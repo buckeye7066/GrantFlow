@@ -63,7 +63,13 @@ export const SECTION_METADATA = {
         "name": "address",
         "label": "Address",
         "format": "json",
-        "help": "Mailing address (street, city, state, ZIP)."
+        "help": "Primary mailing address (street, city, state, ZIP)."
+      },
+      {
+        "name": "secondary_address",
+        "label": "Secondary address",
+        "format": "json",
+        "help": "Optional second address (e.g. home vs. school/campus, deployed/duty station, second residence). Shape: { line1, city, state, zip, type }. Its state/ZIP are included in geo matching and local crawls alongside the primary address."
       },
       {
         "name": "academic_status",

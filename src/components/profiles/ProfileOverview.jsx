@@ -694,6 +694,195 @@ function SectionPreview({
   )
 }
 
+// Optional label for a second address. Covers the common multi-location cases:
+// a student's home vs. campus, a missionary's home vs. deployed, military home vs.
+// duty station, a travel nurse's two homes.
+const SECONDARY_ADDRESS_TYPES = [
+  "Home",
+  "School",
+  "Campus",
+  "Off-campus",
+  "Deployed",
+  "Duty station",
+  "Mailing",
+  "Work",
+  "Other",
+]
+
+function normalizeSecondaryAddress(raw) {
+  if (!isPlainObject(raw)) {
+    return { line1: "", city: "", state: "", zip: "", type: "" }
+  }
+  return {
+    line1: String(raw.line1 ?? raw.address1 ?? raw.street ?? raw.street1 ?? "").trim(),
+    city: String(raw.city ?? "").trim(),
+    state: String(raw.state ?? raw.region ?? "").trim(),
+    zip: String(raw.zip ?? raw.zip_code ?? raw.postal ?? raw.postal_code ?? "").trim(),
+    type: String(raw.type ?? raw.label ?? "").trim(),
+  }
+}
+
+// A clean, optional editor for a SECOND address (line1/city/state/zip + a type label),
+// shown alongside the primary address. Saves to basic_information.secondary_address via
+// the same onSaveField mechanism the rest of the overview uses (no new route). Both
+// addresses' states feed geo matching + local crawlers (see profileSignals `states[]`).
+function SecondaryAddressCard({ value, onSave, isSaving }) {
+  const initial = useMemo(() => normalizeSecondaryAddress(value), [value])
+  const hasExisting = Boolean(
+    initial.line1 || initial.city || initial.state || initial.zip || initial.type,
+  )
+  const [open, setOpen] = useState(hasExisting)
+  const [form, setForm] = useState(initial)
+
+  React.useEffect(() => {
+    setForm(initial)
+    if (hasExisting) setOpen(true)
+  }, [initial, hasExisting])
+
+  const canSave = Boolean(onSave) && !isSaving
+  const setField = (key) => (event) =>
+    setForm((prev) => ({ ...prev, [key]: event.target.value }))
+
+  const handleSave = async () => {
+    if (!canSave) return
+    const trimmed = {
+      line1: form.line1.trim(),
+      city: form.city.trim(),
+      state: form.state.trim().toUpperCase().slice(0, 2),
+      zip: form.zip.trim(),
+      type: form.type.trim(),
+    }
+    const isEmpty = !trimmed.line1 && !trimmed.city && !trimmed.state && !trimmed.zip && !trimmed.type
+    // Saving an empty form clears the secondary address (back to single-location behavior).
+    await onSave(isEmpty ? null : trimmed)
+  }
+
+  const handleClear = async () => {
+    if (!canSave) return
+    setForm({ line1: "", city: "", state: "", zip: "", type: "" })
+    await onSave(null)
+  }
+
+  return (
+    <Card className="border border-slate-200 bg-white/70 backdrop-blur-md shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-lg bg-blue-50 text-blue-600">
+                <MapPin className="w-4 h-4" />
+              </span>
+              <CardTitle className="text-base font-semibold text-slate-900">Second address</CardTitle>
+            </div>
+            <p className="text-xs text-slate-500 leading-snug">
+              Optional. Add a second address — e.g. home vs. school, or a deployment / duty station.
+              Both locations are used for matching and local funding.
+            </p>
+          </div>
+          <Badge variant={hasExisting ? "default" : "outline"} className="text-xs capitalize">
+            {hasExisting ? "Captured" : "Optional"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!open ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setOpen(true)}
+            className="gap-2"
+          >
+            <PenSquare className="w-3.5 h-3.5" />
+            Add a second address
+          </Button>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="secondary-address-type">Label</Label>
+              <select
+                id="secondary-address-type"
+                value={form.type}
+                onChange={setField("type")}
+                disabled={!canSave}
+                className="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+              >
+                <option value="">Select a label (optional)</option>
+                {SECONDARY_ADDRESS_TYPES.map((label) => (
+                  <option key={label} value={label}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="secondary-address-line1">Street address</Label>
+              <Input
+                id="secondary-address-line1"
+                value={form.line1}
+                onChange={setField("line1")}
+                disabled={!canSave}
+                placeholder="123 Campus Dr"
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1.5 sm:col-span-1">
+                <Label htmlFor="secondary-address-city">City</Label>
+                <Input
+                  id="secondary-address-city"
+                  value={form.city}
+                  onChange={setField("city")}
+                  disabled={!canSave}
+                  placeholder="Murfreesboro"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="secondary-address-state">State</Label>
+                <Input
+                  id="secondary-address-state"
+                  value={form.state}
+                  onChange={setField("state")}
+                  disabled={!canSave}
+                  maxLength={2}
+                  placeholder="TN"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="secondary-address-zip">ZIP code</Label>
+                <Input
+                  id="secondary-address-zip"
+                  value={form.zip}
+                  onChange={setField("zip")}
+                  disabled={!canSave}
+                  placeholder="37132"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" size="sm" onClick={handleSave} disabled={!canSave}>
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                Save second address
+              </Button>
+              {hasExisting ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClear}
+                  disabled={!canSave}
+                  className="text-slate-500"
+                >
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function ProfileOverview({
   profile,
   onEditSection,
@@ -1171,6 +1360,13 @@ export default function ProfileOverview({
               onNavigateToUniversities={onNavigateToUniversities}
             />
           ))}
+          {onSaveField ? (
+            <SecondaryAddressCard
+              value={sectionsMap.get("basic_information")?.data?.secondary_address}
+              onSave={(next) => onSaveField("basic_information", "secondary_address", next)}
+              isSaving={savingSectionKey === "basic_information"}
+            />
+          ) : null}
         </div>
       </section>
 

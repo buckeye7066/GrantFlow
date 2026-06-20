@@ -966,6 +966,76 @@ function extractZipFromAddress(address) {
 }
 
 /**
+ * Resolve an optional secondary address (basic_information.secondary_address) into the
+ * same { zip, state, city, county, type } shape as the primary location. Accepts either a
+ * structured object ({ line1, city, state, zip, type }) or a freeform string. Enriches
+ * missing state/city/county from the offline ZIP database, exactly like the primary
+ * location. Returns null when no usable signal is present.
+ *
+ * @param {unknown} raw
+ * @returns {{ zip: string|null, state: string|null, city: string|null, county: string|null, type: string|null }|null}
+ */
+function resolveSecondaryLocation(raw) {
+  if ((raw === null || raw === undefined)) return null
+
+  let zip = null
+  let state = null
+  let city = null
+  let type = null
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    zip = extractZipFromAddress(trimmed)
+    state = extractStateFromAddress(trimmed)
+    city = extractCityFromAddress(trimmed)
+  } else if (typeof raw === 'object') {
+    const a = raw
+    const rawZip = a.zip ?? a.zip_code ?? a.postal ?? a.postal_code ?? null
+    zip = rawZip !== null && rawZip !== undefined ? String(rawZip).replace(/\D/g, '').slice(0, 5) || null : null
+    const rawState = a.state ?? a.region ?? null
+    state = rawState ? String(rawState).trim().toUpperCase().slice(0, 2) || null : null
+    const rawCity = a.city ?? null
+    city = rawCity ? String(rawCity).trim() || null : null
+    const rawType = a.type ?? a.label ?? null
+    type = rawType ? String(rawType).trim() || null : null
+
+    // Fall back to parsing a combined line1/address string when discrete fields are absent.
+    const line = a.line1 ?? a.address1 ?? a.street ?? a.street1 ?? a.address ?? a.formatted ?? null
+    if (typeof line === 'string' && line.trim()) {
+      if (!zip) zip = extractZipFromAddress(line)
+      if (!state) state = extractStateFromAddress(line)
+      if (!city) city = extractCityFromAddress(line)
+    }
+  } else {
+    return null
+  }
+
+  // Enrich from the offline ZIP database (mirrors the primary-location logic).
+  if (zip && !state) {
+    try {
+      const lookup = zipcodes.lookup(zip)
+      if (lookup?.state) state = String(lookup.state).toUpperCase()
+      if (lookup?.city && !city) city = String(lookup.city)
+    } catch {
+      // ignore
+    }
+  }
+
+  let county = null
+  if (zip) {
+    try {
+      county = resolveCountyForZip(zip, state || null) || null
+    } catch {
+      county = null
+    }
+  }
+
+  if (!zip && !state && !city) return null
+  return { zip: zip || null, state: state || null, city: city || null, county, type: type || null }
+}
+
+/**
  * Extract city from an address string (line before state/zip)
  */
 function extractCityFromAddress(address) {
@@ -1049,6 +1119,29 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     } catch {
       // ignore
     }
+  }
+
+  // ============ SECONDARY ADDRESS (multi-location profiles) ============
+  // A person can have more than one address (student home vs. school, missionary
+  // home vs. deployed, military home vs. duty station, travel nurse's two homes).
+  // basic_information.secondary_address holds an optional second address. We resolve
+  // it the same way as the primary and expose ALL distinct states/locations via
+  // `states` / `locations` so geo-gating + local crawlers cover every location.
+  // Absent secondary_address ⇒ identical to today's single-location behavior.
+  const secondaryLocation = resolveSecondaryLocation(basic.secondary_address)
+
+  // Distinct, primary-first list of locations and their states. Geo-gating and local
+  // crawlers should read `states` (all locations) while `location.state` remains the
+  // primary for back-compat.
+  const locations = []
+  if (location.state || location.zip || location.city) locations.push(location)
+  if (secondaryLocation && (secondaryLocation.state || secondaryLocation.zip || secondaryLocation.city)) {
+    locations.push(secondaryLocation)
+  }
+  const states = []
+  for (const loc of locations) {
+    const st = loc?.state ? String(loc.state).toUpperCase() : null
+    if (st && !states.includes(st)) states.push(st)
   }
 
   const academics = {
@@ -3038,6 +3131,13 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     isLicensedProfessional: credentialsSet.size > 0,
     proBonoTerms,
     location,
+    // Multi-location signals: `location` stays the primary (back-compat); `states` is
+    // the deduped, primary-first list of ALL states across primary + secondary
+    // addresses, and `locations` carries each resolved address. Geo-gating and local
+    // crawlers should read `states` so every address is covered.
+    secondaryLocation,
+    locations,
+    states,
     academics,
     financial,
     rawSections,
