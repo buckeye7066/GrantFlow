@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -60,6 +60,27 @@ export default function PrintPipelinePage() {
     retry: 1,
   });
   
+  // Curated-pipeline guard.
+  // The on-screen pipeline is PROFILE-scoped, and the sticky-delete /
+  // tombstone system only governs profile-attached grants
+  // (reconcileDismissedGrants + the DELETE route both no-op when
+  // profile_id IS NULL). An org-scoped fetch, however, also returns
+  // profile_id IS NULL discovery orphans — raw crawler rows and expired
+  // deadlines the user never sees on the board and cannot make "stay
+  // deleted." Those are exactly the "sources I had deleted" that kept
+  // reappearing in the printout.
+  //
+  // Mirror what the user actually curated: if this org has a real profile
+  // pipeline, print ONLY the profile-scoped rows; otherwise fall back to the
+  // legacy org-only listing so orgs that never adopted profiles still print.
+  const curatedGrants = useMemo(() => {
+    const all = Array.isArray(grants) ? grants : [];
+    const profileScoped = all.filter(
+      (g) => g && g.profile_id !== null && g.profile_id !== undefined && g.profile_id !== '',
+    );
+    return profileScoped.length > 0 ? profileScoped : all;
+  }, [grants]);
+
   // FIX: This effect will now run once all data is loaded and ready.
   // It waits a brief moment for the browser to render the content, then triggers the print dialog.
   useEffect(() => {
@@ -134,7 +155,7 @@ export default function PrintPipelinePage() {
   
   // Note: An empty grants array is a valid state; PrintablePipeline renders a
   // "No grants in pipeline" section so the printed report is never silently blank.
-  if (grants && grants.length === 0) {
+  if (curatedGrants && curatedGrants.length === 0) {
     // Still render PrintablePipeline so it can produce the empty-state printed page,
     // but also log for observability so server-side monitoring can detect empty prints.
     console.warn(
@@ -144,5 +165,5 @@ export default function PrintPipelinePage() {
   }
 
   // 5. Render content on success
-  return <PrintablePipeline organization={organization} grants={grants || []} />;
+  return <PrintablePipeline organization={organization} grants={curatedGrants} />;
 }

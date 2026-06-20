@@ -31,6 +31,7 @@ import {
   enforceNoCrossProfileBleed,
   enforceNoDuplicateGrants,
   enforceRelevanceFloor,
+  enforceProfileScopedPipeline,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -51,6 +52,7 @@ function makeDb() {
       funder TEXT,
       status TEXT DEFAULT 'discovered',
       match_score INTEGER,
+      amount_awarded NUMERIC,
       fingerprint TEXT,
       url TEXT,
       application_url TEXT,
@@ -74,8 +76,8 @@ function insertProfile(db, { id, orgId }) {
 function insertGrant(db, g) {
   const id = g.id || crypto.randomUUID()
   db.prepare(
-    `INSERT INTO grants (id, created_at, organization_id, profile_id, funding_opportunity_id, title, funder, status, match_score, fingerprint)
-     VALUES (?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO grants (id, created_at, organization_id, profile_id, funding_opportunity_id, title, funder, status, match_score, amount_awarded, fingerprint)
+     VALUES (?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     g.created_at ?? null,
@@ -86,6 +88,7 @@ function insertGrant(db, g) {
     g.funder ?? null,
     g.status ?? 'discovered',
     g.match_score ?? null,
+    g.amount_awarded ?? null,
     g.fingerprint ?? null,
   )
   return id
@@ -439,6 +442,66 @@ describe('enforceInvariants — relevance floor', () => {
   })
 })
 
+describe('enforceInvariants — profile-scoped pipeline (orphan purge)', () => {
+  beforeEach(() => {
+    delete process.env.ENFORCE_PROFILE_SCOPED_PIPELINE
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_PROFILE_SCOPED_PIPELINE
+  })
+
+  it('purges orphan profile-less grants by DEFAULT (the org-PDF leak source)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    // Curated, profile-attached grant — must survive.
+    insertGrant(db, { id: 'keep', profile_id: 'p1', organization_id: 'org1', title: 'Real pipeline item', status: 'pending_review' })
+    // Orphans with the SAME org but no profile — the rows the org-scoped print
+    // surfaced and the user could never delete from the board.
+    insertGrant(db, { id: 'orphan1', profile_id: null, organization_id: 'org1', title: 'Food Bank near X', status: 'discovered' })
+    insertGrant(db, { id: 'orphan2', profile_id: null, organization_id: 'org1', title: 'United Way near Y', status: 'deadline_passed' })
+    insertGrant(db, { id: 'orphan3', profile_id: null, organization_id: 'org1', title: 'Auto-advanced junk', status: 'submitted' })
+
+    const res = await enforceProfileScopedPipeline(db)
+    expect(res.ok).toBe(true)
+    expect(res.enforced).toBe(true)
+    expect(res.repaired).toBe(3)
+    expect(ids(db)).toEqual(['keep'])
+  })
+
+  it('preserves an orphan that records a real AWARD (amount_awarded > 0)', async () => {
+    const db = makeDb()
+    // No profile, but real money — never collateral damage.
+    insertGrant(db, { id: 'awarded', profile_id: null, organization_id: 'org1', title: 'Org-level awarded grant', status: 'awarded', amount_awarded: 25000 })
+    insertGrant(db, { id: 'junk', profile_id: null, organization_id: 'org1', title: 'No-money discovery', status: 'discovered' })
+
+    const res = await enforceProfileScopedPipeline(db)
+    expect(res.repaired).toBe(1)
+    expect(ids(db)).toEqual(['awarded'])
+  })
+
+  it('does NOT purge when ENFORCE_PROFILE_SCOPED_PIPELINE=0 (explicit disable)', async () => {
+    process.env.ENFORCE_PROFILE_SCOPED_PIPELINE = '0'
+    const db = makeDb()
+    insertGrant(db, { id: 'orphan', profile_id: null, organization_id: 'org1', title: 'Orphan', status: 'discovered' })
+
+    const res = await enforceProfileScopedPipeline(db)
+    expect(res.enforced).toBe(false)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
+  it('never touches profile-attached grants (only orphans are in scope)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    insertGrant(db, { id: 'a', profile_id: 'p1', organization_id: 'org1', title: 'Discovered but owned', status: 'discovered' })
+    insertGrant(db, { id: 'b', profile_id: 'p1', organization_id: 'org1', title: 'Expired but owned', status: 'deadline_passed' })
+
+    const res = await enforceProfileScopedPipeline(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(2)
+  })
+})
+
 describe('enforceInvariants — runner', () => {
   beforeEach(() => {
     delete process.env.ENFORCE_RELEVANCE_FLOOR
@@ -455,11 +518,12 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(4)
+    expect(summary.ran).toBe(5)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
       'no_cross_profile_bleed',
+      'profile_scoped_pipeline',
       'no_duplicate_grants',
       'relevance_floor',
     ])

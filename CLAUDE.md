@@ -53,6 +53,7 @@ enforcer + its test — do not rely on a new per-call check alone.
 | Sticky deletes (deleted pipeline grants stay gone) | `reconcileDismissedGrants()` in `backend/services/pipelineDismissals.js`, re-run by `enforceStickyDeletes()` | `backend/tests/enforceInvariants.test.js` |
 | No cross-profile / cross-tenant bleed (grant org must match its profile's org) | `enforceNoCrossProfileBleed()` | `backend/tests/enforceInvariants.test.js` |
 | Relevance / match-score floor (no junk in pipeline; `match_score < 50` excl. NULL) | `enforceRelevanceFloor()` (count-only unless `ENFORCE_RELEVANCE_FLOOR=1`) | `backend/tests/enforceInvariants.test.js` |
+| Pipeline grants belong to a profile (no orphan `profile_id IS NULL` rows leaking into org-scoped reads/PDFs) | `enforceProfileScopedPipeline()` (ON by default; preserves `amount_awarded > 0`; disable via `ENFORCE_PROFILE_SCOPED_PIPELINE=0`) | `backend/tests/enforceInvariants.test.js` |
 
 **Never weaken these guardrails:** NULL match_score is not junk; protected
 (user-progressed) statuses are never auto-purged; `link_unverified` ≠ dead; all

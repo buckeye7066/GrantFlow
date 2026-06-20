@@ -518,6 +518,94 @@ export async function enforceRelevanceFloor(db) {
 }
 
 /**
+ * INVARIANT: EVERY PIPELINE GRANT BELONGS TO A PROFILE
+ * (canonical_rules.md G4/G8 — the pipeline is profile-scoped end to end).
+ *
+ * The whole pipeline is keyed on profile_id: the on-screen board fetches by
+ * profile_id, the live matcher ALWAYS stamps profile_id on the grants it
+ * creates (opportunityMatcher.js), and every sticky-delete / saved / dismissed
+ * tombstone is profile-keyed. A grant with `profile_id IS NULL` is therefore an
+ * ORPHAN with three bad properties:
+ *
+ *   1. It is unreachable from the profile pipeline UI — the user cannot select
+ *      or delete it, so it can never be cleaned up by hand ("I deleted them
+ *      again and they came back" — they were never reachable to begin with).
+ *   2. It is ungovernable by the sticky-delete system — recordDismissal() and
+ *      reconcileDismissedGrants() both no-op when profile_id IS NULL, so even a
+ *      delete that DID reach it could not make it stay gone.
+ *   3. It LEAKS into organization-scoped reads — the org-scoped print/PDF
+ *      (PrintPipeline) and org grant lists pull `WHERE organization_id = ?`
+ *      with no profile filter, surfacing these orphans the curated board hides.
+ *
+ * In production these are legacy crawler/import leftovers (raw `discovered`
+ * rows, expired `deadline_passed`, automation-advanced rows that never got a
+ * profile). The live matcher does not produce them.
+ *
+ * REPAIR: delete orphan (profile_id IS NULL) grants. GUARDRAIL (mirror the
+ * relevance-floor sweep's "never destroy a real outcome"): a row that records
+ * an actual AWARD (amount_awarded > 0) is real money and is preserved even
+ * without a profile, so an org-level awarded grant is never collateral damage.
+ *
+ * OVERRIDE: enforcement is ON by default. Set ENFORCE_PROFILE_SCOPED_PIPELINE=0
+ * to DISABLE the delete (count-only) without a code change — same posture as
+ * ENFORCE_RELEVANCE_FLOOR.
+ */
+export async function enforceProfileScopedPipeline(db) {
+  return runInvariant('profile_scoped_pipeline', async () => {
+    // Orphan = no profile AND no recorded award. amount_awarded may be absent
+    // on very old schemas; tolerate that by treating a missing column as "no
+    // award" via a guarded probe so this can never abort boot.
+    const where = `profile_id IS NULL AND (amount_awarded IS NULL OR amount_awarded <= 0)`
+
+    let violators = 0
+    try {
+      const row = await db.prepare(`SELECT COUNT(*) AS n FROM grants WHERE ${where}`).get()
+      violators = Number(row?.n ?? 0)
+    } catch (err) {
+      // amount_awarded column missing on a legacy DB — fall back to the
+      // profile-only predicate so the invariant still holds.
+      const msg = String(err?.message || '')
+      if (/amount_awarded|no such column|does not exist/i.test(msg)) {
+        const row = await db.prepare('SELECT COUNT(*) AS n FROM grants WHERE profile_id IS NULL').get()
+        violators = Number(row?.n ?? 0)
+        const disabledLegacy = _parseBoolEnv(process.env.ENFORCE_PROFILE_SCOPED_PIPELINE) === false
+        if (disabledLegacy) {
+          if (violators > 0) log.warn('orphan profile-less grants present (purge DISABLED)', { violators })
+          return { scanned: violators, repaired: 0, enforced: false }
+        }
+        if (violators === 0) return { scanned: 0, repaired: 0, enforced: true }
+        const res = await db.prepare('DELETE FROM grants WHERE profile_id IS NULL').run()
+        const removed = changesOf(res)
+        if (removed > 0) log.info('purged orphan profile-less pipeline grants (legacy schema)', { removed })
+        return { scanned: violators, repaired: removed, enforced: true }
+      }
+      throw err
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_PROFILE_SCOPED_PIPELINE) === false
+    if (disabled) {
+      if (violators > 0) {
+        log.warn('orphan profile-less grants present (purge DISABLED via ENFORCE_PROFILE_SCOPED_PIPELINE=0)', {
+          violators,
+        })
+      }
+      return { scanned: violators, repaired: 0, enforced: false }
+    }
+
+    if (violators === 0) {
+      return { scanned: 0, repaired: 0, enforced: true }
+    }
+
+    const result = await db.prepare(`DELETE FROM grants WHERE ${where}`).run()
+    const repaired = changesOf(result)
+    if (repaired > 0) {
+      log.info('purged orphan profile-less pipeline grants', { repaired })
+    }
+    return { scanned: violators, repaired, enforced: true }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -536,6 +624,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   const steps = []
   steps.push(await enforceStickyDeletes(db))
   steps.push(await enforceNoCrossProfileBleed(db))
+  // Drop profile-less orphans next: removes rows the duplicate + relevance
+  // sweeps would otherwise waste time scanning, and closes the org-scoped PDF
+  // leak at the data layer (the print-side guard is the first line of defense).
+  steps.push(await enforceProfileScopedPipeline(db))
   steps.push(await enforceNoDuplicateGrants(db))
   steps.push(await enforceRelevanceFloor(db))
 
@@ -575,4 +667,5 @@ export const __testables = {
   PURGEABLE_DISCOVERY_STATUSES,
   RELEVANCE_FLOOR,
   RELEVANCE_FLOOR_FALLBACK,
+  enforceProfileScopedPipeline,
 }
