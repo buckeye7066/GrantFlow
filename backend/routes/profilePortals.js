@@ -252,17 +252,26 @@ router.get('/profiles/:id/portals/packet/:documentId/download', async (req, res)
   }
 
   try {
+    // Scope to THIS profile's packet documents only (defense-in-depth: profile +
+    // type both bound in SQL, not just a JS check).
     const doc = await req.db
-      .prepare('SELECT id, profile_id, name, mime_type, file_bytes, extracted_text FROM documents WHERE id = ?')
-      .get(documentId)
-    if (!doc || String(doc.profile_id) !== profileId) {
+      .prepare('SELECT id, profile_id, name, file_bytes, extracted_text FROM documents WHERE id = ? AND profile_id = ? AND type = ?')
+      .get(documentId, profileId, PACKET_DOC_TYPE)
+    if (!doc) {
       return res.status(404).json({ error: 'not found' })
     }
     const html = doc.file_bytes
       ? (Buffer.isBuffer(doc.file_bytes) ? doc.file_bytes : Buffer.from(doc.file_bytes))
       : Buffer.from(String(doc.extracted_text || ''), 'utf-8')
-    const fileName = `${String(doc.name || 'application-packet').replace(/"/g, '')}.html`
-    res.setHeader('Content-Type', doc.mime_type || 'text/html')
+    // Strip CR/LF (header-injection) + quotes from the filename.
+    const fileName = `${String(doc.name || 'application-packet').replace(/[\r\n"]/g, '').slice(0, 120)}.html`
+    // Serve the stored HTML SANDBOXED so it can never script the app origin
+    // (stored-XSS guard): the packet body is built from funder/source text. The
+    // `sandbox` CSP gives it a unique opaque origin with scripts disabled, so even
+    // if any value slipped past HTML-escaping it cannot run or touch app cookies.
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data: https:; style-src 'unsafe-inline'")
     res.setHeader('Content-Disposition', `inline; filename="${fileName}"`)
     return res.send(html)
   } catch (err) {
