@@ -57,6 +57,7 @@
 
 import { db } from '../db/index.js'
 import { runProfileContext } from '../db/scopedQuery.js'
+import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 // ---- arg parsing -----------------------------------------------------------
 
@@ -325,10 +326,32 @@ async function run() {
     }
     if (!dupRow) {
       const already = await isTombstoned(duplicate)
-      console.log(
-        `  · Duplicate profile ${duplicate} not found` +
-          (already ? ' (already tombstoned — nothing to do).' : ' (nothing to do).'),
-      )
+      if (already) {
+        console.log(`  · Duplicate profile ${duplicate} not found (already tombstoned — nothing to do).`)
+        continue
+      }
+      // RESURRECTION GUARD: a designated/slug profile that was hard-deleted with
+      // NO tombstone will be re-created at the next boot by
+      // ensureDesignatedProfiles.js / seedBaselineFromRepo.js (they only skip
+      // ids present in profile_tombstones). Write the tombstone now so it stays
+      // gone. We only do this for known designated ids — a random missing id is
+      // genuinely "nothing to do".
+      if (isDesignatedProfileId(duplicate)) {
+        if (isDryRun) {
+          console.log(
+            `  · Duplicate ${duplicate} is GONE but NOT tombstoned — it is a designated id and WILL ` +
+              `resurrect at next boot. [DRY RUN] Would write a tombstone to prevent that.`,
+          )
+        } else {
+          await tombstone(duplicate, keeper)
+          console.log(
+            `  · Duplicate ${duplicate} was already gone but not tombstoned; wrote tombstone ` +
+              `(prevents boot-time resurrection of this designated profile).`,
+          )
+        }
+        continue
+      }
+      console.log(`  · Duplicate profile ${duplicate} not found (nothing to do).`)
       continue
     }
     console.log(`  keeper:    ${keeperRow.display_name} (status=${keeperRow.status})`)
