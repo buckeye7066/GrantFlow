@@ -2,7 +2,7 @@ import React, { useRef, useEffect } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
-import { AlertCircle, Loader2, Palette, Printer } from "lucide-react"
+import { AlertCircle, Loader2, Palette, Printer, KeyRound } from "lucide-react"
 import {
   getProfile,
   requestProfileSectionAI,
@@ -35,6 +35,7 @@ import UniversityApplicationsSection from "@/components/profiles/UniversityAppli
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
 import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
+import PortalSyncCard from "@/components/hamilton/PortalSyncCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
 import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
@@ -805,6 +806,11 @@ export default function ProfileDetail() {
               {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
                   from your phone or computer" capture flow + disclaimer. */}
               <PortalSessionsCard profileId={profileId} />
+              {/* Two-way portal data sync — pull real data (test scores, aid
+                  awards) into GrantFlow and push GrantFlow funding/awards back
+                  into the portal, using the saved session above. Shows real
+                  per-host run status. */}
+              <PortalSyncCard profileId={profileId} />
               <PortalAccessScheduleCard profileId={profileId} />
             </div>
             <div className="rounded-lg border bg-white p-6">
