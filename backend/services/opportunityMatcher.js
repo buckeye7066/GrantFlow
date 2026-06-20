@@ -18,6 +18,7 @@ import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
+import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
 import { evaluateExclusion } from './exclusionEngine.js'
 import {
   grantFingerprintFromOpportunity,
@@ -31,6 +32,20 @@ const log = createLogger('opportunityMatcher')
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
 const _decisionColumnCache = new WeakMap()
+
+/**
+ * Last-resort profile-scoped dedup key: normalized lower(title)+lower(funder).
+ * Used only when the catalog FK and canonical fingerprint both miss (e.g. a
+ * re-crawl whose url/deadline drifted, changing the fingerprint, but which is
+ * clearly the same program). Returns null when either field is empty so an
+ * all-empty key can never match another all-empty key.
+ */
+function titleFunderKey(title, funder) {
+  const t = title === null || title === undefined ? '' : String(title).trim().toLowerCase().replace(/\s+/g, ' ')
+  const f = funder === null || funder === undefined ? '' : String(funder).trim().toLowerCase().replace(/\s+/g, ' ')
+  if (!t || !f) return null
+  return `${t}|${f}`
+}
 
 async function hasGrantsDecisionColumns(db) {
   if (_decisionColumnCache.has(db)) return _decisionColumnCache.get(db)
@@ -107,8 +122,17 @@ export async function saveToProfilePipeline(
   minMatchThreshold = 55,
 ) {
   try {
-    const thresholdNum = Number(minMatchThreshold)
-    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
+    // The numeric floor is a TRUE FLOOR. A caller's minMatchThreshold can only
+    // RAISE the bar, never lower it below RELEVANCE_FLOOR (config/relevanceFloor.js).
+    // This is the fix for crawlers that relax their own threshold to 0 to fill a
+    // result quota (e.g. localCrawler / comprehensiveCrawlerOptimized pass a
+    // `thresholdUsed` that falls back to 0) — without this clamp, threshold=0
+    // would let every scored-but-irrelevant row into the pipeline.
+    const callerThresholdNum = Number(minMatchThreshold)
+    const callerThreshold = Number.isFinite(callerThresholdNum)
+      ? Math.max(0, Math.min(100, callerThresholdNum))
+      : 55
+    const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
 
     // Gate 1: Source allowlist — blocks non-approved sources entirely
     const oppSource = opportunity?.source ? String(opportunity.source).trim() : null
@@ -211,8 +235,19 @@ export async function saveToProfilePipeline(
       matchPercentage = decision?.score ?? calculateMatchPercentage(opportunity, profileContext)
     }
 
+    // NULL / unknown-score handling (documented choice):
+    //   Default a non-numeric score to 0 so junk with no computable score is
+    //   blocked by the floor below — we never silently insert an unscored row.
+    //   The ONE carve-out: if the canonical decision engine returned a clear
+    //   ACCEPT that is eligible, a clearly-eligible opportunity should not be
+    //   dropped purely because no number came back; we admit it at exactly the
+    //   floor so it still passes the threshold gate but is never scored above
+    //   what we can justify. (A NULL score from a non-ACCEPT decision stays 0.)
     let adjustedScore = Number(matchPercentage)
-    if (!Number.isFinite(adjustedScore)) adjustedScore = 0
+    if (!Number.isFinite(adjustedScore)) {
+      adjustedScore =
+        decision?.decision === 'ACCEPT' && decision?.eligible === true ? RELEVANCE_FLOOR : 0
+    }
 
     if (exclusion?.decision === 'WATCH') {
       adjustedScore = Math.max(0, adjustedScore - 15)
@@ -249,19 +284,25 @@ export async function saveToProfilePipeline(
 
     adjustedScore = Math.round(Math.max(0, Math.min(100, adjustedScore)))
 
-    // Gate 5: Score threshold.
-    // IMPORTANT: do not bypass this for ACCEPT/REVIEW. A score below the user's
-    // floor is not eligible for automatic pipeline insertion.
+    // Gate 5: Score threshold (hard relevance floor).
+    // IMPORTANT: do not bypass this for ACCEPT/REVIEW. A score below the
+    // effective threshold is not eligible for automatic pipeline insertion.
+    // `threshold` is already clamped to >= RELEVANCE_FLOOR above, so this is the
+    // canonical hard floor no caller can lower.
     if (adjustedScore < threshold) {
+      const flooredByCanonical = threshold === RELEVANCE_FLOOR && callerThreshold < RELEVANCE_FLOOR
       log.info(
-        `[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}%, decision was ${decision?.decision ?? 'null'}`,
+        `[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}% (relevance floor ${RELEVANCE_FLOOR}, caller asked ${callerThreshold}), decision was ${decision?.decision ?? 'null'}`,
       )
       return {
         saved: false,
-        reason: `Match score ${adjustedScore}% below ${threshold}% threshold`,
+        reason: flooredByCanonical
+          ? `Match score ${adjustedScore}% below canonical relevance floor ${RELEVANCE_FLOOR}%`
+          : `Match score ${adjustedScore}% below ${threshold}% threshold`,
         gate: 'THRESHOLD',
         matchPercentage: adjustedScore,
         threshold,
+        relevanceFloor: RELEVANCE_FLOOR,
         decision: decision?.decision ?? null,
       }
     }
@@ -284,25 +325,82 @@ export async function saveToProfilePipeline(
       return { saved: false, reason: 'Profile not found' }
     }
 
-    // Check if already in pipeline (profile-scoped idempotency).
-    const existing = await db
+    // Gate 6: IDEMPOTENCY (profile-scoped dedup).
+    //
+    // An opportunity already present in THIS profile's pipeline must NEVER be
+    // re-inserted. The old check matched only `funding_opportunity_id = ? OR
+    // title = ?`, which let re-crawled rows slip through: a re-crawl mints a
+    // brand-new internal funding_opportunities id, so `funding_opportunity_id`
+    // no longer matches the existing grant, and a title that drifted even
+    // slightly (or collides with an unrelated funder's program) made the title
+    // arm unreliable in both directions.
+    //
+    // We now match on a STABLE key set, profile-scoped:
+    //   (a) funding_opportunity_id  — the validated catalog FK, when present;
+    //   (b) fingerprint             — canonical grantFingerprintFromOpportunity
+    //                                 (title|funder|deadline|url), recomputed
+    //                                 from the candidate AND from each existing
+    //                                 row's own identity tuple so rows inserted
+    //                                 before fingerprint backfill still match;
+    //   (c) normalized lower(title)+lower(funder) — last-resort identity for
+    //                                 rows whose url/deadline drifted between
+    //                                 crawls (so the fingerprint differs) but
+    //                                 which are clearly the same program.
+    // If any arm matches, we SKIP (never insert a second row).
+    const candidateFp = grantFingerprintFromOpportunity(opportunity)
+    const candidateTitleFunder = titleFunderKey(opportunity.title, opportunity.sponsor || opportunity.funder)
+    const fkOpportunityId = opportunity.id
+      ? ((await db.prepare('SELECT id FROM funding_opportunities WHERE id = ? LIMIT 1').get(opportunity.id))?.id ?? null)
+      : null
+
+    const dupCandidateRows = await db
       .prepare(
         `
-          SELECT id
+          SELECT id, funding_opportunity_id, fingerprint, title, funder, deadline, url, application_url
           FROM grants
           WHERE profile_id = ?
-            AND (funding_opportunity_id = ? OR title = ?)
-          LIMIT 1
         `,
       )
-      .get(profileId, opportunity.id, opportunity.title)
+      .all(profileId)
+
+    let existing = null
+    for (const row of dupCandidateRows || []) {
+      // (a) catalog FK
+      if (fkOpportunityId && row.funding_opportunity_id && String(row.funding_opportunity_id) === String(fkOpportunityId)) {
+        existing = row
+        break
+      }
+      // also match against the raw opportunity.id (covers callers that pass a
+      // catalog id that didn't survive FK validation but still equals a stored row)
+      if (opportunity.id && row.funding_opportunity_id && String(row.funding_opportunity_id) === String(opportunity.id)) {
+        existing = row
+        break
+      }
+      // (b) canonical fingerprint — stored, or recomputed from the row's tuple
+      const rowFp = (row.fingerprint && String(row.fingerprint)) || grantFingerprintFromOpportunity(row)
+      if (candidateFp && rowFp && candidateFp === rowFp) {
+        existing = row
+        break
+      }
+      // (c) normalized title+funder
+      const rowTitleFunder = titleFunderKey(row.title, row.funder)
+      if (candidateTitleFunder && rowTitleFunder && candidateTitleFunder === rowTitleFunder) {
+        existing = row
+        break
+      }
+    }
 
     if (existing) {
+      log.info(
+        `[opportunityMatcher] Gate:DUPLICATE suppressed "${opportunity.title}" — already in pipeline for profile ${profileId} (existing grant ${existing.id})`,
+      )
       return {
         saved: false,
         reason: 'Already in pipeline',
+        gate: 'DUPLICATE',
         matchPercentage,
         threshold,
+        pipelineId: existing.id,
       }
     }
 
@@ -321,23 +419,19 @@ export async function saveToProfilePipeline(
       : (profileContext?.match_reasons ?? opportunity.match_reasons ?? [])
 
     // Add to pipeline — preserve application URL, contact info, amounts, and submission method
+    // (fkOpportunityId was already resolved + FK-validated by the dedup gate above.)
     const grantId = crypto.randomUUID()
     const contactInfo = parseContactInfo(opportunity)
-
-    // Validate FK: funding_opportunity_id must exist in funding_opportunities or be NULL.
-    // Crawled opportunities may carry an id that hasn't been upserted yet.
-    const fkOpportunityId = opportunity.id
-      ? ((await db.prepare('SELECT id FROM funding_opportunities WHERE id = ? LIMIT 1').get(opportunity.id))?.id ?? null)
-      : null
 
     // Detect which columns exist in the grants table (handles DBs without migration applied)
     const grantCols = await hasGrantsDecisionColumns(db)
 
     // Canonical grant URL + content fingerprint. Populated regardless of
     // whether the decision columns are present — these are the minimum
-    // fields the dedup/drift check relies on.
+    // fields the dedup/drift check relies on. Reuse the fingerprint already
+    // computed for the dedup gate so insert + dedup can never disagree.
     const canonicalUrl = chooseGrantUrl(opportunity)
-    const canonicalFingerprint = grantFingerprintFromOpportunity(opportunity)
+    const canonicalFingerprint = candidateFp
 
     if (grantCols.decision) {
       const cols = [
@@ -481,8 +575,9 @@ export async function saveToProfilePipeline(
     // Race-condition duplicate — treat as idempotent, not an error
     if (msg.includes('unique') || msg.includes('duplicate')) {
       const thresholdNum = Number(minMatchThreshold)
-      const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
-      return { saved: false, reason: 'Already in pipeline', matchPercentage, threshold }
+      const callerThreshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
+      const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
+      return { saved: false, reason: 'Already in pipeline', gate: 'DUPLICATE', matchPercentage, threshold }
     }
     // FK violation — the funding_opportunity was deleted or never upserted
     if (msg.includes('foreign key') || msg.includes('fkey')) {
