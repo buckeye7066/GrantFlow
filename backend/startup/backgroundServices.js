@@ -328,6 +328,21 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
       });
   }, 15000);
 
+  // ── 8c. Nightly email→grant sync (Outlook inbox → catalog) ────────────────
+  // Reads dr.johnwhite@axiombiolabs.org each night at 21:00 America/New_York
+  // and parses grant emails into the catalog. No-ops gracefully if the mailbox
+  // /Graph creds aren't configured. Disable with EMAIL_GRANTS_SYNC_ENABLED=false.
+  setTimeout(() => {
+    import('../services/emailGrants/emailGrantScheduler.js')
+      .then(({ startEmailGrantSyncScheduler }) => {
+        const r = startEmailGrantSyncScheduler({ db });
+        console.log('[email-grants] nightly sync:', JSON.stringify(r));
+      })
+      .catch((err) => {
+        console.warn('[email-grants] scheduler failed to start:', err?.message || err);
+      });
+  }, 6000);
+
   // ── 9. Anya background health service (single call) ───────────────────────
   try {
     startHealthService(db);
