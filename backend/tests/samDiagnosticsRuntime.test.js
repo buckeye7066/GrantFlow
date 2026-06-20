@@ -88,3 +88,33 @@ describe('Sam tool-check resilience in the production runtime', () => {
     expect(results[0]).toMatchObject({ check_id: 'health.check', skipped: true })
   })
 })
+
+// The payment-authorizations probe is PROFILE-SCOPED, so an unparameterized
+// Sam probe legitimately gets a 400 "profileId required" — proof the route is
+// mounted and guarding tenancy, not a failure. acceptableStatuses lets the
+// check accept that without masking a 404 (not mounted) or 500 (broken).
+describe('Sam HTTP check acceptableStatuses (profile-scoped guard endpoints)', () => {
+  const SECURITY_CHECK = ['agent.hamilton.security']
+
+  it('treats a profile-scope 400 ("profileId required") as healthy, not a critical', async () => {
+    const httpProbe = vi.fn(async () => ({ status: 400, body: { ok: false, error: 'profileId required' } }))
+    const { findings, results } = await runDiagnostics({ db: null, ctx: null, checkIds: SECURITY_CHECK, httpProbe })
+    expect(findings.filter((f) => /returned 400/.test(f.title || ''))).toHaveLength(0)
+    expect(findings.filter((f) => f.severity === 'critical')).toHaveLength(0)
+    expect(results[0]).toMatchObject({ check_id: 'agent.hamilton.security', ok: true, status: 400 })
+  })
+
+  it('passes on a real 200 too', async () => {
+    const httpProbe = vi.fn(async () => ({ status: 200, body: { ok: true } }))
+    const { findings } = await runDiagnostics({ db: null, ctx: null, checkIds: SECURITY_CHECK, httpProbe })
+    expect(findings).toHaveLength(0)
+  })
+
+  it('STILL fails on 404 (not mounted) and 500 (broken) — acceptableStatuses does not mask real breakage', async () => {
+    for (const status of [404, 500]) {
+      const httpProbe = vi.fn(async () => ({ status, body: { error: 'boom' } }))
+      const { findings } = await runDiagnostics({ db: null, ctx: null, checkIds: SECURITY_CHECK, httpProbe })
+      expect(findings.filter((f) => new RegExp(`returned ${status}`).test(f.title || '')).length).toBeGreaterThanOrEqual(1)
+    }
+  })
+})

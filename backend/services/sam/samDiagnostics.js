@@ -355,11 +355,20 @@ async function runHttpCheck({ check, httpProbe }) {
 
   const status = Number(response?.status ?? 0)
   const expected = check.expectStatus ?? 200
-  if (status === expected) {
-    return { detail: { ok: true, status }, findings: [] }
+  // A check may declare additional statuses that still prove health. The
+  // canonical use: a PROFILE-SCOPED endpoint probed WITHOUT a profileId must
+  // return a validation 400 ("profileId required") — that is the endpoint
+  // being mounted AND correctly guarding tenancy, not a failure. An
+  // unparameterized probe can only verify "mounted + guarded", so demanding
+  // exactly 200 from such a route is a false positive. We still reject the
+  // statuses that signal a REAL problem (404 not mounted, 500 broken, 0
+  // unreachable) by requiring the alternative to be explicitly allow-listed.
+  const acceptable = Array.isArray(check.acceptableStatuses) ? check.acceptableStatuses : []
+  if (status === expected || acceptable.includes(status)) {
+    return { detail: { ok: true, status, expected, acceptable: acceptable.length ? acceptable : undefined }, findings: [] }
   }
   return {
-    detail: { ok: false, status, expected },
+    detail: { ok: false, status, expected, acceptable: acceptable.length ? acceptable : undefined },
     findings: [makeFinding({
       severity: check.severityOnFailure ?? SEVERITY.HIGH,
       category: check.category,

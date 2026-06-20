@@ -251,8 +251,15 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     method: 'GET',
     path: '/api/hamilton/automation/payment-authorizations',
     expectStatus: 200,
+    // This route is PROFILE-SCOPED (requireProfileScope on req.query.profileId).
+    // Sam's probe is unparameterized, so the route correctly answers 400
+    // "profileId required" — proof it is mounted AND guarding tenancy, which is
+    // exactly what this security check wants to confirm. Accept 400 as healthy
+    // so we don't raise a permanent false-positive CRITICAL that pins
+    // production_ready=false. A 404 (not mounted) / 500 (broken) still fails.
+    acceptableStatuses: [400],
     severityOnFailure: SEVERITY.CRITICAL,
-    description: 'Hamilton must never store raw card data; the authorization endpoint must respond 200 with {ok:true,...} and never echo card numbers.',
+    description: 'Hamilton must never store raw card data; the authorization endpoint must be mounted and profile-guarded (200 with {ok:true,...} when scoped, or 400 "profileId required" when probed without a profile) and never echo card numbers.',
   },
   // ── Agent Control Center (admin-only orchestration) checks ─────────
   // Confirms the new Control Center router is mounted, admin-gated, and
