@@ -25,6 +25,8 @@
  */
 
 import * as cheerio from 'cheerio'
+import dns from 'node:dns/promises'
+import net from 'node:net'
 import { normalizeHttpUrl } from './avatarCrawler.js'
 
 const fetchImpl = globalThis.fetch
@@ -33,23 +35,63 @@ const FETCH_TIMEOUT_MS = 12_000
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024 // 8MB cap
 const MIN_IMAGE_BYTES = 100 // reject empty / 1px tracking junk
 const USER_AGENT = 'GrantFlow Org Logo Fetcher/1.0'
+const MAX_REDIRECTS = 4
 
+// Fast hostname check for obviously-local names + IP literals. NOT sufficient on
+// its own (a public hostname can DNS-resolve to a private IP) — resolvesPrivate()
+// below does the authoritative, resolution-based check.
 function isPrivateHostname(hostname) {
   const h = String(hostname || '').trim().toLowerCase()
   if (!h) return true
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true
-  if (h === '::1') return true
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
-    const parts = h.split('.').map((p) => Number(p))
-    const [a, b] = parts
-    if (a === 10) return true
-    if (a === 127) return true
-    if (a === 192 && b === 168) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 0) return true
-    if (a === 169 && b === 254) return true
-  }
   return false
+}
+
+// Is a concrete IP address (v4 or v6, incl. IPv4-mapped IPv6) in a
+// private/loopback/link-local/CGNAT/ULA/reserved range that must never be
+// fetched server-side (SSRF guard)?
+function ipIsPrivate(ipRaw) {
+  let ip = String(ipRaw || '').trim().toLowerCase()
+  if (!ip) return true
+  // Unwrap IPv4-mapped / -compatible IPv6 (::ffff:10.0.0.1, ::ffff:a00:1, etc.)
+  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  if (mapped) ip = mapped[1]
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map((p) => Number(p))
+    if (a === 0 || a === 10 || a === 127) return true
+    if (a === 169 && b === 254) return true            // link-local
+    if (a === 172 && b >= 16 && b <= 31) return true   // private
+    if (a === 192 && b === 168) return true            // private
+    if (a === 100 && b >= 64 && b <= 127) return true  // CGNAT 100.64/10
+    if (a === 192 && b === 0) return true               // 192.0.0/24, 192.0.2/24
+    if (a === 198 && (b === 18 || b === 19)) return true // benchmarking
+    if (a >= 224) return true                           // multicast / reserved / 255.255.255.255
+    return false
+  }
+  if (net.isIPv6(ip)) {
+    if (ip === '::1' || ip === '::') return true        // loopback / unspecified
+    if (ip.startsWith('fe80') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true // link-local fe80::/10
+    if (/^f[cd]/.test(ip)) return true                  // unique-local fc00::/7
+    return false
+  }
+  return true // not a parseable IP → block
+}
+
+// Authoritative SSRF check: resolve the host and reject if ANY resolved address
+// is private. An IP literal is checked directly; a DNS failure blocks (fail closed).
+async function resolvesPrivate(host) {
+  const h = String(host || '').trim().toLowerCase()
+  if (!h) return true
+  if (isPrivateHostname(h)) return true
+  if (net.isIP(h)) return ipIsPrivate(h)
+  let records = []
+  try {
+    records = await dns.lookup(h, { all: true })
+  } catch {
+    return true // can't resolve → fail closed
+  }
+  if (!records.length) return true
+  return records.some((r) => ipIsPrivate(r.address))
 }
 
 function resolveUrl(baseUrl, maybeRelative) {
@@ -150,13 +192,13 @@ export function extractLogoCandidates(html, baseUrl) {
   return candidates
 }
 
-async function fetchWithTimeout(url, accept) {
+async function fetchOnce(url, accept) {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
     return await fetchImpl(url, {
       method: 'GET',
-      redirect: 'follow',
+      redirect: 'manual', // we follow manually so we can re-validate every hop
       signal: controller.signal,
       headers: { 'User-Agent': USER_AGENT, Accept: accept },
     })
@@ -165,20 +207,48 @@ async function fetchWithTimeout(url, accept) {
   }
 }
 
+// SSRF-safe fetch: validates the host (via DNS resolution) BEFORE every request,
+// follows redirects manually (capped), and re-validates each hop's Location host.
+// Returns { ok, res, finalUrl } or { ok:false, reason }.
+async function safeFetch(startUrl, accept, { allowLocalhost }) {
+  let current = startUrl
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    let host
+    try { host = new URL(current).hostname } catch { return { ok: false, reason: 'invalid_url' } }
+    if (!allowLocalhost && await resolvesPrivate(host)) {
+      return { ok: false, reason: 'blocked_private_host' }
+    }
+    let res
+    try {
+      res = await fetchOnce(current, accept)
+    } catch {
+      return { ok: false, reason: 'fetch_failed' }
+    }
+    const status = res.status
+    if (status >= 300 && status < 400) {
+      const loc = res.headers.get('location')
+      if (!loc) return { ok: true, res, finalUrl: current }
+      const next = resolveUrl(current, loc)
+      if (!next) return { ok: false, reason: 'invalid_redirect' }
+      // Only http(s) redirects are followed (blocks file:/gopher:/etc.).
+      if (!/^https?:\/\//i.test(next)) return { ok: false, reason: 'blocked_redirect_scheme' }
+      current = next
+      continue
+    }
+    return { ok: true, res, finalUrl: current }
+  }
+  return { ok: false, reason: 'too_many_redirects' }
+}
+
 async function downloadImage(imageUrl, { allowLocalhost }) {
   const url = normalizeHttpUrl(imageUrl)
   if (!url) return { ok: false, reason: 'invalid_image_url' }
-  const host = new URL(url).hostname
-  if (!allowLocalhost && isPrivateHostname(host)) {
-    return { ok: false, reason: 'blocked_private_image_host' }
-  }
 
-  let res = null
-  try {
-    res = await fetchWithTimeout(url, 'image/*,*/*;q=0.8')
-  } catch {
-    return { ok: false, reason: 'image_fetch_failed' }
+  const fetched = await safeFetch(url, 'image/*,*/*;q=0.8', { allowLocalhost })
+  if (!fetched.ok) {
+    return { ok: false, reason: fetched.reason === 'blocked_private_host' ? 'blocked_private_image_host' : 'image_fetch_failed' }
   }
+  const res = fetched.res
   if (!res || !res.ok) return { ok: false, reason: 'image_fetch_failed' }
 
   const contentType = String(res.headers.get('content-type') || '').toLowerCase()
@@ -227,20 +297,13 @@ export async function fetchOrgLogo(websiteUrl, opts = {}) {
   const website = normalizeHttpUrl(websiteUrl)
   if (!website) return { ok: false, reason: 'no_website' }
 
-  const host = new URL(website).hostname
-  if (!allowLocalhost && isPrivateHostname(host)) {
-    return { ok: false, reason: 'blocked_private_host' }
+  // Fetch the homepage HTML through the SSRF-safe fetcher (validates every hop).
+  const fetched = await safeFetch(website, 'text/html,application/xhtml+xml', { allowLocalhost })
+  if (!fetched.ok) {
+    return { ok: false, reason: fetched.reason === 'blocked_private_host' ? 'blocked_private_host' : 'website_fetch_failed' }
   }
-
-  // Fetch the homepage HTML.
-  let pageRes = null
-  let finalUrl = website
-  try {
-    pageRes = await fetchWithTimeout(website, 'text/html,application/xhtml+xml')
-    finalUrl = pageRes?.url || website
-  } catch {
-    return { ok: false, reason: 'website_fetch_failed' }
-  }
+  const pageRes = fetched.res
+  const finalUrl = fetched.finalUrl || website
   if (!pageRes || !pageRes.ok) return { ok: false, reason: 'website_fetch_failed' }
 
   let html = ''
