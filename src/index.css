@@ -194,6 +194,33 @@ button:focus-visible {
   }
 }
 
+/* Funding Current design identity — additive tokens.
+   These are OPT-IN: they do not restyle the app globally. Components reference
+   them via Tailwind `current.*` color tokens, the `font-display` / `font-mono-money`
+   aliases, or these CSS variables directly. The accent semantics are the product
+   status language: emerald = ready, amber = awarded, coral = needs-you. */
+:root {
+  --current-ink: #14241F;
+  --current-paper: #F2F5F1;
+  --current-card: #FBFCFA;
+  --current-line: #D7DED6;
+  --current-emerald: #16794E;
+  --current-emerald-soft: #E2EFE7;
+  --current-amber: #E6A23C;
+  --current-amber-soft: #FBECCD;
+  --current-coral: #E2543B;
+  --current-coral-soft: #FBE7E1;
+  --current-sage: #6FA68A;
+  --font-display: "Bricolage Grotesque", system-ui, sans-serif;
+  --font-mono-money: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Space Mono utility for figures/labels (money, hosts, meta lines). */
+.money {
+  font-family: var(--font-mono-money);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Contrast hardening:
    Many screens still use fixed Tailwind grays (e.g. text-slate-500/600) which can be
    too light on white. These overrides keep the UI readable without needing per-component edits. */
