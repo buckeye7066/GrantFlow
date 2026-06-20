@@ -188,3 +188,60 @@ export function getPortalSessionCaptureToken(profileId) {
     body: JSON.stringify({ profileId }),
   })
 }
+
+// -- Capture requests (queue an intent the owner's laptop helper can fulfill) --
+
+export function createCaptureRequest(profileId, { portalHost, loginUrl = null, label = null } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/capture-requests`, {
+    method: 'POST',
+    body: JSON.stringify({ profileId, portal_host: portalHost, login_url: loginUrl, label }),
+  })
+}
+
+export function listCaptureRequests({ profileId, status = 'pending' } = {}) {
+  const qs = new URLSearchParams({ status })
+  if (profileId) qs.set('profileId', profileId)
+  return apiFetch(`/api/hamilton/automation/sessions/capture-requests?${qs.toString()}`)
+}
+
+export function cancelCaptureRequest(id, reason = null) {
+  if (!id) return Promise.reject(new Error('id required'))
+  return apiFetch(`/api/hamilton/automation/sessions/capture-requests/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+// -- Cloud interactive login (Option B): self-serve on any device ------------
+
+// Is cloud login configured on this deployment? (Off by default.)
+export function getCloudLoginStatus() {
+  return apiFetch(`/api/hamilton/automation/sessions/cloud-login/status`)
+}
+
+// Start a cloud login; returns { liveSessionId, liveUrl } the user opens to log in.
+export function startCloudLogin(profileId, { portalHost, loginUrl = null, label = null, captureRequestId = null } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/cloud-login/start`, {
+    method: 'POST',
+    body: JSON.stringify({ profileId, portal_host: portalHost, login_url: loginUrl, label, capture_request_id: captureRequestId }),
+  })
+}
+
+// Finish a cloud login: capture + import the authenticated session (profile-bound).
+export function completeCloudLogin(liveSessionId) {
+  if (!liveSessionId) return Promise.reject(new Error('liveSessionId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function cancelCloudLogin(liveSessionId) {
+  if (!liveSessionId) return Promise.reject(new Error('liveSessionId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}

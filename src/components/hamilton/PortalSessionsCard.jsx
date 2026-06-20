@@ -23,13 +23,17 @@ import {
   listPortalSessions,
   revokePortalSession,
   getPortalSessionCaptureToken,
+  getCloudLoginStatus,
+  startCloudLogin,
+  completeCloudLogin,
 } from "@/api/hamilton"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/use-toast"
 import { showSuccessToast, showErrorToast } from "@/components/shared/toastHelpers"
-import { KeyRound, Loader2, ShieldCheck, ShieldX, Clock, Copy, Plus, X } from "lucide-react"
+import { KeyRound, Loader2, ShieldCheck, ShieldX, Clock, Copy, Plus, X, Smartphone, Globe, Info } from "lucide-react"
 
 const DAY_MS = 86_400_000
 
@@ -117,6 +121,46 @@ export default function PortalSessionsCard({ profileId }) {
     },
   })
 
+  // Option B (cloud interactive login): self-serve on any device, owner-independent.
+  // Off unless the deployment configured a hosted browser provider.
+  const [portalHost, setPortalHost] = useState("")
+  const [loginUrl, setLoginUrl] = useState("")
+  const [liveSessionId, setLiveSessionId] = useState(null)
+
+  const { data: cloudStatus } = useQuery({
+    queryKey: ["hamilton-cloud-login-status"],
+    queryFn: () => getCloudLoginStatus(),
+    staleTime: 5 * 60_000,
+  })
+  const cloudConfigured = Boolean(cloudStatus?.configured)
+
+  const cloudStartMutation = useMutation({
+    mutationFn: () =>
+      startCloudLogin(profileId, {
+        portalHost: portalHost.trim(),
+        loginUrl: loginUrl.trim() || null,
+        label: portalHost.trim() ? `${portalHost.trim()} session` : null,
+      }),
+    onSuccess: (res) => {
+      setLiveSessionId(res?.liveSessionId || null)
+      if (res?.liveUrl && typeof window !== "undefined") {
+        window.open(res.liveUrl, "_blank", "noopener,noreferrer")
+      }
+      showSuccessToast(toast, "Secure login window opened", "Log in + clear 2FA there, then come back and tap “I’ve finished logging in”.")
+    },
+    onError: (err) => showErrorToast(toast, "Could not start cloud login", err?.message || "Please try again."),
+  })
+
+  const cloudCompleteMutation = useMutation({
+    mutationFn: () => completeCloudLogin(liveSessionId),
+    onSuccess: () => {
+      setLiveSessionId(null)
+      queryClient.invalidateQueries({ queryKey: ["hamilton-portal-sessions", profileId] })
+      showSuccessToast(toast, "Session captured", "Hamilton can now act inside this portal for this profile.")
+    },
+    onError: (err) => showErrorToast(toast, "Could not capture the session", err?.message || "Make sure you finished logging in, then retry."),
+  })
+
   const handleCopy = (text, what) => {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text)
@@ -159,11 +203,73 @@ export default function PortalSessionsCard({ profileId }) {
 
       <CardContent className="space-y-4">
         {setupOpen && (
-          <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 space-y-3 text-sm text-sky-900">
-            <p className="font-medium flex items-center gap-1.5">
-              <KeyRound className="h-4 w-4" /> Capture a session for this profile
-            </p>
-            <p>
+          <div className="space-y-4">
+            {/* Plain-language disclaimer — what's captured, why, and the scope. */}
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-2 text-sm text-indigo-950">
+              <p className="font-medium flex items-center gap-1.5">
+                <Info className="h-4 w-4" /> What this does — please read
+              </p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li><strong>What:</strong> captures the logged-in session (cookies) <em>after</em> you finish signing in — never your password or your 2FA code.</li>
+                <li><strong>Why:</strong> lets Hamilton act inside this portal for you later (e.g. submit an application) without making you log in or approve 2FA every time.</li>
+                <li><strong>Scope:</strong> the session is tied to <strong>this profile only</strong> and reused only for this profile’s work. You can revoke it anytime below.</li>
+              </ul>
+            </div>
+
+            {/* OPTION B — cloud interactive login: self-serve on any device. */}
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3 text-sm text-emerald-900">
+              <p className="font-medium flex items-center gap-1.5">
+                <Smartphone className="h-4 w-4" /> Log in from your phone or computer
+              </p>
+              {cloudConfigured ? (
+                <>
+                  <p>
+                    GrantFlow opens a secure login window you complete yourself (including 2FA). When
+                    you’re done, tap “I’ve finished logging in” and the session is captured for this profile.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Input placeholder="Portal host (e.g. mtsu.edu)" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
+                    <Input placeholder="Login URL (optional)" value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} />
+                  </div>
+                  {!liveSessionId ? (
+                    <Button size="sm" disabled={!portalHost.trim() || cloudStartMutation.isPending} onClick={() => cloudStartMutation.mutate()}>
+                      {cloudStartMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}
+                      Open secure login window
+                    </Button>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button size="sm" disabled={cloudCompleteMutation.isPending} onClick={() => cloudCompleteMutation.mutate()}>
+                        {cloudCompleteMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1.5" />}
+                        I’ve finished logging in
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setLiveSessionId(null)}>Cancel</Button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p>
+                  In-app cloud login isn’t enabled on this deployment yet. Use <strong>Saved Login</strong>
+                  {" "}below (works on any phone or computer), or an admin can capture a session from a computer.
+                </p>
+              )}
+            </div>
+
+            {/* OPTION A pointer — phone-friendly, owner-independent: save the login. */}
+            <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 space-y-1 text-sm text-sky-900">
+              <p className="font-medium flex items-center gap-1.5">
+                <KeyRound className="h-4 w-4" /> Or save your login (works on any device)
+              </p>
+              <p>
+                Enter your portal username + password (and an authenticator/2FA secret if you have one)
+                in <strong>Saved Logins</strong>. Hamilton signs in for you each run. For portals that send
+                a “tap to approve” 2FA push, Hamilton will notify you to approve it when it runs.
+              </p>
+            </div>
+
+            {/* Advanced / owner: capture from a computer via the CLI tool. */}
+            <details className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+              <summary className="cursor-pointer font-medium">Advanced: capture from a computer (owner)</summary>
+              <p className="mt-2">
               Run this in the GrantFlow repo. A browser window opens — log in and clear 2FA, then
               return to the terminal and press Enter. The session uploads encrypted and Hamilton
               reuses it.
@@ -201,6 +307,7 @@ export default function PortalSessionsCard({ profileId }) {
               <pre className="mt-2 overflow-x-auto rounded-md bg-slate-900 p-3 text-xs text-slate-100">
                 {buildOutModeCommand(profileId)}
               </pre>
+            </details>
             </details>
           </div>
         )}

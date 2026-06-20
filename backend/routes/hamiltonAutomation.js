@@ -74,6 +74,23 @@ import {
   markSessionExpired,
 } from '../services/hamilton/hamiltonCredentialSessionService.js'
 import {
+  CAPTURE_DISCLAIMER,
+  createCaptureRequest,
+  listCaptureRequests,
+  getCaptureRequest,
+  completeCaptureRequest,
+  cancelCaptureRequest,
+  markLaunched,
+} from '../services/hamilton/hamiltonSessionCaptureRequests.js'
+import {
+  isCloudLoginConfigured,
+  startCloudLogin,
+  getCloudLoginMeta,
+  completeCloudLogin,
+  cancelCloudLogin,
+  cloudLoginStatus,
+} from '../services/hamilton/hamiltonCloudLogin.js'
+import {
   saveCredential,
   saveGeneratedCredential,
   listCredentialsForProfile,
@@ -820,16 +837,39 @@ router.post('/sessions/import', async (req, res) => {
       consent_text: 'Owner authorized Hamilton to reuse this saved session to act inside the portal on their behalf.',
       source_ip: req.ip || req.headers?.['x-forwarded-for'] || null,
     }
+    // Profile-binding safeguard: if this upload fulfills a capture request,
+    // the request MUST belong to the same profile we're importing into. This
+    // is what prevents a session from being filed under the wrong profile when
+    // two users share a portal host (e.g. two MTSU students). We also confirm
+    // the caller may access the request's profile before completing it.
+    const captureRequestId = req.body?.capture_request_id || req.body?.captureRequestId || null
+    let captureRequest = null
+    if (captureRequestId) {
+      captureRequest = await getCaptureRequest(req.db, captureRequestId)
+      if (!captureRequest) {
+        return res.status(404).json({ error: 'capture_request_not_found' })
+      }
+      if (String(captureRequest.profile_id) !== String(req.body?.profileId)) {
+        return res.status(409).json({
+          error: 'profile_mismatch',
+          message: 'This capture request belongs to a different profile. Refusing to file the session under the wrong profile.',
+        })
+      }
+    }
+
     const session = await importSession(req.db, {
       userId: getAuthUserId(user),
       profileId: req.body?.profileId,
-      portalHost: req.body?.portal_host || req.body?.portalHost || req.body?.portal_url,
+      portalHost: req.body?.portal_host || req.body?.portalHost || req.body?.portal_url || captureRequest?.portal_host,
       storageState: req.body?.storage_state || req.body?.storageState,
-      label: req.body?.label || null,
+      label: req.body?.label || captureRequest?.label || null,
       authenticationStrategy: req.body?.authentication_strategy || req.body?.authenticationStrategy || null,
       expiresAt: req.body?.expires_at || req.body?.expiresAt || null,
-      metadata: { ...(req.body?.metadata || {}), consent },
+      metadata: { ...(req.body?.metadata || {}), consent, capture_request_id: captureRequestId || undefined },
     })
+    if (captureRequest) {
+      await completeCaptureRequest(req.db, captureRequest.id, { sessionId: session?.id || null }).catch(() => {})
+    }
     return res.json({ ok: true, session })
   } catch (err) {
     return res.status(400).json({ error: 'import_failed', detail: err?.message })
@@ -875,6 +915,157 @@ router.post('/sessions/capture-token', async (req, res) => {
     profileId,
     api_base: `${req.protocol}://${req.get('host')}`,
   })
+})
+
+// ── Capture requests ────────────────────────────────────────────────────────
+// The in-app "Capture login session" button creates a profile-bound request
+// here; the owner's local laptop-connector polls pending requests, opens the
+// login page so the human can clear 2FA, captures the session, and uploads it.
+// Phone users (who can't run the connector) can still create a request for the
+// owner to fulfill on a computer, or use the Saved Login path instead.
+
+// Create a capture request (owner of the target profile).
+router.post('/sessions/capture-requests', async (req, res) => {
+  const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
+  const user = await requireProfileScope(req, res, profileId)
+  if (!user) return
+  try {
+    const request = await createCaptureRequest(req.db, {
+      userId: getAuthUserId(user),
+      profileId,
+      portalHost: req.body?.portal_host || req.body?.portalHost,
+      loginUrl: req.body?.login_url || req.body?.loginUrl || null,
+      label: req.body?.label || null,
+      requestedByEmail: user?.email || user?.primary_email || null,
+    })
+    return res.json({ ok: true, request, disclaimer: CAPTURE_DISCLAIMER })
+  } catch (err) {
+    return res.status(400).json({ error: 'capture_request_failed', detail: err?.message })
+  }
+})
+
+// List capture requests. The connector polls this scoped to the profiles the
+// authenticated operator can access — so it never sees another operator's work.
+router.get('/sessions/capture-requests', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : 'pending'
+    // If a specific profile is requested, scope+authorize to it; otherwise list
+    // across every profile this operator can access (the connector's poll).
+    let profileIds
+    if (req.query.profileId) {
+      const scoped = await requireProfileScope(req, res, req.query.profileId)
+      if (!scoped) return
+      profileIds = [String(req.query.profileId)]
+    } else {
+      // null = admin (no restriction → all pending); otherwise the operator's
+      // own profiles only, so the connector never sees another operator's work.
+      const accessible = await getAccessibleProfileIds(req.db, user)
+      profileIds = accessible === null ? null : [...accessible].map(String)
+    }
+    const requests = await listCaptureRequests(req.db, { profileIds, status })
+    return res.json({ ok: true, requests, disclaimer: CAPTURE_DISCLAIMER })
+  } catch (err) {
+    return res.status(500).json({ error: 'capture_requests_failed', detail: err?.message })
+  }
+})
+
+// Mark a request as launched (connector opened the browser) — optional UX nicety.
+router.post('/sessions/capture-requests/:id/launched', async (req, res) => {
+  const request = await getCaptureRequest(req.db, req.params.id)
+  if (!request) return res.status(404).json({ error: 'not_found' })
+  const user = await requireProfileScope(req, res, request.profile_id)
+  if (!user) return
+  const updated = await markLaunched(req.db, req.params.id)
+  return res.json({ ok: true, request: updated })
+})
+
+// Cancel a request (owner of the request's profile).
+router.post('/sessions/capture-requests/:id/cancel', async (req, res) => {
+  const request = await getCaptureRequest(req.db, req.params.id)
+  if (!request) return res.status(404).json({ error: 'not_found' })
+  const user = await requireProfileScope(req, res, request.profile_id)
+  if (!user) return
+  const updated = await cancelCaptureRequest(req.db, req.params.id, { reason: req.body?.reason || 'cancelled_by_user' })
+  return res.json({ ok: true, request: updated })
+})
+
+// ── Cloud interactive login (Option B) ──────────────────────────────────────
+// Self-serve, any device, owner-independent: the backend opens a hosted browser
+// the user drives from their phone to log in + clear 2FA, then we capture the
+// session. OFF unless HAMILTON_CLOUD_LOGIN_* is configured (graceful fallback to
+// Saved Login). The captured session imports through the same profile-bound path.
+
+router.get('/sessions/cloud-login/status', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  return res.json({ ok: true, ...cloudLoginStatus(), disclaimer: CAPTURE_DISCLAIMER })
+})
+
+router.post('/sessions/cloud-login/start', async (req, res) => {
+  const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
+  const user = await requireProfileScope(req, res, profileId)
+  if (!user) return
+  if (!isCloudLoginConfigured()) {
+    return res.status(501).json({ error: 'cloud_login_not_configured', ...cloudLoginStatus() })
+  }
+  const result = await startCloudLogin({
+    userId: getAuthUserId(user),
+    profileId,
+    portalHost: req.body?.portal_host || req.body?.portalHost,
+    loginUrl: req.body?.login_url || req.body?.loginUrl || null,
+    label: req.body?.label || null,
+    captureRequestId: req.body?.capture_request_id || null,
+  })
+  if (!result.ok) return res.status(400).json({ error: 'cloud_login_start_failed', ...result })
+  return res.json({ ok: true, ...result, disclaimer: CAPTURE_DISCLAIMER })
+})
+
+// Finish: capture the authenticated session and import it (profile-bound). The
+// live session already carries the profile it was started for; we re-verify the
+// caller may access that profile before storing anything.
+router.post('/sessions/cloud-login/:liveSessionId/complete', async (req, res) => {
+  const meta = getCloudLoginMeta(req.params.liveSessionId)
+  if (!meta) return res.status(404).json({ error: 'not_found_or_expired' })
+  const user = await requireProfileScope(req, res, meta.profileId)
+  if (!user) return
+  const result = await completeCloudLogin(req.params.liveSessionId)
+  if (!result.ok) return res.status(400).json({ error: 'cloud_login_complete_failed', ...result })
+  try {
+    const consent = {
+      consented_by_user_id: getAuthUserId(user),
+      consented_by_email: user?.email || user?.primary_email || null,
+      consented_at: new Date().toISOString(),
+      consent_text: 'User authorized Hamilton to reuse this saved session to act inside the portal on their behalf (captured via cloud interactive login).',
+      source_ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+    }
+    const session = await importSession(req.db, {
+      userId: getAuthUserId(user),
+      profileId: meta.profileId,
+      portalHost: meta.portalHost,
+      storageState: result.storageState,
+      label: meta.label || `${meta.portalHost} session`,
+      authenticationStrategy: 'imported_session',
+      expiresAt: req.body?.expires_at || new Date(Date.now() + 14 * 86400_000).toISOString(),
+      metadata: { imported_via: 'cloud_interactive_login', consent, capture_request_id: meta.captureRequestId || undefined },
+    })
+    if (meta.captureRequestId) {
+      await completeCaptureRequest(req.db, meta.captureRequestId, { sessionId: session?.id || null }).catch(() => {})
+    }
+    return res.json({ ok: true, session })
+  } catch (err) {
+    return res.status(400).json({ error: 'import_failed', detail: err?.message })
+  }
+})
+
+router.post('/sessions/cloud-login/:liveSessionId/cancel', async (req, res) => {
+  const meta = getCloudLoginMeta(req.params.liveSessionId)
+  if (!meta) return res.json({ ok: true, already: true })
+  const user = await requireProfileScope(req, res, meta.profileId)
+  if (!user) return
+  const result = await cancelCloudLogin(req.params.liveSessionId)
+  return res.json({ ok: true, ...result })
 })
 
 // Login-time readiness: is a schedule set, which portals still need a session

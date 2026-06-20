@@ -5,10 +5,13 @@
   "type": "module",
   "description": "Local CLI that scans allowlisted folders on the admin's laptop, extracts text, and stages candidates in GrantFlow for check-off review.",
   "bin": {
-    "grantflow-connector": "./scan.js"
+    "grantflow-connector": "./scan.js",
+    "grantflow-capture": "./capture.js"
   },
   "scripts": {
     "scan": "node scan.js",
-    "dry-run": "node scan.js --dry-run"
+    "dry-run": "node scan.js --dry-run",
+    "capture": "node capture.js",
+    "capture:watch": "node capture.js --watch"
   }
 }

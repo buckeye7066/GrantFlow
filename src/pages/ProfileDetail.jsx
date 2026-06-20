@@ -34,6 +34,7 @@ import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
+import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
 import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
@@ -792,6 +793,9 @@ export default function ProfileDetail() {
                 Hamilton uses them to sign in to any grant/application portal she
                 automates from the pipeline. */}
             <SavedLoginsCard profileId={profileId} />
+            {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
+                from your phone or computer" capture flow + disclaimer. */}
+            <PortalSessionsCard profileId={profileId} />
             <PortalAccessScheduleCard profileId={profileId} />
           </TabsContent>
 

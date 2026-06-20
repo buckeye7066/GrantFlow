@@ -514,10 +514,66 @@ export async function getDecryptedCredentialWithFallback(db, { profileId, portal
   if (own) return { ...own, source: 'profile' }
   const adminId = adminVaultProfileId()
   if (adminId && String(adminId) !== String(profileId)) {
+    // SAFEGUARD (multi-tenant portal): only reuse the shared owner vault when
+    // THIS profile is the only real user of the portal. If any OTHER profile
+    // already has its own credential or captured session for the same
+    // registrable domain, the portal is shared by multiple users (e.g. two
+    // MTSU students) and silently applying the owner's login to this profile
+    // would risk acting in the wrong account. In that case we refuse the
+    // fallback and force a per-profile login/session instead.
+    const sharedHost = await hostHasOtherProfileIdentity(db, { profileId, portalHost, excludeProfileId: adminId })
+    if (sharedHost) {
+      console.warn('[credentialVault] admin-vault fallback suppressed — shared portal host', String(profileId), portalHost)
+      return null
+    }
     const shared = await getDecryptedCredential(db, { profileId: adminId, portalHost })
     if (shared) return { ...shared, source: 'admin_vault' }
   }
   return null
+}
+
+/**
+ * Does any profile OTHER than `profileId` (and `excludeProfileId`, the admin
+ * vault) hold an active credential or a valid saved session for the same
+ * registrable domain as `portalHost`? Used to detect a portal that's shared by
+ * multiple distinct users so we never cross-apply one user's owner-vault login.
+ * Best-effort: any query failure returns false (don't block the normal path).
+ */
+async function hostHasOtherProfileIdentity(db, { profileId, portalHost, excludeProfileId = null } = {}) {
+  try {
+    await ensureSchema(db)
+    const wantDomain = registrableDomain(normalizeHost(portalHost))
+    if (!wantDomain) return false
+    const exclude = new Set([String(profileId), excludeProfileId ? String(excludeProfileId) : null].filter(Boolean))
+
+    const matchesOther = (rows) => {
+      for (const r of rows || []) {
+        const pid = (r?.profile_id !== null && r?.profile_id !== undefined) ? String(r.profile_id) : null
+        if (!pid || exclude.has(pid)) continue
+        if (registrableDomain(normalizeHost(r.portal_host)) === wantDomain) return true
+      }
+      return false
+    }
+
+    const credRows = await db
+      .prepare(`SELECT DISTINCT profile_id, portal_host FROM hamilton_portal_credentials WHERE status = 'active'`)
+      .all()
+    if (matchesOther(credRows)) return true
+
+    let sessRows = []
+    try {
+      sessRows = await db
+        .prepare(`SELECT DISTINCT profile_id, portal_host FROM hamilton_saved_sessions WHERE status = 'valid'`)
+        .all()
+    } catch {
+      sessRows = [] // sessions table may not exist on older deploys — non-fatal
+    }
+    if (matchesOther(sessRows)) return true
+
+    return false
+  } catch {
+    return false
+  }
 }
 
 /**
