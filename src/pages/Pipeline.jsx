@@ -5,7 +5,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Filter, Loader2, RefreshCcw, Trash2, UserCheck, Printer } from "lucide-react";
+import { Filter, Loader2, RefreshCcw, Trash2, UserCheck, Printer, Sparkles } from "lucide-react";
 import { getCrawlerJob, createCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
@@ -504,6 +504,30 @@ export default function Pipeline() {
                 >
                   <Printer className="w-4 h-4 mr-2" />
                   Print This Profile's Packet
+                </Button>
+              )}
+              {/*
+                Process Funding Sources with Hamilton — opens a focused, full
+                worklist (per-source Process / Leave / Delete) in a new tab so
+                the user can triage Hamilton work without losing the board.
+                Only meaningful for a specific profile, since Hamilton needs to
+                know whose application to complete.
+              */}
+              {selectedProfileId && selectedProfileId !== "all" && (
+                <Button
+                  variant="default"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                  onClick={() =>
+                    window.open(
+                      `/HamiltonProcessing?profile_id=${encodeURIComponent(selectedProfileId)}`,
+                      "_blank",
+                      "noopener,noreferrer",
+                    )
+                  }
+                  aria-label="Process funding sources with Hamilton"
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Process with Hamilton
                 </Button>
               )}
             </div>

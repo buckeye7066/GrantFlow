@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   Star,
   Library,
+  Sparkles,
 } from "lucide-react";
 
 /** @typedef {{ title: string, routeName: string, url: string, icon: import('lucide-react').LucideIcon, isAdminOnly?: boolean, isAdvanced?: boolean }} NavItem */
@@ -92,6 +93,7 @@ export const NAV_GROUPS = [
     icon: Kanban,
     items: [
       { title: "Pipeline", routeName: "Pipeline", url: createPageUrl("Pipeline"), icon: Kanban },
+      { title: "Process with Hamilton", routeName: "HamiltonProcessing", url: createPageUrl("HamiltonProcessing"), icon: Sparkles },
       { title: "Applications", routeName: "Applications", url: createPageUrl("Applications"), icon: ClipboardList },
       { title: "Proposals", routeName: "Proposals", url: createPageUrl("Proposals"), icon: FileText },
       { title: "Documents", routeName: "Documents", url: createPageUrl("Documents"), icon: FolderOpen },
@@ -177,6 +179,7 @@ export const ROUTE_LABELS = {
   ItemFunding: "Item Funding",
   ProfileMatcher: "Profile Matcher",
   Pipeline: "Pipeline",
+  HamiltonProcessing: "Process with Hamilton",
   Applications: "Applications",
   GrantDetail: "Grant",
   Apply: "Apply",
