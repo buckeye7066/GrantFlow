@@ -56,7 +56,7 @@ export const AUTOMATION_TOGGLES = Object.freeze([
       'Allow scheduled crawlers / discovery to add newly-matched funding opportunities to this '
       + 'profile’s pipeline automatically.',
     default: true,
-    enforced: false, // TODO: wire into the discovery/crawler auto-add path.
+    enforced: true, // gated in localCrawler + comprehensiveCrawler via discoveryAutoAddGate.js
   }),
 ])
 

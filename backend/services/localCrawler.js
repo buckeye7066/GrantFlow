@@ -9,6 +9,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { discoveryAutoAddAllowedForProfile } from './discoveryAutoAddGate.js'
 import {
   buildProfileSignals,
   summarizeProfileSignals,
@@ -255,7 +256,15 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   let updatedCount = 0
   let savedToPipeline = 0
   const profileId = profileContext?.profile?.id
-  
+  // Per-profile automation toggle: only auto-add to the pipeline when
+  // discovery_auto_add is on. Off → opportunities are still cataloged and
+  // surface in Discovery for manual add, but don't enter the pipeline
+  // unattended. Checked once (not per-opportunity). Absent pref defaults ON.
+  const autoAddOk = profileId ? await discoveryAutoAddAllowedForProfile(db, profileId) : false
+  if (profileId && !autoAddOk) {
+    console.info(`[localCrawler] discovery_auto_add OFF for profile ${profileId} — cataloging only, no pipeline auto-add`)
+  }
+
   for (const opp of topOpps) {
     try {
       const result = await upsertFundingOpportunity(db, {
@@ -289,7 +298,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
       }
       
       // Save to profile pipeline using the relaxed threshold (topOpps already passed it)
-      if (profileId) {
+      if (profileId && autoAddOk) {
         const oppWithId = { ...opp, id: result.id, source: 'local_foundation' }
         // Do NOT pass pre-computed score â let saveToProfilePipeline run
         // computeMatchDecision() as the single canonical authority (Goal 4).

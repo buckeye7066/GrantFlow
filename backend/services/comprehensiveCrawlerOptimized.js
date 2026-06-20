@@ -8,6 +8,7 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { discoveryAutoAddAllowedForProfile } from './discoveryAutoAddGate.js'
 import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
 import { ingestFromConnectors } from './connectorIngestService.js'
@@ -695,7 +696,15 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   // opportunities this crawler legitimately surfaced.
   // instead of pre-filtering at 80% which blocked all individual-profile results.
   let savedToProfile = 0
-  if (profileId) {
+  // Per-profile automation toggle: scheduled/automatic discovery only auto-adds
+  // to the pipeline when `discovery_auto_add` is on. When off, the opportunities
+  // are still cataloged above and surface in Discovery for manual add — they
+  // just don't enter the pipeline unattended.
+  const autoAddOk = profileId ? await discoveryAutoAddAllowedForProfile(db, profileId) : false
+  if (profileId && !autoAddOk) {
+    console.info(`[comprehensiveCrawler] discovery_auto_add OFF for profile ${profileId} — skipping pipeline auto-add (${topOpps.length} opps left for manual add)`)
+  }
+  if (profileId && autoAddOk) {
     for (const opp of topOpps) {
       try {
         // Find the inserted opportunity ID
