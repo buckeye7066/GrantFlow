@@ -209,6 +209,144 @@ function _hasNativeIndicator(pd) {
   )
 }
 
+// ── Single-attribute exclusivity helpers (religion / locale / orientation /
+//    marital / ethnicity). Each returns a NORMALIZED string token or '' when the
+//    attribute is unknown. The rules that use them HARD-reject only when the
+//    attribute is KNOWN (non-empty) AND clearly mismatched; an empty/unknown
+//    value always PASSES (recall over suppression). ───────────────────────────
+
+// Religion / faith / denomination as a normalized lowercase string, or '' when
+// the profile does not declare one. Reads the explicit religion/denomination/
+// faith fields the profile captures (basic_information / demographics / a
+// dedicated faith/religion section) without inventing new fields.
+function _profileReligion(pd) {
+  const candidates = [
+    pd.religion,
+    pd.denomination,
+    pd.faith,
+    pd.religious_affiliation,
+    pd.faith_affiliation,
+    pd.demographics && typeof pd.demographics === 'object' && !Array.isArray(pd.demographics)
+      ? pd.demographics.religion || pd.demographics.denomination || pd.demographics.faith
+      : null,
+    pd.basic_information && typeof pd.basic_information === 'object'
+      ? pd.basic_information.religion || pd.basic_information.denomination
+      : null,
+  ]
+  for (const c of candidates) {
+    if (typeof c === 'string') {
+      const s = c.trim().toLowerCase()
+      if (s && s !== 'none' && s !== 'n/a' && s !== 'unknown' && s !== 'prefer not to say') return s
+    }
+  }
+  return ''
+}
+
+// Map a normalized religion string to a canonical "family" so synonyms collapse
+// (catholic ⊂ christian, baptist ⊂ christian, etc.). Used so a "must be Catholic"
+// opportunity does NOT hard-reject a profile whose religion is literally
+// "catholic" written differently, while still rejecting a clearly different
+// faith. Returns a Set of family tokens the profile belongs to.
+function _religionFamilies(religion) {
+  const r = String(religion || '').toLowerCase()
+  const fams = new Set()
+  if (!r) return fams
+  const CHRISTIAN = /catholic|christian|protestant|baptist|methodist|lutheran|presbyterian|evangelical|pentecostal|orthodox|episcopal|anglican|mormon|latter.?day|adventist|nazarene|quaker|mennonite|amish/
+  if (CHRISTIAN.test(r)) fams.add('christian')
+  if (/catholic/.test(r)) fams.add('catholic')
+  if (/jewish|judaism|hebrew/.test(r)) fams.add('jewish')
+  if (/muslim|islam|islamic/.test(r)) fams.add('muslim')
+  if (/hindu/.test(r)) fams.add('hindu')
+  if (/buddhis/.test(r)) fams.add('buddhist')
+  if (/sikh/.test(r)) fams.add('sikh')
+  fams.add(r) // always include the raw token for exact-string matches
+  return fams
+}
+
+// Which faith does the opportunity REQUIRE (when explicitly exclusive)? Returns
+// the canonical family token the opp restricts to, or '' when not a single
+// recognized faith. Only called by a rule whose oppPattern already proved
+// explicit exclusivity ("only / must be / restricted to ...").
+function _requiredReligionFamily(oppText) {
+  const t = String(oppText || '').toLowerCase()
+  if (/\bcatholic/.test(t)) return 'catholic'
+  if (/\bjewish|\bjudaism|\bjewish students/.test(t)) return 'jewish'
+  if (/\bmuslim|\bislamic|\bislam\b/.test(t)) return 'muslim'
+  if (/\bhindu/.test(t)) return 'hindu'
+  if (/\bbuddhis/.test(t)) return 'buddhist'
+  if (/\bsikh/.test(t)) return 'sikh'
+  // Generic "christian only" (no narrower denomination named)
+  if (/\bchristian/.test(t)) return 'christian'
+  return ''
+}
+
+// Profile locale: 'rural' | 'urban' | '' (unknown). Reads the geographic
+// qualifiers the normalizer surfaces plus any explicit rural/urban flags.
+function _profileLocale(pd) {
+  const gq = Array.isArray(pd.geographic_qualifiers) ? pd.geographic_qualifiers.map((x) => String(x).toLowerCase()) : []
+  if (gq.includes('rural') || gq.includes('frontier') || gq.includes('appalachian')) return 'rural'
+  if (gq.includes('urban_underserved') || gq.includes('urban')) return 'urban'
+  const explicit = String(pd.rural_urban || pd.locale || '').toLowerCase().trim()
+  if (explicit === 'rural') return 'rural'
+  if (explicit === 'urban' || explicit === 'suburban' || explicit === 'metro') return 'urban'
+  if (pd.rural_resident === true || pd.is_rural === true) return 'rural'
+  if (pd.urban_resident === true || pd.is_urban === true) return 'urban'
+  return ''
+}
+
+// Profile sexual orientation as a normalized string, or '' when unknown.
+// 'lgbtq' covers any non-heterosexual identity the profile records; 'straight'
+// covers heterosexual. Anything else / unset → '' (PASS).
+function _profileOrientation(pd) {
+  const demos = Array.isArray(pd.demographics) ? pd.demographics.map((x) => String(x).toLowerCase()) : []
+  if (demos.includes('lgbtq')) return 'lgbtq'
+  const o = String(pd.sexual_orientation || pd.orientation || '').toLowerCase().trim()
+  if (!o || o === 'unknown' || o === 'prefer not to say' || o === 'n/a') return ''
+  if (/lgbtq|gay|lesbian|bisexual|queer|transgender|trans\b|non.?binary|pansexual|asexual/.test(o)) return 'lgbtq'
+  if (/straight|heterosexual/.test(o)) return 'straight'
+  return ''
+}
+
+// Profile marital status normalized to 'married' | 'single' | '' (unknown).
+function _profileMarital(pd) {
+  const m = String(pd.marital_status || pd.marital || '').toLowerCase().trim()
+  if (!m || m === 'unknown' || m === 'prefer not to say' || m === 'n/a') return ''
+  if (/married|partnered|domestic partner|spouse/.test(m)) return 'married'
+  if (/single|divorced|widow|separated|never married|unmarried/.test(m)) return 'single'
+  return ''
+}
+
+// Whether the profile is (or is not) a single mother, when known. Returns
+// true / false / null(unknown). Used for "single mothers only" exclusivity.
+function _profileSingleMother(pd) {
+  const m = _profileMarital(pd)
+  const g = String(pd.gender || '').toLowerCase()
+  const hasKids =
+    pd.has_children === true ||
+    Number(pd.number_of_children) > 0 ||
+    Number(pd.household_members_under_18) > 0
+  // We can only confidently say "NOT a single mother" when gender is known and
+  // male, OR marital status is known-married. Otherwise unknown.
+  if (g && g !== 'female' && g !== 'woman' && g !== 'women') return false
+  if (m === 'married') return false
+  if (g === 'female' && m === 'single' && hasKids) return true
+  return null
+}
+
+// Profile ethnicity / heritage / culture / nationality as a normalized string,
+// or '' when unknown. Reads the free-text ethnicity field the normalizer
+// surfaces plus heritage/culture/nationality if present.
+function _profileEthnicity(pd) {
+  const candidates = [pd.ethnicity, pd.heritage, pd.culture, pd.nationality, pd.race]
+  for (const c of candidates) {
+    if (typeof c === 'string') {
+      const s = c.trim().toLowerCase()
+      if (s && s !== 'none' && s !== 'n/a' && s !== 'unknown' && s !== 'prefer not to say' && s !== 'other') return s
+    }
+  }
+  return ''
+}
+
 function _getAlreadyEnrolledPrograms(pd) {
   const gov = pd.government_assistance || {}
   const enrolled = []
@@ -349,6 +487,118 @@ export const RELEVANCE_RULES = [
       return profileState !== target
     },
     reason: 'Geographic exclusivity: residents-only program for a different state than the profile',
+  },
+
+  // ── R-relig. Demographic: EXPLICITLY religion-exclusive programs (hard) ────
+  // Fires only when the opp text is unambiguously single-faith exclusive
+  // ("Catholics only", "must be Catholic", "for Jewish students only",
+  // "open only to Muslims", "restricted to members of <faith>") AND the
+  // profile's religion is KNOWN and in a DIFFERENT faith family. Unknown
+  // profile religion → PASS (ambiguity wins). Christian-family synonyms
+  // collapse so a Baptist profile is not dropped from a "Christian only" grant.
+  {
+    id: 'demographic_religion_exclusive',
+    category: 'demographic',
+    description: 'Explicitly single-faith-exclusive programs for a profile of a different known religion',
+    hard: true,
+    oppPattern: /\b((catholics?|jewish|muslims?|hindus?|buddhists?|sikhs?|christians?|protestants?|baptists?|methodists?|lutherans?|presbyterians?|evangelicals?|members? of the [a-z]+ (church|faith|congregation))\s+(only|exclusively)|(must be|open only to|restricted to|exclusively for|limited to)\s+(a\s+)?(catholic|jewish|muslim|hindu|buddhist|sikh|christian|protestant|baptist|methodist|lutheran|presbyterian|evangelical)|for\s+(catholic|jewish|muslim|hindu|buddhist|sikh|christian)\s+(students?|applicants?|families|individuals?)\s+only)\b/i,
+    profileCheck: (pd, oppText) => {
+      const religion = _profileReligion(pd)
+      if (!religion) return false // unknown → PASS (recall over suppression)
+      const required = _requiredReligionFamily(oppText)
+      if (!required) return false // ambiguous required faith → PASS
+      const fams = _religionFamilies(religion)
+      // PASS if the profile belongs to the required family (catholic is also
+      // christian; christian requirement matched by any christian denomination).
+      if (fams.has(required)) return false
+      if (required === 'christian' && fams.has('christian')) return false
+      return true // KNOWN religion, clearly different family → REJECT
+    },
+    reason: 'Religion exclusivity: faith-restricted program, profile religion is a different known faith',
+  },
+
+  // ── R-rural. Geographic: EXPLICITLY rural-exclusive programs (hard) ────────
+  // "rural residents only", "must live in a rural county", "for rural
+  // communities only". HARD only when the profile locale is KNOWN-urban.
+  // A soft penalty also applies to a locally-unknown profile is NOT added —
+  // unknown locale PASSES entirely (conservative).
+  {
+    id: 'geographic_rural_exclusive',
+    category: 'geographic',
+    description: 'Explicitly rural-only programs for a known-urban profile',
+    hard: true,
+    oppPattern: /\b(rural\s+(residents?|communities|counties|areas?|households?)\s+only|(must|only)\s+(live|reside)[^.]{0,30}rural|for\s+rural\s+(residents?|communities|areas?)\s+only|restricted to rural|exclusively (for|to) rural)\b/i,
+    profileCheck: (pd) => _profileLocale(pd) === 'urban',
+    reason: 'Geographic exclusivity: rural-only program, profile is in a known urban locale',
+  },
+
+  // ── R-orient. Demographic: EXPLICITLY LGBTQ+-exclusive programs (hard) ─────
+  // "for LGBTQ+ applicants only", "exclusively for LGBTQ students". HARD only
+  // when orientation is KNOWN and clearly not in scope (i.e. recorded as
+  // straight/heterosexual). Unknown orientation → PASS. Respectful: triggers
+  // only on explicit "only/exclusively".
+  {
+    id: 'demographic_orientation_exclusive',
+    category: 'demographic',
+    description: 'Explicitly LGBTQ+-exclusive programs for a known-not-in-scope profile',
+    hard: true,
+    oppPattern: /\b(lgbtq\+?|lgbt|queer|gay|lesbian|transgender)\s+(applicants?|students?|individuals?|community|people|youth)?\s*(only|exclusively)\b|\b(exclusively (for|to)|open only to|restricted to)\s+(the\s+)?lgbtq/i,
+    profileCheck: (pd) => _profileOrientation(pd) === 'straight',
+    reason: 'Orientation exclusivity: LGBTQ+-only program, profile orientation is known and not in scope',
+  },
+
+  // ── R-marital. Demographic: EXPLICITLY marital-exclusive programs (hard) ───
+  // "married couples only", "for single mothers only". HARD only when the
+  // relevant marital attribute is KNOWN and mismatched.
+  {
+    id: 'demographic_marital_exclusive',
+    category: 'demographic',
+    description: 'Explicitly marital-status-exclusive programs for a known-mismatched profile',
+    hard: true,
+    oppPattern: /\b(married\s+(couples?|persons?|individuals?|applicants?)\s+only|for\s+married\s+(couples?|applicants?)\s+only|single\s+(mothers?|parents?|fathers?)\s+only|for\s+single\s+(mothers?|parents?|fathers?)\s+only|(must be|restricted to|exclusively for)\s+(married|single\s+(mothers?|parents?)))\b/i,
+    profileCheck: (pd, oppText) => {
+      const t = String(oppText || '').toLowerCase()
+      const wantsMarried = /\bmarried\b/.test(t)
+      const wantsSingleParent = /single\s+(mothers?|parents?|fathers?)/.test(t)
+      if (wantsMarried) {
+        return _profileMarital(pd) === 'single' // KNOWN single vs married-only → REJECT
+      }
+      if (wantsSingleParent) {
+        return _profileSingleMother(pd) === false // KNOWN not-a-single-mother → REJECT
+      }
+      return false
+    },
+    reason: 'Marital exclusivity: marital-status-restricted program, profile status is known and mismatched',
+  },
+
+  // ── R-ethnic. Demographic: EXPLICITLY ethnicity/heritage-exclusive (hard) ──
+  // "for <ethnicity> students only", "members of the <group> tribe only".
+  // HARD only when the profile's ethnicity/heritage is KNOWN and the named
+  // group does NOT appear anywhere in the profile's ethnicity/heritage text.
+  // Unknown ethnicity → PASS.
+  {
+    id: 'demographic_ethnicity_exclusive',
+    category: 'demographic',
+    description: 'Explicitly ethnicity/heritage-exclusive programs for a profile of a different known ethnicity',
+    hard: true,
+    oppPattern: /\b(for\s+([a-z]+(?:[- ][a-z]+)?)\s+(students?|applicants?|descendants?|heritage|individuals?|youth)\s+only|members? of the\s+([a-z]+)\s+tribe\s+only|(must be|restricted to|exclusively for|open only to)\s+(?:of\s+)?([a-z]+(?:[- ][a-z]+)?)\s+(?:descent|heritage|ancestry|ethnicity|origin)|([a-z]+(?:[- ][a-z]+)?)\s+heritage\s+(scholarship|grant|fund)\b)/i,
+    profileCheck: (pd, oppText) => {
+      const ethnicity = _profileEthnicity(pd)
+      if (!ethnicity) return false // unknown → PASS
+      const t = String(oppText || '').toLowerCase()
+      // Extract the named group from whichever alternative matched, then
+      // REJECT only if NONE of the named-group tokens appear in the profile's
+      // ethnicity/heritage string (conservative substring check both ways).
+      const m = t.match(/\b(?:for\s+([a-z]+(?:[- ][a-z]+)?)\s+(?:students?|applicants?|descendants?|heritage|individuals?|youth)\s+only|members? of the\s+([a-z]+)\s+tribe\s+only|(?:must be|restricted to|exclusively for|open only to)\s+(?:of\s+)?([a-z]+(?:[- ][a-z]+)?)\s+(?:descent|heritage|ancestry|ethnicity|origin)|([a-z]+(?:[- ][a-z]+)?)\s+heritage\s+(?:scholarship|grant|fund))\b/)
+      const named = (m && (m[1] || m[2] || m[3] || m[4]) || '').trim().toLowerCase()
+      if (!named || named.length < 3) return false
+      // Generic words that should never anchor an ethnicity exclusion.
+      const GENERIC = new Set(['minority', 'minorities', 'diverse', 'underrepresented', 'low', 'income', 'first', 'rural', 'local', 'state', 'women', 'female'])
+      if (GENERIC.has(named)) return false
+      if (ethnicity.includes(named) || named.includes(ethnicity)) return false // PASS — same group
+      return true // KNOWN ethnicity, named group absent → REJECT
+    },
+    reason: 'Ethnicity exclusivity: heritage-restricted program, profile ethnicity is a different known group',
   },
 
   // ── 2c. Demographic: refugee/resettlement programs for non-immigrants ──────

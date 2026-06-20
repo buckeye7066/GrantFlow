@@ -1359,6 +1359,42 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
       if (tokens.some((t) => oppText.includes(t))) demoBonus += 3
     }
     demoBonus = Math.min(15, demoBonus)
+  }
+
+  // Heritage / ethnicity / religion INCLUSION boost (+0..10, folded into the
+  // +0..15 demoBonus cap).
+  //
+  // The owner directive: a profile attribute that an opportunity TARGETS must
+  // RAISE the score (a Catholic profile scores higher on Catholic scholarships;
+  // a Russian-heritage profile higher on Russian-heritage scholarships). The
+  // discrete demographics[] tokens above only cover a fixed enum; this surfaces
+  // the FREE-TEXT ethnicity/heritage string and the religion signal, which were
+  // previously collected but never boosted. Kept additive, bounded, and folded
+  // into the same demoBonus cap below so existing weights are not destabilized.
+  {
+    let identityBonus = 0
+    // Free-text heritage / ethnicity (e.g. "russian", "irish", "korean").
+    const ethnicityRaw = String(profileNorm?.ethnicity || '').toLowerCase().trim()
+    if (ethnicityRaw && ethnicityRaw.length >= 4 && oppText.includes(ethnicityRaw)) {
+      identityBonus += 5
+      reasons.push(`Heritage/ethnicity match (${ethnicityRaw}) (+5)`)
+    }
+    // Religion / faith: when the profile carries a faith indicator AND the
+    // opportunity text explicitly names a faith/denomination/scholarship, give a
+    // small, bounded boost so faith-targeted funding ranks higher for faithful
+    // profiles. This never excludes — it only lifts an explicit match.
+    if (profileNorm?.hasFaithIndicator === true &&
+        /\b(catholic|christian|jewish|muslim|islamic|hindu|buddhist|faith[- ]based|religious|denomination|ministry|congregation|parish|diocese)\b/.test(oppText)) {
+      identityBonus += 5
+      reasons.push('Faith/religion alignment (+5)')
+    }
+    if (identityBonus > 0) {
+      demoBonus = Math.min(15, demoBonus + identityBonus)
+    }
+  }
+
+  {
+    // Re-apply the cap and surface the (possibly heritage-augmented) bonus.
     subscale += demoBonus
     if (demoBonus > 0) reasons.push(`Demo/affil +${demoBonus}`)
   }
