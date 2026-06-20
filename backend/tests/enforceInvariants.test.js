@@ -347,13 +347,13 @@ describe('enforceInvariants — relevance floor', () => {
     __resetFloorCache()
   })
 
-  it('resolves a numeric floor with a recorded source (fallback to 55 when config absent)', async () => {
+  it('resolves a numeric floor with a recorded source (from the shared config)', async () => {
     const { value, source } = await getRelevanceFloor()
     expect(Number.isFinite(value)).toBe(true)
     expect(typeof source).toBe('string')
-    // config/relevanceFloor.js does not exist in this worktree yet → fallback.
+    // backend/config/relevanceFloor.js is now present (merged) → resolves from it.
     expect(value).toBe(55)
-    expect(source).toMatch(/fallback/)
+    expect(source).toMatch(/config\/relevanceFloor\.js/)
   })
 
   it('PURGES below-floor discovery grants by DEFAULT (no opt-in needed)', async () => {

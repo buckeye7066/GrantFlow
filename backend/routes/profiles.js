@@ -1765,7 +1765,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
     items = (rows || []).map((g) => {
       const desc = (g.notes && String(g.notes).trim()) || g.opportunity_description || null
       const norm = (v) => {
-        const s = v == null ? '' : String(v).trim()
+        const s = (v === null || v === undefined) ? '' : String(v).trim()
         return s.length ? s : null
       }
       return {

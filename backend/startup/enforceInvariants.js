@@ -329,10 +329,10 @@ export async function enforceNoDuplicateGrants(db) {
     }
     for (const row of rows) {
       const p = norm(row.profile_id)
-      if (row.funding_opportunity_id != null && norm(row.funding_opportunity_id) !== '') {
+      if (row.funding_opportunity_id !== null && row.funding_opportunity_id !== undefined && norm(row.funding_opportunity_id) !== '') {
         linkByKey(`p:${p}|opp:${norm(row.funding_opportunity_id)}`, row.id)
       }
-      if (row.fingerprint != null && norm(row.fingerprint) !== '') {
+      if (row.fingerprint !== null && row.fingerprint !== undefined && norm(row.fingerprint) !== '') {
         linkByKey(`p:${p}|fp:${norm(row.fingerprint)}`, row.id)
       }
       const title = norm(row.title)
@@ -376,8 +376,8 @@ export async function enforceNoDuplicateGrants(db) {
         const cb = createdMs(b.created_at)
         if (ca !== cb) return ca - cb
         // 3. non-null match_score preferred
-        const sa = a.match_score == null ? 1 : 0
-        const sb = b.match_score == null ? 1 : 0
+        const sa = (a.match_score === null || a.match_score === undefined) ? 1 : 0
+        const sb = (b.match_score === null || b.match_score === undefined) ? 1 : 0
         if (sa !== sb) return sa - sb
         // 4. deterministic: lowest id
         return String(a.id).localeCompare(String(b.id))
@@ -475,7 +475,7 @@ export async function enforceRelevanceFloor(db) {
     // only ever delete rows in an explicitly-purgeable discovery status (or NULL
     // status), never an unrecognized status we don't understand.
     const purgeable = candidates.filter((r) => {
-      const status = r.status == null ? null : String(r.status)
+      const status = (r.status === null || r.status === undefined) ? null : String(r.status)
       const isEarly =
         status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
       if (!isEarly) return false
