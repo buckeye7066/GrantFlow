@@ -104,7 +104,8 @@ import savedGrantsRouter from './routes/savedGrants.js'
 import foundationsRouter from './routes/foundations.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
-import { runLinkVerification } from './services/linkVerificationService.js'
+import { runLinkVerification, getLinkHealthSummary } from './services/linkVerificationService.js'
+import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
 
@@ -3087,11 +3088,84 @@ if (process.env.NODE_ENV !== 'test') {
     setTimeout(runOnce, 45_000)
     setInterval(runOnce, intervalMs)
   }
+
+  // Weekly link-verification report — every Monday ~06:00 America/New_York, run
+  // a top-up verification pass and email the owner a link-health summary. Runs
+  // entirely in-process using the prod env (DATABASE_URL + RESEND), so unlike a
+  // cloud routine it needs NO external scheduler or injected secret. Hourly
+  // check; an in-memory guard prevents repeat runs within the same ET day (a
+  // rare restart-induced duplicate is harmless — runLinkVerification is
+  // idempotent and it is at worst one extra email).
+  // Tunable: WEEKLY_VERIFY_CHUNKS (default 6) x LINK_VERIFICATION_BATCH per run.
+  function scheduleWeeklyVerificationReport(dbInstance) {
+    let lastRunYmd = null
+    const nowEt = () => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        weekday: 'short',
+        hour: 'numeric',
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(new Date())
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+      return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
+    }
+    const runOnce = async () => {
+      try {
+        const { weekday, hour, ymd } = nowEt()
+        if (weekday !== 'Mon' || hour !== 6 || lastRunYmd === ymd) return
+        lastRunYmd = ymd
+        const chunks = Math.max(1, Number(process.env.WEEKLY_VERIFY_CHUNKS) || 6)
+        const limit = Math.max(50, Number(process.env.LINK_VERIFICATION_BATCH) || 500)
+        let checked = 0
+        let ok = 0
+        let broken = 0
+        for (let i = 0; i < chunks; i += 1) {
+          const s = await runLinkVerification(dbInstance, { limit, verifiedBy: 'weekly-report' })
+          checked += s.checked
+          ok += s.ok || 0
+          broken += s.broken || 0
+          if (s.checked === 0) break // backlog drained for this run
+        }
+        const health = await getLinkHealthSummary(dbInstance)
+        const byStatus = Object.fromEntries(
+          (health || []).map((r) => [r.link_status || 'unknown', Number(r.count)]),
+        )
+        const text = [
+          `GrantFlow weekly link verification — ${ymd} (America/New_York)`,
+          '',
+          `This pass: checked ${checked}, ok ${ok}, broken ${broken}.`,
+          `Catalog link health: ${JSON.stringify(byStatus)}.`,
+          '',
+          'The in-app verifier also runs every 6h between these weekly passes.',
+        ].join('\n')
+        console.log('[weekly-verify-report]', { checked, ok, broken, byStatus })
+        if (isEmailServiceConfigured()) {
+          await sendEmail({
+            to: ADMIN_EMAIL,
+            subject: `GrantFlow weekly link verification — ${byStatus.unverified ?? 0} unverified remaining`,
+            text,
+            html: `<pre style="font:14px/1.5 monospace">${text.replace(/</g, '&lt;')}</pre>`,
+          })
+          console.log('[weekly-verify-report] emailed', ADMIN_EMAIL)
+        } else {
+          console.warn('[weekly-verify-report] email service not configured; logged only')
+        }
+      } catch (err) {
+        console.warn('[weekly-verify-report] failed:', err.message)
+      }
+    }
+    setTimeout(runOnce, 60_000)
+    setInterval(runOnce, 60 * 60 * 1000) // hourly check
+  }
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
     scheduleLinkVerification(db)
     scheduleBillingCycle(db)
+    scheduleWeeklyVerificationReport(db)
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
     startHealthService(db);
