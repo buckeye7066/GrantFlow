@@ -96,11 +96,11 @@ export function getJohnConfig() {
     // Public self-serve entry point. John's emails invite the recipient to try
     // GrantFlow themselves — talk to Anya, get a live funding scan, then choose
     // whether to sign up — instead of asking John to run a scan for them. This
-    // is the frontend's /start route (the single onboarding funnel for new
-    // users). Override per-environment with JOHN_PROSPECT_LINK.
+    // is the public GrantFlow landing page (the single onboarding funnel for
+    // new users). Override per-environment with JOHN_PROSPECT_LINK.
     prospectLink: readEnvString(
       'JOHN_PROSPECT_LINK',
-      'https://app.axiombiolabs.org/start'
+      'https://www.axiombiolabs.org/grantflow'
     ),
     testRecipient: readEnvString(
       'JOHN_TEST_RECIPIENT',
