@@ -40,6 +40,11 @@ import HamiltonPortalsPanel from "@/components/hamilton/HamiltonPortalsPanel"
 
 const PORTAL_CHECK_REFRESH_DELAY_MS = 3000
 
+// TSAC retired the legacy tn.gov/collegepays.html portal; it now 302-redirects to
+// the "College for TN" (collegefortn.org) site run by THEC. Single source of truth
+// for the default/fallback TSAC portal link so all four usages stay in sync.
+const DEFAULT_TSAC_PORTAL_URL = "https://www.collegefortn.org/about-financial-aid/"
+
 const DEFAULT_TSAC_AWARDS_PLACEHOLDER = `[
   {
     "title": "Tennessee HOPE Scholarship",
@@ -210,7 +215,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
   const [applicationId, setApplicationId] = useState("")
   const [schoolName, setSchoolName] = useState("")
   const [connectionLabel, setConnectionLabel] = useState("")
-  const [portalUrl, setPortalUrl] = useState("https://www.tn.gov/collegepays.html")
+  const [portalUrl, setPortalUrl] = useState(DEFAULT_TSAC_PORTAL_URL)
   const [awardsPayload, setAwardsPayload] = useState("")
   const [selectedAwardIds, setSelectedAwardIds] = useState({})
   const [mergeTargets, setMergeTargets] = useState({})
@@ -485,9 +490,9 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
 
   if (st === "TN") {
     admissionsAndAid.unshift(
-      { label: "TN Student Assistance Corporation (TSAC)", href: "https://www.tn.gov/collegepays.html" },
-      { label: "Tennessee Promise", href: "https://www.tn.gov/collegepays/mon-college-pay/tennessee-promise-scholarship.html" },
-      { label: "HOPE Scholarship", href: "https://www.tn.gov/collegepays/mon-college-pay/tn-education-lottery-programs/hope-scholarship.html" },
+      { label: "TN Student Assistance Corporation (TSAC)", href: DEFAULT_TSAC_PORTAL_URL },
+      { label: "Tennessee Promise", href: "https://www.collegefortn.org/tennessee-promise/" },
+      { label: "HOPE Scholarship", href: "https://www.collegefortn.org/about-financial-aid/" },
     )
   }
 
@@ -789,7 +794,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                   value={providerId}
                   onValueChange={(value) => {
                     setProviderId(value)
-                    if (value === "tsac") setPortalUrl("https://www.tn.gov/collegepays.html")
+                    if (value === "tsac") setPortalUrl(DEFAULT_TSAC_PORTAL_URL)
                   }}
                 >
                   <SelectTrigger>
@@ -853,7 +858,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                 id="school-portal-url"
                 value={portalUrl}
                 onChange={(event) => setPortalUrl(event.target.value)}
-                placeholder="https://www.tn.gov/collegepays.html"
+                placeholder={DEFAULT_TSAC_PORTAL_URL}
               />
             </div>
 
