@@ -36,6 +36,29 @@ const AUTHORITY_ALLOWLIST_BASE = [
   'tmcf.org',
   'foldsofhonor.org',
   'pattillmanfoundation.org',
+  // ── Student-aid coverage: federal portals + major trusted aggregators ──
+  'fafsa.gov',
+  'collegescorecard.ed.gov',
+  'fastweb.com',
+  'scholarships.com',
+  'careeronestop.org',
+  'finaid.org',
+  'salliemae.com', // ScholarshipSearch directory (no-loan content)
+  // ── State higher-education agencies (the canonical state student-aid orgs) ──
+  'tn.gov/collegepays', // TSAC / Tennessee Student Assistance Corporation
+  'collegepays.org',    // TSAC public portal (TN HOPE / TSAA / Promise / Reconnect)
+  'tnreconnect.gov',
+  'cfwv.com',           // West Virginia HEPC OneApp
+  'csac.ca.gov',        // California Student Aid Commission (Cal Grant)
+  'hesc.ny.gov',        // NY Higher Education Services Corp (TAP / Excelsior)
+  'isac.org',           // Illinois Student Assistance Commission (MAP)
+  'gafutures.org',      // Georgia (HOPE / Zell Miller)
+  'floridastudentfinancialaidsg.org', // FL OSFA (Bright Futures)
+  'highered.ohio.gov',  // Ohio (OCOG / Choose Ohio First)
+  'pheaa.org',          // Pennsylvania (state grant)
+  // ── Community / place-based funders (local→national, trusted directories) ──
+  'cof.org',            // Council on Foundations (community-foundation locator)
+  'candid.org',         // Foundation Directory / GrantSpace
 ]
 
 const AUTHORITY_BLOCKLIST_BASE = [
@@ -67,6 +90,29 @@ const CRAWLER_REQUIRED_CONCEPTS = {
   special_needs: ['specialized support'],
   item_matching: ['equipment', 'item support'],
   ecf_benefits: ['medicaid waiver', 'community-based support'],
+}
+
+// State student-aid program names by USPS code. Surfaced as shouldTerms in the
+// student_grants plan so a state-resident student gets their own state's awards
+// without typing the acronyms. Kept in step with STATE_STUDENT_AID in
+// profileHelpers.js (the keyword-tagging counterpart).
+const STATE_STUDENT_AID_TERMS = {
+  TN: ['tennessee hope scholarship', 'tennessee promise', 'tennessee student assistance award', 'tsaa', 'step up scholarship', 'hope aspire award', 'tennessee reconnect'],
+  WV: ['wv promise scholarship', 'wv invests', 'higher education grant', 'cfwv oneapp'],
+  CA: ['cal grant', 'middle class scholarship', 'chafee grant'],
+  NY: ['tap grant', 'tuition assistance program', 'excelsior scholarship'],
+  IL: ['map grant', 'monetary award program'],
+  TX: ['toward excellence access success grant', 'teach grant texas'],
+  GA: ['georgia hope scholarship', 'zell miller scholarship', 'hope grant'],
+  FL: ['bright futures scholarship', 'florida student assistance grant'],
+  OH: ['ohio college opportunity grant', 'choose ohio first'],
+  PA: ['pheaa state grant', 'ready to succeed scholarship'],
+  NC: ['nc need based scholarship', 'nc community college grant'],
+  MI: ['michigan competitive scholarship', 'tuition incentive program'],
+  KY: ['kentucky educational excellence scholarship', 'kees', 'cap grant'],
+  AL: ['alabama student assistance program', 'asap grant'],
+  VA: ['virginia tuition assistance grant', 'vtag'],
+  SC: ['palmetto fellows scholarship', 'life scholarship', 'south carolina need based grant'],
 }
 
 const CRAWLER_PREFERRED_SPONSORS = {
@@ -410,6 +456,15 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
     mustTerms.push('scholarship')
     shouldTerms.push('financial aid')
     shouldTerms.push('tuition assistance')
+    shouldTerms.push('pell grant')
+    shouldTerms.push('fafsa')
+    // State-specific student-aid program NAMES so the right state awards surface
+    // even before the student types the acronyms. Mirrors the STATE_STUDENT_AID
+    // map in profileHelpers (keeps the two in step for a relatable, state-aware
+    // student crawl). Missing/unknown state simply adds nothing — neutral.
+    const studentState = normalizeString(effectiveLocation?.state || '').toUpperCase()
+    const stateAid = STATE_STUDENT_AID_TERMS[studentState]
+    if (stateAid) shouldTerms.push(...stateAid)
     dedupeKeys.push('opportunity_number')
   }
   if (normalizedCrawlerType === 'government_funding') {
