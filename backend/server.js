@@ -1990,6 +1990,12 @@ app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
 // Hamilton Automation Agent — Application Autopilot / Funding Completion.
 // Note: existing Yana = Client Discovery / Lead Funnel and is unchanged.
 app.use('/api/hamilton/automation', lazyRouter('./routes/hamiltonAutomation.js'));
+// Hamilton Portal Sync — two-way portal ↔ GrantFlow data sync. READ pulls real
+// data (test scores, financial-aid awards, application status) from a school /
+// funder portal into the profile + pipeline using the profile's saved session /
+// login; WRITE pushes GrantFlow funding sources/awards into the portal. Gated by
+// HAMILTON_ENABLE_BROWSER_AUTOMATION + host allowlist inside the service.
+app.use('/api/hamilton/portal-sync', lazyRouter('./routes/hamiltonPortalSync.js'));
 // Backwards-compatible alias so any in-flight client still works during
 // the rollout. Both paths resolve to the same router.
 app.use('/api/yana/automation', lazyRouter('./routes/hamiltonAutomation.js'));
