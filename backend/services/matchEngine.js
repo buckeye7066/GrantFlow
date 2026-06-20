@@ -250,9 +250,16 @@ export function evaluateEligibility(profileNorm, oppNorm) {
 
   const geo = oppNorm.geography ?? {}
   if (!geo.isNational && geo.state) {
-    if (profileNorm.state && profileNorm.state !== geo.state) {
-      ineligibilityReasons.push(`Geographic mismatch: opportunity is for ${geo.state}, profile is in ${profileNorm.state}`)
-    } else if (!profileNorm.state && !profileNorm.zip) {
+    // Multi-address aware: in-state if the opportunity's state matches ANY of the
+    // profile's states. `states` (primary-first list) is preferred when present;
+    // falls back to the singular `state` so single-address profiles are unchanged.
+    const profStateList = (Array.isArray(profileNorm.states) && profileNorm.states.length)
+      ? profileNorm.states.map((s) => normalizeState(s)).filter(Boolean)
+      : (profileNorm.state ? [normalizeState(profileNorm.state)] : [])
+    const oppGeoState = normalizeState(geo.state)
+    if (profStateList.length > 0 && oppGeoState && !profStateList.includes(oppGeoState)) {
+      ineligibilityReasons.push(`Geographic mismatch: opportunity is for ${geo.state}, profile is in ${profStateList.join('/')}`)
+    } else if (profStateList.length === 0 && !profileNorm.zip) {
       missingFields.push('profile_location')
     }
   }
@@ -572,6 +579,41 @@ function normalizeState(value) {
   if (STATE_MAPPING[s]) return STATE_MAPPING[s].toUpperCase()
   const sanitized = s.replace(/[^a-z]/g, '')
   return sanitized.length === 2 ? sanitized.toUpperCase() : sanitized.toUpperCase()
+}
+
+/**
+ * profileStates(signals) — ALL of a profile's states, deduped, primary-first.
+ *
+ * STRICTLY ADDITIVE + NEUTRAL: a single-address profile (or an older snapshot
+ * that predates multi-address support) returns exactly one state — its primary —
+ * so geo behavior is unchanged. A two-address profile (e.g. home OH + school TN)
+ * returns both, letting an in-state match be claimed for EITHER state.
+ *
+ * Reads `signals.states` (the deduped primary-first list emitted by
+ * buildProfileSignals) when present, and ALWAYS falls back to the primary
+ * `signals.location.state` so nothing breaks for snapshots without `states`.
+ * Returns normalized 2-letter codes; empty array when no state is known
+ * (caller must treat empty as NEUTRAL, never a penalty).
+ *
+ * @param {object|null} signals - effectiveSignals (analysis shape) or null
+ * @param {string|null} [fallbackState] - a flat profile state (last-resort)
+ * @returns {string[]} normalized state codes, primary first, deduped
+ */
+function profileStates(signals, fallbackState = null) {
+  const out = []
+  const add = (v) => {
+    const norm = normalizeState(v)
+    if (norm && !out.includes(norm)) out.push(norm)
+  }
+  // Primary first (back-compat with snapshots that predate `states`).
+  const primary = signals?.location?.state ?? null
+  if (primary) add(primary)
+  if (Array.isArray(signals?.states)) {
+    for (const st of signals.states) add(st)
+  }
+  // Last-resort flat fallback (older callers passing a bare profile state).
+  if (out.length === 0 && fallbackState) add(fallbackState)
+  return out
 }
 
 function _extractStateNameFromTitle(title) {
@@ -1095,11 +1137,31 @@ function countNeedSynonymHits(rawNeeds, oppText, allOppSignals) {
  * State mismatch → 10 (reduced, never zero).
  */
 function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
+  // Multi-location aware: prefer the resolved `locations[]` (each {zip,state,city,county})
+  // so an out-of-state student (home + school) is matched in-state for BOTH addresses.
+  // STRICTLY ADDITIVE: a single-address profile yields exactly one location, so the
+  // chosen primary fields and the state comparison are identical to before.
   const profileLocation = effectiveSignals?.location || {}
+  const allLocations = Array.isArray(effectiveSignals?.locations) && effectiveSignals.locations.length
+    ? effectiveSignals.locations
+    : [profileLocation]
+  // Primary (back-compat) fields drive county/city tiers; never weakened by extra addresses.
   const profileZip = profileLocation?.zip ?? effectiveProfile?.postal_code ?? effectiveProfile?.zip_code ?? null
   const profileCounty = profileLocation?.county ?? null
   const profileCity = profileLocation?.city ?? effectiveProfile?.city ?? null
   const profileState = profileLocation?.state ?? effectiveProfile?.state ?? null
+
+  // ALL of the profile's states (primary-first, deduped). Single-address → one entry.
+  const profileStateList = profileStates(effectiveSignals, profileState)
+  // ZIPs across every address — used so a secondary-address ZIP can still match locally.
+  const profileZips = []
+  for (const loc of allLocations) {
+    const z = loc?.zip ?? null
+    if (z && !profileZips.includes(String(z).trim())) profileZips.push(String(z).trim())
+  }
+  if (profileZip && !profileZips.includes(String(profileZip).trim())) {
+    profileZips.unshift(String(profileZip).trim())
+  }
 
   const oppState = opportunity?.state ?? opportunity?.stateRestriction ?? null
   const oppZip = opportunity?.geo_zip ?? null
@@ -1108,20 +1170,39 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
     Boolean(opportunity?.is_national) ||
     String(oppState || '').toLowerCase() === 'nationwide'
 
+  // In-state if the opportunity's state matches ANY of the profile's states.
+  // For a single-address profile this is identical to the old singular check.
+  const oNorm = normalizeState(oppState)
+  const stateMatchesAny = Boolean(oNorm) && profileStateList.includes(oNorm)
+  const stateMismatchAll = Boolean(oNorm) && profileStateList.length > 0 && !stateMatchesAny
+
+  // Closest ZIP across all addresses (exact wins; otherwise smallest haversine).
+  // Single-address profiles short-circuit to exactly the primary-ZIP result.
+  let bestZipExact = false
+  let bestZipDist = null
+  if (oppZip) {
+    const oz = String(oppZip).trim()
+    for (const pz of profileZips) {
+      if (pz === oz) { bestZipExact = true; break }
+      const d = _zipDistanceMiles(pz, oz)
+      if (d !== null && (bestZipDist === null || d < bestZipDist)) bestZipDist = d
+    }
+  }
+  const haveAnyZip = profileZips.length > 0
+
   let tier = 'none'
   let subscale = 35
 
-  if (!profileZip && !profileCounty && !profileCity && !profileState) {
+  if (!profileZip && !profileCounty && !profileCity && !profileState && profileStateList.length === 0 && !haveAnyZip) {
     tier = 'unknown'
     subscale = 35
-  } else if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
+  } else if (oppZip && bestZipExact) {
     tier = 'zip'
     subscale = 100
-  } else if (profileZip && oppZip) {
-    // Distance-aware proximity scoring for non-exact ZIP matches.
-    // Uses haversine to compute actual distance and assigns proportional score:
+  } else if (oppZip && haveAnyZip) {
+    // Distance-aware proximity scoring for non-exact ZIP matches (closest address).
     //   ≤ 25mi → 95-85 (local), ≤ 50mi → 84-75 (expanded), > 50mi → falls through
-    const dist = _zipDistanceMiles(profileZip, oppZip)
+    const dist = bestZipDist
     if (dist !== null && dist <= 25) {
       tier = 'nearby_local'
       subscale = Math.round(95 - (dist / 25) * 10)
@@ -1138,13 +1219,13 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
     ) {
       tier = 'city'
       subscale = 85
-    } else if (profileState && oppState && normalizeState(oppState) === normalizeState(profileState)) {
+    } else if (stateMatchesAny) {
       tier = 'state'
       subscale = 75
     } else if (oppIsNational) {
       tier = 'national'
       subscale = 55
-    } else if (profileState && oppState && normalizeState(oppState) !== normalizeState(profileState)) {
+    } else if (stateMismatchAll) {
       tier = 'mismatch'
       subscale = 10
     } else {
@@ -1161,13 +1242,13 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
   ) {
     tier = 'city'
     subscale = 85
-  } else if (profileState && oppState && normalizeState(oppState) === normalizeState(profileState)) {
+  } else if (stateMatchesAny) {
     tier = 'state'
     subscale = 75
   } else if (oppIsNational) {
     tier = 'national'
     subscale = 55
-  } else if (profileState && oppState && normalizeState(oppState) !== normalizeState(profileState)) {
+  } else if (stateMismatchAll) {
     tier = 'mismatch'
     subscale = 10
   } else {
@@ -1175,15 +1256,14 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
     subscale = 30
   }
 
-  // State-name-in-title mismatch: reduce but don't zero out
-  if (profileState && !oppIsNational && tier !== 'mismatch') {
+  // State-name-in-title mismatch: reduce but don't zero out.
+  // Only fires when the title names a state that is NOT any of the profile's
+  // states — so a secondary-state program is never penalized as a "title mismatch".
+  if (profileStateList.length > 0 && !oppIsNational && tier !== 'mismatch') {
     const titleStateAbbr = _extractStateNameFromTitle(opportunity?.title || '')
-    if (titleStateAbbr) {
-      const profileStateNorm = normalizeState(profileState).toUpperCase()
-      if (profileStateNorm !== titleStateAbbr.toUpperCase()) {
-        subscale = Math.max(10, Math.round(subscale * 0.35))
-        tier = 'title_state_mismatch'
-      }
+    if (titleStateAbbr && !profileStateList.includes(titleStateAbbr.toUpperCase())) {
+      subscale = Math.max(10, Math.round(subscale * 0.35))
+      tier = 'title_state_mismatch'
     }
   }
 
@@ -1965,9 +2045,11 @@ export function scoreOpportunity(profile, opportunity) {
     }
   }
 
-  // Tennessee location boost: profile is in TN + opportunity is TN-specific
+  // Tennessee location boost: profile is in TN (any of its addresses) + opportunity is TN-specific.
+  // Multi-address aware so a home-OH / school-TN student still gets the TN boost for TN aid.
   const profileState = profileNorm?.state ?? effectiveProfile?.state ?? null
-  if (profileState && normalizeState(profileState) === 'TN') {
+  const profileStateListForBoost = profileStates(effectiveSignals, profileState)
+  if (profileStateListForBoost.includes('TN')) {
     const tnKeywords = ['tennessee', 'tn ', 'hope scholarship', 'tennessee student assistance',
       'tsac', 'nashville', 'knoxville', 'memphis', 'chattanooga', 'jackson', 'clarksville']
     if (tnKeywords.some((k) => oppText.includes(k))) {
@@ -2209,7 +2291,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
  * @param {Object} opportunity - Raw opportunity object
  * @returns {{ decision: string, explanation: string, reasons: string[] }}
  */
-export function makeDecision(score, profile, opportunity, normalizedProfile = null) {
+export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null) {
   const reasons = []
   const opp = opportunity || {}
   const prof = profile || {}
@@ -2328,16 +2410,22 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // resolved (e.g. "Tennessee" → "TN") before the comparison. MISSING state is
   // NEUTRAL: when the profile state is unresolved we never hard-REJECT on
   // state-exclusivity — at worst we downgrade to REVIEW.
-  const profState = String((np?.state ?? prof.state) || '').trim()
+  // Multi-address aware: consider EVERY state across the profile's addresses.
+  // A program in ANY of the profile's states is in-state (no reject/review).
+  // The state-exclusive REJECT fires ONLY when the program's state is known AND
+  // is NOT in ANY of the profile's states (and never when the profile has none).
+  // Single-address profiles collapse to exactly one state → identical behavior.
+  const profStateList = profileStates(signals, np?.state ?? prof.state)
+  const profState = profStateList[0] ? profStateList[0] : String((np?.state ?? prof.state) || '').trim()
   const oppStateRaw = String(opp.state || '').trim()
   const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
-  const pNormState = normalizeState(profState)
   const oNormState = normalizeState(oppStateRaw)
-  if (oppStateRaw && !oppIsNational && oNormState) {
-    if (!pNormState) {
-      // Profile state is MISSING/unresolved. Per canonical_rules "missing =
-      // neutral": do NOT REJECT even when the opportunity is state-exclusive;
-      // surface it for review so the user can confirm residency themselves.
+  const matchesAnyProfileState = Boolean(oNormState) && profStateList.includes(oNormState)
+  if (oppStateRaw && !oppIsNational && oNormState && !matchesAnyProfileState) {
+    if (profStateList.length === 0) {
+      // No profile state at all. Per canonical_rules "missing = neutral": do NOT
+      // REJECT even when the opportunity is state-exclusive; surface for review so
+      // the user can confirm residency themselves.
       const RE_STATE_EXCLUSIVE_MISSING = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
       if (RE_STATE_EXCLUSIVE_MISSING.test(oppText) || opp.state_residents_only === true) {
         reasons.push(`Geographic note — opportunity is for ${oppStateRaw} residents; profile state unknown (confirm eligibility)`)
@@ -2348,9 +2436,8 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
         }
       }
       // No exclusivity signal + unknown profile state: fall through to scoring.
-    } else if (pNormState !== oNormState) {
-      const pNorm = pNormState
-      const oNorm = oNormState
+    } else {
+      // Opportunity's state is in NONE of the profile's states.
       // Residency-scope signals: any phrase tying "residents" to a qualifier is
       // treated as an explicit state-scope declaration.
       //   • "residents only" / "must be a resident" / "must reside in"
@@ -2361,13 +2448,14 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
       const isExplicitlyExclusive =
         RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true
+      const profStateLabel = profStateList.join('/')
       if (isExplicitlyExclusive) {
-        const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profState}`
+        const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profStateLabel}`
         reasons.push(reasonText)
         return { decision: 'REJECT', explanation: `${reasonText}.`, reasons }
       }
-      reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profState} (may still be accessible)`)
-      return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profState}. Confirm eligibility on the program page.`, reasons }
+      reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profStateLabel} (may still be accessible)`)
+      return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profStateLabel}. Confirm eligibility on the program page.`, reasons }
     }
   }
 
@@ -2543,7 +2631,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   }
 
   // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm)
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals)
 
   // Post-decision guards
   const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)

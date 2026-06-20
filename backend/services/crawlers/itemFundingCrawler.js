@@ -963,6 +963,10 @@ export async function crawlItemFunding(profileInput, options = {}) {
               crawlerType: 'item_matching',
               facets,
               location: facets?.geo ?? signals?.location ?? {},
+              // All resolved addresses so local funding is crawled for both home + school.
+              locations: Array.isArray(signals?.locations) && signals.locations.length
+                ? signals.locations
+                : null,
         })
     const results = []
         const itemRequest = options.item_request

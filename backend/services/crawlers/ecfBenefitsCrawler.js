@@ -716,8 +716,20 @@ function calculateECFMatchScore(benefit, profile, type) {
   }
 
   // State match â read from signals.location first, then flat field.
-  const profileState = signals?.location?.state ?? profile?.state ?? null
-  if (benefit.sponsor?.includes('Tennessee') && String(profileState || '').toUpperCase() === 'TN') {
+  // Multi-address aware: in-state if ANY of the profile's states is TN. Reads
+  // signals.states (all addresses) and falls back to the single primary/flat
+  // state so single-address profiles behave exactly as before.
+  const profileStateList = (() => {
+    const out = []
+    const add = (v) => {
+      const s = String(v ?? '').toUpperCase().trim()
+      if (s && !out.includes(s)) out.push(s)
+    }
+    add(signals?.location?.state ?? profile?.state ?? '')
+    if (Array.isArray(signals?.states)) for (const st of signals.states) add(st)
+    return out.filter(Boolean)
+  })()
+  if (benefit.sponsor?.includes('Tennessee') && profileStateList.includes('TN')) {
     score += 10
   }
 

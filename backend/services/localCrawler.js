@@ -92,29 +92,34 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     signals?.location?.state ||
     profileContext?.sections?.location_focus?.state ||
     parameters.state
-  
-  if (!profileState) {
-    console.warn('[localCrawler] No state specified - cannot find local opportunities')
-    return { 
-      evaluated: 0, 
-      inserted: 0, 
+
+  // Multi-address aware (STRICTLY ADDITIVE): crawl local opps for EVERY state the
+  // profile is tied to (e.g. home OH + school TN), not just the primary. Reads
+  // signals.states (primary-first) and falls back to the single primary state so a
+  // single-address profile yields exactly one state → identical behavior. Bounded
+  // to 2 as designed so the local crawl never explodes.
+  const profileStateList = (() => {
+    const out = []
+    const add = (v) => {
+      const s = String(v ?? '').trim().toUpperCase()
+      if (s && s.length === 2 && !out.includes(s)) out.push(s)
+    }
+    add(profileState)
+    if (Array.isArray(signals?.states)) for (const st of signals.states) add(st)
+    return out.slice(0, 2)
+  })()
+
+  if (profileStateList.length === 0) {
+    console.warn('[localCrawler] No valid state specified - cannot find local opportunities')
+    return {
+      evaluated: 0,
+      inserted: 0,
       opportunityLogs: [],
-      error: 'No state information available in profile'
+      error: 'No valid state information available in profile'
     }
   }
-  
-  // Validate state format
-  if (typeof profileState !== 'string' || profileState.trim().length !== 2) {
-    console.warn('[localCrawler] Invalid state format:', profileState)
-    return { 
-      evaluated: 0, 
-      inserted: 0, 
-      opportunityLogs: [],
-      error: `Invalid state format: ${profileState} (expected 2-letter state code)`
-    }
-  }
-  
-  log.info('[localCrawler] Profile state:', profileState)
+
+  log.info('[localCrawler] Profile states:', profileStateList.join(', '))
   log.info('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
@@ -136,19 +141,20 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         ? '(requires_match IS NULL OR requires_match = FALSE)'
         : '(requires_match = 0 OR requires_match IS NULL)'
 
+    const statePlaceholders = profileStateList.map(() => '?').join(', ')
     dbOpps = await db
       .prepare(
         `
-          SELECT * FROM funding_opportunities 
+          SELECT * FROM funding_opportunities
           WHERE ${activePredicate}
-          AND state = ?
+          AND state IN (${statePlaceholders})
           AND ${noMatchPredicate}
           AND ${trustedOriginClause()}
           AND ${trustedSourceClause()}
           LIMIT 100
         `,
       )
-      .all(profileState)
+      .all(...profileStateList)
     
     log.info(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
   } catch (error) {

@@ -115,26 +115,39 @@ function normalizeState(state) {
 function calculateOpportunityMatch(opp, signals, profileState) {
   let score = 0
   const matchReasons = []
-  
+
   const normalizedOppState = normalizeState(opp.state || '')
-  const normalizedProfileState = normalizeState(profileState || '')
-  
+  // Multi-address aware: in-state if the opportunity matches ANY of the profile's
+  // states. Reads signals.states (primary-first), falling back to the single
+  // profileState so single-address profiles behave exactly as before.
+  const profileStateList = (() => {
+    const out = []
+    const add = (v) => {
+      const s = normalizeState(v || '')
+      if (s && !out.includes(s)) out.push(s)
+    }
+    add(profileState)
+    if (Array.isArray(signals?.states)) for (const st of signals.states) add(st)
+    return out
+  })()
+
   const oppKeywords = new Set([
     ...(opp.keywords || []).map(k => k.toLowerCase()),
     ...(opp.categories || []).map(c => c.toLowerCase())
   ])
-  
+
   const oppText = `${opp.title} ${opp.description}`.toLowerCase()
-  
+
   // State match (15 points) — uses normalized values for TN/Tennessee, CA/California etc.
   const isNationwide = String(opp.state || '').toLowerCase().trim() === 'nationwide'
-  if (isNationwide || (normalizedOppState && normalizedProfileState && normalizedOppState === normalizedProfileState)) {
+  const stateMatchesAny = Boolean(normalizedOppState) && profileStateList.includes(normalizedOppState)
+  if (isNationwide || stateMatchesAny) {
     score += 15
-    if (!isNationwide && normalizedOppState === normalizedProfileState) {
-      matchReasons.push(`Location: ${profileState}`)
+    if (!isNationwide && stateMatchesAny) {
+      matchReasons.push(`Location: ${normalizedOppState}`)
     }
-  } else if (normalizedOppState && normalizedProfileState) {
-    // Wrong state - significantly reduce score
+  } else if (normalizedOppState && profileStateList.length > 0) {
+    // Wrong state (matches none of the profile's states) - significantly reduce score
     score -= 20
   }
   
