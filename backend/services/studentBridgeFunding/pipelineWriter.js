@@ -13,6 +13,8 @@
 import crypto from 'node:crypto'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
 import { isPipelineSourceAllowed } from '../../config/pipelineAllowedSources.js'
+import { saveToProfilePipeline } from '../opportunityMatcher.js'
+import { loadProfileContext } from '../profileHelpers.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('studentBridgeFunding.writer')
@@ -190,41 +192,50 @@ export async function addBridgeOpportunityToProfilePipeline({
   }
   if (!opportunityId) return { skipped: true, reason: 'upsert_no_id' }
 
-  const orgId = organizationId || (await ensureOrganizationForProfile(db, profile))
+  // Make sure the profile owns an organization row for the grants FK before the
+  // canonical save runs (saveToProfilePipeline resolves org itself, but we keep
+  // the self-heal so a brand-new profile never trips the FK).
+  if (!organizationId) { try { await ensureOrganizationForProfile(db, profile) } catch { /* non-fatal */ } }
 
-  const grantId = crypto.randomUUID()
-  await db
-    .prepare(
-      `INSERT INTO grants (
-         id, organization_id, profile_id, funding_opportunity_id,
-         title, funder, deadline, status,
-         match_score, match_reasons,
-         application_url, amount_requested, notes, application_method
-       )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      grantId,
-      orgId,
-      profile.id,
-      opportunityId,
-      data.title,
-      data.sponsor || null,
-      data.deadline ?? null,
-      defaultStatus,
-      typeof expanded.match_score === 'number' ? expanded.match_score : 70,
-      JSON.stringify([
-        {
-          code: 'student_bridge_funding_template',
-          template_id: expanded.template_id,
-          category: expanded.category,
-        },
-      ]),
-      applicationUrl,
-      typeof data.amount_max === 'number' ? data.amount_max : null,
-      data.applicationNote || null,
-      data.application_method || 'portal',
-    )
+  // Route through the SAME canonical relevance + eligibility + dismissal +
+  // threshold gates every other pipeline write uses — never a raw insert with a
+  // hardcoded score. This is what stops (a) bridge templates that don't actually
+  // fit THIS student from landing in the pipeline, and (b) re-adding an
+  // opportunity the owner deleted (the dismissal tombstone is honored here).
+  // Bridge templates are curated for students, so genuine matches still pass;
+  // irrelevant ones are now correctly filtered.
+  const opportunityForGate = {
+    id: opportunityId,
+    title: data.title,
+    sponsor: data.sponsor || null,
+    description: data.description || null,
+    source: data.source,
+    source_url: applicationUrl,
+    application_url: applicationUrl,
+    deadline: data.deadline ?? null,
+    amount_min: typeof data.amount_min === 'number' ? data.amount_min : null,
+    amount_max: typeof data.amount_max === 'number' ? data.amount_max : null,
+    categories: data.categories ?? [expanded.category],
+    keywords: data.keywords ?? [],
+    eligibility_bullets: data.eligibility_bullets ?? [],
+    opportunity_type: data.opportunity_type ?? 'grant',
+    is_national: data.is_national ?? null,
+    state: data.state ?? null,
+  }
 
-  return { added: true, grant_id: grantId, opportunity_id: opportunityId }
+  let profileContext = null
+  try { profileContext = await loadProfileContext(db, profile.id) } catch { profileContext = { profile } }
+
+  const result = await saveToProfilePipeline(
+    db,
+    opportunityForGate,
+    profile.id,
+    profileContext,
+    typeof expanded.match_score === 'number' ? expanded.match_score : null, // let the matcher score it
+  )
+
+  if (!result?.saved) {
+    return { skipped: true, reason: `gate:${result?.gate || result?.reason || 'not_saved'}`, opportunity_id: opportunityId }
+  }
+  return { added: true, grant_id: result.pipelineId || null, opportunity_id: opportunityId }
 }
