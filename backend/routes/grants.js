@@ -32,6 +32,7 @@ import { assertSafeIdentifier } from '../utils/safeSql.js'
 import {
   recordDismissal as recordPipelineDismissal,
   clearDismissal as clearPipelineDismissal,
+  isDismissed as isDismissedFromPipeline,
 } from '../services/pipelineDismissals.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -1045,6 +1046,39 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     }
     if (sanitizedData.matched_needs === undefined || sanitizedData.matched_needs === null) {
       sanitizedData.matched_needs = '[]'
+    }
+
+    // DISMISSED gate (sticky deletes). Mirrors saveToProfilePipeline's Gate 1.5
+    // so this direct-create path can't resurrect a source the user deleted from
+    // a profile pipeline. Manual re-add goes through /from-opportunity, which
+    // clears the tombstone first; this raw create is not that path, so it stays
+    // suppressed. Best-effort — a tombstone lookup error must not block creation
+    // (recall over suppression).
+    if (sanitizedData.profile_id) {
+      try {
+        // Pass an opportunity-shaped object (no `fingerprint` key) so findDismissal
+        // builds the full match key itself (fingerprint + opportunity_id + title).
+        const wasDismissed = await isDismissedFromPipeline(req.db, sanitizedData.profile_id, {
+          id: sanitizedData.funding_opportunity_id ?? null,
+          title: sanitizedData.title ?? data.title ?? null,
+          sponsor: sanitizedData.funder ?? data.funder ?? null,
+          deadline: sanitizedData.deadline ?? data.deadline ?? null,
+          application_url: sanitizedData.application_url ?? null,
+          url: sanitizedData.url ?? null,
+        })
+        if (wasDismissed) {
+          routeLogger.info('[grants/create] blocked DISMISSED resurrection', {
+            profile_id: sanitizedData.profile_id,
+            title: sanitizedData.title ?? data.title,
+          })
+          return res.status(409).json({
+            error: 'dismissed',
+            message: 'This source was previously removed from the pipeline. Re-add it from the opportunity to bring it back.',
+          })
+        }
+      } catch (dismissErr) {
+        routeLogger.warn('[grants/create] dismissal check failed (non-fatal)', { error: dismissErr?.message })
+      }
     }
 
     const columns = ['id', ...Object.keys(sanitizedData)]

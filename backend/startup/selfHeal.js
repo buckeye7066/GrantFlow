@@ -31,6 +31,7 @@ import seedFaithBasedHousing from '../utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from '../utils/seedHousingFunding.js';
 import { seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js';
 import { repairOrphanedJobProfiles } from '../utils/repairOrphanedJobProfiles.js';
+import { reconcileDismissedGrants } from '../services/pipelineDismissals.js';
 
 export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   // ── 1. Upload-avatar repair ───────────────────────────────────────────────
@@ -390,6 +391,21 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
     }
   } catch (error) {
     console.warn('[startup] Failed to seed housing funding:', error?.message || error);
+  }
+
+  // ── 8. Enforce sticky deletes (rule-by-construction) ──────────────────────
+  // Runs LAST, after every seed/heal step above, in ALL environments (not
+  // gated by seeding flags). This re-asserts the invariant "a source a user
+  // deleted from a profile pipeline stays gone" by purging any grant that
+  // matches a recorded tombstone — no matter which path (seed re-upsert,
+  // legacy direct insert, a future code path) put it back. This is the
+  // permanent, global backstop for the recurring "deleted grants reappear"
+  // problem; the per-insert DISMISSED gates are the first line, this is the net.
+  try {
+    const removed = await reconcileDismissedGrants(db);
+    console.info('[startup] reconcileDismissedGrants', { removed });
+  } catch (error) {
+    console.warn('[startup] Failed to reconcile dismissed grants:', error?.message || error);
   }
 }
 

@@ -5,7 +5,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Filter, Loader2, RefreshCcw, Trash2, UserCheck, Printer, Sparkles } from "lucide-react";
+import { Filter, Loader2, RefreshCcw, Trash2, UserCheck, Printer, Sparkles, KeyRound } from "lucide-react";
 import { getCrawlerJob, createCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
@@ -504,6 +504,33 @@ export default function Pipeline() {
                 >
                   <Printer className="w-4 h-4 mr-2" />
                   Print This Profile's Packet
+                </Button>
+              )}
+              {/*
+                Portal Logins — teaches Hamilton how to sign in to this
+                profile's grant/application portals. Sits right next to
+                "Process with Hamilton" because that is exactly when the user
+                discovers Hamilton needs credentials, and the cards
+                (SavedLoginsCard + PortalSessionsCard) otherwise live one
+                screen away on the profile's Pipeline tab. Deep-links there.
+              */}
+              {selectedProfileId && selectedProfileId !== "all" && (
+                <Button
+                  variant="outline"
+                  className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                  onClick={() =>
+                    navigate(
+                      createPageUrl("ProfileDetail", {
+                        id: selectedProfileId,
+                        tab: "pipeline",
+                        focus: "portal-logins",
+                      }),
+                    )
+                  }
+                  aria-label="Manage portal logins so Hamilton can sign in"
+                >
+                  <KeyRound className="w-4 h-4 mr-2" />
+                  Portal Logins
                 </Button>
               )}
               {/*

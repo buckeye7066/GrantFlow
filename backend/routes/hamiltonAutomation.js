@@ -1495,6 +1495,63 @@ router.post('/admin/hard-stops/:blockerId/resolve', async (req, res) => {
   }
 })
 
+// Admin: clear EVERY open hard stop in one action ("Delete all" on the
+// operator dashboard). Each blocker is soft-resolved with strategy
+// 'dismissed' (audit row written, not a hard delete) and its user/admin
+// notifications are cleared so the bell + toast list stay in sync. This does
+// NOT resume Hamilton on the affected tasks — dismissing a hard stop just
+// takes it off the list; the operator re-runs processing when ready.
+router.post('/admin/hard-stops/dismiss-all', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  const note = String(req.body?.note || '').slice(0, 500) || 'Bulk-dismissed from the Hamilton operator dashboard.'
+  // Optional: scope the clear to a single profile (the per-profile "Process
+  // with Hamilton" page passes this so it only empties that profile's list).
+  const scopeProfileId = req.body?.profileId ? String(req.body.profileId) : null
+  try {
+    const all = await listOpenAdminBlockers(req.db, { limit: 500 })
+    const open = scopeProfileId
+      ? all.filter((b) => String(b.profile_id) === scopeProfileId)
+      : all
+    let dismissed = 0
+    const notifIds = []
+    for (const b of open) {
+      try {
+        const resolved = await resolveBlockerById(req.db, {
+          blockerId: b.id,
+          strategy: 'dismissed',
+          detail: note,
+          resolvedByUserId: getAuthUserId(user),
+        })
+        if (resolved) {
+          dismissed += 1
+          notifIds.push(resolved.user_notification_id, ...((resolved.admin_notification_ids) || []))
+          if (resolved.task_id) {
+            await appendTaskEvent(req.db, {
+              taskId: resolved.task_id,
+              eventType: 'blocker_resolved',
+              step: 'admin_checklist',
+              message: `Hard stop "${resolved.blocker_type}" dismissed in bulk clear.`,
+              actorUserId: getAuthUserId(user),
+              actorRole: 'admin',
+            })
+          }
+        }
+      } catch (innerErr) {
+        // Don't let one bad row abort the whole sweep — log and keep going.
+        log.warn('admin_hard_stop_dismiss_all_row_failed', { blockerId: b?.id, err: innerErr?.message })
+      }
+    }
+    const cleanNotifIds = notifIds.filter(Boolean)
+    if (cleanNotifIds.length > 0) await markNotificationsResolved(req.db, cleanNotifIds)
+    return res.json({ ok: true, dismissed, total: open.length })
+  } catch (err) {
+    log.error('admin_hard_stops_dismiss_all_failed', { err: err?.message })
+    return res.status(500).json({ error: 'dismiss_all_failed', detail: err?.message })
+  }
+})
+
 // The field key a missing/ambiguous-info blocker points at, if any. Mirrors
 // blockerFieldKey() in src/config/hamiltonHardStopTargets.js.
 function blockerFieldKey(blocker) {

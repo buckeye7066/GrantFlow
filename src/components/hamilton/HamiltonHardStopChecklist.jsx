@@ -20,7 +20,7 @@ import { Link } from "react-router-dom"
 import client from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { AlertTriangle, CheckCircle2, ChevronRight, Loader2, RefreshCw } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronRight, Loader2, RefreshCw, Trash2 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { showErrorToast, showSuccessToast } from "@/components/shared/toastHelpers"
 import { resolveHardStopTarget, resolveInlineField } from "@/config/hamiltonHardStopTargets"
@@ -40,6 +40,7 @@ export default function HamiltonHardStopChecklist({ profileId }) {
   const [blockers, setBlockers] = useState([])
   const [resolvingId, setResolvingId] = useState(null)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [clearingAll, setClearingAll] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -90,6 +91,27 @@ export default function HamiltonHardStopChecklist({ profileId }) {
     }
   }
 
+  // Clear EVERY open hard stop for this profile in one click. Many stops on a
+  // long-running profile go stale (the source was deleted, the deadline
+  // passed); this empties the list without resuming Hamilton.
+  async function dismissAll() {
+    if (blockers.length === 0) return
+    if (!window.confirm(`Clear all ${blockers.length} hard stop${blockers.length === 1 ? "" : "s"} for this profile? They'll be removed from the list. This does not start Hamilton.`)) return
+    setClearingAll(true)
+    const snapshot = blockers
+    setBlockers([]) // optimistic — restore on failure
+    try {
+      const res = await client.post("/api/hamilton/automation/admin/hard-stops/dismiss-all", { profileId })
+      showSuccessToast(toast, "Hard stops cleared", `${res?.dismissed ?? 0} hard stop${(res?.dismissed ?? 0) === 1 ? "" : "s"} removed.`)
+      await load()
+    } catch (err) {
+      setBlockers(snapshot)
+      showErrorToast(toast, "Could not clear hard stops", err?.message || "See logs.")
+    } finally {
+      setClearingAll(false)
+    }
+  }
+
   // Hidden for non-admins / when the endpoint is unreachable.
   if (loadFailed) return null
 
@@ -101,9 +123,24 @@ export default function HamiltonHardStopChecklist({ profileId }) {
           Hamilton hard stops to clear
           <Badge variant="outline" className="ml-1">{blockers.length}</Badge>
         </h2>
-        <Button variant="ghost" size="sm" onClick={load} disabled={loading} title="Refresh hard stops">
-          {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        </Button>
+        <div className="flex items-center gap-1">
+          {blockers.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={dismissAll}
+              disabled={clearingAll || loading}
+              className="text-rose-700 border-rose-200 hover:bg-rose-50 h-7"
+              title="Clear all hard stops for this profile"
+            >
+              {clearingAll ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Trash2 className="w-3 h-3 mr-1" />}
+              Delete all
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={load} disabled={loading} title="Refresh hard stops">
+            {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+          </Button>
+        </div>
       </div>
 
       {blockers.length === 0 ? (

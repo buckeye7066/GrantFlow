@@ -309,6 +309,77 @@ export async function clearDismissal(db, profileId, opportunity) {
 }
 
 /**
+ * GLOBAL ENFORCEMENT SWEEP — reconcile the pipeline against every tombstone.
+ *
+ * Deletes any grant that matches a recorded dismissal for its own profile,
+ * regardless of how it got (re-)inserted. This is the rule-by-construction
+ * backstop for "a user-deleted source must stay gone": instead of trusting
+ * every current and future insert path to remember the DISMISSED gate, we
+ * re-assert the invariant in one place. Safe to run on every boot.
+ *
+ * Matching mirrors findDismissal() priority, profile-scoped throughout:
+ *   - opportunity_id exact
+ *   - fingerprint exact
+ *   - lower(title) exact (last-resort, blocks URL-drifting re-crawls)
+ *
+ * A manual re-add (POST /api/grants/from-opportunity) clears the tombstone
+ * first, so deliberately restored sources are never purged by this sweep.
+ *
+ * Returns the number of resurrected rows removed.
+ */
+export async function reconcileDismissedGrants(db, { limit = 100000 } = {}) {
+  if (!db || typeof db.prepare !== 'function') return 0
+  await ensurePipelineDismissalsSchema(db)
+
+  // One set-based statement, valid on both SQLite and Postgres. lower() and
+  // the correlated EXISTS are portable; we scope every comparison to the same
+  // profile_id so a tombstone in one profile can never delete another's grant.
+  const sql = `
+    DELETE FROM grants
+    WHERE profile_id IS NOT NULL
+      AND id IN (
+        SELECT g.id
+        FROM grants g
+        JOIN pipeline_dismissals d ON d.profile_id = g.profile_id
+        WHERE
+          (d.opportunity_id IS NOT NULL AND g.funding_opportunity_id IS NOT NULL
+             AND d.opportunity_id = g.funding_opportunity_id)
+          OR (d.fingerprint IS NOT NULL AND g.fingerprint IS NOT NULL
+             AND d.fingerprint = g.fingerprint)
+          OR (d.title IS NOT NULL AND g.title IS NOT NULL
+             AND lower(d.title) = lower(g.title))
+        LIMIT ${Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 100000}
+      )
+  `
+  try {
+    const result = await db.prepare(sql).run()
+    const removed = Number(result?.changes ?? result?.rowCount ?? 0)
+    if (removed > 0) {
+      log.info('reconcileDismissedGrants: purged resurrected pipeline grants', { removed })
+    }
+    return Number.isFinite(removed) ? removed : 0
+  } catch (err) {
+    // Some Postgres configs reject LIMIT inside a DELETE...IN subselect; retry
+    // without the LIMIT before giving up (recall-over-crash: never abort boot).
+    const msg = String(err?.message || '')
+    if (/LIMIT|syntax/i.test(msg)) {
+      try {
+        const noLimitSql = sql.replace(/\s+LIMIT\s+\d+\s*\n/, '\n')
+        const result = await db.prepare(noLimitSql).run()
+        const removed = Number(result?.changes ?? result?.rowCount ?? 0)
+        if (removed > 0) log.info('reconcileDismissedGrants: purged (no-limit fallback)', { removed })
+        return Number.isFinite(removed) ? removed : 0
+      } catch (retryErr) {
+        log.error('reconcileDismissedGrants failed (fallback)', { error: String(retryErr?.message || retryErr) })
+        return 0
+      }
+    }
+    log.error('reconcileDismissedGrants failed', { error: msg })
+    return 0
+  }
+}
+
+/**
  * Diagnostic: count tombstones for a profile.
  */
 export async function countDismissals(db, profileId) {

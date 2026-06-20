@@ -780,6 +780,33 @@ export default function ProfileDetail() {
           </TabsContent>
 
           <TabsContent value="pipeline" className="mt-6 space-y-6">
+            {/* Portal access for Hamilton — pulled to the TOP of the tab and
+                given a labelled anchor so the "Portal Logins" button on the
+                Master Pipeline page (focus=portal-logins) can deep-link the
+                user straight here. Previously these cards sat below the
+                "Go to Pipeline" box and were easy to miss. */}
+            <div id="portal-logins" className="scroll-mt-24 space-y-6">
+              <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-4">
+                <h3 className="text-base font-semibold text-indigo-900 flex items-center gap-2">
+                  <KeyRound className="w-4 h-4" />
+                  Teach Hamilton how to sign in
+                </h3>
+                <p className="text-sm text-indigo-800/80 mt-1">
+                  Add a saved login (username &amp; password) or capture a login
+                  session for any grant/application portal — e.g. MTSU. Hamilton
+                  uses these to sign in on this profile's behalf when processing
+                  the pipeline. Everything here is scoped to this profile only.
+                </p>
+              </div>
+              {/* Saved portal logins — available for every profile type, since
+                  Hamilton uses them to sign in to any grant/application portal she
+                  automates from the pipeline. */}
+              <SavedLoginsCard profileId={profileId} />
+              {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
+                  from your phone or computer" capture flow + disclaimer. */}
+              <PortalSessionsCard profileId={profileId} />
+              <PortalAccessScheduleCard profileId={profileId} />
+            </div>
             <div className="rounded-lg border bg-white p-6">
               <h3 className="text-lg font-semibold mb-4">Pipeline View</h3>
               <p className="text-slate-600 mb-4">
@@ -789,14 +816,6 @@ export default function ProfileDetail() {
                 Go to Pipeline
               </Button>
             </div>
-            {/* Saved portal logins — available for every profile type, since
-                Hamilton uses them to sign in to any grant/application portal she
-                automates from the pipeline. */}
-            <SavedLoginsCard profileId={profileId} />
-            {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
-                from your phone or computer" capture flow + disclaimer. */}
-            <PortalSessionsCard profileId={profileId} />
-            <PortalAccessScheduleCard profileId={profileId} />
           </TabsContent>
 
           <TabsContent value="item-funding" className="mt-6">

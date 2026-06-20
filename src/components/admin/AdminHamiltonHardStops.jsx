@@ -11,7 +11,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import client from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, RefreshCw, AlertTriangle, CheckCircle2, X } from 'lucide-react'
+import { Loader2, RefreshCw, AlertTriangle, CheckCircle2, X, Trash2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showErrorToast } from '@/components/shared/toastHelpers'
 import HamiltonInlineHardStopFix from '@/components/hamilton/HamiltonInlineHardStopFix'
@@ -112,6 +112,23 @@ export default function AdminHamiltonHardStops() {
     }
   }
 
+  // Bulk-clear every open hard stop. Soft-dismisses them server-side (audit
+  // row kept) and clears their notifications. Does not resume Hamilton.
+  async function dismissAll() {
+    if (blockers.length === 0) return
+    if (!window.confirm(`Dismiss all ${blockers.length} open hard stop${blockers.length === 1 ? '' : 's'}? They will be cleared from the list. This does not resume Hamilton.`)) return
+    setBusy('__all__')
+    try {
+      const res = await client.post('/api/hamilton/automation/admin/hard-stops/dismiss-all', {})
+      showInfoToast(toast, 'Hard stops cleared', `${res?.dismissed ?? 0} hard stop${(res?.dismissed ?? 0) === 1 ? '' : 's'} dismissed.`)
+      await load()
+    } catch (err) {
+      showErrorToast(toast, 'Could not clear hard stops', err?.message || 'See logs.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -123,10 +140,24 @@ export default function AdminHamiltonHardStops() {
             <span className="ml-2 text-xs font-normal text-slate-500">routed to <strong>{adminEmail}</strong></span>
           )}
         </h2>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          {loading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {blockers.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={dismissAll}
+              disabled={busy === '__all__' || loading}
+              className="text-rose-700 border-rose-200 hover:bg-rose-50"
+            >
+              {busy === '__all__' ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Trash2 className="w-3 h-3 mr-1" />}
+              Delete all ({blockers.length})
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            {loading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Status overview cards */}
