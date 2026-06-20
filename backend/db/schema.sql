@@ -1053,7 +1053,13 @@ CREATE TABLE IF NOT EXISTS profiles (
   display_name TEXT NOT NULL,
   status TEXT DEFAULT 'active',
   tags TEXT DEFAULT '[]',
-  avatar_url TEXT
+  avatar_url TEXT,
+  -- Durable avatar storage: the image bytes live in the DB so the avatar
+  -- survives an ephemeral /uploads wipe (see migration 096 / pg 0092). Declared
+  -- in the base schema too so smoke-mode / fresh sqlite has parity with prod and
+  -- the DB-backed download path is exercised rather than silently skipped.
+  avatar_data BLOB,
+  avatar_content_type TEXT
 );
 
 -- Tombstones for hard-deleted profiles.

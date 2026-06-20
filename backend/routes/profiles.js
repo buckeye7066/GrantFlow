@@ -195,14 +195,13 @@ function requireUploadsWritable(req, res, next) {
   return next()
 }
 
-const storage = multer.diskStorage({
-  destination: (req, _file, cb) => cb(null, getUploadsDir(req)),
-  filename: (_req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
-    const extension = file.originalname.split('.').pop()
-    cb(null, `${unique}.${extension}`)
-  },
-})
+// Avatars use IN-MEMORY storage, not disk. Railway's filesystem is ephemeral
+// (wiped on every redeploy) and may even be non-writable, which previously made
+// the upload 503 or silently lose the file so NO avatar ever persisted. With
+// memory storage the bytes land in req.file.buffer and go straight into the
+// profiles.avatar_data BYTEA column (the durable source of truth); writing the
+// file to /uploads is now only a best-effort read cache.
+const storage = multer.memoryStorage()
 
 const imageFileFilter = (_req, file, cb) => {
   const mime = String(file?.mimetype || '')
@@ -2026,14 +2025,14 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send()
 })
 
-router.post('/:id/avatar', requireUploadsWritable, runUploadSingle('avatar'), async (req, res, next) => {
+router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
   const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!existing) {
-    if (req.file) fs.unlink(join(getUploadsDir(req), req.file.filename), () => {})
+    // Memory storage: nothing on disk to clean up.
     return res.status(404).json({ error: 'Profile not found' })
   }
 
@@ -2042,28 +2041,34 @@ router.post('/:id/avatar', requireUploadsWritable, runUploadSingle('avatar'), as
   const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
 
   if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
-    if (req.file) fs.unlink(join(getUploadsDir(req), req.file.filename), () => {})
     return denyAuth(req, res)
   }
 
-  if (!req.file) {
+  if (!req.file || !req.file.buffer) {
     return res.status(400).json({ error: 'Avatar file is required' })
   }
 
   try {
-    const publicPath = `/uploads/${req.file.filename}`
+    // Stable filename derived from the profile id so the avatar_url marker (and
+    // the /uploads cache path) is deterministic. The extension is best-effort.
+    const ext = String(req.file.originalname || '').includes('.')
+      ? req.file.originalname.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '')
+      : 'png'
+    const filename = `avatar_${String(id)}_${Date.now()}.${ext || 'png'}`
+    const publicPath = `/uploads/${filename}`
 
-    // Persist the image bytes in the DB so the avatar survives an ephemeral
-    // filesystem reset (Railway wipes /uploads on every redeploy). The DB is the
-    // durable source of truth; the on-disk file is just a fast-path cache.
-    let avatarData = null
-    let avatarContentType = null
+    // The DB is the durable source of truth: the bytes came straight from the
+    // upload into req.file.buffer (memory storage), so they persist across
+    // Railway's ephemeral-filesystem resets.
+    const avatarData = req.file.buffer
+    const avatarContentType = req.file.mimetype || guessImageContentType(filename)
+
+    // Best-effort: also drop the file into /uploads as a fast-path read cache.
+    // If the disk is read-only or wiped, the download endpoint falls back to the
+    // DB BYTEA, so a failure here is non-fatal.
     try {
-      avatarData = fs.readFileSync(join(getUploadsDir(req), req.file.filename))
-      avatarContentType = req.file.mimetype || guessImageContentType(req.file.filename)
-    } catch (readErr) {
-      console.warn('[profiles] could not read uploaded avatar for DB persistence:', readErr?.message || readErr)
-    }
+      fs.writeFile(join(getUploadsDir(req), filename), avatarData, () => {})
+    } catch { /* ignore — DB copy is authoritative */ }
 
     try {
       await req.db
@@ -2085,7 +2090,7 @@ router.post('/:id/avatar', requireUploadsWritable, runUploadSingle('avatar'), as
     const previousAvatar = existing.avatar_url
     if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
       const previousFilename = previousAvatar.replace('/uploads/', '')
-      if (previousFilename && previousFilename !== req.file.filename) {
+      if (previousFilename && previousFilename !== filename) {
         const previousPath = join(getUploadsDir(req), previousFilename)
         fs.unlink(previousPath, () => {})
       }
@@ -2094,7 +2099,6 @@ router.post('/:id/avatar', requireUploadsWritable, runUploadSingle('avatar'), as
     const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     res.json(mapProfile(updated))
   } catch (error) {
-    if (req.file) fs.unlink(join(getUploadsDir(req), req.file.filename), () => {})
     next(error)
   }
 })

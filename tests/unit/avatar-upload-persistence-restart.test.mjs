@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, existsSync } from 'node:fs'
+import { mkdtempSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createServer as createNetServer } from 'node:net'
@@ -184,6 +184,72 @@ test('uploads persistence: avatar upload survives server restart (same db + uplo
     assert.ok(ct.includes('image/'), `expected image/* content-type, got ${ct}`)
     const buf = Buffer.from(await downloadRes.arrayBuffer())
     assert.ok(buf.length > 0)
+  } finally {
+    await srv2.stop()
+  }
+})
+
+// The real Railway failure mode: the uploads directory is WIPED on redeploy.
+// The avatar must still load from the DB BYTEA copy (memory-storage upload), so
+// it survives login-to-login even with no on-disk file at all.
+test('uploads persistence: avatar survives an ephemeral uploads-dir wipe (DB BYTEA only)', async () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-avatar-wipe-'))
+  const dbPath = path.join(tmp, 'test.db')
+  const uploadsDir = path.join(tmp, 'uploads')
+
+  const srv1 = startServer({ dbPath, uploadsDir })
+  const { port: port1 } = await srv1.ready
+
+  let token
+  let profileId
+  let downloadUrl
+
+  try {
+    const email = 'avatar-wipe@example.com'
+    const start = await fetch(`http://127.0.0.1:${port1}/api/auth/email/start`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    const startJson = await start.json()
+    const verify = await fetch(`http://127.0.0.1:${port1}/api/auth/email/verify`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code: startJson.previewCode, verification_token: startJson.verification_token }),
+    })
+    token = (await verify.json()).accessToken
+
+    const createProfileRes = await fetch(`http://127.0.0.1:${port1}/api/profiles`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ display_name: 'Avatar Wipe Profile', primary_type: 'individual_need' }),
+    })
+    profileId = (await createProfileRes.json()).id
+
+    const form = new FormData()
+    form.append('avatar', oneByOnePngBlob(), 'avatar.png')
+    const uploadRes = await fetch(`http://127.0.0.1:${port1}/api/profiles/${profileId}/avatar`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form,
+    })
+    assert.equal(uploadRes.status, 200)
+    downloadUrl = String((await uploadRes.json())?.avatar_download_url || '')
+    assert.ok(downloadUrl.includes(`/api/profiles/${profileId}/avatar/download`))
+  } finally {
+    await srv1.stop()
+  }
+
+  // Simulate the redeploy: obliterate the uploads dir entirely.
+  rmSync(uploadsDir, { recursive: true, force: true })
+  assert.ok(!existsSync(uploadsDir), 'uploads dir should be gone (ephemeral wipe)')
+
+  const srv2 = startServer({ dbPath, uploadsDir })
+  const { port: port2 } = await srv2.ready
+  try {
+    const downloadRes = await fetch(`http://127.0.0.1:${port2}${downloadUrl}`, {
+      method: 'GET', headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(downloadRes.status, 200, 'avatar must still download from the DB after disk wipe')
+    const ct = downloadRes.headers.get('content-type') || ''
+    assert.ok(ct.includes('image/'), `expected image/* content-type, got ${ct}`)
+    const buf = Buffer.from(await downloadRes.arrayBuffer())
+    assert.ok(buf.length > 0, 'avatar bytes must come back from the DB BYTEA copy')
   } finally {
     await srv2.stop()
   }
