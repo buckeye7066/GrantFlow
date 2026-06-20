@@ -1079,6 +1079,50 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       } catch (dismissErr) {
         routeLogger.warn('[grants/create] dismissal check failed (non-fatal)', { error: dismissErr?.message })
       }
+
+      // Duplicate guard (profile-scoped). The gated saver and /from-opportunity
+      // both refuse to add an opportunity already in a profile's pipeline; this
+      // raw manual-create path must not be a back door for duplicates either.
+      // Match the same keys /from-opportunity uses: funding_opportunity_id, or
+      // (NULL opportunity-id AND title), or application_url. We return the
+      // existing row (200-style "already in pipeline") rather than inserting a
+      // second copy. NOTE: we intentionally do NOT add a below-floor block here
+      // — NULL / low match_score is valid for manually-created grants
+      // (canonical_rules.md: NULL is never junk; user-created rows are
+      // protected), and the boot relevance-floor sweep is the net for junk.
+      try {
+        const dupParams = [String(sanitizedData.profile_id)]
+        const dupMatch = []
+        if (sanitizedData.funding_opportunity_id) {
+          dupMatch.push('funding_opportunity_id = ?')
+          dupParams.push(String(sanitizedData.funding_opportunity_id))
+        }
+        const dupTitle = sanitizedData.title ?? data.title ?? null
+        if (dupTitle) {
+          dupMatch.push('(funding_opportunity_id IS NULL AND title = ?)')
+          dupParams.push(String(dupTitle))
+        }
+        if (sanitizedData.application_url) {
+          dupMatch.push('application_url = ?')
+          dupParams.push(String(sanitizedData.application_url))
+        }
+        if (dupMatch.length > 0) {
+          const existingGrant = await req.db
+            .prepare(
+              `SELECT * FROM grants WHERE profile_id = ? AND (${dupMatch.join(' OR ')}) LIMIT 1`,
+            )
+            .get(...dupParams)
+          if (existingGrant) {
+            routeLogger.info('[grants/create] duplicate suppressed — already in pipeline', {
+              profile_id: sanitizedData.profile_id,
+              grant_id: existingGrant.id,
+            })
+            return res.status(200).json({ ...existingGrant, already_exists: true, message: 'Grant already in pipeline' })
+          }
+        }
+      } catch (dupErr) {
+        routeLogger.warn('[grants/create] duplicate check failed (non-fatal)', { error: dupErr?.message })
+      }
     }
 
     const columns = ['id', ...Object.keys(sanitizedData)]

@@ -7,6 +7,7 @@ import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
 import { createLogger } from '../utils/logger.js'
 
 // Parse a JSON-array column that may already be an array or a JSON string.
@@ -441,7 +442,13 @@ async function saveHighMatchesToProfile(options, context) {
   
   try {
     const thresholdNum = Number(matchThreshold)
-    const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
+    // Clamp the caller-supplied threshold into [RELEVANCE_FLOOR, 100]. Anya's
+    // autonomous pipeline-save job must never persist below the canonical
+    // pipeline relevance floor, even if a job is queued with a lower threshold
+    // (the saver's own hard floor is the net behind this).
+    const threshold = Number.isFinite(thresholdNum)
+      ? Math.max(RELEVANCE_FLOOR, Math.min(100, thresholdNum))
+      : Math.max(RELEVANCE_FLOOR, 55)
 
     // Get the crawler job
     const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)

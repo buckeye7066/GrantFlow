@@ -15,6 +15,7 @@ import {
 } from './profileHelpers.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { scoreOpportunity } from './matchEngine.js'
+import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('localCrawler')
 
@@ -299,13 +300,21 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         // and drop everything the crawler legitimately surfaced. The saver
         // still re-runs computeMatchDecision and still treats the numeric
         // floor as authoritative (ACCEPT/REVIEW does NOT bypass it).
+        //
+        // BUT the relaxation loop above can drop thresholdUsed all the way to
+        // 0 when results are scarce. Never ask the saver to persist below the
+        // canonical pipeline relevance floor — that is the "this is junk for
+        // this profile" line (docs/canonical_rules.md). Clamp here so a sparse
+        // local crawl can't smuggle sub-floor rows into the pipeline; the
+        // saver's own hard floor is the net behind this.
+        const saveThreshold = Math.max(thresholdUsed, RELEVANCE_FLOOR)
         const pipelineResult = await saveToProfilePipeline(
           db,
           oppWithId,
           profileId,
           profileContext,
           null,
-          thresholdUsed,
+          saveThreshold,
         )
         if (pipelineResult.saved) {
           savedToPipeline++

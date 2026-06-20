@@ -12,6 +12,8 @@ import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
 import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchEngine.js';
 import { PIPELINE_ALLOWED_SOURCES, evaluatePipelineSource } from '../config/pipelineAllowedSources.js';
+import { saveToProfilePipeline } from '../services/opportunityMatcher.js';
+import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -124,7 +126,7 @@ export function seedFundingOpportunities(db) {
   return seeded;
 }
 
-export function seedProfileGrants(db) {
+export async function seedProfileGrants(db) {
   if (isSeedingBlocked()) {
     console.info('[seedOnStartup] seedProfileGrants: blocked (production or DISABLE_SEEDING)')
     return 0
@@ -273,10 +275,23 @@ export function seedProfileGrants(db) {
       db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
     }
 
-    // Add grants to pipeline
+    // Add grants to pipeline.
+    //
+    // Route every seed insert through the canonical gated saver
+    // (saveToProfilePipeline) instead of inserting directly. This guarantees
+    // the seed path honors the SAME gates as every other pipeline write:
+    // source allowlist, the DISMISSED tombstone (a user-deleted grant must not
+    // be resurrected by a startup re-seed), the decision engine, exclusion
+    // rules, dedup, and the relevance floor. The local `score`/relevance
+    // pre-filter below is kept only as a cheap pre-cut so we don't hand the
+    // saver obvious junk; the saver re-runs computeMatchDecision and is the
+    // authority. (Seeding is non-production only — isSeedingBlocked guards the
+    // caller — but correctness here matters because the floor + dismissed gates
+    // are exactly the invariants this path used to violate.)
+    const seedProfileContext = { profile, sections: sectionsObj };
     let added = 0;
-    for (const { opp, score, matchedFields } of topMatches) {
-      // Apply relevance filter before inserting
+    for (const { opp } of topMatches) {
+      // Cheap pre-cut: skip rows the relevance filter would obviously drop.
       const oppForFilter = {
         ...opp,
         keywords: (() => { try { return JSON.parse(opp.keywords || '[]'); } catch (e) { return []; } })(),
@@ -285,34 +300,21 @@ export function seedProfileGrants(db) {
       const filterResult = applyRelevanceFilter(oppForFilter, profileData);
       if (!filterResult.pass) continue;
 
-      // Canonical decision engine: skip hard ineligibles (REJECT)
-      const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
-      if (decision.decision === 'REJECT') continue;
-
-      // Check for duplicates — profile-scoped (prefer profile_id uniqueness check)
-      const existing = db.prepare(`
-        SELECT id FROM grants 
-        WHERE profile_id = ? AND (funding_opportunity_id = ? OR title = ?)
-      `).get(profile.id, opp.id, opp.title);
-      
-      if (!existing) {
-        const grantId = crypto.randomUUID();
-        try {
-          db.prepare(`
-            INSERT INTO grants (
-              id, organization_id, profile_id, funding_opportunity_id, title, funder,
-              deadline, status, match_score, match_reasons, application_url,
-              created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `).run(
-            grantId, orgId, profile.id, opp.id, opp.title, opp.sponsor,
-            opp.deadline, score, JSON.stringify(matchedFields.slice(0, 10)),
-            opp.application_url
-          );
-          added++;
-        } catch (e) {
-          // Ignore errors
-        }
+      try {
+        // Let the saver score it (pass null) and enforce the floor. Do NOT pass
+        // the local heuristic score — computeMatchDecision inside the saver is
+        // the canonical authority.
+        const result = await saveToProfilePipeline(
+          db,
+          opp,
+          profile.id,
+          seedProfileContext,
+          null,
+          RELEVANCE_FLOOR,
+        );
+        if (result?.saved) added++;
+      } catch (e) {
+        // Ignore errors — one bad row must not abort the whole seed.
       }
     }
     
@@ -492,7 +494,7 @@ export function cleanupIrrelevantGrants(db) {
   return removedBySource + removed;
 }
 
-export function seedOnStartup(db) {
+export async function seedOnStartup(db) {
   if (isSeedingBlocked()) {
     console.info('[seedOnStartup] seedOnStartup: blocked (production or DISABLE_SEEDING)')
     return
@@ -516,7 +518,7 @@ export function seedOnStartup(db) {
   // Seed grants if needed
   const grantCountAfterCleanup = db.prepare('SELECT COUNT(*) as c FROM grants').get().c;
   if (grantCountAfterCleanup < 50) {
-    seedProfileGrants(db);
+    await seedProfileGrants(db);
   }
   
   console.log('[seedOnStartup] Database seeding complete');

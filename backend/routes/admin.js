@@ -3592,6 +3592,12 @@ router.post('/seed-profile-grants', async (req, res) => {
     const { computeMatchDecision } = await import('../services/matchEngine.js');
     const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js');
     const { ADMIN_SEED_MIN_SCORE } = await import('../config/matchThresholds.js');
+    const { RELEVANCE_FLOOR } = await import('../startup/enforceInvariants.js');
+    // ADMIN_SEED_MIN_SCORE (45) is below the canonical pipeline relevance floor.
+    // Never persist below the floor — clamp the threshold handed to the saver so
+    // this owner-only seed endpoint can't smuggle sub-floor rows into a profile
+    // pipeline (the saver's own hard floor is the net behind this).
+    const seedSaveThreshold = Math.max(ADMIN_SEED_MIN_SCORE, RELEVANCE_FLOOR);
 
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
     const opportunities = await req.db.prepare(`
@@ -3639,7 +3645,7 @@ router.post('/seed-profile-grants', async (req, res) => {
           profile.id,
           profileContext,
           decision.score,
-          45,
+          seedSaveThreshold,
         );
         if (result.saved) added++;
       }

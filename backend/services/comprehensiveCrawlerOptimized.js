@@ -12,6 +12,7 @@ import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
 import { ingestFromConnectors } from './connectorIngestService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('comprehensiveCrawlerOptimized')
 
@@ -710,13 +711,20 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           // computeMatchDecision() as the single canonical authority (Goal 4).
           // Pass the crawler's chosen threshold so the saver respects this
           // caller's filtering choice instead of using its 55% default.
+          //
+          // The relaxation loop above can drop thresholdUsed to 0 when matches
+          // are scarce. Never ask the saver to persist below the canonical
+          // pipeline relevance floor (docs/canonical_rules.md) — clamp so a
+          // sparse crawl can't smuggle sub-floor rows in; the saver's own hard
+          // floor is the net behind this.
+          const saveThreshold = Math.max(thresholdUsed, RELEVANCE_FLOOR)
           const result = await saveToProfilePipeline(
             db,
             oppWithId,
             profileId,
             profileContext,
             null,
-            thresholdUsed,
+            saveThreshold,
           )
           if (result.saved) {
             savedToProfile++

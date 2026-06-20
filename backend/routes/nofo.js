@@ -7,9 +7,16 @@ import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
+import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:nofo')
+
+// A caller-supplied minMatchThreshold may not drop a save below the canonical
+// pipeline relevance floor — clamp every request-controlled threshold so the
+// NOFO import endpoints can't be used to smuggle sub-floor rows into a pipeline.
+const clampPipelineThreshold = (value) =>
+  Math.max(Number.isFinite(Number(value)) ? Number(value) : 55, RELEVANCE_FLOOR)
 
 const router = express.Router()
 
@@ -353,7 +360,7 @@ router.post('/importGrantsGovDigest', standardRateLimiter, async (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text : ''
     const organizationId = req.body?.organizationId ?? req.body?.organization_id ?? null
     const profileIdInput = req.body?.profileId ?? req.body?.profile_id ?? null
-    const minMatchThreshold = Number(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
+    const minMatchThreshold = clampPipelineThreshold(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
 
     if (!text.trim()) {
       return res.status(400).json({ success: false, message: 'text is required' })
@@ -438,7 +445,7 @@ router.post('/saveToProfilePipeline', standardRateLimiter, async (req, res) => {
     const opportunity = req.body?.opportunity
     const organizationId = req.body?.organizationId ?? req.body?.organization_id ?? opportunity?.organization_id ?? null
     const profileIdInput = req.body?.profileId ?? req.body?.profile_id ?? null
-    const minMatchThreshold = Number(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
+    const minMatchThreshold = clampPipelineThreshold(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
 
     if (!opportunity || typeof opportunity !== 'object' || Array.isArray(opportunity)) {
       return res.status(400).json({ success: false, message: 'opportunity object is required' })
