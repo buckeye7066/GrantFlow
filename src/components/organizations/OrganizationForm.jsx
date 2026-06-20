@@ -30,6 +30,20 @@ const STUDENT_GRADE_LEVELS = [
   { value: 'other', label: 'Other' },
 ];
 
+// Canonical, selectable profile types. `id` is the `applicant_type` value
+// persisted on the profile/organization. These map to the 4 billing client
+// categories via shared/profileTypeToClientCategory.js: Organization is
+// budget-bucketed (Small/Mid/Large), everything else bills as Individual.
+const PROFILE_TYPE_CARDS = [
+  { id: 'organization',     label: 'Organization',  description: 'Nonprofit, business, or school', icon: Building2 },
+  { id: 'student',          label: 'Student',       description: 'High school, college, graduate', icon: GraduationCap },
+  { id: 'homeschool_family', label: 'Homeschool',   description: 'Family educating at home',        icon: GraduationCap },
+  { id: 'individual_need',  label: 'Individual',    description: 'A single person',                 icon: Heart },
+  { id: 'family',           label: 'Family',        description: 'Household with dependents',       icon: Heart },
+  { id: 'medical_assistance', label: 'Medical',     description: 'Medical / healthcare assistance', icon: Heart },
+  { id: 'other',            label: 'Other',         description: 'None of these fit',               icon: Sparkles },
+];
+
 const initializeFormData = (org, contactMethods) => {
   const defaultData = {
     profile_image_url: "",
@@ -38,6 +52,7 @@ const initializeFormData = (org, contactMethods) => {
     organization_type: "", // This field corresponds to 'nonprofit_type' in the outline's formData.
     ein: "",
     nonprofit_type: "", // Keeping this as well, mapping org_type to this for consistency with outline
+    org_subtype: "", // Organization sub-type: nonprofit | business | school (drives billing client category)
     student_grade_levels: [],
     student_grade_level: "", // Old single select, now should be array
     gpa: null,
@@ -282,6 +297,12 @@ const initializeFormData = (org, contactMethods) => {
     }
   }
   delete initialData.organization_type; // Remove old field after migration
+
+  // Seed the Organization sub-type selector from the persisted nonprofit_type
+  // when it is one of the canonical billing sub-types, so editing shows it.
+  if (!initialData.org_subtype && ['nonprofit', 'business', 'school'].includes(initialData.nonprofit_type)) {
+    initialData.org_subtype = initialData.nonprofit_type;
+  }
 
   return {
     ...initialData,
@@ -980,6 +1001,16 @@ Focus areas should be:
     // Remove old organization_type field from payload if it was mapped to nonprofit_type
     delete cleanedData.organization_type;
 
+    // The Organization sub-type (nonprofit | business | school) is what the
+    // shared billing mapper reads to pick the org client category. We persist
+    // it via the existing `nonprofit_type` column (no new DB column needed):
+    // seed nonprofit_type from org_subtype when the user picked one. org_subtype
+    // itself is UI-only state, so drop it from the payload.
+    if (cleanedData.applicant_type === 'organization' && cleanedData.org_subtype) {
+      cleanedData.nonprofit_type = cleanedData.nonprofit_type || cleanedData.org_subtype;
+    }
+    delete cleanedData.org_subtype;
+
     try {
         const { email, phone, ...coreOrgData } = cleanedData; // Destructure emails and phones before submitting core data
 
@@ -1028,8 +1059,8 @@ Focus areas should be:
   };
 
   const isOrganization = formData.applicant_type === 'organization';
-  const isStudent = ['high_school_student', 'college_student', 'graduate_student'].includes(formData.applicant_type);
-  const isIndividualAssistance = ['individual_need', 'medical_assistance', 'family'].includes(formData.applicant_type);
+  const isStudent = ['student', 'high_school_student', 'college_student', 'graduate_student'].includes(formData.applicant_type);
+  const isIndividualAssistance = ['individual_need', 'medical_assistance', 'family', 'homeschool_family'].includes(formData.applicant_type);
   const isIndividual = isStudent || isIndividualAssistance || formData.applicant_type === 'other';
 
   // Dynamic labels based on applicant type
@@ -1123,55 +1154,63 @@ Focus areas should be:
           <Card className="bg-slate-50 border-slate-200 mt-6">
             <CardContent className="p-4">
               <Label className="text-base font-semibold mb-3 block">Profile Type *</Label>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleSelectChange('applicant_type', 'organization')}
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    formData.applicant_type === 'organization'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-blue-300'
-                  }`}
-                >
-                  <Building2 className={`w-6 h-6 mx-auto mb-2 ${
-                    formData.applicant_type === 'organization' ? 'text-blue-600' : 'text-slate-400'
-                  }`} />
-                  <p className="font-semibold text-sm">Organization</p>
-                  <p className="text-xs text-slate-600 mt-1">Nonprofits, businesses, schools</p>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSelectChange('applicant_type', 'high_school_student')} // Changed to high_school_student to align with isStudent logic
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    isStudent
-                      ? 'border-indigo-600 bg-indigo-50'
-                      : 'border-slate-200 bg-white hover:border-indigo-300'
-                  }`}
-                >
-                  <GraduationCap className={`w-6 h-6 mx-auto mb-2 ${
-                    isStudent ? 'text-indigo-600' : 'text-slate-400'
-                  }`} />
-                  <p className="font-semibold text-sm">Student</p>
-                  <p className="text-xs text-slate-600 mt-1">High school, college, graduate</p>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSelectChange('applicant_type', 'individual_need')} // Changed to individual_need to align with isIndividual logic
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    isIndividualAssistance
-                      ? 'border-rose-600 bg-rose-50'
-                      : 'border-slate-200 bg-white hover:border-rose-300'
-                  }`}
-                >
-                  <Heart className={`w-6 h-6 mx-auto mb-2 ${
-                    isIndividualAssistance ? 'text-rose-600' : 'text-slate-400'
-                  }`} />
-                  <p className="font-semibold text-sm">Individual</p>
-                  <p className="text-xs text-slate-600 mt-1">Medical, emergency assistance</p>
-                </button>
+              {/* Canonical profile types — aligned with the billing client
+                  categories. Individuals / Students / Families / Homeschool /
+                  Medical all bill as the Individual tier; Organization is
+                  budget-bucketed (Small / Mid / Large) via its annual budget. */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {PROFILE_TYPE_CARDS.map((card) => {
+                  const active = card.id === 'organization'
+                    ? isOrganization
+                    : card.id === 'student'
+                      ? isStudent
+                      : formData.applicant_type === card.id;
+                  const Icon = card.icon;
+                  return (
+                    <button
+                      key={card.id}
+                      type="button"
+                      onClick={() => handleSelectChange('applicant_type', card.id)}
+                      className={`p-4 rounded-lg border-2 transition-all text-center ${
+                        active
+                          ? 'border-blue-600 bg-blue-50'
+                          : 'border-slate-200 bg-white hover:border-blue-300'
+                      }`}
+                    >
+                      <Icon className={`w-6 h-6 mx-auto mb-2 ${active ? 'text-blue-600' : 'text-slate-400'}`} />
+                      <p className="font-semibold text-sm">{card.label}</p>
+                      <p className="text-xs text-slate-600 mt-1">{card.description}</p>
+                    </button>
+                  );
+                })}
               </div>
+
+              {/* Organization sub-type — drives nothing in billing on its own,
+                  but records whether the org is a Nonprofit / Business / School.
+                  The Small/Mid/Large billing band comes from Annual Budget. */}
+              {isOrganization && (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="org_subtype">Organization Sub-Type</Label>
+                    <Select
+                      value={formData.org_subtype || ''}
+                      onValueChange={(value) => handleSelectChange('org_subtype', value)}
+                    >
+                      <SelectTrigger id="org_subtype">
+                        <SelectValue placeholder="Nonprofit, Business, or School" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="nonprofit">Nonprofit</SelectItem>
+                        <SelectItem value="business">Business</SelectItem>
+                        <SelectItem value="school">School</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-slate-500">
+                      Your billing band (Small / Mid / Large) is set by your Annual Budget below.
+                    </p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </CardContent>

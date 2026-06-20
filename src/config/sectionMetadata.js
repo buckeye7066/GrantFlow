@@ -187,6 +187,7 @@ export const SECTION_METADATA = {
           "regional_planning_agency",
           "economic_development_agency",
           "medical_need",
+          "homeschool_family",
           "organization",
           "small_business",
           "government",

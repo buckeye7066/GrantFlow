@@ -91,6 +91,22 @@ export const PROFILE_TYPES = Object.freeze({
     anyaLabel: 'Family / household',
     summary: 'Family or household with one or more dependents.',
   },
+  homeschool_family: {
+    id: 'homeschool_family',
+    aliases: ['homeschool', 'homeschooling_family', 'home_school_family', 'home_education'],
+    parentTypes: ['family', 'individual'],
+    defaultNeeds: ['education', 'curriculum', 'scholarship', 'stem_classroom'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [
+      SOURCE_IDS.STUDENT_SCHOLARSHIP_PORTALS,
+      SOURCE_IDS.SCHOLARSHIP_DIRECTORY,
+      SOURCE_IDS.UNITED_WAY_211,
+      SOURCE_IDS.COMMUNITY_ACTION,
+    ],
+    recommendedStrategy: 'family',
+    anyaLabel: 'Homeschool family',
+    summary: 'Family educating children at home, seeking curriculum, ESA, and education funding.',
+  },
   senior: {
     id: 'senior',
     aliases: ['older_adult', 'elderly'],
@@ -868,6 +884,25 @@ export const PROFILE_TYPES = Object.freeze({
     recommendedStrategy: 'nonprofit_org',
     anyaLabel: 'Mental health nonprofit',
     summary: 'Mental health / behavioral health nonprofit.',
+  },
+
+  // ---------------------------------------------------------------------
+  // Catch-all
+  // ---------------------------------------------------------------------
+  other: {
+    id: 'other',
+    aliases: ['unspecified', 'unknown', 'other_profile'],
+    parentTypes: [],
+    defaultNeeds: ['community', 'general'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [
+      SOURCE_IDS.UNITED_WAY_211,
+      SOURCE_IDS.COMMUNITY_ACTION,
+      SOURCE_IDS.GRANTS_GOV,
+    ],
+    recommendedStrategy: 'comprehensive',
+    anyaLabel: 'Other',
+    summary: 'Profile that does not fit a named type — matched comprehensively.',
   },
 })
 
