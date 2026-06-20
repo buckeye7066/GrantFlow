@@ -25,6 +25,7 @@ import {
   getPortalSessionCaptureToken,
   getCloudLoginStatus,
   startCloudLogin,
+  suggestPortalLogin,
 } from "@/api/hamilton"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -32,7 +33,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/use-toast"
 import { showSuccessToast, showErrorToast } from "@/components/shared/toastHelpers"
-import { KeyRound, Loader2, ShieldCheck, ShieldX, Clock, Copy, Plus, X, Smartphone, Globe, Info } from "lucide-react"
+import { KeyRound, Loader2, ShieldCheck, ShieldX, Clock, Copy, Plus, X, Smartphone, Globe, Info, Wand2, Sparkles } from "lucide-react"
 
 const DAY_MS = 86_400_000
 
@@ -130,6 +131,8 @@ export default function PortalSessionsCard({ profileId }) {
   // "finish in the window, then refresh" affordance. Capture/complete now
   // happens inside the live-view window, not here.
   const [liveOpened, setLiveOpened] = useState(false)
+  // Subtle "filled by Hamilton" hint after a successful auto-fill.
+  const [cloudFilledByHamilton, setCloudFilledByHamilton] = useState(false)
 
   const { data: cloudStatus } = useQuery({
     queryKey: ["hamilton-cloud-login-status"],
@@ -138,13 +141,48 @@ export default function PortalSessionsCard({ profileId }) {
   })
   const cloudConfigured = Boolean(cloudStatus?.configured)
 
+  // "✨ Auto-fill with Hamilton": resolve the portal host + login URL she
+  // already knows so the user only supplies credentials + 2FA in the window.
+  const cloudSuggestMutation = useMutation({
+    mutationFn: () => suggestPortalLogin(profileId, {
+      portalHost: portalHost.trim() || null,
+      context: portalHost.trim() || null,
+    }),
+    onSuccess: (resp) => {
+      let filled = false
+      if (resp?.portalHost && !portalHost.trim()) { setPortalHost(resp.portalHost); filled = true }
+      if (resp?.loginUrl && !loginUrl.trim()) { setLoginUrl(resp.loginUrl); filled = true }
+      setCloudFilledByHamilton(filled)
+      if (!filled && !portalHost.trim()) {
+        showErrorToast(toast, "Nothing to auto-fill yet", "Type the portal name (or open this from an opportunity) and try again.")
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Auto-fill failed", err?.message || "Enter the portal manually."),
+  })
+
+  // Start a cloud login. The host is OPTIONAL in the form: when it's blank we
+  // first ask Hamilton to resolve the portal she already knows, then start with
+  // whatever she filled. The user only ever needs their credentials + 2FA in the
+  // secure window.
   const cloudStartMutation = useMutation({
-    mutationFn: () =>
-      startCloudLogin(profileId, {
-        portalHost: portalHost.trim(),
-        loginUrl: loginUrl.trim() || null,
-        label: portalHost.trim() ? `${portalHost.trim()} session` : null,
-      }),
+    mutationFn: async () => {
+      let host = portalHost.trim()
+      let url = loginUrl.trim()
+      if (!host) {
+        try {
+          const resp = await suggestPortalLogin(profileId, { context: portalHost.trim() || null })
+          if (resp?.portalHost) { host = resp.portalHost; setPortalHost(resp.portalHost) }
+          if (resp?.loginUrl && !url) { url = resp.loginUrl; setLoginUrl(resp.loginUrl) }
+          if (host) setCloudFilledByHamilton(true)
+        } catch { /* fall through to the missing-host error below */ }
+      }
+      if (!host) throw new Error("Hamilton couldn't tell which portal to open. Type the portal name, then try again.")
+      return startCloudLogin(profileId, {
+        portalHost: host,
+        loginUrl: url || null,
+        label: `${host} session`,
+      })
+    },
     onSuccess: (res) => {
       // res.liveUrl points at our own full-screen live-view page
       // (/HamiltonLiveLogin?session=...). The user logs in + clears 2FA there and
@@ -221,17 +259,37 @@ export default function PortalSessionsCard({ profileId }) {
               {cloudConfigured ? (
                 <>
                   <p>
-                    GrantFlow opens a clean, full-screen secure login window with a live view of a real
-                    browser. You type your username + password and approve 2FA on your phone right there;
-                    when you’re done, click “Done — I’ve finished logging in” in that window and the session
-                    is captured for this profile.
+                    You only need your <strong>username, password, and 2FA</strong> — Hamilton already knows the
+                    portal. GrantFlow opens a clean, full-screen secure login window with a live view of a real
+                    browser. You sign in and approve 2FA on your phone right there; when you’re done, click
+                    “Done — I’ve finished logging in” in that window and the session is captured for this profile.
                   </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-emerald-800/80">Leave the portal blank and Hamilton fills it in — or let her auto-fill now.</p>
+                    <Button
+                      type="button" size="sm" variant="outline"
+                      className="h-7 gap-1 px-2 text-xs border-indigo-200 bg-indigo-50 text-indigo-900 hover:bg-indigo-100"
+                      onClick={() => cloudSuggestMutation.mutate()}
+                      disabled={cloudSuggestMutation.isPending}
+                      title="Let Hamilton fill the portal host + login URL"
+                    >
+                      {cloudSuggestMutation.isPending
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <Wand2 className="h-3.5 w-3.5" />}
+                      Auto-fill with Hamilton
+                    </Button>
+                  </div>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <Input placeholder="Portal host (e.g. mtsu.edu)" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
+                    <Input placeholder="Portal host (optional — Hamilton knows it)" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
                     <Input placeholder="Login URL (optional)" value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} />
                   </div>
+                  {cloudFilledByHamilton && (
+                    <p className="text-xs text-indigo-700 flex items-center gap-1">
+                      <Sparkles className="h-3 w-3" /> Filled by Hamilton — edit if needed.
+                    </p>
+                  )}
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button size="sm" disabled={!portalHost.trim() || cloudStartMutation.isPending} onClick={() => cloudStartMutation.mutate()}>
+                    <Button size="sm" disabled={cloudStartMutation.isPending} onClick={() => cloudStartMutation.mutate()}>
                       {cloudStartMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}
                       Open secure login window
                     </Button>

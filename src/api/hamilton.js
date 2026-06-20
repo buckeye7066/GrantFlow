@@ -170,6 +170,23 @@ export function listPortalCredentials(profileId) {
   return apiFetch(`/api/hamilton/automation/credentials?profileId=${encodeURIComponent(profileId)}`)
 }
 
+// "✨ Auto-fill with Hamilton": ask the backend to suggest the portal host,
+// login URL, and username for a profile so the user only has to type their
+// password (+ optional 2FA). Returns { portalHost, loginUrl, username, label,
+// source }. Best-effort — any field may come back blank.
+export function suggestPortalLogin(profileId, { portalHost = null, opportunityId = null, context = null } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/portal-login/suggest`, {
+    method: 'POST',
+    body: JSON.stringify({
+      profileId,
+      portalHost: portalHost || undefined,
+      opportunityId: opportunityId || undefined,
+      context: context || undefined,
+    }),
+  })
+}
+
 // Revoke a saved session so Hamilton can no longer reuse it.
 export function revokePortalSession(sessionId, reason = null) {
   if (!sessionId) return Promise.reject(new Error('sessionId required'))

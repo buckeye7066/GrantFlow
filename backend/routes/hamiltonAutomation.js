@@ -106,6 +106,7 @@ import {
   deleteManagedCredential,
 } from '../services/hamilton/hamiltonPortalCredentialService.js'
 import { importCredentialsFromCsv } from '../services/hamilton/hamiltonCredentialCsvImport.js'
+import { suggestPortalLogin } from '../services/hamilton/hamiltonPortalLoginSuggester.js'
 import { getAuthWatchSummary } from '../services/hamilton/hamiltonAuthWatchService.js'
 import { flagMissingPortalCredential } from '../services/hamilton/hamiltonMissingCredential.js'
 import {
@@ -1245,6 +1246,33 @@ router.post('/credentials', async (req, res) => {
     return res.status(400).json({ error: 'save_failed', detail: err?.message })
   }
 })
+// Powers the "✨ Auto-fill with Hamilton" button on the add-login / generate-login
+// dialogs and the cloud-login form. Returns best-effort
+// { portalHost, loginUrl, username, label, source } so the user only has to type
+// their password (+ optional 2FA). Resolution is deterministic first
+// (opportunity → typed partial → registered connector), with the AI client used
+// ONLY as a last resort to resolve a portal NAME to a canonical login URL; it
+// degrades gracefully to whatever it can fill (often just the username).
+router.post('/portal-login/suggest', async (req, res) => {
+  const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
+  const user = await requireProfileScope(req, res, profileId)
+  if (!user) return
+  try {
+    const suggestion = await suggestPortalLogin({
+      db: req.db,
+      profileId,
+      portalHost: req.body?.portalHost || req.body?.portal_host || '',
+      opportunityId: req.body?.opportunityId || req.body?.opportunity_id || '',
+      context: req.body?.context || '',
+      // The AI fallback is on by default but callers can disable it.
+      allowAi: req.body?.allowAi !== false && req.body?.allow_ai !== false,
+    })
+    return res.json({ ok: true, ...suggestion })
+  } catch (err) {
+    return res.status(500).json({ error: 'suggest_failed', detail: err?.message })
+  }
+})
+
 router.delete('/credentials/:id', async (req, res) => {
   const ctx = await requireRecordOwnership(req, res, req.params.id, getCredentialById)
   if (!ctx) return
