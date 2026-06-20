@@ -3097,8 +3097,33 @@ if (process.env.NODE_ENV !== 'test') {
   // rare restart-induced duplicate is harmless — runLinkVerification is
   // idempotent and it is at worst one extra email).
   // Tunable: WEEKLY_VERIFY_CHUNKS (default 6) x LINK_VERIFICATION_BATCH per run.
+  // Tiny generic key/value store, created on demand (dialect-safe DDL). Used by
+  // the weekly report to persist a "last run" marker so a missed Monday-06:00
+  // window is caught up after a restart instead of skipped for the week.
+  async function ensureSystemKv(dbInstance) {
+    await dbInstance
+      .prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+      .run()
+  }
+  async function kvGet(dbInstance, key) {
+    const row = await dbInstance.prepare('SELECT value FROM system_kv WHERE key = ?').get(key)
+    return row ? row.value : null
+  }
+  async function kvSet(dbInstance, key, value) {
+    const now = new Date().toISOString()
+    const res = await dbInstance
+      .prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?')
+      .run(value, now, key)
+    const changed = Number(res?.changes ?? res?.rowCount ?? 0)
+    if (!changed) {
+      await dbInstance
+        .prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+        .run(key, value, now)
+    }
+  }
+
   function scheduleWeeklyVerificationReport(dbInstance) {
-    let lastRunYmd = null
+    const MARKER = 'weekly_verify_last_run'
     const nowEt = () => {
       const parts = new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/New_York',
@@ -3112,11 +3137,24 @@ if (process.env.NODE_ENV !== 'test') {
       const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
       return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
     }
+    // The Monday (YYYY-MM-DD, ET) whose 06:00 window has most recently opened.
+    // Before Monday 06:00 this points at the PREVIOUS Monday, so the new week is
+    // not yet eligible. Comparing this to the persisted marker gives both the
+    // once-per-week guard and automatic catch-up for a missed window.
+    const eligibleWeekKey = ({ weekday, hour, ymd }) => {
+      const off = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday] ?? 0
+      const back = weekday === 'Mon' && hour < 6 ? 7 : off
+      const [Y, M, D] = ymd.split('-').map(Number)
+      const d = new Date(Date.UTC(Y, M - 1, D))
+      d.setUTCDate(d.getUTCDate() - back)
+      return d.toISOString().slice(0, 10)
+    }
     const runOnce = async () => {
       try {
-        const { weekday, hour, ymd } = nowEt()
-        if (weekday !== 'Mon' || hour !== 6 || lastRunYmd === ymd) return
-        lastRunYmd = ymd
+        await ensureSystemKv(dbInstance)
+        const weekKey = eligibleWeekKey(nowEt())
+        const last = await kvGet(dbInstance, MARKER)
+        if (last === weekKey) return // already ran for this week's Monday window
         const chunks = Math.max(1, Number(process.env.WEEKLY_VERIFY_CHUNKS) || 6)
         const limit = Math.max(50, Number(process.env.LINK_VERIFICATION_BATCH) || 500)
         let checked = 0
@@ -3134,7 +3172,7 @@ if (process.env.NODE_ENV !== 'test') {
           (health || []).map((r) => [r.link_status || 'unknown', Number(r.count)]),
         )
         const text = [
-          `GrantFlow weekly link verification — ${ymd} (America/New_York)`,
+          `GrantFlow weekly link verification — week of ${weekKey} (America/New_York)`,
           '',
           `This pass: checked ${checked}, ok ${ok}, broken ${broken}.`,
           `Catalog link health: ${JSON.stringify(byStatus)}.`,
@@ -3153,12 +3191,16 @@ if (process.env.NODE_ENV !== 'test') {
         } else {
           console.warn('[weekly-verify-report] email service not configured; logged only')
         }
+        // Persist the marker AFTER a successful run so a transient failure
+        // (DB hiccup, email outage) simply retries on the next hourly tick
+        // rather than being recorded as done.
+        await kvSet(dbInstance, MARKER, weekKey)
       } catch (err) {
         console.warn('[weekly-verify-report] failed:', err.message)
       }
     }
     setTimeout(runOnce, 60_000)
-    setInterval(runOnce, 60 * 60 * 1000) // hourly check
+    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday window
   }
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
