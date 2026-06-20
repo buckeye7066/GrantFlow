@@ -28,6 +28,7 @@
 
 import { chromium } from 'playwright'
 import readline from 'node:readline'
+import { writeFileSync } from 'node:fs'
 
 function parseArgs(argv) {
   const out = {}
@@ -54,13 +55,18 @@ function waitForEnter(promptText) {
 }
 
 const args = parseArgs(process.argv)
-const apiBase = need(args, 'api-base').replace(/\/+$/, '')
-const token = need(args, 'token')
+// Two modes:
+//   --out <file>  : write the captured storageState to a local JSON file (no
+//                   token needed). Simplest — hand the file to Hamilton after.
+//   --api-base + --token : upload straight to GrantFlow's import endpoint.
+const outFile = args.out && args.out !== 'true' ? args.out : null
 const profileId = need(args, 'profile-id')
 const portalHost = need(args, 'portal-host')
 const loginUrl = need(args, 'login-url')
 const label = args.label || `${portalHost} session`
 const expiresDays = Number(args['expires-days'] || 14)
+const apiBase = outFile ? null : need(args, 'api-base').replace(/\/+$/, '')
+const token = outFile ? null : need(args, 'token')
 
 const browser = await chromium.launch({ headless: false })
 const context = await browser.newContext()
@@ -83,6 +89,18 @@ console.log(`Captured ${storageState.cookies.length} cookies across ${storageSta
 const expiresAt = Number.isFinite(expiresDays) && expiresDays > 0
   ? new Date(Date.now() + expiresDays * 86400_000).toISOString()
   : null
+
+// File mode: write the session locally (no token). Hamilton imports it after.
+if (outFile) {
+  writeFileSync(outFile, JSON.stringify({
+    profile_id: profileId, portal_host: portalHost, label,
+    authentication_strategy: 'imported_session', expires_at: expiresAt,
+    storage_state: storageState,
+  }, null, 2))
+  console.log(`\n✅ Session written to ${outFile} (${storageState.cookies.length} cookies).`)
+  console.log('   Hand this file to Hamilton to import — it contains your live session, keep it private.')
+  process.exit(0)
+}
 
 const res = await fetch(`${apiBase}/api/hamilton/automation/sessions/import`, {
   method: 'POST',

@@ -54,7 +54,7 @@ import {
   readAuthorizations,
 } from '../services/hamilton/hamiltonPreflight.js'
 import { preflightAndResolveSelected } from '../services/hamilton/hamiltonPreflightResolver.js'
-import { getHamiltonReadiness, computeHamiltonCalendarEvents } from '../services/hamilton/hamiltonScheduleService.js'
+import { getHamiltonReadiness, computeHamiltonCalendarEvents, emitSessionCaptureReminders } from '../services/hamilton/hamiltonScheduleService.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { listPortalProviders } from '../services/hamilton/hamiltonPortalProviders.js'
 import {
@@ -788,6 +788,17 @@ router.post('/sessions/import', async (req, res) => {
   const user = await requireProfileScope(req, res, req.body?.profileId)
   if (!user) return
   try {
+    // Record the owner's consent for Hamilton to act inside their real portal
+    // account as an auditable part of the session (who authorized, when, from
+    // where). Legal hygiene: a captured session is permission to act on the
+    // owner's behalf, so we never store one without an attached consent record.
+    const consent = {
+      consented_by_user_id: getAuthUserId(user),
+      consented_by_email: user?.email || user?.primary_email || null,
+      consented_at: new Date().toISOString(),
+      consent_text: 'Owner authorized Hamilton to reuse this saved session to act inside the portal on their behalf.',
+      source_ip: req.ip || req.headers?.['x-forwarded-for'] || null,
+    }
     const session = await importSession(req.db, {
       userId: getAuthUserId(user),
       profileId: req.body?.profileId,
@@ -796,7 +807,7 @@ router.post('/sessions/import', async (req, res) => {
       label: req.body?.label || null,
       authenticationStrategy: req.body?.authentication_strategy || req.body?.authenticationStrategy || null,
       expiresAt: req.body?.expires_at || req.body?.expiresAt || null,
-      metadata: req.body?.metadata || {},
+      metadata: { ...(req.body?.metadata || {}), consent },
     })
     return res.json({ ok: true, session })
   } catch (err) {
@@ -824,6 +835,10 @@ router.get('/readiness', async (req, res) => {
   if (!user) return
   try {
     const readiness = await getHamiltonReadiness(req.db, { profileId: req.query.profileId })
+    // Fire-and-forget: ensure a (deduped) reminder notification exists for any
+    // portal still needing a captured session, so the owner is nudged even when
+    // they aren't looking at the calendar.
+    emitSessionCaptureReminders(req.db, { profileId: req.query.profileId }).catch(() => {})
     return res.json({ ok: true, readiness })
   } catch (err) {
     log.error('hamilton_readiness_failed', { err: err?.message })

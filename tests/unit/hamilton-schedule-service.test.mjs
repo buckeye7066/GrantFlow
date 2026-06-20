@@ -133,3 +133,43 @@ describe('hamilton system-wide session readiness scan (Sam/Anya monitorable)', (
     assert.equal(res.findings.length, 0)
   })
 })
+
+describe('proactive session-capture reminders (#2) + consent (#5)', () => {
+  let db
+  beforeEach(() => {
+    db = freshDb()
+    db.exec(`CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, user_id TEXT);`)
+    db.prepare(`INSERT INTO profiles (id, user_id) VALUES (?, 'u1')`).run(PID)
+  })
+
+  it('emits a reminder once and dedups on the next call', async () => {
+    const { emitSessionCaptureReminders } = await import('../../backend/services/hamilton/hamiltonScheduleService.js')
+    await saveCredential(db, { userId: 'u1', profileId: PID, portalHost: 'mtsu.edu', username: 'a@mtsu.edu', password: 'pw' })
+    await seedActiveTask(db)
+
+    const first = await emitSessionCaptureReminders(db, { profileId: PID })
+    assert.equal(first, 1, 'should emit one reminder')
+    const second = await emitSessionCaptureReminders(db, { profileId: PID })
+    assert.equal(second, 0, 'should dedup the second time')
+
+    const n = await db.prepare(`SELECT type, data FROM notifications WHERE type = 'hamilton_session_capture_needed'`).all()
+    assert.ok(n.length >= 1)
+    assert.match(n[0].data, /mtsu\.edu/)
+  })
+
+  it('stops reminding once a session is captured', async () => {
+    const { emitSessionCaptureReminders } = await import('../../backend/services/hamilton/hamiltonScheduleService.js')
+    await saveCredential(db, { userId: 'u1', profileId: PID, portalHost: 'mtsu.edu', username: 'a@mtsu.edu', password: 'pw' })
+    await importSession(db, { userId: 'u1', profileId: PID, portalHost: 'mtsu.edu', storageState: STATE })
+    await seedActiveTask(db)
+    assert.equal(await emitSessionCaptureReminders(db, { profileId: PID }), 0)
+  })
+
+  it('persists a consent record in session metadata (#5)', async () => {
+    const { listSessionsForProfile } = await import('../../backend/services/hamilton/hamiltonCredentialSessionService.js')
+    const consent = { consented_by_user_id: 'u1', consented_at: '2026-06-20T00:00:00Z' }
+    await importSession(db, { userId: 'u1', profileId: PID, portalHost: 'mtsu.edu', storageState: STATE, metadata: { consent } })
+    const list = await listSessionsForProfile(db, PID)
+    assert.equal(list[0].metadata?.consent?.consented_by_user_id, 'u1')
+  })
+})

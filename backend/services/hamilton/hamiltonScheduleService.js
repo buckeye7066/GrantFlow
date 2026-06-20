@@ -19,6 +19,9 @@ import { normalizeSchedule, nextWindowStart, windowStartsBetween } from './porta
 import { deriveProfilePortalHosts } from './hamiltonAutomationOrchestrator.js'
 import { listCredentialedDomains } from './hamiltonPortalCredentialService.js'
 import { findValidSession } from './hamiltonCredentialSessionService.js'
+import { emitHamiltonNotificationToProfileAndAdmins } from './hamiltonNotifications.js'
+
+const SESSION_REMINDER_TYPE = 'hamilton_session_capture_needed'
 
 // Tasks that still have work for Hamilton to do (not terminal / not waiting on
 // the owner for something other than a scheduled run).
@@ -215,4 +218,52 @@ export async function scanHamiltonSessionReadiness(db, { limit = 500 } = {}) {
   }
 }
 
-export default { getHamiltonReadiness, computeHamiltonCalendarEvents, scanHamiltonSessionReadiness }
+/**
+ * Proactively remind the owner to (re)capture a portal session BEFORE a
+ * scheduled run stalls on it — the active counterpart to the Sam/Anya scan.
+ * Deduped per (profile, host) over `lookbackHours` so it never nags. Returns
+ * the number of reminders emitted. Safe to call from the readiness endpoint
+ * (fire-and-forget) and from the scheduler.
+ */
+export async function emitSessionCaptureReminders(db, { profileId, lookbackHours = 20 } = {}) {
+  if (!db || !profileId) return 0
+  const readiness = await getHamiltonReadiness(db, { profileId })
+  if (!readiness || readiness.pending_task_count === 0) return 0
+  const hosts = readiness.portals_needing_capture || []
+  if (hosts.length === 0) return 0
+
+  // Resolve the profile owner so the reminder reliably reaches them (and so the
+  // dedup marker is actually written even if the broader access resolver is
+  // unavailable).
+  let profileUserId = null
+  try {
+    const row = await db.prepare('SELECT user_id FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    profileUserId = row?.user_id || null
+  } catch { profileUserId = null }
+
+  const cutoff = new Date(Date.now() - lookbackHours * 3600_000).toISOString()
+  let emitted = 0
+  for (const host of hosts) {
+    // Dedup: skip if we already reminded about this host recently.
+    let recent = null
+    try {
+      recent = await db.prepare(
+        `SELECT 1 FROM notifications WHERE type = ? AND data LIKE ? AND created_at > ? LIMIT 1`,
+      ).get(SESSION_REMINDER_TYPE, `%${host}%`, cutoff)
+    } catch { recent = null }
+    if (recent) continue
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId,
+      profileUserId,
+      type: SESSION_REMINDER_TYPE,
+      title: `Capture your ${host} login for Hamilton`,
+      message: `Hamilton has work ready but no valid saved session for ${host}. Capture one (you complete login + 2FA once) so she can submit inside your real account — otherwise the scheduled run will pause for sign-in.`,
+      severity: 'warning',
+      data: { portal_host: host, action: 'capture_session' },
+    }).catch(() => {})
+    emitted += 1
+  }
+  return emitted
+}
+
+export default { getHamiltonReadiness, computeHamiltonCalendarEvents, scanHamiltonSessionReadiness, emitSessionCaptureReminders }

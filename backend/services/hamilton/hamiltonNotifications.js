@@ -49,6 +49,9 @@ export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   // A portal needs a saved login the owner hasn't added yet (sent to the student
   // and admins, with a deep link to add it).
   'hamilton_missing_credential',
+  // A portal needs a captured browser SESSION (post-2FA) before Hamilton can act
+  // inside the real account — proactive reminder to (re)capture.
+  'hamilton_session_capture_needed',
   // Hard-Stop Resolver dual alerts — user side.
   'hamilton_hard_stop',
   'hamilton_payment_required',
