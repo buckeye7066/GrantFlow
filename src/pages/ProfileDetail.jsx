@@ -8,6 +8,7 @@ import {
   requestProfileSectionAI,
   upsertProfileSection,
   uploadProfileAvatar,
+  requestProfileAvatarFromWebsite,
   updateProfile,
 } from "@/api/profiles"
 import { ingestDocument } from "@/api/documents"
@@ -247,6 +248,38 @@ export default function ProfileDetail() {
     },
   })
 
+  // ORG profiles: pull the avatar straight from the org's own website logo.
+  // Deterministic + durable (stored as BYTEA). On failure we surface a clear
+  // reason so the user can fall back to AI generation or manual upload.
+  const requestAvatarFromWebsiteMutation = useMutation({
+    mutationFn: async () => {
+      const basic =
+        profile?.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
+      const website = basic?.website || profile?.website || null
+      return requestProfileAvatarFromWebsite(profileId, { website })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      toast({
+        title: "Logo applied",
+        description: "We pulled the logo from the organization's website.",
+      })
+    },
+    onError: (err) => {
+      const reason = err?.details?.reason || err?.errorCode || null
+      const description =
+        reason === "no_website"
+          ? "No website is on file. Add one in Basic Information, or upload a photo."
+          : err?.details?.message ||
+            (err instanceof Error ? err.message : "We could not find a usable logo on that website.")
+      toast({
+        title: "No logo found",
+        description,
+        variant: "destructive",
+      })
+    },
+  })
+
   const renameProfileMutation = useMutation({
     mutationFn: (displayName) => updateProfile(profileId, { display_name: displayName }),
     onSuccess: () => {
@@ -429,6 +462,10 @@ export default function ProfileDetail() {
     requestAvatarAIMutation.mutate()
   }, [requestAvatarAIMutation])
 
+  const handleUseWebsiteLogo = React.useCallback(() => {
+    requestAvatarFromWebsiteMutation.mutate()
+  }, [requestAvatarFromWebsiteMutation])
+
 
   // IMPORTANT: All hooks must be called before any conditional returns (React rules of hooks).
   const [activeTab, setActiveTab] = React.useState("profile")
@@ -478,6 +515,34 @@ export default function ProfileDetail() {
     profileTypeLabel.includes("student") ||
     highestLevel.includes("student") ||
     hasTargetColleges
+
+  // Org-vs-individual: individuals (people, students, single medical/veteran/etc.)
+  // keep the existing AI/upload flow. Everything else (nonprofit, church, school,
+  // government, business...) is treated as an organization and is offered the
+  // "Use website logo" option. We default UNKNOWN/blank types to individual so we
+  // never surface an org-only control on a personal profile.
+  const INDIVIDUAL_PRIMARY_TYPES = new Set([
+    "individual",
+    "individual_need",
+    "family",
+    "medical_need",
+    "medical_assistance",
+    "medical",
+    "senior",
+    "veteran",
+    "disabled_adult",
+    "student",
+    "high_school_student",
+    "college_student",
+    "graduate_student",
+  ])
+  const isOrgProfile =
+    !isStudentProfile &&
+    primaryType.length > 0 &&
+    !INDIVIDUAL_PRIMARY_TYPES.has(primaryType) &&
+    !profileTypeLabel.includes("individual")
+  const profileWebsite = String(basicInfo?.website || profile?.website || "").trim()
+  const hasWebsiteOnFile = profileWebsite.length > 0
 
   const healthMedical =
     profile?.sections?.find((section) => section.section_key === "health_medical")?.data ?? {}
@@ -770,8 +835,12 @@ export default function ProfileDetail() {
               aiLoadingKey={aiLoadingKey}
               onUploadAvatar={handleUploadAvatar}
               onRequestAvatarAI={handleRequestAvatarAI}
+              onUseWebsiteLogo={isOrgProfile ? handleUseWebsiteLogo : undefined}
+              isOrgProfile={isOrgProfile}
+              hasWebsiteOnFile={hasWebsiteOnFile}
               isUploadingAvatar={uploadAvatarMutation.isPending}
               isRequestingAvatar={requestAvatarAIMutation.isPending}
+              isFetchingWebsiteLogo={requestAvatarFromWebsiteMutation.isPending}
               onUploadDocument={handleUploadDocument}
               isUploadingDocument={uploadDocumentMutation.isPending}
               fundsTotal={profile.pipeline_funds_total ?? 0}

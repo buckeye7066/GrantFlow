@@ -46,6 +46,23 @@ export async function uploadProfileAvatar(profileId, file) {
   })
 }
 
+/**
+ * Derive an ORG profile's avatar from its own website homepage logo.
+ * Synchronous on the backend: resolves immediately with the updated profile
+ * on success, or throws (err.details carries { reason, message }) so callers
+ * can fall back to AI generation / upload.
+ */
+export async function requestProfileAvatarFromWebsite(profileId, options = {}) {
+  assertRealProfileId(profileId, 'requestProfileAvatarFromWebsite')
+  const body = {}
+  const website = options?.website ?? options?.websiteHint
+  if (website) body.website = website
+  return apiFetch(`/api/profiles/${profileId}/avatar/from-website`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 export async function requestProfileAvatarAI(profileId, options = {}) {
   assertRealProfileId(profileId, 'requestProfileAvatarAI')
   const body = {}

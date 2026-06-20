@@ -40,6 +40,7 @@ import {
   Loader2,
   Upload,
   UploadCloud,
+  Globe,
 } from "lucide-react"
 import { normalizeTargetColleges } from "@/utils/targetCollegesSync"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
@@ -702,8 +703,12 @@ export default function ProfileOverview({
   aiLoadingKey,
   onUploadAvatar,
   onRequestAvatarAI,
+  onUseWebsiteLogo,
+  isOrgProfile = false,
+  hasWebsiteOnFile = false,
   isUploadingAvatar,
   isRequestingAvatar,
+  isFetchingWebsiteLogo = false,
   onUploadDocument,
   isUploadingDocument,
   fundsTotal = 0,
@@ -934,6 +939,30 @@ export default function ProfileOverview({
                   className="hidden"
                   onChange={handleDocumentFileChange}
                 />
+                {isOrgProfile && onUseWebsiteLogo ? (
+                  // For organizations, deriving the avatar from the org's own
+                  // website logo is the suggested option (their real brand mark).
+                  // It's the primary/highlighted button when a website is on file.
+                  <Button
+                    variant={hasWebsiteOnFile ? "default" : "outline"}
+                    size="sm"
+                    className="gap-2"
+                    onClick={onUseWebsiteLogo}
+                    disabled={isFetchingWebsiteLogo}
+                    title={
+                      hasWebsiteOnFile
+                        ? "Use the organization's website logo"
+                        : "No website on file — add one in Basic Information, or upload a photo"
+                    }
+                  >
+                    {isFetchingWebsiteLogo ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Globe className="w-4 h-4" />
+                    )}
+                    {isFetchingWebsiteLogo ? "Fetching logo…" : "Use website logo"}
+                  </Button>
+                ) : null}
                 {onUploadAvatar ? (
                   <Button
                     variant="outline"
@@ -953,9 +982,14 @@ export default function ProfileOverview({
                     className="gap-2"
                     onClick={onRequestAvatarAI}
                     disabled={isRequestingAvatar}
+                    title={isOrgProfile ? "Fallback: generate a logo with AI" : "Find or generate a photo with AI"}
                   >
                     {isRequestingAvatar ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    {isRequestingAvatar ? "Locating…" : "Use AI to find photo"}
+                    {isRequestingAvatar
+                      ? "Locating…"
+                      : isOrgProfile
+                      ? "Generate with AI"
+                      : "Use AI to find photo"}
                   </Button>
                 ) : null}
                 {onUploadDocument ? (
@@ -975,6 +1009,12 @@ export default function ProfileOverview({
                   </Button>
                 ) : null}
               </div>
+              {isOrgProfile && onUseWebsiteLogo && !hasWebsiteOnFile ? (
+                <p className="text-xs text-slate-500">
+                  No website on file. Add the organization&apos;s website in Basic Information to pull its
+                  logo automatically, or upload a photo / generate one with AI.
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:max-w-xl">

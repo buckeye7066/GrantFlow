@@ -41,6 +41,7 @@ import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
+import { fetchOrgLogo } from '../services/orgLogoFetcher.js'
 import { mergePortalAwardIntoApplications } from '../services/portalCheckService.js'
 import {
   createSchoolPortalConnection,
@@ -2138,6 +2139,63 @@ router.delete('/:id', async (req, res) => {
   res.status(204).send()
 })
 
+/**
+ * Persist avatar BYTES durably, mirroring the manual-upload path so every
+ * avatar source (upload, website-logo, AI) stores identically:
+ *   - profiles.avatar_data BYTEA + avatar_content_type = the durable source of
+ *     truth (survives Railway's ephemeral filesystem resets — see the
+ *     ephemeral-FS pattern), and
+ *   - profiles.avatar_url = a /uploads/<file> marker, with a best-effort copy
+ *     written to disk as a fast-path read cache.
+ * Falls back to a path-only update if the avatar_data columns are not yet
+ * present (migration pending) so the operation never 500s.
+ *
+ * @param {object} args
+ * @param {object} args.req - express request (for db + uploads dir)
+ * @param {string} args.id - profile id
+ * @param {Buffer} args.buffer - image bytes
+ * @param {string} args.contentType - image content type
+ * @param {string} [args.ext] - file extension hint (default png)
+ * @param {string|null} [args.previousAvatarUrl] - prior avatar_url to clean up
+ */
+async function persistAvatarBytes({ req, id, buffer, contentType, ext = 'png', previousAvatarUrl = null }) {
+  const safeExt = String(ext || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png'
+  const filename = `avatar_${String(id)}_${Date.now()}.${safeExt}`
+  const publicPath = `/uploads/${filename}`
+  const avatarContentType = contentType || guessImageContentType(filename)
+
+  // Best-effort: drop the file into /uploads as a fast-path read cache. If the
+  // disk is read-only or wiped, the download endpoint falls back to the DB
+  // BYTEA, so a failure here is non-fatal.
+  try {
+    fs.writeFile(join(getUploadsDir(req), filename), buffer, () => {})
+  } catch { /* ignore — DB copy is authoritative */ }
+
+  try {
+    await req.db
+      .prepare('UPDATE profiles SET avatar_url = ?, avatar_data = ?, avatar_content_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(publicPath, buffer, avatarContentType, id)
+  } catch (colErr) {
+    if (/avatar_data|avatar_content_type|column/i.test(String(colErr?.message || colErr))) {
+      await req.db
+        .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(publicPath, id)
+    } else {
+      throw colErr
+    }
+  }
+
+  if (previousAvatarUrl && String(previousAvatarUrl).startsWith('/uploads/')) {
+    const previousFilename = String(previousAvatarUrl).replace('/uploads/', '')
+    if (previousFilename && previousFilename !== filename) {
+      const previousPath = join(getUploadsDir(req), previousFilename)
+      fs.unlink(previousPath, () => {})
+    }
+  }
+
+  return { filename, publicPath }
+}
+
 router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
@@ -2162,55 +2220,108 @@ router.post('/:id/avatar', runUploadSingle('avatar'), async (req, res, next) => 
   }
 
   try {
-    // Stable filename derived from the profile id so the avatar_url marker (and
-    // the /uploads cache path) is deterministic. The extension is best-effort.
+    // The bytes came straight from the upload into req.file.buffer (memory
+    // storage), so they persist across Railway's ephemeral-filesystem resets.
     const ext = String(req.file.originalname || '').includes('.')
-      ? req.file.originalname.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '')
+      ? req.file.originalname.split('.').pop()
       : 'png'
-    const filename = `avatar_${String(id)}_${Date.now()}.${ext || 'png'}`
-    const publicPath = `/uploads/${filename}`
-
-    // The DB is the durable source of truth: the bytes came straight from the
-    // upload into req.file.buffer (memory storage), so they persist across
-    // Railway's ephemeral-filesystem resets.
-    const avatarData = req.file.buffer
-    const avatarContentType = req.file.mimetype || guessImageContentType(filename)
-
-    // Best-effort: also drop the file into /uploads as a fast-path read cache.
-    // If the disk is read-only or wiped, the download endpoint falls back to the
-    // DB BYTEA, so a failure here is non-fatal.
-    try {
-      fs.writeFile(join(getUploadsDir(req), filename), avatarData, () => {})
-    } catch { /* ignore — DB copy is authoritative */ }
-
-    try {
-      await req.db
-        .prepare('UPDATE profiles SET avatar_url = ?, avatar_data = ?, avatar_content_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(publicPath, avatarData, avatarContentType, id)
-    } catch (colErr) {
-      // Resilience: if the avatar_data/avatar_content_type columns are not yet
-      // present (migration not applied), fall back to the path-only update so
-      // the upload still succeeds rather than 500ing.
-      if (/avatar_data|avatar_content_type|column/i.test(String(colErr?.message || colErr))) {
-        await req.db
-          .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-          .run(publicPath, id)
-      } else {
-        throw colErr
-      }
-    }
-
-    const previousAvatar = existing.avatar_url
-    if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
-      const previousFilename = previousAvatar.replace('/uploads/', '')
-      if (previousFilename && previousFilename !== filename) {
-        const previousPath = join(getUploadsDir(req), previousFilename)
-        fs.unlink(previousPath, () => {})
-      }
-    }
+    await persistAvatarBytes({
+      req,
+      id,
+      buffer: req.file.buffer,
+      contentType: req.file.mimetype,
+      ext,
+      previousAvatarUrl: existing.avatar_url,
+    })
 
     const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
     res.json(mapProfile(updated))
+  } catch (error) {
+    next(error)
+  }
+})
+
+// POST /api/profiles/:id/avatar/from-website
+// Derive the profile picture from the org's OWN public website (their real
+// logo). Intended for ORGANIZATION profiles, where the homepage logo is the
+// most authentic avatar; individual profiles should use upload / AI instead.
+//
+// Resolves the website from the request body (website / website_hint) or, if
+// absent, the profile's basic_information section. Fetches the homepage,
+// extracts a logo (og:image -> apple-touch-icon -> favicon -> prominent <img>),
+// downloads the bytes and stores them through the SAME durable BYTEA path the
+// upload uses. On any failure (no website, fetch blocked, no usable logo) it
+// returns a structured reason so the UI can fall back to AI generation /
+// initials. Manual upload always remains available.
+router.post('/:id/avatar/from-website', async (req, res, next) => {
+  const { id } = req.params
+  const authUserId = req.ctx?.userId ?? null
+  const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
+
+  const existing = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!existing) {
+    return res.status(404).json({ ok: false, error: 'Profile not found' })
+  }
+
+  const userIsAdmin = req.ctx?.isAdmin === true
+  const matchesProfileId = authProfileId === String(id)
+  const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
+  if (!userIsAdmin && !matchesProfileId && !matchesUserId) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    // Resolve the website: explicit body value wins, else the profile's
+    // basic_information section (the canonical home for the org website URL).
+    let website = normalizeHttpUrl(req.body?.website ?? req.body?.website_hint)
+    if (!website) {
+      const sectionRow = await req.db
+        .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
+        .get(id, 'basic_information')
+      const data = sectionRow?.data ? safeParseJSON(sectionRow.data, {}) : {}
+      website = normalizeHttpUrl(data?.website)
+    }
+
+    if (!website) {
+      return res.status(422).json({
+        ok: false,
+        code: 'NO_WEBSITE',
+        reason: 'no_website',
+        message: 'No website is on file for this profile. Add one or upload a photo.',
+      })
+    }
+
+    const logo = await fetchOrgLogo(website)
+    if (!logo.ok) {
+      // Graceful failure: surface the reason so the UI can offer AI fallback.
+      return res.status(422).json({
+        ok: false,
+        code: 'NO_LOGO',
+        reason: logo.reason,
+        website,
+        message:
+          'We could not find a usable logo on that website. Try AI generation or upload a photo.',
+      })
+    }
+
+    const ext = extensionFromImageContentType(logo.contentType)
+    await persistAvatarBytes({
+      req,
+      id,
+      buffer: logo.buffer,
+      contentType: logo.contentType,
+      ext,
+      previousAvatarUrl: existing.avatar_url,
+    })
+
+    const updated = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+    res.json({
+      ok: true,
+      method: logo.method,
+      website: logo.website,
+      source_url: logo.sourceUrl,
+      profile: mapProfile(updated),
+    })
   } catch (error) {
     next(error)
   }
@@ -2316,6 +2427,17 @@ router.post('/:id/avatar/ai', async (req, res) => {
     created_at: job.created_at,
   })
 })
+
+function extensionFromImageContentType(contentType) {
+  const ct = String(contentType || '').toLowerCase()
+  if (ct.includes('image/png')) return 'png'
+  if (ct.includes('image/webp')) return 'webp'
+  if (ct.includes('image/jpeg') || ct.includes('image/jpg')) return 'jpg'
+  if (ct.includes('image/gif')) return 'gif'
+  if (ct.includes('image/svg')) return 'svg'
+  if (ct.includes('icon')) return 'ico'
+  return 'png'
+}
 
 function guessImageContentType(filePath) {
   const lower = String(filePath || '').toLowerCase()
