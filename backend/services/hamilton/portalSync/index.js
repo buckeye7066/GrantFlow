@@ -39,6 +39,7 @@ import {
 import { setProfileSectionField } from '../../profileFieldWriter.js'
 import { upsertSchoolPortalAwardAsOpportunity } from '../../schoolPortalImportService.js'
 import { isDismissed } from '../../pipelineDismissals.js'
+import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
 import { listConnectors, getConnectorForHost, resolveConnector } from './registry.js'
 import {
@@ -156,6 +157,11 @@ async function loadProfileBundle(db, profileId) {
   for (const r of sectionRows || []) {
     try { sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data } catch { /* ignore */ }
   }
+  // Derive first/last name from full_name / display_name so a profile that only
+  // carries a single full name still presents first/last to portal form-fill.
+  // Mirrors every other Hamilton loader (orchestrator, app-agent, route).
+  const derived = deriveNamePartsIntoBasicInfo(sections.basic_information || {}, row.display_name)
+  if (derived.changed) sections.basic_information = derived.data
   return { ...row, sections, ...sections }
 }
 

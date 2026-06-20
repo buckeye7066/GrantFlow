@@ -24,6 +24,7 @@
 
 import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
 import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
+import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 
 const REQUIRED_IDENTITY_FIELDS = [
   { key: 'first_name', paths: ['basic_information.first_name', 'first_name'] },
@@ -67,6 +68,7 @@ function normKey(k) { return String(k || '').trim().toLowerCase().replace(/[\s-]
 const FIELD_ALIASES = Object.freeze({
   first_name: ['first_name', 'firstname', 'given_name', 'givenname', 'fname'],
   last_name: ['last_name', 'lastname', 'surname', 'family_name', 'familyname', 'lname'],
+  full_name: ['full_name', 'fullname', 'name', 'display_name', 'displayname', 'legal_name', 'legalname', 'applicant_name', 'student_name'],
   email: ['email', 'email_address', 'emailaddress', 'primary_email', 'contact_email'],
   phone: ['phone', 'phone_number', 'cell', 'cell_phone', 'cellphone', 'mobile', 'mobile_phone', 'telephone', 'contact_phone'],
   school_name: ['school_name', 'school', 'university', 'college', 'institution', 'current_school', 'current_institution', 'institution_name'],
@@ -101,13 +103,39 @@ function deepFindByKeys(root, keys) {
   return undefined
 }
 
+// Find a single full-name string anywhere on the profile (basic_information.
+// full_name, profiles.display_name mirrored to the top level, or any aliased
+// key at any depth), so first/last name can be DERIVED instead of demanded.
+function findFullName(profile) {
+  const v = deepFindByKeys(profile, ['full_name'])
+  return nonEmpty(v) ? String(v) : null
+}
+
+// Derive a first/last name part from whatever full name the profile carries.
+// Returns undefined for organizations (no personal name) or when no name is on
+// file. This is the loader-independent safety net: the profile editor persists
+// ONE canonical name (basic_information.full_name / profiles.display_name), so
+// Hamilton must never raise a "missing first/last name" hard stop just because
+// a particular loader didn't pre-split it.
+function derivedNamePart(profile, key) {
+  const nk = normKey(key)
+  if (nk !== 'first_name' && nk !== 'last_name') return undefined
+  const full = findFullName(profile)
+  if (!full || looksLikeOrganization(full)) return undefined
+  const parts = parseFullName(full)
+  const v = nk === 'first_name' ? parts.first_name : parts.last_name
+  return nonEmpty(v) ? v : undefined
+}
+
 // A field counts as present if it sits at an explicit path, OR anywhere in the
 // profile under a known alias, OR the operator already supplied it (resolved
-// field cache). Only then do we trust a "missing" verdict.
+// field cache), OR — for name parts — it can be DERIVED from a full name the
+// profile already carries. Only then do we trust a "missing" verdict.
 function fieldPresent(profile, paths, key, resolvedFields) {
   if (nonEmpty(pickFirst(profile, paths))) return true
   if (resolvedFields && nonEmpty(resolvedFields[normKey(key)])) return true
   if (nonEmpty(deepFindByKeys(profile, [key]))) return true
+  if (nonEmpty(derivedNamePart(profile, key))) return true
   return false
 }
 

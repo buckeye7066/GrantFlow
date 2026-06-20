@@ -49,6 +49,7 @@ import {
   emitMissingInfoAlert,
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
+import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
 import {
   getDecryptedCredentialWithFallback,
@@ -170,6 +171,14 @@ async function loadProfileBundle(db, profileId) {
   for (const r of sectionRows || []) {
     try { sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data } catch { /* ignore */ }
   }
+  // "Parse, baby, parse." Derive first/last name from full_name (or the
+  // profile's display_name) so the autopilot fill — and the preflight that
+  // runs on THIS bundle — never lacks a first/last name that is plainly
+  // present as a single full name. Mirrors hamiltonApplicationAgent.loadProfile
+  // and routes/hamiltonAutomation.loadProfile so every Hamilton entry point
+  // hydrates the profile identically.
+  const derived = deriveNamePartsIntoBasicInfo(sections.basic_information || {}, row.display_name)
+  if (derived.changed) sections.basic_information = derived.data
   return { ...row, ...sections, sections }
 }
 

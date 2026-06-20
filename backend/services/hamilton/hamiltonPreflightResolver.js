@@ -36,8 +36,19 @@ import { listActiveAttestations } from './hamiltonAttestationStore.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
 import { getResolvedFieldsAsMap } from './hamiltonResolvedFieldStore.js'
+import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 
 function nonEmpty(v) { return v !== null && v !== undefined && String(v).trim() !== '' }
+
+// Derive a name part from any full name the profile carries (basic_information.
+// full_name or display_name), so the readiness readout matches the preflight
+// check — both treat a single full name as satisfying first/last name.
+function derivedName(profile, part) {
+  const full = profile?.basic_information?.full_name || profile?.full_name || profile?.display_name || profile?.name
+  if (!nonEmpty(full) || looksLikeOrganization(String(full))) return ''
+  const parts = parseFullName(String(full))
+  return part === 'first' ? parts.first_name : parts.last_name
+}
 
 function deadlineFromOpportunity(opp) {
   const d = opp?.deadline || opp?.application_deadline || opp?.due_date || opp?.close_date
@@ -234,8 +245,8 @@ export async function preflightAndResolveSelected(db, { profile, profileId, sele
 function identityReadiness(profile) {
   const bi = profile?.basic_information || {}
   return {
-    first_name: nonEmpty(bi.first_name || profile?.first_name),
-    last_name:  nonEmpty(bi.last_name || profile?.last_name),
+    first_name: nonEmpty(bi.first_name || profile?.first_name || derivedName(profile, 'first')),
+    last_name:  nonEmpty(bi.last_name || profile?.last_name || derivedName(profile, 'last')),
     email:      nonEmpty(bi.email || profile?.email),
     phone:      nonEmpty(bi.phone || profile?.phone),
   }
