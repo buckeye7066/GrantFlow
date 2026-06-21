@@ -257,6 +257,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                     profileId={profileId}
                     url={safeHttpUrl(c.portals?.student_portal_url) || safeHttpUrl(c.website_url)}
                     label="Log in to student portal"
+                    searchName={c.name}
                   />
                 </div>
               </div>

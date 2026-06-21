@@ -1363,6 +1363,7 @@ function ApplicationCard({
             profileId={profileId}
             url={safeHttpUrl(portals.student_portal_url) || safeHttpUrl(application.website_url)}
             label="Log in to student portal"
+            searchName={application.name}
           />
           <ExternalLinkButton href={application.website_url}>Website</ExternalLinkButton>
           <ExternalLinkButton href={portals.admissions_url}>Admissions</ExternalLinkButton>

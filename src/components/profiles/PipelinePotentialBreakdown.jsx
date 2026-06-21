@@ -414,6 +414,7 @@ export default function PipelinePotentialBreakdown({
                       <PortalLoginButton
                         profileId={profileId}
                         url={safeHttpUrl(item.application_url) || safeHttpUrl(item.url) || safeHttpUrl(item.source_url) || safeHttpUrl(item.portal_url)}
+                        searchName={item.title || item.funder}
                       />
                     </div>
                   </li>

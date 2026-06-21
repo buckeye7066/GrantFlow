@@ -1,8 +1,18 @@
 import React from "react"
-import { KeyRound, ExternalLink, LogIn } from "lucide-react"
+import { KeyRound, ExternalLink, LogIn, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createPageUrl } from "@/utils"
 import { safeHttpUrl, hostFromUrl } from "@/lib/safeUrl"
+
+// When we have no portal/login URL on file but we DO know the school / funding
+// source name, build a web search for its login page so the control is never a
+// dead end. This is the global guarantee: PortalLoginButton always does
+// something useful.
+function loginSearchUrl(name) {
+  const q = String(name || "").trim()
+  if (!q) return null
+  return `https://www.google.com/search?q=${encodeURIComponent(`${q} login portal`)}`
+}
 
 /**
  * PortalLoginButton
@@ -36,10 +46,16 @@ export default function PortalLoginButton({
   size = "sm",
   variant = "outline",
   className = "",
+  // Name of the school / funding source. When there's no valid `url`, we use
+  // this to open a web search for the login page instead of rendering a dead,
+  // un-clickable "No portal link" button. Pass it everywhere a name is known.
+  searchName = "",
 }) {
   const href = safeHttpUrl(url)
   const host = hostFromUrl(url)
   const canSaveLogin = Boolean(profileId) && Boolean(host)
+  // Fallback target when no real URL is on file but we know the name.
+  const searchHref = href ? null : loginSearchUrl(searchName)
 
   // Plain anchor (not useNavigate) so this control works in ANY render context
   // — including the many card surfaces and tests that aren't wrapped in a
@@ -72,6 +88,26 @@ export default function PortalLoginButton({
           >
             <LogIn className="h-3.5 w-3.5" />
             {label}
+          </a>
+        </Button>
+      ) : searchHref ? (
+        // No URL on file, but we know the name — stay CLICKABLE: open a web
+        // search for the login page rather than a dead "No portal link" button.
+        <Button
+          asChild
+          variant={variant}
+          size={size}
+          className="gap-1.5"
+          title={`No saved link yet — search the web for ${searchName}'s login page`}
+        >
+          <a
+            href={searchHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Search className="h-3.5 w-3.5" />
+            Find login page
           </a>
         </Button>
       ) : (
