@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   searchFoundations, getFoundation, searchNSF, searchFederalPrograms,
-  scoreOpportunities, getProfileRegion,
+  scoreOpportunities, getProfileRegion, reverseLookup,
 } from "@/api/foundations"
 import { listProfiles } from "@/api/profiles"
 import { apiFetch } from "@/api/client"
@@ -20,6 +20,7 @@ import {
   Search, Building2, DollarSign, FileText, ExternalLink,
   Loader2, MapPin, TrendingUp, Database, Beaker, Landmark,
   ChevronLeft, ChevronRight, Plus, Check, Target, Mail, Phone, User,
+  Sparkles,
 } from "lucide-react"
 
 const US_STATES = [
@@ -69,6 +70,50 @@ function MatchBadge({ score, loading }) {
     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${scoreColor(score)}`}>
       <Target className="w-3 h-3" /> {score}% match
     </span>
+  )
+}
+
+/** A single org/foundation result card (shared by the Foundations + Recommended tabs). */
+function FoundationCard({ org, score, scoring, hasProfile, onOpen, AddButton, footnote }) {
+  return (
+    <Card
+      className="hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer"
+      onClick={() => onOpen({ kind: "foundation", item: org })}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <h3 className="font-semibold text-slate-900">{org.name}</h3>
+              {org.ntee_code && <Badge variant="outline" className="text-xs">{org.ntee_code}</Badge>}
+              <MatchBadge score={score} loading={scoring && score === undefined && hasProfile} />
+            </div>
+            <div className="flex flex-wrap gap-3 text-sm text-slate-600">
+              {org.city && org.state && (
+                <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {org.city}, {org.state}</span>
+              )}
+              {!org.city && org.state && (
+                <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {org.state}</span>
+              )}
+              {org.income_amount !== null && org.income_amount !== undefined && (
+                <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Income: {formatCurrency(org.income_amount)}</span>
+              )}
+              {org.asset_amount !== null && org.asset_amount !== undefined && (
+                <span className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> Assets: {formatCurrency(org.asset_amount)}</span>
+              )}
+              {org.grant_amount > 0 && (
+                <span className="flex items-center gap-1 font-medium text-emerald-700"><DollarSign className="w-3 h-3" /> Grants Paid: {formatCurrency(org.grant_amount)}</span>
+              )}
+            </div>
+            {footnote && <p className="text-xs text-blue-600 mt-1">{footnote}</p>}
+            {org.ein && /^\d/.test(String(org.ein)) && <p className="text-xs text-slate-400 mt-1">EIN: {org.ein}</p>}
+          </div>
+          <div className="flex gap-2 items-center shrink-0">
+            <AddButton kind="foundation" item={org} score={score} />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -193,8 +238,33 @@ export default function FoundationSearch() {
   })
   const fedScores = useMemo(() => buildScoreMap(fedScoreData), [fedScoreData])
 
+  // ── Recommended funders for the selected profile (reverse-lookup) ────────
+  const { data: recoData, isLoading: recoLoading, isError: recoError } = useQuery({
+    queryKey: ["reverse-lookup", selectedProfileId],
+    queryFn: () => reverseLookup(selectedProfileId, { maxResults: 25 }),
+    enabled: Boolean(selectedProfileId) && activeTab === "recommended",
+    staleTime: 300_000,
+  })
+  const recoFunders = useMemo(() => {
+    const payload = recoData?.data ?? recoData ?? {}
+    return Array.isArray(payload.suggested_funders) ? payload.suggested_funders : []
+  }, [recoData])
+  const recoSummary = (recoData?.data ?? recoData)?.profile_summary ?? null
+
+  const recoKeys = useMemo(() => recoFunders.map((o) => o.ein).filter(Boolean).join(","), [recoFunders])
+  const { data: recoScoreData, isFetching: recoScoring } = useQuery({
+    queryKey: ["reco-scores", selectedProfileId, recoKeys],
+    queryFn: () => scoreOpportunities({ profileId: selectedProfileId, kind: "foundation", items: recoFunders }),
+    enabled: Boolean(selectedProfileId && recoFunders.length),
+    staleTime: 120_000,
+  })
+  const recoScores = useMemo(() => buildScoreMap(recoScoreData), [recoScoreData])
+
   // ── Foundation detail (filings + contact) ────────────────────────────────
-  const selectedEin = detailTarget?.kind === "foundation" ? detailTarget.item?.ein : null
+  // Only the live 990 lookup needs a real 9-digit EIN; catalog-only funders
+  // (non-EIN ids) fall back to the data already on the card.
+  const selectedEinRaw = detailTarget?.kind === "foundation" ? detailTarget.item?.ein : null
+  const selectedEin = /^\d{9}$/.test(String(selectedEinRaw ?? "").replace(/\D/g, "")) ? selectedEinRaw : null
   const { data: detailResult, isLoading: detailLoading } = useQuery({
     queryKey: ["foundation-detail", selectedEin],
     queryFn: () => getFoundation(selectedEin),
@@ -322,7 +392,7 @@ export default function FoundationSearch() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="foundations" className="flex items-center gap-2">
               <Building2 className="w-4 h-4" /> Foundations & 990s
             </TabsTrigger>
@@ -331,6 +401,9 @@ export default function FoundationSearch() {
             </TabsTrigger>
             <TabsTrigger value="federal" className="flex items-center gap-2">
               <Landmark className="w-4 h-4" /> Federal Programs
+            </TabsTrigger>
+            <TabsTrigger value="recommended" className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4" /> Recommended
             </TabsTrigger>
           </TabsList>
 
@@ -397,46 +470,17 @@ export default function FoundationSearch() {
                     </div>
                   )}
                 </div>
-                {fOrgs.map((org) => {
-                  const score = fScores.get(String(org.ein))?.match_score
-                  return (
-                    <Card
-                      key={org.ein || org.name}
-                      className="hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer"
-                      onClick={() => setDetailTarget({ kind: "foundation", item: org })}
-                    >
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <h3 className="font-semibold text-slate-900">{org.name}</h3>
-                              {org.ntee_code && <Badge variant="outline" className="text-xs">{org.ntee_code}</Badge>}
-                              <MatchBadge score={score} loading={fScoring && score === undefined && Boolean(selectedProfileId)} />
-                            </div>
-                            <div className="flex flex-wrap gap-3 text-sm text-slate-600">
-                              {org.city && org.state && (
-                                <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {org.city}, {org.state}</span>
-                              )}
-                              {org.income_amount !== null && org.income_amount !== undefined && (
-                                <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Income: {formatCurrency(org.income_amount)}</span>
-                              )}
-                              {org.asset_amount !== null && org.asset_amount !== undefined && (
-                                <span className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> Assets: {formatCurrency(org.asset_amount)}</span>
-                              )}
-                              {org.grant_amount > 0 && (
-                                <span className="flex items-center gap-1 font-medium text-emerald-700"><DollarSign className="w-3 h-3" /> Grants Paid: {formatCurrency(org.grant_amount)}</span>
-                              )}
-                            </div>
-                            {org.ein && <p className="text-xs text-slate-400 mt-1">EIN: {org.ein}</p>}
-                          </div>
-                          <div className="flex gap-2 items-center shrink-0">
-                            <AddButton kind="foundation" item={org} score={score} />
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )
-                })}
+                {fOrgs.map((org) => (
+                  <FoundationCard
+                    key={org.ein || org.name}
+                    org={org}
+                    score={fScores.get(String(org.ein))?.match_score}
+                    scoring={fScoring}
+                    hasProfile={Boolean(selectedProfileId)}
+                    onOpen={setDetailTarget}
+                    AddButton={AddButton}
+                  />
+                ))}
               </div>
             )}
           </TabsContent>
@@ -602,6 +646,54 @@ export default function FoundationSearch() {
               })}
             </div>
           </TabsContent>
+          {/* ── Recommended Tab (reverse-lookup) ─────────────────── */}
+          <TabsContent value="recommended" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Sparkles className="w-5 h-5" /> Funders matched to this profile</CardTitle>
+                <CardDescription>
+                  Grantmakers aligned with the selected profile's mission area (NTEE) and location, ranked by fit.
+                  Drawn from ProPublica 990 grantmakers and your funding catalog.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!selectedProfileId ? (
+                  <p className="text-sm text-slate-600">Select a profile above to see recommended funders.</p>
+                ) : recoLoading ? (
+                  <p className="text-sm text-slate-600 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Finding aligned funders…</p>
+                ) : recoSummary ? (
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {recoSummary.state && <Badge variant="outline">State: {recoSummary.state}</Badge>}
+                    {recoSummary.entity_type && <Badge variant="outline" className="capitalize">{recoSummary.entity_type}</Badge>}
+                    {(recoSummary.need_categories ?? []).slice(0, 6).map((n) => (
+                      <Badge key={n} variant="secondary" className="capitalize">{String(n).replace(/_/g, " ")}</Badge>
+                    ))}
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            {selectedProfileId && !recoLoading && (
+              <div className="space-y-3">
+                {recoError && <p className="text-sm text-red-600">Could not load recommendations. Please try again.</p>}
+                {!recoError && (
+                  <p className="text-sm text-slate-600">{recoFunders.length} recommended funder{recoFunders.length === 1 ? "" : "s"}</p>
+                )}
+                {recoFunders.map((org) => (
+                  <FoundationCard
+                    key={org.ein || org.name}
+                    org={org}
+                    score={recoScores.get(String(org.ein))?.match_score}
+                    scoring={recoScoring}
+                    hasProfile={Boolean(selectedProfileId)}
+                    onOpen={setDetailTarget}
+                    AddButton={AddButton}
+                    footnote={org.source === "local_catalog" ? "From your funding catalog" : org.already_in_catalog ? "Already in catalog" : null}
+                  />
+                ))}
+              </div>
+            )}
+          </TabsContent>
         </Tabs>
 
         {/* ── Unified Detail Dialog ──────────────────────────────── */}
@@ -610,7 +702,7 @@ export default function FoundationSearch() {
           onClose={() => setDetailTarget(null)}
           foundationDetail={foundationDetail}
           detailLoading={detailLoading}
-          scores={{ foundation: fScores, nsf: nsfScores, federal: fedScores }}
+          scores={{ foundation: new Map([...fScores, ...recoScores]), nsf: nsfScores, federal: fedScores }}
           AddButton={AddButton}
         />
       </div>
