@@ -9,6 +9,12 @@ import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js';
 import { validateOpportunity } from '../opportunityValidator.js';
 import { reviewOpportunity } from '../reviewerAgent.js';
 import { assessReality } from '../opportunityRealityGate.js';
+import {
+  evaluateProvenance,
+  recordRejection,
+  deriveEvidenceUrl,
+  persistEvidence,
+} from '../provenanceAudit.js';
 import { createLogger } from '../../utils/logger.js'
 
 function isActiveFlag(value) {
@@ -109,28 +115,58 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
   );
   
-  // Pre-filter through policy, validation, and the reviewer agent before touching DB.
+  // Best-effort rejection logger — mirrors opportunityInserter so every gate
+  // that drops a row is observable via /api/admin/rejections. Never throws.
+  const logReject = async (opp, stage, reason) => {
+    try {
+      await recordRejection(db, {
+        source: opp?.source ?? sourceName ?? null,
+        source_url: deriveEvidenceUrl(opp),
+        title: opp?.title ?? null,
+        reason,
+        stage,
+        raw_meta: { record_origin: opp?.record_origin ?? null, run_id: runId },
+      });
+    } catch {
+      /* recordRejection is already best-effort */
+    }
+  };
+
+  // Pre-filter through provenance, policy, validation, and the reviewer agent
+  // before touching DB.
   let policySkipped = 0;
   let reviewerSkipped = 0;
   let realitySkipped = 0;
   const validated = [];
   for (const opp of opportunities) {
+    // MANDATORY source-registry / provenance check — no random junk. Unknown
+    // or untrusted provenance is rejected + logged rather than silently stored.
+    const provenance = evaluateProvenance(opp);
+    if (!provenance.allowed) {
+      policySkipped++;
+      console.warn(`[ingestion] Provenance rejection: ${provenance.reason} | ${opp?.title ?? 'untitled'}`);
+      await logReject(opp, 'provenance', provenance.reason);
+      continue;
+    }
     const policy = enforceOpportunityPolicy(opp);
     if (!policy.ok) {
       policySkipped++;
       console.warn(`[ingestion] Policy rejection: ${policy.reason} | ${opp?.title ?? 'untitled'}`);
+      await logReject(opp, 'policy', `policy:${policy.reason}`);
       continue;
     }
     const v = validateOpportunity(opp, { allowDirectories: true });
     if (!v.valid) {
       policySkipped++;
       console.warn(`[ingestion] Validation rejection: ${v.errors.join(',')} | ${opp?.title ?? 'untitled'}`);
+      await logReject(opp, 'validation', `validation:${v.errors.join(',')}`);
       continue;
     }
     const review = reviewOpportunity(opp);
     if (!review.ok) {
       reviewerSkipped++;
       console.warn(`[ingestion] Reviewer rejection: ${review.reason} | ${opp?.title ?? 'untitled'}`);
+      await logReject(opp, 'reviewer', `reviewer:${review.reason}`);
       continue;
     }
     // CANONICAL REALITY GATE (Mission System 1): the government-import path must
@@ -147,6 +183,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       if (!reality.allowed) {
         realitySkipped++;
         console.warn(`[ingestion] Reality-gate rejection: ${reality.reasons.join(',')} | ${opp?.title ?? 'untitled'}`);
+        await logReject(opp, 'reality', `reality:${reality.reasons[0] ?? 'unknown'}`);
         continue;
       }
       // PERSIST the canonical verdict (RC-8). Previously this path gated on
@@ -299,7 +336,23 @@ const existing = checkExists.get(opp.source, opp.source_id);
     `);
     
     completeRun.run(new Date().toISOString(), inserted, updated, runId);
-    
+
+    // Capture per-result evidence snippets for every persisted opportunity
+    // (best-effort, outside the write transaction so it can never block or
+    // roll back the ingest). The id resolves to the row stored above because
+    // the upsert keys on (source, source_id).
+    for (const opp of validated) {
+      try {
+        const existing = checkExists.get(opp.source, opp.source_id);
+        const oppId = existing?.id ?? opp.id;
+        if (oppId) {
+          await persistEvidence(db, oppId, opp);
+        }
+      } catch {
+        /* persistEvidence is best-effort; never block ingestion */
+      }
+    }
+
     log.info(`[ingestion] Completed run ${runId}: inserted=${inserted}, updated=${updated}, errors=${errors}`);
     
     return {

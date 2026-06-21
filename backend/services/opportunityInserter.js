@@ -10,7 +10,34 @@ import { checkUrl as verifyUrlLiveness, recordVerificationEvent } from './linkVe
 import { headForVerification } from './crawlers/httpClient.js'
 import { assessReality } from './opportunityRealityGate.js'
 import { createLogger } from '../utils/logger.js'
+import {
+  evaluateProvenance,
+  recordRejection,
+  deriveEvidenceUrl,
+  persistEvidence,
+} from './provenanceAudit.js'
 const log = createLogger('opportunityInserter')
+
+/**
+ * Best-effort: log a rejection row, then return the skip verdict unchanged.
+ * Centralises the rejection_log write so every skip path is observable
+ * without each call site repeating the logging boilerplate. Never throws.
+ */
+async function logRejection(db, opportunity, stage, reason, verdict) {
+  try {
+    await recordRejection(db, {
+      source: opportunity?.source ?? null,
+      source_url: deriveEvidenceUrl(opportunity),
+      title: opportunity?.title ?? null,
+      reason,
+      stage,
+      raw_meta: { record_origin: opportunity?.record_origin ?? null },
+    })
+  } catch {
+    /* recordRejection is already best-effort; belt-and-suspenders */
+  }
+  return verdict
+}
 
 /**
  * Production reality gate.
@@ -296,27 +323,42 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
 
   const qualityGate = evaluateFundableOpportunity(opportunity)
   if (!qualityGate.ok) {
-    return {
+    return logRejection(db, opportunity, 'quality', `quality:${qualityGate.reason}`, {
       id: null,
       inserted: false,
       skipped: true,
       reason: `quality:${qualityGate.reason}`,
-    }
+    })
   }
   opportunity = applyFundableOpportunityNormalization(opportunity, qualityGate)
   if (qualityGate.kind === 'referral_template' && qualityGate.referralKey && !opportunity.source_id) {
     opportunity.source_id = qualityGate.referralKey
   }
 
+  // ── MANDATORY source-registry / provenance check (mission rule: no random
+  // junk). Every ingest must validate provenance against the canonical
+  // allowlists before storing. Legitimate crawler origins (live_crawl,
+  // curated_*, grants_gov, geo_crawl, web_search, …) still pass; unknown /
+  // untrusted provenance is rejected + logged rather than silently stored.
+  const provenance = evaluateProvenance(opportunity)
+  if (!provenance.allowed) {
+    return logRejection(db, opportunity, 'provenance', provenance.reason, {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: provenance.reason,
+    })
+  }
+
   // Full policy enforcement on every path (not just bulk).
   const policyResult = enforceOpportunityPolicy(opportunity)
   if (!policyResult.ok) {
-    return {
+    return logRejection(db, opportunity, 'policy', `policy:${policyResult.reason}`, {
       id: null,
       inserted: false,
       skipped: true,
       reason: `policy:${policyResult.reason}`,
-    }
+    })
   }
 
   // Comprehensive validation (required fields, categorization, directory/expiration detection).
@@ -328,12 +370,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     allowExpired: opts.allowExpired ?? false,
   })
   if (!validation.valid) {
-    return {
+    return logRejection(db, opportunity, 'validation', `validation:${validation.errors.join(',')}`, {
       id: null,
       inserted: false,
       skipped: true,
       reason: `validation:${validation.errors.join(',')}`,
-    }
+    })
   }
 
   // Reviewer Agent — final deterministic quality gate before DB write.
@@ -342,23 +384,23 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   // optional fields (see reviewerAgent.js for the full contract).
   const review = reviewOpportunity(opportunity)
   if (!review.ok) {
-    return {
+    return logRejection(db, opportunity, 'reviewer', `reviewer:${review.reason}`, {
       id: null,
       inserted: false,
       skipped: true,
       reason: review.reason,
-    }
+    })
   }
 
   const source = opportunity.source ?? 'crawler'
   const title = normalizeNonEmptyString(opportunity?.title)
   if (!title) {
-    return {
+    return logRejection(db, opportunity, 'validation', 'missing_title', {
       id: null,
       inserted: false,
       skipped: true,
       reason: 'missing title',
-    }
+    })
   }
 
   const recordOrigin = deriveRecordOrigin(opportunity)
@@ -368,12 +410,13 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
 
   const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
-    return {
+    const urlReason = !candidateUrl ? 'missing_application_url' : 'dead_application_url'
+    return logRejection(db, opportunity, 'url', urlReason, {
       id: null,
       inserted: false,
       skipped: true,
       reason: !candidateUrl ? 'missing evidence/source/application URL' : 'invalid or placeholder URL',
-    }
+    })
   }
 
   // ── MANDATORY reality gate (mission rule #1) ────────────────────────────
@@ -397,12 +440,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     },
   )
   if (!reality.allowed) {
-    return {
+    return logRejection(db, opportunity, 'reality', `reality:${reality.reasons[0] ?? 'unknown'}`, {
       id: null,
       inserted: false,
       skipped: true,
       reason: `reality_gate:${reality.reasons[0] ?? 'unknown'}`,
-    }
+    })
   }
   opportunity.opportunity_kind = reality.kind
   opportunity.source_trust_tier = reality.trustTier
@@ -458,12 +501,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     }
 
     if (liveness.status === 'broken') {
-      return {
+      return logRejection(db, opportunity, 'url', 'dead_application_url', {
         id: null,
         inserted: false,
         skipped: true,
         reason: `dead_link:${liveness.code ?? 'no_response'}`,
-      }
+      })
     }
     // Stamp verification metadata so the background sweep doesn't re-check
     // immediately. We persist verification_method so applyVerificationGate
@@ -479,12 +522,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   }
 
   if (isLoanOrMatchingFund(opportunity)) {
-    return {
+    return logRejection(db, opportunity, 'policy', 'loan_like', {
       id: null,
       inserted: false,
       skipped: true,
       reason: 'excluded: loan or matching-fund opportunity',
-    }
+    })
   }
 
   // Apply inferred opportunity_type from validator if not already set.
@@ -715,6 +758,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       existing.id,
     )
 
+    // Capture per-result evidence snippets (best-effort, never blocks).
+    await persistEvidence(db, existing.id, opportunity)
+
     return { id: existing.id, inserted: false, updated: true, skipped: false }
   }
 
@@ -731,12 +777,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         )
         .get(candidateUrl, candidateUrl)
       if (urlDupe && urlDupe.source !== source) {
-        return {
+        return logRejection(db, opportunity, 'dedupe', 'duplicate', {
           id: urlDupe.id,
           inserted: false,
           skipped: true,
           reason: `url_duplicate:${urlDupe.source}/${urlDupe.source_id}`,
-        }
+        })
       }
     } catch (err) {
       // URL cross-source dedup is a data-integrity check — never silent.
@@ -1065,6 +1111,11 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     eligibility_signals: record.eligibility_signals ?? null,
     verification_status: record.verification_status ?? null,
   })
+
+  // Capture per-result evidence snippets (best-effort, never blocks). The
+  // evidence is the source text (title + matched description / eligibility)
+  // and the source URL that justify this stored opportunity.
+  await persistEvidence(db, id, opportunity)
 
   return { id, inserted: true, skipped: false }
 }
