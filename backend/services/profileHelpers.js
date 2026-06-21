@@ -6,6 +6,8 @@ import { normalizeState, normalizeStateFromText } from '../utils/stateNormalizat
 import { createLogger } from '../utils/logger.js'
 import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
 import { resolveStudentFundingLocation } from './college/committedCollege.js'
+import { buildProfileFacets } from './profile/profileTaxonomy.js'
+import { normalizeProfile } from './profileNormalizer.js'
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -438,12 +440,56 @@ export async function loadProfileContext(db, profileId) {
     }
   }
 
+  const safeDocuments = Array.isArray(documents) ? documents : []
+
+  // Build the canonical facet object and normalized profile AT LOAD TIME so every
+  // consumer of loadProfileContext (matching, Robert, Anya, crawlers) gets facet-intent
+  // alignment + eligibility scoring instead of silently dropping ~15 scoring points.
+  //
+  // The canonical matcher reads `profileContext.facets` directly and only lazily builds
+  // `profileNorm` (and never builds facets). When loadProfileContext omitted both, real
+  // profiles scored with facets:{} / profileNorm:null, suppressing match scores. Building
+  // them here is the single, schema-drift-tolerant place that fixes it for all callers.
+  //
+  // STRICTLY DEFENSIVE: a missing/odd section or taxonomy hiccup must degrade to empty,
+  // never throw — matching must still run on the rest of the context.
+  let facets = {}
+  let coverage = null
+  try {
+    const enriched = buildProfileFacets({
+      profile: mergedProfile,
+      sections,
+      signals,
+      organization: organization ?? null,
+    })
+    if (enriched && typeof enriched.facets === 'object' && enriched.facets) {
+      facets = enriched.facets
+    }
+    if (enriched && typeof enriched.coverage === 'object' && enriched.coverage) {
+      coverage = enriched.coverage
+    }
+  } catch (err) {
+    log.warn(`[loadProfileContext] buildProfileFacets failed for profile=${profileId}: ${err?.message || err}`)
+    facets = {}
+  }
+
+  let profileNorm = null
+  try {
+    profileNorm = normalizeProfile(mergedProfile, sections, signals, safeDocuments)
+  } catch (err) {
+    log.warn(`[loadProfileContext] normalizeProfile failed for profile=${profileId}: ${err?.message || err}`)
+    profileNorm = null
+  }
+
   return {
     profile: mergedProfile,
     sections,
     signals,
+    facets,
+    coverage,
+    profileNorm,
     organization: organization ?? undefined,
-    documents: Array.isArray(documents) ? documents : [],
+    documents: safeDocuments,
   }
 }
 
