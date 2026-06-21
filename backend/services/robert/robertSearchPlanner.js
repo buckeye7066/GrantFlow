@@ -96,6 +96,15 @@ export function buildSearchPlans(demand, opts = {}) {
   const needs = (demand.needs && demand.needs.length > 0) ? demand.needs : ['general']
 
   const out = []
+
+  // ── Targeted, identity-specific plans (HIGHEST priority) ────────────────────
+  // The generic templates above search by applicant-type + need + geo only, so a
+  // hyper-local, role/employer/school-specific award (e.g. "Bradley County EMS
+  // scholarship for paramedics at Cleveland State Community College") is NEVER
+  // searched. These plans inject the profile's employer, school, occupation, and
+  // major — the signals that actually surface niche local funding — so discovery
+  // looks for the real thing instead of "<type> grant <geo>" boilerplate.
+  out.push(...buildTargetedPlans(demand, applicantType))
   for (const need of needs) {
     const templates = NEED_QUERY_TEMPLATES[need] || NEED_QUERY_TEMPLATES.general
     for (const scope of scopes) {
@@ -146,6 +155,71 @@ export function buildSearchPlans(demand, opts = {}) {
   return out.sort((a, b) => b.priority - a.priority).slice(0, maxPlans)
 }
 
+/**
+ * Build identity-specific search plans from the profile's employer, school,
+ * occupation, and major. These are the signals that surface real local/niche
+ * funding (employer scholarships, school foundations, occupation-specific
+ * awards) which the generic type+need+geo templates can never find.
+ */
+function buildTargetedPlans(demand, applicantType) {
+  const plans = []
+  const loc = demand.location || {}
+  const stateGeo = loc.state || ''
+  const cityGeo = [loc.city, loc.state].filter(Boolean).join(', ')
+  const employer = cleanTerm(demand.employment?.employer)
+  const title = cleanTerm(demand.employment?.title)
+  const institution = cleanTerm(demand.education?.institution)
+  const major = cleanTerm(demand.education?.major)
+
+  const add = (query, reason, priority) => {
+    const q = String(query || '').replace(/\s+/g, ' ').trim()
+    if (!q) return
+    plans.push(makeSearchPlan({
+      profile_id: demand.profile_id,
+      applicant_type: applicantType,
+      location_scope: 'targeted',
+      need_category: 'general',
+      search_query: q,
+      source_types: ['employer_program', 'university_scholarship_portal', 'community_foundation', 'private_foundation', 'federal_portal'],
+      trusted_domains: [],
+      exclude_terms: COMMON_EXCLUDES,
+      expected_evidence: ['real funder/portal URL', 'sponsor name', 'eligibility text', 'application path'],
+      priority,
+      reason,
+    }))
+  }
+
+  // Employer-sponsored aid (e.g. "Bradley County EMS scholarship").
+  if (employer) {
+    add(`${employer} scholarship`, `employer aid · ${employer}`, 92)
+    add(`${employer} grant OR assistance fund`, `employer aid · ${employer}`, 88)
+    if (title) add(`${employer} ${title} scholarship`, `employer+role · ${employer}`, 90)
+  }
+  // School-specific aid (e.g. "Cleveland State Community College paramedic scholarship").
+  if (institution) {
+    add(`${institution} scholarship ${stateGeo}`, `school aid · ${institution}`, 86)
+    if (title) add(`${title} scholarship ${institution}`, `school+role · ${institution}`, 91)
+    if (major) add(`${major} scholarship ${institution}`, `school+major · ${institution}`, 84)
+  }
+  // Occupation/role aid scoped to the user's geography (e.g. "paramedic scholarship Cleveland, TN").
+  if (title) {
+    add(`${title} scholarship ${cityGeo || stateGeo}`, `occupation · ${title}`, 82)
+    add(`${title} training grant ${stateGeo}`, `occupation · ${title}`, 78)
+  }
+  // Major + geography (e.g. "Forensic Science scholarship Tennessee").
+  if (major && !institution) {
+    add(`${major} scholarship ${stateGeo}`, `major · ${major}`, 76)
+  }
+  return plans
+}
+
+function cleanTerm(value) {
+  const v = String(value || '').trim()
+  // Drop placeholder/unknown values so we don't search "null scholarship".
+  if (!v || /^(n\/?a|none|unknown|null|undefined)$/i.test(v)) return ''
+  return v
+}
+
 function priorityFromScope(scope, demand) {
   // City/county searches matter most for an individual/local org;
   // national for broad programs. Matches GrantFlow's "expand outward"
@@ -187,4 +261,4 @@ function defaultTrustedDomains(applicantType, need) {
   return base
 }
 
-export const __testing__ = { COMMON_EXCLUDES, NEED_QUERY_TEMPLATES, APPLICANT_TYPE_QUERY_HINTS, formatGeo, humanizeType }
+export const __testing__ = { COMMON_EXCLUDES, NEED_QUERY_TEMPLATES, APPLICANT_TYPE_QUERY_HINTS, formatGeo, humanizeType, buildTargetedPlans, cleanTerm }
