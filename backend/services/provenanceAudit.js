@@ -63,11 +63,25 @@ export function evaluateProvenance(opportunity) {
     }
   }
 
-  // Normalise the rejection reason to the canonical taxonomy.
+  // Explicitly UNTRUSTED provenance markers are always hard-rejected — this is
+  // the "no garbage web scraper" guard (synthetic/manual/denied/untrusted).
+  if (origin === 'synthetic' || origin === 'manual') {
+    return { allowed: false, reason: 'untrusted_origin' }
+  }
   if (verdict.reason === 'untrusted_origin' || verdict.reason === 'denied_source') {
     return { allowed: false, reason: 'untrusted_origin' }
   }
-  return { allowed: false, reason: 'unknown_source' }
+
+  // UNRECOGNISED (but not explicitly untrusted) provenance: do NOT hard-reject
+  // here. ingestOpportunities / upsertFundingOpportunity are the UNIVERSAL
+  // inserter used by many trusted internal paths (curated seeds, crawlers that
+  // mint novel source labels, import scripts), so a blanket "reject unknown"
+  // wrongly drops legitimate rows AND masks the specific policy/validation/
+  // reality reason. Let it flow to the full gate stack — policy + validation +
+  // reviewer + reality (dead URL / placeholder / loan / expired) is what
+  // actually filters junk. Hard provenance rejection stays reserved for the
+  // explicitly-untrusted origins above.
+  return { allowed: true, reason: 'unrecognized_source_passthrough' }
 }
 
 function toJsonOrNull(value) {

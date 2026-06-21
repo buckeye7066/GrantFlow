@@ -76,10 +76,14 @@ describe('evaluateProvenance', () => {
     expect(evaluateProvenance({ source: 'spam' }).reason).toBe('untrusted_origin')
   })
 
-  it('rejects unrecognised provenance as unknown_source', () => {
+  it('passes unrecognised (but not untrusted) provenance through to the gate stack', () => {
+    // The universal inserter is used by many trusted internal paths, so an
+    // unrecognised source is NOT hard-rejected at provenance — it flows to the
+    // policy/validation/reviewer/reality gates (the real junk filter). Only
+    // explicitly-untrusted origins are hard-rejected here.
     expect(evaluateProvenance({ source: 'qwerty_random_blob' })).toEqual({
-      allowed: false,
-      reason: 'unknown_source',
+      allowed: true,
+      reason: 'unrecognized_source_passthrough',
     })
   })
 })
@@ -166,18 +170,22 @@ describe('opportunityInserter — evidence + rejection + provenance integration'
     expect(logged[0].title).toContain('Loan')
   })
 
-  it('rejects + logs an unknown-provenance row (FEATURE 3)', async () => {
+  it('rejects + logs an UNTRUSTED-provenance row at the provenance stage (FEATURE 3)', async () => {
+    // Hard provenance rejection is reserved for explicitly-untrusted origins
+    // (synthetic/manual/denied). Unrecognised sources are NOT hard-rejected
+    // here (they pass to the gate stack), so we exercise the reject+log path
+    // with a genuinely-untrusted origin.
     const result = await upsertFundingOpportunity(
       db,
-      realOpportunity({ source: 'qwerty_random_blob', record_origin: 'qwerty_random_blob' }),
+      realOpportunity({ source: 'synthetic', record_origin: 'synthetic' }),
     )
     expect(result.skipped).toBe(true)
-    expect(result.reason).toBe('unknown_source')
+    expect(result.reason).toBe('untrusted_origin')
 
     const logged = rejections(db)
     const provenanceRow = logged.find((r) => r.stage === 'provenance')
     expect(provenanceRow).toBeTruthy()
-    expect(provenanceRow.reason).toBe('unknown_source')
+    expect(provenanceRow.reason).toBe('untrusted_origin')
     // No opportunity was stored.
     expect(db.prepare('SELECT COUNT(*) AS c FROM funding_opportunities').get().c).toBe(0)
   })

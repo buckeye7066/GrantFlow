@@ -87,7 +87,7 @@ test('CRAWLER_JOB_TYPES list includes every dispatcher VALID_TYPE', async () => 
   )
 })
 
-test('ensureSchemaInvariants returns ran=9 (every declared step runs)', async () => {
+test('ensureSchemaInvariants runs every declared step (ran === step count)', async () => {
   const { db } = makeFakeDb({ dialect: 'sqlite' })
   // Stub out the dynamic-import-bearing steps so the orchestrator runs
   // end-to-end without pulling in unrelated subsystems for the unit test.
@@ -95,8 +95,12 @@ test('ensureSchemaInvariants returns ran=9 (every declared step runs)', async ()
   // letting the dynamic-import steps reach into the real modules — they
   // are also no-ops on an empty fake db.
   const out = await ensureSchemaInvariants(db, { logger: silentLogger })
-  assert.equal(out.ran, 9, 'all 9 steps must run')
+  // Robust: every declared step must run (count is derived, not hard-coded, so
+  // adding a new invariant step doesn't false-fail this guard).
+  assert.equal(out.ran, out.steps.length, 'every declared step must run')
   assert.equal(typeof out.failed, 'number')
+  // Strict ordered list — guards against accidental removal/reorder of steps.
+  // Update this list (and only this list) when an invariant step is added.
   assert.deepEqual(
     out.steps.map((s) => s.name),
     [
@@ -107,7 +111,10 @@ test('ensureSchemaInvariants returns ran=9 (every declared step runs)', async ()
       'crawler_jobs_type_check',
       'anya_match_suggestions',
       'matching_low_coverage_events',
+      'behavior_events',
+      'profile_discovery_column',
       'funding_opportunity_verification_columns',
+      'ingestion_provenance_tables',
       'perf_indexes',
     ],
   )
@@ -240,8 +247,9 @@ test('orchestrator is idempotent: second call is a no-op summary', async () => {
   const first = await ensureSchemaInvariants(db, { logger: silentLogger })
   const second = await ensureSchemaInvariants(db, { logger: silentLogger })
 
-  assert.equal(first.ran, 9)
-  assert.equal(second.ran, 9)
+  assert.equal(first.ran, first.steps.length)
+  assert.equal(second.ran, second.steps.length)
+  assert.equal(first.ran, second.ran)
   // Failure counts must be the same (or strictly less) on the second
   // run — never more, since DDL is idempotent.
   assert.ok(second.failed <= first.failed,

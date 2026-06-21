@@ -227,11 +227,15 @@ test('P4: upsertFundingOpportunity rejects non-compliant opportunities with poli
     assert.equal(r.inserted, false)
     assert.equal(r.id, null)
   }
-  // No DB statement should have been prepared for any rejected opportunity.
+  // Rejected opps must NEVER be written to funding_opportunities. A best-effort
+  // rejection_log INSERT IS expected now (the observability feature) and is fine.
+  const catalogWrites = db._debug.prepared.filter(
+    (sql) => /funding_opportunities/i.test(sql) && /\b(INSERT|UPDATE)\b/i.test(sql),
+  )
   assert.equal(
-    db._debug.prepared.length,
+    catalogWrites.length,
     0,
-    `No SQL should be prepared for policy-rejected opps. Saw: ${db._debug.prepared.join('\n')}`,
+    `No funding_opportunities write should occur for policy-rejected opps. Saw: ${catalogWrites.join('\n')}`,
   )
 })
 
