@@ -247,8 +247,69 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
   };
 }
 
+/**
+ * Clinical-trials study discovery for opted-in medical-need profiles.
+ *
+ * Surfaces RECRUITING ClinicalTrials.gov studies (early/Phase 1 boosted) for a
+ * profile that EXPLICITLY opted in. Discovery/display only — never enrolls.
+ * The opt-in is re-checked inside connectorIngestService (the
+ * 'clinicaltrials.gov' source gate); when the profile has not consented the
+ * source reports `not_applicable` and inserts nothing.
+ */
+async function processClinicalTrialsJob({ db, job, profileContext }) {
+  const profileId = job?.profile_id || profileContext?.profile?.id
+  if (!profileId) throw new Error('clinical_trials requires a profile_id')
+
+  // Lazy import keeps the dispatcher's static import graph lean and avoids a
+  // cycle (connectorIngestService → opportunityInserter → …).
+  const { ingestFromConnectors } = await import('./connectorIngestService.js')
+  const { buildProfileSignals } = await import('./profileHelpers.js')
+
+  let ctx = profileContext
+  if (!ctx?.profile) {
+    ctx = await buildProfileContext(db, profileId)
+  }
+  let signals = {}
+  try {
+    signals = buildProfileSignals({ profile: ctx.profile, sections: ctx.sections })
+  } catch (err) {
+    log.warn('[clinicalTrials] buildProfileSignals failed (continuing):', err?.message || err)
+  }
+
+  // Run ONLY the clinical-trials source. The gate inside the service enforces
+  // opt-in; we additionally filter the coverage report so the job result is
+  // scoped to this source.
+  const { coverage } = await ingestFromConnectors({
+    db,
+    profileContext: ctx,
+    signals,
+    onlySources: ['clinicaltrials.gov'],
+  })
+  const ct = (coverage || []).find((r) => r.source === 'clinicaltrials.gov') || {
+    fetched: 0,
+    inserted: 0,
+    updated: 0,
+    skipped: 0,
+    status: 'not_run',
+  }
+
+  return {
+    result_count: ct.inserted,
+    result_meta: {
+      source: 'clinicaltrials.gov',
+      status: ct.status,
+      fetched: ct.fetched,
+      inserted: ct.inserted,
+      updated: ct.updated,
+      skipped: ct.skipped,
+      opt_in_gated: ct.status === 'not_applicable',
+    },
+  }
+}
+
 const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,
+  clinical_trials: processClinicalTrialsJob,
   local: processLocalCrawlerJob,
   scholarship: processCuratedBenefitsJob,
   curated_benefits: processCuratedBenefitsJob,

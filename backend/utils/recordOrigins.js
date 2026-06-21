@@ -29,6 +29,9 @@ export const ALLOWED_RECORD_ORIGINS = new Set([
   'manual',
   'synthetic',
   'funding_api',
+  // Clinical trials / research studies surfaced for opted-in medical-need
+  // profiles (ClinicalTrials.gov). These are STUDIES, not funding.
+  'clinical_trials',
   'url_import',
   'directory_resource',
   'directory:health_resources',

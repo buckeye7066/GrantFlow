@@ -31,6 +31,11 @@ import { fetchOpportunities as fetchSimplerGrants } from '../src/integrations/si
 import { searchOrganizations, orgToFundingOpportunity } from '../src/integrations/propublica990.js'
 import { fetchGrantsGov, transformGrantsGovOpportunity } from './grantsDotGovCrawler.js'
 import { fetchUSASpending } from './sources/usaSpending.js'
+import {
+  searchClinicalTrials,
+  extractConditionTerms,
+  isOptedIntoClinicalTrials,
+} from './connectors/clinicalTrialsConnector.js'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -210,6 +215,16 @@ export function buildConnectorQueryPlan(profileContext = {}, signals = {}) {
 
   const terms = collectNeedTerms(profileContext, signals)
 
+  // Clinical trials / research studies are PERSONAL and OPT-IN. Resolve the
+  // profile's health section once so the (gated) clinical-trials source knows
+  // whether the participant explicitly opted in and what conditions to query.
+  const healthSection =
+    profileContext.sections?.health_medical ||
+    profileContext.profile?.sections?.health_medical ||
+    {}
+  const clinicalTrialsOptIn = isOptedIntoClinicalTrials(healthSection)
+  const conditionTerms = extractConditionTerms(healthSection)
+
   // Federal agency NOFOs are applied for by organizations/governments, not by
   // individuals/families/students (who want benefits & scholarships instead).
   // Derived here (not stored per-row in PROFILE_QUERY_MAP) so the map stays lean.
@@ -219,10 +234,15 @@ export function buildConnectorQueryPlan(profileContext = {}, signals = {}) {
 
   return {
     primaryType: primaryType || 'unknown',
+    profileId: profileContext.profile?.id || profileContext.profileId || null,
     state: state ? String(state) : null,
     terms,
     ...base,
     federalApplicant: !INDIVIDUAL_TYPES.has(primaryType),
+    // Opt-in study discovery (clinical trials). Default-OFF: a study is only
+    // surfaced when the profile EXPLICITLY consented and has condition terms.
+    clinicalTrialsOptIn,
+    conditionTerms,
   }
 }
 
@@ -383,6 +403,30 @@ async function ingestUsaSpending(db, plan, limits, row) {
   }
 }
 
+async function ingestClinicalTrials(db, plan, limits, row) {
+  // OPT-IN ONLY. The gate already guarantees plan.clinicalTrialsOptIn === true,
+  // but we re-assert here so this can never surface a study for a profile that
+  // did not explicitly consent (defense in depth — the user's choice is sacred).
+  if (!plan.clinicalTrialsOptIn) return
+  const conditions = Array.isArray(plan.conditionTerms) ? plan.conditionTerms : []
+  if (conditions.length === 0) return // no diagnosis = nothing relevant to surface
+
+  const studies = await searchClinicalTrials({
+    conditions,
+    state: plan.state ? String(plan.state).slice(0, 2).toUpperCase() : null,
+    maxConditions: Math.max(1, Math.min(limits.maxTerms, conditions.length)),
+    pageSize: limits.rowsPerQuery,
+  })
+  row.fetched += studies.length
+  // Tag every row to the consenting profile so it is profile-scoped (pipeline
+  // exclusion + tenancy), and so it can never bleed to a non-consenting profile.
+  const profileId = plan.profileId || null
+  const tagged = studies.map((s) => ({ ...s, profile_id: profileId }))
+  // Studies are rolling/standing listings (not dated award postings) — allow
+  // directories so the reality gate treats the recruiting listing as valid.
+  await upsertAll(db, tagged, row, { allowDirectories: true })
+}
+
 // `keyed` marks sources whose gate failure means "no API key" (vs. simply
 // not-applicable to this profile). Drives honest status in the coverage report.
 const SOURCES = [
@@ -396,6 +440,16 @@ const SOURCES = [
   // Federal award history = funder leads for orgs/governments (not individuals,
   // who want benefits/scholarships). Keyless; gated like Federal Register.
   { key: 'usaspending.gov', run: ingestUsaSpending, keyed: false, gate: (plan) => plan.federalApplicant },
+  // Clinical trials / research studies (ClinicalTrials.gov, no key). STUDIES,
+  // not funding. EXPLICIT OPT-IN ONLY — gate is false unless the profile
+  // consented AND has at least one condition to match. Discovery/display only;
+  // the user enrolls themselves on the real study page.
+  {
+    key: 'clinicaltrials.gov',
+    run: ingestClinicalTrials,
+    keyed: false,
+    gate: (plan) => Boolean(plan.clinicalTrialsOptIn) && (plan.conditionTerms?.length ?? 0) > 0,
+  },
 ]
 
 /**
@@ -409,9 +463,10 @@ const SOURCES = [
  * @param {number} [args.limits.maxTerms=8]      - need terms used per source (env: CONNECTOR_INGEST_MAX_TERMS)
  * @param {number} [args.limits.rowsPerQuery=25] - rows requested per query
  * @param {number} [args.limits.delayMs=300]     - politeness delay between calls
+ * @param {string[]} [args.onlySources]    - if set, run ONLY these source keys
  * @returns {Promise<{ plan: Object, coverage: Array, totals: Object }>}
  */
-export async function ingestFromConnectors({ db, profileContext = {}, signals = {}, limits = {} } = {}) {
+export async function ingestFromConnectors({ db, profileContext = {}, signals = {}, limits = {}, onlySources = null } = {}) {
   if (!db) throw new Error('ingestFromConnectors requires a db handle')
 
   // maxTerms bounds how many of the (now category-diverse) profile terms each
@@ -434,8 +489,13 @@ export async function ingestFromConnectors({ db, profileContext = {}, signals = 
     ggEligibility: plan.ggEligibility,
   })
 
+  const sourceFilter = Array.isArray(onlySources) && onlySources.length
+    ? new Set(onlySources)
+    : null
+
   const coverage = []
   for (const source of SOURCES) {
+    if (sourceFilter && !sourceFilter.has(source.key)) continue
     const row = { source: source.key, fetched: 0, inserted: 0, updated: 0, skipped: 0, status: 'ok' }
     if (!source.gate(plan)) {
       row.status = source.keyed ? 'no_api_key' : 'not_applicable'
