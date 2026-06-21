@@ -25,6 +25,7 @@
 
 import { canonicalizeProfileTypeId } from '../../shared/profileTypeOptions.js'
 import { normalizeNeedCategory } from './profileNormalizer.js'
+import { SUPPORTED_LANGUAGES, normalizeLanguageCode } from '../../shared/languages.js'
 
 export const INTERVIEW_VERSION = 1
 
@@ -80,6 +81,7 @@ export function makeInitialState() {
         programs_services: { focus_areas: [], interests: [], keywords: [] },
         narrative: {},
         location_focus: {},
+        language_preferences: {},
       },
     },
   }
@@ -182,6 +184,36 @@ function personaGroup(state) {
 // Question definitions
 // ---------------------------------------------------------------------------
 export const QUESTIONS = Object.freeze({
+  // -------------------------------------------------------------------------
+  // VERY FIRST step: language. Shown bilingual-safe (each option in its own
+  // script) so anyone can self-select. The choice is persisted to the
+  // `language_preferences` profile section, which every user-facing AI prompt
+  // (Anya chat, proposal drafting, summaries, etc.) reads to respond in the
+  // user's language. English is the default and the behaviour-preserving path.
+  language: {
+    id: 'language',
+    kind: 'choice',
+    prompt:
+      'Welcome! Before we begin, which language would you like to use? · ' +
+      '¿Qué idioma prefieres? · Какой язык вы предпочитаете? · ' +
+      'Quelle langue préférez-vous? · Яку мову ви бажаєте? · ' +
+      'Welche Sprache möchten Sie? · Qual idioma prefere? · ' +
+      'आप कौन सी भाषा पसंद करेंगे? · 您想使用哪种语言？',
+    help: 'You can change this any time from Settings.',
+    options: SUPPORTED_LANGUAGES.map((lang) => ({
+      value: lang.code,
+      label: lang.nativeName,
+    })),
+    apply: (state, answer) => {
+      const code = normalizeLanguageCode(answer)
+      let next = mergeSection(state, 'language_preferences', { preferred_language: code })
+      next.patch.preferred_language = code
+      next.answers = { ...next.answers, language: code }
+      return next
+    },
+    next: () => 'intro',
+  },
+
   // -------------------------------------------------------------------------
   intro: {
     id: 'intro',
@@ -807,7 +839,7 @@ export const QUESTIONS = Object.freeze({
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-export const FIRST_QUESTION_ID = 'intro'
+export const FIRST_QUESTION_ID = 'language'
 export const COMPLETION_TOKEN = '__complete__'
 
 export function getQuestion(questionId) {

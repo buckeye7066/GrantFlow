@@ -54,10 +54,13 @@ import { NAV_GROUPS, getGroupIdForRoute } from "@/nav/navConfig";
 import { useNavGroupsOpen, getShowAdvancedTools, setShowAdvancedTools } from "@/nav/useNavGroupsOpen";
 import { useSettingsStore } from '@/stores/settingsStore';
 import { setLastVisitedPath } from '@/lib/lastVisitedPreferences';
+import { LanguageSwitcher } from '@/i18n/LanguageSwitcher.jsx';
+import { useLanguage } from '@/i18n';
 
 function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
   // Access user preferences to support feature toggles
   const preferences = useSettingsStore((state) => state.preferences);
+  const { t } = useLanguage();
   const isActive = group.items.some((item) => location.pathname === item.url);
   const visibleItems = group.items.filter((item) => {
     if (item.isAdminOnly && !user?.is_admin) return false;
@@ -98,7 +101,7 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
                 >
                   <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
                     <item.icon className="w-4 h-4 shrink-0" />
-                    <span className="font-medium">{item.title}</span>
+                    <span className="font-medium">{item.i18nKey ? t(item.i18nKey) : item.title}</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -265,6 +268,7 @@ export default function Layout({ children, currentPageName }) {
                 <LogOut className="w-4 h-4 text-muted-foreground" />
               </button>
             </div>
+            <LanguageSwitcher className="w-full justify-start" />
             {isAdmin ? (
               <div>
                 <div className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm text-sidebar-foreground">

@@ -36,6 +36,19 @@ export async function updateProfile(id, payload) {
   })
 }
 
+export async function getPreferredLanguage(id) {
+  assertRealProfileId(id, 'getPreferredLanguage')
+  return apiFetch(`/api/profiles/${id}/preferred-language`)
+}
+
+export async function updatePreferredLanguage(id, code) {
+  assertRealProfileId(id, 'updatePreferredLanguage')
+  return apiFetch(`/api/profiles/${id}/preferred-language`, {
+    method: 'PUT',
+    body: JSON.stringify({ preferred_language: code, updated_by: 'language-switcher' }),
+  })
+}
+
 export async function uploadProfileAvatar(profileId, file) {
   assertRealProfileId(profileId, 'uploadProfileAvatar')
   const formData = new FormData()

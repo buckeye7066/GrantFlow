@@ -2,6 +2,7 @@ import { buildGrantApplicationApproachPrompt } from '../prompts/grantApplication
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { createLogger } from '../utils/logger.js'
+import { buildLanguageDirectiveForProfileAsync } from './languagePreference.js'
 const log = createLogger('grantApplicationApproachAdvisor')
 
 function normalizeString(value) {
@@ -225,12 +226,14 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
         profileSummary,
       })
 
+      // The application_steps reach the user, so honour their chosen language.
+      const languageDirective = await buildLanguageDirectiveForProfileAsync(db, grant.profile_id)
       const completion = await openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         temperature: 0.2,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: 'Output JSON only.' },
+          { role: 'system', content: `Output JSON only.${languageDirective}` },
           { role: 'user', content: prompt },
         ],
       })

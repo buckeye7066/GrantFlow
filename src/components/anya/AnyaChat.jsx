@@ -40,6 +40,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { useLanguage } from "@/i18n"
 
 // ---------------------------------------------------------------------------
 // Onboarding constants
@@ -188,7 +189,7 @@ const US_STATES = [
 // Onboarding step component
 // ---------------------------------------------------------------------------
 
-function OnboardingFlow({ step, onAdvance, onboarding }) {
+function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLanguage }) {
   const { profileType, setProfileType, situations, setSituations, state, setState } = onboarding
 
   const toggleSituation = (item) => {
@@ -206,15 +207,42 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
     </div>
   )
 
+  // VERY FIRST onboarding step: pick a language. Shown in a bilingual-safe way
+  // (each option in its own script) so the user can self-select regardless of
+  // the language they currently read. Picking one immediately switches the app
+  // and persists the choice, then advances to the welcome step.
+  if (step === "language") {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <AnyaBubble>
+          {`${t("language.picker.title")} · ${t("language.picker.subtitle")}`}
+        </AnyaBubble>
+        <div className="flex flex-wrap gap-2">
+          {languages.map((lang) => (
+            <button
+              key={lang.code}
+              type="button"
+              lang={lang.code}
+              onClick={() => onPickLanguage(lang.code)}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700"
+            >
+              {lang.nativeName}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   if (step === 0) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
-          {`Hi! I'm Anya, your GrantFlow guide. I'll help you find funding that actually fits your situation — grants, benefits, programs, and more. Ready to get started? This takes about 3 minutes.`}
+          {`${t("anya.greeting")} ${t("anya.intro")}`}
         </AnyaBubble>
         <div className="flex justify-end">
           <Button size="sm" className="gap-2" onClick={() => onAdvance(1)}>
-            Let&apos;s go →
+            {t("anya.letsGo")} →
           </Button>
         </div>
       </div>
@@ -225,7 +253,7 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
-          {`First, what best describes you? I'll use this to find the right funding sources.`}
+          {t("anya.onboarding.whoTitle")}
         </AnyaBubble>
         <div className="flex flex-wrap gap-2">
           {PROFILE_TYPES.map((type) => (
@@ -255,7 +283,7 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
-          {`Are any of these situations relevant to you right now? (Select all that apply)`}
+          {t("anya.onboarding.situationsTitle")}
         </AnyaBubble>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {LIFE_SITUATIONS.map((item) => (
@@ -293,7 +321,7 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
-          {`What state are you in? This unlocks state-specific programs.`}
+          {t("anya.onboarding.stateTitle")}
         </AnyaBubble>
         <div className="flex items-center gap-2">
           <MapPin className="h-4 w-4 text-slate-500 shrink-0" />
@@ -321,7 +349,7 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
-          {`Great — you're all set! I've saved your profile type${profileType ? ` (${profileType})` : ""}${state ? ` and location (${state})` : ""}. Let's find your first matches!`}
+          {t("anya.onboarding.allSet")}
         </AnyaBubble>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -333,7 +361,7 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
             }}
           >
             <Compass className="h-3.5 w-3.5" />
-            Find My Matches →
+            {t("anya.onboarding.findMatches")} →
           </Button>
           <Button
             variant="outline"
@@ -345,7 +373,7 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
             }}
           >
             <User className="h-3.5 w-3.5" />
-            Fill in more details first
+            {t("anya.onboarding.fillMoreDetails")}
           </Button>
         </div>
       </div>
@@ -417,6 +445,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   // quick actions when the user object carried the camelCase flag from a
   // fresh `/api/auth/me` bootstrap — violating Anya goals 4 and 8.
   const isAdmin = normalizeUserAdmin(user)
+  const { t, setLanguage, languages } = useLanguage()
   // Filter out the UI-only admin sentinel ('__admin__') — it is NOT a real
   // profile UUID. Leaking it into the Anya bootstrap causes createSession to
   // fall back to a profile-less session while `findExisting` below keeps
@@ -440,7 +469,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   // minimal; the next cleanup pass will excise it entirely.
   const isFirstRun = false
 
-  // onboardingStep: null = not in onboarding; 0-4 = step index
+  // onboardingStep: null = not in onboarding; 'language' = first step; 0-4 = step index
   const [onboardingStep, setOnboardingStep] = useState(null)
   const onboardingStartedRef = useRef(false)
 
@@ -483,8 +512,16 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     if (!isFirstRun) return
     if (onboardingStartedRef.current) return
     onboardingStartedRef.current = true
-    setOnboardingStep(0)
+    // Language is the VERY FIRST onboarding step.
+    setOnboardingStep("language")
   }, [isFirstRun])
+
+  // First onboarding step: language. Switch the app immediately + persist, then
+  // continue to the welcome step.
+  const handlePickLanguage = useCallback((code) => {
+    try { setLanguage(code) } catch { /* provider always present at app root */ }
+    setOnboardingStep(0)
+  }, [setLanguage])
 
   // Handle advancing onboarding steps (null = complete → persist to profile)
   const handleOnboardingAdvance = useCallback(async (nextStep) => {
@@ -1737,6 +1774,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           <OnboardingFlow
             step={onboardingStep}
             onAdvance={handleOnboardingAdvance}
+            t={t}
+            languages={languages}
+            onPickLanguage={handlePickLanguage}
             onboarding={{
               profileType: obProfileType,
               setProfileType: setObProfileType,

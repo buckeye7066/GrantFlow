@@ -28,6 +28,7 @@ import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
 import { useToast } from '@/components/ui/use-toast'
 import OnboardingVideo from '@/components/onboarding/OnboardingVideo'
+import { useLanguage } from '@/i18n'
 
 const SESSION_KEY = 'grantflow:onboarding-session'
 const US_STATES = [
@@ -353,6 +354,7 @@ export default function Start() {
   const { toast } = useToast()
   const verifyEmailCode = useAuthStore((s) => s.verifyEmailCode)
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const { setLanguage } = useLanguage()
 
   const [sessionId, setSessionId] = useState(null)
   const [question, setQuestion] = useState(null)
@@ -425,6 +427,12 @@ export default function Start() {
   const submitAnswer = useCallback(async (answer) => {
     if (!sessionId || !question) return
     setError(null)
+    // Language is the first question — apply the choice immediately so the rest
+    // of the onboarding chrome (and the whole app) switches right away. The
+    // backend also persists it to the profile when onboarding completes.
+    if (question.id === 'language' && typeof answer === 'string') {
+      try { setLanguage(answer) } catch { /* provider always mounted at root */ }
+    }
     setBusy(true)
     setHistory((prev) => [
       ...prev,
@@ -469,7 +477,7 @@ export default function Start() {
     } finally {
       setBusy(false)
     }
-  }, [sessionId, question])
+  }, [sessionId, question, setLanguage])
 
   // --- Verify the email OTP and finalise sign-in --------------------------
   const verifyOtp = useCallback(async (e) => {

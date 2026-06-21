@@ -28,6 +28,7 @@ import {
 } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
+import { buildLanguageDirectiveForProfileAsync } from '../services/languagePreference.js'
 const routeLogger = createLogger('route:ai')
 
 const router = express.Router();
@@ -666,9 +667,11 @@ router.post('/generate/proposal', enforceTierCapability(TIER_CAPABILITIES.DOCUME
           application_url: grant.application_url ?? null,
         }
 
+    // Honour the user's chosen language for the proposal text they will read.
+    const languageDirective = await buildLanguageDirectiveForProfileAsync(req.db, grant.profile_id)
     const systemPrompt = `You are an expert grant writer.
 Write compelling, specific grant content grounded in the applicant context and the funding source context.
-If details are missing, ask for the missing info via clear bracketed placeholders rather than inventing facts.`
+If details are missing, ask for the missing info via clear bracketed placeholders rather than inventing facts.${languageDirective}`
 
     const prompt =
       userPrompt ||

@@ -5,6 +5,7 @@ import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.
 import path from 'path'
 import { promises as fs } from 'fs'
 import { createLogger } from '../utils/logger.js'
+import { buildLanguageDirectiveForProfile } from './languagePreference.js'
 const log = createLogger('anyaOrchestrator')
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
@@ -1248,7 +1249,18 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     liveContextSection,
   ].join('\n')
 
-  const systemPrompt = dynamicHeader + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  // Language directive — the user picks a language as Anya's first onboarding
+  // step; honour it for every reply. Empty string (default English) leaves the
+  // prompt unchanged so the default path is untouched.
+  let languageDirective = ''
+  try {
+    const langProfileId = user?.activeProfileId || user?.profile_id
+    languageDirective = buildLanguageDirectiveForProfile(db, langProfileId)
+  } catch (langErr) {
+    console.warn('[anya] Could not resolve preferred language:', langErr?.message)
+  }
+
+  const systemPrompt = dynamicHeader + languageDirective + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
   // Build the OpenAI tool schema for the chat-time whitelist. Without
   // this, the LLM had no way to actually run profile.updateSection /

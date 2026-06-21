@@ -103,6 +103,7 @@ function assertCanonicalShape(state, label) {
 
 test('PERSONAL persona: TN family with housing + food needs reaches __complete__ with matchable patch', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'personal_group',
     location: { zip: '37130', state: 'TN', city: 'Murfreesboro', county: 'Rutherford' },
@@ -125,6 +126,7 @@ test('PERSONAL persona: TN family with housing + food needs reaches __complete__
 
 test('PERSONAL persona: TN disabled adult with Medicaid-likely need passes ECF eligibility check', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'personal_group',
     location: { zip: '37130', state: 'TN', city: 'Murfreesboro', county: 'Rutherford' },
@@ -162,6 +164,7 @@ test('PERSONAL persona: TN disabled adult with Medicaid-likely need passes ECF e
 
 test('STUDENT persona: CA college student needing tuition reaches __complete__', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'student',
     location: { zip: '94720', state: 'CA', city: 'Berkeley', county: 'Alameda' },
@@ -182,6 +185,7 @@ test('STUDENT persona: CA college student needing tuition reaches __complete__',
 
 test('BUSINESS persona: minority-owned business in OH needing equipment reaches __complete__', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'business',
     location: { zip: '44113', state: 'OH', city: 'Cleveland', county: 'Cuyahoga' },
@@ -199,6 +203,7 @@ test('BUSINESS persona: minority-owned business in OH needing equipment reaches 
 
 test('MISSION ORG persona: TN church running a food pantry reaches __complete__ with org_compliance signal', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'org_mission',
     location: { zip: '37130', state: 'TN', city: 'Murfreesboro', county: 'Rutherford' },
@@ -223,6 +228,7 @@ test('MISSION ORG persona: TN church running a food pantry reaches __complete__ 
 
 test('VFD persona: small Tennessee volunteer fire dept reaches __complete__', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'volunteer_fire_department',
     location: { zip: '37130', state: 'TN', city: 'Murfreesboro', county: 'Rutherford' },
@@ -238,6 +244,7 @@ test('VFD persona: small Tennessee volunteer fire dept reaches __complete__', ()
 
 test('SCHOOL persona: CA classroom teacher reaches __complete__', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'school',
     location: { zip: '94720', state: 'CA', city: 'Berkeley', county: 'Alameda' },
@@ -254,6 +261,7 @@ test('SCHOOL persona: CA classroom teacher reaches __complete__', () => {
 
 test('GOV persona: city public works dept reaches __complete__', () => {
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'gov',
     location: { zip: '37130', state: 'TN', city: 'Murfreesboro', county: 'Rutherford' },
@@ -297,6 +305,7 @@ test('REGRESSION: every "kinds of help" answer canonicalizes to a real need cate
   // that signal — and the user gets a smaller match list than
   // they should.
   const out = runInterview({
+    language: 'en',
     intro: 'yes',
     who: 'personal_group',
     location: { zip: '37130', state: 'TN' },
