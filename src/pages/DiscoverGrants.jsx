@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
 import client, { apiFetch } from '@/api/client';
-import { runRealCrawler, discoverAllForProfile } from '@/api/crawlers';
+import { discoverAllForProfile, fetchCrawlerStatus } from '@/api/crawlers';
 import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -30,6 +30,34 @@ import {
 } from '@/utils/inferLocationFromAddress'
 import { useFundingResultsStore } from '@/stores/fundingResultsStore'
 import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds'
+
+// Discovery is now asynchronous: a click dispatches the profile-aware crawler
+// fleet to the background dispatcher (which runs each relevant crawler to
+// completion — no synchronous request to hit Vercel's ~30s proxy 504, and no
+// time-budget that returns partial/shortcut results), then the UI polls the
+// catalog so matches stream in as crawlers finish. Slow-but-complete by design.
+const DISCOVERY_POLL_MS = 4000          // how often to refetch catalog + status
+const DISCOVERY_MAX_WAIT_MS = 5 * 60 * 1000 // stop polling after 5 min (jobs keep running server-side)
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Fetch profile-matched catalog opportunities. Shared by the live discover
+ * query and the discovery poll loop so both honor the slider as a hard floor.
+ */
+async function fetchCatalogMatches(profileId, minMatchScore) {
+  if (!profileId) return { opportunities: [] }
+  const ms = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
+  const params = new URLSearchParams({
+    min_score: String(ms),
+    limit: '2000',
+    skip_readiness_check: '1',
+    strict: '1',
+    allow_relax: '0',
+    relax: '0',
+  })
+  return apiFetch(`/api/matching/profile/${profileId}/opportunities?${params.toString()}`)
+}
 
 /**
  * Resolve profile_id: 1) explicit UI selection, 2) URL ?profile_id=, 3) null.
@@ -108,6 +136,8 @@ export default function DiscoverGrants() {
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const [categoryQuery, setCategoryQuery] = useState(null)
   const [scoreHint, setScoreHint] = useState(null)
+  // Live progress for the async crawler fleet: { active, enqueued, running, crawlerTypes }.
+  const [discovery, setDiscovery] = useState(null)
   const [crawlerResultMeta, setCrawlerResultMeta] = useState(null)
   // Mission Goal 7: capture coverage data from the API so the user can see
   // which source families GrantFlow planned, queried, and missed.
@@ -239,24 +269,9 @@ export default function DiscoverGrants() {
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
     queryKey: ['discover-catalog', effectiveProfileId, minMatchScore],
-    queryFn: async () => {
-      if (!effectiveProfileId) return { opportunities: [] }
-      const ms = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
-      // Catalog query honors the Discover slider as a HARD floor. The user
-      // can broaden via the "Try Broader Search" button, which deliberately
-      // lowers the slider; until that happens we want strict mode end-to-end.
-      const params = new URLSearchParams({
-        min_score: String(ms),
-        limit: '2000',
-        skip_readiness_check: '1',
-        strict: '1',
-        allow_relax: '0',
-        relax: '0',
-      })
-      return apiFetch(
-        `/api/matching/profile/${effectiveProfileId}/opportunities?${params.toString()}`,
-      )
-    },
+    // Catalog query honors the Discover slider as a HARD floor (strict mode).
+    // The user can broaden via "Try Broader Search", which lowers the slider.
+    queryFn: () => fetchCatalogMatches(effectiveProfileId, minMatchScore),
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 0,
     // A concurrent crawl can momentarily saturate the DB pool, so the matcher
@@ -467,75 +482,69 @@ export default function DiscoverGrants() {
       category_query: activeCategoryQuery ?? undefined,
     } : null
     try {
-      const data = await runRealCrawler({
-        profileId: pid,
-        crawlerType: 'comprehensive',
-        profileData: profileForSearch,
-        minMatchScore: effectiveMinMatchScore,
-        strictMinScore,
-        itemRequest,
+      setProfileCompletionHint(null)
+      // Show whatever already matches this profile immediately (instant feedback
+      // from opportunities already in the catalog), then stream more in as the
+      // background fleet finishes.
+      await queryClient.refetchQueries({ queryKey: ['discover-catalog'] }).catch(() => {})
+
+      // Dispatch the FULL, profile-aware crawler fleet to the background
+      // dispatcher. The server-side relevance selector runs ONLY the crawlers
+      // appropriate for THIS profile (local + comprehensive + government always;
+      // scholarship/student only for students; health/clinical-trials only with
+      // health indicators + consent; foundation/990 for orgs — never mismatched
+      // crawlers), and each runs to COMPLETION server-side. No synchronous
+      // request to hit the gateway 504, and no time budget that returns partial
+      // results — slow-but-complete, using the full profile.
+      const dispatch = await discoverAllForProfile({ profileId: pid }).catch((bgErr) => {
+        console.warn('[DiscoverGrants] discover-all dispatch failed:', bgErr?.message || bgErr)
+        return null
       })
-      if (data && data.success === false) {
-        const profileHint = getProfileContextIncompleteHint(data)
-        if (profileHint) {
-          setProfileCompletionHint(profileHint)
-          toast({
-            title: 'Profile needs a quick update',
-            description: profileHint.headline,
-          })
-          return
-        }
-        const message = data.message || data.error || 'Search failed'
+      const enqueued = Number(dispatch?.jobs_enqueued) || 0
+      const crawlerTypes = Array.isArray(dispatch?.crawler_types) ? dispatch.crawler_types : []
+      setDiscovery({ active: enqueued > 0, enqueued, running: enqueued, crawlerTypes })
+
+      if (enqueued > 0) {
         toast({
-          variant: 'destructive',
-          title: 'Search failed',
-          description: message,
+          title: 'Searching funding sources matched to your profile',
+          description: `Running ${enqueued} relevant crawler${enqueued === 1 ? '' : 's'}${crawlerTypes.length ? ` (${crawlerTypes.slice(0, 6).join(', ')}${crawlerTypes.length > 6 ? '…' : ''})` : ''}. Matches appear below as each finishes — this can take a few minutes.`,
         })
-        return
+        // Poll: refetch the catalog so new matches stream into the merged list,
+        // and watch the job counters until this run's crawlers have drained.
+        const start = Date.now()
+        let sawRunning = false
+        while (Date.now() - start < DISCOVERY_MAX_WAIT_MS) {
+          await sleep(DISCOVERY_POLL_MS)
+          const status = await fetchCrawlerStatus(pid).catch(() => null)
+          await queryClient.refetchQueries({ queryKey: ['discover-catalog'] }).catch(() => {})
+          const running = Number(status?.running) || 0
+          if (running > 0) sawRunning = true
+          setDiscovery((d) => (d ? { ...d, running } : d))
+          // Done once the dispatched jobs have finished (we saw them running and
+          // they drained), with a short grace window in case status lags.
+          if (running === 0 && (sawRunning || Date.now() - start > 8000)) break
+        }
       }
-      const rawOpportunities = Array.isArray(data?.opportunities) ? data.opportunities : []
-      // Frontend hard floor (defense in depth) — backend should already have
-      // enforced this when strictMinScore is set, but never trust looser
-      // results to silently leak through the slider.
+
+      // Final pass: pull the complete, profile-matched catalog and hand it to the
+      // existing pipeline/store logic (auto-add high-confidence matches, populate
+      // the FundingResults store, final summary toast). Honors any broadened
+      // slider via effectiveMinMatchScore.
+      const finalPayload = await fetchCatalogMatches(pid, effectiveMinMatchScore).catch(() => null)
+      const rawOpportunities = Array.isArray(finalPayload?.opportunities)
+        ? finalPayload.opportunities
+        : Array.isArray(finalPayload?.data?.opportunities)
+          ? finalPayload.data.opportunities
+          : []
+      // Frontend hard floor (defense in depth) — honor the slider as a hard floor.
       const opportunities = strictMinScore
         ? rawOpportunities.filter((opp) => {
             const score = Number(opp.match_score ?? opp.match ?? -Infinity)
             return Number.isFinite(score) && score >= effectiveMinMatchScore
           })
         : rawOpportunities
-      setProfileCompletionHint(null)
-      setScoreHint(data?.score_hint || null)
-      await handleCrawlerResults(opportunities, data)
-
-      // ALSO fire the FULL relevance-gated crawler fleet in the BACKGROUND. The
-      // synchronous `comprehensive` run above gave the user immediate results;
-      // this dispatches every OTHER crawler relevant to THIS profile type
-      // (scholarship/student for students, foundation_990 for orgs, etc. — never
-      // mismatched crawlers) so more matches keep arriving. We do NOT await the
-      // crawls themselves — the endpoint returns once jobs are enqueued — so the
-      // UI is never blocked. The toast is HONEST: it reports the actual number of
-      // crawlers the backend said it dispatched, and only after it confirms.
-      discoverAllForProfile({ profileId: pid })
-        .then((dispatch) => {
-          const n = Number(dispatch?.jobs_enqueued) || 0
-          if (n > 0) {
-            toast({
-              title: 'Searching now + more on the way',
-              description: `Showing matches now, and dispatched ${n} relevant crawler${n === 1 ? '' : 's'} in the background — more matches will appear as they finish. Search again shortly to see them.`,
-            })
-            // Results grow asynchronously as background jobs land rows in the
-            // catalog. Nudge the discover-catalog query to refetch shortly so new
-            // matches surface without requiring a manual re-search.
-            setTimeout(() => {
-              queryClient.invalidateQueries({ queryKey: ['discover-catalog'] })
-            }, 8000)
-          }
-        })
-        .catch((bgErr) => {
-          // Background dispatch is best-effort — never disrupt the foreground
-          // results the user already has. Log only.
-          console.warn('[DiscoverGrants] background discover-all dispatch failed:', bgErr?.message || bgErr)
-        })
+      setScoreHint(finalPayload?.score_hint || null)
+      await handleCrawlerResults(opportunities, finalPayload)
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
       const profileHint = getProfileContextIncompleteHint(error)
@@ -557,6 +566,7 @@ export default function DiscoverGrants() {
       })
     } finally {
       setIsSearching(false)
+      setDiscovery(null)
     }
   }
 
@@ -1365,6 +1375,24 @@ export default function DiscoverGrants() {
             crawlerType={coverageInfo.crawlerType}
           />
         ) : null}
+
+        {/* Live discovery progress: the profile-aware crawler fleet runs in the
+            background; matches stream in below as each crawler finishes. */}
+        {discovery?.active && (
+          <Alert className="mb-4 border-blue-200 bg-blue-50">
+            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+            <AlertDescription className="text-blue-900">
+              Searching {discovery.enqueued} funding source{discovery.enqueued === 1 ? '' : 's'} matched to your profile
+              {Array.isArray(discovery.crawlerTypes) && discovery.crawlerTypes.length > 0
+                ? ` (${discovery.crawlerTypes.slice(0, 6).join(', ')}${discovery.crawlerTypes.length > 6 ? '…' : ''})`
+                : ''}
+              {typeof discovery.running === 'number' && discovery.running > 0
+                ? ` — ${discovery.running} still running.`
+                : ' — wrapping up.'}{' '}
+              New matches appear below as each finishes; this can take a few minutes.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
         {((catalogOpportunities.length > 0) || searchResults.length > 0) && (
