@@ -6,6 +6,7 @@ import { parseDocxToText } from './parsers/docx.js'
 import { normalizeFromDocument } from './normalize.js'
 import { upsertProgramWithVersion } from './store.js'
 import { auditLog } from './audit.js'
+import { bridgeProgramToCatalog } from './catalogBridge.js'
 import { federalAgent } from './agents/federal.js'
 import { tennesseeAgent } from './agents/tn.js'
 
@@ -61,6 +62,11 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
   const parameters = job?.parameters && typeof job.parameters === 'object' ? job.parameters : {}
   const maxUrls = Number.isFinite(parameters.max_urls) ? parameters.max_urls : 200
   const maxDepth = Number.isFinite(parameters.max_depth) ? parameters.max_depth : 2
+  // Cap how many catalog opportunities a single run can emit, so one run can
+  // never flood funding_opportunities. Defaults generously (1 per fetched URL).
+  const maxOpportunities = Number.isFinite(parameters.max_opportunities)
+    ? parameters.max_opportunities
+    : maxUrls * 2
   const agentsRequested = Array.isArray(parameters.agents) ? parameters.agents : null
 
   const agents = [federalAgent, tennesseeAgent].filter((a) =>
@@ -82,7 +88,33 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
     programs_updated: 0,
     programs_unchanged: 0,
     crosslinks_created: 0,
+    // Canonical catalog bridge (funding_opportunities) outcomes.
+    catalog_inserted: 0,
+    catalog_updated: 0,
+    catalog_skipped: 0,
+    catalog_skip_reasons: {},
     errors: [],
+  }
+
+  const bridgeToCatalog = async ({ track, payload, agent }) => {
+    if (stats.catalog_inserted >= maxOpportunities) return
+    try {
+      const result = await bridgeProgramToCatalog({ db, track, program: payload, agent })
+      if (result?.inserted) {
+        stats.catalog_inserted += 1
+      } else if (result?.updated) {
+        stats.catalog_updated += 1
+      } else {
+        stats.catalog_skipped += 1
+        const reason = result?.reason || 'unknown'
+        stats.catalog_skip_reasons[reason] = (stats.catalog_skip_reasons[reason] || 0) + 1
+      }
+    } catch (bridgeError) {
+      // Never let a catalog write abort the crawl — log + continue.
+      stats.catalog_skipped += 1
+      const reason = `bridge_error:${bridgeError instanceof Error ? bridgeError.message : String(bridgeError)}`
+      stats.catalog_skip_reasons[reason] = (stats.catalog_skip_reasons[reason] || 0) + 1
+    }
   }
 
   await auditLog({
@@ -164,6 +196,12 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
           if (upserted.change_type === 'created') stats.programs_created += 1
           else if (upserted.change_type === 'updated') stats.programs_updated += 1
           else stats.programs_unchanged += 1
+
+          // Bridge every real program into the canonical funding catalog so it
+          // reaches the Discover Grants UI (G3) through the mandatory reality
+          // gate + dedupe. Skips (no URL / no sponsor / loan / placeholder /
+          // duplicate) are counted with their reason — never silently dropped.
+          await bridgeToCatalog({ track, payload, agent })
         }
 
         // If page yields both tracks, auto-crosslink (but keep tables separate)

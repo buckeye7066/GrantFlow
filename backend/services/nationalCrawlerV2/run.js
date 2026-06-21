@@ -9,6 +9,7 @@ import { createFetcher, fetchToBuffer, fetchFileUrl } from './fetchers.js'
 import { parseContent } from './parsers.js'
 import { normalizeProgram } from './normalize.js'
 import { upsertNormalizedProgram } from './store.js'
+import { bridgeProgramToCatalog } from '../nationalPrograms/catalogBridge.js'
 
 function isoDay() {
   return new Date().toISOString().slice(0, 10)
@@ -366,6 +367,37 @@ export async function runNationalCrawlerV2({
                 counts.programs_normalized += 1
                 counts.programs_upserted += 1
                 counts.versions_created += upsert.versions_created
+
+                // Bridge into the canonical funding catalog (reality gate +
+                // dedupe) so V2 programs reach the Discover Grants UI (G3).
+                // Never let a catalog write abort the crawl.
+                try {
+                  const catalogResult = await bridgeProgramToCatalog({
+                    db,
+                    track: normalized.funding_track === 'TRACK_B' ? 'PROVIDER' : 'CLIENT',
+                    program: {
+                      program_name: normalized.program_name,
+                      jurisdiction: normalized.jurisdiction,
+                      state: normalized.state,
+                      administering_agency: normalized.administering_agency,
+                      program_type: normalized.program_type,
+                      eligible_population: Array.isArray(normalized.eligible_population)
+                        ? normalized.eligible_population.join('; ')
+                        : normalized.eligible_population,
+                      covered_services: Array.isArray(normalized.covered_services)
+                        ? normalized.covered_services.join('; ')
+                        : normalized.covered_services,
+                      application_method: normalized.application_url || normalized.application_method,
+                      source_url: normalized.source_url,
+                    },
+                    agent: { administeringAgency: normalized.administering_agency },
+                  })
+                  if (!catalogResult?.inserted && !catalogResult?.updated && catalogResult?.reason) {
+                    await logs.normalize(`[run=${runId}] catalog_skip ${source.source_id} reason=${catalogResult.reason}`)
+                  }
+                } catch (bridgeError) {
+                  await logs.normalize(`[run=${runId}] catalog_bridge_error ${source.source_id}: ${bridgeError.message}`)
+                }
               }
             }
 
