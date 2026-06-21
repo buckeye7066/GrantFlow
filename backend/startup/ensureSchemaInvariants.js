@@ -344,6 +344,53 @@ export async function ensureFundingOpportunityVerificationColumns(db, { logger =
  *
  * @returns {Promise<{ steps: Array<{ name: string, ok: boolean }>, ran: number, failed: number }>}
  */
+/**
+ * Performance indexes for the admin/integrity + Hamilton auth-watch read paths.
+ *
+ * These endpoints (GET /api/admin/profiles/integrity, .../duplicates, and
+ * /api/hamilton/automation/auth-watch) were returning 504s because their
+ * queries fell back to sequential scans / per-row work at scale. The query
+ * shapes themselves were also fixed (correlated subqueries -> grouped JOINs,
+ * unbounded profile loads -> capped), but the indexes are the durable half:
+ * re-asserted on every boot so a missed migration can never silently reintroduce
+ * the slow plan.
+ *
+ * Postgres-only (sqlite test DBs are tiny and the planner is fine without
+ * these). Each CREATE runs in its own try/catch so a table that doesn't exist
+ * in a given deployment can't stop the rest.
+ */
+export async function ensurePerfIndexes(db, { logger = console } = {}) {
+  if (db?.dialect !== 'postgres') return true
+  return runStep(
+    'perf indexes (admin integrity + auth-watch)',
+    '[database]',
+    logger,
+    async () => {
+      const indexes = [
+        // auth-watch: COUNT unread auth notifications for a user.
+        'CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read)',
+        // auth-watch + sessionReadiness: tasks waiting on the owner, by profile/status.
+        'CREATE INDEX IF NOT EXISTS idx_application_tasks_profile_status ON application_tasks(profile_id, status)',
+        'CREATE INDEX IF NOT EXISTS idx_application_tasks_status ON application_tasks(status)',
+        // integrity + duplicates: status filter and the orphan/dedup aggregate JOINs.
+        'CREATE INDEX IF NOT EXISTS idx_profiles_status ON profiles(status)',
+        'CREATE INDEX IF NOT EXISTS idx_profile_sections_profile ON profile_sections(profile_id)',
+        'CREATE INDEX IF NOT EXISTS idx_profile_documents_profile ON profile_documents(profile_id)',
+        'CREATE INDEX IF NOT EXISTS idx_documents_profile ON documents(profile_id)',
+        'CREATE INDEX IF NOT EXISTS idx_grants_profile ON grants(profile_id)',
+      ]
+      for (const sql of indexes) {
+        try {
+          await db.exec(sql)
+        } catch (err) {
+          // Table may not exist in this deployment — log and keep going.
+          logger?.warn?.(`[database] perf index skipped (non-fatal): ${err?.message || err}`)
+        }
+      }
+    },
+  )
+}
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   const steps = [
     ['agent_subsystem', ensureAgentSubsystem],
@@ -354,6 +401,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['anya_match_suggestions', ensureAnyaMatchSuggestions],
     ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
+    ['perf_indexes', ensurePerfIndexes],
   ]
 
   const results = []

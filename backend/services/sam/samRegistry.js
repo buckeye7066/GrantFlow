@@ -342,6 +342,16 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Delegates to admin.compliance.overdue — surfaces awarded funding whose restrictions are overdue, short on required spending, or over an exact-category requirement, so the owner can log compliant spending (with proof) before it becomes a real compliance problem.',
   },
   {
+    id: 'profile.languageReadiness',
+    label: 'Profile language preference readiness',
+    category: SAM_CATEGORIES.PRODUCTION_CONFIG,
+    kind: CHECK_KIND.TOOL,
+    tool: 'admin.profile.languageReadiness',
+    parameters: {},
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Delegates to admin.profile.languageReadiness — makes the per-profile preferred-language choice observable and flags any profile whose stored language code is unsupported (silently degrading to English instead of the chosen language).',
+  },
+  {
     id: 'emailGrants.ingestionHealth',
     label: 'Email → Grant ingestion health',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,

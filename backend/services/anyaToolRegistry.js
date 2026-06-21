@@ -2193,6 +2193,63 @@ registerTool({
   handler: async ({ limit } = {}, context) => scanHamiltonSessionReadiness(context?.db, { limit }),
 })
 
+import {
+  getProfilePreferredLanguageAsync,
+  scanProfileLanguageReadiness,
+} from './languagePreference.js'
+import { languageEnglishName, normalizeLanguageCode } from '../../shared/languages.js'
+
+// Makes the per-profile preferred-language setting observable + usable by the
+// agents — the consume side of the i18n onboarding work. Anya reads it (and
+// already injects a "respond ONLY in <language>" directive built from it into
+// her system prompt); this tool lets her also answer "what language is this
+// profile set to?" directly. Profile-scoped (non-admin) via ensureProfileAccess.
+registerTool({
+  name: 'profile.getPreferredLanguage',
+  description: "Get a profile's preferred language (the choice made in onboarding). Returns the ISO code, its English name, and whether it is the English default. Use it to confirm which language to respond in.",
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile ID to check.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(context?.ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+    const code = normalizeLanguageCode(await getProfilePreferredLanguageAsync(context.db, profileId))
+    return {
+      profileId,
+      preferred_language: code,
+      language_name: languageEnglishName(code),
+      is_default: code === 'en',
+    }
+  },
+})
+
+// Makes the language preference observable to Sam: scans profiles for their
+// stored language and flags any unsupported codes that silently degrade to
+// English. Sam mines findings[] into diagnostics (see samRegistry
+// profile.languageReadiness). Read-only. Admin only.
+registerTool({
+  name: 'admin.profile.languageReadiness',
+  description: 'Audits stored per-profile language preferences: reports how many profiles chose a non-English language (with the distribution) and flags any profile whose stored language code is unsupported (so it is being answered in English instead of the chosen language). Read-only. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 5000, description: 'Max profiles to scan (default 1000, newest first).' },
+    },
+  },
+  handler: async ({ limit } = {}, context) => scanProfileLanguageReadiness(context?.db, { limit }),
+})
+
 // Makes Award Compliance & Restriction Tracking observable to the agents:
 // Anya can answer "which awards are overdue / short on required spending" and
 // Sam mines the findings[] into diagnostics (see samRegistry award.compliance).

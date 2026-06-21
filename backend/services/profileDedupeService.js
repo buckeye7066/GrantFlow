@@ -270,12 +270,22 @@ function pickWinner(candidates) {
   return sorted[0]
 }
 
+// Hard ceiling on how many profiles a single dedup pass loads into memory. The
+// scan loads all candidate profiles plus their sections/docs/jobs and clusters
+// them in-process, so an unbounded load is what timed out GET
+// /api/admin/profiles/duplicates (504). Far above the real profile count today,
+// so behaviour is unchanged in practice — it just caps pathological growth. When
+// the cap bites we scan the most-recently-updated profiles and report it.
+const DEFAULT_MAX_DEDUP_PROFILES = 5000
+
 export async function findDuplicateProfileGroups(db, {
   strategy = 'exact_name',
   limitGroups = 50,
   minGroupSize = 2,
   includeInactive = false,
+  maxProfiles = DEFAULT_MAX_DEDUP_PROFILES,
 } = {}) {
+  const cap = Math.max(1, Math.min(Number(maxProfiles) || DEFAULT_MAX_DEDUP_PROFILES, 50000))
   const where = includeInactive ? '' : "WHERE status IS NULL OR status <> 'deleted'"
   const profiles = await db
     .prepare(
@@ -283,11 +293,14 @@ export async function findDuplicateProfileGroups(db, {
         SELECT id, display_name, primary_type, status, user_id, organization_id, created_at, updated_at
         FROM profiles
         ${where}
+        ORDER BY updated_at DESC
+        LIMIT ?
       `,
     )
-    .all()
+    .all(cap)
 
-  if (!profiles || profiles.length === 0) return { groups: [] }
+  if (!profiles || profiles.length === 0) return { groups: [], scanned: 0, capped: false }
+  const capped = profiles.length >= cap
 
   const profileIds = profiles.map((p) => p.id)
   const placeholders = profileIds.map(() => '?').join(',')
@@ -436,7 +449,7 @@ export async function findDuplicateProfileGroups(db, {
 
   groups.sort((a, b) => (b.count - a.count) || String(a.key).localeCompare(String(b.key)))
 
-  return { groups: groups.slice(0, limitGroups) }
+  return { groups: groups.slice(0, limitGroups), scanned: profiles.length, capped }
 }
 
 async function tableExists(tx, tableName) {

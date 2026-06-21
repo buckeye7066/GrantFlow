@@ -305,7 +305,9 @@ export const useAuthStore = create((set, get) => ({
         set({ activeProfileId: nextActive })
       }
 
-      if (isAdmin && (force || profiles.length !== prevCount)) {
+      // Dev-only: this fired on every admin refresh and spammed the production
+      // console. Keep it for local debugging, silence it in the shipped build.
+      if (import.meta.env?.DEV && isAdmin && (force || profiles.length !== prevCount)) {
         console.info('[authStore] refreshed profiles', {
           reason,
           previous_count: prevCount,

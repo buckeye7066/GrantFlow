@@ -2828,24 +2828,39 @@ router.get('/profiles/integrity', async (req, res) => {
     [limitOwners],
   )
 
-  // Orphan candidates (hard-deletable) – mirror `/api/admin/profiles/orphans` definition (sampled)
+  // Orphan candidates (hard-deletable) – mirror `/api/admin/profiles/orphans` definition (sampled).
+  // Selectivity-first: prune to deleted + unowned + un-orged profiles in a CTE
+  // (cheap, indexed via idx_profiles_status), then attach child counts with four
+  // GROUPED LEFT JOINs instead of 12 per-row correlated subqueries. Same
+  // semantics (filter on counts, then order, then limit) at a fraction of the
+  // cost — this query was the integrity endpoint's 504 root cause. CTE is
+  // supported on both Postgres and SQLite.
   const orphanRows = await safeAll(
     `
+      WITH cand AS (
+        SELECT
+          p.id, p.display_name, p.primary_type, p.status, p.created_at, p.updated_at, p.user_id, p.organization_id
+        FROM profiles p
+        WHERE (p.status IS NOT NULL AND lower(p.status) = 'deleted')
+          AND (p.user_id IS NULL OR TRIM(p.user_id) = '')
+          AND (p.organization_id IS NULL OR TRIM(p.organization_id) = '')
+      )
       SELECT
-        p.id, p.display_name, p.primary_type, p.status, p.created_at, p.updated_at, p.user_id, p.organization_id,
-        (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) AS section_count,
-        (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) AS profile_document_count,
-        (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) AS document_count,
-        (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) AS grant_count
-      FROM profiles p
-      WHERE (p.status IS NOT NULL AND lower(p.status) = 'deleted')
-        AND (p.user_id IS NULL OR TRIM(p.user_id) = '')
-        AND (p.organization_id IS NULL OR TRIM(p.organization_id) = '')
-        AND (SELECT COUNT(*) FROM profile_sections ps WHERE ps.profile_id = p.id) < 2
-        AND (SELECT COUNT(*) FROM profile_documents pd WHERE pd.profile_id = p.id) = 0
-        AND (SELECT COUNT(*) FROM documents d WHERE d.profile_id = p.id) = 0
-        AND (SELECT COUNT(*) FROM grants g WHERE g.profile_id = p.id) = 0
-      ORDER BY p.updated_at DESC
+        c.id, c.display_name, c.primary_type, c.status, c.created_at, c.updated_at, c.user_id, c.organization_id,
+        COALESCE(ps.cnt, 0) AS section_count,
+        COALESCE(pd.cnt, 0) AS profile_document_count,
+        COALESCE(d.cnt, 0)  AS document_count,
+        COALESCE(g.cnt, 0)  AS grant_count
+      FROM cand c
+      LEFT JOIN (SELECT profile_id, COUNT(*) AS cnt FROM profile_sections GROUP BY profile_id) ps ON ps.profile_id = c.id
+      LEFT JOIN (SELECT profile_id, COUNT(*) AS cnt FROM profile_documents GROUP BY profile_id) pd ON pd.profile_id = c.id
+      LEFT JOIN (SELECT profile_id, COUNT(*) AS cnt FROM documents GROUP BY profile_id) d ON d.profile_id = c.id
+      LEFT JOIN (SELECT profile_id, COUNT(*) AS cnt FROM grants GROUP BY profile_id) g ON g.profile_id = c.id
+      WHERE COALESCE(ps.cnt, 0) < 2
+        AND COALESCE(pd.cnt, 0) = 0
+        AND COALESCE(d.cnt, 0) = 0
+        AND COALESCE(g.cnt, 0) = 0
+      ORDER BY c.updated_at DESC
       LIMIT ?
     `,
     [limitOrphans],
@@ -4236,6 +4251,8 @@ router.get('/profiles/duplicates', async (req, res, next) => {
       limitGroups,
       minGroupSize,
       includeInactive,
+      scanned: report.scanned ?? null,
+      capped: report.capped ?? false,
       groups: report.groups,
     })
   } catch (error) {

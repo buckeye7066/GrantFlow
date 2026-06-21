@@ -4,6 +4,7 @@ import {
   getProfilePreferredLanguage,
   buildLanguageDirective,
   buildLanguageDirectiveForProfile,
+  scanProfileLanguageReadiness,
 } from '../services/languagePreference.js'
 import {
   SUPPORTED_LANGUAGE_CODES,
@@ -73,5 +74,59 @@ describe('languagePreference helper', () => {
     const directive = buildLanguageDirective('ru')
     expect(directive).toContain('Respond ONLY in Russian')
     expect(directive).toContain('(ru)')
+  })
+})
+
+// Async db stub mimicking prepare().all() returning the joined profile rows the
+// readiness scan reads (the Postgres path).
+function makeScanDb(rows) {
+  return {
+    prepare() {
+      return { all: async () => rows }
+    },
+  }
+}
+
+describe('scanProfileLanguageReadiness (Sam/Anya observability)', () => {
+  it('reports all-clear when no profile sets a language', async () => {
+    const out = await scanProfileLanguageReadiness(makeScanDb([
+      { id: 'p1', display_name: 'A', data: null },
+      { id: 'p2', display_name: 'B', data: null },
+    ]))
+    expect(out.ok).toBe(true)
+    expect(out.profiles_scanned).toBe(2)
+    expect(out.explicit_non_default).toBe(0)
+    expect(out.findings).toEqual([])
+    expect(out.summary).toContain('all stored language preferences are valid')
+  })
+
+  it('counts non-English choices and their distribution', async () => {
+    const out = await scanProfileLanguageReadiness(makeScanDb([
+      { id: 'p1', display_name: 'A', data: JSON.stringify({ preferred_language: 'es' }) },
+      { id: 'p2', display_name: 'B', data: JSON.stringify({ preferred_language: 'es-MX' }) },
+      { id: 'p3', display_name: 'C', data: JSON.stringify({ preferred_language: 'en' }) },
+    ]))
+    expect(out.explicit_non_default).toBe(2)
+    expect(out.by_language.es).toBe(2)
+    expect(out.findings).toEqual([])
+    expect(out.summary).toContain('Spanish:2')
+  })
+
+  it('flags an unsupported stored code as a low finding (silent English degrade)', async () => {
+    const out = await scanProfileLanguageReadiness(makeScanDb([
+      { id: 'p9', display_name: 'Z', data: JSON.stringify({ preferred_language: 'tlh' }) },
+    ]))
+    expect(out.findings).toHaveLength(1)
+    expect(out.findings[0]).toMatchObject({ severity: 'low', category: 'profile_language' })
+    expect(out.findings[0].evidence).toEqual({ profile_id: 'p9', stored_value: 'tlh' })
+    expect(out.summary).toContain('unsupported language code')
+  })
+
+  it('never throws on a missing table — returns an empty result', async () => {
+    const throwingDb = { prepare() { return { all: async () => { throw new Error('no such table: profiles') } } } }
+    const out = await scanProfileLanguageReadiness(throwingDb)
+    expect(out.ok).toBe(true)
+    expect(out.profiles_scanned).toBe(0)
+    expect(out.findings).toEqual([])
   })
 })

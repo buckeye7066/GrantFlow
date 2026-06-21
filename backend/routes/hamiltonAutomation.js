@@ -1382,11 +1382,19 @@ router.post('/credentials/import-csv', express.json({ limit: '5mb' }), async (re
 router.get('/auth-watch', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
+  // This drives a non-critical login-priming toast. It must never hang long
+  // enough to hit the gateway's 504 — if the summary can't be produced quickly
+  // (slow query, contention), degrade to "nothing waiting" so the page proceeds.
+  const empty = { has_any: false, pending_notifications: 0, waiting_tasks: 0, items: [] }
   try {
-    const summary = await getAuthWatchSummary(req.db, { userId: getAuthUserId(user) })
+    const summary = await Promise.race([
+      getAuthWatchSummary(req.db, { userId: getAuthUserId(user) }),
+      new Promise((resolve) => setTimeout(() => resolve({ ...empty, timed_out: true }), 8000)),
+    ])
     return res.json({ ok: true, ...summary })
   } catch (err) {
-    return res.status(500).json({ error: 'auth_watch_failed', detail: err?.message })
+    // Degrade rather than 500 — the toast is optional, the page is not.
+    return res.json({ ok: true, ...empty, error: 'auth_watch_failed', detail: err?.message })
   }
 })
 
