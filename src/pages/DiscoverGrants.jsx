@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
 import client, { apiFetch } from '@/api/client';
@@ -36,7 +36,7 @@ import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds'
 // completion — no synchronous request to hit Vercel's ~30s proxy 504, and no
 // time-budget that returns partial/shortcut results), then the UI polls the
 // catalog so matches stream in as crawlers finish. Slow-but-complete by design.
-const DISCOVERY_POLL_MS = 4000          // how often to refetch catalog + status
+const DISCOVERY_POLL_MS = 12000         // how often to refetch catalog + status (gentle: heavy query)
 const DISCOVERY_MAX_WAIT_MS = 5 * 60 * 1000 // stop polling after 5 min (jobs keep running server-side)
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -131,6 +131,18 @@ export default function DiscoverGrants() {
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [minMatchScore, setMinMatchScore] = useState(35);
+  // Debounce the slider value used to KEY the catalog query so dragging the
+  // slider through intermediate values doesn't fire a heavy 2000-row matching
+  // query per step (that thundering herd saturated the DB → 503/504 cascade).
+  const [debouncedMinMatchScore, setDebouncedMinMatchScore] = useState(35);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMinMatchScore(minMatchScore), 450);
+    return () => clearTimeout(t);
+  }, [minMatchScore]);
+  // Guard so repeated "Find Funding" clicks don't stack multiple poll loops /
+  // re-dispatch the crawler fleet concurrently (each poll re-runs the heavy
+  // matcher; stacking them is what overwhelmed the DB).
+  const discoveringRef = React.useRef(false);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
@@ -268,21 +280,28 @@ export default function DiscoverGrants() {
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
-    queryKey: ['discover-catalog', effectiveProfileId, minMatchScore],
+    // Keyed by the DEBOUNCED slider value — one query per settled value, not per
+    // drag step.
+    queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore],
     // Catalog query honors the Discover slider as a HARD floor (strict mode).
     // The user can broaden via "Try Broader Search", which lowers the slider.
-    queryFn: () => fetchCatalogMatches(effectiveProfileId, minMatchScore),
+    queryFn: () => fetchCatalogMatches(effectiveProfileId, debouncedMinMatchScore),
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 0,
-    // A concurrent crawl can momentarily saturate the DB pool, so the matcher
-    // returns a retryable 503 (catalog_busy) or the request 504s. Both are
-    // transient — retry transparently with backoff so the user sees results
-    // instead of an error. Non-retryable failures (4xx) fall through immediately.
+    // Keep showing the previous results while a new slider value loads, so the
+    // UI never blanks (and the user isn't tempted to re-trigger).
+    placeholderData: keepPreviousData,
+    // A concurrent crawl can momentarily saturate the DB, so the matcher returns
+    // a retryable 503 (catalog_busy) or 504s. Retry — but SPARINGLY with long
+    // backoff: this is a heavy query, and aggressive retries amplify the very
+    // overload that caused the timeout (a thundering-herd death spiral).
     retry: (failureCount, error) => {
       const status = error?.status
-      return (status === 503 || status === 504) && failureCount < 4
+      if (status === 503) return failureCount < 2
+      if (status === 504) return failureCount < 1
+      return false
     },
-    retryDelay: (attempt) => Math.min(1500 * 2 ** attempt, 8000),
+    retryDelay: (attempt) => Math.min(3000 * 2 ** attempt, 15000),
   })
 
   const catalogOpportunities = useMemo(() => {
@@ -291,7 +310,7 @@ export default function DiscoverGrants() {
     if (!Array.isArray(rows)) return []
     // Defense in depth: if any backend path leaks results below the user's
     // slider value, the UI must still honor the slider as a hard floor.
-    const minScoreFloor = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
+    const minScoreFloor = Math.min(100, Math.max(0, Number(debouncedMinMatchScore) || 0))
     return rows
       .filter((opp) => {
         const score = Number(opp.match_score ?? opp.match ?? -Infinity)
@@ -316,7 +335,7 @@ export default function DiscoverGrants() {
         refund_potential: opp.refund_potential ?? false,
         funding_category: opp.funding_category ?? null,
       }))
-  }, [catalogMatchResponse, minMatchScore])
+  }, [catalogMatchResponse, debouncedMinMatchScore])
 
   const catalogResultMeta = useMemo(() => {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
@@ -451,6 +470,16 @@ export default function DiscoverGrants() {
       Math.max(0, Number(options?.minMatchScoreOverride ?? minMatchScore) || 0),
     )
     const strictMinScore = options?.strictMinScore !== false
+    // If a discovery run is already in flight, don't stack another fleet +
+    // poll loop (each poll re-runs the heavy matcher — stacking them is what
+    // overwhelmed the DB). Just refresh the current view and bail.
+    if (discoveringRef.current) {
+      await queryClient
+        .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
+        .catch(() => {})
+      return
+    }
+    discoveringRef.current = true
     setIsSearching(true)
     setProfileCompletionHint(null)
     setScoreHint(null)
@@ -485,8 +514,12 @@ export default function DiscoverGrants() {
       setProfileCompletionHint(null)
       // Show whatever already matches this profile immediately (instant feedback
       // from opportunities already in the catalog), then stream more in as the
-      // background fleet finishes.
-      await queryClient.refetchQueries({ queryKey: ['discover-catalog'] }).catch(() => {})
+      // background fleet finishes. Refetch ONLY the active (current-slider) query
+      // — never the whole ['discover-catalog'] family, which would re-run the
+      // heavy matcher for every cached slider value at once.
+      await queryClient
+        .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
+        .catch(() => {})
 
       // Dispatch the FULL, profile-aware crawler fleet to the background
       // dispatcher. The server-side relevance selector runs ONLY the crawlers
@@ -516,7 +549,9 @@ export default function DiscoverGrants() {
         while (Date.now() - start < DISCOVERY_MAX_WAIT_MS) {
           await sleep(DISCOVERY_POLL_MS)
           const status = await fetchCrawlerStatus(pid).catch(() => null)
-          await queryClient.refetchQueries({ queryKey: ['discover-catalog'] }).catch(() => {})
+          await queryClient
+            .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
+            .catch(() => {})
           const running = Number(status?.running) || 0
           if (running > 0) sawRunning = true
           setDiscovery((d) => (d ? { ...d, running } : d))
@@ -567,6 +602,7 @@ export default function DiscoverGrants() {
     } finally {
       setIsSearching(false)
       setDiscovery(null)
+      discoveringRef.current = false
     }
   }
 
