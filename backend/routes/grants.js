@@ -35,6 +35,7 @@ import {
   clearDismissal as clearPipelineDismissal,
   isDismissed as isDismissedFromPipeline,
 } from '../services/pipelineDismissals.js'
+import { recordBehaviorEvent } from '../services/behaviorLearning.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
@@ -2112,6 +2113,15 @@ router.post('/from-opportunity', async (req, res, next) => {
       mergeOpportunitySignals(req.db, normalizedProfileId, opportunity, 'save').catch(() => {
         // Signal merge failures must never affect the pipeline save response.
       })
+
+      // SOFT user-behavior learning (architecture #12): a save nudges future
+      // matching toward this opportunity's categories/needs/source. Best-effort,
+      // never throws, never alters the response.
+      recordBehaviorEvent(req.db, {
+        profileId: normalizedProfileId,
+        action: 'saved',
+        opportunity,
+      }).catch(() => {})
     }
 
     // Manual re-add overrides any prior tombstone for this profile/opportunity.

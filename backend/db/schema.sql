@@ -3767,3 +3767,20 @@ CREATE TABLE IF NOT EXISTS owner_blocklist_hits (
 );
 CREATE INDEX IF NOT EXISTS idx_owner_blocklist_hits_created ON owner_blocklist_hits(created_at);
 
+-- ── User-behavior learning (SOFT preference signals — architecture #12) ──
+-- Saves / applies / dismisses-rejects nudge future matching toward what the
+-- user values. SOFT preference learning only — never a hard filter. See
+-- backend/services/behaviorLearning.js. Gated by BEHAVIOR_LEARNING_ENABLED.
+CREATE TABLE IF NOT EXISTS behavior_events (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('saved', 'applied', 'dismissed', 'ignored')),
+  opportunity_source TEXT,
+  opportunity_categories TEXT,
+  need_types TEXT,
+  is_local INTEGER,
+  ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_behavior_events_profile ON behavior_events(profile_id);
+CREATE INDEX IF NOT EXISTS idx_behavior_events_profile_ts ON behavior_events(profile_id, ts);
+

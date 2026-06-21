@@ -316,6 +316,61 @@ export async function ensureMatchingLowCoverageEvents(db, { logger = console } =
 }
 
 /**
+ * behavior_events table (both dialects). Stores user SAVE / APPLY /
+ * DISMISS / IGNORE interactions as SOFT preference signals (architecture
+ * #12) consumed by matchEngine to nudge — never hard-filter — future
+ * matching. See backend/services/behaviorLearning.js. Gated at read/write
+ * time by BEHAVIOR_LEARNING_ENABLED; the table is always created so the
+ * feature can be toggled on without a redeploy.
+ */
+export async function ensureBehaviorEventsTable(db, { logger = console } = {}) {
+  return runStep(
+    'behavior_events',
+    '[database]',
+    logger,
+    async () => {
+      if (db.dialect === 'postgres') {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS behavior_events (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            action TEXT NOT NULL
+              CHECK (action IN ('saved', 'applied', 'dismissed', 'ignored')),
+            opportunity_source TEXT,
+            opportunity_categories JSONB,
+            need_types JSONB,
+            is_local BOOLEAN,
+            ts TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+          CREATE INDEX IF NOT EXISTS idx_behavior_events_profile
+            ON behavior_events(profile_id);
+          CREATE INDEX IF NOT EXISTS idx_behavior_events_profile_ts
+            ON behavior_events(profile_id, ts);
+        `)
+      } else {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS behavior_events (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            action TEXT NOT NULL
+              CHECK (action IN ('saved', 'applied', 'dismissed', 'ignored')),
+            opportunity_source TEXT,
+            opportunity_categories TEXT,
+            need_types TEXT,
+            is_local INTEGER,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_behavior_events_profile
+            ON behavior_events(profile_id);
+          CREATE INDEX IF NOT EXISTS idx_behavior_events_profile_ts
+            ON behavior_events(profile_id, ts);
+        `)
+      }
+    },
+  )
+}
+
+/**
  * funding_opportunities verification + reality columns (postgres
  * mirror of migrations 0061 + 0062). Several writers — including the
  * student bridge funding pipeline — assume these columns exist and
@@ -538,6 +593,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['crawler_jobs_type_check', ensureCrawlerJobsTypeCheck],
     ['anya_match_suggestions', ensureAnyaMatchSuggestions],
     ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
+    ['behavior_events', ensureBehaviorEventsTable],
     ['profile_discovery_column', ensureProfileDiscoveryColumn],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
     ['ingestion_provenance_tables', ensureIngestionProvenanceTables],

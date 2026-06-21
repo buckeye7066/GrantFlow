@@ -22,6 +22,7 @@ import {
   chooseGrantUrl,
 } from '../utils/grantFingerprint.js'
 import { createLogger } from '../utils/logger.js'
+import { recordBehaviorEvent } from './behaviorLearning.js'
 
 const log = createLogger('service:pipelineDismissals')
 
@@ -210,6 +211,16 @@ export async function recordDismissal(
     log.error('failed to record pipeline dismissal', { profileId: profile, error: msg })
     throw err
   }
+
+  // SOFT user-behavior learning (architecture #12): a dismiss/reject nudges
+  // future matching AWAY from this opportunity's categories/needs/source (e.g.
+  // rejecting a loan ↓ loan-like sources). Best-effort — never throws, never
+  // changes this function's behavior or return value.
+  recordBehaviorEvent(db, {
+    profileId: profile,
+    action: 'dismissed',
+    opportunity: opportunity ?? grantRow ?? null,
+  }).catch(() => {})
 
   return { recorded: true, alreadyExisted: false, key, id }
 }

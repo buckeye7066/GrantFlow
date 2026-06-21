@@ -51,6 +51,11 @@ import {
   CONFIDENCE_BAND_HIGH, CONFIDENCE_BAND_MEDIUM,
 } from '../config/matchThresholds.js'
 import { assessOpportunityTrust } from './opportunityTrust.js'
+import {
+  computePreferenceNudge,
+  getProfilePreferenceSignals,
+  isBehaviorLearningEnabled,
+} from './behaviorLearning.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
@@ -2049,7 +2054,7 @@ function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
  * @param {Object} opportunity  - Raw opportunity object
  * @returns {{ score: number, reasons: string[], match_explain: object }}
  */
-export function scoreOpportunity(profile, opportunity) {
+export function scoreOpportunity(profile, opportunity, opts = {}) {
   const profileContext =
     profile && typeof profile === 'object' && profile.profile && (profile.sections || profile.signals)
       ? profile
@@ -2312,6 +2317,24 @@ export function scoreOpportunity(profile, opportunity) {
     }
   }
 
+  // ── SOFT preference nudge (user-behavior learning — architecture #12) ──
+  // Applied AFTER the weighted score, BEFORE the floor/0-100 clamp. The nudge is
+  // a SMALL bounded additive number (±BEHAVIOR_NUDGE_MAX) derived from the user's
+  // own save/apply/dismiss history. When no preference vector is supplied (or it
+  // is empty / the feature is disabled) the nudge is exactly 0 → identical score.
+  // This is SOFT preference learning, never a hard filter: it can tip a
+  // borderline match but cannot eliminate one.
+  const preferenceSignals = opts?.preferenceSignals ?? null
+  let behaviorNudgeReason = null
+  if (preferenceSignals) {
+    const { nudge, reason } = computePreferenceNudge(preferenceSignals, effectiveOpp)
+    if (nudge !== 0) {
+      rawScore = rawScore + nudge
+      behaviorNudgeReason = reason
+      housingBonusReasons.push(reason)
+    }
+  }
+
   // ── Floor guarantee: validated opportunities always score ≥ SCORE_FLOOR ──
   const finalScore = Math.max(SCORE_FLOOR, Math.min(100, rawScore))
 
@@ -2407,6 +2430,7 @@ export function scoreOpportunity(profile, opportunity) {
     profileSignalsUsed,
     profileReasonLines,
     housingSignals: housingBonusReasons.length > 0 ? housingBonusReasons : undefined,
+    behaviorNudge: behaviorNudgeReason || undefined,
     usableForHousing: Boolean(effectiveOpp?.usable_for_housing || effectiveOpp?.refund_potential ||
       ['refund_eligible', 'stipend', 'housing_direct'].includes(effectiveOpp?.funding_category)),
     fundingCategory: effectiveOpp?.funding_category ?? null,
@@ -2467,15 +2491,25 @@ export function scoreOpportunity(profile, opportunity) {
  * @param {Array}  opportunities  - Array of opportunity objects
  * @param {Object} [opts]
  * @param {number} [opts.minScore=0] - Minimum score threshold
+ * @param {Object} [opts.preferenceSignals] - SOFT user-behavior preference
+ *   vector (architecture #12). Loaded ONCE per profile (via
+ *   loadPreferenceSignals / behaviorLearning.getProfilePreferenceSignals) and
+ *   applied to every opportunity in this batch with NO per-call DB read. When
+ *   absent or empty → ZERO change to every score.
  * @returns {Array} Opportunities sorted by score desc, each augmented with score/reasons/match_explain.
  *                  result._relaxed is set when the threshold was relaxed.
  */
 export function matchOpportunities(profile, opportunities, opts = {}) {
   if (!Array.isArray(opportunities) || opportunities.length === 0) return []
 
+  // Resolve the SOFT preference vector ONCE for the whole batch (no per-call DB
+  // read). When none is supplied the per-opportunity nudge is a no-op.
+  const preferenceSignals = opts.preferenceSignals ?? null
+  const scoreOpts = preferenceSignals ? { preferenceSignals } : undefined
+
   const scored = opportunities.map((opp) => {
     const { score, confidence, confidence_reasons, confidence_band, reasons, match_explain } =
-      scoreOpportunity(profile, opp)
+      scoreOpportunity(profile, opp, scoreOpts)
     return { ...opp, score, confidence, confidence_reasons, confidence_band, reasons, match_explain }
   })
 
@@ -2505,6 +2539,27 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
   if (relaxed) results._relaxed = relaxed
 
   return results
+}
+
+/**
+ * Convenience loader for the SOFT user-behavior preference vector (architecture
+ * #12). The read-path (e.g. backend/routes/matching.js) should call this ONCE
+ * per profile and pass the result into matchOpportunities(..., { preferenceSignals }):
+ *
+ *   const preferenceSignals = await loadPreferenceSignals(db, profileId)
+ *   const results = matchOpportunities(profile, opps, { ...opts, preferenceSignals })
+ *
+ * Best-effort + gated: returns an empty (no-op) vector when the feature is
+ * disabled, when there's no behavior data, or on any error — so adding this
+ * single line can never change scores until the user actually has history.
+ */
+export async function loadPreferenceSignals(db, profileId) {
+  if (!isBehaviorLearningEnabled()) return null
+  try {
+    return await getProfilePreferenceSignals(db, profileId)
+  } catch {
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------------

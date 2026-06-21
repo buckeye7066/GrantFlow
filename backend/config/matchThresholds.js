@@ -110,6 +110,48 @@ export const CONFIDENCE_FRESHNESS_SCORE = {
 export const CONFIDENCE_BAND_HIGH = 75
 export const CONFIDENCE_BAND_MEDIUM = 50
 
+// ── User-behavior learning (SOFT preference signals — architecture #12) ──
+//
+// When a user SAVES / APPLIES-TO / DISMISSES-REJECTS opportunities, those
+// actions nudge future matching toward what they value. This is SOFT
+// preference learning, NOT hard filtering: it can only add/subtract a small,
+// clamped number of points AFTER the weighted score, and it NEVER eliminates a
+// match or changes a score when there is no behavior data (zero-default).
+//
+// The whole feature is gated behind BEHAVIOR_LEARNING_ENABLED (see
+// behaviorLearning.js → isBehaviorLearningEnabled()); when off, the preference
+// vector is empty and the nudge is exactly 0 for every opportunity.
+//
+// Bounds below are intentionally tiny so a user's history can only tip a
+// borderline match, never override the substantive need/eligibility/geo/category
+// model. Each individual signal is clamped to ±BEHAVIOR_SIGNAL_MAX, and the SUM
+// of all applied nudges for one opportunity is clamped to ±BEHAVIOR_NUDGE_MAX.
+
+/** Per-signal clamp: a single category/need/source/locality nudge in points. */
+export const BEHAVIOR_SIGNAL_MAX = 4
+
+/** Total per-opportunity nudge clamp (sum of all signals), in points. */
+export const BEHAVIOR_NUDGE_MAX = 8
+
+/**
+ * Points contributed per positive interaction (save/apply) and per negative
+ * interaction (dismiss/ignore) BEFORE recency decay + clamping. Apply is
+ * weighted more strongly than a save because it is a stronger intent signal.
+ */
+export const BEHAVIOR_WEIGHT_APPLIED = 2.0
+export const BEHAVIOR_WEIGHT_SAVED = 1.0
+export const BEHAVIOR_WEIGHT_DISMISSED = -1.5
+export const BEHAVIOR_WEIGHT_IGNORED = -0.75
+
+/** Recency: events older than this many days are dropped from the aggregate. */
+export const BEHAVIOR_RECENCY_WINDOW_DAYS = 180
+
+/** Half-life (days) for the exponential recency decay applied to each event. */
+export const BEHAVIOR_DECAY_HALF_LIFE_DAYS = 45
+
+/** Max number of recent events aggregated per profile (bounds the read). */
+export const BEHAVIOR_MAX_EVENTS = 500
+
 // ── Admin / Seeding ─────────────────────────────────────────────────────
 
 /** Minimum score for admin seed-to-pipeline operations */
