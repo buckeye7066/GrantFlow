@@ -2398,6 +2398,10 @@ app.use('/api/admin/portal-sync', lazyRouter('./routes/portalSyncHealth.js'));
 // whole agent process. Restricted to the canonical operator
 // (buckeye7066@gmail.com or AGENT_CONTROL_ADMIN_EMAIL env override).
 app.use('/api/admin/agent-control', lazyRouter('./routes/adminAgentControl.js'));
+// Admin-only, read-only crawl coverage & health dashboard (architecture #13):
+// "did the crawler know where to look, did it query, what failed, what was
+// found vs accepted vs rejected" — plus stale sources + weak-data profiles.
+app.use('/api/admin/crawl-coverage', lazyRouter('./routes/adminCrawlCoverage.js'));
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));

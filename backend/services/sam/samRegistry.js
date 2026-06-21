@@ -634,6 +634,64 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
     },
   },
+  {
+    id: 'crawler.coverageDegraded',
+    label: 'Crawler coverage degraded (source failure rate)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources FAILED (default threshold 30% over the last ~50 runs), which signals an outage, a bad key, or a broken source adapter. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'crawler coverage: db unavailable' }
+      const threshold = Number.parseFloat(process.env.CRAWLER_COVERAGE_FAILURE_THRESHOLD || '0.30')
+      // Minimum queried-source sample before we trust the rate — avoids a
+      // single failed run reading as "100% degraded".
+      const MIN_SAMPLE = 20
+      let row
+      try {
+        row = await db
+          .prepare(
+            `SELECT
+               SUM(CASE WHEN queried THEN 1 ELSE 0 END) AS queried,
+               SUM(CASE WHEN failed  THEN 1 ELSE 0 END) AS failed
+             FROM crawler_source_runs
+             WHERE crawler_run_id IN (
+               SELECT crawler_run_id FROM crawler_source_runs
+               GROUP BY crawler_run_id
+               ORDER BY MAX(created_at) DESC
+               LIMIT 50
+             )`,
+          )
+          .get()
+      } catch (err) {
+        // Table not migrated yet — environment gap, not a defect.
+        return { ok: true, summary: `crawler_source_runs not queryable yet (${err?.message || 'unknown'})` }
+      }
+      const queried = Number(row?.queried ?? 0)
+      const failed = Number(row?.failed ?? 0)
+      if (queried < MIN_SAMPLE) {
+        return {
+          ok: true,
+          summary: `crawler coverage: only ${queried} queried source(s) sampled (< ${MIN_SAMPLE}); no reliable signal yet`,
+          evidence: { queried, failed, threshold },
+        }
+      }
+      const rate = failed / queried
+      if (rate > threshold) {
+        return {
+          ok: false,
+          summary: `Crawler coverage DEGRADED: ${failed}/${queried} recently-queried sources failed (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold). Check source adapters / API keys / outages on the Crawl Coverage dashboard.`,
+          evidence: { queried, failed, failure_rate: Number(rate.toFixed(3)), threshold },
+          recommended_fix: 'Open /CrawlCoverage (admin) to see which sources are failing and their errors; verify FUNDING_SOURCES API keys and source endpoint health.',
+        }
+      }
+      return {
+        ok: true,
+        summary: `crawler coverage healthy: ${failed}/${queried} queried sources failed (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%)`,
+        evidence: { queried, failed, failure_rate: Number(rate.toFixed(3)), threshold },
+      }
+    },
+  },
 ])
 
 // ---------------------------------------------------------------------------

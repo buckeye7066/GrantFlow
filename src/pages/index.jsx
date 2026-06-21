@@ -46,6 +46,7 @@ const BackfillContacts = lazy(() => import("./BackfillContacts"), 'BackfillConta
 const Stewardship = lazy(() => import("./Stewardship"), 'Stewardship');
 const ProfileDetail = lazy(() => import("./ProfileDetail"), 'ProfileDetail');
 const Diagnostics = lazy(() => import("./Diagnostics"), 'Diagnostics');
+const CrawlCoverage = lazy(() => import("./CrawlCoverage"), 'CrawlCoverage');
 const ComplianceReportDetail = lazy(() => import("./ComplianceReportDetail"), 'ComplianceReportDetail');
 const ProfileMatcher = lazy(() => import("./ProfileMatcher"), 'ProfileMatcher');
 const SourceDirectory = lazy(() => import("./SourceDirectory"), 'SourceDirectory');
@@ -166,7 +167,9 @@ const PAGES = {
     Stewardship: Stewardship,
     
     Diagnostics: Diagnostics,
-    
+
+    CrawlCoverage: CrawlCoverage,
+
     ComplianceReportDetail: ComplianceReportDetail,
     
     ProfileMatcher: ProfileMatcher,
@@ -349,6 +352,8 @@ function LayoutRoutes() {
                 <Route path="/Incognito" element={withBoundary(<Incognito />, "Incognito")} />
 
                 <Route path="/Diagnostics" element={withBoundary(<Diagnostics />, "Diagnostics")} />
+
+                <Route path="/CrawlCoverage" element={withBoundary(<CrawlCoverage />, "CrawlCoverage")} />
 
                 <Route path="/ComplianceReportDetail" element={withBoundary(<ComplianceReportDetail />, "ComplianceReportDetail")} />
 

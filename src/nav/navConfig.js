@@ -33,6 +33,7 @@ import {
   Star,
   Library,
   Sparkles,
+  Activity,
 } from "lucide-react";
 
 /** @typedef {{ title: string, routeName: string, url: string, icon: import('lucide-react').LucideIcon, isAdminOnly?: boolean, isAdvanced?: boolean }} NavItem */
@@ -122,6 +123,7 @@ export const NAV_GROUPS = [
       { title: "Billing & Invoicing", i18nKey: "nav.billing", routeName: "Billing", url: createPageUrl("Billing"), icon: DollarSign },
       { title: "Budgets", routeName: "Budgets", url: createPageUrl("Budgets"), icon: DollarSign },
       { title: "Diagnostics", routeName: "Diagnostics", url: createPageUrl("Diagnostics"), icon: Beaker },
+      { title: "Crawl Coverage", routeName: "CrawlCoverage", url: createPageUrl("CrawlCoverage"), icon: Activity, isAdminOnly: true },
       { title: "Admin Panel", i18nKey: "nav.adminPanel", routeName: "Admin", url: createPageUrl("Admin"), icon: Shield, isAdminOnly: true },
       // Incognito extension (privacy/broker removal) - requires incognitoEnabled flag
       { title: "Incognito", routeName: "Incognito", url: createPageUrl("Incognito"), icon: ShieldCheck, requiresIncognitoEnabled: true },
@@ -205,6 +207,7 @@ export const ROUTE_LABELS = {
   NOFOParser: "NOFO Parser",
   Settings: "Settings",
   Diagnostics: "Diagnostics",
+  CrawlCoverage: "Crawl Coverage",
   Admin: "Admin",
   Incognito: "Incognito",
   Help: "Help Center",
