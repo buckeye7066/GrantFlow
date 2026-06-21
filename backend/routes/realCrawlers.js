@@ -29,11 +29,34 @@ import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../ser
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource, loadCrawlerSourceRuntimeStatus } from '../services/sourceRegistry.js'
 import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
+import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+import fs from 'fs'
+import { createOpenAIClient } from '../utils/openaiClient.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
 
 const router = express.Router()
+
+// Upload dir + OpenAI factory mirror backend/routes/crawlers.js so the
+// on-demand discover-all dispatch can pass the same context the login/daily
+// auto-discovery paths use to triggerAutoDiscoveryCrawlers.
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const discoverAllUploadDir = join(__dirname, '..', 'uploads')
+try {
+  if (!fs.existsSync(discoverAllUploadDir)) fs.mkdirSync(discoverAllUploadDir, { recursive: true })
+} catch { /* best-effort; dispatcher tolerates a missing uploadDir */ }
+function getDiscoverAllOpenAI() {
+  try {
+    const { openai } = createOpenAIClient({ allowMissing: true })
+    return openai
+  } catch {
+    return null
+  }
+}
 
 // Server-side time budget for the inline /run crawl. The gateway (Railway/
 // Vercel) drops the request with a 504 well before a full live crawl can
@@ -1075,6 +1098,64 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
     totalFound,
     totalInserted,
   })
+})
+
+/**
+ * Fire the FULL relevance-gated discovery fleet for a profile, on demand.
+ * POST /api/real-crawlers/discover-all
+ *
+ * Reuses the canonical relevance selector (triggerAutoDiscoveryCrawlers) — the
+ * same code path that runs on login + daily — so gating is identical: a
+ * corporation never gets student/scholarship crawlers, a student never gets
+ * military/fire-department crawlers, foundation_990 only fires for org/nonprofit/
+ * business profiles, clinical_trials only when opted in with conditions, etc.
+ *
+ * Profile-scoped (ensureProfileAccess) — no cross-tenant. Returns the honest
+ * enqueued summary { jobs_enqueued, crawler_types } so the UI can report exactly
+ * how many relevant crawlers were dispatched (never claims crawlers that didn't
+ * run). The jobs themselves run in the BACKGROUND (fire-and-forget); this route
+ * returns as soon as they are enqueued + dispatched.
+ */
+router.post('/discover-all', ensureAuth, async (req, res) => {
+  const profileId = req.body?.profile_id
+
+  if (!profileId) {
+    return res.status(400).json({
+      error: 'Profile ID required',
+      message: 'discover-all requires a profile_id.',
+    })
+  }
+
+  if (!(await ensureProfileAccess(req, res, String(profileId)))) return
+
+  try {
+    const summary = await triggerAutoDiscoveryCrawlers(req.db, String(profileId), {
+      uploadDir: discoverAllUploadDir,
+      getOpenAI: getDiscoverAllOpenAI,
+      requestedBy: 'discover-all',
+      trigger: 'on_demand_discover_all',
+    })
+
+    routeLogger.info(
+      `[RealCrawlers] discover-all enqueued ${summary?.jobs_enqueued ?? 0} jobs for profile ${profileId}: [${(summary?.crawler_types || []).join(', ')}]`,
+    )
+
+    return res.json({
+      success: true,
+      profile_id: String(profileId),
+      jobs_enqueued: summary?.jobs_enqueued ?? 0,
+      crawler_types: summary?.crawler_types ?? [],
+    })
+  } catch (error) {
+    routeLogger.error('[RealCrawlers] discover-all failed:', error)
+    return res.status(500).json({
+      success: false,
+      error: 'discover-all failed',
+      message: error?.message || String(error),
+      jobs_enqueued: 0,
+      crawler_types: [],
+    })
+  }
 })
 
 function getCrawlerDescription(type) {

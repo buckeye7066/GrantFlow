@@ -200,3 +200,28 @@ export async function runRealCrawler({
   }
   return result
 }
+
+/**
+ * Fire the FULL relevance-gated discovery fleet for a profile, in the BACKGROUND.
+ * Reuses the canonical relevance selector server-side (POST
+ * /api/real-crawlers/discover-all → triggerAutoDiscoveryCrawlers), so only the
+ * crawlers relevant to THIS profile type are dispatched (a corporation never
+ * gets student crawlers; a student never gets military/fire crawlers).
+ *
+ * Returns the honest enqueued summary { jobs_enqueued, crawler_types } so the UI
+ * can report exactly how many relevant crawlers were dispatched. profile_id is
+ * required — throws early if missing.
+ * @param {Object} opts
+ * @param {string} opts.profileId - Required. Profile ID to discover for.
+ * @returns {Promise<{ success: boolean, profile_id: string, jobs_enqueued: number, crawler_types: string[] }>}
+ */
+export async function discoverAllForProfile({ profileId }) {
+  const pid = typeof profileId === 'string' ? profileId.trim() : null
+  if (!pid) {
+    throw new Error('profile_id is required to discover funding. Select a profile first.')
+  }
+  return apiFetch('/api/real-crawlers/discover-all', {
+    method: 'POST',
+    body: JSON.stringify({ profile_id: pid }),
+  })
+}

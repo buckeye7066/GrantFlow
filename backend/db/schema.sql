@@ -1480,10 +1480,15 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'portal_check',
     'government_funding',
     'student_grants',
+    'student_bridge_funding',
     'ecf_benefits',
+    'ecf_hcbs',
     'special_needs',
     'local_funding',
-    'item_matching'
+    'item_matching',
+    'anya_match_scout',
+    'foundation_990',
+    'clinical_trials'
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued',

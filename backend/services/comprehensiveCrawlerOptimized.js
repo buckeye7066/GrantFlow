@@ -566,6 +566,30 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   log.info('[comprehensiveCrawler] Profile signals:', summarizeProfileSignals(signals))
   log.info('[comprehensiveCrawler] Profile state:', profileState)
 
+  // Phase: profile-driven domain corpus build. Unlike the admin/geo sweep (which
+  // runs the whole 56-corpus registry because it has no profile), a profile-
+  // driven comprehensive run must crawl ONLY the domain corpora RELEVANT to this
+  // profile. Passing `signals` makes runDomainCorpusCrawl honor
+  // selectRelevantDomainIds (canonical relevance gating, docs/canonical_rules.md
+  // G4) so a corporation never pulls student/scholarship corpora and a student
+  // never pulls military/first-responder corpora. Fully isolated: any failure is
+  // logged and the established crawl continues unchanged. Opt out via env or
+  // skip_domain_corpus to keep CI/smoke runs lean.
+  const skipProfileDomainCorpus =
+    options?.skip_domain_corpus === true ||
+    process.env.NODE_ENV === 'test' ||
+    String(process.env.SMOKE_MODE || '').toLowerCase() === 'true'
+  if (db && signals && !skipProfileDomainCorpus) {
+    try {
+      const corpusStats = await runDomainCorpusCrawl(db, { signals })
+      log.info(
+        `[comprehensiveCrawler] Profile-driven domain corpus: ${corpusStats?.domains_selected ?? '?'}/${corpusStats?.domains_total ?? '?'} relevant corpora crawled`,
+      )
+    } catch (corpusErr) {
+      console.warn('[comprehensiveCrawler] Profile-driven domain corpus phase failed (continuing):', corpusErr?.message || corpusErr)
+    }
+  }
+
   // Phase: profile-driven connector ingest. Pulls fresh, eligibility-matched rows
   // from Grants.gov / Simpler.Grants.gov / SAM Assistance Listings / NIH RePORTER /
   // ProPublica foundations into funding_opportunities BEFORE we query the DB below,

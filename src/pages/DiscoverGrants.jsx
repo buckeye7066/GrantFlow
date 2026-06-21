@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
 import client, { apiFetch } from '@/api/client';
-import { runRealCrawler } from '@/api/crawlers';
+import { runRealCrawler, discoverAllForProfile } from '@/api/crawlers';
 import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -497,6 +497,36 @@ export default function DiscoverGrants() {
       setProfileCompletionHint(null)
       setScoreHint(data?.score_hint || null)
       await handleCrawlerResults(opportunities, data)
+
+      // ALSO fire the FULL relevance-gated crawler fleet in the BACKGROUND. The
+      // synchronous `comprehensive` run above gave the user immediate results;
+      // this dispatches every OTHER crawler relevant to THIS profile type
+      // (scholarship/student for students, foundation_990 for orgs, etc. — never
+      // mismatched crawlers) so more matches keep arriving. We do NOT await the
+      // crawls themselves — the endpoint returns once jobs are enqueued — so the
+      // UI is never blocked. The toast is HONEST: it reports the actual number of
+      // crawlers the backend said it dispatched, and only after it confirms.
+      discoverAllForProfile({ profileId: pid })
+        .then((dispatch) => {
+          const n = Number(dispatch?.jobs_enqueued) || 0
+          if (n > 0) {
+            toast({
+              title: 'Searching now + more on the way',
+              description: `Showing matches now, and dispatched ${n} relevant crawler${n === 1 ? '' : 's'} in the background — more matches will appear as they finish. Search again shortly to see them.`,
+            })
+            // Results grow asynchronously as background jobs land rows in the
+            // catalog. Nudge the discover-catalog query to refetch shortly so new
+            // matches surface without requiring a manual re-search.
+            setTimeout(() => {
+              queryClient.invalidateQueries({ queryKey: ['discover-catalog'] })
+            }, 8000)
+          }
+        })
+        .catch((bgErr) => {
+          // Background dispatch is best-effort — never disrupt the foreground
+          // results the user already has. Log only.
+          console.warn('[DiscoverGrants] background discover-all dispatch failed:', bgErr?.message || bgErr)
+        })
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
       const profileHint = getProfileContextIncompleteHint(error)

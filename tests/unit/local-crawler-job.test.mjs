@@ -82,7 +82,10 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-async function waitForJob({ port, accessToken, jobId, timeoutMs = 30_000 }) {
+// 90s budget: the local crawl does real work (now multi-state + county/city
+// expansion) and can run slowly under full-suite concurrency. It completes well
+// under this standalone; the larger budget only prevents load-flakiness.
+async function waitForJob({ port, accessToken, jobId, timeoutMs = 90_000 }) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
     const res = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs/${jobId}`, {

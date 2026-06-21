@@ -84,10 +84,13 @@ export const DISCOUNT_TYPES = {
 export const CRAWLER_JOB_TYPES = [
   'anya_match_scout',
   'avatar_lookup',
+  'clinical_trials',
   'comprehensive',
   'curated_benefits',
   'document_ingest',
   'ecf_benefits',
+  'ecf_hcbs',
+  'foundation_990',
   'government_funding',
   'health_resources',
   'item_gift_search',

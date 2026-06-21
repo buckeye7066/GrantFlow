@@ -160,10 +160,16 @@ const CRAWLER_JOB_TYPES = [
   'student_grants',
   'student_bridge_funding',
   'ecf_benefits',
+  // Alias autoDiscoveryCrawlers enqueues (dispatcher maps ecf_hcbs → ecf_benefits).
+  'ecf_hcbs',
   'special_needs',
   'local_funding',
   'item_matching',
   'anya_match_scout',
+  // Org/nonprofit private-foundation (Form 990) + opted-in clinical-trials
+  // discovery — both relevance-gated in autoDiscoveryCrawlers.
+  'foundation_990',
+  'clinical_trials',
 ]
 
 export async function ensureCrawlerJobsTypeCheck(db, { logger = console } = {}) {

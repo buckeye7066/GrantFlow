@@ -207,6 +207,83 @@ function checkHealthIndicators({ profile, sections, signals }) {
 }
 
 /**
+ * Check whether a profile represents an organization (nonprofit, business, or
+ * other registered entity) rather than an individual / student / household.
+ *
+ * Used to gate the foundation_990 crawler: private-foundation discovery is only
+ * relevant to entities that can RECEIVE foundation grants. We must NOT fire it
+ * for individuals or students (a corporation gets foundation 990s; a student
+ * does not — canonical relevance gating, see docs/canonical_rules.md G4).
+ */
+function checkOrganizationIndicators({ profile, sections }) {
+  if (!profile) return false
+
+  // Individuals / households / students are explicitly NOT organizations even if
+  // a stray keyword leaks into a tag. Exclude these first so the foundation_990
+  // gate can never fire for them.
+  const INDIVIDUAL_TYPES = [
+    'individual', 'student', 'high_school_student', 'college_student',
+    'graduate_student', 'family', 'household', 'caregiver', 'senior',
+    'veteran', 'patient',
+  ]
+  const ORG_TYPES = [
+    'nonprofit', 'non_profit', 'non-profit', 'charity', 'charitable', 'foundation',
+    'organization', 'org', 'business', 'company', 'corporation', 'corp',
+    'llc', 'enterprise', 'small_business', 'medium_corporation', 'large_corporation',
+    'church', 'religious_organization', 'faith_based', 'ministry', 'school',
+    'public_school', 'school_district', 'university', 'college', 'municipality',
+    'government', 'tribal', 'cooperative', 'food_pantry', 'food_bank',
+    'homeless_shelter', 'animal_rescue', 'fire_department', 'volunteer_fire_department',
+  ]
+
+  const primaryType = normalizeString(profile.primary_type)
+  if (primaryType) {
+    // Exact individual types short-circuit to false.
+    if (INDIVIDUAL_TYPES.includes(primaryType)) return false
+    if (ORG_TYPES.some((t) => primaryType.includes(t))) return true
+  }
+
+  // organization_details section is the canonical org marker when present.
+  const orgDetails = sections?.organization_details
+  if (orgDetails && typeof orgDetails === 'object') {
+    const orgType = normalizeString(orgDetails.organization_type)
+    if (orgType && !INDIVIDUAL_TYPES.includes(orgType)) return true
+    if (orgDetails.ein || orgDetails.tax_id || orgDetails.is_501c3) return true
+  }
+
+  // An explicitly set organization_id linkage indicates an entity profile.
+  if (profile.organization_id) return true
+
+  return false
+}
+
+/**
+ * Check whether a profile has explicit MEDICAL CONDITIONS (not just generic
+ * health indicators). Required — together with consent_for_studies — to gate the
+ * clinical_trials crawler so it only fires for opted-in profiles that actually
+ * have a condition a trial could match.
+ */
+function checkMedicalConditions({ sections, signals }) {
+  const health = sections?.health_medical
+  if (health && typeof health === 'object') {
+    if (Array.isArray(health.conditions) && health.conditions.length > 0) return true
+    if (Array.isArray(health.disability_type) && health.disability_type.length > 0) return true
+    if (
+      health.chronic_illness ||
+      health.dialysis_patient ||
+      health.organ_transplant ||
+      health.hiv_aids ||
+      health.cancer ||
+      health.rare_disease
+    ) {
+      return true
+    }
+  }
+  if (signals?.health?.size && signals.health.size > 0) return true
+  return false
+}
+
+/**
  * Automatically trigger discovery crawlers for a user profile on login
  * @param {object} db - Database instance
  * @param {string} profileId - Profile ID to discover opportunities for
@@ -304,13 +381,28 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
 
     // 2b. Health resources crawler (if health indicators exist)
     const isHealth = checkHealthIndicators({ profile: profileForDiscovery, sections, signals })
+    const consentForStudies = Boolean(sections?.health_medical?.consent_for_studies)
     if (isHealth) {
-      const consent = Boolean(sections?.health_medical?.consent_for_studies)
       jobs.push({
         id: randomUUID(),
         type: 'health_resources',
         profile_id: profileId,
-        parameters: withDiscoveryMetadata({ include_trials: consent }, discoveryMeta),
+        parameters: withDiscoveryMetadata({ include_trials: consentForStudies }, discoveryMeta),
+      })
+    }
+
+    // 2c. Clinical trials crawler — ONLY when the profile EXPLICITLY opted in
+    // (health_medical.consent_for_studies) AND actually has a medical condition
+    // a trial could match. Discovery/display only; never enrolls. The connector
+    // re-checks the opt-in gate, but we also gate here so we never enqueue a
+    // guaranteed-no-op job for non-consenting / no-condition profiles.
+    const hasMedicalConditions = checkMedicalConditions({ sections, signals })
+    if (consentForStudies && hasMedicalConditions) {
+      jobs.push({
+        id: randomUUID(),
+        type: 'clinical_trials',
+        profile_id: profileId,
+        parameters: withDiscoveryMetadata({}, discoveryMeta),
       })
     }
     
@@ -433,6 +525,20 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
           })
         }
 
+        // 13. Private-foundation (IRS Form 990) discovery — ONLY for
+        // organization/nonprofit/business entities that can RECEIVE foundation
+        // grants. Gated OUT for individuals/students/households (a corporation
+        // gets foundation 990s; a student does not — canonical relevance gating).
+        const isOrganization = checkOrganizationIndicators({ profile: profileForDiscovery, sections })
+        if (isOrganization) {
+          jobs.push({
+            id: randomUUID(),
+            type: 'foundation_990',
+            profile_id: profileId,
+            parameters: withDiscoveryMetadata({}, discoveryMeta),
+          })
+        }
+
     // Insert all jobs into database
     const insertStmt = db.prepare(`
       INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
@@ -454,8 +560,20 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         console.error(`[auto-discovery] Job ${job.id} dispatch failed:`, err)
       })
     }
+
+    // Return an honest summary so on-demand callers (and tests) can report
+    // exactly which relevant crawlers were enqueued for this profile. The
+    // crawler_types list preserves enqueue order but de-duplicates so the UI
+    // can show distinct types fired.
+    const crawlerTypes = [...new Set(jobs.map((job) => job.type))]
+    return {
+      jobs_enqueued: jobs.length,
+      crawler_types: crawlerTypes,
+      job_ids: jobs.map((job) => job.id),
+    }
   } catch (error) {
     console.error('[auto-discovery] Failed to trigger crawlers:', error)
     // Don't throw - we don't want to block login if auto-discovery fails
+    return { jobs_enqueued: 0, crawler_types: [], job_ids: [], error: error?.message || String(error) }
   }
 }
