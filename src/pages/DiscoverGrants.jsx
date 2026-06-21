@@ -8,7 +8,7 @@ import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle } from 'lucide-react';
+import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle, Sparkles } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import SearchCoveragePanel from '@/components/discovery/SearchCoveragePanel';
@@ -124,6 +124,66 @@ function extractDiagnostics(payload) {
 }
 
 // Category taxonomy imported from @/constants/needCategories
+
+/**
+ * Friendly label for a score bucket based on where it sits in the 0–80 range.
+ * Higher score zones = better fit. Kept in user-friendly language (no jargon).
+ */
+function bucketQualityLabel(min, max) {
+  if (min >= 60) return 'Best matches'
+  if (min >= 40) return 'Strong matches'
+  if (min >= 20) return 'Good matches'
+  return 'Broad matches'
+}
+
+/**
+ * Color-coded, NOTCHED guidance band rendered ABOVE the match-score slider.
+ * Data-driven from the matching endpoint's `score_histogram`
+ * ([{ min, max, count, top_source }] across 0–80). Greener = more results in
+ * that zone (density), fading as fewer; each notch is labeled with a friendly
+ * quality label + the dominant source family. Degrades gracefully: when no
+ * histogram is provided (older response) it renders nothing.
+ *
+ * @param {{ histogram: Array<{min:number,max:number,count:number,top_source:string|null}>, max?: number, value?: number }} props
+ */
+function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
+  if (!Array.isArray(histogram) || histogram.length === 0) return null
+  const maxCount = histogram.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
+  if (maxCount === 0) return null
+  return (
+    <div className="mt-3" aria-hidden="false">
+      <div className="flex w-full gap-1">
+        {histogram.map((b, i) => {
+          const count = Number(b?.count) || 0
+          // Density → green intensity. 0 results = neutral gray; more = greener.
+          const ratio = maxCount > 0 ? count / maxCount : 0
+          const span = Math.max(1, (Number(b?.max) || max) - (Number(b?.min) || 0))
+          const isActiveZone = typeof value === 'number' && value >= (Number(b?.min) || 0) && value < (Number(b?.max) || max)
+          const bg = count === 0
+            ? 'rgb(226 232 240)' // slate-200 neutral
+            : `rgba(34, 197, 94, ${0.25 + 0.6 * ratio})` // green-500 fading by density
+          return (
+            <div
+              key={`band-${b?.min ?? i}`}
+              className="flex flex-col"
+              style={{ flexGrow: span, flexBasis: 0 }}
+              title={`${bucketQualityLabel(Number(b?.min) || 0, Number(b?.max) || max)} (${b?.min}–${b?.max}%) · ${count} result${count === 1 ? '' : 's'}${b?.top_source ? ` · mostly ${String(b.top_source).toLowerCase()}` : ''}`}
+            >
+              <div
+                className={`h-2.5 rounded-sm ${isActiveZone ? 'ring-2 ring-emerald-600' : ''}`}
+                style={{ backgroundColor: bg }}
+              />
+              <div className="mt-1 text-[10px] leading-tight text-muted-foreground text-center">
+                <div className="font-medium text-foreground/80">{bucketQualityLabel(Number(b?.min) || 0, Number(b?.max) || max)}</div>
+                {b?.top_source ? <div className="truncate">{String(b.top_source).toLowerCase()}</div> : null}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
@@ -341,6 +401,23 @@ export default function DiscoverGrants() {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
     return normalizeResultMetadata(payload, catalogOpportunities)
   }, [catalogMatchResponse, catalogOpportunities])
+
+  // Feature A: the matching endpoint returns discovery_pending:true when this
+  // profile has never had discovery run. We then show a friendly run-discovery
+  // empty state instead of a blank/zero list — and never imply "no matches".
+  const discoveryPending = useMemo(() => {
+    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
+    return Boolean(payload?.discovery_pending)
+  }, [catalogMatchResponse])
+
+  // Feature B: data-driven guidance band. score_histogram is an array of
+  // { min, max, count, top_source } buckets across the 0–80 range. Absent on
+  // older responses — the band degrades gracefully (hidden).
+  const scoreHistogram = useMemo(() => {
+    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
+    const buckets = payload?.score_histogram
+    return Array.isArray(buckets) ? buckets : []
+  }, [catalogMatchResponse])
 
   // Keep FundingResults store in sync with the combined view so /FundingResults
   // always displays whatever the user last saw on DiscoverGrants.
@@ -1203,12 +1280,16 @@ export default function DiscoverGrants() {
                   </div>
                   <div className="text-sm font-semibold text-foreground">{minMatchScore}%</div>
                 </div>
+                {/* Color-coded, notched guidance band (Feature B). Data-driven
+                    from score_histogram; degrades gracefully (hidden) when the
+                    backend response predates it. Capped at 80 to match slider. */}
+                <MatchScoreGuidanceBand histogram={scoreHistogram} max={80} value={minMatchScore} />
                 <input
                   type="range"
                   min={0}
-                  max={100}
+                  max={80}
                   step={5}
-                  value={minMatchScore}
+                  value={Math.min(80, minMatchScore)}
                   onChange={(e) => setMinMatchScore(Number(e.target.value))}
                   disabled={isSearching}
                   className="mt-3 w-full"
@@ -1233,8 +1314,41 @@ export default function DiscoverGrants() {
           </CardContent>
         </Card>
 
+        {/* Discovery-pending empty state (Feature A): the profile has never had
+            discovery run, so the backend returned discovery_pending and an empty
+            list. Prompt the user to run discovery rather than implying "no
+            matches". Suppressed while searching or once any results exist. */}
+        {discoveryPending && !isSearching && searchResults.length === 0 && catalogOpportunities.length === 0 && (
+          <Card className="mb-8 border-blue-200 bg-blue-50/50">
+            <CardContent className="p-6 space-y-4 text-center">
+              <Sparkles className="h-8 w-8 mx-auto text-blue-600" />
+              <div>
+                <h3 className="text-lg font-semibold text-blue-900">Run discovery to see funding matches</h3>
+                <p className="text-sm text-blue-800 mt-1">
+                  We haven&apos;t searched for funding for this profile yet. Run discovery to find grants, scholarships, benefits, and local programs matched to it.
+                </p>
+              </div>
+              <Button
+                onClick={() => void handleFindFunding()}
+                disabled={!selectedProfile || isSearching}
+                size="lg"
+                className="min-w-[240px]"
+              >
+                {isSearching ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Searching...
+                  </>
+                ) : (
+                  'Run discovery'
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Zero-result recovery card: shown after a search completes with no results */}
-        {hasSearched && searchResults.length === 0 && catalogOpportunities.length === 0 && !isSearching && (
+        {!discoveryPending && hasSearched && searchResults.length === 0 && catalogOpportunities.length === 0 && !isSearching && (
           <Card className="mb-8 border-amber-200 bg-amber-50/50">
             <CardContent className="p-6 space-y-5">
               <div className="flex items-start gap-3">
