@@ -439,6 +439,96 @@ export async function ensureProfileDiscoveryColumn(db, { logger = console } = {}
   )
 }
 
+/**
+ * Ingestion provenance & quality layer tables (both dialects).
+ *
+ *   opportunity_evidence — per-result evidence snippets (title + matched
+ *     description / eligibility text + source URL) that justify each stored
+ *     opportunity. Written by provenanceAudit.persistEvidence at ingest.
+ *   rejection_log — append-only "why excluded" log. Written best-effort by
+ *     provenanceAudit.recordRejection whenever a gate drops a row; read by
+ *     GET /api/admin/rejections.
+ *
+ * Without these, the inserter / ingestion service silently no-op their
+ * best-effort writes (missing-table tolerated), so the admin rejection feed
+ * and per-opportunity evidence stay empty. Re-asserted on every boot so a
+ * missed migration can never disable provenance observability.
+ */
+export async function ensureIngestionProvenanceTables(db, { logger = console } = {}) {
+  return runStep(
+    'ingestion provenance + quality (evidence + rejection_log)',
+    '[funding-schema]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS opportunity_evidence (
+            id BIGSERIAL PRIMARY KEY,
+            opportunity_id TEXT NOT NULL,
+            source_url TEXT,
+            snippet TEXT,
+            evidence_type TEXT,
+            crawl_timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_opportunity_id
+            ON opportunity_evidence(opportunity_id);
+          CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_crawl_ts
+            ON opportunity_evidence(crawl_timestamp);
+
+          CREATE TABLE IF NOT EXISTS rejection_log (
+            id BIGSERIAL PRIMARY KEY,
+            source TEXT,
+            source_url TEXT,
+            title TEXT,
+            reason TEXT,
+            stage TEXT,
+            raw_meta JSONB,
+            checked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_rejection_log_checked_at
+            ON rejection_log(checked_at);
+          CREATE INDEX IF NOT EXISTS idx_rejection_log_stage
+            ON rejection_log(stage);
+          CREATE INDEX IF NOT EXISTS idx_rejection_log_source
+            ON rejection_log(source);
+        `)
+      } else {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS opportunity_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opportunity_id TEXT NOT NULL,
+            source_url TEXT,
+            snippet TEXT,
+            evidence_type TEXT,
+            crawl_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_opportunity_id
+            ON opportunity_evidence(opportunity_id);
+          CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_crawl_ts
+            ON opportunity_evidence(crawl_timestamp);
+
+          CREATE TABLE IF NOT EXISTS rejection_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            source_url TEXT,
+            title TEXT,
+            reason TEXT,
+            stage TEXT,
+            raw_meta TEXT,
+            checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_rejection_log_checked_at
+            ON rejection_log(checked_at);
+          CREATE INDEX IF NOT EXISTS idx_rejection_log_stage
+            ON rejection_log(stage);
+          CREATE INDEX IF NOT EXISTS idx_rejection_log_source
+            ON rejection_log(source);
+        `)
+      }
+    },
+  )
+}
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   const steps = [
     ['agent_subsystem', ensureAgentSubsystem],
@@ -450,6 +540,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
     ['profile_discovery_column', ensureProfileDiscoveryColumn],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
+    ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
     ['perf_indexes', ensurePerfIndexes],
   ]
 

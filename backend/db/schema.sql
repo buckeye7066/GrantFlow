@@ -309,6 +309,53 @@ CREATE INDEX IF NOT EXISTS idx_verification_events_ts
 CREATE INDEX IF NOT EXISTS idx_verification_events_status
   ON verification_events(link_status);
 
+-- Per-result evidence snippets (ingestion provenance & quality layer).
+-- Every stored opportunity should carry the evidence that justifies it: the
+-- snippet(s) of source text (title + matched description / eligibility text)
+-- and the source URL it came from. Captured at ingest time from the live
+-- search adapters (which already carry title/description/snippet/url). One
+-- opportunity may have several evidence rows (title, description, eligibility).
+-- evidence_type values: 'title' | 'description' | 'eligibility' | 'snippet'
+CREATE TABLE IF NOT EXISTS opportunity_evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  opportunity_id TEXT NOT NULL,
+  source_url TEXT,
+  snippet TEXT,
+  evidence_type TEXT,
+  crawl_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_opportunity_id
+  ON opportunity_evidence(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_crawl_ts
+  ON opportunity_evidence(crawl_timestamp);
+
+-- Rejection log (ingestion provenance & quality layer).
+-- Today the ingest gates (policy / validation / reviewer / reality / quality /
+-- provenance) reject rows but only console.warn. This append-only log makes
+-- "why was this excluded?" visible to admins. Writes are best-effort and must
+-- never block or throw the ingest path.
+-- stage values: 'policy' | 'validation' | 'reviewer' | 'reality' | 'quality' |
+--               'provenance' | 'dedupe' | 'url' | 'ingest'
+-- reason is a structured code, e.g. dead_application_url, placeholder_content,
+--   loan_like, expired_deadline, untrusted_origin, unknown_source, duplicate,
+--   quality:<x>, policy:<x>, validation:<x>, reviewer:<x>, reality:<x>
+CREATE TABLE IF NOT EXISTS rejection_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT,
+  source_url TEXT,
+  title TEXT,
+  reason TEXT,
+  stage TEXT,
+  raw_meta TEXT, -- JSON
+  checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rejection_log_checked_at
+  ON rejection_log(checked_at);
+CREATE INDEX IF NOT EXISTS idx_rejection_log_stage
+  ON rejection_log(stage);
+CREATE INDEX IF NOT EXISTS idx_rejection_log_source
+  ON rejection_log(source);
+
 -- Item catalog (AI + deterministic suggestions)
 -- A durable list of "things people request" (devices, equipment, adaptive items, etc.)
 CREATE TABLE IF NOT EXISTS item_catalog (
