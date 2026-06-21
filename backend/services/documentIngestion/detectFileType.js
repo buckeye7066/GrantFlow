@@ -26,7 +26,18 @@ export function detectFileType({ filePath, mimeType, fileName } = {}) {
     }
   }
 
-  if (safeMime === 'text/plain' || ext === 'txt') {
+  // Plain text, web pages (URL imports arrive as text/html), and other readable
+  // text formats all extract to text. The document_extracts.source_type CHECK
+  // only allows docx|pdf|image|text, so web/text-ish content MUST map to 'text'
+  // (a URL import previously fell through to 'unknown' and violated the CHECK).
+  const TEXT_EXTS = new Set(['txt', 'text', 'html', 'htm', 'md', 'markdown', 'csv', 'json', 'rtf', 'xhtml'])
+  if (
+    safeMime === 'text/plain' ||
+    safeMime === 'text/html' ||
+    safeMime === 'application/xhtml+xml' ||
+    safeMime.startsWith('text/') ||
+    TEXT_EXTS.has(ext)
+  ) {
     return { source_type: 'text', mime: safeMime || 'text/plain', ext }
   }
 

@@ -1,5 +1,23 @@
 import crypto from 'node:crypto'
 
+// The document_extracts.source_type CHECK constraint only permits these values.
+// Any other detector output (e.g. 'html'/'url' from a web/URL import, or
+// 'unknown' for an unrecognized mime) would violate the constraint and abort the
+// insert. We clamp at THIS write choke point so no upstream code path can ever
+// trip the constraint again: web/text-ish sources become 'text' (extracts are
+// readable text), and anything unrecognized falls back to 'text' too.
+const ALLOWED_SOURCE_TYPES = new Set(['docx', 'pdf', 'image', 'text'])
+function normalizeSourceType(value) {
+  // Preserve NULL: the CHECK constraint permits NULL, and callers hydrate the
+  // real type later via COALESCE(source_type, ?). Only a NON-NULL invalid value
+  // (e.g. 'html'/'url'/'unknown') trips the constraint — map those to 'text'.
+  if (value === null || value === undefined || String(value).trim() === '') return null
+  const v = String(value).toLowerCase().trim()
+  if (ALLOWED_SOURCE_TYPES.has(v)) return v
+  // Web/text-ish or unrecognized: a stored extract is readable text by nature.
+  return 'text'
+}
+
 function jsonOrNull(value) {
   if ((value === null || value === undefined)) return null
   try {
@@ -25,6 +43,7 @@ export async function ensureDocumentExtract(db, {
   fileHash = null,
 } = {}) {
   if (!documentId) throw new Error('documentId is required')
+  sourceType = normalizeSourceType(sourceType)
   if (!fileHash) {
     console.warn('[documentExtractStore] ensureDocumentExtract called without fileHash for document', documentId, 'â hash-reuse will be unavailable')
   }
@@ -182,7 +201,7 @@ export async function saveDocumentExtractResult(db, documentId, result) {
         WHERE document_id = ?
       `,
     ).run(
-      meta.source_type ?? null,
+      normalizeSourceType(meta.source_type),
       methodsJson,
       pages,
       charCount,
@@ -219,7 +238,7 @@ export async function saveDocumentExtractResult(db, documentId, result) {
         WHERE document_id = ?
       `,
     ).run(
-      meta.source_type ?? null,
+      normalizeSourceType(meta.source_type),
       methodsJson,
       pages,
       charCount,
