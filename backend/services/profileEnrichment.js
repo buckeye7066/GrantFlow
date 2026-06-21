@@ -74,7 +74,12 @@ async function upsertEnrichedSection(db, profileId, sectionKey, data, context) {
 export async function processProfileEnrichmentJob({ db, job, profileContext, getOpenAI }) {
   const { profile } = profileContext ?? {}
   if (!profile) {
-    throw new Error('profile_enrichment job requires a profile context')
+    // Profile deleted or snapshot unhydrated between enqueue and dispatch.
+    // Nothing to enrich — honest no-op rather than a failed job + error log.
+    return {
+      result_count: 0,
+      result_meta: { skipped: true, noop_reason: 'profile context unavailable (deleted or unhydrated)' },
+    }
   }
 
   // Validate job and parameters exist
@@ -83,12 +88,16 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   }
 
   // Verify the profile still exists before writing to profile_sections.
-  // The snapshot may reference a profile that was deleted after job creation.
+  // The snapshot may reference a profile that was deleted after job creation —
+  // that's an honest no-op (nothing to enrich), not an error.
   const profileExists = await db
     .prepare('SELECT id FROM profiles WHERE id = ? LIMIT 1')
     .get(profile.id)
   if (!profileExists) {
-    throw new Error(`Profile ${profile.id} no longer exists — cannot enrich`)
+    return {
+      result_count: 0,
+      result_meta: { skipped: true, noop_reason: `profile ${profile.id} no longer exists` },
+    }
   }
 
   const parameters = job.parameters ?? {}

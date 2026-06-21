@@ -46,16 +46,28 @@ async function logRunSummary(db, jobId, { status, resultCount = null, resultMeta
       const startMs = new Date(startedAt).getTime()
       if (Number.isFinite(startMs)) durationMs = Math.max(0, Date.now() - startMs)
     }
+    // Derive a real "imported" count from the run's result_meta. Historically
+    // crawl_logs.records_imported was never populated, so the Diagnostics page
+    // always showed "found N, imported 0" — making every crawl look wasted even
+    // when it added opportunities. Every crawler reports its true insert count
+    // under one of these keys; pick the first present (null → writeCrawlLog
+    // stores 0, which is correct when the run genuinely imported nothing).
+    const meta = resultMeta && typeof resultMeta === 'object' ? resultMeta : null
+    const importedRaw = meta
+      ? (meta.inserted ?? meta.inserted_new ?? meta.imported ?? meta.records_imported ?? meta.fundingUpserted)
+      : undefined
+    const recordsImported = Number.isFinite(Number(importedRaw)) ? Number(importedRaw) : 0
     await writeCrawlLog(db, {
       source: job.type || 'unknown',
       status,
       recordsFound: typeof resultCount === 'number' ? resultCount : 0,
+      recordsImported,
       durationMs,
       errorMessage,
       metadata: {
         job_id: jobId,
         profile_id: job.profile_id || null,
-        ...(resultMeta && typeof resultMeta === 'object' ? { result_meta: resultMeta } : {}),
+        ...(meta ? { result_meta: meta } : {}),
       },
     })
   } catch (err) {

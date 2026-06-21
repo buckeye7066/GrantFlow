@@ -148,7 +148,14 @@ async function processPortalCheckJob({ db, job }) {
 
 async function processCuratedBenefitsJob({ db, job, profileContext }) {
   const profileId = job?.profile_id || profileContext?.profile?.id;
-  if (!profileId) throw new Error('curated_benefits requires a profile_id');
+  if (!profileId) {
+    // Profile-scoped crawl with no profile to scope to (deleted profile /
+    // unhydrated snapshot). Honest no-op instead of a failed job + error log.
+    return {
+      result_count: 0,
+      result_meta: { skipped: true, noop_reason: 'no profile_id to scope curated benefits crawl' },
+    };
+  }
   const params = typeof job?.parameters === 'string' ? JSON.parse(job.parameters) : (job?.parameters || {});
   // Map job types to strategy IDs (e.g. 'scholarship' → 'student_grants', 'health_resources' → 'health_resources')
   const JOB_TYPE_TO_STRATEGY = {
@@ -239,6 +246,9 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     result_count: result.results.length,
     result_meta: {
       total_matched: result.results.length,
+      // Rows actually written to funding_opportunities — surfaced so the crawl
+      // log records found-vs-imported instead of always reporting imported=0.
+      inserted: Number(result.inserted || 0),
       state: result.analysis?.location?.state,
       applicant_type: result.analysis?.applicantType,
       top_match: result.results[0]?.name || null,

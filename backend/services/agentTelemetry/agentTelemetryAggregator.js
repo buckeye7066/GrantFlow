@@ -32,6 +32,34 @@ import {
 
 const SECRET_KEY_RE = /(secret|token|password|api[-_ ]?key|authorization|bearer)/i
 
+/**
+ * Truthy env flag reader (mirrors readEnvBool used by the agent services).
+ * Treats '1'/'true'/'yes'/'on' (any case) as true.
+ */
+function envEnabled(name, defaultValue = false) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === null || String(raw).trim() === '') return defaultValue
+  return /^(1|true|yes|on)$/i.test(String(raw).trim())
+}
+
+/**
+ * Whether an opt-in background agent is switched ON by the owner. The Mission
+ * Control overview badge ("enabled" / "disabled") must reflect the REAL master
+ * switch — not merely "tables exist" — otherwise a configured-off agent reads
+ * as "enabled" and a configured-on agent (like Yana after YANA_ENABLED=true)
+ * can read as "disabled" on stale telemetry. Sam/Anya/Hamilton are always-on
+ * operationally, so they stay enabled-when-installed.
+ */
+const AGENT_MASTER_SWITCH = {
+  robert: () => envEnabled('ROBERT_ENABLED', false),
+  yana: () => envEnabled('YANA_ENABLED', false),
+  john: () => envEnabled('JOHN_ENABLED', false),
+}
+function agentEnabled(agentName) {
+  const fn = AGENT_MASTER_SWITCH[agentName]
+  return fn ? fn() : true
+}
+
 /** Strip obviously-sensitive keys from a details JSON blob. */
 export function redactSecrets(value) {
   if (value === null || value === undefined) return value
@@ -366,7 +394,7 @@ export async function aggregateRobert(db, range) {
   const installed = runs || candidates || recs
   if (!installed) return out
   out.installed = true
-  out.enabled = true
+  out.enabled = agentEnabled('robert')
   out.notes = []
   Object.assign(out, await unifiedAgentBase(db, 'robert', range))
 
@@ -551,7 +579,7 @@ export async function aggregateYana(db, range) {
   const installed = !!yanaRunsTable || leads || johnQ || larryQ
   if (!installed) return out
   out.installed = true
-  out.enabled = true
+  out.enabled = agentEnabled('yana')
   out.notes = []
   Object.assign(out, await unifiedAgentBase(db, 'yana', range))
 
@@ -756,7 +784,7 @@ export async function aggregateJohn(db, range) {
     return out
   }
   out.installed = true
-  out.enabled = true
+  out.enabled = agentEnabled('john')
   out.notes = []
   Object.assign(out, await unifiedAgentBase(db, 'john', range))
 
