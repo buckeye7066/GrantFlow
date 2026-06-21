@@ -19,6 +19,8 @@ import {
 } from '../services/opportunityTrust.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
 import { SCORE_FLOOR } from '../config/matchThresholds.js'
+import { searchLiveFederalByProfile } from '../services/crawlers/liveFederalSearch.js'
+import { ingestOpportunities } from '../services/sources/ingestionService.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
   detectProfessionalDevelopmentIntent,
@@ -548,8 +550,48 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Re-score everything with the canonical decision engine before filtering,
     // displaying, saving, or explaining it.
     const curatedTitles = mapped.map(o => o.title || o.name || '')
-    const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30)
-    const initialMapped = filterActionableOpportunities([...mapped, ...nearbyOpps])
+
+    // ── Live, profile-driven federal discovery ──
+    // Root-cause fix: acquire opportunities from the WHOLE profile (type +
+    // needs + interests → live Grants.gov keyword search), not just the
+    // profile's state. Runs in parallel with the DB "near you" query so it
+    // adds no serial latency, and is fully failure-tolerant + time-bounded.
+    // Results are persisted globally (profile_id IS NULL → legitimately
+    // national federal grants) so they are saveable, reusable across profiles,
+    // and retrievable via the catalog (rule G3).
+    const liveFederalEnabled = process.env.DISCOVERY_LIVE_FEDERAL !== '0'
+    const [nearbyOpps, liveFederal] = await Promise.all([
+      queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30),
+      liveFederalEnabled
+        ? searchLiveFederalByProfile(profileContext, { searchTerms: derivedSearchTerms, timeoutMs: 7000 })
+            .catch((err) => {
+              routeLogger.warn(`[RealCrawlers] live federal search failed (continuing): ${err?.message ?? err}`)
+              return { opportunities: [], debug: { error: String(err?.message ?? err) } }
+            })
+        : Promise.resolve({ opportunities: [], debug: { disabled: true } }),
+    ])
+
+    const liveFederalOpps = (liveFederal?.opportunities ?? []).map((opp) => ({
+      ...opp,
+      name: opp.title || opp.name,
+      url: opp.application_url || opp.source_url || null,
+      match_score: profileContext ? (scoreOpportunity(profileContext, opp)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
+      record_origin: opp.record_origin || 'grants_gov',
+      match_explain: { source: 'grants_gov_live', matched_terms: opp.matched_terms || [] },
+    }))
+
+    // Persist the live federal results to the shared catalog (best-effort).
+    // Idempotent insert-or-update keyed on (source, source_id); never blocks
+    // the response on a storage failure.
+    if (liveFederal?.opportunities?.length) {
+      try {
+        await ingestOpportunities(db, liveFederal.opportunities, 'grants.gov')
+      } catch (ingestErr) {
+        routeLogger.warn(`[RealCrawlers] live federal ingest skipped: ${ingestErr?.message ?? ingestErr}`)
+      }
+    }
+
+    const initialMapped = filterActionableOpportunities([...mapped, ...nearbyOpps, ...liveFederalOpps])
 
     const canonicalized = canonicalizeOpportunityList(profileContext, initialMapped, {
       preserveDirectories: true,
