@@ -16,7 +16,7 @@
  * known footgun). The child is fully ours, so there is nothing to sever.
  */
 
-import { buildApplicationPacketHtml } from "@/components/hamilton/applicationPacketHtml"
+import { buildApplicationPacketHtml } from "../../../shared/applicationPacketHtml.js"
 
 /**
  * Open the printable application packet for one non-portal source.

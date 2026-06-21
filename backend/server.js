@@ -121,11 +121,22 @@ import { validateCriticalImports } from './startup/validateImports.js'
 function lazyRouter(specifier, extract) {
   let _router = null
   return async (req, res, next) => {
-    if (!_router) {
-      const mod = await import(specifier)
-      _router = extract ? extract(mod) : (mod.default ?? mod)
+    try {
+      if (!_router) {
+        const mod = await import(specifier)
+        _router = extract ? extract(mod) : (mod.default ?? mod)
+      }
+    } catch (err) {
+      // A lazily-loaded route module failed to import (e.g. a bad import path
+      // that only resolves in dev). Previously the rejected promise was swallowed
+      // and next() was never called, so EVERY request routed through this mount
+      // hung until the gateway 504'd — and for a catch-all '/api' mount that took
+      // down every route mounted after it. Fail fast instead: surface the error
+      // to Express (→ 500) so the failure is loud, isolated, and never a hang.
+      console.error(`[lazyRouter] failed to load ${specifier}:`, err?.message || err)
+      return next(err)
     }
-    _router(req, res, next)
+    return _router(req, res, next)
   }
 }
 

@@ -44,7 +44,7 @@ import { getProfilePortals } from '../services/hamilton/profilePortalIndex.js'
 import {
   buildApplicationPacketHtml,
   packetDocumentName,
-} from '../../src/components/hamilton/applicationPacketHtml.js'
+} from '../../shared/applicationPacketHtml.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:profile-portals')
