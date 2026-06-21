@@ -259,6 +259,15 @@ export default function DiscoverGrants() {
     },
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 0,
+    // A concurrent crawl can momentarily saturate the DB pool, so the matcher
+    // returns a retryable 503 (catalog_busy) or the request 504s. Both are
+    // transient — retry transparently with backoff so the user sees results
+    // instead of an error. Non-retryable failures (4xx) fall through immediately.
+    retry: (failureCount, error) => {
+      const status = error?.status
+      return (status === 503 || status === 504) && failureCount < 4
+    },
+    retryDelay: (attempt) => Math.min(1500 * 2 ** attempt, 8000),
   })
 
   const catalogOpportunities = useMemo(() => {
