@@ -31,6 +31,34 @@ import { listProfiles } from "@/api/profiles";
 import { apiFetch } from "@/api/client";
 import { env } from "@/config/env.js";
 import { useAuthStore } from "@/stores/authStore";
+import { Money } from "@/components/ui/Money";
+import { canonicalStage } from "../../shared/pipelineStages.js";
+
+// "Your funding current" track: the four high-level phases of the pipeline,
+// matching design/grantflow-dashboard.html. Each canonical Kanban stage rolls
+// up into one phase so the live board collapses into a readable current.
+const FUNDING_CURRENT_PHASES = [
+  { key: "preparing", label: "Preparing", statuses: ["discovered", "saved", "interested", "gathering_documents", "drafting", "ready_to_submit"] },
+  { key: "applied", label: "Applied", statuses: ["submitted"] },
+  { key: "under_review", label: "Under review", statuses: ["follow_up"] },
+  { key: "awarded", label: "Awarded", statuses: ["awarded"], awarded: true },
+];
+
+const usdCompact = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+// Best-estimate dollar value for a grant card (requested → max → min → amount).
+function grantValue(grant) {
+  const candidates = [grant?.amount_requested, grant?.amount_awarded, grant?.amount_max, grant?.amount_min, grant?.amount];
+  for (const raw of candidates) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
 
 export default function Pipeline() {
   const [selectedProfileId, setSelectedProfileId] = useState("all");
@@ -302,6 +330,33 @@ export default function Pipeline() {
     }).length;
   }, [scopedGrants]);
 
+  // "Your funding current" rollup — bucket the scoped grants into the four
+  // high-level phases shown in the track band. Counts + estimated dollar value
+  // per phase, derived live from the same grants the board renders.
+  const fundingCurrent = useMemo(() => {
+    const totals = Object.fromEntries(
+      FUNDING_CURRENT_PHASES.map((p) => [p.key, { count: 0, amount: 0 }]),
+    );
+    const phaseByStatus = new Map();
+    for (const phase of FUNDING_CURRENT_PHASES) {
+      for (const status of phase.statuses) phaseByStatus.set(status, phase.key);
+    }
+    for (const grant of Array.isArray(scopedGrants) ? scopedGrants : []) {
+      if (!grant) continue;
+      const canon = canonicalStage(grant.status);
+      const phaseKey = phaseByStatus.get(canon);
+      if (!phaseKey) continue;
+      totals[phaseKey].count += 1;
+      totals[phaseKey].amount += grantValue(grant);
+    }
+    return totals;
+  }, [scopedGrants]);
+
+  const fundingCurrentTotal = useMemo(
+    () => Object.values(fundingCurrent).reduce((sum, p) => sum + p.amount, 0),
+    [fundingCurrent],
+  );
+
   const filteredGrants = useFilteredGrants(scopedGrants, filters, 'all');
 
   // Get all expired grants in "discovered" or "interested" status
@@ -422,17 +477,18 @@ export default function Pipeline() {
         <div className="flex flex-col gap-4 mb-8">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">Master Grant Pipeline</h1>
-              <p className="text-slate-600 mt-2">
+              <p className="money text-xs font-bold uppercase tracking-[0.12em] text-current-emerald">Your funding current</p>
+              <h1 className="mt-1 font-display text-3xl font-extrabold tracking-tight text-current-ink">Master Grant Pipeline</h1>
+              <p className="money mt-2 text-sm text-current-ink/60">
                 Track all your grants across every profile • {filteredGrants.length} of {scopedGrants.length} grants
               </p>
               {handoffsNeededCount > 0 && (
                 <p
-                  className="mt-2 inline-flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 px-3 py-1.5 text-sm font-medium"
+                  className="mt-2 inline-flex items-center gap-2 rounded-full border border-current-amber/40 bg-current-amberSoft px-3 py-1.5 text-sm font-semibold text-[#a76a16]"
                   role="status"
                   aria-live="polite"
                 >
-                  <UserCheck className="w-4 h-4" />
+                  <UserCheck className="h-4 w-4" />
                   {handoffsNeededCount} grant{handoffsNeededCount === 1 ? "" : "s"} need a person to step in
                 </p>
               )}
@@ -560,6 +616,45 @@ export default function Pipeline() {
             </div>
           </div>
 
+          {/* "Your funding current" track — live pipeline phases as a current,
+              matching design/grantflow-dashboard.html. Shown only when there's
+              something flowing, so an empty board stays clean. */}
+          {fundingCurrentTotal > 0 && (
+            <section className="rounded-2xl border border-current-line bg-current-card p-5">
+              <h2 className="money mb-5 text-xs font-bold uppercase tracking-[0.12em] text-current-ink/55">
+                Your funding current
+              </h2>
+              <ol className="relative grid grid-cols-2 gap-y-6 md:grid-cols-4">
+                <span
+                  aria-hidden="true"
+                  className="absolute left-[12%] right-[12%] top-[7px] hidden h-1 rounded bg-gradient-to-r from-current-emerald via-current-sage to-current-amber md:block"
+                />
+                {FUNDING_CURRENT_PHASES.map((phase) => {
+                  const stats = fundingCurrent[phase.key] ?? { count: 0, amount: 0 };
+                  return (
+                    <li key={phase.key} className="relative flex flex-col items-center text-center">
+                      <span
+                        aria-hidden="true"
+                        className={`relative z-[1] mb-3 h-4 w-4 rounded-full border-4 bg-current-paper ${
+                          phase.awarded ? "border-current-amber bg-current-amber" : "border-current-emerald"
+                        }`}
+                      />
+                      <span className="font-display text-[15px] font-bold text-current-ink">{phase.label}</span>
+                      <span className="money mt-1 text-xs text-current-ink/55">
+                        {stats.count} source{stats.count === 1 ? "" : "s"}
+                      </span>
+                      <Money
+                        className={`mt-1.5 text-sm font-bold ${phase.awarded ? "text-[#a76a16]" : "text-current-ink"}`}
+                      >
+                        {usdCompact.format(Math.round(stats.amount))}
+                      </Money>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          )}
+
           {/* Advanced Filters */}
           <AdvancedFilters
             filters={filters}
@@ -638,10 +733,10 @@ export default function Pipeline() {
         <div className="mt-4 flex-1 overflow-x-auto">
           {filteredGrants.length === 0 ? (
             <div className="text-center py-20">
-              <h3 className="text-xl font-semibold text-slate-900 mb-2">
+              <h3 className="mb-2 font-display text-xl font-bold text-current-ink">
                 {hasActiveFilters ? "No Grants Match Your Filters" : "No Applications Yet"}
               </h3>
-              <p className="text-slate-600 mb-4">
+              <p className="text-current-ink/60 mb-4">
                 {hasActiveFilters
                   ? "Try adjusting your search criteria or filters to see more results."
                   : "Find grants that match your organization, then add them here to track and submit."}

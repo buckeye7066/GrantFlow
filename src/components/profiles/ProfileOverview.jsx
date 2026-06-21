@@ -218,13 +218,20 @@ function renderFlattenedPreview(flattened) {
   )
 }
 
+// Funding Current "Pipeline potential" hero treatment: the figure sits on the
+// dark ink card (matching design/grantflow-dashboard.html .potential). It's the
+// same across themes so the headline funding number always reads as the hero.
+const PIPELINE_HERO_CARD =
+  "border-transparent bg-current-ink text-[#eaf1ec] shadow-[0_24px_48px_-30px_rgba(20,36,31,0.7)]"
+const PIPELINE_HERO_LABEL = "text-[#9fb4a8]"
+
 const THEME_PRESETS = {
   blue: {
     metric: "bg-blue-50 text-blue-700 border-blue-200",
     subtleMetric: "bg-blue-50 text-blue-700 border-blue-100",
     banner: "border-blue-100 bg-blue-50/70",
-    pipelineCard: "border-blue-200 bg-blue-50/80 text-blue-800",
-    pipelineLabel: "text-blue-600",
+    pipelineCard: PIPELINE_HERO_CARD,
+    pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-blue-500 to-blue-600",
     iconTone: "text-blue-600",
   },
@@ -232,8 +239,8 @@ const THEME_PRESETS = {
     metric: "bg-emerald-50 text-emerald-700 border-emerald-200",
     subtleMetric: "bg-emerald-50 text-emerald-700 border-emerald-100",
     banner: "border-emerald-100 bg-emerald-50/70",
-    pipelineCard: "border-emerald-200 bg-emerald-50/80 text-emerald-800",
-    pipelineLabel: "text-emerald-600",
+    pipelineCard: PIPELINE_HERO_CARD,
+    pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-emerald-500 to-emerald-600",
     iconTone: "text-emerald-600",
   },
@@ -241,8 +248,8 @@ const THEME_PRESETS = {
     metric: "bg-violet-50 text-violet-700 border-violet-200",
     subtleMetric: "bg-violet-50 text-violet-700 border-violet-100",
     banner: "border-violet-100 bg-violet-50/70",
-    pipelineCard: "border-violet-200 bg-violet-50/80 text-violet-800",
-    pipelineLabel: "text-violet-600",
+    pipelineCard: PIPELINE_HERO_CARD,
+    pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-violet-500 to-violet-600",
     iconTone: "text-violet-600",
   },
@@ -250,8 +257,8 @@ const THEME_PRESETS = {
     metric: "bg-amber-50 text-amber-700 border-amber-200",
     subtleMetric: "bg-amber-50 text-amber-700 border-amber-100",
     banner: "border-amber-100 bg-amber-50/70",
-    pipelineCard: "border-amber-200 bg-amber-50/80 text-amber-800",
-    pipelineLabel: "text-amber-600",
+    pipelineCard: PIPELINE_HERO_CARD,
+    pipelineLabel: PIPELINE_HERO_LABEL,
     gradient: "bg-gradient-to-br from-amber-500 to-amber-600",
     iconTone: "text-amber-600",
   },

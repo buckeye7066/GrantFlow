@@ -33,6 +33,7 @@ import { Loader2, ExternalLink, CalendarClock, ChevronRight, Printer } from "luc
 import { createPageUrl } from "@/utils"
 import PortalLoginButton from "@/components/portal/PortalLoginButton"
 import { safeHttpUrl } from "@/lib/safeUrl"
+import { Money } from "@/components/ui/Money"
 
 // Stage label + tone, mirroring the pipeline board (KanbanBoard STATUSES) and
 // covering the legacy status names the backend still tracks. Anything unmapped
@@ -295,16 +296,16 @@ export default function PipelinePotentialBreakdown({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={`rounded-2xl border px-4 py-3 text-left transition hover:shadow-md hover:brightness-[0.98] focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-indigo-400 ${cardClassName}`}
+        className={`group rounded-2xl border px-5 py-4 text-left transition-transform hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-current-amber focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0 ${cardClassName}`}
         title="See which funding sources make up this number"
         aria-label="Open pipeline potential breakdown"
       >
-        <p className={`text-xs font-medium uppercase tracking-wide flex items-center gap-1 ${labelClassName}`}>
+        <p className={`money flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.12em] ${labelClassName}`}>
           Pipeline Potential
-          <ChevronRight className="w-3 h-3 opacity-70" />
+          <ChevronRight className="h-3 w-3 opacity-70 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
         </p>
-        <p className="text-2xl font-bold mt-1">{formattedTotal}</p>
-        <p className="text-[11px] opacity-70 mt-0.5">Click to see the breakdown</p>
+        <Money className="mt-1.5 block text-4xl font-bold leading-none tracking-tight">{formattedTotal}</Money>
+        <p className="money mt-1.5 text-[11px] opacity-70">Click to see the breakdown</p>
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -312,7 +313,9 @@ export default function PipelinePotentialBreakdown({
           <DialogHeader>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <DialogTitle>Pipeline Potential — {formattedTotal}</DialogTitle>
+                <DialogTitle className="font-display">
+                  Pipeline Potential — <Money>{formattedTotal}</Money>
+                </DialogTitle>
                 <DialogDescription>
                   The funding sources that make up this profile's potential, with amount, deadline, and where each sits in the pipeline.
                   Already-awarded and closed sources are excluded — this is unrealized potential.
@@ -353,7 +356,7 @@ export default function PipelinePotentialBreakdown({
                         {item.funder && <div className="text-xs text-slate-500">{item.funder}</div>}
                       </div>
                       <div className="text-right shrink-0">
-                        <div className="font-semibold text-slate-900 whitespace-nowrap">{formatAmount(item)}</div>
+                        <Money className="block whitespace-nowrap font-bold text-slate-900">{formatAmount(item)}</Money>
                         <div className="flex items-center justify-end gap-1 text-[11px] text-slate-500 mt-0.5">
                           <CalendarClock className="w-3 h-3" /> {formatDeadline(item.deadline)}
                         </div>
@@ -422,7 +425,7 @@ export default function PipelinePotentialBreakdown({
           {!query.isLoading && !query.isError && items.length > 0 && (
             <div className="border-t border-slate-100 pt-3 text-xs text-slate-500 flex items-center justify-between">
               <span>{items.length} funding source{items.length === 1 ? "" : "s"} in the pipeline</span>
-              <span className="font-semibold text-slate-700">Total: {formattedTotal}</span>
+              <span className="font-semibold text-slate-700">Total: <Money>{formattedTotal}</Money></span>
             </div>
           )}
         </DialogContent>
