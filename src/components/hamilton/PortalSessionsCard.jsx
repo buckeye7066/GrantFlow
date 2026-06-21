@@ -27,6 +27,7 @@ import {
   startCloudLogin,
   suggestPortalLogin,
 } from "@/api/hamilton"
+import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -165,7 +166,7 @@ export default function PortalSessionsCard({ profileId }) {
   // whatever she filled. The user only ever needs their credentials + 2FA in the
   // secure window.
   const cloudStartMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ popup }) => {
       let host = portalHost.trim()
       let url = loginUrl.trim()
       if (!host) {
@@ -177,24 +178,52 @@ export default function PortalSessionsCard({ profileId }) {
         } catch { /* fall through to the missing-host error below */ }
       }
       if (!host) throw new Error("Hamilton couldn't tell which portal to open. Type the portal name, then try again.")
-      return startCloudLogin(profileId, {
-        portalHost: host,
-        loginUrl: url || null,
-        label: `${host} session`,
-      })
-    },
-    onSuccess: (res) => {
-      // res.liveUrl points at our own full-screen live-view page
-      // (/HamiltonLiveLogin?session=...). The user logs in + clears 2FA there and
-      // clicks "Done" inside that window to capture the session.
-      if (res?.liveUrl && typeof window !== "undefined") {
-        window.open(res.liveUrl, "_blank", "noopener,noreferrer")
-        setLiveOpened(true)
+      // Cancel the placeholder popup if the start itself rejects.
+      try {
+        return await startCloudLogin(profileId, {
+          portalHost: host,
+          loginUrl: url || null,
+          label: `${host} session`,
+        })
+      } catch (err) {
+        popup?.fail(err?.message || "Could not start cloud login. Please try again.")
+        throw err
       }
+    },
+    onSuccess: (res, { popup }) => {
+      // res.liveUrl points at our own full-screen live-view page
+      // (/HamiltonLiveLogin?session=...). The popup was opened synchronously on
+      // click (see handleStartCloudLogin) and is navigated here — opening it
+      // after the await would be popup-blocked (dead window).
+      const url = resolveLiveLoginUrl(res)
+      if (!url) {
+        popup?.fail("We couldn't open the secure login. Please try again.")
+        showErrorToast(toast, "Could not start cloud login", "No login window link was returned. Please try again.")
+        return
+      }
+      popup?.navigate(url)
+      setLiveOpened(true)
       showSuccessToast(toast, "Secure login window opened", "Sign in + approve 2FA in the new window, then click “Done” there. Come back and Refresh to see the saved session.")
     },
-    onError: (err) => showErrorToast(toast, "Could not start cloud login", err?.message || "Please try again."),
+    onError: (err, { popup }) => {
+      popup?.fail(err?.message || "Could not start cloud login. Please try again.")
+      showErrorToast(toast, "Could not start cloud login", err?.message || "Please try again.")
+    },
   })
+
+  // Open the secure-login popup while the click gesture is live, then start.
+  const handleStartCloudLogin = () => {
+    const popup = openPendingLoginWindow()
+    if (popup.blocked) {
+      showErrorToast(
+        toast,
+        "Allow pop-ups to sign in",
+        "Your browser blocked the secure login window. Allow pop-ups for GrantFlow, then click again.",
+      )
+      return
+    }
+    cloudStartMutation.mutate({ popup })
+  }
 
   const handleCopy = (text, what) => {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
@@ -289,7 +318,7 @@ export default function PortalSessionsCard({ profileId }) {
                     </p>
                   )}
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button size="sm" disabled={cloudStartMutation.isPending} onClick={() => cloudStartMutation.mutate()}>
+                    <Button size="sm" disabled={cloudStartMutation.isPending} onClick={handleStartCloudLogin}>
                       {cloudStartMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}
                       Open secure login window
                     </Button>

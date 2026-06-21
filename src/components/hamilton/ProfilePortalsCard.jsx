@@ -48,6 +48,7 @@ import {
   packetDownloadUrl,
 } from "@/api/hamilton"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
+import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { StatusDot } from "@/components/ui/StatusDot"
@@ -116,23 +117,6 @@ function sourceKey(src, idx) {
   return src?.grantId || src?.opportunityId || `${src?.title || "source"}-${idx}`
 }
 
-// Open the GrantFlow secure live-login window for this portal, prefilled — no
-// typing. We prefer the backend-built liveUrl; if it's absent we build the
-// same-origin /HamiltonLiveLogin route from the returned ids.
-function openLiveLogin(res) {
-  if (typeof window === "undefined") return false
-  let url = res?.liveUrl
-  if (!url) {
-    const sessionId = res?.liveSessionId || res?.id
-    if (!sessionId) return false
-    const params = new URLSearchParams({ session: sessionId })
-    if (res?.portalHost) params.set("host", res.portalHost)
-    url = `/HamiltonLiveLogin?${params.toString()}`
-  }
-  window.open(url, "_blank", "noopener,noreferrer")
-  return true
-}
-
 const KIND_GROUPS = [
   { key: "school", title: "Schools", Icon: GraduationCap },
   { key: "process", title: "Applications & forms", Icon: ClipboardList },
@@ -167,33 +151,58 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
 
   // Click a RED tile → start a cloud login and open the prefilled secure window.
+  // The popup is opened SYNCHRONOUSLY in the click handler (see startLogin) and
+  // threaded through as a mutation variable, then navigated here once the async
+  // start resolves — opening it after the await would be popup-blocked (dead
+  // window). See liveLoginWindow.js for the full rationale.
   const loginMutation = useMutation({
-    mutationFn: (portal) =>
+    mutationFn: ({ portal }) =>
       startCloudLogin(profileId, {
         portalHost: portal.portalHost,
         loginUrl: portal.loginUrl || null,
         label: portal.label || `${portal.portalHost} session`,
       }),
-    onSuccess: (res) => {
-      const opened = openLiveLogin(res)
-      if (opened) {
-        showSuccessToast(
-          toast,
-          "Secure login window opened",
-          "Sign in + approve 2FA in the new window, then click “Done” there. We’ll update this list automatically.",
-        )
-        // Refetch when the user returns to this tab (window closed / login done).
-        const onFocus = () => {
-          refetchPortals()
-          window.removeEventListener("focus", onFocus)
-        }
-        if (typeof window !== "undefined") window.addEventListener("focus", onFocus)
-      } else {
-        showErrorToast(toast, "Couldn’t open the login window", "Allow pop-ups for GrantFlow and try again.")
+    onSuccess: (res, { popup }) => {
+      const url = resolveLiveLoginUrl(res)
+      if (!url) {
+        popup?.fail("We couldn't open the secure login. Please try again.")
+        showErrorToast(toast, "Could not start the secure login", "No login window link was returned. Please try again.")
+        return
       }
+      popup?.navigate(url)
+      showSuccessToast(
+        toast,
+        "Secure login window opened",
+        "Sign in + approve 2FA in the new window, then click “Done” there. We’ll update this list automatically.",
+      )
+      // Refetch when the user returns to this tab (window closed / login done).
+      const onFocus = () => {
+        refetchPortals()
+        window.removeEventListener("focus", onFocus)
+      }
+      if (typeof window !== "undefined") window.addEventListener("focus", onFocus)
     },
-    onError: (err) => showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again."),
+    onError: (err, { popup }) => {
+      popup?.fail(err?.message || "Could not start the secure login. Please try again.")
+      showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again.")
+    },
   })
+
+  // Open the secure-login popup WHILE the click gesture is live, then kick off
+  // the async start. If the browser blocked the popup, tell the user instead of
+  // silently starting a session they can't see.
+  const startLogin = (portal) => {
+    const popup = openPendingLoginWindow()
+    if (popup.blocked) {
+      showErrorToast(
+        toast,
+        "Allow pop-ups to sign in",
+        "Your browser blocked the secure login window. Allow pop-ups for GrantFlow, then click again.",
+      )
+      return
+    }
+    loginMutation.mutate({ portal, popup })
+  }
 
   const readMutation = useMutation({
     mutationFn: (portal) => runPortalSyncRead(profileId, portal.portalHost),
@@ -239,7 +248,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onError: (err) => showErrorToast(toast, "Could not save the packet", err?.message || "It still opened for printing."),
   })
 
-  const busyLoginHost = loginMutation.isPending ? loginMutation.variables?.portalHost : null
+  const busyLoginHost = loginMutation.isPending ? loginMutation.variables?.portal?.portalHost : null
   const busyReadHost = readMutation.isPending ? readMutation.variables?.portalHost : null
   const busyWriteHost = writeMutation.isPending ? writeMutation.variables?.portalHost : null
 
@@ -342,7 +351,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 type="button"
                 className={BTN_BASE}
                 disabled={isLoggingIn}
-                onClick={() => loginMutation.mutate(portal)}
+                onClick={() => startLogin(portal)}
                 title="Re-open the secure login window to refresh this session"
               >
                 {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <RefreshCw className="h-4 w-4" />}
@@ -359,7 +368,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               type="button"
               className={BTN_CORAL}
               disabled={isLoggingIn}
-              onClick={() => loginMutation.mutate(portal)}
+              onClick={() => startLogin(portal)}
             >
               {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Globe className="h-4 w-4" />}
               Log in once →
