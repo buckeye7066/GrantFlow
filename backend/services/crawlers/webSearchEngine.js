@@ -2,9 +2,17 @@
  * Shared live web-search engine.
  *
  * One `searchWeb(query)` entry point that returns normalized
- * `[{ url, title, snippet }]` results, preferring Brave (higher-quality, keyed)
- * and falling back to DuckDuckGo HTML scraping (no key, best-effort). Both
- * back-ends are failure-tolerant: any error or non-OK response yields `[]`,
+ * `[{ url, title, snippet }]` results. Provider chain, in order:
+ *
+ *   1. SearXNG (self-hosted metasearch, PRIMARY) — keyless, unlimited, and
+ *      reliable from a datacenter IP. Active when SEARXNG_URL is set. This is
+ *      GrantFlow's "own Brave"; see docs/SEARXNG_SELF_HOST.md for the runbook.
+ *   2. Brave Search API (fallback, only when BRAVE_SEARCH_API_KEY is set) —
+ *      higher quality but a metered/capped paid plan, so it's a backstop.
+ *   3. DuckDuckGo HTML scraping (last resort, no key) — DEAD from cloud IPs
+ *      (202 anti-bot challenge), so in prod it no-ops; kept for local/dev.
+ *
+ * Every back-end is failure-tolerant: any error or non-OK response yields `[]`,
  * never a throw, so callers can merge results without guarding every call.
  *
  * This exists so profile-driven discovery of LOCAL/non-federal funding (which
@@ -16,6 +24,7 @@
 import * as cheerio from 'cheerio'
 import { getWithRetry } from './httpClient.js'
 import { makeBraveSearchProvider } from '../yana/webSearchProvider.js'
+import { makeSearxngProvider } from './searxngProvider.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:webSearchEngine')
@@ -31,8 +40,25 @@ const SKIP_SUBSTRINGS = [
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-// Brave provider is created once (it throws without a key). Cache the attempt so
-// we don't re-check the env / re-construct on every query.
+// Providers are created once (each throws without its config). Cache the attempt
+// so we don't re-check the env / re-construct on every query.
+let _searxng = null
+let _searxngResolved = false
+function getSearxngProvider() {
+  if (_searxngResolved) return _searxng
+  _searxngResolved = true
+  if (process.env.SEARXNG_URL) {
+    try {
+      _searxng = makeSearxngProvider({ count: 8 })
+      log.info('[webSearchEngine] SearXNG search provider active (primary)')
+    } catch (err) {
+      log.warn(`[webSearchEngine] SearXNG provider unavailable: ${err?.message ?? err}`)
+      _searxng = null
+    }
+  }
+  return _searxng
+}
+
 let _brave = null
 let _braveResolved = false
 function getBraveProvider() {
@@ -41,7 +67,7 @@ function getBraveProvider() {
   if (process.env.BRAVE_SEARCH_API_KEY) {
     try {
       _brave = makeBraveSearchProvider({ count: 8 })
-      log.info('[webSearchEngine] Brave search provider active')
+      log.info('[webSearchEngine] Brave search provider active (fallback)')
     } catch (err) {
       log.warn(`[webSearchEngine] Brave provider unavailable: ${err?.message ?? err}`)
       _brave = null
@@ -52,6 +78,8 @@ function getBraveProvider() {
 
 /** Reset cached provider state — test seam only. */
 export function _resetWebSearchEngineForTests() {
+  _searxng = null
+  _searxngResolved = false
   _brave = null
   _braveResolved = false
 }
@@ -133,6 +161,23 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   const q = String(query || '').trim()
   if (!q) return []
 
+  // 1. SearXNG (self-hosted, primary): keyless, unlimited, datacenter-reliable.
+  const searxng = getSearxngProvider()
+  if (searxng) {
+    try {
+      const results = await searxng({ query: q, count, timeoutMs })
+      if (Array.isArray(results) && results.length) {
+        return results
+          .filter((r) => r?.url && !shouldSkip(r.url))
+          .slice(0, count)
+          .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
+      }
+    } catch (err) {
+      log.warn(`[webSearchEngine] SearXNG search failed for "${q}": ${err?.message ?? err}`)
+    }
+  }
+
+  // 2. Brave API (fallback, only when keyed): a metered backstop.
   const brave = getBraveProvider()
   if (brave) {
     try {
@@ -148,6 +193,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     }
   }
 
+  // 3. DuckDuckGo HTML (last resort, no key): dead from cloud IPs, kept for dev.
   try {
     return await duckDuckGoSearch(q, count, timeoutMs)
   } catch (err) {
