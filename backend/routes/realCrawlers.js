@@ -20,6 +20,7 @@ import {
 import { scoreOpportunity } from '../services/matchEngine.js'
 import { SCORE_FLOOR } from '../config/matchThresholds.js'
 import { searchLiveFederalByProfile } from '../services/crawlers/liveFederalSearch.js'
+import { searchLocalWebByProfile } from '../services/crawlers/liveWebSearch.js'
 import { ingestOpportunities } from '../services/sources/ingestionService.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
@@ -118,6 +119,29 @@ async function withCrawlBudget(fn, budgetMs) {
 function remainingBudget(startTime, { total = CRAWL_TOTAL_BUDGET_MS, reserve = 0, floor = 1500 } = {}) {
   const elapsed = Date.now() - startTime
   return Math.max(floor, total - elapsed - reserve)
+}
+
+/**
+ * Persist freshly-discovered opportunities to the shared catalog OFF the request
+ * path. Catalog writes (ingestion's per-row gates + upserts) must not add
+ * latency to — or contend for DB connections with — the user's discovery
+ * response (see the discovery-contention history: heavy synchronous writes
+ * starved the pool). We defer with setImmediate so it runs after the response
+ * is queued, and swallow all errors: a storage failure must never surface to
+ * the user or crash the process via an unhandled rejection.
+ */
+function scheduleBackgroundIngest(db, opportunities, sourceName) {
+  if (!db || !Array.isArray(opportunities) || opportunities.length === 0) return
+  setImmediate(() => {
+    Promise.resolve()
+      .then(() => ingestOpportunities(db, opportunities, sourceName))
+      .then((res) => {
+        const n = res?.inserted ?? 0
+        const u = res?.updated ?? 0
+        if (n || u) routeLogger.info(`[RealCrawlers] background ingest (${sourceName}): +${n} new, ${u} updated`)
+      })
+      .catch((err) => routeLogger.warn(`[RealCrawlers] background ingest (${sourceName}) failed: ${err?.message ?? err}`))
+  })
 }
 
 /**
@@ -559,13 +583,27 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Results are persisted globally (profile_id IS NULL → legitimately
     // national federal grants) so they are saveable, reusable across profiles,
     // and retrievable via the catalog (rule G3).
+    // Live acquisition runs in PARALLEL with the DB "near you" query so it adds
+    // no serial latency and is fully failure-tolerant + time-bounded:
+    //  • Federal APIs (Grants.gov/SAM/USASpending/NIH) → real open grants.
+    //  • Local web search → leads for non-federal/local funders that have no
+    //    API (county scholarships, city foundations). DuckDuckGo (no key) or
+    //    Brave when BRAVE_SEARCH_API_KEY is set.
     const liveFederalEnabled = process.env.DISCOVERY_LIVE_FEDERAL !== '0'
-    const [nearbyOpps, liveFederal] = await Promise.all([
+    const liveWebEnabled = process.env.DISCOVERY_LIVE_WEB !== '0'
+    const [nearbyOpps, liveFederal, liveWeb] = await Promise.all([
       queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30),
       liveFederalEnabled
         ? searchLiveFederalByProfile(profileContext, { searchTerms: derivedSearchTerms, timeoutMs: 7000 })
             .catch((err) => {
               routeLogger.warn(`[RealCrawlers] live federal search failed (continuing): ${err?.message ?? err}`)
+              return { opportunities: [], debug: { error: String(err?.message ?? err) } }
+            })
+        : Promise.resolve({ opportunities: [], debug: { disabled: true } }),
+      liveWebEnabled
+        ? searchLocalWebByProfile(profileContext, { timeoutMs: 9000 })
+            .catch((err) => {
+              routeLogger.warn(`[RealCrawlers] live web search failed (continuing): ${err?.message ?? err}`)
               return { opportunities: [], debug: { error: String(err?.message ?? err) } }
             })
         : Promise.resolve({ opportunities: [], debug: { disabled: true } }),
@@ -585,18 +623,25 @@ router.post('/run', ensureAuth, async (req, res) => {
         match_explain: { source: `${opp.source || 'federal'}_live`, matched_terms: opp.matched_terms || [] },
       }))
 
-    // Persist the live federal results to the shared catalog (best-effort).
-    // Idempotent insert-or-update keyed on (source, source_id); never blocks
-    // the response on a storage failure.
-    if (liveFederal?.opportunities?.length) {
-      try {
-        await ingestOpportunities(db, liveFederal.opportunities, 'grants.gov')
-      } catch (ingestErr) {
-        routeLogger.warn(`[RealCrawlers] live federal ingest skipped: ${ingestErr?.message ?? ingestErr}`)
-      }
-    }
+    // Local web LEADS. These are unverified open-web results: scored against the
+    // profile and merged for DISPLAY (so local funders surface), but the trust
+    // layer renders them low-trust/behind official sources and relevance still
+    // gates them. We deliberately do NOT ingest them into the shared global
+    // catalog — unverified web noise must not pollute every other profile.
+    const liveWebOpps = (liveWeb?.opportunities ?? []).map((opp) => ({
+      ...opp,
+      match_score: profileContext ? (scoreOpportunity(profileContext, opp)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
+      match_explain: { source: 'web_search', matched_terms: opp.matched_terms || [] },
+    }))
 
-    const initialMapped = filterActionableOpportunities([...mapped, ...nearbyOpps, ...liveFederalOpps])
+    // Persist live FEDERAL results to the shared catalog OFF the request path
+    // (deferred + best-effort): real, structured federal grants are global
+    // (profile_id IS NULL) so they become saveable/reusable/catalog-retrievable
+    // (rule G3), but catalog writes must not add latency or contend with the
+    // user's response. Web leads are intentionally NOT persisted (see above).
+    scheduleBackgroundIngest(db, liveFederal?.opportunities ?? [], 'grants.gov')
+
+    const initialMapped = filterActionableOpportunities([...mapped, ...nearbyOpps, ...liveFederalOpps, ...liveWebOpps])
 
     const canonicalized = canonicalizeOpportunityList(profileContext, initialMapped, {
       preserveDirectories: true,
