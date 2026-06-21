@@ -69,7 +69,7 @@ import {
   testButtonFunctionality,
   getAutonomousFunctionTestsStatus,
 } from './anyaAutonomousFunctionTesting.js'
-import { getBackgroundCodeCrawlState } from './anyaAutonomousScheduler.js'
+import { getBackgroundCodeCrawlState, startBackgroundCodeCrawlAndRepair } from './anyaAutonomousScheduler.js'
 import { runMissionAudit } from './missionAuditService.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
@@ -2681,7 +2681,35 @@ registerTool({
       fixTodos: { type: 'boolean', description: 'Convert TODO comments to tracked issues (default: false)' },
     },
   },
-  handler: runAutonomousCodeCrawl,
+  // Code crawl + repair scans ~1100 files and runs for 1–2 minutes — far longer
+  // than the gateway/HTTP timeout. Running it inline made the admin chat call
+  // fail with "the server took too long to respond" even though the work
+  // succeeded in the background. Dispatch it fire-and-forget and return
+  // immediately; the caller polls admin.anya.getStatus →
+  // background_code_crawl_repair for live progress + the final result.
+  handler: async (_params, context) => {
+    const existing = getBackgroundCodeCrawlState()
+    if (existing?.running) {
+      return {
+        started: false,
+        already_running: true,
+        startedAt: existing.startedAt,
+        message:
+          'A code crawl & repair run is already in progress. Poll ' +
+          'admin.anya.getStatus (operationType="code") → background_code_crawl_repair for progress.',
+      }
+    }
+    const result = startBackgroundCodeCrawlAndRepair({ db: context?.db ?? null, user: context?.user ?? null })
+    return {
+      started: result?.queued !== false,
+      async: true,
+      ...result,
+      message:
+        'Code crawl & repair started in the background (scans ~1,100 files; ~1–2 min). ' +
+        'It runs without blocking this chat. Poll admin.anya.getStatus ' +
+        '(operationType="code") → background_code_crawl_repair for live progress and the final result.',
+    }
+  },
 })
 
 registerTool({

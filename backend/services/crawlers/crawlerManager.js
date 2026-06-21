@@ -594,7 +594,8 @@ export async function runCrawler(db, profileId, options = {}) {
 
   // ── Step 7: Store results ──
   const t7 = Date.now();
-  await storeResults(db, profileId, accepted, analysis, stateData.meta, countyContacts);
+  const stored = await storeResults(db, profileId, accepted, analysis, stateData.meta, countyContacts);
+  const insertedCount = Number(stored?.fundingUpserted || 0);
   timing.storage_ms = Date.now() - t7;
   timing.total_ms = Date.now() - t0;
 
@@ -637,6 +638,11 @@ export async function runCrawler(db, profileId, options = {}) {
 
   return {
     results: accepted,
+    // Real count of rows actually upserted into funding_opportunities this run.
+    // Distinct from results.length (matched/accepted) — many accepted records
+    // are dropped at the import gate (dup/below-floor/reality-gate), so this is
+    // the number that answers "did the crawl actually add anything?".
+    inserted: insertedCount,
     analysis,
     statePortal: stateData.meta,
     countyContacts,
@@ -747,6 +753,7 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
       }
     }
     log.info(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);
+    return { fundingUpserted };
   } catch (err) {
     console.error('[CrawlerManager] Error storing results:', err.message);
     throw err;

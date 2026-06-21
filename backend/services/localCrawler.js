@@ -139,9 +139,17 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   }
   
   if (!profileContext?.profile) {
-    throw new Error('Local crawler requires a profile context with profile data')
+    // The job's profile was deleted (e.g. a cleaned-up smoke profile) or could
+    // not be hydrated between enqueue and dispatch. There is nothing to crawl —
+    // that's an honest no-op, not a failure. Returning a clean result keeps the
+    // job out of the failed-job/error-log noise the owner sees in Diagnostics.
+    log.warn(`[localCrawler] No profile data for job ${job?.id ?? '(unknown)'} — skipping (profile deleted or unhydrated)`)
+    return {
+      result_count: 0,
+      result_meta: { skipped: true, noop_reason: 'profile has no usable data (deleted or unhydrated)' },
+    }
   }
-  
+
   if (!dataDir || typeof dataDir !== 'string') {
     throw new Error('Data directory path is required for local crawler')
   }
@@ -401,7 +409,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   // unattended. Checked once (not per-opportunity). Absent pref defaults ON.
   const autoAddOk = profileId ? await discoveryAutoAddAllowedForProfile(db, profileId) : false
   if (profileId && !autoAddOk) {
-    console.info(`[localCrawler] discovery_auto_add OFF for profile ${profileId} — cataloging only, no pipeline auto-add`)
+    log.info(`[localCrawler] discovery_auto_add OFF for profile ${profileId} — cataloging only, no pipeline auto-add`)
   }
 
   for (const opp of topOpps) {
