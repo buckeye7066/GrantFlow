@@ -6,6 +6,7 @@ import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
+import { getProfileFieldPrompts } from '../services/profileFieldPrompts.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isJunkOpportunity } from '../services/contentFilter.js'
 import {
@@ -353,6 +354,10 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         }
         const discoveryHasRun = discoveryStamp !== null && discoveryStamp !== undefined
         if (discoveryStamp !== undefined && !discoveryHasRun) {
+          // Even before discovery has run, tell the user which high-value
+          // profile fields — if filled — would unlock/improve their matches
+          // (Architecture P1). Additive + tolerant: never blocks the response.
+          const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
           return res.json({
             profile_id: profileId,
             discovery_pending: true,
@@ -363,6 +368,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
             qualified_count: 0,
             total_scored: 0,
             score_histogram: [],
+            profile_field_prompts: profileFieldPrompts,
           })
         }
       }
@@ -1187,9 +1193,14 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // notched band the Discover/SmartMatcher slider renders above itself.
       const scoreHistogram = buildScoreHistogram(allScored)
 
+      // Architecture P1: surface the high-value profile fields that, if filled,
+      // would unlock/improve matches. Additive prompts only (never a gate).
+      const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
+
       res.json({
               profile_id: profileId,
               profile_applicant_type: profileApplicantType ?? null,
+              profile_field_prompts: profileFieldPrompts,
               primary_category: effectivePrimaryCategory || null,
               excluded_categories: Array.from(excludedCategories),
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,

@@ -199,6 +199,104 @@ function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
   )
 }
 
+/**
+ * Architecture P1: friendly, dismissible "Improve your matches" card.
+ *
+ * Renders the backend's `profile_field_prompts` ({ field, label, why,
+ * section_key }) as encouraging nudges that deep-link to the relevant profile
+ * section. Two layouts:
+ *   - variant="prominent": full card for the discovery-pending empty state.
+ *   - variant="banner": compact strip shown above results otherwise.
+ * Never a gate — purely additive guidance.
+ */
+function ImproveMatchesCard({ prompts, profileId, onDismiss, variant = 'banner' }) {
+  if (!Array.isArray(prompts) || prompts.length === 0 || !profileId) return null
+
+  const promptLink = (prompt) =>
+    prompt.section_key
+      ? createPageUrl('ProfileDetail', { id: profileId, section: prompt.section_key })
+      : createPageUrl('ProfileDetail', { id: profileId })
+
+  if (variant === 'prominent') {
+    return (
+      <Card className="mb-6 border-emerald-200 bg-emerald-50/60">
+        <CardContent className="p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <Sparkles className="h-6 w-6 shrink-0 text-emerald-600 mt-0.5" />
+            <div className="flex-1">
+              <h3 className="text-base font-semibold text-emerald-900">Improve your matches</h3>
+              <p className="text-sm text-emerald-800 mt-0.5">
+                Add a few details to your profile and we&apos;ll find more — and more relevant — funding for you.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="text-xs text-emerald-700 hover:text-emerald-900 underline shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+          <div className="space-y-2">
+            {prompts.map((prompt) => (
+              <Link
+                key={prompt.field}
+                to={promptLink(prompt)}
+                className="group flex items-start gap-3 rounded-lg border border-emerald-200 bg-white/70 p-3 hover:border-emerald-400 hover:bg-white transition-colors"
+              >
+                <CheckCircle2 className="w-4 h-4 mt-0.5 text-emerald-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium text-slate-900">{prompt.label}</span>
+                  <p className="text-xs text-slate-600 mt-0.5 leading-snug">{prompt.why}</p>
+                </div>
+                <ArrowRight className="w-4 h-4 mt-0.5 text-emerald-400 group-hover:text-emerald-600 shrink-0" />
+              </Link>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="mb-4 border-emerald-200 bg-emerald-50/50">
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <Sparkles className="h-5 w-5 shrink-0 text-emerald-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-emerald-900">Improve your matches</span>
+              <span className="text-xs text-emerald-700">
+                Add these to unlock more funding:
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {prompts.map((prompt) => (
+                <Link
+                  key={prompt.field}
+                  to={promptLink(prompt)}
+                  title={prompt.why}
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-white px-3 py-1 text-xs font-medium text-emerald-800 hover:border-emerald-500 hover:bg-emerald-50 transition-colors"
+                >
+                  {prompt.label}
+                  <ArrowRight className="w-3 h-3" />
+                </Link>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-xs text-emerald-700 hover:text-emerald-900 underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -220,6 +318,8 @@ export default function DiscoverGrants() {
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
+  // Architecture P1: lets the user dismiss the "Improve your matches" prompts.
+  const [improvePromptsDismissed, setImprovePromptsDismissed] = useState(false)
   const [categoryQuery, setCategoryQuery] = useState(null)
   const [scoreHint, setScoreHint] = useState(null)
   // Live progress for the async crawler fleet: { active, enqueued, running, crawlerTypes }.
@@ -431,6 +531,15 @@ export default function DiscoverGrants() {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
     const buckets = payload?.score_histogram
     return Array.isArray(buckets) ? buckets : []
+  }, [catalogMatchResponse])
+
+  // Architecture P1: high-value profile fields that, if filled, would unlock or
+  // improve this profile's matches. Surfaced as encouraging prompts (never a
+  // gate). Present in both the discovery_pending and the normal response.
+  const profileFieldPrompts = useMemo(() => {
+    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
+    const prompts = payload?.profile_field_prompts
+    return Array.isArray(prompts) ? prompts : []
   }, [catalogMatchResponse])
 
   // Keep FundingResults store in sync with the combined view so /FundingResults
@@ -1361,6 +1470,18 @@ export default function DiscoverGrants() {
           </Card>
         )}
 
+        {/* Architecture P1: prominent "Improve your matches" prompts while
+            discovery is still pending — show the user what to complete now so
+            their first discovery returns better results. */}
+        {discoveryPending && !isSearching && !improvePromptsDismissed && selectedProfile?.id && (
+          <ImproveMatchesCard
+            prompts={profileFieldPrompts}
+            profileId={selectedProfile.id}
+            variant="prominent"
+            onDismiss={() => setImprovePromptsDismissed(true)}
+          />
+        )}
+
         {/* Zero-result recovery card: shown after a search completes with no results */}
         {!discoveryPending && hasSearched && searchResults.length === 0 && catalogOpportunities.length === 0 && !isSearching && (
           <Card className="mb-8 border-amber-200 bg-amber-50/50">
@@ -1557,6 +1678,18 @@ export default function DiscoverGrants() {
               <strong>You can leave this page</strong> — the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
             </AlertDescription>
           </Alert>
+        )}
+
+        {/* Architecture P1: compact "Improve your matches" banner above results
+            (not while discovery is pending — that path shows the prominent card). */}
+        {!discoveryPending && !improvePromptsDismissed && selectedProfile?.id &&
+          ((catalogOpportunities.length > 0) || searchResults.length > 0) && (
+          <ImproveMatchesCard
+            prompts={profileFieldPrompts}
+            profileId={selectedProfile.id}
+            variant="banner"
+            onDismiss={() => setImprovePromptsDismissed(true)}
+          />
         )}
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
