@@ -58,26 +58,41 @@ function getDiscoverAllOpenAI() {
   }
 }
 
-// Server-side time budget for the inline /run crawl. The gateway (Railway/
-// Vercel) drops the request with a 504 well before a full live crawl can
-// finish, leaving the client hanging with no response. We race the crawl
-// work against this budget so the handler ALWAYS responds in time — falling
-// back to whatever DB-backed/nearby opportunities are already available (or
-// an empty list) flagged with `partial: true, timed_out: true`.
-// HAMILTON-style env override; default 22s sits under a typical 30s gateway cap.
-const CRAWL_BUDGET_MS = Number(process.env.CRAWL_TIME_BUDGET_MS) || 22000
+// Server-side time budget for the inline /run crawl. The binding constraint is
+// Vercel's edge proxy: `/api/*` is a rewrite to Railway (see vercel.json), and
+// Vercel drops a proxied response at ~30s with a 504 long before a full live
+// crawl can finish. We bound the ENTIRE handler's wall-clock under one
+// gateway-safe deadline so we ALWAYS respond in time — falling back to whatever
+// DB-backed/nearby opportunities are already available (or an empty list)
+// flagged with `partial: true, timed_out: true`.
+//
+// CRAWL_TOTAL_BUDGET_MS is the total budget for the whole request (pre-pipeline
+// profile/coverage load + pipeline + post-timeout fallback + serialization),
+// NOT just the pipeline. Default 26s leaves ~4s headroom under Vercel's 30s cap
+// for proxy hops and JSON serialization. `CRAWL_TIME_BUDGET_MS` kept as a
+// back-compat alias (HAMILTON-style env override).
+const CRAWL_TOTAL_BUDGET_MS =
+  Number(process.env.CRAWL_TOTAL_BUDGET_MS) ||
+  Number(process.env.CRAWL_TIME_BUDGET_MS) ||
+  26000
 
-// Sentinel returned when the crawl pipeline overruns the time budget. Distinct
-// object identity so the caller can branch without ambiguity vs a real result.
+// Wall-clock reserved at the end of the budget for the post-timeout fallback
+// (nearby query + pipeline-exclusion dedup + JSON serialization). Carving this
+// out of the pipeline's slice guarantees the fallback itself can't push the
+// response past the gateway deadline.
+const CRAWL_FALLBACK_RESERVE_MS = Number(process.env.CRAWL_FALLBACK_RESERVE_MS) || 5000
+
+// Sentinel returned when budgeted work overruns its time slice. Distinct object
+// identity so the caller can branch without ambiguity vs a real result.
 const CRAWL_TIMEOUT = Symbol('crawl-timeout')
 
 /**
- * Race an async crawl-producing function against the server-side time budget.
- * Resolves to the function's value, or CRAWL_TIMEOUT if the budget elapsed
- * first. Never rejects on timeout — the in-flight work is abandoned (its
- * eventual settlement is ignored) so the request can respond immediately.
+ * Race an async work-producing function against a time slice. Resolves to the
+ * function's value, or CRAWL_TIMEOUT if the slice elapsed first. Never rejects
+ * on timeout — the in-flight work is abandoned (its eventual settlement is
+ * ignored) so the request can respond immediately.
  */
-async function withCrawlBudget(fn, budgetMs = CRAWL_BUDGET_MS) {
+async function withCrawlBudget(fn, budgetMs) {
   let timer = null
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve(CRAWL_TIMEOUT), Math.max(1, budgetMs))
@@ -88,6 +103,18 @@ async function withCrawlBudget(fn, budgetMs = CRAWL_BUDGET_MS) {
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+/**
+ * Milliseconds left until `startTime + total` minus a tail reserve, floored at
+ * `floor` so a budgeted call always gets a usable (if small) slice even when
+ * the pre-work already ate most of the budget. This is what makes pre-pipeline
+ * work (profile/coverage load) count against the gateway deadline instead of
+ * being free time on top of the pipeline budget.
+ */
+function remainingBudget(startTime, { total = CRAWL_TOTAL_BUDGET_MS, reserve = 0, floor = 1500 } = {}) {
+  const elapsed = Date.now() - startTime
+  return Math.max(floor, total - elapsed - reserve)
 }
 
 /**
@@ -773,8 +800,15 @@ router.post('/run', ensureAuth, async (req, res) => {
     }
     } // end pipeline()
 
-    // Race the pipeline against the server-side time budget.
-    const pipelineOutcome = await withCrawlBudget(pipeline)
+    // Race the pipeline against the time LEFT in the total handler budget,
+    // holding back a reserve for the fallback path below. Because this subtracts
+    // the pre-pipeline profile/coverage load already spent, the response always
+    // lands under the gateway deadline regardless of how slow that load was.
+    const pipelineBudget = remainingBudget(startTime, {
+      reserve: CRAWL_FALLBACK_RESERVE_MS,
+      floor: 2000,
+    })
+    const pipelineOutcome = await withCrawlBudget(pipeline, pipelineBudget)
 
     // BUG 1 fix — budget exceeded: respond with DB-backed nearby opportunities
     // (whatever is already available) flagged partial/timed_out, instead of
@@ -782,18 +816,31 @@ router.post('/run', ensureAuth, async (req, res) => {
     if (pipelineOutcome === CRAWL_TIMEOUT) {
       const duration = Date.now() - startTime
       routeLogger.warn(
-        `[RealCrawlers] ${crawler_type} for profile ${profile_id} exceeded crawl budget ${CRAWL_BUDGET_MS}ms — responding with partial DB-backed results`,
+        `[RealCrawlers] ${crawler_type} for profile ${profile_id} exceeded crawl budget (total ${CRAWL_TOTAL_BUDGET_MS}ms) — responding with partial DB-backed results`,
       )
-      let partialOpps = []
-      try {
-        partialOpps = await queryNearbyOpportunities(db, { location: { state: profileContext?.profile?.state || profileContext?.signals?.location?.state } }, [], profileContext, 30)
-      } catch (partialErr) {
-        routeLogger.warn(`[RealCrawlers] partial nearby query failed: ${partialErr?.message ?? partialErr}`)
-        partialOpps = []
+      // Bound the fallback against the time LEFT before the gateway deadline.
+      // The abandoned pipeline promise is still running and contending for the
+      // DB pool, so these queries can be slow — without their own budget they
+      // would be exactly what pushes the response past Vercel's 30s and 504s.
+      // If even this small slice elapses, respond with an empty partial list
+      // rather than waiting (recall: an empty partial is honest, a 504 is not).
+      const fallbackBudget = remainingBudget(startTime, { reserve: 1500, floor: 1500 })
+      const fallbackOutcome = await withCrawlBudget(async () => {
+        let opps = []
+        try {
+          opps = await queryNearbyOpportunities(db, { location: { state: profileContext?.profile?.state || profileContext?.signals?.location?.state } }, [], profileContext, 30)
+        } catch (partialErr) {
+          routeLogger.warn(`[RealCrawlers] partial nearby query failed: ${partialErr?.message ?? partialErr}`)
+          opps = []
+        }
+        // Apply the same dedup against the profile's existing pipeline (BUG 2)
+        // so timed-out responses don't resurface already-added sources.
+        return excludeExistingPipeline(db, profile_id, opps)
+      }, fallbackBudget)
+      let partialOpps = fallbackOutcome === CRAWL_TIMEOUT ? [] : (fallbackOutcome || [])
+      if (fallbackOutcome === CRAWL_TIMEOUT) {
+        routeLogger.warn(`[RealCrawlers] fallback nearby/dedup also exceeded budget — returning empty partial`)
       }
-      // Apply the same dedup against the profile's existing pipeline (BUG 2)
-      // so timed-out responses don't resurface already-added sources.
-      partialOpps = await excludeExistingPipeline(db, profile_id, partialOpps)
       return res.json({
         success: true,
         partial: true,
