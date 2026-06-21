@@ -178,9 +178,20 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     // CDP Page.startScreencast works fine in headless Chromium.
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+      // --disable-blink-features=AutomationControlled hides the navigator.webdriver
+      // automation flag, which bot-detection (e.g. studentaid.gov / FAFSA behind
+      // Akamai) uses to serve a BLANK page to an obviously-automated browser.
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
     })
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    // A realistic UA + locale further reduces "this is a bot" blank-page blocks
+    // on hardened portals. The user still drives the page; we only soften the
+    // automation fingerprint so the login page actually renders.
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      locale: 'en-US',
+    })
     const page = await context.newPage()
     await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {})
     const liveSessionId = makeLiveSessionId()

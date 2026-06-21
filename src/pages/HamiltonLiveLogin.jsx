@@ -222,11 +222,13 @@ export default function HamiltonLiveLogin() {
           <Smartphone className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
           <div>
             <p className="text-sm font-medium">
-              Sign in{portalHost ? ` to ${portalHost}` : ''} and approve 2FA on your phone, then click Done.
+              Sign in{portalHost ? ` to ${portalHost}` : ''} right here on this device, then click Done.
             </p>
             <p className="text-xs text-slate-400">
-              You are driving a real, private browser. We capture the logged-in session only — never your
-              password or 2FA code. The window expires in 15 minutes.
+              You are driving a real, private browser <span className="font-medium text-slate-300">on this laptop</span> — type
+              the username &amp; password and complete 2FA in this window. Only a phone-<em>push</em> 2FA (Duo / Microsoft
+              Authenticator) needs the phone; a texted or app code can be entered here. We capture the logged-in session
+              only — never your password or 2FA code. The window expires in 15 minutes.
             </p>
           </div>
         </div>
