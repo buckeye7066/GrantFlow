@@ -1699,8 +1699,10 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
 
     let working = filtered
     if (pdIntent.active) {
-      const profileState = smartProfileContext?.profile?.state || smartProfileContext?.signals?.location?.state
-      const curated = loadCuratedProfessionalDevelopmentPrograms(profileState)
+      // Profile-aware curated injection (same global gate as routes/matching.js):
+      // only programs whose declared state/occupation/student/heritage targeting
+      // fits this profile are injected.
+      const curated = loadCuratedProfessionalDevelopmentPrograms(smartProfileContext)
       const seen = new Set(working.map((o) => String(o.title || '').toLowerCase()))
       for (const opp of curated) {
         const key = String(opp.title || '').toLowerCase()

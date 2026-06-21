@@ -173,8 +173,31 @@ export function isProfessionalDevelopmentOpportunity(opp) {
   return /\b(wioa|workforce|vocational rehabilitation|continuing education|cme|probe|license reinstatement|nursing re-?entry|remediation|professional boundaries|nurse corps|nhsc|american job center|ita\b|etpl)\b/i.test(text)
 }
 
+/**
+ * Resolve a curated record's REAL geographic scope. The dataset records carry
+ * `state` / `stateRestriction` / `eligibility.stateResident` for state-specific
+ * programs and `isNational` for national ones. (Bug: this used to be discarded —
+ * every curated program was stamped `nationwide`, so a Texas-only nurse grant or
+ * a WV-resident scholarship matched everyone and bypassed the geo filter.)
+ */
+function recordState(record) {
+  const raw =
+    record.state ||
+    record.stateRestriction ||
+    record.eligibility?.stateResident ||
+    null
+  return raw ? String(raw).toUpperCase().trim() : null
+}
+
+function recordIsNational(record) {
+  if (record.isNational === true || record.is_national === true) return true
+  return !recordState(record)
+}
+
 function nationalRecordToOpportunity(record, sourceLabel) {
   const categories = Array.isArray(record.categories) ? record.categories : []
+  const st = recordState(record)
+  const national = recordIsNational(record)
   return {
     id: record.id || `${sourceLabel}-${record.name?.slice(0, 24) || 'program'}`,
     title: record.name || record.title || 'Professional development program',
@@ -186,8 +209,11 @@ function nationalRecordToOpportunity(record, sourceLabel) {
     sponsor: record.sponsor || record.name?.split('—')[0]?.trim() || 'National program',
     source: sourceLabel,
     record_origin: 'curated_verified',
-    is_national: true,
-    state: 'nationwide',
+    // Preserve the record's REAL geography so the geo filter + geographic_match
+    // reasoning are honest. National programs stay nationwide; state-specific
+    // ones carry their state and are NOT flagged national.
+    is_national: national,
+    state: national ? 'nationwide' : st,
     is_active: true,
     is_loan: false,
     requires_match: false,
@@ -201,32 +227,161 @@ function nationalRecordToOpportunity(record, sourceLabel) {
   }
 }
 
+// Ethnicity/heritage detection. A scholarship explicitly for one heritage is
+// "explicitly exclusive" (Goal 4) — surfacing it to an unrelated profile is
+// noise. The dataset's declared tokens are INCONSISTENT (the same fund is tagged
+// in one file, untagged in the other), so we detect from the program NAME +
+// description too and map each indicator to a canonical token we can match
+// against the profile's STRUCTURED ethnicity/heritage. Each entry: [regex,
+// canonicalToken].
+const ETHNIC_PATTERNS = [
+  [/asian|pacific islander|\baapi\b|\bapia\b/i, 'asian'],
+  [/hispanic|latino|latina|latinx|chicano/i, 'hispanic'],
+  [/united negro|negro college|\bhbcu\b|thurgood marshall|african[- ]?american|\bblack\b/i, 'black'],
+  [/native american|american indian|alaska native|indigenous|\btribal\b|first nations/i, 'native american'],
+  [/\bpolish\b/i, 'polish'],
+  [/\bitalian\b/i, 'italian'],
+  [/\bjewish\b|hebrew/i, 'jewish'],
+  [/\barmenian\b/i, 'armenian'],
+  [/\bgreek\b/i, 'greek'],
+  [/\bportuguese\b/i, 'portuguese'],
+  [/\bfilipino\b/i, 'filipino'],
+  [/\bvietnamese\b/i, 'vietnamese'],
+  [/\bkorean\b/i, 'korean'],
+  [/\bchinese\b/i, 'chinese'],
+  [/\bjapanese\b/i, 'japanese'],
+]
+
+/** Canonical heritage tokens a record targets, detected from name+description. */
+function detectEthnicTargets(record) {
+  const text = `${record?.name || record?.title || ''} ${record?.description || ''}`
+  const out = new Set()
+  for (const [re, token] of ETHNIC_PATTERNS) {
+    if (re.test(text)) out.add(token)
+  }
+  return out
+}
+
+function lowerSet(value) {
+  const out = new Set()
+  const add = (x) => { if (x !== null && x !== undefined) { const s = String(x).toLowerCase().trim(); if (s) out.add(s) } }
+  if (value instanceof Set) for (const x of value) add(x)
+  else if (Array.isArray(value)) for (const x of value) add(x)
+  return out
+}
+
 /**
- * Load curated national PD / CE / reinstatement programs for injection into catalog matching.
+ * Build a compact descriptor of who the profile IS, from its signals, so curated
+ * records can be matched against their declared targeting.
  */
-export function loadCuratedProfessionalDevelopmentPrograms(_profileState = null) {
+export function buildProfileTargeting(profileContext) {
+  const sig = profileContext?.signals ?? {}
+  const states = new Set()
+  const addState = (x) => { if (x) states.add(String(x).toUpperCase().trim()) }
+  addState(sig?.location?.state)
+  if (Array.isArray(sig?.states)) sig.states.forEach(addState)
+  const occupations = lowerSet(sig?.occupation)
+  const demographics = lowerSet(sig?.demographics)
+  const interests = lowerSet(sig?.interests)
+  // Ethnicity/heritage from the STRUCTURED demographics section — NOT the
+  // signals.keywordSet bag, which over-expands (e.g. it contained 'asian' for a
+  // White/Polish profile and let an API-heritage fund slip through). The
+  // structured fields are the reliable identity for heritage gating.
+  const demoSection = profileContext?.sections?.demographics ?? {}
+  const ethnicityText = [
+    demoSection.ethnicity, demoSection.race, demoSection.heritage,
+    demoSection.tribal_affiliation, demoSection.nationality, demoSection.ancestry,
+  ].filter(Boolean).map((x) => String(x).toLowerCase()).join(' ')
+  const primaryType = String(profileContext?.profile?.primary_type || profileContext?.profile?.primary_profile_type || '').toLowerCase()
+  const isStudent = primaryType.includes('student') || occupations.has('student')
+  return { states, occupations, demographics, interests, ethnicityText, isStudent }
+}
+
+/**
+ * Does a curated record actually fit this profile? We only ever REJECT on a
+ * dimension the record itself DECLARES (state / occupation / student / heritage)
+ * — a record with no declared targeting is broadly relevant and kept. This keeps
+ * "missing profile field is neutral" (Goal 4) while honoring each program's
+ * explicit exclusivity. Returns true when no targeting info is available
+ * (profile-less callers) so behavior degrades to the old broad list rather than
+ * silently emptying.
+ */
+export function recordMatchesProfile(record, targeting) {
+  if (!targeting) return true
+
+  // Geography — a state-restricted program is explicitly exclusive.
+  if (!recordIsNational(record)) {
+    const st = recordState(record)
+    if (st) {
+      if (targeting.states.size === 0) return false // unknown profile state → don't push a state-only program
+      if (!targeting.states.has(st)) return false
+    }
+  }
+
+  // Student requirement.
+  if (record.eligibility?.requiresStudent && !targeting.isStudent) return false
+
+  // Occupation targeting (e.g. nurse / social worker / first responder programs).
+  // Match against the structured occupation + interest signals only (NOT the
+  // over-broad keywordSet bag).
+  const occ = Array.isArray(record.occupationMatch) ? record.occupationMatch.map((o) => String(o).toLowerCase()) : []
+  if (occ.length > 0) {
+    const hit = occ.some((o) => targeting.occupations.has(o) || targeting.interests.has(o))
+    if (!hit) return false
+  }
+
+  // Heritage / ethnicity targeting — detected from the program name+description
+  // (reliable; the dataset's declared tokens are inconsistent). When a record
+  // targets a specific heritage, require the profile's STRUCTURED ethnicity to
+  // include it. We do NOT match against the keyword/interest bags (they
+  // over-expand — e.g. 'asian' appeared for a White/Polish profile).
+  const ethnicTargets = detectEthnicTargets(record)
+  if (ethnicTargets.size > 0) {
+    // Word-boundary match so 'asian' does NOT match "Cauc-asian" (substring
+    // false-positive that let an API-heritage fund through for a White profile).
+    const hit = [...ethnicTargets].some((t) => new RegExp(`\\b${t}\\b`, 'i').test(targeting.ethnicityText))
+    if (!hit) return false
+  }
+
+  return true
+}
+
+/**
+ * Load curated national PD / CE / reinstatement programs for injection into
+ * catalog matching — PROFILE-AWARE. Only programs whose declared targeting
+ * (state, occupation, student status, heritage) actually fits the profile are
+ * returned, so a TN student no longer gets Texas/Florida nurse grants, a
+ * WV-only scholarship, or an API-heritage fund. Pass the profileContext (the
+ * legacy string-state signature is still accepted but ignored → broad list).
+ */
+export function loadCuratedProfessionalDevelopmentPrograms(profileContextOrState = null) {
+  const profileContext =
+    profileContextOrState && typeof profileContextOrState === 'object' ? profileContextOrState : null
+  const targeting = profileContext ? buildProfileTargeting(profileContext) : null
+
   const seen = new Set()
   const out = []
+  let skipped = 0
 
   const isPdRecord = (rec) => {
     const cats = Array.isArray(rec.categories) ? rec.categories : []
     return cats.some((c) => PD_PROGRAM_CATEGORIES.has(String(c).toLowerCase()))
   }
 
-  for (const rec of NATIONAL_PROGRAMS) {
-    if (!isPdRecord(rec)) continue
-    if (seen.has(rec.id)) continue
+  const consider = (rec, sourceLabel) => {
+    if (!isPdRecord(rec)) return
+    if (seen.has(rec.id)) return
     seen.add(rec.id)
-    out.push(nationalRecordToOpportunity(rec, 'national_pd_program'))
+    if (!recordMatchesProfile(rec, targeting)) { skipped += 1; return }
+    out.push(nationalRecordToOpportunity(rec, sourceLabel))
   }
 
-  for (const rec of SCHOLARSHIPS) {
-    if (!isPdRecord(rec)) continue
-    if (seen.has(rec.id)) continue
-    seen.add(rec.id)
-    out.push(nationalRecordToOpportunity(rec, 'national_pd_scholarship'))
-  }
+  for (const rec of NATIONAL_PROGRAMS) consider(rec, 'national_pd_program')
+  for (const rec of SCHOLARSHIPS) consider(rec, 'national_pd_scholarship')
 
+  if (targeting && skipped > 0) {
+    log.info(`[pd] curated injection: kept ${out.length}, skipped ${skipped} as off-profile (state/occupation/student/heritage)`)
+  }
   return out
 }
 
