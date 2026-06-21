@@ -114,7 +114,7 @@ export default function AdvancedFilters({ filters, onFiltersChange, allTags = []
         <PopoverContent className="w-96 max-h-[600px] overflow-y-auto" align="end">
           <Card className="border-0 shadow-none">
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Advanced Filters</CardTitle>
+              <CardTitle className="font-display text-lg text-current-ink">Advanced Filters</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Deadline Status */}
@@ -238,7 +238,7 @@ export default function AdvancedFilters({ filters, onFiltersChange, allTags = []
       {/* Active Filters Display with Reset Button */}
       {hasActiveFilters && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-slate-500 font-medium">Active filters:</span>
+          <span className="money text-xs font-bold uppercase tracking-[0.08em] text-current-ink/55">Active filters:</span>
           
           {localFilters.hideExpired && (
             <Badge variant="secondary" className="gap-1">
