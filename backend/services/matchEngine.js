@@ -1255,7 +1255,13 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
       subscale = 75
     } else if (oppIsNational) {
       tier = 'national'
-      subscale = 55
+      // National opportunities are fully geographically eligible for ANY profile
+      // (canonical rule G4: matching expands city→county→state→national; national
+      // must surface). 55 sat BELOW the state tier (75), unfairly capping the many
+      // federal grants that are national-by-design so the 80% slider never reached
+      // them. 70 keeps national below local tiers (preserving local preference)
+      // while letting a strong national match clear a high bar.
+      subscale = 70
     } else if (stateMismatchAll) {
       tier = 'mismatch'
       subscale = 10
