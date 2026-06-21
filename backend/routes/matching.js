@@ -344,6 +344,18 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
+      // Normalize the profile once, up front, so the geographic pre-filter can
+      // read ALL of the profile's states (primary + secondary address +
+      // multi-state arrays). Reused below for the per-opportunity decision so
+      // we never normalize twice. RC-17: pass documents so uploaded extracted
+      // text folds into the canonical need vocabulary.
+      const profileNormForGeo = normalizeProfile(
+        profileContext?.profile ?? profileContext,
+        profileContext?.sections ?? null,
+        profileContext?.signals ?? null,
+        profileContext?.documents ?? null,
+      )
+
       const pdIntent = detectProfessionalDevelopmentIntent({
         searchTerms,
         freeText: freeTextNeed,
@@ -398,15 +410,36 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       conditions.push('(profile_id IS NULL OR profile_id = ?)')
       params.push(profileId)
 
-      // Geographic pre-filter: only load opps in the profile's normalized state,
-      // national opportunities, or unspecified rows. If the profile has no real
-      // state, do not show specific-state rows unless explicitly requested.
-      const profileState = normalizeState(profileContext?.signals?.location?.state || profileContext?.profile?.state)
+      // Geographic pre-filter: only load opps in ANY of the profile's normalized
+      // states (primary + secondary address + multi-state `states[]`), national
+      // opportunities, or unspecified rows. A two-address profile (home in one
+      // state, school in another) must match LOCAL opportunities in BOTH states.
+      // If the profile has no real state, do not show specific-state rows unless
+      // explicitly requested.
+      //
+      // Multi-source, deduped: signals.states (primary + secondary, ZIP-enriched)
+      // + profileNorm.states (also folds the multi-state arrays). The primary
+      // (signals.location.state) is preserved for back-compat with consumers that
+      // still read the singular value.
+      const primaryProfileState = normalizeState(profileContext?.signals?.location?.state || profileContext?.profile?.state)
+      const profileStateList = []
+      const _pushState = (raw) => {
+        const norm = normalizeState(raw)
+        if (norm && !profileStateList.includes(norm)) profileStateList.push(norm)
+      }
+      _pushState(primaryProfileState)
+      for (const s of (Array.isArray(profileContext?.signals?.states) ? profileContext.signals.states : [])) _pushState(s)
+      for (const s of (Array.isArray(profileNormForGeo?.states) ? profileNormForGeo.states : [])) _pushState(s)
+      // Back-compat alias: many later branches read `profileState` as the single
+      // primary. Keep it pointing at the primary so single-address behavior and
+      // diagnostics are unchanged.
+      const profileState = primaryProfileState
       const includeOtherStates = req.query.include_other_states === '1'
-      if (profileState) {
+      if (profileStateList.length > 0) {
         const natVal = isPostgres ? 'TRUE' : '1'
-        conditions.push(`(UPPER(state) = ? OR LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
-        params.push(profileState)
+        const placeholders = profileStateList.map(() => '?').join(', ')
+        conditions.push(`(UPPER(state) IN (${placeholders}) OR LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
+        params.push(...profileStateList)
       } else if (!includeOtherStates) {
         const natVal = isPostgres ? 'TRUE' : '1'
         conditions.push(`(LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
@@ -495,7 +528,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         }
         const normalized = applyFundableOpportunityNormalization(rawCandidate, quality)
         const candidateState = normalizeOpportunityState(normalized.state)
-        if (!includeOtherStates && candidateState && candidateState !== 'nationwide' && candidateState !== profileState) {
+        // Multi-state aware: keep the opportunity if its state matches ANY of
+        // the profile's states (primary + secondary + states[]), not just the
+        // primary. A two-address profile must see local opportunities in BOTH.
+        if (
+          !includeOtherStates &&
+          candidateState &&
+          candidateState !== 'nationwide' &&
+          profileStateList.length > 0 &&
+          !profileStateList.includes(String(candidateState).toUpperCase())
+        ) {
           rejectStats.wrongState++
           continue
         }
@@ -573,19 +615,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
-      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity).
-      // CRITICAL: pass signals so needCategories are populated from buildProfileSignals().
-      // RC-17: pass documents so extracted_text from uploaded files folds
-      // into the canonical need vocabulary.
-      const rawProfileForDecision = profileContext?.profile ?? profileContext
+      // Reuse the single profile normalization computed up front for the geo
+      // pre-filter (avoids re-running normalizeProfile per request). Sections
+      // are still needed below for scoreOpportunity's signal building.
       const profileSectionsForDecision = profileContext?.sections ?? null
-      const profileDocumentsForDecision = profileContext?.documents ?? null
-      const profileNormForDecision = normalizeProfile(
-        rawProfileForDecision,
-        profileSectionsForDecision,
-        profileContext?.signals ?? null,
-        profileDocumentsForDecision,
-      )
+      const profileNormForDecision = profileNormForGeo
 
       // Directory-style / general funding resources must always survive
       // filtering unless explicitly excluded (project rule). However, they

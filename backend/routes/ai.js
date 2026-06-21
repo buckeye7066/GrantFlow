@@ -278,10 +278,22 @@ router.post('/ecf-service-search', async (req, res) => {
     `).all(...isolationParams, ...stateParams)
 
     // Score each service against the profile using keyword matching
-    const scored = services.map(svc => {
+    let scored = services.map(svc => {
       const matchResult = calculateMatchScore(profile || {}, svc)
       return { ...svc, match_score: matchResult.score, match_reasons: matchResult.reasons }
     }).sort((a, b) => b.match_score - a.match_score)
+
+    // Profile-scoped result surface: never re-surface a service already in this
+    // profile's pipeline / dismissed / secured in university_applications.
+    // Canonical helper; skipped only when include_pipeline is requested.
+    if (isolationId && req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+      try {
+        const filtered = await filterOutPipelineMembers(req.db, String(isolationId), scored)
+        scored = filtered.results
+      } catch (exclErr) {
+        routeLogger.warn(`[ai/ecf-service-search] pipeline exclusion skipped: ${exclErr?.message || exclErr}`)
+      }
+    }
 
     res.json({
       services: scored,

@@ -1,26 +1,28 @@
 /**
  * portalSync/connectors/mtsu.js
  *
- * Best-effort, REAL connector for Middle Tennessee State University's student /
- * financial-aid portals (PipelineMT / MyMT, and the AcademicWorks scholarship
- * portal MTSU uses). Driven with an already-authenticated Playwright page.
+ * REAL connector for Middle Tennessee State University's student / financial-aid
+ * portals (PipelineMT / MyMT, and the AcademicWorks scholarship portal MTSU
+ * uses). Driven with an already-authenticated Playwright page.
  *
  * ───────────────────────────────────────────────────────────────────────────
- * HONESTY / SELECTOR DISCLAIMER  (read before trusting any field below)
+ * EXTRACTION STRATEGY (why this is selector-INDEPENDENT)
  * ───────────────────────────────────────────────────────────────────────────
  * The exact DOM of a live, authenticated MTSU portal CANNOT be verified from
- * this environment. Every selector here is a documented ASSUMPTION based on the
- * common shapes of Banner/Ellucian student portals and AcademicWorks. Each
- * extractor:
- *   - tries several plausible selectors / label-anchored lookups,
- *   - returns the value ONLY when it actually finds & parses one,
- *   - otherwise records the item under `notFound` with a reason.
- * It NEVER fabricates a value or claims a write that didn't land. When MTSU's
- * real markup is confirmed, tighten the *_SELECTORS / *_LABELS constants below;
- * the framework around this file does not change.
+ * this environment, and Banner/Ellucian/AcademicWorks markup differs widely. So
+ * the PRIMARY read path navigates the authenticated landing + known MTSU hosts
+ * and delegates extraction to the shared, model-driven `extractPortalDataWithLLM`
+ * (llmPageExtract.js) — it reads the page's visible text and lets Claude pull
+ * out awards + fields. This is robust where guessed CSS selectors never were.
+ *
+ * The legacy label/table selectors remain ONLY as a low-priority fallback for
+ * fields the LLM didn't return (and only when LLM extraction was actually
+ * attempted but came back empty). Nothing here fabricates a value or claims a
+ * write that didn't land; missing items are reported in `notFound`.
  */
 
 import { normalizeHost } from '../../hamiltonCredentialSessionService.js'
+import { extractPortalDataWithLLM } from '../llmPageExtract.js'
 
 export const id = 'mtsu'
 export const label = 'Middle Tennessee State University (PipelineMT / AcademicWorks)'
@@ -47,10 +49,12 @@ const NAV = {
 }
 
 // Label anchors we search for (case-insensitive substring) to locate values by
-// their on-screen label rather than a brittle absolute selector. ASSUMPTION.
+// their on-screen label rather than a brittle absolute selector. ASSUMPTION —
+// used only as a low-priority fallback when LLM extraction returns nothing.
+// Keyed by the canonical `education` section field the value writes into.
 const SCORE_LABELS = {
-  act_composite: ['ACT Composite', 'ACT Score', 'Composite ACT'],
-  sat_total: ['SAT Total', 'SAT Score', 'SAT Composite', 'Total SAT'],
+  act_score: ['ACT Composite', 'ACT Score', 'Composite ACT'],
+  sat_score: ['SAT Total', 'SAT Score', 'SAT Composite', 'Total SAT'],
 }
 const AWARD_TABLE_SELECTORS = [
   'table[summary*="award" i]',
@@ -59,8 +63,6 @@ const AWARD_TABLE_SELECTORS = [
   '.award-summary table',
   'table', // last-resort: scan every table and keep rows that look like awards
 ]
-const STATUS_LABELS = ['Application Status', 'Admission Status', 'Decision', 'Aid Status']
-
 function num(v) {
   if (v === null || v === undefined) return null
   const n = Number(String(v).replace(/[^0-9.]/g, ''))
@@ -121,88 +123,118 @@ async function readByLabel(page, labels) {
   return null
 }
 
+// Canonical `education` field name -> value coercion used when we fall back to
+// brittle label lookups. Scores are stored as text per sectionMetadata.
+const SCORE_FIELD_SECTION = 'education'
+
 /**
- * READ: ACT/SAT scores, financial-aid awards, and application status.
- * Returns { fields, awards, notFound, raw }. Each missing item is reported in
- * notFound — we never claim a value we didn't actually read.
+ * READ: financial-aid awards + key fields (ACT/SAT scores).
+ *
+ * PRIMARY path: navigate the authenticated landing + known MTSU hosts, then
+ * delegate to the shared model-driven extractor (selector-independent). The
+ * legacy label/table selectors run ONLY as a fallback for items the LLM didn't
+ * surface. Returns { fields, awards, notFound, raw }; every missing item is
+ * reported in notFound — we never claim a value we didn't actually read.
  */
 export async function read(page, ctx = {}) {
   const log = ctx.log || (() => {})
   const fields = []
   const awards = []
   const notFound = []
-  const raw = { scores: {}, awards: [], status: null, navigated: false }
+  const raw = { llm: null, fallback: { scores: {}, awards: [] }, navigated: false }
 
-  // ── Test scores ──────────────────────────────────────────────────────────
-  await gotoFirst(page, NAV.scores, log).then((ok) => { raw.navigated = raw.navigated || ok })
+  // Navigate to the authenticated landing / known MTSU hosts so the extractor
+  // starts from a useful page. We do NOT depend on these succeeding — the
+  // extractor also reads same-origin aid links from wherever we land.
+  const navCandidates = [...new Set([...NAV.awards, ...NAV.scores, ...NAV.status])]
+  const landed = await gotoFirst(page, navCandidates, log)
+  raw.navigated = landed
+
+  // ── PRIMARY: model-driven, selector-independent extraction ─────────────────
+  const llm = await extractPortalDataWithLLM(page, { log, navCandidates })
+  raw.llm = llm.raw
+  const seenAwardKeys = new Set()
+  for (const a of llm.awards || []) {
+    awards.push({
+      title: a.title,
+      amount: a.amount,
+      amountDisplay: a.amountDisplay || null,
+      status: a.status || null,
+      sponsor: a.sponsor || 'Middle Tennessee State University',
+      sourceUrl: a.sourceUrl || safeUrl(page),
+    })
+    seenAwardKeys.add(String(a.title).trim().toLowerCase())
+  }
+  const seenFieldKeys = new Set()
+  for (const f of llm.fields || []) {
+    fields.push(f)
+    seenFieldKeys.add(`${f.sectionKey}.${f.field}`)
+  }
+  for (const reason of llm.notFound || []) notFound.push({ kind: 'llm', name: 'extraction', reason })
+
+  // ── FALLBACK: legacy label lookups for scores the model did NOT return ──────
   for (const [field, labels] of Object.entries(SCORE_LABELS)) {
+    if (seenFieldKeys.has(`${SCORE_FIELD_SECTION}.${field}`)) continue
     const hit = await readByLabel(page, labels)
     const n = num(hit?.value)
     if (n !== null) {
-      // ASSUMPTION: scores map to an 'academics' profile section. If the section
-      // guard rejects these keys at write time, the framework reports the
-      // rejection honestly (it does NOT silently drop them).
-      fields.push({ sectionKey: 'academics', field, value: n, label: hit.label, source: 'label_lookup' })
-      raw.scores[field] = n
-    } else {
-      notFound.push({ kind: 'field', name: field, reason: hit ? `found label but value unparseable: "${hit.value}"` : 'no matching label on page' })
+      // education.act_score / education.sat_score are TEXT per sectionMetadata.
+      fields.push({ sectionKey: SCORE_FIELD_SECTION, field, value: String(n), label: hit.label, source: 'label_lookup' })
+      raw.fallback.scores[field] = n
     }
   }
 
-  // ── Financial-aid awards ───────────────────────────────────────────────────
-  await gotoFirst(page, NAV.awards, log)
-  let foundAwardTable = false
-  for (const sel of AWARD_TABLE_SELECTORS) {
-    try {
-      const rows = await page.$$eval(sel, (tables) => {
-        const out = []
-        for (const table of tables) {
-          for (const tr of Array.from(table.querySelectorAll('tr'))) {
-            const cells = Array.from(tr.querySelectorAll('td')).map((c) => (c.textContent || '').trim())
-            if (cells.length < 2) continue
-            // Heuristic: a row is an award row if some cell looks like a dollar
-            // amount and another cell looks like a name (has letters).
-            const amountCell = cells.find((c) => /\$|\d{3,}/.test(c) && /\d/.test(c))
-            const nameCell = cells.find((c) => /[a-zA-Z]{4,}/.test(c) && !/\$/.test(c))
-            if (amountCell && nameCell) out.push({ name: nameCell, amount: amountCell, cells })
+  // ── FALLBACK: legacy award-table scrape when the model found NO awards ──────
+  if (awards.length === 0) {
+    for (const sel of AWARD_TABLE_SELECTORS) {
+      let rows = []
+      try {
+        rows = await page.$$eval(sel, (tables) => {
+          const out = []
+          for (const table of tables) {
+            for (const tr of Array.from(table.querySelectorAll('tr'))) {
+              const cells = Array.from(tr.querySelectorAll('td')).map((c) => (c.textContent || '').trim())
+              if (cells.length < 2) continue
+              const amountCell = cells.find((c) => /\$|\d{3,}/.test(c) && /\d/.test(c))
+              const nameCell = cells.find((c) => /[a-zA-Z]{4,}/.test(c) && !/\$/.test(c))
+              if (amountCell && nameCell) out.push({ name: nameCell, amount: amountCell })
+            }
           }
-        }
-        return out
-      })
+          return out
+        })
+      } catch (err) {
+        log(`award table selector failed: ${sel}`, { error: err?.message })
+        continue
+      }
       if (rows && rows.length) {
-        foundAwardTable = true
         for (const r of rows) {
-          const amt = money(r.amount)
+          const key = String(r.name).trim().toLowerCase()
+          if (seenAwardKeys.has(key)) continue
+          seenAwardKeys.add(key)
           awards.push({
             title: r.name,
-            amount: amt,
+            amount: money(r.amount),
             amountDisplay: r.amount,
-            // ASSUMPTION: status column is not reliably present; left undefined.
+            status: null,
             sponsor: 'Middle Tennessee State University',
             sourceUrl: safeUrl(page),
           })
-          raw.awards.push(r)
+          raw.fallback.awards.push(r)
         }
         break // first selector that yields award-shaped rows wins
       }
-    } catch (err) {
-      log(`award table selector failed: ${sel}`, { error: err?.message })
     }
   }
-  if (!foundAwardTable) {
-    notFound.push({ kind: 'award', name: 'financial_aid_awards', reason: 'no award-shaped table found on the navigated pages (selectors are assumptions; confirm MTSU markup)' })
+
+  if (awards.length === 0 && !notFound.some((n) => n.kind === 'llm')) {
+    notFound.push({ kind: 'award', name: 'financial_aid_awards', reason: 'no awards found by model extraction or label/table fallback' })
   }
 
-  // ── Application / aid status ────────────────────────────────────────────────
-  await gotoFirst(page, NAV.status, log)
-  const statusHit = await readByLabel(page, STATUS_LABELS)
-  if (statusHit?.value) {
-    raw.status = statusHit.value
-    // ASSUMPTION: store application status under 'university_applications'.
-    fields.push({ sectionKey: 'university_applications', field: 'application_status', value: statusHit.value, label: statusHit.label, source: 'label_lookup' })
-  } else {
-    notFound.push({ kind: 'status', name: 'application_status', reason: 'no status label found on page' })
-  }
+  // NOTE: we intentionally do NOT emit an `application_status` profile field.
+  // The `university_applications` section schema only accepts `applications` and
+  // `school_portal_imports` (both JSON), so a scalar `application_status` would
+  // be rejected by the section guard and silently dropped. Award status is
+  // captured per-award above instead.
 
   log(`MTSU read complete: ${fields.length} fields, ${awards.length} awards, ${notFound.length} notFound`)
   return { fields, awards, notFound, raw }

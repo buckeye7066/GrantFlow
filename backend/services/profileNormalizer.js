@@ -10,6 +10,26 @@ import { createHash } from 'crypto'
 import { resolveApplicantType } from './profileHelpers.js'
 
 // ---------------------------------------------------------------------------
+// State name → 2-letter abbreviation. Used to normalize the multi-state
+// `states[]` array (which may carry full names like "Tennessee") so geo
+// matching can compare them against opportunity state codes.
+// ---------------------------------------------------------------------------
+const STATE_NAME_TO_ABBR = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
+  kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA',
+  michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT',
+  nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
+  'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA',
+  'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
+  tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA',
+  washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+  'district of columbia': 'DC',
+}
+
+// ---------------------------------------------------------------------------
 // Need category alias map
 // Multiple names can refer to the same canonical need bucket.
 // ---------------------------------------------------------------------------
@@ -465,6 +485,20 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   let county = profile.county ?? null
   let city = profile.city ?? null
 
+  // Collect ALL of the profile's states (primary + secondary address + the
+  // multi-state `states[]` array on basic_information / location_focus). This
+  // makes a two-address (or multi-state service-area) profile match local
+  // opportunities in EVERY one of its states — not just the primary. Stored
+  // primary-first, deduped, 2-letter normalized. Empty when no state is known
+  // (callers MUST treat empty as NEUTRAL, never a penalty).
+  const _stateAccumulator = []
+  const _addState = (raw) => {
+    if (!raw) return
+    const norm = String(raw).trim().toUpperCase()
+    const two = STATE_NAME_TO_ABBR[norm.toLowerCase()] ?? (norm.length === 2 ? norm : null)
+    if (two && !_stateAccumulator.includes(two)) _stateAccumulator.push(two)
+  }
+
   // Extract location from sections if top-level is incomplete.
   // Check standard section keys used in real profile data.
   if ((!state || !zip) && profileSections) {
@@ -508,6 +542,38 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
       }
     }
   }
+
+  // -- Multi-state collection (primary + secondary address + states[]) --
+  // Primary first (so single-address behavior is unchanged), then the
+  // secondary address, then any explicit multi-state arrays. This is the
+  // canonical list the matcher uses to claim in-state for ANY address.
+  _addState(state)
+  const _basicInfo = profileSections?.basic_information?.answers ?? profileSections?.basic_information ?? null
+  const _locFocus = profileSections?.location_focus?.answers ?? profileSections?.location_focus ?? null
+  // Secondary address: structured object or freeform string.
+  const _secondary = _basicInfo?.secondary_address ?? null
+  if (_secondary && typeof _secondary === 'object') {
+    _addState(_secondary.state ?? _secondary.region ?? null)
+  } else if (typeof _secondary === 'string') {
+    const m = _secondary.match(/\b([A-Za-z]{2})\s*,?\s*\d{5}/)
+    if (m) _addState(m[1])
+  }
+  // Explicit states[] arrays on the profile, basic_information, or location_focus.
+  for (const arr of [
+    safeParseArray(profile.states),
+    safeParseArray(_basicInfo?.states),
+    safeParseArray(_locFocus?.states),
+    safeParseArray(_locFocus?.service_states),
+  ]) {
+    for (const s of arr) _addState(s)
+  }
+  // Merge any states surfaced by buildProfileSignals (primary + secondary
+  // resolved with the offline ZIP DB). Keeps profileNorm.states in sync with
+  // signals.states without depending on call order.
+  if (Array.isArray(signals?.states)) {
+    for (const s of signals.states) _addState(s)
+  }
+  const states = _stateAccumulator.slice()
 
   // -- Need categories --
   const rawNeeds = [
@@ -904,9 +970,25 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   if (!ethnicity && demographicsSection) {
     const da = demographicsSection.answers ?? demographicsSection
     if (da && typeof da === 'object') {
-      ethnicity = da.ethnicity ?? null
+      ethnicity = da.ethnicity ?? da.race ?? null
     }
   }
+
+  // Canonical ethnicity bucket — the single signal the matcher compares against
+  // an opportunity's explicit ethnicity restriction. Derived from the free-text
+  // ethnicity/race string and (as a fallback) the boolean demographics tokens
+  // collected below. null = unknown ⇒ NEUTRAL (never a hard reject).
+  const _ethnicityBucketFromText = (raw) => {
+    if (!raw || typeof raw !== 'string') return null
+    const r = raw.toLowerCase()
+    if (/\b(african[\s-]?american|black)\b/.test(r)) return 'african_american'
+    if (/\b(hispanic|latino|latina|latinx|latin[\s-]?american)\b/.test(r)) return 'hispanic_latino'
+    if (/\b(native[\s-]?american|american indian|alaska native|indigenous|tribal)\b/.test(r)) return 'native_american'
+    if (/\b(asian[\s-]?american|asian|pacific islander)\b/.test(r)) return 'asian_american'
+    if (/\b(white|caucasian|european[\s-]?american)\b/.test(r)) return 'white'
+    return null
+  }
+  let ethnicityBucket = _ethnicityBucketFromText(ethnicity)
 
   // -- Household children signal --
   const householdSection = profileSections?.household_details ?? null
@@ -966,6 +1048,15 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   if (isStudent && !demographics.includes('first_generation')) {
     const ea = (educationSection?.answers ?? educationSection)
     if (ea?.first_generation || ea?.first_generation_college_student) demographics.push('first_generation')
+  }
+
+  // Fallback: derive the ethnicity bucket from the boolean demographics tokens
+  // when no free-text ethnicity was provided.
+  if (!ethnicityBucket) {
+    if (demographics.includes('african_american')) ethnicityBucket = 'african_american'
+    else if (demographics.includes('hispanic_latino')) ethnicityBucket = 'hispanic_latino'
+    else if (demographics.includes('native_american') || demographics.includes('tribal_affiliation')) ethnicityBucket = 'native_american'
+    else if (demographics.includes('asian_american')) ethnicityBucket = 'asian_american'
   }
 
   // ---------------------------------------------------------------------------
@@ -1521,6 +1612,11 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     id: profile.id,
     entityType,
     state,
+    // ALL of the profile's states (primary-first, deduped, 2-letter). A
+    // single-address profile yields exactly [state]; a multi-address /
+    // multi-state profile yields every one so geo matching claims in-state for
+    // ANY address. Empty = unknown (neutral, never a penalty).
+    states,
     zip,
     county,
     city,
@@ -1545,6 +1641,11 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     ageGroup: resolvedAgeGroup,
     gender,
     ethnicity,
+    // Canonical ethnicity bucket (african_american / hispanic_latino /
+    // native_american / asian_american / white) or null when unknown. Used by
+    // the matcher to hard-gate ethnicity-exclusive scholarships ONLY when the
+    // profile clearly does not qualify. null ⇒ neutral.
+    ethnicityBucket,
     demographics,
     immigrationStatus,
     // Affiliations & qualifiers

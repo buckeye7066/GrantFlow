@@ -58,12 +58,23 @@ const VALID_DIRECTIONS = new Set(['read', 'write', 'both'])
 function profileToFundingSources(profile) {
   // Pull the profile's completed-application funding sources / awards so a WRITE
   // can push them into the portal. We read the same university_applications
-  // section the import service writes into, plus any generic awards list.
+  // section the import service writes into. The real award data lives in BOTH
+  // `imported_portal_awards` (raw imports) AND `financial_aid_pipeline` (the
+  // tracked aid stages the UI shows) — so we read both. Previously only
+  // imported_portal_awards was read, which left WRITE with zero sources because
+  // the data actually sits in financial_aid_pipeline.
   const sources = []
   const uni = profile?.university_applications || profile?.sections?.university_applications || {}
   for (const app of Array.isArray(uni?.applications) ? uni.applications : []) {
     for (const a of Array.isArray(app?.imported_portal_awards) ? app.imported_portal_awards : []) {
       sources.push({ name: a?.title || a?.award_name, amount: a?.amount, sponsor: a?.provider_name })
+    }
+    // financial_aid_pipeline stages carry the funding source name (label/name/
+    // title) and, when known, an amount.
+    for (const stage of Array.isArray(app?.financial_aid_pipeline) ? app.financial_aid_pipeline : []) {
+      const name = stage?.title || stage?.name || stage?.label
+      if (!name) continue
+      sources.push({ name, amount: stage?.amount ?? stage?.award_amount ?? null, sponsor: stage?.provider_name || stage?.sponsor })
     }
   }
   // Dedupe by name; drop entries with no name.

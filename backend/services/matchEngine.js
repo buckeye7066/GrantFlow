@@ -147,6 +147,36 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     if (isFemale === false) ineligibilityReasons.push('Requires women/female applicants')
     else if (isFemale === null) missingFields.push('gender')
   }
+
+  // Explicit GENDER restriction (men-only / women-only). requiresWomen above
+  // already covers the female-only path for back-compat; this also gates the
+  // male-only case symmetrically. Mirrors requiresWomen: known-mismatch →
+  // hard reject; unknown gender → missing field (REVIEW, never reject).
+  if (oppNorm.requiresGender === 'male') {
+    const isFemale = profileGenderIsFemale(profileNorm)
+    if (isFemale === true) ineligibilityReasons.push('Requires male applicants')
+    else if (isFemale === null) missingFields.push('gender')
+  }
+
+  // Explicit ETHNICITY restriction (canonical_rules G4 "explicitly exclusive").
+  // UNCF (African-American-only), Hispanic Scholarship Fund (Hispanic-only),
+  // enrolled-tribal-member scholarships, etc. HARD-REJECT only when the
+  // profile's ethnicity is KNOWN and is NOT among the required buckets. When
+  // the profile's ethnicity is UNKNOWN/blank, this is a MISSING field
+  // (→ REVIEW), never a hard reject (missing = neutral per canonical rules).
+  const requiredEthnicities = Array.isArray(oppNorm.requiresEthnicity) ? oppNorm.requiresEthnicity : []
+  if (requiredEthnicities.length > 0) {
+    const profBucket = profileNorm.ethnicityBucket ?? null
+    if (profBucket) {
+      if (!requiredEthnicities.includes(profBucket)) {
+        ineligibilityReasons.push(
+          `Restricted to ${requiredEthnicities.join('/')} applicants; profile ethnicity is ${profBucket}`,
+        )
+      }
+    } else {
+      missingFields.push('ethnicity')
+    }
+  }
   if (oppNorm.requiresNonprofit && !profileNorm.isNonprofit) ineligibilityReasons.push('Requires 501(c)(3) or nonprofit status')
   if (oppNorm.requiresBusiness && !profileNorm.isBusiness) ineligibilityReasons.push('Requires business or self-employment')
 

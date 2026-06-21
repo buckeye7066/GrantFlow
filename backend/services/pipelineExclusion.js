@@ -73,6 +73,42 @@ function titleOf(opp) {
   return opp?.title ?? opp?.program_name ?? null
 }
 
+/**
+ * Pull a human title from a profile-section award entry. These come from the
+ * `university_applications` section JSON and use a different (looser) shape than
+ * catalog rows: financial-aid pipeline stages carry `title` / `name` / `label`,
+ * imported portal awards carry `award_name` / `awardName` / `portal_name`. We
+ * accept all of them so a saved/imported award is keyed under the SAME
+ * normalized title the catalog exclusion uses.
+ */
+function sectionAwardTitle(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  return (
+    entry.title ??
+    entry.name ??
+    entry.label ??
+    entry.award_name ??
+    entry.awardName ??
+    entry.portal_name ??
+    entry.portalName ??
+    null
+  )
+}
+
+/** Pull a funder/source from a profile-section award entry (may be absent). */
+function sectionAwardFunder(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  return (
+    entry.funder ??
+    entry.source ??
+    entry.provider ??
+    entry.sponsor ??
+    entry.portal_name ??
+    entry.portalName ??
+    null
+  )
+}
+
 /** Pull the funder from an opportunity-shaped row. */
 function funderOf(opp) {
   return opp?.funder ?? opp?.sponsor ?? null
@@ -112,6 +148,12 @@ export async function loadPipelineExclusionIndex(db, profileId) {
   const fingerprints = new Set()
   const titleFunders = new Set()
   const titles = new Set()
+  // Bare normalized titles of awards the user has ALREADY secured/imported in
+  // their university_applications section. Always checked (unlike `titles`,
+  // which is opt-in) because these are user-confirmed awards whose funder/source
+  // label routinely drifts from the catalog's — title alone is the only stable
+  // identity we have for them, and re-surfacing them is exactly the bug.
+  const sectionTitles = new Set()
 
   // 1. Grants already in this profile's pipeline (every stage — once a grant
   //    is being tracked, re-surfacing it as a "new" result is the bug).
@@ -172,7 +214,61 @@ export async function loadPipelineExclusionIndex(db, profileId) {
     })
   }
 
-  return { oppIds, fingerprints, titleFunders, titles }
+  // 3. Awards the user already secured/imported that live ONLY in the profile's
+  //    `university_applications` section JSON (financial_aid_pipeline stages +
+  //    imported portal awards), NOT in the `grants` table. Without these, a
+  //    saved/portal-imported scholarship (e.g. "UNCF Scholarships") re-surfaces
+  //    as a "new" match because its title/title+funder key was never indexed.
+  //    Fold them into the SAME normalized title / title+funder keys so the
+  //    existing exclusion logic catches them with no other changes.
+  try {
+    const sectionRows = await db
+      .prepare(
+        `SELECT data
+           FROM profile_sections
+          WHERE profile_id = ? AND section_key = 'university_applications'`,
+      )
+      .all(profile)
+    for (const row of sectionRows || []) {
+      const raw = row?.data
+      let parsed
+      if (raw && typeof raw === 'object') {
+        parsed = raw // pg JSON columns may already be objects
+      } else {
+        const s = norm(raw)
+        if (!s) continue
+        parsed = JSON.parse(s)
+      }
+      const applications = Array.isArray(parsed?.applications) ? parsed.applications : []
+      for (const app of applications) {
+        if (!app || typeof app !== 'object') continue
+        const awardEntries = [
+          ...(Array.isArray(app.financial_aid_pipeline) ? app.financial_aid_pipeline : []),
+          ...(Array.isArray(app.imported_portal_awards) ? app.imported_portal_awards : []),
+        ]
+        for (const entry of awardEntries) {
+          const title = sectionAwardTitle(entry)
+          const t = lowerKey(title)
+          if (t) {
+            titles.add(t)
+            sectionTitles.add(t)
+          }
+          const tf = titleFunderKey(title, sectionAwardFunder(entry))
+          if (tf) titleFunders.add(tf)
+        }
+      }
+    }
+  } catch (err) {
+    // Non-fatal — recall over suppression. We still have pipeline grants +
+    // dismissals to exclude against; never blank results because a section
+    // failed to parse.
+    log.warn('failed to load university_applications section awards (continuing)', {
+      profileId: profile,
+      error: String(err?.message || err),
+    })
+  }
+
+  return { oppIds, fingerprints, titleFunders, titles, sectionTitles }
 }
 
 /**
@@ -186,9 +282,13 @@ export async function loadPipelineExclusionIndex(db, profileId) {
  *      that catches a pipeline grant re-crawled under a new id and/or a new
  *      source label (different deadline/url → different fingerprint). title is
  *      paired with funder to avoid generic-title collisions.
- *   4. bare lower(title) — OPT-IN (`matchTitle: true`), only for dismissal
- *      tombstones whose funder/URL drifted. Off by default because exact title
- *      collisions across unrelated programs are common.
+ *   4. bare lower(title) for user-secured/imported `university_applications`
+ *      section awards — ALWAYS ON. These awards live only in the profile's
+ *      section JSON (never the grants table) and their funder/source label
+ *      drifts from the catalog's, so title is the only stable identity.
+ *   5. bare lower(title) for everything else — OPT-IN (`matchTitle: true`),
+ *      only for dismissal tombstones whose funder/URL drifted. Off by default
+ *      because exact title collisions across unrelated programs are common.
  */
 function isExcluded(opp, index, { matchTitle = false } = {}) {
   if (!index) return false
@@ -198,9 +298,13 @@ function isExcluded(opp, index, { matchTitle = false } = {}) {
   if (fp && index.fingerprints.has(fp)) return true
   const tf = titleFunderKey(titleOf(opp), funderOf(opp))
   if (tf && index.titleFunders.has(tf)) return true
+  // User-secured/imported section awards: matched on bare normalized title
+  // regardless of `matchTitle`, because their funder label drifts from the
+  // catalog's and the title is the only stable identity we have for them.
+  const titleKey = lowerKey(titleOf(opp))
+  if (titleKey && index.sectionTitles && index.sectionTitles.has(titleKey)) return true
   if (matchTitle) {
-    const t = lowerKey(titleOf(opp))
-    if (t && index.titles.has(t)) return true
+    if (titleKey && index.titles.has(titleKey)) return true
   }
   return false
 }
@@ -226,7 +330,8 @@ export async function filterOutPipelineMembers(db, profileId, opportunities, opt
     (index.oppIds.size === 0 &&
       index.fingerprints.size === 0 &&
       index.titleFunders.size === 0 &&
-      index.titles.size === 0)
+      index.titles.size === 0 &&
+      (index.sectionTitles?.size ?? 0) === 0)
   ) {
     // Nothing to exclude (or load failed) — pass through untouched.
     return { results: list, excluded: 0, total: list.length }

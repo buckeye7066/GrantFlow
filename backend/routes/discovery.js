@@ -807,14 +807,30 @@ router.post('/discoverECFServices', async (req, res) => {
       LIMIT 50
     `;
     
-    const services = await req.db.prepare(query).all(...params);
-    
+    let services = await req.db.prepare(query).all(...params);
+
+    // Pipeline exclusion: never re-surface a service already in this profile's
+    // pipeline, dismissed, or secured/imported in university_applications.
+    // Profile-scoped (no cross-profile bleed). Skipped when include_pipeline=1.
+    let excludedAlreadyInPipeline = 0;
+    if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+      try {
+        const filtered = await filterOutPipelineMembers(req.db, String(profile_id), services);
+        services = filtered.results;
+        excludedAlreadyInPipeline = filtered.excluded;
+      } catch (exclErr) {
+        // Recall over suppression — a filter failure must not blank results.
+        console.warn('[discoverECFServices] pipeline exclusion skipped:', exclErr?.message || exclErr);
+      }
+    }
+
     res.json({
       success: true,
       services,
-      count: services.length
+      count: services.length,
+      excluded_already_in_pipeline: excludedAlreadyInPipeline || undefined
     });
-    
+
   } catch (error) {
     console.error('[discoverECFServices] Error:', error);
     res.status(500).json({

@@ -334,6 +334,108 @@ function matchesExclusiveEntityRequirement(text, type) {
 }
 
 // ---------------------------------------------------------------------------
+// Explicit identity restriction detection (ethnicity / heritage / gender).
+//
+// Canonical rule (docs/canonical_rules.md G4): "Population/eligibility
+// mismatches reduce score, not discard results UNLESS the opportunity is
+// EXPLICITLY EXCLUSIVE." Ethnicity/gender-exclusive scholarships (UNCF =
+// African-American-only, HSF = Hispanic-only, women-only STEM awards, etc.)
+// ARE explicitly exclusive, so they must be HARD-GATED when a profile clearly
+// does not qualify — and only then. A casual, inclusive mention ("we welcome
+// diverse applicants", "open to all backgrounds") is NEVER a restriction.
+//
+// Each canonical ethnicity bucket maps to the same tokens the profile
+// normalizer emits on profileNorm.demographics + the free-text ethnicity
+// string, so matchEngine can compare apples to apples.
+// ---------------------------------------------------------------------------
+const ETHNICITY_RESTRICTION_PATTERNS = {
+  african_american: [
+    /\b(?:for|to)\s+(?:african[\s-]?american|black)\s+(?:students?|applicants?|individuals?|men|women|youth)\b/i,
+    /\b(?:african[\s-]?american|black)\s+(?:students?|applicants?|individuals?)\s+(?:only|exclusively)\b/i,
+    /\bmust be\s+(?:african[\s-]?american|black)\b/i,
+    /\b(?:open|available|restricted|limited)\s+(?:only\s+)?(?:to|for)\s+(?:african[\s-]?american|black)\b/i,
+    /\bunited negro college fund\b/i,
+    /\buncf\b/i,
+  ],
+  hispanic_latino: [
+    /\b(?:for|to)\s+(?:hispanic|latino|latina|latinx|latin[\s-]?american)\s+(?:students?|applicants?|individuals?|heritage)\b/i,
+    /\b(?:hispanic|latino|latina|latinx)\s+(?:students?|applicants?|individuals?)\s+(?:only|exclusively)\b/i,
+    /\bmust be\s+(?:hispanic|latino|latina|latinx)\b/i,
+    /\b(?:hispanic|latino|latina|latinx)\s+heritage\s+(?:required|only)\b/i,
+    /\b(?:open|available|restricted|limited)\s+(?:only\s+)?(?:to|for)\s+(?:hispanic|latino|latina|latinx)\b/i,
+    /\bhispanic scholarship fund\b/i,
+  ],
+  native_american: [
+    /\b(?:for|to)\s+(?:native[\s-]?american|american indian|alaska native|indigenous)\s+(?:students?|applicants?|individuals?|peoples?)\b/i,
+    /\b(?:native[\s-]?american|american indian|indigenous)\s+(?:students?|applicants?)\s+(?:only|exclusively)\b/i,
+    /\bmust be\s+(?:native[\s-]?american|american indian|an enrolled (?:tribal )?member)\b/i,
+    /\benrolled (?:tribal )?members?\s+(?:only|of a federally recognized tribe)\b/i,
+    /\b(?:open|available|restricted|limited)\s+(?:only\s+)?(?:to|for)\s+(?:native[\s-]?american|american indian|indigenous)\b/i,
+  ],
+  asian_american: [
+    /\b(?:for|to)\s+(?:asian[\s-]?american|asian|pacific islander)\s+(?:students?|applicants?|individuals?)\b/i,
+    /\b(?:asian[\s-]?american|asian|pacific islander)\s+(?:students?|applicants?)\s+(?:only|exclusively)\b/i,
+    /\bmust be\s+(?:asian[\s-]?american|asian|pacific islander)\b/i,
+  ],
+}
+
+// Profile ethnicity free-text → canonical bucket. Used to decide whether a
+// profile clearly DOES NOT satisfy an explicit ethnicity restriction.
+const ETHNICITY_TOKEN_TO_BUCKET = [
+  { bucket: 'african_american', rx: /\b(african[\s-]?american|black)\b/i },
+  { bucket: 'hispanic_latino', rx: /\b(hispanic|latino|latina|latinx|latin[\s-]?american)\b/i },
+  { bucket: 'native_american', rx: /\b(native[\s-]?american|american indian|alaska native|indigenous|tribal)\b/i },
+  { bucket: 'asian_american', rx: /\b(asian[\s-]?american|asian|pacific islander)\b/i },
+  { bucket: 'white', rx: /\b(white|caucasian|european[\s-]?american)\b/i },
+]
+
+/**
+ * Map a free-text ethnicity string to a canonical bucket, or null when it
+ * cannot be confidently classified (→ treated as UNKNOWN/neutral downstream).
+ * @param {string|null} raw
+ * @returns {string|null}
+ */
+export function ethnicityToBucket(raw) {
+  if (!raw || typeof raw !== 'string') return null
+  for (const { bucket, rx } of ETHNICITY_TOKEN_TO_BUCKET) {
+    if (rx.test(raw)) return bucket
+  }
+  return null
+}
+
+/**
+ * Detect EXPLICIT ethnicity restrictions in opportunity text. Returns the
+ * canonical buckets the opportunity is exclusively for, or [] when none.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function detectEthnicityRestrictions(text) {
+  const out = []
+  for (const [bucket, patterns] of Object.entries(ETHNICITY_RESTRICTION_PATTERNS)) {
+    if (patterns.some((rx) => rx.test(text))) out.push(bucket)
+  }
+  return out
+}
+
+// Explicit gender restriction (women-only / men-only). `requiresWomen` already
+// covers the female-only case for back-compat; this adds an explicit
+// male-only signal and a structured requiresGender field.
+const MEN_ONLY_PATTERNS = [
+  /\b(?:for|to)\s+men\s+only\b/i,
+  /\bmen[\s-]?only\b/i,
+  /\bmale\s+(?:students?|applicants?)\s+only\b/i,
+  /\bmust be (?:a )?male\b/i,
+]
+const WOMEN_ONLY_RESTRICTION_PATTERNS = [
+  /\bwomen[\s-]?only\b/i,
+  /\bfor\s+women\s+only\b/i,
+  /\bfemale\s+(?:students?|applicants?)\s+only\b/i,
+  /\bmust be (?:a )?(?:woman|female)\b/i,
+  /\bwomen\s+in\s+(?:stem|engineering|business|science|technology)\b/i,
+  /\bfor\s+women\b/i,
+]
+
+// ---------------------------------------------------------------------------
 // Normalize opportunity into canonical structure
 // ---------------------------------------------------------------------------
 export function normalizeOpportunity(rawOpp) {
@@ -491,6 +593,23 @@ export function normalizeOpportunity(rawOpp) {
     (allNeedTypes.includes('women') &&
       (allNeedTypes.includes('education') || /\bstudents?\b/i.test(text)))
 
+  // -- Explicit identity (ethnicity / gender) restrictions --
+  // Only set when EXPLICITLY exclusive (per canonical_rules G4). These are the
+  // hard-gate signals the decision engine uses to reject a profile whose
+  // demographics clearly do NOT qualify (and ONLY then; unknown = neutral).
+  const requiresEthnicity = Array.isArray(rawOpp.requires_ethnicity)
+    ? rawOpp.requires_ethnicity.map((e) => String(e).toLowerCase().trim()).filter(Boolean)
+    : detectEthnicityRestrictions(text)
+
+  let requiresGender = null
+  const rawRequiresGender = rawOpp.requires_gender
+    ? String(rawOpp.requires_gender).toLowerCase().trim()
+    : null
+  if (rawRequiresGender === 'male' || rawRequiresGender === 'men') requiresGender = 'male'
+  else if (rawRequiresGender === 'female' || rawRequiresGender === 'women') requiresGender = 'female'
+  else if (matchesAnyPattern(text, MEN_ONLY_PATTERNS)) requiresGender = 'male'
+  else if (requiresWomen || matchesAnyPattern(text, WOMEN_ONLY_RESTRICTION_PATTERNS)) requiresGender = 'female'
+
   // -- Has real application URL? --
   const hasApplicationUrl = Boolean(
     rawOpp.application_url ||
@@ -542,6 +661,8 @@ export function normalizeOpportunity(rawOpp) {
     requiresVeteran,
     requiresStudent,
     requiresWomen,
+    requiresGender,
+    requiresEthnicity,
     requiresNonprofit,
     requiresBusiness,
     hasApplicationUrl,
@@ -651,6 +772,8 @@ export function computeOpportunityFingerprint(normalizedOpp) {
     requiresStudent: normalizedOpp.requiresStudent,
     requiresNonprofit: normalizedOpp.requiresNonprofit,
     requiresBusiness: normalizedOpp.requiresBusiness,
+    requiresGender: normalizedOpp.requiresGender ?? null,
+    requiresEthnicity: (normalizedOpp.requiresEthnicity ?? []).slice().sort(),
   }
   return crypto
     .createHash('sha256')
