@@ -86,6 +86,10 @@ tmp/
 # Scratch/debugging tooling produced by codemod or audit passes.
 # Anything under scripts/ that starts with `_` is one-off, not shipped.
 scripts/_*
+
+# Claude Code agent worktrees — isolated nested checkouts used as agent
+# scratch space. Never commit (would nest the repo inside itself).
+.claude/worktrees/
 # Audit-pass output (audit-scan.json) is a local artifact; the canonical
 # audit lives under audit-reports/ above.
 audit-scan.json
