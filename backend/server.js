@@ -2590,22 +2590,28 @@ if (process.env.NODE_ENV !== 'test') {
         // YANA_ALLOW_LIVE_WEB=true AND BRAVE_SEARCH_API_KEY is set; otherwise
         // enrichment stays an honest NOOP and prospects sit at needs_enrichment.
         try {
-          const braveKey = process.env.BRAVE_SEARCH_API_KEY
           const liveWeb = /^(1|true|yes|on)$/i.test(String(process.env.YANA_ALLOW_LIVE_WEB || ''))
-          if (braveKey && liveWeb) {
-            const [{ makeBraveSearchProvider, makeHtmlFetcher }, { makeContactEnricher, setDefaultContactEnricher }] =
+          if (liveWeb) {
+            // Yana's contact enricher shares ONE canonical web-search engine with
+            // profile discovery (services/crawlers/webSearchEngine.js): Brave when
+            // BRAVE_SEARCH_API_KEY is set, else keyless DuckDuckGo. This means Yana
+            // can search the web even without a Brave key — YANA_ALLOW_LIVE_WEB is
+            // the single master gate for Yana's outbound live-web access.
+            const [{ searchWeb }, { makeHtmlFetcher }, { makeContactEnricher, setDefaultContactEnricher }] =
               await Promise.all([
+                import('./services/crawlers/webSearchEngine.js'),
                 import('./services/yana/webSearchProvider.js'),
                 import('./services/yana/yanaContactEnrichment.js'),
               ])
             const enricher = makeContactEnricher({
-              searchProvider: makeBraveSearchProvider({ apiKey: braveKey }),
+              searchProvider: ({ query }) => searchWeb(query, { count: 5 }),
               fetcher: makeHtmlFetcher(),
             })
             setDefaultContactEnricher(enricher)
-            console.log('[Server] Yana contact enricher wired (Brave Search, live web ON)')
+            const backend = process.env.BRAVE_SEARCH_API_KEY ? 'Brave' : 'DuckDuckGo'
+            console.log(`[Server] Yana contact enricher wired (${backend} web search, live web ON)`)
           } else {
-            console.log('[Server] Yana contact enricher is a NOOP (set YANA_ALLOW_LIVE_WEB=true + BRAVE_SEARCH_API_KEY to enable)')
+            console.log('[Server] Yana contact enricher is a NOOP (set YANA_ALLOW_LIVE_WEB=true to enable; Brave key optional)')
           }
         } catch (enrichErr) {
           console.warn('[Server] Yana contact enricher wiring failed (non-fatal):', enrichErr?.message || enrichErr)
