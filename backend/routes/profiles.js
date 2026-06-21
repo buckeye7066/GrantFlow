@@ -2167,9 +2167,12 @@ async function persistAvatarBytes({ req, id, buffer, contentType, ext = 'png', p
 
   // Best-effort: drop the file into /uploads as a fast-path read cache. If the
   // disk is read-only or wiped, the download endpoint falls back to the DB
-  // BYTEA, so a failure here is non-fatal.
+  // BYTEA, so a failure here is non-fatal. AWAIT the write so the cache is
+  // actually present when we respond — the previous fire-and-forget
+  // (fs.writeFile(..., () => {})) returned before the bytes hit disk, which made
+  // the read-cache racy (and the persistence test intermittently fail in CI).
   try {
-    fs.writeFile(join(getUploadsDir(req), filename), buffer, () => {})
+    await fs.promises.writeFile(join(getUploadsDir(req), filename), buffer)
   } catch { /* ignore — DB copy is authoritative */ }
 
   try {
