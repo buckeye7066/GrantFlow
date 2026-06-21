@@ -109,7 +109,13 @@ export async function runJohn({
 
   try {
     const supp = await makeSuppressionChecker(db)
-    const src = leadSource || getRegisteredLeadSource()
+    // When the caller passed an explicit lead source, use ONLY that one
+    // (back-compat: admin drafting a single approved lead, or a test adapter).
+    // Otherwise pass null so fetchLeadsForJohn aggregates across EVERY
+    // registered source (Yana + Robert + …). Per-lead hooks are routed back to
+    // the owning source via lead._leadSource. `fallbackSrc` is used only when a
+    // lead carries no owning source (single-source / legacy packets).
+    const fallbackSrc = leadSource || getRegisteredLeadSource()
     const cfg = { ...config }
     if (typeof draftOnly === 'boolean') cfg.draftOnly = draftOnly
     assertDraftOnly(cfg)
@@ -132,7 +138,7 @@ export async function runJohn({
     // Pull candidate leads (always — observe mode also lists them).
     const fetched = await fetchLeadsForJohn({
       db,
-      leadSource: src,
+      leadSource,
       config: cfg,
       limit: typeof maxDrafts === 'number' ? maxDrafts : cfg.maxDraftsPerRun,
       leadIds,
@@ -231,8 +237,9 @@ export async function runJohn({
       // thin lead is never stuck (esp. when live-web enrichment is off).
       const interpretation = interpretLead(lead)
       const sufficiency = assessLeadSufficiency(lead, interpretation)
+      const leadSrc = lead._leadSource || fallbackSrc
       if (!sufficiency.sufficient && lead.lead_id) {
-        const req = await requestLeadEnrichment(src, {
+        const req = await requestLeadEnrichment(leadSrc, {
           leadId: lead.lead_id,
           organizationName: lead.organization_name,
           missing: sufficiency.missing,
@@ -271,7 +278,7 @@ export async function runJohn({
       })
       if (result.ok) {
         summary.drafts_created += 1
-        await markLeadQueuedForReview(src, lead.lead_id, result.draft_id).catch(() => {})
+        await markLeadQueuedForReview(leadSrc, lead.lead_id, result.draft_id).catch(() => {})
       } else if (result.status === 'failed') {
         summary.drafts_failed += 1
         if (result.error) summary.errors.push({ lead_id: lead.lead_id, error: result.error })

@@ -892,14 +892,18 @@ if (!app.locals.db_startup_error) {
     )
   }
 
-  // Register the Yana-backed lead source so John drafts outreach from Yana's
-  // qualified client-discovery leads (johnYanaBridge). Yana = Client Discoverer.
+  // Register the lead sources John drafts outreach from (johnYanaBridge now
+  // aggregates over MULTIPLE sources). Yana = Client Discoverer; Robert hands
+  // over the subset of contactable client prospects he encounters (never his
+  // funding sources — those continue to flow to profiles unchanged).
   try {
-    const [{ registerLeadSource }, { makeYanaLeadSource }] = await Promise.all([
+    const [{ registerLeadSource }, { makeYanaLeadSource }, { makeRobertLeadSource }] = await Promise.all([
       import('./services/john/johnYanaBridge.js'),
       import('./services/yana/yanaLeadDiscovery.js'),
+      import('./services/robert/robertJohnBridge.js'),
     ])
     registerLeadSource(makeYanaLeadSource(db))
+    registerLeadSource(makeRobertLeadSource(db))
   } catch (leadSrcErr) {
     console.warn(
       '[yana] could not register lead source for John (non-fatal):',
