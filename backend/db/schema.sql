@@ -1053,6 +1053,11 @@ CREATE TABLE IF NOT EXISTS profiles (
   display_name TEXT NOT NULL,
   status TEXT DEFAULT 'active',
   tags TEXT DEFAULT '[]',
+  -- Timestamp of the most recent discovery RUN for this profile. NULL until
+  -- discovery has ever been triggered. The matching endpoint uses this as a
+  -- gate: NOTHING is shown from the global catalog until discovery has run
+  -- for the profile (so a fresh profile doesn't surface pre-loaded results).
+  last_discovery_at DATETIME,
   avatar_url TEXT,
   -- Durable avatar storage: the image bytes live in the DB so the avatar
   -- survives an ephemeral /uploads wipe (see migration 096 / pg 0092). Declared

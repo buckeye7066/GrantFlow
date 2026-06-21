@@ -32,9 +32,14 @@ function seedOrg(db, name = "Test Org") {
 
 function seedProfile(db, userId, orgId, overrides = {}) {
   const profileId = "p-test-" + Math.random().toString(36).slice(2, 10)
+  // Stamp last_discovery_at so these integration profiles represent the
+  // "discovery has already run" state. The matching endpoint now gates the
+  // catalog behind a per-profile discovery_pending signal (NULL → empty +
+  // discovery_pending); these tests assert the post-discovery matching
+  // behavior, so they must look like discovery has run.
   db.prepare(`
-    INSERT INTO profiles (id, user_id, organization_id, display_name, primary_type, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    INSERT INTO profiles (id, user_id, organization_id, display_name, primary_type, last_discovery_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `).run(
     profileId,
     userId,

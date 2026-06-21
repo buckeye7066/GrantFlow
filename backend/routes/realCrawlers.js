@@ -33,7 +33,7 @@ import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../ser
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource, loadCrawlerSourceRuntimeStatus } from '../services/sourceRegistry.js'
 import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
-import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
+import { triggerAutoDiscoveryCrawlers, stampLastDiscoveryAt } from '../services/autoDiscoveryCrawlers.js'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import fs from 'fs'
@@ -446,6 +446,11 @@ router.post('/run', ensureAuth, async (req, res) => {
     const startTime = Date.now()
 
     routeLogger.info(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
+
+    // Stamp the per-profile "discovery has run" signal: this run IS discovery
+    // for this profile, so flip it out of the matching endpoint's
+    // discovery_pending empty state. Best-effort — never block the crawl.
+    void stampLastDiscoveryAt(db, profile_id)
 
     const strategy = getStrategy(crawler_type)
 
@@ -1430,6 +1435,10 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
     const db = req.db
     const startTime = Date.now()
 
+    // Stamp the per-profile "discovery has run" signal (best-effort, never
+    // blocks): a specific-need search is a discovery path for this profile.
+    void stampLastDiscoveryAt(db, profile_id)
+
     const expandedNeed = expandNeed(need_text)
 
     // 1. Run curated crawler pipeline
@@ -1652,6 +1661,9 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
 
   const db = req.db
+  // Stamp the per-profile "discovery has run" signal (best-effort, never blocks):
+  // run-smart is a discovery path for this profile.
+  void stampLastDiscoveryAt(db, profile_id)
   const minScore = Number(min_match_score) || 50
   const allOpportunities = []
   const seenTitles = new Set()

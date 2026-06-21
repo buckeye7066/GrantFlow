@@ -95,6 +95,70 @@ async function requireProfileAccess(req, res, profileId) {
 }
 
 /**
+ * Map a raw source / record_origin token to a USER-FRIENDLY source family
+ * label for the Discover guidance band. Keeps jargon (geo_crawl,
+ * grants_gov, foundation_990, web_search…) out of the UI. Anything we don't
+ * recognize collapses to a sensible generic bucket so the band never shows a
+ * snake_case blob.
+ *
+ * @param {string} source
+ * @param {string} recordOrigin
+ * @returns {string} friendly family label
+ */
+function friendlySourceFamily(source, recordOrigin) {
+  const raw = `${String(source ?? '')} ${String(recordOrigin ?? '')}`.toLowerCase()
+  if (!raw.trim()) return 'Other programs'
+  if (/grants?[._-]?gov|federal|nih|sam|usaspending|fed_/.test(raw)) return 'Federal grants'
+  if (/foundation|990|philanthrop/.test(raw)) return 'Foundation grants'
+  if (/scholarship|school|student|college|university|education/.test(raw)) return 'Scholarships & student aid'
+  if (/web[._-]?search|web_|duckduckgo|brave|live/.test(raw)) return 'Web-discovered leads'
+  if (/state|local|geo|county|city|directory|curated|benefit/.test(raw)) return 'Local programs & benefits'
+  return 'Other programs'
+}
+
+/**
+ * Build a score histogram from ALL scored opportunities (BEFORE the slider's
+ * min-score filter) so the frontend can render a data-driven guidance band
+ * across the 0–80 range. Each bucket reports its [min,max) range, how many
+ * scored opportunities fell in it, and the dominant friendly source family.
+ * The 0–80 cap mirrors the slider's realistic strong-match ceiling; anything
+ * scored above 80 folds into the top bucket so no result is invisible.
+ *
+ * @param {Array<{ match_score?: number, source?: string, record_origin?: string }>} scoredList
+ * @param {{ bucketSize?: number, max?: number }} [opts]
+ * @returns {Array<{ min: number, max: number, count: number, top_source: string|null }>}
+ */
+function buildScoreHistogram(scoredList, { bucketSize = 20, max = 80 } = {}) {
+  if (!Array.isArray(scoredList) || scoredList.length === 0) return []
+  const bucketCount = Math.max(1, Math.ceil(max / bucketSize))
+  const buckets = Array.from({ length: bucketCount }, (_, i) => ({
+    min: i * bucketSize,
+    max: i === bucketCount - 1 ? max : (i + 1) * bucketSize,
+    count: 0,
+    _families: new Map(),
+  }))
+  for (const opp of scoredList) {
+    const score = Number(opp?.match_score)
+    if (!Number.isFinite(score)) continue
+    let idx = Math.floor(score / bucketSize)
+    if (idx >= bucketCount) idx = bucketCount - 1
+    if (idx < 0) idx = 0
+    const bucket = buckets[idx]
+    bucket.count++
+    const family = friendlySourceFamily(opp?.source, opp?.record_origin)
+    bucket._families.set(family, (bucket._families.get(family) || 0) + 1)
+  }
+  return buckets.map((b) => {
+    let topSource = null
+    let topCount = -1
+    for (const [family, n] of b._families) {
+      if (n > topCount) { topCount = n; topSource = family }
+    }
+    return { min: b.min, max: b.max, count: b.count, top_source: topSource }
+  })
+}
+
+/**
  * POST /api/matching/interpret-intent
  * Parse free-text funding needs into catalog search terms (rules + optional OpenAI).
  */
@@ -268,6 +332,40 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
                    if (!profileRow) {
                            return res.status(404).json({ error: 'Profile not found' })
                    }
+
+      // ── Discovery-pending gate ───────────────────────────────────────────
+      // NOTHING from the (global) catalog is surfaced for a profile until
+      // discovery has actually RUN for it. `profiles.last_discovery_at` is the
+      // per-profile signal (stamped by triggerAutoDiscoveryCrawlers + the
+      // realCrawlers POST handlers). When it is NULL, return a 200 with an
+      // EMPTY list + discovery_pending:true + a friendly message instead of
+      // querying the catalog — so a fresh profile shows a "run discovery"
+      // empty state, not pre-loaded global results. Admin/debug callers can
+      // bypass with ?ignore_discovery_gate=1. Tolerant: if the column is
+      // missing on an older DB the read throws and we fall through to normal
+      // behavior (the boot invariant adds it).
+      if (req.query.ignore_discovery_gate !== '1') {
+        let discoveryStamp
+        try {
+          discoveryStamp = profileRow.last_discovery_at
+        } catch {
+          discoveryStamp = undefined
+        }
+        const discoveryHasRun = discoveryStamp !== null && discoveryStamp !== undefined
+        if (discoveryStamp !== undefined && !discoveryHasRun) {
+          return res.json({
+            profile_id: profileId,
+            discovery_pending: true,
+            message: 'Run discovery to find funding for this profile.',
+            opportunities: [],
+            referrals: [],
+            returned: 0,
+            qualified_count: 0,
+            total_scored: 0,
+            score_histogram: [],
+          })
+        }
+      }
 
       if (req.query.skip_readiness_check !== '1') {
               const readiness = await checkProfileReadiness(req.db, profileId)
@@ -1083,6 +1181,12 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         })
       }
 
+      // Guidance band data: bucketed score distribution computed from ALL
+      // scored opportunities (BEFORE the slider's min-score filter), with the
+      // dominant friendly source family per bucket. Drives the color-coded,
+      // notched band the Discover/SmartMatcher slider renders above itself.
+      const scoreHistogram = buildScoreHistogram(allScored)
+
       res.json({
               profile_id: profileId,
               profile_applicant_type: profileApplicantType ?? null,
@@ -1092,6 +1196,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               total_scored: rawCandidates.length,
               returned: capped.length,
               qualified_count: qualifiedCount,
+              score_histogram: scoreHistogram,
               opportunities: capped,
               referrals: Array.from(referralTemplates.values()),
               diagnostics: {

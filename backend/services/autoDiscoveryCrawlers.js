@@ -290,6 +290,33 @@ function checkMedicalConditions({ sections, signals }) {
  * @param {object} options - Additional options (uploadDir, getOpenAI for dispatcher)
  * @returns {Promise<void>}
  */
+/**
+ * Stamp profiles.last_discovery_at = now for a profile. This is the single
+ * "discovery has run" signal the matching endpoint gates on (a NULL value
+ * means "never discovered → show nothing but a run-discovery prompt"). It is
+ * best-effort by contract: callers invoke it AFTER the real work (job enqueue
+ * / crawl dispatch) and MUST NOT let a stamping failure block their response.
+ * Tolerant of an older DB where the column hasn't been added yet.
+ *
+ * @param {object} db - Database instance
+ * @param {string} profileId - Profile ID to stamp
+ * @returns {Promise<boolean>} true on success, false on any caught failure
+ */
+export async function stampLastDiscoveryAt(db, profileId) {
+  if (!db || typeof db.prepare !== 'function' || !profileId) return false
+  try {
+    const isPg = db?.dialect === 'postgres'
+    const nowExpr = isPg ? 'NOW()' : "datetime('now')"
+    await db
+      .prepare(`UPDATE profiles SET last_discovery_at = ${nowExpr} WHERE id = ?`)
+      .run(String(profileId))
+    return true
+  } catch (err) {
+    console.warn('[discovery-stamp] Unable to stamp last_discovery_at (continuing):', err?.message || String(err))
+    return false
+  }
+}
+
 function withDiscoveryMetadata(parameters, { profileDigest, trigger }) {
   const merged = { ...(parameters && typeof parameters === 'object' ? parameters : {}) }
   if (profileDigest) merged._profile_digest = profileDigest
@@ -572,6 +599,12 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         console.error(`[auto-discovery] Job ${job.id} dispatch failed:`, err)
       })
     }
+
+    // Stamp the per-profile "discovery has run" signal now that the fleet is
+    // enqueued + dispatched. This is what flips the matching endpoint out of
+    // its discovery_pending empty state for this profile. Best-effort — never
+    // block the summary on a stamping failure.
+    await stampLastDiscoveryAt(db, profileId)
 
     // Return an honest summary so on-demand callers (and tests) can report
     // exactly which relevant crawlers were enqueued for this profile. The

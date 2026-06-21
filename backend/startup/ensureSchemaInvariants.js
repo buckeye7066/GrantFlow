@@ -400,6 +400,45 @@ export async function ensurePerfIndexes(db, { logger = console } = {}) {
   )
 }
 
+/**
+ * profiles.last_discovery_at column (both dialects).
+ *
+ * This is the per-profile "discovery has run" signal. The matching endpoint
+ * (GET /api/matching/profile/:id/opportunities) refuses to surface ANY catalog
+ * results for a profile whose last_discovery_at IS NULL — so a brand-new
+ * profile shows a "run discovery" empty state instead of the global catalog.
+ * triggerAutoDiscoveryCrawlers + the realCrawlers POST handlers stamp it.
+ *
+ * Postgres uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS. SQLite has no
+ * IF NOT EXISTS for ADD COLUMN, so we probe PRAGMA table_info first (the
+ * base schema.sql already declares the column on fresh DBs; this heals
+ * older DBs that predate it).
+ */
+export async function ensureProfileDiscoveryColumn(db, { logger = console } = {}) {
+  return runStep(
+    'profiles.last_discovery_at',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_discovery_at TIMESTAMPTZ')
+        return
+      }
+      // sqlite: add only if missing.
+      let hasColumn = false
+      try {
+        const cols = await db.prepare('PRAGMA table_info(profiles)').all()
+        hasColumn = Array.isArray(cols) && cols.some((c) => c?.name === 'last_discovery_at')
+      } catch {
+        hasColumn = false
+      }
+      if (!hasColumn) {
+        await db.exec('ALTER TABLE profiles ADD COLUMN last_discovery_at DATETIME')
+      }
+    },
+  )
+}
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   const steps = [
     ['agent_subsystem', ensureAgentSubsystem],
@@ -409,6 +448,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['crawler_jobs_type_check', ensureCrawlerJobsTypeCheck],
     ['anya_match_suggestions', ensureAnyaMatchSuggestions],
     ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
+    ['profile_discovery_column', ensureProfileDiscoveryColumn],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
     ['perf_indexes', ensurePerfIndexes],
   ]
