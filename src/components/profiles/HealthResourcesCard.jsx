@@ -3,6 +3,8 @@ import { ExternalLink, FlaskConical, HeartPulse, Info, MapPin } from "lucide-rea
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 
 function normalizeState(value) {
   const v = String(value || "").trim().toUpperCase()
@@ -94,6 +96,8 @@ export default function HealthResourcesCard({
   supportNeeds,
   consentForStudies,
   onEditHealth,
+  onToggleStudyConsent,
+  consentSaving = false,
 }) {
   const st = normalizeState(state)
   const conditionNames = normalizeConditionNames(conditions)
@@ -189,6 +193,46 @@ export default function HealthResourcesCard({
             helper="Reliable, non-commercial health education sources (informational only)."
           />
 
+          {/* Clinical-trials / research-studies OPT-IN. A direct, explained
+              toggle — participation is the user's choice. Default OFF; nothing
+              about studies is shown or fetched until this is turned on. */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-start gap-3">
+              <FlaskConical className="h-5 w-5 text-slate-700 mt-0.5" />
+              <div className="flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <Label htmlFor="consent-studies" className="text-sm font-semibold text-slate-900 cursor-pointer">
+                    Show me clinical trials &amp; research studies
+                  </Label>
+                  {onToggleStudyConsent ? (
+                    <Switch
+                      id="consent-studies"
+                      checked={Boolean(consentForStudies)}
+                      disabled={consentSaving}
+                      onCheckedChange={(next) => onToggleStudyConsent(Boolean(next))}
+                      aria-label="Opt in to clinical trials and research studies"
+                    />
+                  ) : null}
+                </div>
+                <p className="mt-1 text-sm text-slate-700">
+                  When ON, GrantFlow shows currently-recruiting clinical trials and research studies that match the
+                  conditions in your medical profile (early-phase studies included). This is <strong>optional and entirely
+                  your choice</strong>: GrantFlow only shows you the listings with their official ClinicalTrials.gov links —
+                  it never enrolls you, never submits anything, and never shares your medical information. You decide whether
+                  to contact or join any study, and the study team determines eligibility.
+                </p>
+                {/* Fallback for contexts without the inline toggle handler. */}
+                {!onToggleStudyConsent && onEditHealth ? (
+                  <div className="mt-3">
+                    <Button variant="outline" size="sm" onClick={onEditHealth}>
+                      Update consent in Health &amp; Medical
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
           {consentForStudies ? (
             <PortalSection
               title="Research opportunities (opted in)"
@@ -196,26 +240,7 @@ export default function HealthResourcesCard({
               items={research}
               helper="Informational only. ClinicalTrials listings are external and eligibility is determined by study teams."
             />
-          ) : (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-start gap-3">
-                <FlaskConical className="h-5 w-5 text-slate-700 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Research studies/trials are hidden</p>
-                  <p className="mt-1 text-sm text-slate-700">
-                    You can opt in to see research studies/trials you may be able to join as a participant. This is optional.
-                  </p>
-                  {onEditHealth ? (
-                    <div className="mt-3">
-                      <Button variant="outline" size="sm" onClick={onEditHealth}>
-                        Update consent in Health & Medical
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          )}
+          ) : null}
         </div>
 
         <p className="mt-4 text-xs text-slate-600">

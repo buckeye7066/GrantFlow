@@ -1154,6 +1154,16 @@ export default function ProfileDetail() {
                   supportNeeds={healthMedical?.support_needs}
                   consentForStudies={Boolean(healthMedical?.consent_for_studies)}
                   onEditHealth={() => handleOpenSection("health_medical", healthMedical)}
+                  consentSaving={
+                    upsertSectionMutation.isPending &&
+                    upsertSectionMutation.variables?.sectionKey === "health_medical"
+                  }
+                  onToggleStudyConsent={(next) =>
+                    upsertSectionMutation.mutate({
+                      sectionKey: "health_medical",
+                      values: { ...healthMedical, consent_for_studies: next },
+                    })
+                  }
                 />
               </div>
             </TabsContent>
