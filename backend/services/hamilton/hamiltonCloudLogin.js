@@ -245,13 +245,21 @@ export async function startScreencast(liveSessionId, onFrame, { quality = 60, ma
   }
   const cdp = await s.page.context().newCDPSession(s.page)
   s.screencastCdp = cdp
+  let frameCount = 0
   cdp.on('Page.screencastFrame', async (frame) => {
     try {
+      if (frameCount === 0) log.info('cloud login first frame delivered', { liveSessionId })
+      frameCount += 1
       s.lastFrameMeta = frame?.metadata || s.lastFrameMeta
       onFrame({ data: frame.data, metadata: frame.metadata })
     } catch { /* consumer error — ignore, keep stream alive */ }
     try { await cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }) } catch { /* ignore */ }
   })
+  // Enable the Page domain BEFORE starting the screencast. A raw CDP session
+  // (Playwright's newCDPSession) does not auto-enable Page; without it some
+  // Chromium builds accept Page.startScreencast but never emit Page.screencastFrame
+  // events — a silent "zero frames / connecting forever" stream. Cheap insurance.
+  try { await cdp.send('Page.enable') } catch { /* older builds may not require it */ }
   await cdp.send('Page.startScreencast', {
     format: 'jpeg',
     quality,
@@ -259,6 +267,7 @@ export async function startScreencast(liveSessionId, onFrame, { quality = 60, ma
     maxHeight,
     everyNthFrame: 1,
   })
+  log.info('cloud login screencast started', { liveSessionId, quality, maxWidth, maxHeight })
   return async function stop() {
     try { await cdp.send('Page.stopScreencast') } catch { /* ignore */ }
     try { await cdp.detach() } catch { /* ignore */ }

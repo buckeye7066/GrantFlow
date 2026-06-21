@@ -1042,10 +1042,12 @@ async function requireCloudLoginSessionAccess(req, res) {
   const liveSessionId = String(req.params.liveSessionId || '')
   const session = getCloudLoginSession(liveSessionId)
   if (!session) {
+    log.warn('cloud_login_access_denied', { reason: 'not_found_or_expired', liveSessionId })
     res.status(404).json({ error: 'not_found_or_expired' })
     return null
   }
   if (!(await userMayAccessProfile(req, user, session.meta?.profileId))) {
+    log.warn('cloud_login_access_denied', { reason: 'forbidden', liveSessionId, profileId: session.meta?.profileId })
     res.status(403).json({ error: 'forbidden' })
     return null
   }

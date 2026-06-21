@@ -47,6 +47,10 @@ export default function HamiltonLiveLogin() {
   const [streamError, setStreamError] = useState(null)
   const [busy, setBusy] = useState(null) // 'complete' | 'cancel' | null
   const [doneMessage, setDoneMessage] = useState(null)
+  // Bumping this re-runs the stream effect so a dropped connection can be
+  // re-attached WITHOUT restarting the login — the live browser persists
+  // server-side (15-min TTL), so reconnecting just resumes the screencast.
+  const [reconnectNonce, setReconnectNonce] = useState(0)
 
   // Draw a base64 JPEG frame onto the canvas, sizing the canvas to the frame's
   // device pixels so coordinate scaling stays 1:1 with what the user sees.
@@ -85,7 +89,29 @@ export default function HamiltonLiveLogin() {
       try { handle.close() } catch { /* ignore */ }
       streamRef.current = null
     }
-  }, [liveSessionId, drawFrame])
+  }, [liveSessionId, drawFrame, reconnectNonce])
+
+  const handleReconnect = useCallback(() => {
+    setStreamError(null)
+    setConnected(false)
+    setReconnectNonce((n) => n + 1)
+  }, [])
+
+  // Human-readable explanation for the actual stream failure code, so a dead
+  // window tells the user (and support) WHAT went wrong instead of a vague
+  // "connection ended". The raw code is still shown for diagnostics.
+  const explainStreamError = useCallback((code) => {
+    const c = String(code || '')
+    if (c === 'missing_session') return 'No login session was provided. Start a new secure login from your profile.'
+    if (c === 'stream_http_401' || c === 'stream_http_403') {
+      return 'Your sign-in to GrantFlow expired in this window. Reconnect to retry, or sign in to GrantFlow again and reopen the login.'
+    }
+    if (c === 'stream_http_404') return 'The secure login session expired or was closed. Start a new secure login from your profile.'
+    if (c === 'stream_unavailable' || c === 'stream_failed') {
+      return "The secure browser couldn't start streaming. Reconnect to retry; if it keeps failing, start a new secure login."
+    }
+    return 'The live connection ended. If you had already finished logging in, your session may be captured — otherwise reconnect or start a new secure login.'
+  }, [])
 
   // Translate a DOM pointer/mouse event to normalized 0..1 coords over the
   // displayed canvas, then POST it. Out-of-bounds events are ignored.
@@ -230,14 +256,18 @@ export default function HamiltonLiveLogin() {
         {streamError && !connected && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-slate-300">
             <WifiOff className="h-8 w-8 text-amber-400" />
-            <p className="max-w-md text-sm">
-              {streamError === 'missing_session'
-                ? 'No login session was provided. Start a new secure login from your profile.'
-                : 'The live connection ended. If you had already finished logging in, your session may be captured — otherwise start a new secure login.'}
-            </p>
-            <Button size="sm" variant="secondary" className="mt-2" onClick={() => { if (window.opener) window.close(); else navigate('/MyProfiles') }}>
-              Close
-            </Button>
+            <p className="max-w-md text-sm">{explainStreamError(streamError)}</p>
+            <p className="text-xs text-slate-500">Details: {String(streamError)}</p>
+            <div className="mt-2 flex items-center gap-2">
+              {streamError !== 'missing_session' && (
+                <Button size="sm" onClick={handleReconnect}>
+                  <Wifi className="mr-1.5 h-4 w-4" /> Reconnect
+                </Button>
+              )}
+              <Button size="sm" variant="secondary" onClick={() => { if (window.opener) window.close(); else navigate('/MyProfiles') }}>
+                Close
+              </Button>
+            </div>
           </div>
         )}
         <canvas

@@ -293,13 +293,41 @@ export function streamCloudLogin(liveSessionId, { onFrame, onError, onOpen } = {
   const controller = new AbortController()
   const base = getApiBasePrefixForFetch()
   const url = `${base}/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/stream`
-  const token = client.getToken?.()
-  const headers = { Accept: 'text/event-stream' }
-  if (token) headers.Authorization = `Bearer ${token}`
+
+  // The live-login window is a FRESH app load (opened via window.open), so its
+  // auth bootstrap may not have refreshed the access token yet. The stream uses
+  // a raw fetch (not apiFetch), so it must do its own refresh: proactively when
+  // the stored token is expired/near-expiry, and reactively (refresh + retry
+  // ONCE) on a 401/403. Without this the stream silently 401s and the window
+  // shows a dead "connection ended" — even though the user is signed in.
+  const openOnce = async () => {
+    const token = client.getToken?.()
+    const headers = { Accept: 'text/event-stream' }
+    if (token) headers.Authorization = `Bearer ${token}`
+    return fetch(url, { method: 'GET', headers, signal: controller.signal })
+  }
 
   ;(async () => {
     try {
-      const resp = await fetch(url, { method: 'GET', headers, signal: controller.signal })
+      // Proactive refresh if the access token is expired / about to expire.
+      try {
+        if (typeof window !== 'undefined' && client.getRefreshToken?.()) {
+          const expiryRaw = window.localStorage.getItem('grantflow:access-expiry')
+          const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
+          if (!Number.isFinite(expiryMs) || expiryMs <= Date.now() + 60_000) {
+            await client.refreshTokens?.()
+          }
+        }
+      } catch { /* fall through; the 401 retry below is the net */ }
+
+      let resp = await openOnce()
+      // Reactive refresh + single retry on an auth failure.
+      if ((resp.status === 401 || resp.status === 403) && client.refreshTokens) {
+        try {
+          await client.refreshTokens()
+          if (!controller.signal.aborted) resp = await openOnce()
+        } catch { /* keep the original failing response */ }
+      }
       if (!resp.ok || !resp.body) {
         onError?.(`stream_http_${resp.status}`)
         return
