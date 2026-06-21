@@ -8,7 +8,7 @@ import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
 import { getStrategy, listStrategies } from '../services/crawlers/strategyRegistry.js'
 import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../services/crawlers/itemFundingCrawler.js'
-import { loadProfileContext } from '../services/profileHelpers.js'
+import { loadProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
@@ -1186,28 +1186,42 @@ router.post('/discover-all', ensureAuth, async (req, res) => {
     const force = req.query?.force === '1' || req.body?.force === true
     const throttleMin = Number(process.env.DISCOVER_ALL_THROTTLE_MIN) || 10
     if (!force) {
-      let recent = null
       try {
-        recent = await req.db
+        const recent = await req.db
           .prepare(
-            `SELECT COUNT(*) AS n FROM crawler_jobs
+            `SELECT parameters FROM crawler_jobs
               WHERE profile_id = ?
                 AND requested_by IN ('auto-discovery','discover-all','scheduled-auto-discovery')
-                AND created_at > ${isPg ? `now() - interval '${throttleMin} minutes'` : `datetime('now','-${throttleMin} minutes')`}`,
+                AND created_at > ${isPg ? `now() - interval '${throttleMin} minutes'` : `datetime('now','-${throttleMin} minutes')`}
+              ORDER BY created_at DESC LIMIT 1`,
           )
           .get(String(profileId))
+        if (recent) {
+          // QUALITY GUARD: only throttle when the recent crawl used the SAME
+          // profile snapshot. A profile edit changes the digest → we must
+          // re-crawl so results reflect the new inputs (never serve stale
+          // matches for changed data). If either digest is unknown we fail OPEN
+          // (re-crawl) rather than risk staleness.
+          let recentDigest = null
+          try {
+            const params = typeof recent.parameters === 'string' ? JSON.parse(recent.parameters) : (recent.parameters || {})
+            recentDigest = params?._profile_digest ?? null
+          } catch { /* unparseable params → treat as unknown digest */ }
+          let currentDigest = null
+          try { currentDigest = await computeProfileDigest(req.db, String(profileId)) } catch { /* unknown */ }
+          if (recentDigest && currentDigest && recentDigest === currentDigest) {
+            routeLogger.info(`[RealCrawlers] discover-all throttled for profile ${profileId} (same profile, crawled within ${throttleMin}m)`)
+            return res.json({
+              success: true,
+              profile_id: String(profileId),
+              jobs_enqueued: 0,
+              crawler_types: [],
+              throttled: true,
+              reason: 'recently_crawled_same_profile',
+            })
+          }
+        }
       } catch { /* best-effort — if this fails we just proceed to crawl */ }
-      if (recent && Number(recent.n) > 0) {
-        routeLogger.info(`[RealCrawlers] discover-all throttled for profile ${profileId} (crawled within ${throttleMin}m)`)
-        return res.json({
-          success: true,
-          profile_id: String(profileId),
-          jobs_enqueued: 0,
-          crawler_types: [],
-          throttled: true,
-          reason: 'recently_crawled',
-        })
-      }
     }
 
     const summary = await triggerAutoDiscoveryCrawlers(req.db, String(profileId), {
