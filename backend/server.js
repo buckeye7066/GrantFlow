@@ -2389,6 +2389,7 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 
 app.use('/api/admin', adminRouter);
 app.use('/api/admin/funding-trace', lazyRouter('./routes/fundingTrace.js'));
+app.use('/api/admin/rejections', lazyRouter('./routes/adminRejections.js'));
 app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
 // Admin-only health surface for Hamilton's two-way portal sync. Probed by
 // Sam's `hamilton.portalSync.health` diagnostic; degrades to "not installed".
