@@ -95,6 +95,11 @@ export const PIPELINE_ALLOWED_SOURCES = [
   'usa_spending',
   'usaspending',
 
+  // User-initiated web-discovered leads (see web_search note in
+  // TRUSTED_ORIGIN_SET below). Allowed by source as well as origin so an
+  // explicit save still passes even if the client omits record_origin.
+  'web_search',
+
   // Curated / Verified
   'verified_real',
   'curated_benefits',
@@ -348,6 +353,12 @@ const TRUSTED_ORIGIN_SET = new Set([
   'geo_crawl',
   'seeded',
   'imported',
+  // User-initiated web-discovered LEADS. These render low-trust on the display
+  // side (opportunityTrust treats source_trust 'unknown' as low), but when a
+  // user EXPLICITLY saves one to their pipeline it is a deliberate action on a
+  // result with a real URL — permitted into the pipeline and persisted
+  // profile-scoped via upsertFundingOpportunity. Not catalog-global.
+  'web_search',
 ]);
 
 /**

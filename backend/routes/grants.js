@@ -17,6 +17,7 @@ import {
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
 import { isPipelineSourceAllowed, evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
+import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { mergeOpportunitySignals } from '../services/profileHelpers.js'
 import { decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import {
@@ -1508,6 +1509,12 @@ router.post('/from-opportunity', async (req, res, next) => {
           description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
           eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
           source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
+          // Preserve provenance so the pipeline source gate and any profile-scoped
+          // persistence below see the real origin (e.g. 'web_search' leads).
+          record_origin: coerceString(opportunity_data.record_origin, { maxLen: 100 }) || null,
+          state: coerceString(opportunity_data.state, { maxLen: 100 }) || null,
+          source_id: coerceString(opportunity_data.source_id || opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 }) || null,
+          opportunity_type: coerceString(opportunity_data.opportunity_type, { maxLen: 100 }) || null,
           contact_info: opportunity_data.contact_info || null,
           application_method: coerceString(opportunity_data.application_method, { maxLen: 100 }) || null,
           applicationNote: coerceString(opportunity_data.applicationNote, { maxLen: 2000 }) || null,
@@ -1727,6 +1734,57 @@ router.post('/from-opportunity', async (req, res, next) => {
       })
     }
     
+    // Profile-scoped persistence of web-discovered LEADS. When a user saves a
+    // web_search lead (it isn't in the catalog: resolvedOpportunityId is null),
+    // promote it to a real funding_opportunities row scoped to THIS profile
+    // (profile_id = normalizedProfileId — never global, so unverified web noise
+    // can't reach other profiles). The grant then links to it, and the profile's
+    // future discovery (queryNearbyOpportunities matches profile_id) can resurface
+    // it. Best-effort: upsertFundingOpportunity runs the full quality/policy/
+    // validation/reviewer gates, so junk is rejected — on skip/failure we fall
+    // back to the inline-data grant (funding_opportunity_id NULL), preserving the
+    // existing save behavior.
+    const isWebLead =
+      !resolvedOpportunityId &&
+      normalizedProfileId &&
+      (String(opportunity.record_origin || '').toLowerCase() === 'web_search' ||
+        String(opportunity.source || '').toLowerCase() === 'web_search')
+    if (isWebLead) {
+      try {
+        const persisted = await upsertFundingOpportunity(
+          req.db,
+          {
+            ...opportunity,
+            source: 'web_search',
+            record_origin: 'web_search',
+            source_id: opportunity.source_id || opportunity.application_url || null,
+            opportunity_type: opportunity.opportunity_type || 'program',
+            is_active: 1,
+            profile_id: normalizedProfileId,
+          },
+          { allowDirectories: true },
+        )
+        if (persisted?.id) {
+          resolvedOpportunityId = persisted.id
+          routeLogger.info('[grants/from-opportunity] persisted web lead profile-scoped', {
+            requestId,
+            profile_id: normalizedProfileId,
+            opportunity_id: persisted.id,
+          })
+        } else {
+          routeLogger.info('[grants/from-opportunity] web lead not persisted (gated); saving inline', {
+            requestId,
+            reason: persisted?.reason ?? 'unknown',
+          })
+        }
+      } catch (persistErr) {
+        routeLogger.warn('[grants/from-opportunity] web lead persistence failed; saving inline', {
+          requestId,
+          error: persistErr?.message || String(persistErr),
+        })
+      }
+    }
+
     // TRANSACTION: Wrap multi-step grant pipeline creation
     const result = await req.db.withTransaction(async (tx) => {
       const hasProfileId = await grantsHasProfileIdColumn(tx)
