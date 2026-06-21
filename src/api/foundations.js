@@ -43,6 +43,24 @@ export async function searchFederalPrograms({ keyword, assistanceType, applicant
   return apiFetch(`/api/foundations/federal/search?${params}`)
 }
 
+/**
+ * Score a batch of foundation/NSF/federal results against a profile.
+ * kind: 'foundation' | 'nsf' | 'federal'. Returns { scores: [{ key, match_score,
+ * decision, match_reasons, opportunity }] } where `opportunity` is save-ready.
+ */
+export async function scoreOpportunities({ profileId, kind, items } = {}) {
+  return apiFetch('/api/foundations/score', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId, kind, items }),
+  })
+}
+
+/** Resolve a profile's geo state (for prepopulating the state dropdown). */
+export async function getProfileRegion(profileId) {
+  return apiFetch(`/api/foundations/profile-region/${profileId}`)
+}
+
 /** Reverse-lookup: find similar orgs and their funders */
 export async function reverseLookup(profileId, { maxResults = 20 } = {}) {
   return apiFetch('/api/foundations/reverse-lookup', {
