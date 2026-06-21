@@ -74,6 +74,7 @@ const PricingRequired = lazy(() => import("./PricingRequired"), 'PricingRequired
 const ServiceAgreement = lazy(() => import("./ServiceAgreement"), 'ServiceAgreement');
 const CheckoutRequired = lazy(() => import("./CheckoutRequired"), 'CheckoutRequired');
 const HamiltonLiveLogin = lazy(() => import("./HamiltonLiveLogin"), 'HamiltonLiveLogin');
+const Landing = lazy(() => import("./Landing"), 'Landing');
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -406,6 +407,11 @@ export default function Pages() {
                 catch-all layout route so it can never be gated by the
                 Layout's "redirect to /login" check.
               */}
+            {/* /welcome is the PUBLIC "Funding Current" marketing landing page.
+                Mounted ABOVE the gated Layout so it renders without auth and
+                never changes where authenticated users land (they still go to
+                the Dashboard at "/"). */}
+            <Route path="/welcome" element={withBoundary(<Landing />, "Landing")} />
             <Route path="/start" element={withBoundary(<Start />, "Start")} />
             <Route path="/login" element={withBoundary(<Login />, "Login")} />
             {/* Hamilton live login: a chrome-free, full-screen live-view window
