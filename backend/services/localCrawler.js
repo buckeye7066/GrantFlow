@@ -16,6 +16,7 @@ import {
 } from './profileHelpers.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { scoreOpportunity } from './matchEngine.js'
+import { filterOutPipelineMembers } from './pipelineExclusion.js'
 import { RELEVANCE_FLOOR } from '../startup/enforceInvariants.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('localCrawler')
@@ -30,6 +31,78 @@ function loadJSON(filePath) {
     console.warn(`[localCrawler] Could not load ${filePath}:`, e.message)
     return []
   }
+}
+
+/**
+ * Build the profile's outward-expansion geo scope (city → county → state →
+ * national) from buildProfileSignals output. STRICTLY ADDITIVE: a single-address
+ * profile that only resolved a state yields { states:[ST], counties:[], cities:[] }
+ * — identical to the old state-only behavior. A multi-address profile contributes
+ * the county/city of every address it could resolve.
+ *
+ * Canonical rule (docs/canonical_rules.md): "Matching expands outward:
+ * city → county → state → national." The candidate-pool SQL must therefore admit
+ * an opportunity when its STATE, COUNTY, or CITY matches ANY of the profile's
+ * locations (or it is national), not state alone — otherwise a genuinely LOCAL
+ * county/city award never enters the pool to be scored.
+ *
+ * @param {object} signals - buildProfileSignals(...) output
+ * @param {string|null} [fallbackState] - last-resort flat profile state
+ * @returns {{ states: string[], counties: string[], cities: string[] }}
+ *   Normalized, deduped. States are 2-letter upper; counties are lower-cased
+ *   with a trailing "county" stripped (matching normalizeCounty in matchEngine);
+ *   cities are lower-cased trimmed.
+ */
+export function buildProfileGeoScope(signals, fallbackState = null) {
+  const states = []
+  const counties = []
+  const cities = []
+
+  const addState = (v) => {
+    const s = String(v ?? '').trim().toUpperCase()
+    if (s.length === 2 && /^[A-Z]{2}$/.test(s) && !states.includes(s)) states.push(s)
+  }
+  const addCounty = (v) => {
+    // Mirror matchEngine.normalizeCounty so SQL candidate matching and scoring agree.
+    const c = String(v ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\bcounty\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (c && !counties.includes(c)) counties.push(c)
+  }
+  const addCity = (v) => {
+    const c = String(v ?? '').trim().toLowerCase()
+    if (c && !cities.includes(c)) cities.push(c)
+  }
+
+  // Every resolved address (primary + secondary). buildProfileSignals fully
+  // resolves county/city for the primary (and for secondary addresses where the
+  // ZIP/state were present); we take whatever each address carries.
+  const locs = Array.isArray(signals?.locations) && signals.locations.length
+    ? signals.locations
+    : (signals?.location ? [signals.location] : [])
+  for (const loc of locs) {
+    addState(loc?.state)
+    addCounty(loc?.county)
+    addCity(loc?.city)
+  }
+
+  // signals.location is the canonical primary even if locations[] was empty.
+  if (signals?.location) {
+    addState(signals.location.state)
+    addCounty(signals.location.county)
+    addCity(signals.location.city)
+  }
+
+  // All states across every address (primary-first, already deduped upstream).
+  if (Array.isArray(signals?.states)) for (const st of signals.states) addState(st)
+
+  // Last-resort flat state so a profile with only a bare state still works.
+  addState(fallbackState)
+
+  return { states, counties, cities }
 }
 
 function safeJsonArray(value) {
@@ -121,7 +194,17 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     }
   }
 
+  // Outward-expansion geo scope (city → county → state → national). The DB
+  // candidate-pool query below admits an opportunity on ANY of these, not just
+  // state — so a genuinely LOCAL county/city award surfaces, while a profile
+  // that only has a state still pulls exactly the same state-scoped pool.
+  const geoScope = buildProfileGeoScope(signals, profileState)
+
   log.info('[localCrawler] Profile states:', profileStateList.join(', '))
+  log.info(
+    `[localCrawler] Geo scope — states:[${geoScope.states.join(',')}] ` +
+      `counties:[${geoScope.counties.join(',')}] cities:[${geoScope.cities.join(',')}]`,
+  )
   log.info('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
@@ -137,27 +220,59 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   // Also check database for local opportunities
   let dbOpps = []
   try {
-    const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
-    const noMatchPredicate =
-      db?.dialect === 'postgres'
-        ? '(requires_match IS NULL OR requires_match = FALSE)'
-        : '(requires_match = 0 OR requires_match IS NULL)'
+    const isPg = db?.dialect === 'postgres'
+    const activePredicate = isPg ? 'is_active = TRUE' : 'is_active = 1'
+    const noMatchPredicate = isPg
+      ? '(requires_match IS NULL OR requires_match = FALSE)'
+      : '(requires_match = 0 OR requires_match IS NULL)'
+    const nationalPredicate = isPg ? 'is_national = TRUE' : 'is_national = 1'
 
-    const statePlaceholders = profileStateList.map(() => '?').join(', ')
+    // Outward-expansion candidate pool (city → county → state → national).
+    // An opportunity is a candidate if its STATE matches any profile state, OR
+    // its COUNTY (geo_county) matches any profile county, OR its CITY matches any
+    // profile city (no city column exists — match against the description text,
+    // the same signal the scorer uses), OR it is national. All values are
+    // parameterized (no injection). When the profile resolved only states this
+    // reduces to the previous state-IN behavior plus national.
+    const geoClauses = []
+    const geoParams = []
+
+    if (geoScope.states.length > 0) {
+      geoClauses.push(`UPPER(state) IN (${geoScope.states.map(() => '?').join(', ')})`)
+      geoParams.push(...geoScope.states)
+    }
+    if (geoScope.counties.length > 0) {
+      // Normalize stored geo_county the same way buildProfileGeoScope normalizes
+      // the profile county (lower, strip trailing "county"), so "Putnam County"
+      // and "putnam" match.
+      const norm = "TRIM(REPLACE(LOWER(COALESCE(geo_county, '')), 'county', ''))"
+      geoClauses.push(`${norm} IN (${geoScope.counties.map(() => '?').join(', ')})`)
+      geoParams.push(...geoScope.counties)
+    }
+    for (const city of geoScope.cities) {
+      // City-local: the catalog has no city column, so match the description text
+      // (the exact signal scoreGeoComponent credits as a city-tier match).
+      // ESCAPE '\' so LIKE wildcards inside a city name are treated literally.
+      geoClauses.push("LOWER(COALESCE(description, '')) LIKE ? ESCAPE '\\'")
+      geoParams.push(`%${city.replace(/[%_\\]/g, '\\$&')}%`)
+    }
+    geoClauses.push(nationalPredicate)
+    const geoPredicate = `(${geoClauses.join(' OR ')})`
+
     dbOpps = await db
       .prepare(
         `
           SELECT * FROM funding_opportunities
           WHERE ${activePredicate}
-          AND state IN (${statePlaceholders})
+          AND ${geoPredicate}
           AND ${noMatchPredicate}
           AND ${trustedOriginClause()}
           AND ${trustedSourceClause()}
-          LIMIT 100
+          LIMIT 200
         `,
       )
-      .all(...profileStateList)
-    
+      .all(...geoParams)
+
     log.info(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
   } catch (error) {
     console.error('[localCrawler] Error querying database for opportunities:', error.message)
@@ -251,19 +366,35 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     }
   }
 
-  const topOpps = filteredOpps.slice(0, maxResults)
+  let topOpps = filteredOpps.slice(0, maxResults)
   const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
-  
+  const profileId = profileContext?.profile?.id
+
+  // Dedup against this profile's existing pipeline + dismissals BEFORE returning
+  // or saving, so we never re-surface a grant the user already saved or deleted
+  // (canonical pipelineExclusion filter; profile-scoped). Recall-over-suppression:
+  // any failure inside the filter degrades to the unfiltered list.
+  let pipelineExcluded = 0
+  if (profileId) {
+    try {
+      const filtered = await filterOutPipelineMembers(db, profileId, topOpps, { matchTitle: true })
+      pipelineExcluded = filtered.excluded
+      topOpps = filtered.results
+    } catch (err) {
+      console.warn(`[localCrawler] pipeline-exclusion filter failed (continuing unfiltered): ${err?.message || err}`)
+    }
+  }
+
   log.info(
-    `[localCrawler] Found ${topOpps.length} matching local opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+    `[localCrawler] Found ${topOpps.length} matching local opportunities ` +
+      `(requested: ${requestedThreshold}%, used: ${thresholdUsed}%, pipeline-excluded: ${pipelineExcluded})`,
   )
-  
+
   // Insert into database
   let upsertedCount = 0
   let insertedCount = 0
   let updatedCount = 0
   let savedToPipeline = 0
-  const profileId = profileContext?.profile?.id
   // Per-profile automation toggle: only auto-add to the pipeline when
   // discovery_auto_add is on. Off → opportunities are still cataloged and
   // surface in Discovery for manual add, but don't enter the pipeline
@@ -357,6 +488,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
       match_threshold_requested: requestedThreshold,
       match_threshold_used: thresholdUsed,
       match_threshold_fallback_applied: thresholdFallbackApplied,
+      pipeline_excluded: pipelineExcluded,
     },
     opportunityLogs: topOpps.map(o => ({
       title: o.title,

@@ -8,7 +8,7 @@
  */
 
 import { runDomainCrawler, looksLikeLoan, looksLikeMatchingFunds } from './domainCrawlerEngine.js'
-import { DOMAIN_CRAWLER_REGISTRY } from './domainCrawlerRegistry.js'
+import { DOMAIN_CRAWLER_REGISTRY, selectRelevantDomainIds } from './domainCrawlerRegistry.js'
 import { runAllDomainEngines, DOMAIN_ENGINES } from './domainEngines/index.js'
 import { bulkUpsertFundingOpportunities } from '../opportunityInserter.js'
 import { headForVerification } from './httpClient.js'
@@ -63,13 +63,44 @@ function attachCorpusMetadata(opp, config) {
 }
 
 /**
- * Run all domain crawlers and persist to funding_opportunities.
+ * Run domain crawlers and persist to funding_opportunities.
+ *
+ * PROFILE-DRIVEN selection: when `options.profileContext` (or `options.signals`)
+ * is supplied, only the domain corpora RELEVANT to that profile are crawled
+ * (selectRelevantDomainIds) — a church profile pulls faith/community/nonprofit
+ * domains, an EMS profile pulls first-responder domains, etc. With no profile
+ * (admin nationwide sweep) ALL corpora are crawled exactly as before.
+ *
  * @param {Object} db - Database instance
- * @param {Object} options - { skipVerification, geoRunId }
+ * @param {Object} options - { skipVerification, geoRunId, profileContext, signals, domainIds }
  * @returns {Promise<Object>} Stats
  */
 export async function runDomainCorpusCrawl(db, options = {}) {
+  // Resolve the profile signals (dispatcher passes profileContext.signals).
+  const signals = options.signals ?? options.profileContext?.signals ?? null
+  const profileForCrawl = signals ? { signals } : MINIMAL_PROFILE
+
+  // Decide which corpora to run. Explicit options.domainIds wins; otherwise
+  // derive from the profile; with no profile, run the whole registry.
+  let activeRegistry = DOMAIN_CRAWLER_REGISTRY
+  let selectedIds = null
+  if (Array.isArray(options.domainIds) && options.domainIds.length > 0) {
+    selectedIds = new Set(options.domainIds)
+  } else if (signals) {
+    selectedIds = new Set(selectRelevantDomainIds(signals))
+  }
+  if (selectedIds) {
+    activeRegistry = DOMAIN_CRAWLER_REGISTRY.filter((c) => selectedIds.has(c.id))
+    log.info(
+      `[domainCorpusCrawler] Profile-driven selection: crawling ${activeRegistry.length}/${DOMAIN_CRAWLER_REGISTRY.length} ` +
+      `domain corpora [${activeRegistry.map((c) => c.id).join(', ')}]`,
+    )
+  }
+
   const stats = {
+    domains_selected: activeRegistry.length,
+    domains_total: DOMAIN_CRAWLER_REGISTRY.length,
+    profile_driven: Boolean(signals) && !options.domainIds,
     number_of_urls_missing: 0,
     number_filtered_loans: 0,
     number_filtered_matching: 0,
@@ -83,11 +114,11 @@ export async function runDomainCorpusCrawl(db, options = {}) {
 
   const allOpportunities = []
 
-  for (const config of DOMAIN_CRAWLER_REGISTRY) {
+  for (const config of activeRegistry) {
     try {
       const raw = await withTimeout(
         runDomainCrawler({
-          profile: MINIMAL_PROFILE,
+          profile: profileForCrawl,
           config,
           options: {},
         }),
@@ -149,7 +180,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
 
   // Append 8 domain engines (tax, utilities, health, education, housing, workforce, family/youth, geo)
   try {
-    const engineOpps = await runAllDomainEngines(MINIMAL_PROFILE, {})
+    const engineOpps = await runAllDomainEngines(profileForCrawl, {})
     for (const o of engineOpps) {
       if (!hasUrl(o)) {
         stats.number_of_urls_missing++

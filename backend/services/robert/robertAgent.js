@@ -51,6 +51,8 @@ import { verifyOpportunity } from './robertVerification.js'
 import { ingestOpportunity } from './robertIngestionBridge.js'
 import { scoreOpportunityForProfile } from './robertMatchBridge.js'
 import { createRecommendationIfHelpful } from './robertRecommendationService.js'
+import { mineCatalogForProfiles } from './robertCatalogMiner.js'
+import { runEmailFeedForRobert } from './robertEmailFeedBridge.js'
 
 const log = createLogger('robert-agent')
 
@@ -140,6 +142,7 @@ export async function runRobert({
     recommendations_accepted: 0,
     recommendations_declined: 0,
     zero_result_profiles_helped: 0,
+    email_opportunities_imported: 0,
   }
   const summary = {
     mode: chosenMode,
@@ -180,6 +183,34 @@ export async function runRobert({
     if (chosenMode === ROBERT_MODES.OBSERVE) {
       summary.notes.push('observe mode — no network access, no ingestion, no recommendations')
       return finishRun({ db, runId, status: RUN_STATUS.COMPLETED, counters, summary })
+    }
+
+    // ---- Phase 1b: email→grant feed (connect existing feeder) ----
+    // Trigger the already-shipped Outlook grant feeder so any grant-announcement
+    // emails are parsed into `funding_opportunities` BEFORE the catalog-mining
+    // match phase below — that way email-sourced rows flow through the SAME
+    // match + recommend path as crawler/curated rows in the same run. Gated by
+    // EMAIL_GRANTS_SYNC_ENABLED and self-no-ops when the mailbox/Graph creds are
+    // unset, so this is safe to always attempt. Only on modes that recommend.
+    if (
+      !dryRun &&
+      [ROBERT_MODES.MATCH, ROBERT_MODES.RECOMMEND, ROBERT_MODES.INGEST, ROBERT_MODES.FULL_CYCLE].includes(chosenMode)
+    ) {
+      const emailFeed = await safe(
+        () => runEmailFeedForRobert({
+          db,
+          runOutlookGrantFeed: deps.runOutlookGrantFeed,
+          provider: deps.outlookProvider,
+        }),
+        { errors: summary.errors, stage: 'email_feed' },
+      )
+      summary.email_feed = emailFeed || { ran: false, reason: 'email_feed_error' }
+      if (emailFeed?.ran) {
+        counters.email_opportunities_imported = Number(emailFeed?.result?.summary?.imported) || 0
+        summary.notes.push({ stage: 'email_feed', imported: counters.email_opportunities_imported })
+      } else {
+        summary.notes.push({ stage: 'email_feed', skipped: emailFeed?.reason || 'unknown' })
+      }
     }
 
     // ---- Phase 2: search plans (always derived; cheap) ----
@@ -305,74 +336,78 @@ export async function runRobert({
 
     // ---- Phase 7–9: match + recommend ----
     if ([ROBERT_MODES.MATCH, ROBERT_MODES.RECOMMEND, ROBERT_MODES.FULL_CYCLE].includes(chosenMode)) {
-      // Pull opportunities to score against profiles.
-      //
-      // Historically this only matched against rows ingested in *this* run
-      // (Phase 4 → Phase 5 → Phase 7). When the Agent Control Center runs
-      // Robert without `deps.opportunityAdapter` wired (the default — we don't
-      // want unattended outbound web calls during a Mission Control click),
-      // Phase 4 is skipped, so `summary.ingested` is empty, so the match phase
-      // had nothing to do, so Robert reported `recommendations_created=0` and
-      // Mission Control surfaced him as a "noop" agent every cycle.
-      //
-      // That violated mission goals #2 ("match to actual needs"), #6
-      // ("intelligent matching"), and #8 ("avoid zero results when funding
-      // exists"): the canonical `funding_opportunities` table already holds
-      // tens of thousands of real, ingested-by-other-paths rows (crawlers,
-      // school-portal imports, manual curation), and Robert was ignoring
-      // them. The fallback below scores a recent, capped sample of those rows
-      // against every profile in this run so a Mission Control cycle always
-      // produces real, persisted recommendations when funding exists.
-      // `createRecommendationIfHelpful` is idempotent on (profile_id,
-      // opportunity_id) so repeating across cycles is safe.
+      // (a) Score the rows Robert ingested in THIS run (Phase 4→5). These are
+      // brand-new to the catalog so they wouldn't be reached by the broad
+      // catalog query below if it were capped tightly; score them explicitly so
+      // a fresh ingest always gets a chance to recommend.
       const newlyIngested = summary.ingested.map((x) => x.id)
-      let ingestedRows = await fetchOpportunitiesByIds(db, newlyIngested)
-      if (ingestedRows.length === 0) {
-        const fallback = await fetchRecentActiveOpportunities(db, cfg.maxOpportunitiesPerRun)
-        if (fallback.length > 0) {
-          ingestedRows = fallback
-          summary.notes.push({
-            stage: 'match',
-            note: 'no fresh ingests this run — matching against the most-recent active funding_opportunities so the cycle still produces recommendations',
-            fallback_count: fallback.length,
-          })
-        }
-      }
-      const profileContexts = await Promise.all(
-        profilesToConsider.map((pid) => safe(() => getCtx({ db, profileId: pid, deps }))),
-      )
-      for (const opp of ingestedRows) {
-        for (const ctx of profileContexts) {
-          if (!ctx?.profile) continue
-          const decision = await safe(() => scoreOpportunityForProfile({
-            profileContext: ctx, opportunity: opp, computeMatchDecision: deps.computeMatchDecision,
-          }))
-          if (!decision) continue
-          counters.opportunities_matched += 1
-          summary.matched.push({ profile_id: ctx.profile.id, opportunity_id: opp.id, score: decision.score, decision: decision.decision })
-          if (chosenMode === ROBERT_MODES.MATCH) continue   // match-only stops here
-          const recResult = await safe(() => createRecommendationIfHelpful({
-            db,
-            profileId: ctx.profile.id,
-            opportunityId: opp.id,
-            matchDecision: decision.decision,
-            matchScore: decision.score,
-            matchReasons: decision.reasons || [],
-            missingProfileFields: decision.missingProfileFields || [],
-            whyFound: `Robert discovered this opportunity from ${opp.source || 'a verified source'}.`,
-            searchQueryUsed: '',
-            opportunityCandidateId: null,
-            robertRunId: runId,
-            opportunityTitle: opp.title,
-            profileDisplayName: ctx.profile.display_name || 'this profile',
-            config: cfg,
-          }))
-          if (recResult?.created) {
-            counters.recommendations_created += 1
-            summary.recommendations.push({ id: recResult.recommendation_id, profile_id: ctx.profile.id, opportunity_id: opp.id, decision: decision.decision, score: decision.score })
+      const ingestedRows = await fetchOpportunitiesByIds(db, newlyIngested)
+      if (ingestedRows.length > 0) {
+        const freshContexts = await Promise.all(
+          profilesToConsider.map((pid) => safe(() => getCtx({ db, profileId: pid, deps }))),
+        )
+        for (const opp of ingestedRows) {
+          for (const ctx of freshContexts) {
+            if (!ctx?.profile) continue
+            const decision = await safe(() => scoreOpportunityForProfile({
+              profileContext: ctx, opportunity: opp, computeMatchDecision: deps.computeMatchDecision,
+            }))
+            if (!decision) continue
+            counters.opportunities_matched += 1
+            summary.matched.push({ profile_id: ctx.profile.id, opportunity_id: opp.id, score: decision.score, decision: decision.decision, source: 'fresh_ingest' })
+            if (chosenMode === ROBERT_MODES.MATCH) continue   // match-only stops here
+            const recResult = await safe(() => createRecommendationIfHelpful({
+              db,
+              profileId: ctx.profile.id,
+              opportunityId: opp.id,
+              matchDecision: decision.decision,
+              matchScore: decision.score,
+              matchReasons: decision.reasons || [],
+              missingProfileFields: decision.missingProfileFields || [],
+              whyFound: `Robert discovered this opportunity from ${opp.source || 'a verified source'}.`,
+              searchQueryUsed: '',
+              opportunityCandidateId: null,
+              robertRunId: runId,
+              opportunityTitle: opp.title,
+              profileDisplayName: ctx.profile.display_name || 'this profile',
+              config: cfg,
+            }))
+            if (recResult?.created) {
+              counters.recommendations_created += 1
+              summary.recommendations.push({ id: recResult.recommendation_id, profile_id: ctx.profile.id, opportunity_id: opp.id, decision: decision.decision, source: 'fresh_ingest' })
+            }
           }
         }
       }
+
+      // (b) PRIMARY discovery: mine the EXISTING funding catalog and match it to
+      // every profile. This is the user's core ask — Robert searches the rows
+      // the crawlers / school-portal imports / email feeder / manual curation
+      // already populated (the "universe already discovered"), scores each with
+      // the CANONICAL matcher, EXCLUDES anything already in the profile's
+      // pipeline/dismissed (pipelineExclusion), applies the canonical relevance
+      // floor (config/relevanceFloor), and queues recommendations through the
+      // same idempotent recommendation path. It always runs (not gated on a
+      // wired opportunityAdapter), so Robert never no-ops while funding exists.
+      const mineResult = await safe(
+        () => mineCatalogForProfiles({
+          db,
+          profileIds: profilesToConsider,
+          getCtx: (d, pid) => getCtx({ db: d, profileId: pid, deps }),
+          config: cfg,
+          runId,
+          dryRun: dryRun || chosenMode === ROBERT_MODES.MATCH,
+          computeMatchDecision: deps.computeMatchDecision,
+          perProfileCap: cfg.maxOpportunitiesPerRun,
+          errors: summary.errors,
+          matched: summary.matched,
+          recommendations: summary.recommendations,
+          counters,
+        }),
+        { errors: summary.errors, stage: 'catalog_mine' },
+      )
+      summary.catalog_mine = mineResult || { error: 'catalog_mine_failed' }
+      summary.notes.push({ stage: 'catalog_mine', ...(mineResult || {}) })
     }
 
     return finishRun({ db, runId, status: RUN_STATUS.COMPLETED, counters, summary })
@@ -466,40 +501,6 @@ async function fetchOpportunitiesByIds(db, ids) {
     return await db.prepare(`SELECT * FROM funding_opportunities WHERE id IN (${placeholders})`).all(...ids) || []
   } catch (err) {
     log.warn(`fetchOpportunitiesByIds failed (returning none): ${String(err?.message || err)}`)
-    return []
-  }
-}
-
-// Fallback for the match phase when no opportunities were ingested in this
-// run (the Agent Control Center path — Phase 4 is gated on a wired
-// opportunityAdapter, which we don't ship by default). We pull the most
-// recently updated, *active*, *non-hidden* opportunities so Robert's
-// recommendations stay grounded in real, currently-listed funding instead of
-// going silent. Bounded by maxOpportunitiesPerRun so a cycle is always cheap.
-//
-// SAFETY: this is read-only — Robert's downstream `createRecommendationIfHelpful`
-// is idempotent on (profile_id, opportunity_id), so repeated cycles never
-// duplicate. We deliberately avoid filtering on `link_status='ok'` because
-// directory-style rows (mission rule: directory resources must always survive
-// filtering unless explicitly excluded) often start as 'unverified'.
-async function fetchRecentActiveOpportunities(db, cap = 50) {
-  if (!db?.prepare) return []
-  const limit = Math.max(1, Math.min(Number(cap) || 50, 200))
-  try {
-    return (
-      (await db
-        .prepare(
-          `SELECT *
-             FROM funding_opportunities
-            WHERE COALESCE(is_active, 1) IN (1, TRUE, 'true')
-              AND COALESCE(is_hidden, 0) IN (0, FALSE, 'false')
-            ORDER BY COALESCE(updated_at, created_at) DESC
-            LIMIT ?`,
-        )
-        .all(limit)) || []
-    )
-  } catch (err) {
-    log.warn(`fetchRecentActiveOpportunities failed (returning none): ${String(err?.message || err)}`)
     return []
   }
 }

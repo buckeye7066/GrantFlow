@@ -8,6 +8,8 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { buildProfileGeoScope } from './localCrawler.js'
+import { filterOutPipelineMembers } from './pipelineExclusion.js'
 import { discoveryAutoAddAllowedForProfile } from './discoveryAutoAddGate.js'
 import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
@@ -111,8 +113,10 @@ function normalizeState(state) {
  * to rank/keep candidate opportunities before insertion; the pipeline saver
  * (`saveToProfilePipeline`) re-runs `computeMatchDecision` and overwrites
  * any score it sees here.
+ *
+ * Exported for unit testing of the geo (city → county → state → national) credit.
  */
-function calculateOpportunityMatch(opp, signals, profileState) {
+export function calculateOpportunityMatch(opp, signals, profileState) {
   let score = 0
   const matchReasons = []
 
@@ -138,16 +142,38 @@ function calculateOpportunityMatch(opp, signals, profileState) {
 
   const oppText = `${opp.title} ${opp.description}`.toLowerCase()
 
-  // State match (15 points) — uses normalized values for TN/Tennessee, CA/California etc.
-  const isNationwide = String(opp.state || '').toLowerCase().trim() === 'nationwide'
+  // ── Geographic relevance, outward expansion: city → county → state → national ──
+  // A county/city match is MORE local than a state-only match, so it earns more
+  // points (canonical rule: "Matching expands outward: city → county → state →
+  // national"). This mirrors scoreGeoComponent in matchEngine.js (the canonical
+  // authority): county > city > state > national. STRICTLY ADDITIVE — a profile
+  // that only resolved a state behaves exactly as before (state credit only).
+  const geoScope = buildProfileGeoScope(signals, profileState)
+  const isNationwide =
+    Boolean(opp.is_national) || String(opp.state || '').toLowerCase().trim() === 'nationwide'
   const stateMatchesAny = Boolean(normalizedOppState) && profileStateList.includes(normalizedOppState)
-  if (isNationwide || stateMatchesAny) {
+
+  const normCounty = (v) =>
+    String(v ?? '').trim().toLowerCase().replace(/\bcounty\b/g, '').replace(/\s+/g, ' ').trim()
+  const oppCounty = normCounty(opp.geo_county)
+  const countyMatchesAny = Boolean(oppCounty) && geoScope.counties.includes(oppCounty)
+  const cityMatchesAny = geoScope.cities.some((c) => c && oppText.includes(c))
+
+  // Credit the MOST-local tier that matches (county 25 > city 20 > state 15 >
+  // national 8). Higher-local always outranks a far-away state.
+  if (countyMatchesAny) {
+    score += 25
+    matchReasons.push(`Location: ${opp.geo_county} (county)`)
+  } else if (cityMatchesAny) {
+    score += 20
+    matchReasons.push('Location: city match')
+  } else if (stateMatchesAny) {
     score += 15
-    if (!isNationwide && stateMatchesAny) {
-      matchReasons.push(`Location: ${normalizedOppState}`)
-    }
+    matchReasons.push(`Location: ${normalizedOppState}`)
+  } else if (isNationwide) {
+    score += 8
   } else if (normalizedOppState && profileStateList.length > 0) {
-    // Wrong state (matches none of the profile's states) - significantly reduce score
+    // Wrong state (matches none of the profile's states/counties/cities) - reduce score.
     score -= 20
   }
   
@@ -316,6 +342,10 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
           fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
           heartbeat: heartbeatFn,
+          // Profile-drive the Grants.gov query when this geo run is scoped to a
+          // profile. Admin nationwide geo sweeps have no profile, so this is
+          // null and the crawler uses its generic fallback terms.
+          profileContext: profileContext && Object.keys(profileContext).length ? profileContext : null,
           // Pass the dispatcher deadline + a 90s buffer so per-batch loops can exit
           // gracefully BEFORE withTimeout() kills the job as `failed`.
           deadline_ms: deadlineMs,
@@ -377,6 +407,9 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
             geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
             fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
             heartbeat: heartbeatFn,
+            // Profile-drive the Grants.gov query when scoped to a profile (null
+            // for admin nationwide all-states sweeps → generic fallback terms).
+            profileContext: profileContext && Object.keys(profileContext).length ? profileContext : null,
             // Pass the dispatcher deadline + a 90s buffer so per-batch loops can exit
             // gracefully BEFORE withTimeout() kills the job as `failed`.
             deadline_ms: deadlineMs,
@@ -560,12 +593,46 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   
   // Also load from database
   const isPg = db?.dialect === 'postgres'
+  const nationalPredicate = isPg ? 'is_national = TRUE' : 'is_national = 1'
+
+  // Outward-expansion candidate pool (city → county → state → national). Without
+  // this, the query took the 200 most-RECENT rows only, so a genuinely local
+  // county/city award that wasn't recently inserted never entered the pool. Now
+  // an opportunity is a candidate if its STATE matches any profile state, OR its
+  // COUNTY (geo_county) matches any profile county, OR its CITY appears in the
+  // description (no city column exists; same signal the scorer credits), OR it is
+  // national. Fully parameterized. A profile that resolved only a state reduces to
+  // state-IN + national, so single-address behavior is preserved.
+  const geoScope = buildProfileGeoScope(signals, profileState)
+  const geoClauses = []
+  const geoParams = []
+  if (geoScope.states.length > 0) {
+    geoClauses.push(`UPPER(state) IN (${geoScope.states.map(() => '?').join(', ')})`)
+    geoParams.push(...geoScope.states)
+  }
+  if (geoScope.counties.length > 0) {
+    const norm = "TRIM(REPLACE(LOWER(COALESCE(geo_county, '')), 'county', ''))"
+    geoClauses.push(`${norm} IN (${geoScope.counties.map(() => '?').join(', ')})`)
+    geoParams.push(...geoScope.counties)
+  }
+  for (const city of geoScope.cities) {
+    geoClauses.push("LOWER(COALESCE(description, '')) LIKE ? ESCAPE '\\'")
+    geoParams.push(`%${city.replace(/[%_\\]/g, '\\$&')}%`)
+  }
+  geoClauses.push(nationalPredicate)
+  // When the profile has NO resolved geography at all (only national left), keep
+  // the original recency-only behavior so a geographyless profile is unchanged.
+  const hasGeo =
+    geoScope.states.length > 0 || geoScope.counties.length > 0 || geoScope.cities.length > 0
+  const geoPredicate = hasGeo ? `AND (${geoClauses.join(' OR ')})` : ''
+
   const dbOppsQuery = isPg
       ? `
           SELECT *
           FROM funding_opportunities
           WHERE is_active IS TRUE
             AND (requires_match IS FALSE OR requires_match IS NULL)
+            ${geoPredicate}
             AND ${trustedOriginClause()}
             AND ${trustedSourceClause()}
           ORDER BY created_at DESC
@@ -576,6 +643,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           FROM funding_opportunities
           WHERE is_active = 1
             AND (requires_match = 0 OR requires_match IS NULL)
+            ${geoPredicate}
             AND ${trustedOriginClause()}
             AND ${trustedSourceClause()}
           ORDER BY created_at DESC
@@ -584,7 +652,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
 
   let dbOpps = []
   try {
-    dbOpps = await db.prepare(dbOppsQuery).all() || []
+    dbOpps = await db.prepare(dbOppsQuery).all(...geoParams) || []
   } catch (err) {
     console.error('[comprehensiveCrawler] Error querying database for opportunities:', err.message)
   }
@@ -650,13 +718,29 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     }
   }
 
-  const topOpps = filteredOpps.slice(0, maxResults)
+  let topOpps = filteredOpps.slice(0, maxResults)
   const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
-  
+
+  // Dedup against this profile's existing pipeline + dismissals BEFORE returning
+  // or saving, so we never re-surface a grant the user already saved or deleted
+  // (canonical pipelineExclusion filter; profile-scoped). Recall-over-suppression:
+  // any failure degrades to the unfiltered list.
+  let pipelineExcluded = 0
+  if (profileId) {
+    try {
+      const filtered = await filterOutPipelineMembers(db, profileId, topOpps, { matchTitle: true })
+      pipelineExcluded = filtered.excluded
+      topOpps = filtered.results
+    } catch (err) {
+      console.warn(`[comprehensiveCrawler] pipeline-exclusion filter failed (continuing unfiltered): ${err?.message || err}`)
+    }
+  }
+
   log.info(
-    `[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
+    `[comprehensiveCrawler] Found ${topOpps.length} matching opportunities ` +
+      `(requested: ${requestedThreshold}%, used: ${thresholdUsed}%, pipeline-excluded: ${pipelineExcluded})`,
   )
-  
+
   // Save to database if requested
   let upsertedCount = 0
   let insertedCount = 0
@@ -790,6 +874,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       match_threshold_requested: requestedThreshold,
       match_threshold_used: thresholdUsed,
       match_threshold_fallback_applied: thresholdFallbackApplied,
+      pipeline_excluded: pipelineExcluded,
     },
     message: `Found ${topOpps.length} real funding opportunities matching your profile.`
   }

@@ -1024,3 +1024,212 @@ export const DOMAIN_CRAWLER_REGISTRY = [
     ],
   },
 ]
+
+// ===========================================================================
+// PROFILE-RELEVANCE SELECTION
+// ---------------------------------------------------------------------------
+// The corpus crawler used to run ALL ~56 domain corpora for every crawl, with
+// no regard for the profile (a church profile got EMS/UAW domains; a paramedic
+// got LGBTQ scholarships). Per the GrantFlow goal "use the FULL profile",
+// selectRelevantDomainIds(signals) scores each registry config against the
+// profile's signals (entityType / occupation / needs / keywords / demographics
+// / military) and returns only the relevant subset of domain ids to crawl.
+//
+// Scoring is ADDITIVE and NEUTRAL on missing data (canonical_rules G4):
+//   - a config's `category`, `boostSignals`, label/description text, and its
+//     directoryResources' categories/keywords are matched against a flattened,
+//     lowercased "profile term blob";
+//   - configs with NO requiredSignals are treated as broad/directory-style and
+//     get a small baseline so general resources survive (G4 directory rule);
+//   - the result is never empty for a non-thin profile — if nothing scores we
+//     fall back to the broad configs so discovery is never a zero-result set
+//     (G2: zero results is a failure state).
+// ===========================================================================
+
+/** Map common entity / occupation hints to the registry categories they imply. */
+const ENTITY_CATEGORY_HINTS = {
+  // entity / applicant types
+  nonprofit: ['organization', 'community'],
+  organization: ['organization', 'community'],
+  church: ['organization'],
+  faith: ['organization'],
+  faith_based: ['organization'],
+  ministry: ['organization'],
+  business: ['business'],
+  small_business: ['business'],
+  student: ['education'],
+  college_student: ['education'],
+  veteran: ['veteran'],
+  military: ['veteran'],
+  senior: ['demographics'],
+  caregiver: ['health', 'disability'],
+  // occupations / domains
+  paramedic: ['first responder'],
+  ems: ['first responder'],
+  emt: ['first responder'],
+  firefighter: ['first responder'],
+  'first responder': ['first responder'],
+  police: ['first responder'],
+  nurse: ['education', 'health'],
+  farmer: ['agriculture'],
+  artist: ['arts'],
+}
+
+function _toIterable(v) {
+  if (!v) return []
+  if (Array.isArray(v)) return v
+  if (typeof v[Symbol.iterator] === 'function') return Array.from(v)
+  return []
+}
+
+/**
+ * Build a flat, lowercased list of profile terms used for relevance matching.
+ * Pulls from every signal facet that can describe WHAT a profile is about.
+ */
+function buildProfileTermBlob(signals) {
+  if (!signals || typeof signals !== 'object') return { terms: [], categories: new Set() }
+  const terms = []
+  const push = (v) => { const s = String(v ?? '').toLowerCase().trim(); if (s) terms.push(s) }
+
+  for (const k of _toIterable(signals.keywords)) push(k)
+  for (const k of _toIterable(signals.keywordSet)) push(k)
+  for (const k of _toIterable(signals.occupation)) push(k)
+  for (const k of _toIterable(signals.needs)) push(k)
+  for (const k of _toIterable(signals.demographics)) push(k)
+  for (const k of _toIterable(signals.military)) push(k)
+  for (const k of _toIterable(signals.interests)) push(k)
+  for (const k of _toIterable(signals.assistance)) push(k)
+  for (const k of _toIterable(signals.health)) push(k)
+  for (const k of _toIterable(signals.applicantTypes)) push(k)
+  push(signals.applicantType)
+  push(signals.primaryType)
+  push(signals.entityType)
+
+  // Derive implied registry categories from entity/occupation/keyword hints.
+  const categories = new Set()
+  for (const term of terms) {
+    for (const [hint, cats] of Object.entries(ENTITY_CATEGORY_HINTS)) {
+      if (term === hint || term.includes(hint)) {
+        for (const c of cats) categories.add(c)
+      }
+    }
+  }
+  return { terms, categories }
+}
+
+/** Score one registry config's relevance to the profile term blob. */
+function scoreConfigRelevance(config, blob) {
+  let score = 0
+  const matched = []
+  const { terms, categories } = blob
+  const termSet = new Set(terms)
+
+  // (1) Category match — strongest signal (a paramedic → 'first responder').
+  const cat = String(config.category || '').toLowerCase()
+  if (cat && categories.has(cat)) { score += 6; matched.push(`category:${cat}`) }
+
+  // (2) boostSignals overlap with profile terms (substring both ways).
+  for (const b of (config.boostSignals || [])) {
+    const bl = String(b).toLowerCase()
+    if (!bl) continue
+    if (termSet.has(bl) || terms.some((t) => t.includes(bl) || bl.includes(t))) {
+      score += 3
+      matched.push(`boost:${bl}`)
+    }
+  }
+
+  // (3) directoryResource categories/keywords overlap with profile terms.
+  for (const res of (config.directoryResources || [])) {
+    const resTerms = [
+      ...(_toIterable(res.categories)),
+      ...(_toIterable(res.keywords)),
+    ].map((x) => String(x).toLowerCase())
+    for (const rt of resTerms) {
+      if (!rt) continue
+      if (termSet.has(rt) || terms.some((t) => (t.length > 3 && (t.includes(rt) || rt.includes(t))))) {
+        score += 1
+        matched.push(`res:${rt}`)
+        break // one hit per resource is enough to avoid over-weighting
+      }
+    }
+  }
+
+  // (4) label/description text overlap (cheap text scan for multi-word terms).
+  const text = `${config.label || ''} ${config.description || ''}`.toLowerCase()
+  for (const t of termSet) {
+    if (t.length >= 5 && text.includes(t)) { score += 1; matched.push(`text:${t}`) }
+  }
+
+  return { score, matched }
+}
+
+/** Registry ids that are broad/directory-style (no required signals). */
+function isBroadConfig(config) {
+  return !Array.isArray(config.requiredSignals) || config.requiredSignals.length === 0
+}
+
+/**
+ * Select the relevant subset of domain corpus ids for a profile.
+ *
+ * @param {Object} signals - buildProfileSignals() output (or compatible).
+ * @param {Object} [opts]
+ * @param {number} [opts.minScore=3] - minimum relevance score to include.
+ * @param {number} [opts.maxIds]     - optional cap on number of ids.
+ * @param {boolean} [opts.includeBroad=true] - always include broad/directory configs.
+ * @returns {string[]} relevant domain ids (never empty for a non-empty registry).
+ */
+export function selectRelevantDomainIds(signals, opts = {}) {
+  const minScore = typeof opts.minScore === 'number' ? opts.minScore : 3
+  const includeBroad = opts.includeBroad !== false
+
+  // No usable signals → return everything (admin/whole-corpus behavior).
+  const blob = buildProfileTermBlob(signals)
+  if (blob.terms.length === 0) {
+    return DOMAIN_CRAWLER_REGISTRY.map((c) => c.id)
+  }
+
+  const scored = DOMAIN_CRAWLER_REGISTRY.map((config) => ({
+    id: config.id,
+    config,
+    ...scoreConfigRelevance(config, blob),
+  }))
+
+  const relevant = scored.filter((s) => s.score >= minScore)
+  const ids = new Set(relevant.map((s) => s.id))
+
+  // Always keep broad/directory-style resources so general "where to find
+  // grants" sources survive selection (canonical_rules G4 directory rule).
+  if (includeBroad) {
+    for (const s of scored) {
+      if (isBroadConfig(s.config)) ids.add(s.id)
+    }
+  }
+
+  // Never return an empty set for a profile that HAS signals — fall back to the
+  // broad configs (G2: zero results is a failure state).
+  if (ids.size === 0) {
+    for (const s of scored) {
+      if (isBroadConfig(s.config)) ids.add(s.id)
+    }
+    if (ids.size === 0) return DOMAIN_CRAWLER_REGISTRY.map((c) => c.id)
+  }
+
+  let result = [...ids]
+  if (typeof opts.maxIds === 'number' && opts.maxIds > 0 && result.length > opts.maxIds) {
+    // Keep highest-scoring first, then broad configs.
+    const scoreById = new Map(scored.map((s) => [s.id, s.score]))
+    result = result
+      .sort((a, b) => (scoreById.get(b) ?? 0) - (scoreById.get(a) ?? 0))
+      .slice(0, opts.maxIds)
+  }
+  return result
+}
+
+/** Detailed relevance scoring (for diagnostics / Sam observability). */
+export function scoreDomainRelevance(signals) {
+  const blob = buildProfileTermBlob(signals)
+  return DOMAIN_CRAWLER_REGISTRY.map((config) => {
+    const { score, matched } = scoreConfigRelevance(config, blob)
+    return { id: config.id, category: config.category, score, matched, broad: isBroadConfig(config) }
+  }).sort((a, b) => b.score - a.score)
+}

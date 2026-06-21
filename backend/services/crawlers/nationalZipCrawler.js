@@ -28,6 +28,11 @@ import path from 'path'
 import zipcodes from 'zipcodes-nrviens'
 import { searchGrants } from './grantsGovClient.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
+// Profile-driven Grants.gov query terms. When a profile context is supplied to
+// the geo crawl, we build the search keywords from the profile (type + needs +
+// interests, PII-scrubbed) instead of a generic fallback — see canonical_rules
+// "use the full profile" + Phase 4 "never blank/generic ZIP search".
+import { buildGrantsGovQueryTerms } from '../sourceRegistry.js'
 
 // Lazy-import better-sqlite3 only when actually needed (local script mode).
 // In production (Railway/Postgres), the app passes the shared db wrapper,
@@ -439,78 +444,30 @@ function deriveZipMeta(zip) {
   }
 }
 
-function buildBaselineDirectorySources({ zip, meta }) {
-  const city = meta?.city ? String(meta.city) : null
-  const state = meta?.state ? String(meta.state) : null
-  const keywords = [zip, city, state].filter(Boolean).map((v) => String(v).toLowerCase())
-
-  // These are durable, user-actionable “entry point” resources that do not depend on scraping.
-  // They ensure every ZIP produces at least 3 local-ish resources even if upstream APIs are down.
-  return [
-    {
-      title: city && state ? `United Way near ${city}, ${state}` : 'United Way Locator (find local chapter)',
-      sponsor: 'United Way',
-      description:
-        'Find your local United Way chapter for community support, emergency assistance programs, and local partner referrals.',
-      url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
-      application_url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
-      source_url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
-      evidence_url: `https://www.unitedway.org/find-your-united-way?zip=${zip}`,
-      opportunity_type: 'program',
-      type: 'DIRECTORY',
-      requires_match: false,
-      match_percentage: 0,
-      is_national: false,
-      state,
-      categories: ['community', 'local', 'emergency_assistance'],
-      keywords: ['united way', 'emergency assistance', 'community', ...keywords].filter(Boolean),
-      source: 'local_directory_united_way',
-      source_id: `united_way:${zip}`,
-      discovered_at: new Date().toISOString(),
-    },
-    {
-      title: city && state ? `Food Bank resources near ${city}, ${state}` : 'Food Bank Locator (Feeding America)',
-      sponsor: 'Feeding America',
-      description: 'Find local food bank partners and emergency food assistance resources near the profile ZIP.',
-      url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
-      application_url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
-      source_url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
-      evidence_url: `https://www.feedingamerica.org/find-your-local-foodbank?postal-code=${zip}`,
-      opportunity_type: 'program',
-      type: 'DIRECTORY',
-      requires_match: false,
-      match_percentage: 0,
-      is_national: false,
-      state,
-      categories: ['food', 'local', 'emergency_assistance'],
-      keywords: ['food bank', 'food assistance', 'snap', ...keywords].filter(Boolean),
-      source: 'local_directory_feeding_america',
-      source_id: `feeding_america:${zip}`,
-      discovered_at: new Date().toISOString(),
-    },
-    {
-      title:
-        city && state ? `Community Action Agency near ${city}, ${state}` : 'Community Action Agency Locator (CAP)',
-      sponsor: 'Community Action Partnership',
-      description:
-        'Locate a Community Action Agency (CAA/CAP) that can help with housing, utilities, food, and employment support.',
-      url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
-      application_url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
-      source_url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
-      evidence_url: `https://communityactionpartnership.com/find-a-cap/?zip=${zip}`,
-      opportunity_type: 'program',
-      type: 'DIRECTORY',
-      requires_match: false,
-      match_percentage: 0,
-      is_national: false,
-      state,
-      categories: ['utilities', 'housing', 'local', 'community'],
-      keywords: ['community action', 'utilities assistance', 'rent assistance', ...keywords].filter(Boolean),
-      source: 'local_directory_cap',
-      source_id: `cap:${zip}`,
-      discovered_at: new Date().toISOString(),
-    },
-  ]
+// REMOVED: per-ZIP placeholder directory stubs.
+//
+// This function used to synthesize one templated row per ZIP for United Way,
+// Feeding America, and Community Action Partnership — e.g. "United Way near
+// Bradley, SD" pointing at a generic locator URL with the ZIP appended. Those
+// rows are NOT real, ZIP-specific funding opportunities: they are the same
+// three national locator portals re-stamped with a city/state label and shoved
+// into the catalog for every one of ~44k crawl codes. That manufactured
+// thousands of near-duplicate junk rows ("X near <city>, <state>") and directly
+// violates canonical_rules.md: "real sources, not junk" / "no placeholder
+// funding" (Goal #1) and G7's "REAL means non-placeholder, deduped by domain".
+//
+// The fix is to emit NOTHING per ZIP rather than per-ZIP junk. Real ZIP-scoped
+// coverage comes from the actual upstream sources (Grants.gov via
+// searchGrantsGovByZip, state portals, foundation locators, Overpass/OSM). The
+// genuine national locators (United Way, Feeding America, CAP) are already
+// represented as canonical, NON-geo-templated entries in the domain corpus
+// crawl (runDomainCorpusCrawl) + sourceRegistry — a single clean row each, not
+// one per ZIP.
+//
+// Kept as a no-op (returning []) so existing callers (processZip's
+// `baselineDirectories` spread) stay safe without restructuring.
+function buildBaselineDirectorySources(_args = {}) {
+  return []
 }
 
 // ── CANADIAN SOURCE SET ───────────────────────────────────────────────────
@@ -524,77 +481,19 @@ function buildBaselineDirectorySources({ zip, meta }) {
 //
 // If you want to tune which Canadian orgs represent the baseline, this map and
 // the two functions below (provincial portals + foundations) are the place.
-function buildCanadianBaselineDirectorySources({ code, meta }) {
-  const city = meta?.city ? String(meta.city) : null
-  const province = regionForMeta(meta)
-  const where = city && province ? `${city}, ${province}` : province || 'Canada'
-  const keywords = [code, city, province].filter(Boolean).map((v) => String(v).toLowerCase())
-
-  return [
-    {
-      title: `211 Canada — community & social services near ${where}`,
-      sponsor: '211 Canada',
-      description:
-        'Free, confidential navigator for local community, social, health, and government assistance programs across Canada. Search by postal code for nearby help.',
-      url: 'https://211.ca/',
-      application_url: 'https://211.ca/',
-      source_url: 'https://211.ca/',
-      evidence_url: 'https://211.ca/',
-      opportunity_type: 'program',
-      type: 'DIRECTORY',
-      requires_match: false,
-      match_percentage: 0,
-      is_national: false,
-      state: province,
-      categories: ['community', 'local', 'social_services', 'emergency_assistance'],
-      keywords: ['211', 'community services', 'social services', 'assistance', ...keywords].filter(Boolean),
-      source: 'local_directory_211_ca',
-      source_id: `211ca:${code}`,
-      discovered_at: new Date().toISOString(),
-    },
-    {
-      title: `Food Banks Canada — find a food bank near ${where}`,
-      sponsor: 'Food Banks Canada',
-      description:
-        'Locate a local food bank and emergency food assistance through the national Food Banks Canada network.',
-      url: 'https://foodbankscanada.ca/find-a-food-bank/',
-      application_url: 'https://foodbankscanada.ca/find-a-food-bank/',
-      source_url: 'https://foodbankscanada.ca/find-a-food-bank/',
-      evidence_url: 'https://foodbankscanada.ca/find-a-food-bank/',
-      opportunity_type: 'program',
-      type: 'DIRECTORY',
-      requires_match: false,
-      match_percentage: 0,
-      is_national: false,
-      state: province,
-      categories: ['food', 'local', 'emergency_assistance'],
-      keywords: ['food bank', 'food assistance', 'hunger', ...keywords].filter(Boolean),
-      source: 'local_directory_food_banks_canada',
-      source_id: `foodbankscanada:${code}`,
-      discovered_at: new Date().toISOString(),
-    },
-    {
-      title: `United Way Centraide — find your local United Way near ${where}`,
-      sponsor: 'United Way Centraide Canada',
-      description:
-        'Find your local United Way Centraide for community support, financial empowerment programs, and partner referrals.',
-      url: 'https://www.unitedway.ca/find-your-united-way/',
-      application_url: 'https://www.unitedway.ca/find-your-united-way/',
-      source_url: 'https://www.unitedway.ca/find-your-united-way/',
-      evidence_url: 'https://www.unitedway.ca/find-your-united-way/',
-      opportunity_type: 'program',
-      type: 'DIRECTORY',
-      requires_match: false,
-      match_percentage: 0,
-      is_national: false,
-      state: province,
-      categories: ['community', 'local', 'financial_empowerment'],
-      keywords: ['united way', 'centraide', 'community', ...keywords].filter(Boolean),
-      source: 'local_directory_united_way_ca',
-      source_id: `unitedway_ca:${code}`,
-      discovered_at: new Date().toISOString(),
-    },
-  ]
+// REMOVED: per-FSA placeholder directory stubs (Canadian analogue of the US
+// trio removed above). This used to emit one title-templated row per Canadian
+// FSA for 211 Canada / Food Banks Canada / United Way Centraide — e.g. "211
+// Canada — community & social services near <city>, <province>" — all pointing
+// at the same fixed national locator URLs. One row per FSA across ~1.6k FSAs is
+// the same manufactured-junk pattern the US trio created, and violates the same
+// canonical rule ("real sources, not junk" / "no placeholder funding").
+//
+// These national Canadian locators are legitimately useful, but as ONE clean,
+// non-geo-templated catalog entry each (owned by the domain corpus crawl), not
+// as a per-FSA fan-out. Returns [] so the processZip caller stays safe.
+function buildCanadianBaselineDirectorySources(_args = {}) {
+  return []
 }
 
 /**
@@ -621,19 +520,38 @@ function generateAllPostalCodes() {
  * — that's the broad blank ZIP search Phase 4 mission rule explicitly
  * forbids ("do not call broad blank search as 'ZIP match.'").
  *
- * When called without a profile context, we use a small rotation of broad
- * assistance categories that cover what most ZIP-driven lookups need
- * (community development, rural, public safety, workforce). When called
- * with a profile context, the dispatcher should pass profile-derived
- * terms (see sourceRegistry.buildGrantsGovQueryTerms).
+ * When called WITH a profile context (opts.profileContext) we build the query
+ * terms from the profile via sourceRegistry.buildGrantsGovQueryTerms (profile
+ * type + needs + interests, PII-scrubbed) — this is the canonical "use the full
+ * profile" path. Callers may also pass already-derived opts.searchTerms.
+ *
+ * Only when NO profile context and NO explicit terms are supplied (admin
+ * nationwide geo crawl) do we fall back to a small rotation of broad assistance
+ * categories (community development, rural, public safety, workforce).
  *
  * Uses the resilient grantsGovClient (API key, User-Agent, retries) rather
  * than raw axios — see grantsGovClient.js header comment.
  */
 async function searchGrantsGovByZip(zip, coords, opts = {}) {
-  const terms = Array.isArray(opts.searchTerms) && opts.searchTerms.length > 0
+  // Term resolution priority:
+  //   1) Explicit searchTerms passed by the caller (already profile-derived).
+  //   2) A profileContext → buildGrantsGovQueryTerms() (profile type + needs +
+  //      interests, PII-scrubbed). This is the "use the full profile" path.
+  //   3) Generic fallback (admin nationwide geo crawl with NO profile).
+  // buildGrantsGovQueryTerms itself falls back to the same generic set when the
+  // profile yields nothing, so a supplied-but-empty profile never blank-searches.
+  const explicit = Array.isArray(opts.searchTerms)
     ? opts.searchTerms.filter((t) => typeof t === 'string' && t.trim().length > 0)
-    : ['community development', 'rural development', 'public safety', 'workforce development']
+    : []
+
+  let terms
+  if (explicit.length > 0) {
+    terms = explicit
+  } else if (opts.profileContext && typeof opts.profileContext === 'object') {
+    terms = buildGrantsGovQueryTerms(opts.profileContext, { limit: 6 })
+  } else {
+    terms = ['community development', 'rural development', 'public safety', 'workforce development']
+  }
 
   try {
     const allHits = []
@@ -1290,7 +1208,15 @@ async function processZip(zip, db, config) {
       // Benefits Finder is already added via searchProvincialGrants).
       if (!isCanada) {
         await reportSource('grants.gov', 'Querying source: grants.gov')
-        grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
+        // Profile-drive the Grants.gov query when a profile context is attached
+        // to the run config; otherwise searchGrantsGovByZip uses the generic
+        // fallback (admin nationwide geo crawl with no profile).
+        grantsGovResults = coords
+          ? await searchGrantsGovByZip(zip, coords, {
+              profileContext: config?.profileContext ?? config?.profile_context ?? null,
+              searchTerms: Array.isArray(config?.grantsGovSearchTerms) ? config.grantsGovSearchTerms : undefined,
+            })
+          : []
       }
 
       // Overpass/OSM is global (lat/lng based) — useful for both US and Canada.
@@ -2099,3 +2025,13 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
 }
 
 export default { runNationalZipCrawl }
+
+// Test-only surface. Exposes internals so the geo-crawler unit tests can assert
+// the placeholder-stub removal and the profile-driven Grants.gov term wiring
+// without standing up the full DB/network crawl. NOT part of the public API —
+// production callers use runNationalZipCrawl.
+export const __test = {
+  buildBaselineDirectorySources,
+  buildCanadianBaselineDirectorySources,
+  searchGrantsGovByZip,
+}
