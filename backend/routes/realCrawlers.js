@@ -18,6 +18,7 @@ import {
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
+import { SCORE_FLOOR } from '../config/matchThresholds.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
   detectProfessionalDevelopmentIntent,
@@ -174,7 +175,7 @@ async function persistCoverageOutcomes(db, { crawlerRunId, profileId, crawlerTyp
  * Returns results mapped to the same frontend shape as curated results.
  * Deduplicates against curated results by title normalization.
  */
-async function queryNearbyOpportunities(db, analysis, curatedTitles, profileContext, limit = 50) {
+export async function queryNearbyOpportunities(db, analysis, curatedTitles, profileContext, limit = 50) {
   if (!db || typeof db.prepare !== 'function') return [];
   const state = analysis?.location?.state;
   try {
@@ -182,28 +183,43 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, profileCont
     // Fetch more rows than requested: curated upserts overlap with curatedTitles and
     // will be deduplicated, so we need headroom to find genuinely new records.
     const sqlLimit = Math.max(limit * 4, 200)
-    const query = isPg
-      ? `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
+
+    // Profile isolation — mirrors discovery.js:169 and matching.js. funding_opportunities
+    // is a SHARED table: rows are either global catalog (profile_id IS NULL) or tagged to
+    // the profile whose crawl produced them. Without this clause, this query returns any
+    // OTHER profile's crawl output that happens to share the state/national scope — i.e.
+    // "funding sources leaked from a previous search". Restrict to global catalog rows plus
+    // THIS profile's own results. When no profile id is resolvable, fall back to global-only
+    // (never leak another profile's rows).
+    const profileId = profileContext?.profile_id ?? profileContext?.profile?.id ?? null
+    const params = [state || 'nationwide']
+    let profileClause
+    if (profileId) {
+      params.push(profileId)
+      profileClause = isPg
+        ? `AND (profile_id IS NULL OR profile_id = $${params.length})`
+        : 'AND (profile_id IS NULL OR profile_id = ?)'
+    } else {
+      profileClause = 'AND profile_id IS NULL'
+    }
+    params.push(sqlLimit)
+    const statePh = isPg ? '$1' : '?'
+    const limitPh = isPg ? `$${params.length}` : '?'
+    const activeLit = isPg ? 'TRUE' : '1'
+    const nationalLit = isPg ? 'TRUE' : '1'
+
+    const query = `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
              contact_info, categories, keywords, match_reasons,
              funding_type, record_origin, requires_match, match_percentage, is_loan,
              funding_category, usable_for_housing, refund_potential, eligibility_signals, verification_status
-         FROM funding_opportunities 
-         WHERE is_active = TRUE AND (state = $1 OR state = 'nationwide' OR is_national = TRUE) 
-         AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
-         ORDER BY last_verified_at DESC NULLS LAST 
-         LIMIT $2`
-      : `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
-             state, is_national, opportunity_type, type, deadline_type, amount_max,
-             contact_info, categories, keywords, match_reasons,
-             funding_type, record_origin, requires_match, match_percentage, is_loan,
-             funding_category, usable_for_housing, refund_potential, eligibility_signals, verification_status
-         FROM funding_opportunities 
-         WHERE is_active = 1 AND (state = ? OR state = 'nationwide' OR is_national = 1) 
-         AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
-         ORDER BY last_verified_at DESC NULLS LAST 
-         LIMIT ?`
-    const rows = await db.prepare(query).all(state || 'nationwide', sqlLimit);
+         FROM funding_opportunities
+         WHERE is_active = ${activeLit} AND (state = ${statePh} OR state = 'nationwide' OR is_national = ${nationalLit})
+         ${profileClause}
+         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
+         ORDER BY last_verified_at DESC NULLS LAST
+         LIMIT ${limitPh}`
+    const rows = await db.prepare(query).all(...params);
 
     const normalizeTitle = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const seenTitles = new Set(curatedTitles.map(normalizeTitle));
@@ -224,7 +240,10 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, profileCont
         url: row.application_url || row.apply_url || row.source_url || null,
         application_url: row.application_url || row.apply_url || null,
         source_url: row.source_url || row.application_url || null,
-        match_score: profileContext ? (scoreOpportunity(profileContext, row)?.score ?? 50) : 50,
+        // Default to the score FLOOR (not 50) when a row can't be scored: a row with
+        // no computable relevance must rank last and fall below min_match_score, never
+        // masquerade as a median-strength (== DEFAULT_MIN_SCORE) match.
+        match_score: profileContext ? (scoreOpportunity(profileContext, row)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
         match_reasons: safeJsonParse(row.match_reasons, []),
         categories: safeJsonParse(row.categories, []),
         opportunity_type: row.opportunity_type || row.type || 'program',
