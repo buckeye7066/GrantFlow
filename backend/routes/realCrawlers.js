@@ -1176,6 +1176,40 @@ router.post('/discover-all', ensureAuth, async (req, res) => {
   if (!(await ensureProfileAccess(req, res, String(profileId)))) return
 
   try {
+    // Throttle: don't re-dispatch the whole crawler fleet if this profile was
+    // crawled very recently. Repeated Discover searches / slider changes would
+    // otherwise pile fleet load onto the small Postgres and starve the
+    // interactive matcher (→ statement_timeout 503 / 504). The catalog already
+    // holds the fresh results; let the client just read them. Honor ?force=1
+    // for an explicit re-crawl. Window is configurable.
+    const isPg = req.db?.dialect === 'postgres'
+    const force = req.query?.force === '1' || req.body?.force === true
+    const throttleMin = Number(process.env.DISCOVER_ALL_THROTTLE_MIN) || 10
+    if (!force) {
+      let recent = null
+      try {
+        recent = await req.db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM crawler_jobs
+              WHERE profile_id = ?
+                AND requested_by IN ('auto-discovery','discover-all','scheduled-auto-discovery')
+                AND created_at > ${isPg ? `now() - interval '${throttleMin} minutes'` : `datetime('now','-${throttleMin} minutes')`}`,
+          )
+          .get(String(profileId))
+      } catch { /* best-effort — if this fails we just proceed to crawl */ }
+      if (recent && Number(recent.n) > 0) {
+        routeLogger.info(`[RealCrawlers] discover-all throttled for profile ${profileId} (crawled within ${throttleMin}m)`)
+        return res.json({
+          success: true,
+          profile_id: String(profileId),
+          jobs_enqueued: 0,
+          crawler_types: [],
+          throttled: true,
+          reason: 'recently_crawled',
+        })
+      }
+    }
+
     const summary = await triggerAutoDiscoveryCrawlers(req.db, String(profileId), {
       uploadDir: discoverAllUploadDir,
       getOpenAI: getDiscoverAllOpenAI,
