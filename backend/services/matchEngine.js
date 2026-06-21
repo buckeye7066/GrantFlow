@@ -42,7 +42,15 @@ import {
   ACCEPT_SCORE, REVIEW_SCORE,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
   NEED_FULL_CREDIT_HITS,
+  CONF_W_SOURCE, CONF_W_ACTIONABILITY, CONF_W_ELIGIBILITY, CONF_W_FRESHNESS,
+  CONFIDENCE_SOURCE_TRUST_SCORE,
+  CONFIDENCE_ACTIONABLE_FULL, CONFIDENCE_ACTIONABLE_NONE,
+  CONFIDENCE_ELIGIBILITY_FULL, CONFIDENCE_ELIGIBILITY_PARTIAL, CONFIDENCE_ELIGIBILITY_NONE,
+  CONFIDENCE_ELIGIBILITY_FULL_BULLETS,
+  CONFIDENCE_FRESHNESS_SCORE,
+  CONFIDENCE_BAND_HIGH, CONFIDENCE_BAND_MEDIUM,
 } from '../config/matchThresholds.js'
+import { assessOpportunityTrust } from './opportunityTrust.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
@@ -96,6 +104,169 @@ export function calculateSourceTrust(opportunity) {
   if (origin === 'curated_benefits' || origin === 'curated_program') return 65
   if (origin === 'live_crawl') return 40
   return 35
+}
+
+// ---------------------------------------------------------------------------
+// Confidence scoring (ORTHOGONAL to MATCH score)
+// ---------------------------------------------------------------------------
+//
+// Architecture point #7: MATCH = how well it fits (the weighted score above).
+// CONFIDENCE = how sure we are it is real and actionable. They answer DIFFERENT
+// questions and are computed from DIFFERENT signals, so an opportunity can be a
+// 92 MATCH but a 55 CONFIDENCE when its source is weak or its eligibility text
+// is incomplete. Confidence is additive metadata — it NEVER changes `score`.
+//
+// Four orthogonal-to-fit component subscales (each 0-100), weighted:
+//   sourceTrust   — official API / verified / directory / community / unknown
+//   actionability — has a real, non-placeholder application/source URL
+//   eligibility   — do we actually have eligibility text (or are we guessing)
+//   freshness     — rolling/ongoing or future deadline vs unknown/expired
+
+/**
+ * Map a confidence score (0-100) to a coarse band.
+ * @param {number} confidence
+ * @returns {'high'|'medium'|'low'}
+ */
+export function confidenceBand(confidence) {
+  const c = Number(confidence)
+  if (Number.isFinite(c) && c >= CONFIDENCE_BAND_HIGH) return 'high'
+  if (Number.isFinite(c) && c >= CONFIDENCE_BAND_MEDIUM) return 'medium'
+  return 'low'
+}
+
+/**
+ * Eligibility-text completeness subscale (0-100). This measures whether we
+ * actually KNOW the eligibility criteria — NOT whether the profile is eligible
+ * (that is the MATCH engine's job). A row with several eligibility bullets is
+ * "full"; one with a thin signal is "partial"; one with nothing is "none"
+ * (i.e. any eligibility judgment is a guess → lower confidence).
+ */
+function _eligibilityCompletenessScore(opportunity) {
+  const bullets = safeParseArrayField(opportunity?.eligibility_bullets, [])
+    .map((b) => String(b || '').trim())
+    .filter((b) => b.length > 0)
+  if (bullets.length >= CONFIDENCE_ELIGIBILITY_FULL_BULLETS) return CONFIDENCE_ELIGIBILITY_FULL
+
+  // Fall back to free-text eligibility fields some sources populate instead of
+  // bullets (eligibility / eligibility_text / who_can_apply).
+  const freeText = [
+    opportunity?.eligibility,
+    opportunity?.eligibility_text,
+    opportunity?.who_can_apply,
+  ]
+    .map((v) => String(v || '').trim())
+    .filter((v) => v.length > 0)
+
+  if (bullets.length === 1 || freeText.some((t) => t.length >= 40)) {
+    return CONFIDENCE_ELIGIBILITY_FULL
+  }
+  if (freeText.length > 0) return CONFIDENCE_ELIGIBILITY_PARTIAL
+  return CONFIDENCE_ELIGIBILITY_NONE
+}
+
+/**
+ * Freshness / deadline-validity subscale (0-100) keyed by the normalized
+ * deadline status (rolling / open / unknown / closed).
+ */
+function _freshnessScore(deadlineStatus) {
+  const key = String(deadlineStatus || 'unknown').toLowerCase()
+  return CONFIDENCE_FRESHNESS_SCORE[key] ?? CONFIDENCE_FRESHNESS_SCORE.unknown
+}
+
+/**
+ * Compute CONFIDENCE (0-100) and human-readable confidence_reasons for an
+ * opportunity, using signals orthogonal to MATCH fit. Reuses the canonical
+ * consumer-side trust classifier (opportunityTrust.assessOpportunityTrust) for
+ * source-trust tier + URL actionability so confidence and the display/trust
+ * layer can never drift apart.
+ *
+ * @param {Object} opportunity
+ * @param {Object} [oppNorm] - optional pre-normalized opportunity (for deadlineStatus)
+ * @returns {{ confidence: number, confidence_reasons: string[], confidence_band: string,
+ *             confidence_components: object }}
+ */
+export function calculateConfidence(opportunity, oppNorm = null) {
+  const reasons = []
+
+  // 1. Source trust — reuse the canonical trust classifier. allowExpired etc.
+  //    are irrelevant here; we only consume sourceTrust + actionability flags,
+  //    not its display verdict.
+  let sourceTrust = 'unknown'
+  let actionable = false
+  try {
+    const trust = assessOpportunityTrust(opportunity, {
+      allowExpired: true,
+      allowLoans: true,
+      allowMatchingFunds: true,
+      allowDirectory: true,
+    })
+    sourceTrust = trust?.sourceTrust || 'unknown'
+    actionable = Boolean(trust?.actionable)
+  } catch {
+    // Defensive: if the trust assessor throws on a malformed row, fall back to
+    // the matchEngine-local source-trust heuristic and a URL presence check.
+    const localTrust = calculateSourceTrust(opportunity)
+    sourceTrust = localTrust >= 90 ? 'official'
+      : localTrust >= 75 ? 'verified'
+        : localTrust >= 60 ? 'directory'
+          : localTrust >= 35 ? 'community' : 'unknown'
+    const url = opportunity?.application_url || opportunity?.apply_url ||
+      opportunity?.source_url || opportunity?.url || ''
+    actionable = Boolean(String(url).trim())
+  }
+
+  const sourceScore = CONFIDENCE_SOURCE_TRUST_SCORE[sourceTrust] ??
+    CONFIDENCE_SOURCE_TRUST_SCORE.unknown
+  reasons.push(`Source trust: ${sourceTrust} (${sourceScore})`)
+
+  // 2. Actionability — real, non-placeholder usable URL.
+  const actionabilityScore = actionable ? CONFIDENCE_ACTIONABLE_FULL : CONFIDENCE_ACTIONABLE_NONE
+  reasons.push(
+    actionable
+      ? 'Actionable: usable application/source URL'
+      : 'Not actionable: no usable application/source URL',
+  )
+
+  // 3. Eligibility-text completeness.
+  const eligibilityScore = _eligibilityCompletenessScore(opportunity)
+  reasons.push(
+    eligibilityScore >= CONFIDENCE_ELIGIBILITY_FULL
+      ? 'Eligibility: detailed criteria present'
+      : eligibilityScore >= CONFIDENCE_ELIGIBILITY_PARTIAL
+        ? 'Eligibility: partial criteria present'
+        : 'Eligibility: no criteria — eligibility is inferred',
+  )
+
+  // 4. Freshness / deadline validity.
+  const deadlineStatus = oppNorm?.deadlineStatus ??
+    (opportunity?.deadline_type === 'rolling' || opportunity?.deadline_type === 'ongoing'
+      ? 'rolling'
+      : opportunity?.deadline
+        ? (new Date(opportunity.deadline) < new Date() ? 'closed' : 'open')
+        : 'unknown')
+  const freshnessScore = _freshnessScore(deadlineStatus)
+  reasons.push(`Freshness: deadline ${deadlineStatus} (${freshnessScore})`)
+
+  const confidence = Math.max(0, Math.min(100, Math.round(
+    sourceScore * CONF_W_SOURCE +
+    actionabilityScore * CONF_W_ACTIONABILITY +
+    eligibilityScore * CONF_W_ELIGIBILITY +
+    freshnessScore * CONF_W_FRESHNESS,
+  )))
+
+  return {
+    confidence,
+    confidence_reasons: reasons,
+    confidence_band: confidenceBand(confidence),
+    confidence_components: {
+      source: sourceScore,
+      actionability: actionabilityScore,
+      eligibility: eligibilityScore,
+      freshness: freshnessScore,
+      sourceTrust,
+      deadlineStatus,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2262,8 +2433,24 @@ export function scoreOpportunity(profile, opportunity) {
     reasons: reasons.length > 0 ? reasons : ['No specific matches found'],
   }
 
+  // ── CONFIDENCE (orthogonal to MATCH score) ──
+  // Computed from source trust / actionability / eligibility-text completeness /
+  // freshness — NONE of which feed `finalScore`. A high-fit row from an unknown
+  // source with a placeholder URL keeps its high MATCH but earns a low
+  // CONFIDENCE; an official, actionable row earns high confidence. Confidence is
+  // additive metadata only and never alters `score`.
+  const oppNormForConfidence = canonicalOppNormForExplain ?? normalizeOpportunity(effectiveOpp)
+  const { confidence, confidence_reasons, confidence_band, confidence_components } =
+    calculateConfidence(effectiveOpp, oppNormForConfidence)
+  match_explain.confidence = confidence
+  match_explain.confidence_band = confidence_band
+  match_explain.confidence_components = confidence_components
+
   return {
     score: finalScore,
+    confidence,
+    confidence_reasons,
+    confidence_band,
     reasons: reasons.length > 0 ? reasons : ['No specific matches found'],
     match_explain,
   }
@@ -2287,8 +2474,9 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
   if (!Array.isArray(opportunities) || opportunities.length === 0) return []
 
   const scored = opportunities.map((opp) => {
-    const { score, reasons, match_explain } = scoreOpportunity(profile, opp)
-    return { ...opp, score, reasons, match_explain }
+    const { score, confidence, confidence_reasons, confidence_band, reasons, match_explain } =
+      scoreOpportunity(profile, opp)
+    return { ...opp, score, confidence, confidence_reasons, confidence_band, reasons, match_explain }
   })
 
   scored.sort((a, b) => b.score - a.score)
@@ -2769,4 +2957,6 @@ export default {
   matchOpportunities,
   makeDecision,
   computeMatchDecision,
+  calculateConfidence,
+  confidenceBand,
 }
