@@ -25,6 +25,16 @@ export const W_CATEGORY = 0.20
 /** Default minimum score for discovery results */
 export const DEFAULT_MIN_SCORE = 50
 
+/**
+ * Number of matched profile needs that earns FULL need-alignment credit.
+ * The need subscale is `min(1, needHits / min(needTotal, NEED_FULL_CREDIT_HITS))`,
+ * so a profile that lists many needs is not penalized: a funder realistically
+ * addresses a few of a person's needs, and matching this many strongly is a
+ * complete need match. Raising this makes scoring stricter (harder to reach the
+ * 80% slider); lowering it makes strong matches surface more readily.
+ */
+export const NEED_FULL_CREDIT_HITS = 4
+
 /** Progressive relaxation steps when results are too few.
  *  Tried in order; first to yield results wins. */
 export const RELAX_THRESHOLDS = [30, 15, 0]

@@ -41,6 +41,7 @@ import {
   DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N,
   ACCEPT_SCORE, REVIEW_SCORE,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
+  NEED_FULL_CREDIT_HITS,
 } from '../config/matchThresholds.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
@@ -1350,7 +1351,18 @@ function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets,
       if (matched) needHits++
     }
     if (needHits > 0) {
-      const needPct = needHits / needTotal
+      // Reward matching the profile's needs WITHOUT diluting by how MANY needs
+      // the profile lists. Dividing by the full needTotal meant a complete
+      // profile (e.g. Robert White's 13 needs) capped every grant low — a grant
+      // matching 7/13 strong needs only earned 54% of the need slice, so the
+      // 80% slider returned nothing. A funder realistically addresses a few of a
+      // person's needs; matching ~4 strongly is full need-alignment credit.
+      // (Canonical rule G4: profile attributes INCREASE score; recall over
+      // precision. Differentiation between equally-need-matching grants comes
+      // from the keyword/interest/category components, not from punishing rich
+      // profiles.)
+      const needDenom = Math.max(1, Math.min(needTotal, NEED_FULL_CREDIT_HITS))
+      const needPct = Math.min(1, needHits / needDenom)
       subscale += Math.round(needPct * 45)
       reasons.push(`Need alignment: ${needHits}/${needTotal}`)
     }
