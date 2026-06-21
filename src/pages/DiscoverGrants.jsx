@@ -1425,7 +1425,8 @@ export default function DiscoverGrants() {
               {typeof discovery.running === 'number' && discovery.running > 0
                 ? ` — ${discovery.running} still running.`
                 : ' — wrapping up.'}{' '}
-              New matches appear below as each finishes; this can take a few minutes.
+              New matches appear below as each finishes; this can take a few minutes.{' '}
+              <strong>You can leave this page</strong> — the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
             </AlertDescription>
           </Alert>
         )}
