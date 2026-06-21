@@ -149,8 +149,8 @@ describe('robertAgent — defaults are safe', () => {
 // nothing fresh to match on, so a Mission Control cycle ALWAYS produces
 // real recommendations when funding exists. createRecommendationIfHelpful
 // is idempotent on (profile, opportunity) so this is safe across cycles.
-describe('robertAgent — match-phase fallback to existing funding_opportunities', () => {
-  it('matches against recent funding_opportunities when no opportunityAdapter is wired (Mission Control happy path)', async () => {
+describe('robertAgent — mines the existing funding catalog (catalog miner)', () => {
+  it('scores existing funding_opportunities against the profile and excludes hidden rows', async () => {
     db.seed('funding_opportunities', [
       {
         id: 'opp-active-1',
@@ -158,8 +158,10 @@ describe('robertAgent — match-phase fallback to existing funding_opportunities
         sponsor: 'TestFunder',
         application_url: 'https://www.real-grant.example.gov/apply',
         source_url: 'https://www.real-grant.example.gov',
+        record_origin: 'curated_catalog',
         is_active: true,
         is_hidden: false,
+        is_national: true,
         updated_at: '2026-06-15T00:00:00Z',
         created_at: '2026-06-01T00:00:00Z',
       },
@@ -169,8 +171,10 @@ describe('robertAgent — match-phase fallback to existing funding_opportunities
         sponsor: 'X',
         application_url: 'https://x.example.com/apply',
         source_url: 'https://x.example.com',
+        record_origin: 'curated_catalog',
         is_active: true,
-        is_hidden: true, // must NOT be recommended
+        is_hidden: true, // must NOT reach the matcher (excluded at the SQL layer)
+        is_national: true,
         updated_at: '2026-06-16T00:00:00Z',
         created_at: '2026-06-02T00:00:00Z',
       },
@@ -185,56 +189,52 @@ describe('robertAgent — match-phase fallback to existing funding_opportunities
       deps: {
         loadProfileContext: async () => PROFILE_CTX,
         listActiveProfileIds: async () => ['p1'],
-        // No searchProvider, no opportunityAdapter — the exact Mission Control
-        // shape after the bug. The fallback must kick in regardless.
+        // No searchProvider/opportunityAdapter — the catalog miner is Robert's
+        // primary, always-on discovery surface and must run regardless.
         configOverride: { enabled: true, allowLiveWeb: true, autoIngestVerified: true },
+        // Canonical 0-100 scale; ACCEPT well above the relevance floor.
         computeMatchDecision: () => {
           computedDecisions += 1
-          return { decision: 'match', score: 0.9, reasons: ['fallback test'], missingProfileFields: [] }
+          return { decision: 'ACCEPT', score: 90, reasons: ['catalog test'], missingEligibilityFields: [] }
         },
       },
     })
 
     assert.equal(result.ok, true)
     assert.equal(result.status, 'completed')
-    assert.ok(
-      computedDecisions >= 1,
-      'computeMatchDecision must have been invoked against the existing funding_opportunities row',
-    )
-    // Hidden row must be skipped — the fallback fetch filters on is_hidden=0.
+    // Only the visible active row reaches the matcher; the hidden row is excluded
+    // by the miner's SQL (is_hidden=0).
     assert.equal(
       computedDecisions,
       1,
-      'only the visible active row should reach the matcher (hidden rows excluded)',
+      'only the visible active catalog row should reach the matcher (hidden excluded)',
     )
-    // Summary explains why the run still produced work.
-    const fallbackNote = (result.summary?.notes || []).find(
-      (n) => typeof n === 'object' && n.stage === 'match' && /no fresh ingests/.test(String(n.note)),
+    const mine = result.summary?.catalog_mine
+    assert.ok(mine, 'summary.catalog_mine must be present')
+    assert.ok(mine.matched >= 1, 'the strong-scoring visible row should be matched')
+    const note = (result.summary?.notes || []).find(
+      (n) => typeof n === 'object' && n.stage === 'catalog_mine',
     )
-    assert.ok(fallbackNote, 'summary.notes must record the match-phase fallback explicitly')
+    assert.ok(note, 'summary.notes must record the catalog_mine stage')
   })
 
-  it('does NOT activate the fallback when fresh ingests are present (preserves the original path)', async () => {
-    // Seed a recent active row that WOULD be picked up by the fallback so we
-    // can prove the fallback note never fires when the run produced ingests
-    // of its own.
+  it('reports a structured catalog_mine summary (rows considered + matched)', async () => {
     db.seed('funding_opportunities', [
       {
         id: 'opp-stray',
         title: 'Stray',
+        sponsor: 'S',
         application_url: 'https://www.stray-grant.example.gov/apply',
+        source_url: 'https://www.stray-grant.example.gov',
+        record_origin: 'curated_catalog',
         is_active: true,
         is_hidden: false,
+        is_national: true,
         updated_at: '2026-06-18T00:00:00Z',
         created_at: '2026-06-18T00:00:00Z',
       },
     ])
 
-    // Pretend Robert ingested an opportunity this run by stubbing out the
-    // verify+ingest path to short-circuit success. We don't go through the
-    // real verifier here because its policy gates need a fully populated
-    // normalized record; the assertion we care about is whether the fallback
-    // BRANCH fires, not whether the verifier accepts a synthetic candidate.
     const result = await runRobert({
       db,
       mode: 'full-cycle',
@@ -244,17 +244,12 @@ describe('robertAgent — match-phase fallback to existing funding_opportunities
         loadProfileContext: async () => PROFILE_CTX,
         listActiveProfileIds: async () => ['p1'],
         configOverride: { enabled: true, allowLiveWeb: true, autoIngestVerified: true },
+        computeMatchDecision: () => ({ decision: 'ACCEPT', score: 88, reasons: [], missingEligibilityFields: [] }),
       },
     })
-    // No opportunityAdapter wired and the synthetic verify path didn't run:
-    // summary.ingested is empty, so the fallback NOTE *is* expected here.
-    // This test instead documents the contract: when the fallback DOES fire,
-    // it leaves a structured note. The previous test already proved the
-    // fallback fires + matches the stray row.
-    const fallbackNote = (result.summary?.notes || []).find(
-      (n) => typeof n === 'object' && n.stage === 'match',
-    )
-    assert.ok(fallbackNote, 'note must record the fallback activation')
-    assert.equal(fallbackNote.fallback_count, 1, 'fallback_count must reflect the seeded row')
+    const mine = result.summary?.catalog_mine
+    assert.ok(mine, 'summary.catalog_mine must be present')
+    assert.ok(mine.rows_considered >= 1, 'rows_considered must reflect the seeded catalog row')
+    assert.ok(mine.matched >= 1, 'the seeded row should match with a high score')
   })
 })

@@ -319,14 +319,19 @@ export function makeMemoryDb() {
     if (/^SELECT \* FROM funding_opportunities WHERE id IN/i.test(sql)) {
       return rowsCopy(tables.funding_opportunities.filter((o) => params.includes(o.id)))
     }
-    // Fallback fetch used by Robert's match phase when no fresh ingests are
-    // available. Mirror the SQL signature in robertAgent.fetchRecentActiveOpportunities.
-    if (/^SELECT \*\s+FROM funding_opportunities\s+WHERE COALESCE\(is_active, 1\) IN \(1, TRUE, 'true'\)\s+AND COALESCE\(is_hidden, 0\) IN \(0, FALSE, 'false'\)\s+ORDER BY COALESCE\(updated_at, created_at\) DESC\s+LIMIT \?$/i.test(sql)) {
-      const limit = Number(params[0]) || 50
+    // Catalog miner (robertCatalogMiner.fetchCatalogForProfile): a broad
+    // active + non-hidden slice ordered newest-first, with geo as a SOFT OR.
+    // The mock honors active/hidden and the LIMIT (last param) and ignores the
+    // geo predicate (recall — the real matcher does precise geo scoring). This
+    // also covers the older fallback shape.
+    if (
+      /^SELECT \* FROM funding_opportunities WHERE COALESCE\(is_active/i.test(sql) &&
+      /ORDER BY COALESCE\(updated_at, created_at\) DESC LIMIT \?$/i.test(sql)
+    ) {
+      const limit = Number(params[params.length - 1]) || 100
       const truthy = (v, dflt) => {
         if (v === undefined || v === null) return dflt
-        if (v === true || v === 1 || v === 'true') return true
-        return false
+        return v === true || v === 1 || v === 'true' || v === 't'
       }
       const rows = tables.funding_opportunities
         .filter((o) => truthy(o.is_active, true) && !truthy(o.is_hidden, false))
