@@ -106,7 +106,9 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     }
     add(profileState)
     if (Array.isArray(signals?.states)) for (const st of signals.states) add(st)
-    return out.slice(0, 2)
+    // Bounded so the local crawl never explodes, but high enough to cover a
+    // profile with several addresses (home + school + work + service areas).
+    return out.slice(0, 5)
   })()
 
   if (profileStateList.length === 0) {

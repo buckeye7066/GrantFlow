@@ -1139,9 +1139,33 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     locations.push(secondaryLocation)
   }
   const states = []
-  for (const loc of locations) {
-    const st = loc?.state ? String(loc.state).toUpperCase() : null
-    if (st && !states.includes(st)) states.push(st)
+  const addState = (value) => {
+    if (!value) return
+    const raw = String(value).trim()
+    if (!raw) return
+    // Accept a 2-letter code directly, else parse a state out of a freeform string.
+    const st = raw.length === 2 ? raw.toUpperCase() : (extractStateFromAddress(raw) || null)
+    if (st && st.length === 2 && !states.includes(st)) states.push(st)
+  }
+  for (const loc of locations) addState(loc?.state)
+
+  // STRICTLY ADDITIVE multi-location coverage for the CRAWL path. The primary +
+  // basic.secondary_address are handled above; a second address (or extra service
+  // states) may also live in location_focus / comprehensive_application, or as an
+  // explicit states array. Fold them all in so local crawlers cover EVERY state
+  // the profile touches, regardless of which field the address was entered in.
+  // (Mirrors the matching path's `states` so crawl + match agree.) Single-address
+  // profiles are unchanged.
+  for (const sectionObj of [locationFocus, comprehensive, organizationDetails]) {
+    const sec = resolveSecondaryLocation(sectionObj?.secondary_address)
+    if (sec?.state) addState(sec.state)
+  }
+  for (const arr of [
+    profile?.states, basic?.states, locationFocus?.states,
+    locationFocus?.states_served, locationFocus?.service_states,
+    organizationDetails?.states_served, organizationDetails?.service_states,
+  ]) {
+    if (Array.isArray(arr)) for (const v of arr) addState(v)
   }
 
   const academics = {
