@@ -1,0 +1,23 @@
+# SearXNG settings for GrantFlow's self-hosted web search.
+# Key change vs. stock: the JSON output format is ENABLED (stock ships HTML-only),
+# which the GrantFlow backend requires (it calls /search?format=json).
+use_default_settings: true
+
+server:
+  # Overridden by the SEARXNG_SECRET env var on the Railway service.
+  secret_key: "set-via-SEARXNG_SECRET-env"
+  # This instance is internal-only (called by the GrantFlow backend), not public,
+  # so disable the bot limiter that would otherwise throttle our own backend.
+  limiter: false
+  image_proxy: false
+
+search:
+  # Enabling json is the whole point — without it /search?format=json returns 403.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+
+general:
+  instance_name: "grantflow-search"
