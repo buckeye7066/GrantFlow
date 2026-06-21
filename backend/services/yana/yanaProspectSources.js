@@ -26,6 +26,7 @@
 import { searchOrganizations as realSearchOrganizations } from '../../src/integrations/propublica990.js'
 import { NTEE_DESCRIPTIONS, NEED_TO_NTEE_MAP } from '../../constants/nteeMapping.js'
 import { createLogger } from '../../utils/logger.js'
+import { searchPlaces as realSearchPlaces, getGoogleMapsApiKey } from './googleMapsProvider.js'
 
 const log = createLogger('yanaProspectSources')
 
@@ -170,9 +171,108 @@ export function makePropublica990Source(deps = {}) {
   }
 }
 
+// ── Google Maps (Places) provider ────────────────────────────────────────────
+// Discovers LOCAL orgs/businesses near the discovery geography and returns them
+// WITH a website in a single Places call. The website lets scoreOrganizationLead
+// award `has_website` immediately and gives contact enrichment a homepage to
+// read for an email — so a Maps prospect can graduate to `qualified` the same
+// way a 990 prospect does. external_id is the Google place_id (stable dedup key).
+const DEFAULT_MAPS_QUERIES = Object.freeze([
+  'nonprofit organizations',
+  'community foundation',
+  'charity',
+  'food bank',
+  'youth services',
+])
+
+/** Map a normalized Google Maps place into a Yana prospect candidate. */
+export function mapPlaceToProspect(place, { source = 'google_maps' } = {}) {
+  if (!place || !place.name) return null
+  const evidence = []
+  if (Array.isArray(place.types) && place.types.length) {
+    evidence.push({ type: 'google_maps_types', value: place.types.slice(0, 10) })
+  }
+  if (place.address) evidence.push({ type: 'address', text: place.address })
+  if (place.phone) evidence.push({ type: 'contact', name: null, title: null, phone: place.phone, email: null })
+  return {
+    source,
+    external_id: place.place_id ? String(place.place_id) : null,
+    organization_name: place.name,
+    organization_type: 'organization',
+    entity_type: 'organization',
+    city: null,
+    state: null,
+    location: place.address || null,
+    mission: null,
+    focus_areas: [],
+    program_areas: [],
+    website: place.website || null,
+    website_url: place.website || null,
+    phone: place.phone || null,
+    email: null,
+    profile_url: place.website || null,
+    source_urls: place.website ? [place.website] : [],
+    public_evidence: evidence,
+  }
+}
+
+/**
+ * @param {object} [deps]
+ * @param {Function} [deps.searchPlaces] injectable for tests — defaults to the
+ *        live Google Maps integration.
+ * @param {object}   [deps.env]          defaults to process.env (key lookup).
+ */
+export function makeGoogleMapsSource(deps = {}) {
+  const search = typeof deps.searchPlaces === 'function' ? deps.searchPlaces : realSearchPlaces
+  const env = deps.env || process.env
+  return {
+    name: 'google_maps',
+    async discover({ limit = 60, location = null, queries = null, type = null } = {}) {
+      // Honest NOOP when unkeyed — never call the network, never throw.
+      if (!getGoogleMapsApiKey(env)) {
+        log.info('google_maps source skipped — set GOOGLE_MAPS_API_KEY to enable Google Maps source')
+        return []
+      }
+      const plans = Array.isArray(queries) && queries.length ? queries : DEFAULT_MAPS_QUERIES
+      const perQuery = Math.max(1, Math.min(20, Math.ceil((Number(limit) || 60) / plans.length)))
+      const out = []
+      const seen = new Set()
+      for (const q of plans) {
+        if (out.length >= limit) break
+        let places = []
+        try {
+          places = await search({ query: q, location: location || undefined, type: type || undefined, limit: perQuery })
+        } catch (err) {
+          log.warn(`google_maps search failed for q="${q}": ${err?.message || err}`)
+          continue
+        }
+        for (const place of places || []) {
+          if (out.length >= limit) break
+          const prospect = mapPlaceToProspect(place)
+          if (!prospect) continue
+          // Dedup within this run by place_id, else by lowercased name.
+          const key = prospect.external_id
+            ? `id:${prospect.external_id}`
+            : `name:${String(prospect.organization_name).trim().toLowerCase()}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          out.push(prospect)
+        }
+      }
+      return out
+    },
+  }
+}
+
 function registerDefaults() {
   if (!providers.has('propublica_990')) {
     registerProspectSource('propublica_990', makePropublica990Source())
+  }
+  // Google Maps is registered unconditionally; it's an honest NOOP (returns [])
+  // until GOOGLE_MAPS_API_KEY is set, so wiring it never changes today's
+  // behavior for operators who haven't supplied a key.
+  if (!providers.has('google_maps')) {
+    registerProspectSource('google_maps', makeGoogleMapsSource())
   }
 }
 

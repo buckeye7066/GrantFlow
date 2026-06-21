@@ -454,6 +454,33 @@ async function loadOwnOrgKeys(db) {
 }
 
 /**
+ * Most common "City, State" of the operator's own organizations, used to bias
+ * Google Maps' local prospect search. Returns null when nothing is known (Maps
+ * then searches without a location bias). Best-effort — never throws.
+ */
+async function loadOwnGeography(db) {
+  try {
+    const rows = await db.prepare(
+      `SELECT city, state FROM organizations
+       WHERE state IS NOT NULL AND TRIM(state) <> ''`,
+    ).all()
+    const counts = new Map()
+    for (const r of rows || []) {
+      const loc = [String(r.city || '').trim(), String(r.state || '').trim()].filter(Boolean).join(', ')
+      if (loc) counts.set(loc, (counts.get(loc) || 0) + 1)
+    }
+    let best = null
+    let bestN = 0
+    for (const [loc, n] of counts) {
+      if (n > bestN) { best = loc; bestN = n }
+    }
+    return best
+  } catch {
+    return null
+  }
+}
+
+/**
  * Discover EXTERNAL prospects (grant-seeking orgs that aren't GrantFlow clients)
  * via the registered prospect sources, score + (optionally) enrich them, and
  * upsert into yana_lead_candidates with an honest lifecycle status.
@@ -480,12 +507,29 @@ export async function discoverProspects(db, {
   const enrich = enricher || getDefaultContactEnricher()
   const ownKeys = await loadOwnOrgKeys(db)
 
+  // providerArgs are applied to every source; `providerArgs.bySource[name]`
+  // (optional) supplies per-source args (e.g. Google Maps wants a `location`
+  // string + plain-string `queries`, while ProPublica 990 wants `states` +
+  // `{q,ntee}` query plans). Per-source args win over the shared ones.
+  const sharedArgs = { ...providerArgs }
+  const bySource = { ...(sharedArgs.bySource || {}) }
+  delete sharedArgs.bySource
+
+  // Build the discovery GEOGRAPHY for Google Maps from the operator's own org
+  // footprint (city/state) when the caller didn't pin one. This focuses the
+  // Maps text search on the same locales the operator already serves, instead
+  // of a national sweep. Harmless when Maps isn't keyed (provider NOOPs).
+  if (sourceNames.includes('google_maps') && !bySource.google_maps?.location) {
+    const geo = await loadOwnGeography(db)
+    if (geo) bySource.google_maps = { ...(bySource.google_maps || {}), location: geo }
+  }
+
   for (const name of sourceNames) {
     const provider = getProspectSource(name)
     if (!provider) continue
     let prospects = []
     try {
-      prospects = await provider.discover({ limit, ...providerArgs })
+      prospects = await provider.discover({ limit, ...sharedArgs, ...(bySource[name] || {}) })
     } catch (err) {
       log.warn(`prospect source "${name}" discover failed: ${err?.message || err}`)
       continue
