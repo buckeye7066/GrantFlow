@@ -129,6 +129,105 @@ describe('selectRelevantDomainIds — fallbacks', () => {
   })
 })
 
+describe('new domain corpora — well-formedness', () => {
+  const NEW_IDS = [
+    'corporate_matching_gift_grants',
+    'reentry_justice_involved_funding',
+    'patient_disease_specific_assistance',
+  ]
+
+  it('the 3 new ids exist exactly once and are well-formed', () => {
+    for (const id of NEW_IDS) {
+      const matches = DOMAIN_CRAWLER_REGISTRY.filter((c) => c.id === id)
+      expect(matches.length, `expected exactly one config for ${id}`).toBe(1)
+      const cfg = matches[0]
+      expect(typeof cfg.label).toBe('string')
+      expect(cfg.label.length).toBeGreaterThan(0)
+      expect(typeof cfg.category).toBe('string')
+      expect(Array.isArray(cfg.boostSignals)).toBe(true)
+      expect(cfg.boostSignals.length).toBeGreaterThan(0)
+      expect(Array.isArray(cfg.directoryResources)).toBe(true)
+      // each entry points to >= 3 real http(s) directory resources with titles
+      expect(cfg.directoryResources.length).toBeGreaterThanOrEqual(3)
+      for (const res of cfg.directoryResources) {
+        expect(res.url, `${id} resource missing url`).toMatch(/^https?:\/\//)
+        expect(res.url).not.toMatch(/example\.com|placeholder|TODO|xxxx/i)
+        expect(typeof res.title).toBe('string')
+        expect(res.title.length).toBeGreaterThan(0)
+      }
+    }
+  })
+})
+
+describe('selectRelevantDomainIds — new corpora routing', () => {
+  const nonprofitSignals = signals({
+    applicantType: 'nonprofit',
+    applicantTypes: new Set(['nonprofit', 'church']),
+    keywords: ['nonprofit', 'church', 'charity', 'community', 'matching gift'],
+    keywordSet: new Set(['nonprofit', 'church', 'charity', 'community', 'matching gift']),
+    demographics: new Set(['faith', 'congregation']),
+  })
+
+  const medicalSignals = signals({
+    applicantType: 'individual',
+    keywords: ['patient', 'chronic illness', 'copay', 'medication', 'diagnosis'],
+    keywordSet: new Set(['patient', 'chronic illness', 'copay', 'medication', 'diagnosis']),
+    health: new Set(['chronic illness', 'patient', 'medical']),
+    needs: new Set(['medical_bills']),
+  })
+
+  const reentrySignals = signals({
+    applicantType: 'individual',
+    keywords: ['reentry', 'formerly incarcerated', 'returning citizen', 'second chance'],
+    keywordSet: new Set(['reentry', 'formerly incarcerated', 'returning citizen', 'second chance']),
+    assistance: new Set(['reentry', 'justice-involved']),
+    needs: new Set(['reentry']),
+  })
+
+  it('routes corporate matching-gift to a nonprofit profile', () => {
+    const ids = selectRelevantDomainIds(nonprofitSignals)
+    expect(ids).toContain('corporate_matching_gift_grants')
+  })
+
+  it('routes patient/disease-specific assistance to a medical-need profile', () => {
+    const ids = selectRelevantDomainIds(medicalSignals)
+    expect(ids).toContain('patient_disease_specific_assistance')
+  })
+
+  it('routes reentry funding to a justice-involved profile', () => {
+    const ids = selectRelevantDomainIds(reentrySignals)
+    expect(ids).toContain('reentry_justice_involved_funding')
+  })
+
+  it('does NOT route the 3 new corpora to clearly-unrelated profiles', () => {
+    const emsSignals = signals({
+      applicantType: 'first responder',
+      occupation: new Set(['paramedic', 'emt']),
+      keywords: ['ems', 'paramedic', 'ambulance', 'first responder'],
+      keywordSet: new Set(['ems', 'paramedic', 'ambulance', 'first responder']),
+    })
+    const emsIds = selectRelevantDomainIds(emsSignals)
+    expect(emsIds).not.toContain('corporate_matching_gift_grants')
+    expect(emsIds).not.toContain('patient_disease_specific_assistance')
+    expect(emsIds).not.toContain('reentry_justice_involved_funding')
+
+    // nonprofit should not pull patient-assistance or reentry
+    const npIds = selectRelevantDomainIds(nonprofitSignals)
+    expect(npIds).not.toContain('patient_disease_specific_assistance')
+    expect(npIds).not.toContain('reentry_justice_involved_funding')
+
+    // medical profile should not pull corporate-matching or reentry
+    const medIds = selectRelevantDomainIds(medicalSignals)
+    expect(medIds).not.toContain('corporate_matching_gift_grants')
+    expect(medIds).not.toContain('reentry_justice_involved_funding')
+
+    // reentry profile should not pull corporate-matching or patient-assistance
+    const reIds = selectRelevantDomainIds(reentrySignals)
+    expect(reIds).not.toContain('corporate_matching_gift_grants')
+    expect(reIds).not.toContain('patient_disease_specific_assistance')
+  })
+})
+
 describe('scoreDomainRelevance — diagnostics', () => {
   it('ranks EMS domains above unrelated ones for a paramedic', () => {
     const ranked = scoreDomainRelevance(signals({

@@ -1023,6 +1023,66 @@ export const DOMAIN_CRAWLER_REGISTRY = [
       { title: 'State DOT Grants', description: 'State transportation departments', url: 'https://www.fhwa.dot.gov/federalaid/', categories: ['transportation'], keywords: ['transportation'] },
     ],
   },
+
+  // === CORPORATE / CSR / MATCHING GIFTS (nonprofit-facing) ===
+  {
+    id: 'corporate_matching_gift_grants',
+    label: 'Corporate Matching Gift & CSR Grants',
+    description: 'Corporate matching-gift programs and corporate foundation / CSR grants for nonprofits, churches, and charities.',
+    category: 'organization',
+    requiredSignals: [['demographics']],
+    boostSignals: ['nonprofit', 'matching gift', 'corporate', 'CSR', 'corporate foundation', 'workplace giving'],
+    strict_no_loans: false,
+    strict_no_matching: false,
+    directoryResources: [
+      { title: 'Double the Donation Matching Gift Database', description: 'Searchable database of company matching-gift programs', url: 'https://doublethedonation.com/matching-gift-companies/', categories: ['organization', 'nonprofit'], keywords: ['matching gift', 'nonprofit'] },
+      { title: 'Benevity Corporate Giving Platform', description: 'Corporate matching, employee giving, and grants management', url: 'https://www.benevity.com/', categories: ['organization', 'nonprofit'], keywords: ['matching gift', 'corporate'] },
+      { title: 'America\'s Charities Workplace Giving', description: 'Corporate workplace giving, matching gifts, and grantmaking', url: 'https://www.charities.org/', categories: ['organization', 'nonprofit'], keywords: ['workplace giving', 'corporate'] },
+      { title: 'Candid Foundation Directory', description: 'Research corporate foundations and their grant programs', url: 'https://candid.org/', categories: ['organization', 'nonprofit'], keywords: ['corporate foundation', 'nonprofit'] },
+      { title: 'Walmart Foundation Grants', description: 'Corporate foundation community grant programs', url: 'https://walmart.org/how-we-give/', categories: ['organization', 'nonprofit'], keywords: ['corporate foundation', 'grant'] },
+      { title: 'Bank of America Charitable Foundation', description: 'Corporate philanthropy and nonprofit grants', url: 'https://about.bankofamerica.com/en/making-an-impact/charitable-foundation-funding', categories: ['organization', 'nonprofit'], keywords: ['corporate foundation', 'grant'] },
+    ],
+  },
+
+  // === REENTRY / JUSTICE-INVOLVED ===
+  {
+    id: 'reentry_justice_involved_funding',
+    label: 'Reentry & Justice-Involved Funding',
+    description: 'Funding and support for re-entry / justice-involved (formerly incarcerated, returning citizen) individuals and the organizations serving them.',
+    category: 'reentry',
+    requiredSignals: [['assistance']],
+    boostSignals: ['reentry', 're-entry', 'justice-involved', 'formerly incarcerated', 'returning citizen', 'second chance'],
+    strict_no_loans: false,
+    strict_no_matching: false,
+    directoryResources: [
+      { title: 'National Reentry Resource Center Funding', description: 'Reentry grants and funding opportunities (Second Chance Act)', url: 'https://nationalreentryresourcecenter.org/funding', categories: ['reentry'], keywords: ['reentry', 'second chance'] },
+      { title: 'DOJ Office of Justice Programs', description: 'Federal reentry and justice grant programs', url: 'https://www.ojp.gov/', categories: ['reentry'], keywords: ['reentry', 'justice'] },
+      { title: 'BJA Second Chance Act Program', description: 'Bureau of Justice Assistance reentry grants', url: 'https://bja.ojp.gov/program/second-chance-act-sca/overview', categories: ['reentry'], keywords: ['second chance', 'reentry'] },
+      { title: 'DOL Reentry Employment Opportunities', description: 'Department of Labor reentry employment grants', url: 'https://www.dol.gov/agencies/eta/reentry', categories: ['reentry', 'workforce'], keywords: ['reentry', 'employment'] },
+      { title: 'The Fortune Society', description: 'Reentry services for formerly incarcerated people', url: 'https://fortunesociety.org/', categories: ['reentry'], keywords: ['formerly incarcerated', 'reentry'] },
+      { title: 'Prison Fellowship', description: 'Support for prisoners, returning citizens, and families', url: 'https://www.prisonfellowship.org/', categories: ['reentry'], keywords: ['returning citizen', 'reentry'] },
+    ],
+  },
+
+  // === DISEASE-SPECIFIC PATIENT ASSISTANCE ===
+  {
+    id: 'patient_disease_specific_assistance',
+    label: 'Disease-Specific Patient & Copay Assistance',
+    description: 'Disease and condition-specific patient assistance and copay foundations that help with medication, copays, premiums, and out-of-pocket medical costs.',
+    category: 'health',
+    requiredSignals: [['health']],
+    boostSignals: ['patient assistance', 'copay', 'co-pay', 'disease', 'chronic illness', 'medication', 'out-of-pocket'],
+    strict_no_loans: false,
+    strict_no_matching: false,
+    directoryResources: [
+      { title: 'PAN Foundation', description: 'Disease-specific copay and out-of-pocket assistance funds', url: 'https://panfoundation.org/', categories: ['health'], keywords: ['copay', 'patient assistance'] },
+      { title: 'HealthWell Foundation', description: 'Copay, premium, and deductible assistance for specific conditions', url: 'https://www.healthwellfoundation.org/', categories: ['health'], keywords: ['copay', 'patient assistance'] },
+      { title: 'Patient Advocate Foundation Co-Pay Relief', description: 'Copay relief and case management for chronic illness', url: 'https://www.patientadvocate.org/', categories: ['health'], keywords: ['copay', 'chronic illness'] },
+      { title: 'NeedyMeds', description: 'Database of patient assistance and medication savings programs', url: 'https://www.needymeds.org/', categories: ['health'], keywords: ['medication', 'patient assistance'] },
+      { title: 'The Assistance Fund', description: 'Disease-specific copay and financial assistance programs', url: 'https://tafcares.org/', categories: ['health'], keywords: ['copay', 'disease'] },
+      { title: 'Good Days', description: 'Copay and out-of-pocket assistance for chronic disease', url: 'https://www.mygooddays.org/', categories: ['health'], keywords: ['copay', 'chronic illness'] },
+    ],
+  },
 ]
 
 // ===========================================================================
@@ -1063,6 +1123,24 @@ const ENTITY_CATEGORY_HINTS = {
   military: ['veteran'],
   senior: ['demographics'],
   caregiver: ['health', 'disability'],
+  // medical-need / patient (disease-specific copay & patient assistance)
+  patient: ['health'],
+  medical: ['health'],
+  disease: ['health'],
+  diagnosis: ['health'],
+  chronic: ['health'],
+  illness: ['health'],
+  copay: ['health'],
+  'co-pay': ['health'],
+  // reentry / justice-involved
+  reentry: ['reentry', 'assistance'],
+  're-entry': ['reentry', 'assistance'],
+  'justice-involved': ['reentry', 'assistance'],
+  incarcerated: ['reentry', 'assistance'],
+  'formerly incarcerated': ['reentry', 'assistance'],
+  'returning citizen': ['reentry', 'assistance'],
+  parole: ['reentry', 'assistance'],
+  probation: ['reentry', 'assistance'],
   // occupations / domains
   paramedic: ['first responder'],
   ems: ['first responder'],
