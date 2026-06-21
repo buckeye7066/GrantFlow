@@ -6,11 +6,18 @@
  */
 
 import express from 'express'
-import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
+import {
+  requireAuthenticatedUser,
+  requireAuthenticatedUserMiddleware,
+  ensureProfileAccess,
+} from '../utils/accessControl.js'
 import * as propublica from '../src/integrations/propublica990.js'
 import * as nsf from '../src/integrations/nsfAwards.js'
 import * as samAL from '../src/integrations/samAssistanceListings.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
+import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:foundations')
@@ -28,14 +35,22 @@ router.get('/search', async (req, res) => {
 
   try {
     const q = String(req.query.q || '').trim()
-    if (!q) return res.status(400).json({ error: 'Search query (q) is required' })
+    const state = req.query.state || undefined
+    const ntee = req.query.ntee || undefined
+    const c_code = req.query.c_code || undefined
+    // Browse mode: a keyword is no longer required as long as we have at least one
+    // filter (state / NTEE group / IRS subsection). This lets the Foundations tab
+    // prepopulate straight from the state dropdown.
+    if (!q && !state && !ntee && !c_code) {
+      return res.status(400).json({ error: 'Provide a search query (q) or a state/ntee filter' })
+    }
 
     const result = await propublica.searchOrganizations({
       q,
       page: Number(req.query.page) || 0,
-      state: req.query.state || undefined,
-      ntee: req.query.ntee || undefined,
-      c_code: req.query.c_code || undefined,
+      state,
+      ntee,
+      c_code,
     })
 
     res.json(result)
@@ -92,10 +107,17 @@ router.get('/nsf/search', async (req, res) => {
   if (!requireAuthenticatedUser(req, res)) return
 
   try {
+    const keyword = req.query.keyword || req.query.q || ''
+    const state = req.query.state || undefined
+    // NSF's API needs at least one selective param; keyword OR state is enough.
+    // This lets the NSF tab prepopulate from the state dropdown alone.
+    if (!keyword && !state && !req.query.program) {
+      return res.status(400).json({ error: 'Provide a keyword or a state to search NSF awards' })
+    }
     const results = await nsf.fetchOpportunities({
-      keyword: req.query.keyword || req.query.q || '',
+      keyword,
       fundProgramName: req.query.program || undefined,
-      awardeeStateCode: req.query.state || undefined,
+      awardeeStateCode: state,
       dateStart: req.query.dateStart || undefined,
       dateEnd: req.query.dateEnd || undefined,
       offset: Number(req.query.offset) || 1,
@@ -232,6 +254,103 @@ router.get('/calendar/deadlines', async (req, res) => {
     res.json({ count: events.length, events })
   } catch (error) {
     routeLogger.error('[foundations/calendar] error', error?.message)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ── Match Scoring + Pipeline Prep ─────────────────────────────────────────────
+
+/**
+ * Convert a raw search-result row into the canonical FundingOpportunity shape
+ * the matcher + pipeline saver expect. Foundations come back org-shaped (from
+ * propublica.normalizeOrg) and must be projected through orgToFundingOpportunity;
+ * NSF / federal rows are already opportunity-shaped from their normalizers.
+ */
+function toOpportunityShape(kind, item) {
+  if (!item || typeof item !== 'object') return null
+  if (kind === 'foundation') {
+    return propublica.orgToFundingOpportunity(item)
+  }
+  // nsf | federal — already opportunity-shaped; guarantee provenance so the
+  // pipeline source gate (record_origin 'funding_api' is trusted) accepts it.
+  return { ...item, record_origin: item.record_origin || 'funding_api' }
+}
+
+/**
+ * POST /api/foundations/score
+ * Body: { profile_id, kind: 'foundation'|'nsf'|'federal', items: [...] }
+ *
+ * Scores each result against the profile using the canonical decision engine
+ * (same scorer Discover/Pipeline use), and returns a save-ready opportunity so
+ * the client can drop it straight into /api/grants/from-opportunity with its
+ * match score. Returns { scores: [{ key, match_score, decision, match_reasons,
+ * opportunity }] }.
+ */
+router.post('/score', requireAuthenticatedUserMiddleware, async (req, res) => {
+  try {
+    const { profile_id, kind = 'foundation', items } = req.body ?? {}
+    if (!profile_id) return res.status(400).json({ error: 'profile_id required' })
+    if (!Array.isArray(items) || items.length === 0) return res.json({ scores: [] })
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+    const baseContext = await loadProfileContext(req.db, String(profile_id))
+    const profileContext = buildProfileFacets(baseContext)
+    const profileNorm = normalizeProfile(
+      profileContext?.profile ?? profileContext,
+      profileContext?.sections ?? null,
+      profileContext?.signals ?? null,
+      profileContext?.documents ?? null,
+    )
+
+    // Cap the batch so one click can't fan out into hundreds of score calls.
+    const scores = items.slice(0, 50).map((item) => {
+      const opportunity = toOpportunityShape(kind, item)
+      const key = opportunity?.source_id || item?.ein || item?.source_id || null
+      if (!opportunity) return { key, match_score: null, decision: null, match_reasons: [], opportunity: null }
+
+      let decision = null
+      try {
+        decision = computeMatchDecision(profileNorm, opportunity)
+      } catch (scoreErr) {
+        routeLogger.warn('[foundations/score] scoring failed for one item', scoreErr?.message)
+      }
+
+      const reasons = decision
+        ? (decision.matched_profile_facts?.length ? decision.matched_profile_facts : decision.reasons ?? [])
+        : []
+      return {
+        key,
+        match_score: decision ? decision.score : null,
+        decision: decision ? decision.decision : null,
+        match_reasons: Array.isArray(reasons) ? reasons.slice(0, 6) : [],
+        opportunity,
+      }
+    })
+
+    res.json({ scores })
+  } catch (error) {
+    routeLogger.error('[foundations/score] error', error?.message)
+    res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * GET /api/foundations/profile-region/:profileId
+ * Returns the profile's resolved geo state (2-letter) so the Foundations / NSF
+ * tabs can prepopulate their state dropdown from the selected profile.
+ */
+router.get('/profile-region/:profileId', requireAuthenticatedUserMiddleware, async (req, res) => {
+  try {
+    const profileId = String(req.params.profileId)
+    if (!(await ensureProfileAccess(req, res, profileId))) return
+
+    const baseContext = await loadProfileContext(req.db, profileId)
+    const profileContext = buildProfileFacets(baseContext)
+    const state = profileContext?.facets?.geo?.state ?? null
+    const zip = profileContext?.facets?.geo?.zip ?? profileContext?.facets?.geo?.zip_code ?? null
+    res.json({ state: state || null, zip: zip || null })
+  } catch (error) {
+    routeLogger.error('[foundations/profile-region] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })

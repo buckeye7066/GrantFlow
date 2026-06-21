@@ -59,12 +59,21 @@ function nteeToMajorGroup(ntee) {
  */
 export async function searchOrganizations(query = {}) {
   const { q = '', page = 0, state, ntee, c_code } = query
-  if (!q.trim()) return { total_results: 0, organizations: [] }
+  const trimmedQ = q.trim()
+
+  // Browse mode: ProPublica's Nonprofit Explorer lets you browse by state and/or
+  // NTEE group with NO keyword (that's how the website's "browse by state" works).
+  // We allow that here so the Foundations tab can PREPOPULATE from the state
+  // dropdown alone. We only short-circuit to empty when there is truly nothing to
+  // search on — no keyword AND no filters.
+  const hasFilter = Boolean(state || ntee || c_code)
+  if (!trimmedQ && !hasFilter) return { total_results: 0, organizations: [] }
 
   // ProPublica expects filters as array-style indexed params (state[id],
   // ntee[id], c_code[id]); bare `state=`/`ntee=` make the API 500. axios
   // url-encodes the bracket keys, which ProPublica accepts.
-  const params = { q: q.trim(), page }
+  const params = { page }
+  if (trimmedQ) params.q = trimmedQ
   if (state) params['state[id]'] = String(state).toUpperCase()
   const nteeId = nteeToMajorGroup(ntee)
   if (nteeId) params['ntee[id]'] = nteeId
@@ -139,9 +148,16 @@ export async function getFiling(ein, taxPeriod) {
 }
 
 function normalizeOrg(raw) {
+  // The detail endpoint (organizations/{ein}.json) returns street address + zip
+  // on the `organization` object; the search endpoint usually omits them. We map
+  // them when present so the detail dialog can show real contact info.
+  const street = toTrimmedStringOrNull(raw?.address)
+  const zip = toTrimmedStringOrNull(raw?.zipcode ?? raw?.zip)
   return {
     ein: toTrimmedStringOrNull(raw?.ein),
     name: toTrimmedStringOrNull(raw?.name) || toTrimmedStringOrNull(raw?.organization?.name) || 'Unknown',
+    address: street,
+    zipcode: zip,
     city: toTrimmedStringOrNull(raw?.city),
     state: toTrimmedStringOrNull(raw?.state),
     ntee_code: toTrimmedStringOrNull(raw?.ntee_code),
