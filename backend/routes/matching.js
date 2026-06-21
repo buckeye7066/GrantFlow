@@ -1,6 +1,7 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
+import { loadPreferenceSignals } from '../services/matchEngine.js'
 import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -868,6 +869,10 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       }
 
       const trustDropReasons = {}
+      // Soft user-behavior preference signals (saves/applies/dismisses) — loaded
+      // ONCE per request and applied as a small bounded nudge inside the canonical
+      // decision engine. No-op (zero change) when the profile has no activity.
+      const preferenceSignals = await loadPreferenceSignals(req.db, profileId).catch(() => null)
       const allScored = candidates
                      .map((opp) => {
                                   const isDirectory = isDirectoryRecord(opp)
@@ -895,6 +900,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
                                   const decision = computeMatchDecision(profileNormForDecision, opp, {
                                     profileSections: profileSectionsForDecision,
                                     signals: profileContext?.signals ?? null,
+                                    preferenceSignals,
                                   })
                                   if (decision.decision === 'REJECT') {
                                     if (!isDirectory) { rejectStats.reject++; return null }

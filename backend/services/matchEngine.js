@@ -2860,7 +2860,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   const profileForScoring = (sectionsForScoring || signalsForScoring)
     ? { profile: effectiveProfileForScoring, sections: sectionsForScoring, signals: signalsForScoring }
     : rawProfile
-  const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity)
+  // Forward the optional soft behavior-preference signals (no-op when absent),
+  // so the user-activity nudge applies on the canonical decision path too.
+  const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity, {
+    preferenceSignals: opts.preferenceSignals,
+  })
 
   // Need alignment from normalised objects (uses calculateNeedAlignment for consistency)
   const { score: needAlignment, matchedNeeds } = calculateNeedAlignment(profileNorm, oppNorm)
