@@ -96,6 +96,7 @@ export const CRAWLER_JOB_TYPES = [
   'item_gift_search',
   'item_matching',
   'item_search',
+  'live_search',
   'local',
   'local_funding',
   'national',

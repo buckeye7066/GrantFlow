@@ -17,9 +17,12 @@ const fetchUSASpendingMock = vi.fn()
 const fetchNihMock = vi.fn()
 const buildTermsMock = vi.fn()
 
-vi.mock('../services/grantsDotGovCrawler.js', () => ({
+// Mock the NORMALIZED shim that liveFederalSearch actually imports (returns
+// { opportunities }). Mocking the raw grantsDotGovCrawler here previously masked
+// a real shape bug where the live search read .opportunities off a { oppHits }
+// response and silently got ZERO Grants.gov results.
+vi.mock('../services/sources/grantsGov.js', () => ({
   fetchGrantsGov: (...a) => fetchGrantsGovMock(...a),
-  transformGrantsGovOpportunity: (x) => x,
 }))
 vi.mock('../services/sources/samGov.js', () => ({ fetchSamGov: (...a) => fetchSamGovMock(...a) }))
 vi.mock('../services/sources/usaSpending.js', () => ({ fetchUSASpending: (...a) => fetchUSASpendingMock(...a) }))

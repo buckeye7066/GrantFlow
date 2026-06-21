@@ -69,7 +69,27 @@ async function duckDuckGoSearch(query, count, timeoutMs) {
     { headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.5' } },
     { timeoutMs, retries: 1 },
   )
-  if (!response?.data) return []
+  // DuckDuckGo serves a 202 anti-bot challenge (no result markup) to datacenter
+  // / cloud IPs — exactly where this runs in prod. Detect it and warn ONCE-style
+  // so "0 web results" is diagnosable as a blocked backend, not a silent miss.
+  // The reliable server-side web backend is Brave (set BRAVE_SEARCH_API_KEY).
+  const status = Number(response?.status)
+  const body = String(response?.data || '')
+  if (status && status !== 200) {
+    log.warn(
+      `[webSearchEngine] DuckDuckGo returned HTTP ${status} (likely a datacenter-IP block) — ` +
+        'web search is degraded. Set BRAVE_SEARCH_API_KEY for reliable server-side web search.',
+    )
+    return []
+  }
+  if (!body) return []
+  if (!body.includes('result__') && !body.includes('result-link')) {
+    log.warn(
+      '[webSearchEngine] DuckDuckGo response had no result markup (anti-bot challenge). ' +
+        'Set BRAVE_SEARCH_API_KEY for reliable server-side web search.',
+    )
+    return []
+  }
 
   const $ = cheerio.load(response.data)
   const out = []

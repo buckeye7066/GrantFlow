@@ -36,7 +36,10 @@
  *     display-merge the actionable (is_active !== 0) ones.
  */
 
-import { fetchGrantsGov } from '../grantsDotGovCrawler.js'
+// Use the NORMALIZED shim (returns { opportunities } in canonical shape and
+// accepts { limit, keyword }). The raw crawler export returns { oppHits } —
+// reading res.opportunities off it silently yields ZERO Grants.gov results.
+import { fetchGrantsGov } from '../sources/grantsGov.js'
 import { fetchSamGov } from '../sources/samGov.js'
 import { fetchUSASpending } from '../sources/usaSpending.js'
 import { fetchOpportunities as fetchNihReporter } from '../../src/integrations/nihReporter.js'

@@ -1488,7 +1488,8 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'item_matching',
     'anya_match_scout',
     'foundation_990',
-    'clinical_trials'
+    'clinical_trials',
+    'live_search'
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued',

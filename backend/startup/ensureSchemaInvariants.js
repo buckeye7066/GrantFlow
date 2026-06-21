@@ -170,6 +170,9 @@ const CRAWLER_JOB_TYPES = [
   // discovery — both relevance-gated in autoDiscoveryCrawlers.
   'foundation_990',
   'clinical_trials',
+  // Live profile-driven acquisition (federal APIs + local web) — enqueued by
+  // autoDiscoveryCrawlers, runs liveFederalSearch + liveWebSearch and ingests.
+  'live_search',
 ]
 
 export async function ensureCrawlerJobsTypeCheck(db, { logger = console } = {}) {

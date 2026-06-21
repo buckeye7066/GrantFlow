@@ -357,6 +357,18 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       profile_id: profileId,
       parameters: withDiscoveryMetadata({ radius: 25 }, discoveryMeta),
     })
+
+    // 1b. Live acquisition — turns the WHOLE profile into live queries against
+    // federal APIs (Grants.gov/SAM/USASpending/NIH) + the local web, persisting
+    // NEW real opportunities into the catalog. This is what makes "run the
+    // crawlers" actually surface fresh, profile-relevant funding instead of only
+    // re-ranking the existing catalog. Always queued; failure-tolerant.
+    jobs.push({
+      id: randomUUID(),
+      type: 'live_search',
+      profile_id: profileId,
+      parameters: withDiscoveryMetadata({}, discoveryMeta),
+    })
     
     // 2. Scholarship crawler (if student indicators exist)
     const isStudent = checkStudentIndicators(profileForDiscovery)

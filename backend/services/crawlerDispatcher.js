@@ -317,8 +317,84 @@ async function processClinicalTrialsJob({ db, job, profileContext }) {
   }
 }
 
+/**
+ * Live profile-driven acquisition — the job that surfaces NEW real funding
+ * sources (not just the curated catalog). Runs the whole profile (type + needs
+ * + interests + geography) against live federal APIs (Grants.gov/SAM/USASpending
+ * /NIH) and the local web, then persists results so they appear via the catalog
+ * the Discover UI polls:
+ *   - Federal opportunities → global catalog (profile_id NULL; national grants
+ *     are legitimately shared + reusable across profiles).
+ *   - Local web LEADS → profile-scoped (profile_id = this profile), gated by the
+ *     full quality/policy/validation/reviewer pipeline so open-web junk is
+ *     rejected and never reaches the global catalog or other profiles.
+ * Fully failure-tolerant: a dead source / missing key degrades to fewer results
+ * with a structured meta entry, never a failed job.
+ */
+async function processLiveSearchJob({ db, job, profileContext }) {
+  const profileId = job?.profile_id || profileContext?.profile?.id
+  if (!profileId) {
+    return { result_count: 0, result_meta: { skipped: true, noop_reason: 'no profile_id to scope live search' } }
+  }
+  let ctx = profileContext
+  if (!ctx?.profile) {
+    ctx = await buildProfileContext(db, profileId)
+  }
+
+  const [{ searchLiveFederalByProfile }, { searchLocalWebByProfile }, { ingestOpportunities }, { upsertFundingOpportunity }] =
+    await Promise.all([
+      import('./crawlers/liveFederalSearch.js'),
+      import('./crawlers/liveWebSearch.js'),
+      import('./sources/ingestionService.js'),
+      import('./opportunityInserter.js'),
+    ])
+
+  const meta = {}
+  let federalInserted = 0
+  let webInserted = 0
+
+  if (process.env.DISCOVERY_LIVE_FEDERAL !== '0') {
+    try {
+      const { opportunities, debug } = await searchLiveFederalByProfile(ctx, { timeoutMs: 15000 })
+      meta.federal = debug
+      if (opportunities.length) {
+        const res = await ingestOpportunities(db, opportunities, 'live_federal')
+        federalInserted = Number(res?.inserted || 0)
+        meta.federal_inserted = federalInserted
+        meta.federal_updated = Number(res?.updated || 0)
+      }
+    } catch (e) {
+      meta.federal_error = String(e?.message || e)
+    }
+  }
+
+  if (process.env.DISCOVERY_LIVE_WEB !== '0') {
+    try {
+      const { opportunities, debug } = await searchLocalWebByProfile(ctx, { timeoutMs: 15000 })
+      meta.web = debug
+      for (const lead of opportunities) {
+        const r = await upsertFundingOpportunity(
+          db,
+          { ...lead, profile_id: profileId, is_active: 1 },
+          { allowDirectories: true },
+        ).catch(() => null)
+        if (r?.inserted) webInserted++
+      }
+      meta.web_inserted = webInserted
+    } catch (e) {
+      meta.web_error = String(e?.message || e)
+    }
+  }
+
+  return {
+    result_count: federalInserted + webInserted,
+    result_meta: { inserted: federalInserted + webInserted, federal_inserted: federalInserted, web_inserted: webInserted, ...meta },
+  }
+}
+
 const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,
+  live_search: processLiveSearchJob,
   clinical_trials: processClinicalTrialsJob,
   local: processLocalCrawlerJob,
   scholarship: processCuratedBenefitsJob,
