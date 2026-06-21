@@ -11,12 +11,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const getWithRetryMock = vi.fn()
 const braveSearchFn = vi.fn()
 const makeBraveMock = vi.fn(() => braveSearchFn)
+const searxngSearchFn = vi.fn()
+const makeSearxngMock = vi.fn(() => searxngSearchFn)
 
 vi.mock('../services/crawlers/httpClient.js', () => ({
   getWithRetry: (...a) => getWithRetryMock(...a),
 }))
 vi.mock('../services/yana/webSearchProvider.js', () => ({
   makeBraveSearchProvider: (...a) => makeBraveMock(...a),
+}))
+vi.mock('../services/crawlers/searxngProvider.js', () => ({
+  makeSearxngProvider: (...a) => makeSearxngMock(...a),
 }))
 
 const { searchWeb, _resetWebSearchEngineForTests } = await import(
@@ -40,12 +45,16 @@ beforeEach(() => {
   getWithRetryMock.mockReset()
   braveSearchFn.mockReset()
   makeBraveMock.mockClear()
+  searxngSearchFn.mockReset()
+  makeSearxngMock.mockClear()
   delete process.env.BRAVE_SEARCH_API_KEY
+  delete process.env.SEARXNG_URL
   _resetWebSearchEngineForTests()
 })
 
 afterEach(() => {
   delete process.env.BRAVE_SEARCH_API_KEY
+  delete process.env.SEARXNG_URL
   _resetWebSearchEngineForTests()
 })
 
@@ -96,5 +105,48 @@ describe('searchWeb (Brave, when keyed)', () => {
     const results = await searchWeb('local grant')
     expect(results).toHaveLength(1)
     expect(results[0].url).toBe('https://bradleyfoundation.org/grants')
+  })
+})
+
+describe('searchWeb (SearXNG primary + provider chain)', () => {
+  it('prefers SearXNG over Brave and DuckDuckGo when SEARXNG_URL is set', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue([
+      { url: 'https://county.gov/scholarship', title: 'County Scholarship', snippet: 'apply' },
+      { url: 'https://facebook.com/x', title: 'social', snippet: '' }, // filtered
+    ])
+
+    const results = await searchWeb('"Bradley County" scholarship')
+    expect(makeSearxngMock).toHaveBeenCalled()
+    expect(results.map((r) => r.url)).toEqual(['https://county.gov/scholarship'])
+    expect(braveSearchFn).not.toHaveBeenCalled() // SearXNG satisfied it; no Brave
+    expect(getWithRetryMock).not.toHaveBeenCalled() // and no DDG
+  })
+
+  it('falls back to Brave when SearXNG returns nothing', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue([]) // empty → chain continues
+    braveSearchFn.mockResolvedValue([{ url: 'https://example.org/a', title: 'A', snippet: 'desc a' }])
+
+    const results = await searchWeb('local grant')
+    expect(searxngSearchFn).toHaveBeenCalled()
+    expect(braveSearchFn).toHaveBeenCalled()
+    expect(results.map((r) => r.url)).toEqual(['https://example.org/a'])
+  })
+
+  it('falls back to DuckDuckGo when SearXNG throws and Brave is not keyed', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockRejectedValue(new Error('searxng down'))
+    getWithRetryMock.mockResolvedValue({ data: DDG_HTML })
+
+    const results = await searchWeb('local grant')
+    expect(results).toHaveLength(1)
+    expect(results[0].url).toBe('https://bradleyfoundation.org/grants')
+    expect(makeBraveMock).not.toHaveBeenCalled() // no Brave key
   })
 })
