@@ -1,5 +1,5 @@
 import express from 'express'
-import { formatError, isRetryableDbError } from '../middleware/errorHandler.js'
+import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
 import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
@@ -127,7 +127,7 @@ router.post('/interpret-intent', async (req, res) => {
 /**
  * Match a profile to grants in its organization pipeline.
  */
-router.get('/profile/:profileId/grants', async (req, res) => {
+router.get('/profile/:profileId/grants', async (req, res, next) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)
     if (!auth) return
@@ -239,16 +239,10 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       matches.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
                    res.json(matches)
              } catch (error) {
-                   if (isRetryableDbError(error)) {
-                     console.warn('Matching grants deferred — DB busy:', error?.code || error?.message)
-                     return res.status(503).json({
-                       error: 'catalog_busy',
-                       message: 'The funding catalog is busy right now (a crawl may be running). Please try again in a few seconds.',
-                       retryable: true,
-                     })
-                   }
-                   console.error('Error matching profile to grants:', error)
-                   res.status(500).json(formatError(error))
+                   // Delegate to the global errorHandler choke point: it records
+                   // the error (G1 observability) and maps transient DB
+                   // contention -> retryable 503, real faults -> 500. One place.
+                   next(error)
              }
 })
 
@@ -264,7 +258,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
    * The fix: filter by record_origin to only return curated/verified records,
    * AND post-filter to catch any informational pages that slipped through.
    */
-router.get('/profile/:profileId/opportunities', async (req, res) => {
+router.get('/profile/:profileId/opportunities', async (req, res, next) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)
     if (!auth) return
@@ -1134,21 +1128,12 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
              } catch (error) {
                    // A live crawl can saturate the PG pool / IO while this heavy
                    // candidate scan runs, tripping statement_timeout or a pool
-                   // acquire timeout. That is a transient capacity condition, not
-                   // a server fault — return a retryable 503 (which the Discover
-                   // UI already handles as "catalog busy, try again") instead of a
-                   // hard 500. See isRetryableDbError + the inline /real-crawlers
-                   // budget that bounds how long a crawl can hold the pool.
-                   if (isRetryableDbError(error)) {
-                     console.warn('Matching opportunities deferred — DB busy:', error?.code || error?.message)
-                     return res.status(503).json({
-                       error: 'catalog_busy',
-                       message: 'The funding catalog is busy right now (a crawl may be running). Please try again in a few seconds.',
-                       retryable: true,
-                     })
-                   }
-                   console.error('Error matching profile to opportunities:', error)
-                   res.status(500).json(formatError(error))
+                   // acquire timeout — a transient capacity condition, not a
+                   // server fault. Delegate to the global errorHandler choke
+                   // point, which records the error (G1 observability) and maps
+                   // retryable DB contention -> 503 (the Discover UI retries it)
+                   // and real faults -> 500. One place, not scattered per-route.
+                   next(error)
              }
 })
 

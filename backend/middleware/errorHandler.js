@@ -59,8 +59,20 @@ export function isRetryableDbError(error) {
  */
 export function errorHandler(err, req, res, next) {
   const requestId = req.requestId || req.request_id || null;
-  const statusCode = err.statusCode || err.status || 500;
 
+  // CHOKE POINT: transient DB-contention (statement_timeout / pool acquire
+  // timeout, e.g. a heavy catalog scan colliding with a live crawl) is a
+  // retryable capacity condition, NOT a server fault. Map it to 503 here — in
+  // ONE place — so every route that delegates via next(err) reports it
+  // consistently and observably, instead of scattering the check across route
+  // catch blocks. See isRetryableDbError().
+  const retryable = isRetryableDbError(err);
+  const statusCode = retryable ? 503 : (err.statusCode || err.status || 500);
+
+  // G1 (observable, no silent failures): record EVERY surfaced error — including
+  // retryable contention — so diagnostics (Sam) / Mission Control can answer
+  // "how often is the catalog timing out under crawl load?" rather than it
+  // hiding in raw logs.
   try {
     recordRequestError({
       requestId,
@@ -69,9 +81,30 @@ export function errorHandler(err, req, res, next) {
       statusCode,
       message: err?.message,
       stack: err?.stack,
+      retryable,
     })
   } catch (recordError) {
     console.warn('Failed to record error:', recordError.message);
+  }
+
+  if (retryable) {
+    // Transient — warn, don't error-spam, and omit the stack (it's a timeout,
+    // not a bug).
+    console.warn('Transient DB contention -> 503:', {
+      requestId,
+      code: err?.code,
+      message: err?.message,
+      path: req.path,
+      method: req.method,
+    });
+    const body = {
+      error: 'catalog_busy',
+      message: 'The data store is busy right now (a crawl may be running). Please try again in a few seconds.',
+      retryable: true,
+      ok: false,
+    };
+    if (requestId) body.request_id = requestId;
+    return res.status(statusCode).json(body);
   }
 
   // Log error for debugging
@@ -82,7 +115,7 @@ export function errorHandler(err, req, res, next) {
     path: req.path,
     method: req.method
   });
-  
+
   // Send error response
   const body = formatError(err);
   // request_id + ok flag are also enforced by the response envelope middleware.

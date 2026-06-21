@@ -37,6 +37,20 @@ Sources:
 - **No silent failures**: exceptions must be surfaced to the caller (API response / job status) with context.
 - **Every critical behavior has a test**: unit/integration/E2E coverage is required for core flows.
 - **Deterministic automation**: given identical inputs, mocked externals, and the same DB seed, automation results must be stable in CI.
+- **Errors funnel through ONE choke point.** Route handlers must surface failures
+  via `next(error)`, not by calling `res.status(500).json(formatError(e))` inline.
+  The global `errorHandler` middleware (`backend/middleware/errorHandler.js`,
+  mounted last in `server.js`) is the single place that (a) records the error for
+  diagnostics via `recordRequestError` (so Sam / Mission Control can see it) and
+  (b) classifies it. Do NOT re-implement status mapping per route.
+- **Transient DB contention is retryable (503), not a 500.** A Postgres
+  `statement_timeout` (SQLSTATE 57014) or pool-acquire timeout — e.g. a heavy
+  `funding_opportunities` catalog scan colliding with a live crawl — is a
+  capacity condition, not a server fault. `isRetryableDbError()` detects this and
+  the choke point returns `503 { error: 'catalog_busy', retryable: true }`; the
+  Discover UI retries with backoff. The ~12 heavy read routes that still
+  `catch → res.status(500)` inline (discovery, opportunities, grants, robert,
+  fundingTrace, …) should converge on `next(error)` so they inherit this.
 
 ### G2. Funding discovery must be useful (zero-results is a failure state)
 
