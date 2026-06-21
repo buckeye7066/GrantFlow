@@ -593,7 +593,11 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       }
 
       if (pdIntent.active) {
-        const curatedPd = loadCuratedProfessionalDevelopmentPrograms(profileState)
+        // Profile-aware: only inject curated programs whose declared targeting
+        // (state / occupation / student / heritage) fits THIS profile, so we
+        // stop surfacing e.g. Texas-nurse or WV-only or API-heritage programs to
+        // an unrelated profile.
+        const curatedPd = loadCuratedProfessionalDevelopmentPrograms(profileContext)
         const seenCurated = new Set(candidates.map((c) => String(c.id || c.title || '').toLowerCase()))
         for (const opp of curatedPd) {
           const key = String(opp.id || opp.title || '').toLowerCase()
