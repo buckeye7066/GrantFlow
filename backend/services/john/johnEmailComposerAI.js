@@ -27,6 +27,7 @@ import {
   getJohnConfig,
 } from './johnOutreachSafety.js'
 import { interpretLead } from './johnLeadInterpreter.js'
+import { researchOrganization } from './johnOrgResearch.js'
 
 const GRANTFLOW_FACTS = [
   'GrantFlow is a funding discovery and application-tracking platform.',
@@ -123,7 +124,7 @@ function textToHtml(text) {
   return `<!doctype html><html><body>${paragraphs.join('')}</body></html>`
 }
 
-function buildPrompt(lead, interpretation, facts, config) {
+function buildPrompt(lead, interpretation, facts, config, researchSummary = '') {
   const org = interpretation.organization_name || 'the organization'
   const ctx = {
     organization_name: org,
@@ -137,6 +138,9 @@ function buildPrompt(lead, interpretation, facts, config) {
     website: lead?.website_url || null,
     website_excerpt: facts.website_excerpt,
     grantflow_fit: interpretation.grantflow_fit_summary || lead?.grantflow_fit_summary || null,
+    // What we found about this org on the live web (titles + snippets only).
+    // Empty when web research is unavailable — the prompt then omits it.
+    web_research: researchSummary ? String(researchSummary) : null,
     recipient_first_name:
       interpretation.salutation && /^Hi\s+(\w+),/.test(interpretation.salutation)
         ? interpretation.salutation.match(/^Hi\s+(\w+),/)[1]
@@ -148,7 +152,7 @@ function buildPrompt(lead, interpretation, facts, config) {
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',
     'The email body MUST, in this order:',
-    '1. Open by genuinely acknowledging THIS organization using the most specific fact you were given. Name their mission, focus area, or program in plain words so it is obvious the email was written for them and not blasted to a list. If the facts are thin, say something honest and specific about their sector instead of padding with vague praise. NEVER invent achievements, dollar figures, programs, names, or events.',
+    '1. Open by genuinely acknowledging THIS organization using the most specific fact you were given (including anything in web_research, which is what we found about them on the public web). Name their mission, focus area, or program in plain words so it is obvious the email was written for them and not blasted to a list. If the facts are thin, say something honest and specific about their sector instead of padding with vague praise. Use ONLY facts present in the supplied data (including web_research snippets); NEVER invent achievements, dollar figures, programs, names, or events, and do not treat a web_research snippet as more certain than it is.',
     '2. Briefly say who you are and what GrantFlow is, and share its honest origin in 1-2 sentences: you first built GrantFlow to find funding for your own research lab (Axiom BioLabs), then found the same engine helped the mission and nonprofit work you care about, and even helped you find scholarships and college funding for your own children. A touch of self-deprecation is welcome ("I did not set out to build software").',
     '3. Explain concretely how GrantFlow can help THIS organization given its mission/focus/needs, tying it to what you named in step 1. Be specific, never generic.',
     '',
@@ -208,7 +212,17 @@ export async function composeEmailWithAI(lead, opts = {}) {
   if (!client) return { ok: false, reason: 'no_api_key' }
 
   const facts = extractOrgFacts(lead)
-  const { system, user } = buildPrompt(lead, interpretation, facts, config)
+
+  // Pre-draft web research: look the org up on the live web and feed the
+  // findings into the prompt. Failure-tolerant + time-bounded — if search is
+  // unavailable or returns nothing, research is empty and John drafts anyway.
+  const research = await researchOrganization({
+    orgName: interpretation.organization_name || lead?.organization_name,
+    location: interpretation.location || lead?.location,
+    logger,
+  })
+
+  const { system, user } = buildPrompt(lead, interpretation, facts, config, research.summary)
 
   let raw
   try {
@@ -277,6 +291,15 @@ export async function composeEmailWithAI(lead, opts = {}) {
         focus_areas: facts.focus_areas,
         has_financials: facts.revenue !== null || facts.assets !== null,
         has_website_excerpt: !!facts.website_excerpt,
+      },
+      web_research: {
+        query: research.query || null,
+        used: !!research.summary,
+        result_count: Array.isArray(research.results) ? research.results.length : 0,
+        summary: research.summary || null,
+        source_urls: Array.isArray(research.results)
+          ? research.results.map((r) => r?.url).filter(Boolean)
+          : [],
       },
       prospect_link: String(config.prospectLink || '').trim() || null,
       config_snapshot: {

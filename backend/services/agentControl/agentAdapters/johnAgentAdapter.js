@@ -9,6 +9,13 @@
  * config (johnOutreachSafety.draftOnly) permits it. The adapter
  * forces draftOnly=true regardless of options.allow_john_send unless
  * the operator opts in explicitly.
+ *
+ * Before drafting each lead, John's AI composer (johnEmailComposerAI ->
+ * johnOrgResearch) looks the organization up on the live web (shared searchWeb
+ * engine) and folds the findings into the draft prompt. That research step is
+ * failure-tolerant and time-bounded: if web search is unavailable or returns
+ * nothing, John drafts without it. It is reflected here only via the existing
+ * drafts_created / note telemetry.
  */
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
