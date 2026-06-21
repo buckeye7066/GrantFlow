@@ -170,6 +170,18 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     if ((opp.is_active === null || opp.is_active === undefined)) {
       opp.is_active = 1;
     }
+    // Normalize JSON-array columns to TEXT before binding. Adapters are
+    // inconsistent: SAM.gov / USASpending pre-stringify these, but
+    // transformGrantsGovOpportunity (and some others) return raw arrays.
+    // better-sqlite3 cannot bind arrays/objects, so an un-stringified field
+    // would throw per-row inside the transaction and silently drop the record.
+    // Stringify here (after all gates) so every adapter persists correctly.
+    for (const col of ['categories', 'keywords', 'eligibility_bullets']) {
+      const v = opp[col];
+      if (v !== null && v !== undefined && typeof v !== 'string') {
+        opp[col] = JSON.stringify(v);
+      }
+    }
     validated.push(opp);
   }
   if (policySkipped > 0) {

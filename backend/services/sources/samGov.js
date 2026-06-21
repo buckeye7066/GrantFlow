@@ -51,6 +51,9 @@ const SAM_GOV_MAX_LIMIT = 1000;
  * @param {string} options.postedFrom - Start date filter YYYY-MM-DD
  * @param {string} options.postedTo - End date filter YYYY-MM-DD
  * @param {string} options.ptype - Opportunity type: 'o' (solicitation), 'k' (presolicitation), 'g' (grant)
+ * @param {string} [options.keyword] - Profile term; filters opportunities whose
+ *   TITLE matches (SAM.gov v2 `title` param). Lets a profile pull the federal
+ *   slice that matches its needs instead of the latest grants overall.
  * @returns {Promise<{ opportunities: Array, metadata: object }>}
  */
 export async function fetchSamGov(options = {}) {
@@ -76,9 +79,18 @@ export async function fetchSamGov(options = {}) {
     postedFrom = getDateDaysAgo(90),
     postedTo = getCurrentDate(),
     ptype = 'g',
+    keyword = null,
   } = options;
 
-  log.info(`[sam.gov] Fetching opportunities (limit: ${limit}, offset: ${offset})`);
+  // SAM.gov v2 keyword filtering is title-based. Bound to a sane length so a
+  // malformed/over-long term can't corrupt the query (recall-over-precision:
+  // an empty/too-short term simply omits the filter rather than failing).
+  const titleTerm =
+    typeof keyword === 'string' && keyword.trim().length >= 3 && keyword.trim().length <= 60
+      ? keyword.trim()
+      : null;
+
+  log.info(`[sam.gov] Fetching opportunities (limit: ${limit}, offset: ${offset}${titleTerm ? `, title="${titleTerm}"` : ''})`);
 
   try {
     const paramObj = {
@@ -90,6 +102,9 @@ export async function fetchSamGov(options = {}) {
     };
     if (ptype && typeof ptype === 'string') {
       paramObj.ptype = ptype;
+    }
+    if (titleTerm) {
+      paramObj.title = titleTerm;
     }
     const params = new URLSearchParams(paramObj);
 

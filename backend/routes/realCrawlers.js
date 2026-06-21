@@ -571,14 +571,19 @@ router.post('/run', ensureAuth, async (req, res) => {
         : Promise.resolve({ opportunities: [], debug: { disabled: true } }),
     ])
 
-    const liveFederalOpps = (liveFederal?.opportunities ?? []).map((opp) => ({
-      ...opp,
-      name: opp.title || opp.name,
-      url: opp.application_url || opp.source_url || null,
-      match_score: profileContext ? (scoreOpportunity(profileContext, opp)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
-      record_origin: opp.record_origin || 'grants_gov',
-      match_explain: { source: 'grants_gov_live', matched_terms: opp.matched_terms || [] },
-    }))
+    // Display-merge only ACTIONABLE live results. USASpending returns PAST
+    // awards (is_active=0) as agency intelligence — they persist (below) but
+    // must not surface as if they were open opportunities.
+    const liveFederalOpps = (liveFederal?.opportunities ?? [])
+      .filter((opp) => opp.is_active !== 0 && opp.is_active !== false)
+      .map((opp) => ({
+        ...opp,
+        name: opp.title || opp.name,
+        url: opp.application_url || opp.source_url || null,
+        match_score: profileContext ? (scoreOpportunity(profileContext, opp)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
+        record_origin: opp.record_origin || opp.source || 'federal_live',
+        match_explain: { source: `${opp.source || 'federal'}_live`, matched_terms: opp.matched_terms || [] },
+      }))
 
     // Persist the live federal results to the shared catalog (best-effort).
     // Idempotent insert-or-update keyed on (source, source_id); never blocks
