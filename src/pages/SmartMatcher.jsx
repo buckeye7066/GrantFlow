@@ -57,55 +57,57 @@ const IMPACT_COLORS = {
   medium: "bg-blue-100 text-blue-700 border-blue-200",
 }
 
-// Friendly label for a score bucket within the 0–80 range. Higher = better fit.
-function bucketQualityLabel(min) {
-  if (min >= 60) return "Best matches"
-  if (min >= 40) return "Strong matches"
-  if (min >= 20) return "Good matches"
-  return "Broad matches"
-}
+// Fixed 0–80 guidance zones, ALWAYS rendered (a visible guide even before
+// results exist), enriched with live counts + dominant source from
+// `score_histogram` (buckets align with these zones) when available.
+const GUIDANCE_ZONES = [
+  { min: 0, max: 20, label: "Broad matches", hint: "Wide net" },
+  { min: 20, max: 40, label: "Good matches", hint: "Worth a look" },
+  { min: 40, max: 60, label: "Strong matches", hint: "Solid fit" },
+  { min: 60, max: 80, label: "Best matches", hint: "Closest fit" },
+]
 
-/**
- * Color-coded, NOTCHED guidance band above the match-score slider. Data-driven
- * from the matching endpoint's `score_histogram` ([{ min, max, count,
- * top_source }] across 0–80). Greener = more results in that zone; each notch
- * is labeled with a friendly quality label + dominant source family. Renders
- * nothing when no histogram is provided (graceful degradation on older
- * responses).
- */
 function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
-  if (!Array.isArray(histogram) || histogram.length === 0) return null
-  const maxCount = histogram.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
-  if (maxCount === 0) return null
+  const buckets = Array.isArray(histogram) ? histogram : []
+  const byMin = new Map(buckets.map((b) => [Number(b?.min) || 0, b]))
+  const maxCount = buckets.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
+  const hasData = maxCount > 0
   return (
     <div className="mt-2 mb-1 w-full">
       <div className="flex w-full gap-1">
-        {histogram.map((b, i) => {
-          const count = Number(b?.count) || 0
-          const ratio = maxCount > 0 ? count / maxCount : 0
-          const span = Math.max(1, (Number(b?.max) || max) - (Number(b?.min) || 0))
-          const isActiveZone = typeof value === "number" && value >= (Number(b?.min) || 0) && value < (Number(b?.max) || max)
-          const bg = count === 0
-            ? "rgb(226 232 240)"
-            : `rgba(34, 197, 94, ${0.25 + 0.6 * ratio})`
+        {GUIDANCE_ZONES.map((z) => {
+          const live = byMin.get(z.min)
+          const count = Number(live?.count) || 0
+          const topSource = live?.top_source ? String(live.top_source) : null
+          const isActiveZone = typeof value === "number" && value >= z.min && value < z.max
+          const ratio = hasData ? count / maxCount : 0
+          const staticRatio = z.min / max
+          const intensity = hasData ? 0.2 + 0.65 * ratio : 0.16 + 0.5 * staticRatio
+          const bg = hasData && count === 0 ? "rgb(241 245 249)" : `rgba(34, 197, 94, ${intensity})`
+          const sub = hasData ? (count > 0 ? `${count}${topSource ? ` · ${topSource.toLowerCase()}` : ""}` : z.hint) : z.hint
           return (
             <div
-              key={`band-${b?.min ?? i}`}
+              key={`band-${z.min}`}
               className="flex flex-col"
-              style={{ flexGrow: span, flexBasis: 0 }}
-              title={`${bucketQualityLabel(Number(b?.min) || 0)} (${b?.min}–${b?.max}%) · ${count} result${count === 1 ? "" : "s"}${b?.top_source ? ` · mostly ${String(b.top_source).toLowerCase()}` : ""}`}
+              style={{ flexGrow: 1, flexBasis: 0 }}
+              title={`${z.label} (${z.min}–${z.max}%)${hasData ? ` · ${count} match${count === 1 ? "" : "es"}` : ""}${topSource ? ` · mostly ${topSource.toLowerCase()}` : ` · ${z.hint}`}`}
             >
               <div
                 className={`h-2.5 rounded-sm ${isActiveZone ? "ring-2 ring-emerald-600" : ""}`}
                 style={{ backgroundColor: bg }}
               />
               <div className="mt-1 text-[10px] leading-tight text-slate-500 text-center">
-                <div className="font-medium text-slate-700">{bucketQualityLabel(Number(b?.min) || 0)}</div>
-                {b?.top_source ? <div className="truncate">{String(b.top_source).toLowerCase()}</div> : null}
+                <div className="font-medium text-slate-700">{z.label}</div>
+                <div className="truncate">{sub}</div>
               </div>
             </div>
           )
         })}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-slate-500">
+        <span>0%</span>
+        <span>Higher % = closer fit to this profile</span>
+        <span>{max}%</span>
       </div>
     </div>
   )

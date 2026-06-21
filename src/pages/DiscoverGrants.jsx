@@ -126,17 +126,6 @@ function extractDiagnostics(payload) {
 // Category taxonomy imported from @/constants/needCategories
 
 /**
- * Friendly label for a score bucket based on where it sits in the 0–80 range.
- * Higher score zones = better fit. Kept in user-friendly language (no jargon).
- */
-function bucketQualityLabel(min, max) {
-  if (min >= 60) return 'Best matches'
-  if (min >= 40) return 'Strong matches'
-  if (min >= 20) return 'Good matches'
-  return 'Broad matches'
-}
-
-/**
  * Color-coded, NOTCHED guidance band rendered ABOVE the match-score slider.
  * Data-driven from the matching endpoint's `score_histogram`
  * ([{ min, max, count, top_source }] across 0–80). Greener = more results in
@@ -146,40 +135,65 @@ function bucketQualityLabel(min, max) {
  *
  * @param {{ histogram: Array<{min:number,max:number,count:number,top_source:string|null}>, max?: number, value?: number }} props
  */
+// Fixed 0–80 guidance zones, ALWAYS rendered so the band is a visible guide
+// even before any results exist. Each zone is enriched with live counts + the
+// dominant source from `score_histogram` (buckets are 0-20/20-40/40-60/60-80,
+// matching these zones) when the matching response provides it.
+const GUIDANCE_ZONES = [
+  { min: 0, max: 20, label: 'Broad matches', hint: 'Wide net' },
+  { min: 20, max: 40, label: 'Good matches', hint: 'Worth a look' },
+  { min: 40, max: 60, label: 'Strong matches', hint: 'Solid fit' },
+  { min: 60, max: 80, label: 'Best matches', hint: 'Closest fit' },
+]
+
 function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
-  if (!Array.isArray(histogram) || histogram.length === 0) return null
-  const maxCount = histogram.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
-  if (maxCount === 0) return null
+  const buckets = Array.isArray(histogram) ? histogram : []
+  const byMin = new Map(buckets.map((b) => [Number(b?.min) || 0, b]))
+  const maxCount = buckets.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
+  const hasData = maxCount > 0
   return (
-    <div className="mt-3" aria-hidden="false">
+    <div className="mt-3">
       <div className="flex w-full gap-1">
-        {histogram.map((b, i) => {
-          const count = Number(b?.count) || 0
-          // Density → green intensity. 0 results = neutral gray; more = greener.
-          const ratio = maxCount > 0 ? count / maxCount : 0
-          const span = Math.max(1, (Number(b?.max) || max) - (Number(b?.min) || 0))
-          const isActiveZone = typeof value === 'number' && value >= (Number(b?.min) || 0) && value < (Number(b?.max) || max)
-          const bg = count === 0
-            ? 'rgb(226 232 240)' // slate-200 neutral
-            : `rgba(34, 197, 94, ${0.25 + 0.6 * ratio})` // green-500 fading by density
+        {GUIDANCE_ZONES.map((z) => {
+          const live = byMin.get(z.min)
+          const count = Number(live?.count) || 0
+          const topSource = live?.top_source ? String(live.top_source) : null
+          const isActiveZone = typeof value === 'number' && value >= z.min && value < z.max
+          // With live data: green by result density (gray when a zone has 0).
+          // Without data: a static confidence gradient (higher zone = stronger
+          // fit = deeper green) so the guide still reads as "right = closer fit".
+          const ratio = hasData ? count / maxCount : 0
+          const staticRatio = z.min / max // 0 → 0.75
+          const intensity = hasData ? 0.2 + 0.65 * ratio : 0.16 + 0.5 * staticRatio
+          const bg = hasData && count === 0
+            ? 'rgb(241 245 249)' // slate-100 — searched, nothing here
+            : `rgba(34, 197, 94, ${intensity})`
+          const sub = hasData
+            ? (count > 0 ? `${count}${topSource ? ` · ${topSource.toLowerCase()}` : ''}` : z.hint)
+            : z.hint
           return (
             <div
-              key={`band-${b?.min ?? i}`}
+              key={`band-${z.min}`}
               className="flex flex-col"
-              style={{ flexGrow: span, flexBasis: 0 }}
-              title={`${bucketQualityLabel(Number(b?.min) || 0, Number(b?.max) || max)} (${b?.min}–${b?.max}%) · ${count} result${count === 1 ? '' : 's'}${b?.top_source ? ` · mostly ${String(b.top_source).toLowerCase()}` : ''}`}
+              style={{ flexGrow: 1, flexBasis: 0 }}
+              title={`${z.label} (${z.min}–${z.max}%)${hasData ? ` · ${count} match${count === 1 ? '' : 'es'}` : ''}${topSource ? ` · mostly ${topSource.toLowerCase()}` : ` · ${z.hint}`}`}
             >
               <div
                 className={`h-2.5 rounded-sm ${isActiveZone ? 'ring-2 ring-emerald-600' : ''}`}
                 style={{ backgroundColor: bg }}
               />
               <div className="mt-1 text-[10px] leading-tight text-muted-foreground text-center">
-                <div className="font-medium text-foreground/80">{bucketQualityLabel(Number(b?.min) || 0, Number(b?.max) || max)}</div>
-                {b?.top_source ? <div className="truncate">{String(b.top_source).toLowerCase()}</div> : null}
+                <div className="font-medium text-foreground/80">{z.label}</div>
+                <div className="truncate">{sub}</div>
               </div>
             </div>
           )
         })}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+        <span>0%</span>
+        <span>Higher % = closer fit to this profile</span>
+        <span>{max}%</span>
       </div>
     </div>
   )
