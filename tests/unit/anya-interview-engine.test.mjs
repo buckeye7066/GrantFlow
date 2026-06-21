@@ -65,9 +65,11 @@ function defaultAnswerFor(q) {
 // ---------------------------------------------------------------------------
 // Tree contract
 // ---------------------------------------------------------------------------
-test('first question id is intro', () => {
-  assert.equal(FIRST_QUESTION_ID, 'intro')
+test('first question id is language', () => {
+  assert.equal(FIRST_QUESTION_ID, 'language')
   assert.ok(getFirstQuestion())
+  // The language step must lead into the welcome (intro) step.
+  assert.equal(QUESTIONS.language.next(applyAnswer(makeInitialState(), 'language', 'en').state), 'intro')
 })
 
 test('every question id referenced by next() exists', () => {
@@ -117,8 +119,8 @@ test('personal branch routes through personal_subtype + needs + situations', () 
     name: 'Smith Family',
     email: 'smith@example.com',
   })
-  assert.deepEqual(visited.slice(0, 6), [
-    'intro', 'who', 'location', 'personal_subtype', 'needs_personal', 'situations',
+  assert.deepEqual(visited.slice(0, 7), [
+    'language', 'intro', 'who', 'location', 'personal_subtype', 'needs_personal', 'situations',
   ])
   assert.equal(state.patch.primary_type, 'family')
   assert.equal(state.patch.email, 'smith@example.com')

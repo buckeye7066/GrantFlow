@@ -33,6 +33,7 @@ import { ADMIN_EMAILS } from '../config/constants.js'
 import { countSeats, describeSeatTier, evaluateSeatChange } from '../services/billing/seatTier.js'
 import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
 import { normalizeAutomationToggles, AUTOMATION_TOGGLES } from '../../shared/automationPreferences.js'
+import { normalizeLanguageCode, isSupportedLanguage } from '../../shared/languages.js'
 import { buildAwardSummary } from '../services/awardSummary.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
@@ -2603,6 +2604,68 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
     updated_at: section.updated_at,
     updated_by: section.updated_by,
   })
+})
+
+// ---------------------------------------------------------------------------
+// Preferred language — the FIRST thing Anya asks during onboarding. Stored in
+// the `language_preferences` profile section as { preferred_language: 'es' }.
+// A dedicated tiny GET/PUT keeps the contract simple and avoids coupling the
+// language choice to the section-payload guard. English is the default.
+// ---------------------------------------------------------------------------
+router.get('/:id/preferred-language', async (req, res) => {
+  const { id } = req.params
+
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  const row = await req.db
+    .prepare(
+      `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'language_preferences' LIMIT 1`,
+    )
+    .get(id)
+  const stored = row ? safeParseJSON(row.data, {}) : {}
+  res.json({ preferred_language: normalizeLanguageCode(stored?.preferred_language) })
+})
+
+router.put('/:id/preferred-language', async (req, res) => {
+  const { id } = req.params
+  const { preferred_language: requested, updated_by } = req.body ?? {}
+
+  if (!isSupportedLanguage(requested)) {
+    return res.status(400).json({
+      error: 'unsupported_language',
+      message: 'preferred_language must be one of the supported ISO codes.',
+    })
+  }
+
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  const code = normalizeLanguageCode(requested)
+  await req.db
+    .prepare(
+      `
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (?, 'language_preferences', ?, ?)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    )
+    .run(id, JSON.stringify({ preferred_language: code }), updated_by ?? 'anya-onboarding')
+
+  res.json({ preferred_language: code })
 })
 
 router.post('/:id/portal-awards/merge', async (req, res) => {

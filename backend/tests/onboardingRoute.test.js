@@ -192,24 +192,26 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(res.status).toBe(201)
     expect(res.body.session_id).toMatch(/^[0-9a-f-]{36}$/)
     expect(res.body.status).toBe('in_progress')
-    expect(res.body.question?.id).toBe('intro')
-    expect(res.body.question?.kind).toBe('announce')
+    expect(res.body.question?.id).toBe('language')
+    expect(res.body.question?.kind).toBe('choice')
   })
 
   it('rejects out-of-order answers', async () => {
     const start = await request(app).post('/api/onboarding/start')
     const sid = start.body.session_id
-    // Try to answer 'who' while we're still on 'intro'
+    // Try to answer 'who' while we're still on the first ('language') question
     const bad = await answer(app, sid, 'who', 'personal_group')
     expect(bad.status).toBe(409)
-    expect(bad.body.expected_question_id).toBe('intro')
+    expect(bad.body.expected_question_id).toBe('language')
   })
 
   it('walks an entire personal interview to completion and surfaces canonical state', async () => {
     const start = await request(app).post('/api/onboarding/start')
     const sid = start.body.session_id
 
-    let r = await answer(app, sid, 'intro', null)
+    let r = await answer(app, sid, 'language', 'en')
+    expect(r.body.question?.id).toBe('intro')
+    r = await answer(app, sid, 'intro', null)
     expect(r.body.question?.id).toBe('who')
     r = await answer(app, sid, 'who', 'personal_group')
     expect(r.body.question?.id).toBe('location')
@@ -234,6 +236,7 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
   it('resumes an in-flight session with GET /sessions/:id', async () => {
     const start = await request(app).post('/api/onboarding/start')
     const sid = start.body.session_id
+    await answer(app, sid, 'language', 'en')
     await answer(app, sid, 'intro', null)
     await answer(app, sid, 'who', 'volunteer_fire_department')
     const r = await request(app).get(`/api/onboarding/sessions/${sid}`)
@@ -250,7 +253,7 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
       .post('/api/onboarding/complete')
       .send({ session_id: sid })
     expect(r.status).toBe(409)
-    expect(r.body.next_question_id).toBe('intro')
+    expect(r.body.next_question_id).toBe('language')
   })
 
   it('completes a finished interview: creates user, profile, sections, and verification token', { timeout: 30000 }, async () => {
@@ -258,6 +261,7 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     const sid = start.body.session_id
 
     // Walk the personal branch end-to-end with realistic answers.
+    await answer(app, sid, 'language', 'en')
     await answer(app, sid, 'intro', null)
     await answer(app, sid, 'who', 'org_mission')
     await answer(app, sid, 'location', { zip: '37205', state: 'TN', city: 'Nashville', county: 'Davidson' })

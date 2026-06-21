@@ -45,8 +45,8 @@ export const NAV_GROUPS = [
     label: "Home",
     icon: LayoutDashboard,
     items: [
-      { title: "Dashboard", routeName: "Dashboard", url: createPageUrl("Dashboard"), icon: LayoutDashboard },
-      { title: "Calendar", routeName: "Calendar", url: createPageUrl("Calendar"), icon: Calendar },
+      { title: "Dashboard", i18nKey: "nav.dashboard", routeName: "Dashboard", url: createPageUrl("Dashboard"), icon: LayoutDashboard },
+      { title: "Calendar", i18nKey: "nav.calendar", routeName: "Calendar", url: createPageUrl("Calendar"), icon: Calendar },
     ],
   },
   {
@@ -62,9 +62,9 @@ export const NAV_GROUPS = [
     label: "Setup",
     icon: Building2,
     items: [
-      { title: "My Profiles", routeName: "MyProfiles", url: createPageUrl("MyProfiles"), icon: Building2 },
-      { title: "Organizations", routeName: "Organizations", url: createPageUrl("Organizations"), icon: Building2 },
-      { title: "Settings", routeName: "Settings", url: createPageUrl("Settings"), icon: Settings },
+      { title: "My Profiles", i18nKey: "nav.myProfiles", routeName: "MyProfiles", url: createPageUrl("MyProfiles"), icon: Building2 },
+      { title: "Organizations", i18nKey: "nav.organizations", routeName: "Organizations", url: createPageUrl("Organizations"), icon: Building2 },
+      { title: "Settings", i18nKey: "nav.settings", routeName: "Settings", url: createPageUrl("Settings"), icon: Settings },
     ],
   },
   {
@@ -72,8 +72,8 @@ export const NAV_GROUPS = [
     label: "Find Funding",
     icon: Search,
     items: [
-      { title: "Discover Grants", routeName: "DiscoverGrants", url: createPageUrl("DiscoverGrants"), icon: Search },
-      { title: "Saved Grants", routeName: "SavedGrants", url: createPageUrl("SavedGrants"), icon: Star },
+      { title: "Discover Grants", i18nKey: "nav.discoverGrants", routeName: "DiscoverGrants", url: createPageUrl("DiscoverGrants"), icon: Search },
+      { title: "Saved Grants", i18nKey: "nav.savedGrants", routeName: "SavedGrants", url: createPageUrl("SavedGrants"), icon: Star },
       { title: "Funding Results", routeName: "FundingResults", url: createPageUrl("FundingResults"), icon: Search },
       { title: "Smart Matcher", routeName: "SmartMatcher", url: createPageUrl("SmartMatcher"), icon: Brain },
       { title: "Profile Matcher", routeName: "ProfileMatcher", url: createPageUrl("ProfileMatcher"), icon: Target },
@@ -92,10 +92,10 @@ export const NAV_GROUPS = [
     label: "Work",
     icon: Kanban,
     items: [
-      { title: "Pipeline", routeName: "Pipeline", url: createPageUrl("Pipeline"), icon: Kanban },
-      { title: "Process with Hamilton", routeName: "HamiltonProcessing", url: createPageUrl("HamiltonProcessing"), icon: Sparkles },
-      { title: "Applications", routeName: "Applications", url: createPageUrl("Applications"), icon: ClipboardList },
-      { title: "Proposals", routeName: "Proposals", url: createPageUrl("Proposals"), icon: FileText },
+      { title: "Pipeline", i18nKey: "nav.pipeline", routeName: "Pipeline", url: createPageUrl("Pipeline"), icon: Kanban },
+      { title: "Process with Hamilton", i18nKey: "nav.processWithHamilton", routeName: "HamiltonProcessing", url: createPageUrl("HamiltonProcessing"), icon: Sparkles },
+      { title: "Applications", i18nKey: "nav.applications", routeName: "Applications", url: createPageUrl("Applications"), icon: ClipboardList },
+      { title: "Proposals", i18nKey: "nav.proposals", routeName: "Proposals", url: createPageUrl("Proposals"), icon: FileText },
       { title: "Documents", routeName: "Documents", url: createPageUrl("Documents"), icon: FolderOpen },
       { title: "Printable Application", routeName: "PrintableApplication", url: createPageUrl("PrintableApplication"), icon: FileText },
     ],
@@ -107,7 +107,7 @@ export const NAV_GROUPS = [
     items: [
       { title: "Grant Deadline", routeName: "GrantDeadline", url: createPageUrl("GrantDeadline"), icon: CalendarClock },
       { title: "Grant Monitoring", routeName: "GrantMonitoring", url: createPageUrl("GrantMonitoring"), icon: BarChart3 },
-      { title: "Reports & Analytics", routeName: "Reports", url: createPageUrl("Reports"), icon: BarChart3 },
+      { title: "Reports & Analytics", i18nKey: "nav.reports", routeName: "Reports", url: createPageUrl("Reports"), icon: BarChart3 },
       { title: "Advanced Analytics", routeName: "AdvancedAnalytics", url: createPageUrl("AdvancedAnalytics"), icon: LineChart },
       { title: "Outreach", routeName: "Outreach", url: createPageUrl("Outreach"), icon: Megaphone },
       { title: "Stewardship", routeName: "Stewardship", url: createPageUrl("Stewardship"), icon: ShieldCheck },
@@ -119,10 +119,10 @@ export const NAV_GROUPS = [
     icon: Shield,
     items: [
       { title: "Automation", routeName: "Automation", url: createPageUrl("Automation"), icon: Workflow },
-      { title: "Billing & Invoicing", routeName: "Billing", url: createPageUrl("Billing"), icon: DollarSign },
+      { title: "Billing & Invoicing", i18nKey: "nav.billing", routeName: "Billing", url: createPageUrl("Billing"), icon: DollarSign },
       { title: "Budgets", routeName: "Budgets", url: createPageUrl("Budgets"), icon: DollarSign },
       { title: "Diagnostics", routeName: "Diagnostics", url: createPageUrl("Diagnostics"), icon: Beaker },
-      { title: "Admin Panel", routeName: "Admin", url: createPageUrl("Admin"), icon: Shield, isAdminOnly: true },
+      { title: "Admin Panel", i18nKey: "nav.adminPanel", routeName: "Admin", url: createPageUrl("Admin"), icon: Shield, isAdminOnly: true },
       // Incognito extension (privacy/broker removal) - requires incognitoEnabled flag
       { title: "Incognito", routeName: "Incognito", url: createPageUrl("Incognito"), icon: ShieldCheck, requiresIncognitoEnabled: true },
     ],
