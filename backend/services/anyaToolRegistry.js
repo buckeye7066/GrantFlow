@@ -76,6 +76,8 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 import { loadProfileContext } from './profileHelpers.js'
+import { searchWeb } from './crawlers/webSearchEngine.js'
+import { searchLocalWebByProfile } from './crawlers/liveWebSearch.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import {
@@ -2101,6 +2103,69 @@ registerTool({
     required: ['jobId'],
   },
   handler: adminCrawlerCancel,
+})
+
+/**
+ * Live web search for funding — the same canonical engine the discovery
+ * pipeline and Yana use (services/crawlers/webSearchEngine.js: Brave when
+ * BRAVE_SEARCH_API_KEY is set, else keyless DuckDuckGo).
+ *
+ * Two modes, combinable:
+ *   - `profileId`: profile-driven funding LEADS (geography + needs + type →
+ *     funding queries), via searchLocalWebByProfile. Best for "find local
+ *     funding for this person/org".
+ *   - `query`: a direct free-text web search. Best for ad-hoc lookups.
+ *
+ * Owner-gated (requiresOwner): touches the live web, mirroring the cautious
+ * live-web posture of the rest of the system. Results are raw web findings /
+ * unverified leads — Anya should present them as "discovered on the web, verify
+ * before relying on them", never as confirmed opportunities.
+ */
+async function anyaWebSearch({ query, profileId, limit = 8 } = {}, context) {
+  const { db } = context || {}
+  const out = { query: query ?? null, profile_id: profileId ?? null }
+
+  if (profileId) {
+    if (!db) throw new Error('Database connection unavailable')
+    const profileContext = await loadProfileContext(db, profileId)
+    const { opportunities, debug } = await searchLocalWebByProfile(profileContext, {})
+    out.profile_queries = debug?.queries ?? []
+    out.profile_leads = opportunities.map((o) => ({
+      title: o.title,
+      url: o.url,
+      sponsor: o.sponsor,
+      description: o.description,
+      matched_terms: o.matched_terms,
+    }))
+  }
+
+  const q = String(query ?? '').trim()
+  if (q) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 15))
+    out.results = await searchWeb(q, { count: safeLimit })
+  }
+
+  out.count = (out.results?.length || 0) + (out.profile_leads?.length || 0)
+  if (out.count === 0) {
+    out.note = 'No web results. The web search is best-effort (DuckDuckGo unless a Brave key is set) and may be rate-limited.'
+  }
+  return out
+}
+
+registerTool({
+  name: 'web.search',
+  description:
+    'Search the live web for funding. Pass `profileId` to discover local/non-federal funding LEADS driven by that profile (geography + needs + type), and/or `query` for a direct web search. Results are unverified web findings — present them as "discovered on the web, verify before relying". Owner only.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Free-text web search query (e.g. "Bradley County TN EMS scholarship").' },
+      profileId: { type: 'string', description: 'Profile ID — runs profile-driven funding-lead discovery for this profile.' },
+      limit: { type: 'integer', minimum: 1, maximum: 15, description: 'Max results for a direct `query` search (default 8).' },
+    },
+  },
+  handler: anyaWebSearch,
 })
 
 // App Function Execution & Diagnostics
