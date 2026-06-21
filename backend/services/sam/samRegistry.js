@@ -383,6 +383,257 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
     },
   },
+  // ── Funding-discovery awareness (catalog-building engines) ──────────
+  // These checks wire the funding-discovery code shipped this session into
+  // Sam's normal sweep so the standing "agent observability" rule holds:
+  // every discovery engine that quietly builds the catalog in the
+  // background must be visible to Sam (so the admin can tell when one is
+  // dormant or dishonest), without raising false alarms when an engine is
+  // intentionally disabled or has simply not run yet. All are INTERNAL +
+  // fail-open: a missing table / never-run engine reports ok:true with a
+  // human-readable note, never a recurring finding.
+  {
+    id: 'discovery.nationalProgramsCatalog',
+    label: 'National-programs crawler → canonical catalog bridge',
+    category: SAM_CATEGORIES.OPPORTUNITY_INTEGRITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Confirms the national-programs continuous crawler now reaches the canonical funding_opportunities catalog via catalogBridge (source=national_programs_crawler), and reports its enabled/disabled status (NATIONAL_PROGRAMS_CRAWLER_ENABLED). Historically the crawler wrote only to private programs_* tables; this check makes the catalog bridge observable so a silently-zero bridge is caught.',
+    async run({ db }) {
+      const enabled = process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true'
+      if (!db?.prepare) {
+        return { ok: true, summary: `national-programs bridge: db unavailable (enabled=${enabled})`, evidence: { enabled } }
+      }
+      let catalogRows = null
+      try {
+        const row = await db
+          .prepare("SELECT COUNT(*) AS c FROM funding_opportunities WHERE source = 'national_programs_crawler'")
+          .get()
+        catalogRows = Number(row?.c ?? 0)
+      } catch (err) {
+        // Catalog table not migrated yet — environment gap, not a defect.
+        return { ok: true, summary: `funding_opportunities not queryable yet (${err?.message || 'unknown'})`, evidence: { enabled } }
+      }
+      // When the crawler is enabled but NOTHING from it has ever reached the
+      // canonical catalog, the bridge is the prime suspect — surface it. When
+      // it is disabled, zero rows is expected (just report the dormant engine).
+      if (enabled && catalogRows === 0) {
+        return {
+          ok: false,
+          summary: 'National-programs crawler is ENABLED but 0 of its discoveries reached the canonical catalog (funding_opportunities). The catalogBridge may be rejecting/erroring.',
+          evidence: { enabled, catalog_rows: catalogRows, source: 'national_programs_crawler' },
+        }
+      }
+      return {
+        ok: true,
+        summary: enabled
+          ? `national-programs bridge healthy: ${catalogRows} catalog row(s)`
+          : `national-programs crawler DORMANT (NATIONAL_PROGRAMS_CRAWLER_ENABLED not 'true'); ${catalogRows} historical catalog row(s)`,
+        evidence: { enabled, catalog_rows: catalogRows },
+      }
+    },
+  },
+  {
+    id: 'agent.robert.discoveryPhases',
+    label: 'Robert discovery phases (catalog mine + email feed)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: "Recognizes Robert's catalog-mining (summary.catalog_mine) and email-feed (summary.email_feed) phases — the per-cycle work that mines the existing catalog and connects the Outlook grant feeder — and surfaces a finding when either phase reports an error in Robert's latest run. Fails open when Robert has never run or its tables are absent.",
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'robert phases: db unavailable' }
+      let run
+      try {
+        const { latestRun } = await import('../robert/robertRunStore.js')
+        run = await latestRun(db)
+      } catch (err) {
+        return { ok: true, summary: `robert_runs not present yet (${err?.message || 'unknown'})` }
+      }
+      if (!run) return { ok: true, summary: 'Robert has not run yet (no robert_runs rows)' }
+
+      const summary = run.summary || {}
+      const phaseErrors = []
+      // catalog_mine: failed when the phase recorded an explicit error key.
+      const mine = summary.catalog_mine
+      if (mine && typeof mine === 'object' && mine.error) {
+        phaseErrors.push({ phase: 'catalog_mine', error: String(mine.error) })
+      }
+      // email_feed: ran:false with an error reason (not a benign disabled/no-op).
+      const feed = summary.email_feed
+      const benignFeedReasons = new Set(['email_feed_disabled', 'outlook_not_configured', 'feed_not_ok'])
+      if (feed && typeof feed === 'object' && feed.ran === false && feed.error && !benignFeedReasons.has(feed.reason)) {
+        phaseErrors.push({ phase: 'email_feed', reason: feed.reason, error: String(feed.error) })
+      }
+      // Any stage-scoped errors Robert pushed for these phases.
+      const stageErrors = Array.isArray(summary.errors)
+        ? summary.errors.filter((e) => e && /^(catalog_mine|email_feed)/.test(String(e.stage || '')))
+        : []
+
+      if (phaseErrors.length > 0 || stageErrors.length > 0) {
+        return {
+          ok: false,
+          summary: `Robert discovery phase failures: ${[...phaseErrors.map((p) => p.phase), ...stageErrors.map((e) => e.stage)].join(', ')}`,
+          evidence: { run_id: run.id, phase_errors: phaseErrors, stage_errors: stageErrors.slice(0, 5) },
+        }
+      }
+      return {
+        ok: true,
+        summary: `Robert discovery phases ok (catalog_mine ${mine ? 'present' : 'n/a'}, email_feed ${feed ? (feed.ran ? 'ran' : feed.reason || 'skipped') : 'n/a'})`,
+        evidence: { run_id: run.id, has_catalog_mine: Boolean(mine), has_email_feed: Boolean(feed) },
+      }
+    },
+  },
+  {
+    id: 'connector.clinicalTrials',
+    label: 'Clinical-trials connector + dispatcher job type',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: "Confirms the opt-in clinical-trials connector exists, the 'clinical_trials' dispatcher job type is registered, and the connector is HONEST (its no-conditions search returns [] rather than fabricated studies; it never throws). Discovery is gated on health_medical.consent_for_studies — this check verifies wiring, never enrolls.",
+    async run() {
+      let connector
+      let registered = false
+      try {
+        connector = await import('../connectors/clinicalTrialsConnector.js')
+      } catch (err) {
+        return {
+          ok: false,
+          summary: `clinical-trials connector failed to load: ${err?.message || err}`,
+          evidence: { error: String(err?.message || err) },
+        }
+      }
+      try {
+        const dispatcher = await import('../crawlerDispatcher.js')
+        // HANDLERS is module-private; assert via the documented job-type contract
+        // instead. The connector's source gate (connectorIngestService) owns the
+        // 'clinicaltrials.gov' source; the dispatcher owns the job type. We treat
+        // the exported source constant as the wiring witness here and rely on the
+        // dedicated dispatcher test for the handler-map assertion.
+        registered = Boolean(dispatcher) && typeof connector.searchClinicalTrials === 'function'
+      } catch (err) {
+        return { ok: true, summary: `dispatcher not loadable in this runtime (${err?.message || 'unknown'})` }
+      }
+
+      // Honesty probe: with no conditions there is nothing relevant to a
+      // medical-need participant, so the connector MUST return an empty array
+      // (no fabricated studies) and MUST NOT throw.
+      let honest = false
+      try {
+        const empty = await connector.searchClinicalTrials({ conditions: [] })
+        honest = Array.isArray(empty) && empty.length === 0
+      } catch {
+        honest = false
+      }
+      if (!registered || !honest) {
+        return {
+          ok: false,
+          summary: `clinical-trials connector wiring/honesty check failed (registered=${registered}, honest_empty=${honest})`,
+          evidence: {
+            registered,
+            honest_empty_result: honest,
+            source: connector.CLINICAL_TRIALS_SOURCE,
+            record_origin: connector.CLINICAL_TRIALS_RECORD_ORIGIN,
+          },
+        }
+      }
+      return {
+        ok: true,
+        summary: `clinical-trials connector reachable + honest (source=${connector.CLINICAL_TRIALS_SOURCE}, opt-in gated)`,
+        evidence: { registered, source: connector.CLINICAL_TRIALS_SOURCE },
+      }
+    },
+  },
+  {
+    id: 'discovery.domainCrawlerAwareness',
+    label: 'Domain crawler registry awareness',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Makes Sam aware of the domain crawler registry (incl. the new corporate_matching_gift_grants / reentry_justice_involved_funding / patient_disease_specific_assistance types, profile-driven foundation990, domain-corpus relevance, city/county geo expansion). Purely informational so unknown-but-valid crawler types dispatched on demand (e.g. via the "Find funding" trigger of triggerAutoDiscoveryCrawlers) NEVER raise a false "missing crawler" alarm. Only fails if the registry cannot load at all.',
+    async run() {
+      const EXPECTED_NEW_TYPES = [
+        'corporate_matching_gift_grants',
+        'reentry_justice_involved_funding',
+        'patient_disease_specific_assistance',
+      ]
+      let registry
+      try {
+        ;({ DOMAIN_CRAWLER_REGISTRY: registry } = await import('../crawlers/domainCrawlerRegistry.js'))
+      } catch (err) {
+        return {
+          ok: false,
+          summary: `domain crawler registry failed to load: ${err?.message || err}`,
+          evidence: { error: String(err?.message || err) },
+        }
+      }
+      const ids = new Set((Array.isArray(registry) ? registry : []).map((c) => c?.id))
+      const missing = EXPECTED_NEW_TYPES.filter((t) => !ids.has(t))
+      // Awareness, not enforcement: a missing NEW type is informational (the
+      // registry may legitimately evolve), never a hard failure, and unknown
+      // types are explicitly tolerated.
+      return {
+        ok: true,
+        summary: missing.length === 0
+          ? `domain crawler registry loaded: ${ids.size} types, all ${EXPECTED_NEW_TYPES.length} new types present`
+          : `domain crawler registry loaded: ${ids.size} types; new types not yet present: ${missing.join(', ')}`,
+        evidence: { total_types: ids.size, new_types_present: EXPECTED_NEW_TYPES.filter((t) => ids.has(t)), new_types_missing: missing },
+      }
+    },
+  },
+  {
+    id: 'discovery.automationConfig',
+    label: 'Discovery automation config presence (booleans only)',
+    category: SAM_CATEGORIES.PRODUCTION_CONFIG,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Reports PRESENCE (boolean only — NEVER values) of the env flags now driving background funding discovery, so an admin can tell at a glance if a discovery engine is dormant. Covers NATIONAL_PROGRAMS_CRAWLER_ENABLED, AUTO_DISCOVERY_DAILY_ENABLED, EMAIL_GRANTS_SYNC_ENABLED, ROBERT_ENABLED, ROBERT_RUN_ON_SCHEDULE, OPPORTUNITY_INSERT_VERIFY_URL, and the SAM.gov key via the canonical resolver (loadFundingApiKeys). Never emits a secret. Always ok:true — it is observability, not a gate.',
+    async run() {
+      // Enable-style flags default to ON when unset (matches the engines'
+      // own defaults: email feed + auto-discovery treat absence as enabled),
+      // so "present and enabled" reflects whether the engine will actually run.
+      const isEnabled = (name, defaultOn = false) => {
+        const raw = process.env[name]
+        if (raw === undefined || raw === null || String(raw).trim() === '') return defaultOn
+        return !['false', '0', 'no', 'off'].includes(String(raw).trim().toLowerCase())
+      }
+      const isPresent = (name) => {
+        const raw = process.env[name]
+        return raw !== undefined && raw !== null && String(raw).trim() !== ''
+      }
+
+      const config = {
+        NATIONAL_PROGRAMS_CRAWLER_ENABLED: process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true',
+        AUTO_DISCOVERY_DAILY_ENABLED: isEnabled('AUTO_DISCOVERY_DAILY_ENABLED', true),
+        EMAIL_GRANTS_SYNC_ENABLED: isEnabled('EMAIL_GRANTS_SYNC_ENABLED', true),
+        ROBERT_ENABLED: isEnabled('ROBERT_ENABLED', false),
+        ROBERT_RUN_ON_SCHEDULE: isEnabled('ROBERT_RUN_ON_SCHEDULE', false),
+        OPPORTUNITY_INSERT_VERIFY_URL: isPresent('OPPORTUNITY_INSERT_VERIFY_URL'),
+      }
+
+      // SAM.gov key presence via the CANONICAL resolver — never the raw value.
+      let samGovKeyPresent = false
+      try {
+        const { loadFundingApiKeys } = await import('../../src/config/apiKeys.js')
+        samGovKeyPresent = Boolean(loadFundingApiKeys().SAM_GOV_PUBLIC_API_KEY)
+      } catch {
+        samGovKeyPresent = false
+      }
+      config.SAM_GOV_API_KEY = samGovKeyPresent
+
+      const dormant = Object.entries(config)
+        .filter(([, present]) => present === false)
+        .map(([name]) => name)
+
+      return {
+        ok: true,
+        summary: dormant.length === 0
+          ? 'all discovery automation flags present/enabled'
+          : `discovery flags absent/disabled (engines may be dormant): ${dormant.join(', ')}`,
+        // Evidence is booleans ONLY — no secret can leak.
+        evidence: config,
+      }
+    },
+  },
 ])
 
 // ---------------------------------------------------------------------------

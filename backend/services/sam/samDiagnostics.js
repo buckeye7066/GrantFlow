@@ -103,7 +103,7 @@ async function runOneCheck({ check, db, ctx, invokeTool, httpProbe }) {
     case CHECK_KIND.HTTP:
       return runHttpCheck({ check, httpProbe })
     case CHECK_KIND.INTERNAL:
-      return { detail: { ok: true, kind: 'internal', skipped: true }, findings: [] }
+      return runInternalCheck({ check, db, ctx })
     default:
       return {
         detail: { ok: false, reason: `unsupported kind: ${check.kind}` },
@@ -384,6 +384,76 @@ async function runHttpCheck({ check, httpProbe }) {
 }
 
 // ---------------------------------------------------------------------------
+// Internal check — runs the registry check's own `run({ db, ctx })` function
+// ---------------------------------------------------------------------------
+// INTERNAL checks own their logic inline (e.g. agent.controlCenter.lockHygiene,
+// emailGrants.ingestionHealth, the funding-discovery awareness checks). They
+// return a small { ok, summary, evidence } envelope — fail-OPEN by design:
+// ok:true means "healthy or not-applicable-yet", ok:false means a real defect.
+// Sam never throws here — a check that throws is itself recorded as a finding so
+// the rest of the sweep continues.
+async function runInternalCheck({ check, db, ctx }) {
+  if (typeof check.run !== 'function') {
+    // A registry INTERNAL check with no run() is a wiring mistake, not a no-op:
+    // surface it (low) so it can't silently never execute.
+    return {
+      detail: { ok: false, kind: 'internal', reason: 'no run() defined' },
+      findings: [makeFinding({
+        severity: SEVERITY.LOW,
+        category: check.category,
+        title: `Internal Sam check ${check.id} has no run() function`,
+        description: 'An INTERNAL-kind check must define an async run({ db, ctx }). This one does not, so it can never report.',
+        recommended_fix: `Add a run() to ${check.id} in samRegistry.js or change its kind.`,
+        confidence: 1,
+      })],
+    }
+  }
+
+  let result
+  try {
+    result = await check.run({ db, ctx })
+  } catch (err) {
+    return {
+      detail: { ok: false, kind: 'internal', error: String(err?.message || err) },
+      findings: [makeFinding({
+        severity: check.severityOnFailure ?? SEVERITY.MEDIUM,
+        category: check.category,
+        title: `Internal check threw: ${check.label}`,
+        description: err?.message || String(err),
+        evidence: { check_id: check.id, error: String(err?.message || err) },
+        recommended_fix: `Inspect the run() function for ${check.id} in samRegistry.js.`,
+        confidence: 0.7,
+      })],
+    }
+  }
+
+  const ok = Boolean(result?.ok ?? true)
+  const detail = {
+    ok,
+    kind: 'internal',
+    summary: result?.summary ?? null,
+    ...(result?.skipped ? { skipped: true } : {}),
+  }
+  if (ok) {
+    return { detail, findings: [] }
+  }
+  return {
+    detail,
+    findings: [makeFinding({
+      severity: check.severityOnFailure ?? SEVERITY.MEDIUM,
+      category: check.category,
+      title: `${check.label} reported a problem`,
+      description: result?.summary || `${check.id} returned ok:false.`,
+      evidence: result?.evidence && typeof result.evidence === 'object'
+        ? result.evidence
+        : { summary: result?.summary ?? null },
+      recommended_fix: result?.recommended_fix || `Inspect ${check.id} in samRegistry.js and the engine it observes.`,
+      confidence: typeof result?.confidence === 'number' ? result.confidence : 0.8,
+    })],
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Default tool dispatcher loader (lazy)
 // ---------------------------------------------------------------------------
 async function loadDefaultInvokeTool() {
@@ -399,6 +469,7 @@ async function loadDefaultInvokeTool() {
 // Test exports
 export const __testing__ = {
   runOneCheck,
+  runInternalCheck,
   mineToolFindings,
   coerceToFinding,
   mapSeverity,
