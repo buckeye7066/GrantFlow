@@ -13,6 +13,7 @@
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
+import { searchWeb } from '../../crawlers/webSearchEngine.js'
 
 export class RobertAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -78,14 +79,23 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
     // configOverride makes the in-app authorization authoritative over the env
     // defaults; runRobert merges it over getRobertConfig().
     //
-    // Note: this does NOT cause outbound web calls. Live source/opportunity
-    // discovery (phases 3–4) additionally requires deps.searchProvider /
-    // deps.opportunityAdapter, which are not wired on this path — so the
-    // override only unlocks verify + ingest + match + recommend over candidates
-    // that already exist in Robert's stores.
+    // Live source discovery (phase 3) needs deps.searchProvider. We now wire it
+    // to the SHARED canonical web-search engine (SearXNG → Brave → DuckDuckGo),
+    // the same tool Yana + Anya use, so Robert can actually discover funder URLs
+    // on the open web when an admin authorizes ingest (live web). It is
+    // failure-tolerant and only used when allowIngest is true. (Opportunity
+    // EXTRACTION — deps.opportunityAdapter, turning a discovered page into a
+    // structured opportunity via LLM — remains the next piece; without it Robert
+    // discovers + verifies sources but leans on its existing candidate stores
+    // for extraction.)
     const configOverride = allowIngest
       ? { enabled: true, allowLiveWeb: true, allowSourceDiscovery: true, autoIngestVerified: true }
       : { enabled: true }
+
+    const deps = { configOverride }
+    if (allowIngest) {
+      deps.searchProvider = ({ query } = {}) => searchWeb(query, { count: 8 })
+    }
 
     let result
     try {
@@ -94,7 +104,7 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
         mode,
         trigger: 'admin-ui',
         dryRun,
-        deps: { configOverride },
+        deps,
       })
     } catch (err) {
       return {
