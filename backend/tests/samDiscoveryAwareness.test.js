@@ -140,10 +140,36 @@ describe('agent.robert.discoveryPhases', () => {
 })
 
 describe('connector.clinicalTrials', () => {
+  // The check imports two heavy modules — the clinical-trials connector (which
+  // pulls in node-fetch) and crawlerDispatcher.js (which loads the entire
+  // crawler dependency graph). Under the full parallel suite that import work
+  // could blow the per-test timeout, and the connector's honesty probe could in
+  // principle reach ClinicalTrials.gov. We mock BOTH module boundaries so the
+  // check runs instantly and deterministically with NO network and NO heavy
+  // import, while preserving the check's intent: prove the connector is
+  // reachable (loads + exposes searchClinicalTrials) and HONEST (empty
+  // conditions => [], never throws), and the dispatcher is loadable.
   it('confirms the connector is reachable + honest (empty conditions => [])', async () => {
-    const { results, findings } = await runDiagnostics({ db: null, ctx: null, checkIds: ['connector.clinicalTrials'] })
-    expect(results[0]).toMatchObject({ check_id: 'connector.clinicalTrials', ok: true })
-    expect(findings).toHaveLength(0)
+    vi.resetModules()
+    vi.doMock('../services/connectors/clinicalTrialsConnector.js', () => ({
+      // Honest empty result for a no-conditions probe — no network call.
+      searchClinicalTrials: async () => [],
+      CLINICAL_TRIALS_SOURCE: 'clinicaltrials.gov',
+      CLINICAL_TRIALS_RECORD_ORIGIN: 'clinical_trials',
+    }))
+    // crawlerDispatcher only needs to be importable for the wiring witness; a
+    // tiny stub avoids loading its real (very large) dependency graph.
+    vi.doMock('../services/crawlerDispatcher.js', () => ({ default: {} }))
+    try {
+      const { runDiagnostics: run } = await import('../services/sam/samDiagnostics.js')
+      const { results, findings } = await run({ db: null, ctx: null, checkIds: ['connector.clinicalTrials'] })
+      expect(results[0]).toMatchObject({ check_id: 'connector.clinicalTrials', ok: true })
+      expect(findings).toHaveLength(0)
+    } finally {
+      vi.doUnmock('../services/connectors/clinicalTrialsConnector.js')
+      vi.doUnmock('../services/crawlerDispatcher.js')
+      vi.resetModules()
+    }
   })
 })
 
