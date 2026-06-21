@@ -1,5 +1,5 @@
 import express from 'express'
-import { formatError } from '../middleware/errorHandler.js'
+import { formatError, isRetryableDbError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
 import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
@@ -239,6 +239,14 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       matches.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
                    res.json(matches)
              } catch (error) {
+                   if (isRetryableDbError(error)) {
+                     console.warn('Matching grants deferred — DB busy:', error?.code || error?.message)
+                     return res.status(503).json({
+                       error: 'catalog_busy',
+                       message: 'The funding catalog is busy right now (a crawl may be running). Please try again in a few seconds.',
+                       retryable: true,
+                     })
+                   }
                    console.error('Error matching profile to grants:', error)
                    res.status(500).json(formatError(error))
              }
@@ -1124,6 +1132,21 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               truncated: scored.length > MAX_RESPONSE ? true : undefined,
       })
              } catch (error) {
+                   // A live crawl can saturate the PG pool / IO while this heavy
+                   // candidate scan runs, tripping statement_timeout or a pool
+                   // acquire timeout. That is a transient capacity condition, not
+                   // a server fault — return a retryable 503 (which the Discover
+                   // UI already handles as "catalog busy, try again") instead of a
+                   // hard 500. See isRetryableDbError + the inline /real-crawlers
+                   // budget that bounds how long a crawl can hold the pool.
+                   if (isRetryableDbError(error)) {
+                     console.warn('Matching opportunities deferred — DB busy:', error?.code || error?.message)
+                     return res.status(503).json({
+                       error: 'catalog_busy',
+                       message: 'The funding catalog is busy right now (a crawl may be running). Please try again in a few seconds.',
+                       retryable: true,
+                     })
+                   }
                    console.error('Error matching profile to opportunities:', error)
                    res.status(500).json(formatError(error))
              }
