@@ -358,7 +358,13 @@ async function processLiveSearchJob({ db, job, profileContext }) {
       const { opportunities, debug } = await searchLiveFederalByProfile(ctx, { timeoutMs: 15000 })
       meta.federal = debug
       if (opportunities.length) {
-        const res = await ingestOpportunities(db, opportunities, 'live_federal')
+        // Ingest only ACTIONABLE opportunities. USASpending returns past awards
+        // (is_active=0) — intelligence, not catalog opportunities — which would
+        // otherwise be rejected as unknown_source and clutter the catalog. Per
+        // the reality-gate philosophy (closed/expired excluded), past awards do
+        // not belong in funding_opportunities.
+        const ingestable = opportunities.filter((o) => o.is_active !== 0 && o.is_active !== false)
+        const res = await ingestOpportunities(db, ingestable, 'live_federal')
         federalInserted = Number(res?.inserted || 0)
         meta.federal_inserted = federalInserted
         meta.federal_updated = Number(res?.updated || 0)

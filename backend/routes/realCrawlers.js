@@ -644,7 +644,14 @@ router.post('/run', ensureAuth, async (req, res) => {
     // (profile_id IS NULL) so they become saveable/reusable/catalog-retrievable
     // (rule G3), but catalog writes must not add latency or contend with the
     // user's response. Web leads are intentionally NOT persisted (see above).
-    scheduleBackgroundIngest(db, liveFederal?.opportunities ?? [], 'grants.gov')
+    // Only ACTIONABLE opportunities enter the catalog — USASpending past awards
+    // (is_active=0) are intelligence, not opportunities (and would be rejected
+    // as unknown_source anyway).
+    scheduleBackgroundIngest(
+      db,
+      (liveFederal?.opportunities ?? []).filter((o) => o.is_active !== 0 && o.is_active !== false),
+      'grants.gov',
+    )
 
     const initialMapped = filterActionableOpportunities([...mapped, ...nearbyOpps, ...liveFederalOpps, ...liveWebOpps])
 

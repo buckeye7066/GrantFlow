@@ -133,7 +133,15 @@ export async function fetchSamGov(options = {}) {
       },
     };
   } catch (error) {
-    console.error('[sam.gov] Error fetching opportunities:', error.message);
+    // A 404 means this API key lacks access to the Opportunities API (SAM.gov
+    // gates each API separately). It's a key/account config issue, not a code
+    // bug — log once at warn (not error-per-call) and degrade to no results.
+    const is404 = /\b404\b/.test(String(error?.message || ''))
+    if (is404) {
+      log.warn('[sam.gov] Opportunities API returned 404 — the SAM_GOV_API_KEY likely lacks Opportunities-API access; skipping SAM (set/verify the key to enable).')
+    } else {
+      console.error('[sam.gov] Error fetching opportunities:', error.message);
+    }
     return {
       opportunities: [],
       metadata: {
