@@ -656,61 +656,79 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
   const isPg = db?.dialect === 'postgres';
   const nowExpr = isPg ? 'now()' : "datetime('now')";
 
+  const analysisJson = JSON.stringify({
+    needs: [...(analysis.needs || [])],
+    demographics: [...(analysis.demographics || [])],
+    health: [...(analysis.health || [])],
+    family: [...(analysis.family || [])],
+    military: [...(analysis.military || [])],
+    county: analysis.location?.county,
+    statePortalUrl: stateMeta?.benefitsPortal || null,
+    statePortalName: stateMeta?.benefitsPortalName || null,
+  });
+
+  // Atomic replace of the profile's crawl_results + crawl_metadata. Previously
+  // the DELETE auto-committed before the INSERT loop, so a mid-loop failure (or
+  // crash) left the profile with WIPED or partial results. Wrapping DELETE +
+  // INSERTs + metadata in one transaction means a failure rolls the DELETE back
+  // too — the profile keeps its previous results until a full new batch commits.
+  // withTransaction is the canonical helper (works on both SQLite + Postgres);
+  // fall back to sequential when a raw db without it is passed (e.g. some tests).
+  const runAtomic = typeof db?.withTransaction === 'function'
+    ? (fn) => db.withTransaction(fn)
+    : (fn) => fn(db);
+
   try {
-    await db.prepare('DELETE FROM crawl_results WHERE profile_id = ?').run(profileId);
+    await runAtomic(async (tx) => {
+      await tx.prepare('DELETE FROM crawl_results WHERE profile_id = ?').run(profileId);
 
-    const stmt = db.prepare(`
-      INSERT INTO crawl_results (
-        profile_id, program_id, program_name, program_url, program_description,
-        match_score, match_reasons, matched_categories,
-        program_type, funding_type, max_amount,
-        source_type, crawled_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowExpr})
-    `);
+      const stmt = tx.prepare(`
+        INSERT INTO crawl_results (
+          profile_id, program_id, program_name, program_url, program_description,
+          match_score, match_reasons, matched_categories,
+          program_type, funding_type, max_amount,
+          source_type, crawled_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowExpr})
+      `);
 
-    for (const result of results) {
-      try {
-        await stmt.run(
-          profileId, result.id, result.name,
-          result.url || result.applicationUrl || null,
-          result.description, result.matchScore,
-          JSON.stringify(result.matchReasons),
-          JSON.stringify(result.matchedCategories),
-          result.type, result.fundingType, result.maxAmount || null,
-          result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
-        );
-      } catch (err) {
-        console.error(`Failed to store result ${result.id}:`, err.message);
-        throw err;
+      for (const result of results) {
+        try {
+          await stmt.run(
+            profileId, result.id, result.name,
+            result.url || result.applicationUrl || null,
+            result.description, result.matchScore,
+            JSON.stringify(result.matchReasons),
+            JSON.stringify(result.matchedCategories),
+            result.type, result.fundingType, result.maxAmount || null,
+            result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
+          );
+        } catch (err) {
+          console.error(`Failed to store result ${result.id}:`, err.message);
+          throw err; // abort the transaction → DELETE rolls back, results preserved
+        }
       }
-    }
 
-    const analysisJson = JSON.stringify({
-      needs: [...(analysis.needs || [])],
-      demographics: [...(analysis.demographics || [])],
-      health: [...(analysis.health || [])],
-      family: [...(analysis.family || [])],
-      military: [...(analysis.military || [])],
-      county: analysis.location?.county,
-      statePortalUrl: stateMeta?.benefitsPortal || null,
-      statePortalName: stateMeta?.benefitsPortalName || null,
+      if (isPg) {
+        await tx.prepare(`
+          INSERT INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
+          VALUES (?, ?, ?, ?, ?, now())
+          ON CONFLICT (profile_id) DO UPDATE SET
+            state = EXCLUDED.state, analysis_json = EXCLUDED.analysis_json,
+            county_contacts = EXCLUDED.county_contacts, total_matches = EXCLUDED.total_matches, crawled_at = now()
+        `).run(profileId, analysis.location?.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
+      } else {
+        await tx.prepare(`
+          INSERT OR REPLACE INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
+          VALUES (?, ?, ?, ?, ?, datetime('now'))
+        `).run(profileId, analysis.location?.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
+      }
     });
 
-    if (isPg) {
-      await db.prepare(`
-        INSERT INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
-        VALUES (?, ?, ?, ?, ?, now())
-        ON CONFLICT (profile_id) DO UPDATE SET
-          state = EXCLUDED.state, analysis_json = EXCLUDED.analysis_json,
-          county_contacts = EXCLUDED.county_contacts, total_matches = EXCLUDED.total_matches, crawled_at = now()
-      `).run(profileId, analysis.location?.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
-    } else {
-      await db.prepare(`
-        INSERT OR REPLACE INTO crawl_metadata (profile_id, state, analysis_json, county_contacts, total_matches, crawled_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
-      `).run(profileId, analysis.location?.state, analysisJson, countyContacts ? JSON.stringify(countyContacts) : null, results.length);
-    }
-
+    // Funding-catalog enrichment runs AFTER the atomic crawl_results commit, on
+    // the auto-commit connection: each upsert is independent + best-effort, so a
+    // single bad row never wipes the profile's freshly-stored results, and the
+    // many async verification calls inside upsertFundingOpportunity don't hold
+    // the crawl_results transaction open.
     let fundingUpserted = 0;
     for (const result of results) {
       try {
