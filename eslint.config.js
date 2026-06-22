@@ -140,4 +140,18 @@ export default [
       ],
     },
   },
+  {
+    // Vendored, self-contained Crawler OS (backend/crawler-os/**). It is the
+    // single canonical discovery/matching authority, fully covered by its own
+    // node:test suite. Two scoped relaxations, both behaviour-preserving:
+    //  - eqeqeq 'smart': the module uses the deliberate `== null` idiom (matches
+    //    null OR undefined); rewriting to `===` would change semantics.
+    //  - the frontend-only profile-field-label rule does not apply to backend
+    //    agent text (it false-positives on titleCase()/toUpperCase()).
+    files: ['backend/crawler-os/**/*.js'],
+    rules: {
+      eqeqeq: ['error', 'smart'],
+      'no-restricted-syntax': 'off',
+    },
+  },
 ]
