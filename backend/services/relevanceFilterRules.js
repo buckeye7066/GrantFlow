@@ -130,6 +130,23 @@ function _isStudentProfile(pd) {
   return t === 'student' || t === 'high_school_student' || t === 'college_student'
 }
 
+// A research-capable institution (university, medical center, research institute).
+// GrantFlow's clients (individuals, families, churches, small community nonprofits,
+// K-12 schools, businesses, VFDs) are NOT these, so NIH/CDC research mechanisms and
+// "research center/resource" cooperative agreements do not apply to them.
+function _isResearchInstitution(pd) {
+  const t = (pd.primary_type || '').toLowerCase()
+  return ['university', 'college_institution', 'research_institution', 'hospital', 'medical_center', 'academic_medical_center'].includes(t)
+}
+
+// A tribal government / Native organization. Tribal-only cooperative agreements
+// and tribe-targeted programs do not apply to non-tribal profiles.
+function _isTribalProfile(pd) {
+  const t = (pd.primary_type || '').toLowerCase()
+  if (t === 'tribal_government' || t.includes('tribal')) return true
+  try { return /\b(tribal|tribe|native american|american indian|alaska native)\b/i.test(JSON.stringify(pd.demographics || pd.tags || '')) } catch { return false }
+}
+
 function _hasImmigrantIndicator(pd) {
   const NON_IMMIGRANT_STATUSES = new Set([
     'us_citizen', 'citizen', 'us citizen', 'permanent_resident',
@@ -1051,6 +1068,46 @@ export const RELEVANCE_RULES = [
         oppPattern: null,
         profileCheck: (pd, oppText, opp) => isTemplatedGeoStub(opp),
         reason: 'Data quality: templated geo-stub (directory/locator labeled as a county-specific opportunity)',
+  },
+
+  // — 19c. Foreign / embassy / public-diplomacy programs — not for domestic
+  // GrantFlow clients (e.g. "Mission Italy Annual Program Statement",
+  // "U.S. Mission to ...", "Public Diplomacy Grants"). These fund in-country /
+  // foreign organizations, never a US individual, family, church, or small nonprofit.
+  {
+    id: 'foreign_embassy_program',
+    category: 'content_type',
+    description: 'U.S. embassy / mission / public-diplomacy / foreign-assistance program — not for domestic profiles',
+    hard: true,
+    oppPattern: /\b(u\.?s\.?\s+(mission|embassy|consulate)\b|mission\s+(?:italy|to\s+[a-z])|annual program statement|public diplomacy (?:grants?|program|section)|foreign assistance|democracy commission|in-country (?:organizations?|applicants?))\b/i,
+    profileCheck: () => true, // GrantFlow serves US domestic clients; embassy/foreign programs never apply
+    reason: 'Content type mismatch: foreign/embassy/public-diplomacy program, not open to domestic profiles',
+  },
+
+  // — 19d. Research-institution mechanisms — NIH/CDC research center/resource,
+  // R/U/P award mechanisms, PI-required, biomedical/clinical research. These go to
+  // universities, hospitals, and research institutes — not individuals, families,
+  // churches, K-12 schools, or small community nonprofits.
+  {
+    id: 'research_institution_only',
+    category: 'content_type',
+    description: 'Research-institution funding mechanism (NIH/CDC research center/resource, R/U/P, PI-required) — not for non-research profiles',
+    hard: true,
+    oppPattern: /\b(research (?:center|resource|project grant)|swine resource|\bU(?:42|54|01|19|2C|60)\b|\bR0?1\b|\bP[0-9]{2}\b|principal investigator|biomedical research|clinical (?:trial|research)|national institutes? (?:of health|on |of )|doctoral dissertation research)\b/i,
+    profileCheck: (pd) => !_isResearchInstitution(pd),
+    reason: 'Content type mismatch: research-institution mechanism, not open to this profile type',
+  },
+
+  // — 19e. Tribal-government-only — tribe-targeted cooperative agreements/programs
+  // (e.g. "988 Tribal Response Cooperative Agreements"). Not for non-tribal profiles.
+  {
+    id: 'tribal_government_only',
+    category: 'content_type',
+    description: 'Tribal-government / Native-organization-only program — not for non-tribal profiles',
+    hard: true,
+    oppPattern: /\b(tribal (?:response|government|organizations?|grants?|cooperative agreements?|programs?|nations?)|federally recognized tribes?|indian tribes?|tribal consultation)\b/i,
+    profileCheck: (pd) => !_isTribalProfile(pd),
+    reason: 'Content type mismatch: tribal-government-only program, not open to non-tribal profiles',
   },
 
     // — 20. Generic directory page — reject opportunities that are just org homepages
