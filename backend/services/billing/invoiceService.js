@@ -21,6 +21,8 @@ import { billingMomentPassed, normalizeCadence } from './invoiceSchedule.js'
 import { sendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { createLogger } from '../../utils/logger.js'
+import { notifyProfile } from '../comms/commsService.js'
+import { suspendProfile, cadenceCycleDays } from './accountStatus.js'
 
 const log = createLogger('invoiceService')
 
@@ -40,10 +42,20 @@ export async function ensureInvoiceSchema(db) {
   await ensureBillingSchema(db)
   const isPg = db?.dialect === 'postgres'
   const ts = isPg ? 'TIMESTAMPTZ' : 'TIMESTAMP'
-  // Cadence + anchor on the account.
+  // Cadence + anchor on the account, plus the free-period (trial) window the
+  // owner can grant (one week / one month, individually or globally). A profile
+  // is "currently free" when free_until IS NOT NULL AND free_until > now — a
+  // pure suppression window, independent of pro-bono (permanent) and discounts.
   for (const [col, ddl] of [
     ['billing_cadence', `TEXT DEFAULT 'weekly'`],
     ['billing_anchor_at', ts],
+    ['free_until', ts],
+    ['free_granted_at', ts],
+    ['free_kind', `TEXT`],
+    ['free_reason', `TEXT`],
+    // Set true on each grant; cleared the first time the user sees the in-app
+    // notice. Drives the "your free week/month started on X" first-login banner.
+    ['free_notice_pending', isPg ? `BOOLEAN DEFAULT FALSE` : `BOOLEAN DEFAULT 0`],
   ]) {
     try { await db.exec(`ALTER TABLE billing_accounts ADD COLUMN ${col} ${ddl}`) } catch { /* exists */ }
   }
@@ -163,6 +175,14 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
   const anchor = accountRow.billing_anchor_at ? new Date(accountRow.billing_anchor_at) : null
   if (anchor && new Date(moment.billed_at) < anchor) return null
 
+  // Respect an active free period (one week / one month the owner granted). No
+  // invoice is generated while the window is open; normal billing resumes
+  // automatically once free_until passes.
+  if (isFreePeriodActive(accountRow, now)) {
+    log.info('invoice skipped — free period active', { profile_id: account.profile_id, free_until: accountRow.free_until })
+    return null
+  }
+
   // Already invoiced this period?
   const exists = await db.prepare('SELECT id FROM billing_invoices WHERE profile_id = ? AND period_key = ? LIMIT 1')
     .get(account.profile_id, moment.period_key)
@@ -217,17 +237,21 @@ export async function processDunning(db, { now = new Date() } = {}) {
     if (!issued) continue
     const ageDays = (now - issued) / 86400000
 
-    if (ageDays >= SUSPEND_DAYS() && canSuspend) {
+    // Suspend once an invoice is a full billing CYCLE past due (one week, two
+    // weeks, or one month depending on the account's cadence). An explicit
+    // BILLING_SUSPEND_DAYS override still wins if set.
+    const cycleDays = Number(process.env.BILLING_SUSPEND_DAYS) || cadenceCycleDays(inv.cadence)
+
+    if (ageDays >= cycleDays && canSuspend) {
       await db.prepare(`UPDATE billing_invoices SET status = 'suspended', suspended_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
-      try { await db.prepare(`UPDATE profiles SET status = 'suspended' WHERE id = ?`).run(inv.profile_id) } catch { /* status col */ }
-      const orgName = await resolveOrgName(db, inv.profile_id)
-      if (inv.recipient_email) {
-        await sendEmail({
-          to: inv.recipient_email, cc: ownerCc(),
-          subject: `Account access paused — invoice ${money(inv.amount_cents)} unpaid`,
-          text: `${orgName ? `Hi ${orgName},` : 'Hello,'}\n\nWe've temporarily paused this account because the invoice for ${inv.period_start}–${inv.period_end} (${money(inv.amount_cents)}) is now ${Math.floor(ageDays)} days past due. Settle it and access resumes right away — just reply and we'll help.\n\nThe GrantFlow team`,
-        })
-      }
+      // Single suspension path (sets profile status + notifies profile & admin
+      // with how to lift). Pass the invoice's payment link when present.
+      await suspendProfile(db, {
+        profileId: inv.profile_id,
+        reason: 'past_due',
+        suspendedBy: 'billing_dunning',
+        paymentLink: inv.stripe_payment_link || null,
+      }).catch((err) => log.warn('suspendProfile failed', { error: err?.message }))
       suspended += 1
     } else if (ageDays >= SECOND_NOTICE_DAYS() && inv.status === 'sent') {
       await db.prepare(`UPDATE billing_invoices SET status = 'second_notice', reminders_sent = reminders_sent + 1, last_reminder_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
@@ -301,4 +325,145 @@ export async function backfillBillingAnchor(db, anchorIso, { provisionAll = true
   }
   const res = await db.prepare(`UPDATE billing_accounts SET billing_anchor_at = ? WHERE billing_anchor_at IS NULL`).run(anchorIso)
   return { provisioned, anchored: res?.changes ?? null, anchor: anchorIso }
+}
+
+// ---------------------------------------------------------------------------
+// Free periods (one week / one month free), individual or global.
+// ---------------------------------------------------------------------------
+
+/** Map a free-period kind to its duration in days. */
+export const FREE_PERIOD_DAYS = Object.freeze({ week: 7, month: 30 })
+
+/** True when the account has an open free window at `now`. Pure read. */
+export function isFreePeriodActive(accountRow, now = new Date()) {
+  if (!accountRow?.free_until) return false
+  const until = new Date(accountRow.free_until)
+  return Number.isFinite(until.getTime()) && until.getTime() > now.getTime()
+}
+
+/**
+ * Describe an account's free-period state for API responses. Pure read.
+ * Returns { active, kind, until, granted_at, reason, days_remaining }.
+ */
+export function describeFreePeriod(accountRow, now = new Date()) {
+  const active = isFreePeriodActive(accountRow, now)
+  const until = accountRow?.free_until ? new Date(accountRow.free_until) : null
+  const daysRemaining = active && until
+    ? Math.max(0, Math.ceil((until.getTime() - now.getTime()) / 86400000))
+    : 0
+  return {
+    active,
+    kind: accountRow?.free_kind ?? null,
+    until: accountRow?.free_until ?? null,
+    granted_at: accountRow?.free_granted_at ?? null,
+    reason: accountRow?.free_reason ?? null,
+    days_remaining: daysRemaining,
+    notice_pending: Boolean(accountRow?.free_notice_pending),
+  }
+}
+
+/** Friendly announcement copy for a granted free period (email + SMS share it). */
+export function buildFreePeriodAnnouncement({ kind, grantedAt, until, orgName }) {
+  const label = kind === 'month' ? 'a free month' : 'a free week'
+  const started = grantedAt ? new Date(grantedAt).toLocaleDateString() : 'today'
+  const through = until ? new Date(until).toLocaleDateString() : null
+  const greeting = orgName ? `Hi ${orgName},` : 'Hello,'
+  const subject = `You've got ${label} on GrantFlow 🎉`
+  const text = [
+    greeting, '',
+    `Good news — we've added ${label} to your GrantFlow account. It started on ${started}${through ? ` and runs through ${through}` : ''}.`,
+    `You won't be invoiced during this time. Everything keeps working exactly as it does now.`,
+    '', 'With appreciation,', 'The GrantFlow team',
+  ].join('\n')
+  return { subject, text }
+}
+
+/**
+ * Compute the new free_until when granting `kind` ('week'|'month'). The timer
+ * starts at the moment of the grant (`now`), but never SHORTENS an existing
+ * future window — we extend from whichever is later so re-granting stacks
+ * gracefully rather than cutting an in-flight trial short.
+ */
+function nextFreeUntil(existingFreeUntil, kind, now) {
+  const days = FREE_PERIOD_DAYS[kind]
+  if (!days) throw new Error(`invalid free period kind: ${kind}`)
+  const existing = existingFreeUntil ? new Date(existingFreeUntil) : null
+  const base = existing && Number.isFinite(existing.getTime()) && existing.getTime() > now.getTime()
+    ? existing
+    : now
+  return new Date(base.getTime() + days * 86400000)
+}
+
+/**
+ * Grant a free period to one profile. `kind` is 'week' or 'month'. Ensures the
+ * billing account exists first. Returns the resulting free-period descriptor.
+ */
+export async function grantFreePeriod(db, { profileId, kind = 'week', reason = null, grantedBy = 'admin', announce = true, now = new Date() } = {}) {
+  if (!profileId) return { ok: false, error: 'profile_id_required' }
+  if (!FREE_PERIOD_DAYS[kind]) return { ok: false, error: 'invalid_kind' }
+  await ensureInvoiceSchema(db)
+  const { ensureBillingAccount } = await import('../billingAccounts.js')
+  const accountRow = await ensureBillingAccount(db, profileId)
+  const until = nextFreeUntil(accountRow.free_until, kind, now)
+  const trueVal = db?.dialect === 'postgres' ? true : 1
+  await db.prepare(
+    `UPDATE billing_accounts SET free_until = ?, free_granted_at = ?, free_kind = ?, free_reason = ?, free_notice_pending = ?, updated_at = ${db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'} WHERE profile_id = ?`,
+  ).run(until.toISOString(), now.toISOString(), kind, reason, trueVal, profileId)
+  log.info('free period granted', { profile_id: profileId, kind, until: until.toISOString(), granted_by: grantedBy })
+
+  // Announce it (email preferred, SMS fallback). Best-effort — never fail the
+  // grant because an email/SMS didn't go out. The in-app first-login notice
+  // (free_notice_pending) is the durable channel; this is the proactive push.
+  if (announce) {
+    try {
+      const orgName = await resolveOrgName(db, profileId)
+      const msg = buildFreePeriodAnnouncement({ kind, grantedAt: now.toISOString(), until: until.toISOString(), orgName })
+      await notifyProfile(db, { profileId, subject: msg.subject, text: msg.text, channel: 'auto' })
+    } catch (err) { log.warn('free period announcement failed', { profile_id: profileId, error: err?.message }) }
+  }
+  return { ok: true, profile_id: profileId, kind, free_until: until.toISOString(), reason }
+}
+
+/**
+ * Grant a free period to EVERY billing account (global). Provisions an account
+ * for every active profile first so a freshly-created profile is covered too.
+ * Returns the count granted.
+ */
+export async function grantFreePeriodGlobal(db, { kind = 'week', reason = null, grantedBy = 'admin', now = new Date() } = {}) {
+  if (!FREE_PERIOD_DAYS[kind]) return { ok: false, error: 'invalid_kind' }
+  await ensureInvoiceSchema(db)
+  const { ensureBillingAccount } = await import('../billingAccounts.js')
+  let profiles = []
+  try {
+    profiles = await db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status NOT IN ('deleted')`).all()
+  } catch { try { profiles = await db.prepare('SELECT id FROM profiles').all() } catch { profiles = [] } }
+  let granted = 0
+  for (const p of profiles || []) {
+    try { await grantFreePeriod(db, { profileId: p.id, kind, reason, grantedBy, now }); granted += 1 } catch { /* skip one */ }
+  }
+  log.info('free period granted globally', { kind, granted, granted_by: grantedBy })
+  return { ok: true, kind, granted }
+}
+
+/**
+ * Acknowledge (clear) the pending first-login free-period notice for a profile.
+ * Called once the user has seen the "your free week/month started" banner.
+ */
+export async function acknowledgeFreeNotice(db, profileId) {
+  await ensureInvoiceSchema(db)
+  const falseVal = db?.dialect === 'postgres' ? false : 0
+  await db.prepare('UPDATE billing_accounts SET free_notice_pending = ? WHERE profile_id = ?').run(falseVal, String(profileId))
+  return { ok: true }
+}
+
+/** Revoke (clear) the free period for one profile (or all when profileId omitted). */
+export async function revokeFreePeriod(db, { profileId = null } = {}) {
+  await ensureInvoiceSchema(db)
+  const clear = `free_until = NULL, free_granted_at = NULL, free_kind = NULL, free_reason = NULL`
+  if (profileId) {
+    await db.prepare(`UPDATE billing_accounts SET ${clear} WHERE profile_id = ?`).run(profileId)
+    return { ok: true, profile_id: profileId }
+  }
+  const res = await db.prepare(`UPDATE billing_accounts SET ${clear} WHERE free_until IS NOT NULL`).run()
+  return { ok: true, cleared: res?.changes ?? null }
 }

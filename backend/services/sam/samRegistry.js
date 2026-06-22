@@ -484,6 +484,71 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    id: 'agent.robert.contactLeads',
+    label: 'Robert email-contact lead scan',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: "Robert's ONLY lead source: scanning the owner's email contacts (gated by ROBERT_SCAN_EMAIL_CONTACTS + Graph Contacts.Read) and tagging client prospects into robert_source_candidates for the John bridge. Reports how many contact-sourced leads are tagged and whether the latest run's contact_lead_scan phase errored. Fails open when disabled or never run.",
+    async run({ db }) {
+      let enabled = false
+      try {
+        const { isContactScanEnabled } = await import('../robert/robertContactDiscovery.js')
+        enabled = isContactScanEnabled()
+      } catch { /* module load best-effort */ }
+      if (!db?.prepare) return { ok: true, summary: 'robert contact leads: db unavailable' }
+      let tagged = null
+      try {
+        const r = await db.prepare(`SELECT COUNT(*) AS c FROM robert_source_candidates WHERE discovered_by = 'robert_contacts'`).get()
+        tagged = Number(r?.c || 0)
+      } catch { /* table may not exist yet */ }
+      return {
+        ok: true,
+        summary: `Robert contact-lead scan ${enabled ? 'enabled' : 'disabled (ROBERT_SCAN_EMAIL_CONTACTS off)'}; ${tagged ?? 'n/a'} contact lead(s) tagged.`,
+        evidence: { enabled, tagged_contact_leads: tagged },
+      }
+    },
+  },
+  {
+    id: 'agent.hamilton.weeklyDigest',
+    label: 'Hamilton weekly funding digest',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Confirms Hamilton\'s Monday-08:00-ET per-profile funding digest (drafts into the owner mailbox) is enabled and reports the last run summary from system_kv (drafted / skipped_no_email / errors). Fails open before the first run.',
+    async run({ db }) {
+      let enabled = true
+      try {
+        const { isWeeklyDigestEnabled } = await import('../hamilton/hamiltonWeeklyDigest.js')
+        enabled = isWeeklyDigestEnabled()
+      } catch { /* best-effort */ }
+      let summary = null
+      try {
+        const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('hamilton_weekly_digest_last_run_summary')
+        summary = row?.value ? JSON.parse(row.value) : null
+      } catch { /* system_kv may not exist until first run */ }
+      const errored = summary && Number(summary.errors) > 0
+      return {
+        ok: !errored,
+        summary: errored
+          ? `Hamilton weekly digest last run had ${summary.errors} draft error(s).`
+          : `Hamilton weekly digest ${enabled ? 'enabled' : 'disabled'}${summary ? ` — last run drafted ${summary.drafted ?? 0}, skipped ${summary.skipped_no_email ?? 0}` : ' (not run yet)'}.`,
+        evidence: { enabled, last_summary: summary },
+      }
+    },
+  },
+  {
+    id: 'comms.broadcastSurface',
+    label: 'Owner broadcast / notifications surface',
+    category: SAM_CATEGORIES.ROUTE_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/comms/recipients',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Probes the admin Broadcast recipient surface so a mount-point / route regression in owner messaging (promotions, notifications, free-period + suspension notices) is caught before deploy.',
+  },
+  {
     id: 'connector.clinicalTrials',
     label: 'Clinical-trials connector + dispatcher job type',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,

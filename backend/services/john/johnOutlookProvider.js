@@ -95,20 +95,24 @@ export function createOutlookProvider({
     replyTo,
     displayName,
   }) {
+    // `toEmail` may be a single address (string) or several (array) — Hamilton's
+    // weekly digest addresses every email on a profile. Existing callers pass a
+    // string, which still produces exactly one recipient.
+    const toList = (Array.isArray(toEmail) ? toEmail : [toEmail])
+      .map((e) => String(e || '').trim())
+      .filter(Boolean)
     const msg = {
       subject: String(subject || '').slice(0, 255),
       body: {
         contentType: bodyHtml ? 'HTML' : 'Text',
         content: bodyHtml || bodyText || '',
       },
-      toRecipients: [
-        {
-          emailAddress: {
-            address: String(toEmail),
-            name: toName ? String(toName).slice(0, 200) : undefined,
-          },
+      toRecipients: toList.map((address, i) => ({
+        emailAddress: {
+          address,
+          name: i === 0 && toName ? String(toName).slice(0, 200) : undefined,
         },
-      ],
+      })),
     }
     if (fromAlias) {
       msg.from = {

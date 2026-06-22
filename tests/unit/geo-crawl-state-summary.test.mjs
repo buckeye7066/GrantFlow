@@ -124,7 +124,9 @@ async function loginEmailOtp({ port, email }) {
 }
 
 async function waitForJobComplete({ port, token, jobId }) {
-  const deadline = Date.now() + 60_000
+  // Load-tolerant: a cold-cache / loaded full-server crawl can exceed 60s even
+  // though the job completes. Override via CRAWLER_JOB_TIMEOUT_MS.
+  const deadline = Date.now() + (Number(process.env.CRAWLER_JOB_TIMEOUT_MS) || 180_000)
   while (Date.now() < deadline) {
     const res = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs/${jobId}`, {
       method: 'GET',

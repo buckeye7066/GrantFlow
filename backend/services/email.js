@@ -79,7 +79,7 @@ function getResend() {
  * throws — callers (invoicing, dunning) treat email as best-effort. `from`
  * defaults to FROM_EMAIL; `cc` accepts a string or array.
  */
-export async function sendEmail({ to, cc = null, subject, html, text, from = null } = {}) {
+export async function sendEmail({ to, cc = null, subject, html, text, from = null, replyTo = null } = {}) {
   if (!to || !subject) return { ok: false, error: 'to_and_subject_required' }
   const resend = getResend()
   if (!resend || !getFromEmail()) return { ok: false, skipped: true, error: 'email_not_configured' }
@@ -92,6 +92,11 @@ export async function sendEmail({ to, cc = null, subject, html, text, from = nul
       ...(text ? { text } : {}),
     }
     if (cc) payload.cc = Array.isArray(cc) ? cc : [cc]
+    if (replyTo) {
+      // Support both Resend SDK key spellings across versions.
+      payload.replyTo = replyTo
+      payload.reply_to = replyTo
+    }
     const result = await resend.emails.send(payload)
     return { ok: true, id: result?.data?.id || result?.id || null }
   } catch (err) {

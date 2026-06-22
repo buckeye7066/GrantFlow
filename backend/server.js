@@ -1927,6 +1927,8 @@ app.use('/api/activity', activityRouter);
 app.use('/api/onboarding', lazyRouter('./routes/onboarding.js'));
 app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);
+// User-facing comms: email the owner alias from a profile + self-serve SMS opt-in.
+app.use('/api/comms', lazyRouter('./routes/comms.js'));
 app.use('/api/stats', responseCache(60_000), statsRouter);
 app.use('/api/services', servicesRouter);
 app.use('/api/stripe', stripeRouter);
@@ -2406,6 +2408,10 @@ app.use('/api/admin/agent-control', lazyRouter('./routes/adminAgentControl.js'))
 // "did the crawler know where to look, did it query, what failed, what was
 // found vs accepted vs rejected" — plus stale sources + weak-data profiles.
 app.use('/api/admin/crawl-coverage', lazyRouter('./routes/adminCrawlCoverage.js'));
+// Owner-initiated outbound messaging (Broadcast screen): list recipients, send
+// promotional/notification email (dr.johnwhite alias) or SMS, manage phones +
+// opt-in. Admin-only inside the router.
+app.use('/api/admin/comms', lazyRouter('./routes/adminComms.js'));
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
@@ -3288,12 +3294,62 @@ if (process.env.NODE_ENV !== 'test') {
     setTimeout(runOnce, 60_000)
     setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday window
   }
+
+  // Hamilton weekly per-profile funding digest — every Monday 08:00
+  // America/New_York, draft one Outlook message per profile (to every email on
+  // the profile) into the owner's draft box. Runs in-process regardless of who
+  // is logged in. Same hourly-tick + ET-week-key marker pattern as the weekly
+  // verification report (once-per-week guard + automatic catch-up on restart).
+  function scheduleHamiltonWeeklyDigest(dbInstance) {
+    const MARKER = 'hamilton_weekly_digest_last_run'
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.HAMILTON_WEEKLY_DIGEST_HOUR_ET) || 8))
+    const nowEt = () => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(new Date())
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+      return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
+    }
+    // The Monday (YYYY-MM-DD, ET) whose TRIGGER_HOUR window has most recently
+    // opened; before that on Monday it points at the previous Monday.
+    const eligibleWeekKey = ({ weekday, hour, ymd }) => {
+      const off = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday] ?? 0
+      const back = weekday === 'Mon' && hour < TRIGGER_HOUR ? 7 : off
+      const [Y, M, D] = ymd.split('-').map(Number)
+      const d = new Date(Date.UTC(Y, M - 1, D))
+      d.setUTCDate(d.getUTCDate() - back)
+      return d.toISOString().slice(0, 10)
+    }
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const weekKey = eligibleWeekKey(nowEt())
+        const last = await kvGet(dbInstance, MARKER)
+        if (last === weekKey) return // already drafted this week's Monday window
+        const { runHamiltonWeeklyDigest } = await import('./services/hamilton/hamiltonWeeklyDigest.js')
+        const summary = await runHamiltonWeeklyDigest(dbInstance, {})
+        console.log('[hamilton-weekly-digest]', summary)
+        // Observability: persist the last-run summary for Sam/admin/Anya status.
+        try { await kvSet(dbInstance, `${MARKER}_summary`, JSON.stringify({ week: weekKey, ...summary })) } catch { /* best-effort */ }
+        // Only mark done when it actually ran (provider configured, etc.), so a
+        // not-yet-configured environment retries on the next tick.
+        if (summary?.ran) await kvSet(dbInstance, MARKER, weekKey)
+      } catch (err) {
+        console.warn('[hamilton-weekly-digest] failed:', err.message)
+      }
+    }
+    setTimeout(runOnce, 90_000)
+    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 08:00 ET window
+  }
+
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
     scheduleLinkVerification(db)
     scheduleBillingCycle(db)
     scheduleWeeklyVerificationReport(db)
+    scheduleHamiltonWeeklyDigest(db)
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
     startHealthService(db);

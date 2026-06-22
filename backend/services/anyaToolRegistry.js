@@ -4147,6 +4147,127 @@ registerTool({
   },
 })
 
+// ── Owner comms / billing / agent super-tools (new subsystems) ─────────────
+// Let Anya operate the owner-messaging, free-period, account-status, and the
+// Hamilton-digest / Robert-contact-scan subsystems on the owner's behalf.
+
+registerTool({
+  name: 'owner.send_broadcast',
+  description: 'OWNER ONLY. Send a promotional / notification message to profiles — email (from the dr.johnwhite alias) and/or SMS (opted-in numbers only). Use when the owner says "email/text my users about X". Set all:true to reach every profile, or pass profileIds.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileIds: { type: 'array', items: { type: 'string' }, description: 'Profile IDs to message (omit when all=true)' },
+      all: { type: 'boolean', description: 'Send to every profile' },
+      channel: { type: 'string', enum: ['auto', 'email', 'sms'], description: 'auto = email, else SMS' },
+      subject: { type: 'string' },
+      body: { type: 'string' },
+    },
+    required: ['body'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { sendBroadcast, listProfileContacts } = await import('./comms/commsService.js')
+    let ids = Array.isArray(params.profileIds) ? params.profileIds.map(String) : []
+    if (params.all) ids = (await listProfileContacts(db)).map((r) => r.profile_id)
+    if (ids.length === 0) return { ok: false, error: 'no_recipients' }
+    return sendBroadcast(db, {
+      profileIds: ids,
+      channel: params.channel || 'auto',
+      subject: params.subject || null,
+      body: String(params.body),
+      sentBy: context?.ctx?.email || 'anya_owner',
+      kind: 'broadcast',
+    })
+  },
+})
+
+registerTool({
+  name: 'owner.grant_free_period',
+  description: 'OWNER ONLY. Grant a free week or month (timer starts now; invoices are suppressed and the account is notified). scope:"global" applies to everyone; scope:"profile" needs profileId. Use when the owner says "give X a free week/month" or "give everyone a free month".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      kind: { type: 'string', enum: ['week', 'month'] },
+      scope: { type: 'string', enum: ['profile', 'global'] },
+      profileId: { type: 'string' },
+      reason: { type: 'string' },
+    },
+    required: ['kind'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { grantFreePeriod, grantFreePeriodGlobal } = await import('./billing/invoiceService.js')
+    const by = context?.ctx?.email || 'anya_owner'
+    if ((params.scope || 'profile') === 'global') return grantFreePeriodGlobal(db, { kind: params.kind, reason: params.reason || null, grantedBy: by })
+    if (!params.profileId) return { ok: false, error: 'profileId required for scope "profile"' }
+    return grantFreePeriod(db, { profileId: String(params.profileId), kind: params.kind, reason: params.reason || null, grantedBy: by })
+  },
+})
+
+registerTool({
+  name: 'owner.set_account_status',
+  description: 'OWNER ONLY. Suspend, reactivate, ban, or unban an account. Suspend pauses access; ban blocks the user\'s login via the owner blocklist. Use when the owner says "suspend/ban X" or "reactivate/unban X".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string' },
+      action: { type: 'string', enum: ['suspend', 'reactivate', 'ban', 'unban'] },
+      reason: { type: 'string' },
+    },
+    required: ['profileId', 'action'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const mod = await import('./billing/accountStatus.js')
+    const by = context?.ctx?.email || 'anya_owner'
+    const profileId = String(params.profileId)
+    switch (params.action) {
+      case 'suspend': return mod.suspendProfile(db, { profileId, reason: params.reason || 'owner_suspend', suspendedBy: by })
+      case 'reactivate': return mod.reactivateProfile(db, { profileId, reactivatedBy: by })
+      case 'ban': return mod.banProfileUser(db, { profileId, reason: params.reason || 'owner_ban', bannedBy: by })
+      case 'unban': return mod.unbanProfileUser(db, { profileId, unbannedBy: by })
+      default: return { ok: false, error: 'unknown_action' }
+    }
+  },
+})
+
+registerTool({
+  name: 'owner.run_hamilton_digest',
+  description: 'OWNER ONLY. Run Hamilton\'s weekly per-profile funding digest now — drafts a status update per profile into the owner mailbox. Use when the owner says "draft the weekly updates now".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: { profileIds: { type: 'array', items: { type: 'string' } } },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runHamiltonWeeklyDigest } = await import('./hamilton/hamiltonWeeklyDigest.js')
+    const profileIds = Array.isArray(params?.profileIds) ? params.profileIds.map(String) : null
+    return runHamiltonWeeklyDigest(db, { force: true, profileIds })
+  },
+})
+
+registerTool({
+  name: 'owner.run_robert_contact_scan',
+  description: 'OWNER ONLY. Run Robert\'s email-contact lead scan now — reads the owner\'s Outlook contacts and tags client prospects for John. Use when the owner says "scan my contacts for leads".',
+  requiresOwner: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runContactScanForRobert } = await import('./robert/robertContactDiscovery.js')
+    return runContactScanForRobert(db, { force: true })
+  },
+})
+
 // ── Hamilton two-way portal sync ──────────────────────────────────────────
 //
 // Gating rationale: runPortalSync reads from / writes to a user's *authenticated*
