@@ -452,8 +452,9 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               engine: 'crawler-os',
             }
           })
-          mapped = dedupeOpportunityList(mapped)
-          mapped = await filterOutPipelineMembers(req.db, profileId, mapped)
+          // dedupeOpportunityList / filterOutPipelineMembers return { results, ... }
+          mapped = dedupeOpportunityList(mapped).results
+          mapped = (await filterOutPipelineMembers(req.db, profileId, mapped)).results
           const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
           const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
           return res.json({

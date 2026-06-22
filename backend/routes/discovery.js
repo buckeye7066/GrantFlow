@@ -207,7 +207,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
           }
         })
         if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
-          mapped = await filterOutPipelineMembers(req.db, matchProfileId, mapped)
+          // filterOutPipelineMembers returns { results, ... }
+          mapped = (await filterOutPipelineMembers(req.db, matchProfileId, mapped)).results
         }
         const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
         return res.json({
