@@ -233,6 +233,20 @@ export async function persistRun(db, memStore, run) {
     matches += 1;
   }
 
+  // Stamp profiles.last_discovery_at so the discovery routes treat these
+  // profiles as discovered (OS-served) rather than discovery_pending. This is
+  // the OS-native replacement for the legacy autoDiscoveryCrawlers stamp.
+  // Tolerant: older DBs may lack the column (a boot invariant adds it).
+  const stampIds = [...new Set(matchRows.map((m) => m.profile_id).filter(Boolean))];
+  const stampExpr = db.dialect === 'postgres' ? 'now()' : "datetime('now')";
+  for (const pid of stampIds) {
+    try {
+      await db.prepare(`UPDATE profiles SET last_discovery_at = ${stampExpr} WHERE id = ?`).run(pid);
+    } catch {
+      /* column may not exist on older local DBs — non-fatal */
+    }
+  }
+
   // Remove bad matches (OS REJECTs) from the profile's pipelines too.
   const pipelinePruned = await prunePipelineRejects(db, memStore, idRemap);
 
