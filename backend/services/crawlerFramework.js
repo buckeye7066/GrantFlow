@@ -83,28 +83,66 @@ export async function runFullCrawl(db, profileId, options = {}) {
 
   try {
     let _runCrawler;
-try {
-  const module = await import('./crawlers/crawlerManager.js');
-  _runCrawler = module.runCrawler;
-  if (!_runCrawler) throw new Error('runCrawler not exported');
-} catch (importErr) {
-  throw new Error(`Failed to load crawlerManager: ${importErr.message}`);
-}
+    try {
+      const module = await import('./crawlers/crawlerManager.js');
+      _runCrawler = module.runCrawler;
+      if (!_runCrawler) throw new Error('runCrawler not exported');
+    } catch (importErr) {
+      throw new Error(`Failed to load crawlerManager: ${importErr.message}`);
+    }
     if (!db || typeof db !== 'object') {
-  throw new Error('Valid database connection required');
-}
-const result = await _runCrawler(db, profileId, {
-      maxResults,
-      minScore,
-      ...(sources ? { crawlerType: sources[0] } : {}),
-    });
+      throw new Error('Valid database connection required');
+    }
+
+    // Multi-source orchestration. `sources` is a list of crawler_types. A run
+    // MUST execute every requested type and aggregate — previously only
+    // sources[0] ran, silently dropping the rest. One type failing must not
+    // wipe out the others; we collect per-source outcomes for honest telemetry.
+    const types = Array.isArray(sources) && sources.length > 0 ? sources : [null];
+    const sourceOutcomes = [];
+    const aggregated = [];
+    const seen = new Set();
+
+    for (const crawlerType of types) {
+      const label = crawlerType || 'default';
+      try {
+        const result = await _runCrawler(db, profileId, {
+          maxResults,
+          minScore,
+          ...(crawlerType ? { crawlerType } : {}),
+        });
+        const found = result?.results || [];
+        let added = 0;
+        for (const opp of found) {
+          // De-dup across crawler types by URL (fallback id/title) so a program
+          // surfaced by two strategies is not double-counted.
+          const key = String(opp?.url || opp?.application_url || opp?.applicationUrl || opp?.id || opp?.name || '').toLowerCase().trim();
+          if (key && seen.has(key)) continue;
+          if (key) seen.add(key);
+          aggregated.push(opp);
+          added += 1;
+        }
+        sourceOutcomes.push({ crawler_type: label, found: found.length, added, strategy: result?.debug?.strategy || null, ok: true });
+      } catch (perErr) {
+        // Partial success: record the failure, keep going.
+        sourceOutcomes.push({ crawler_type: label, found: 0, added: 0, ok: false, error: perErr?.message || String(perErr) });
+        console.warn(`[crawlerFramework] crawler "${label}" failed (continuing):`, perErr?.message || perErr);
+      }
+    }
+
+    const capped = Number.isFinite(maxResults) && maxResults > 0 ? aggregated.slice(0, maxResults) : aggregated;
+    const failures = sourceOutcomes.filter((o) => !o.ok).length;
 
     return {
-      results: result.results || [],
+      results: capped,
       stats: {
-        total: (result.results || []).length,
+        total: capped.length,
         duration_ms: Date.now() - startedAt,
-        strategy: result.debug?.strategy,
+        crawler_types_run: types.map((t) => t || 'default'),
+        source_outcomes: sourceOutcomes,
+        partial: failures > 0 && capped.length > 0,
+        failed_types: failures,
+        strategy: sourceOutcomes.find((o) => o.ok)?.strategy ?? null,
       },
     };
   } catch (err) {
