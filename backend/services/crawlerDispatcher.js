@@ -587,7 +587,26 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       })
       return
     }
-    
+
+    // ── CUTOVER: Crawler OS is the single grant-discovery authority ──────────
+    // The legacy grant-discovery crawlers are superseded by the Crawler OS
+    // (driven by Robert). They are NOT executed at runtime anymore — the job is
+    // marked superseded so the old crawler never runs and stale jobs do not pile
+    // up. Non-discovery job types (document ingest, avatar lookup, portal/
+    // pipeline automation) are unaffected and still run. There is intentionally
+    // no flag to re-enable the old crawler (no dual-run); revert via git if ever
+    // needed.
+    const NON_DISCOVERY_JOB_TYPES = new Set(['document_ingest', 'avatar_lookup', 'pipeline_automation'])
+    if (!NON_DISCOVERY_JOB_TYPES.has(job.type)) {
+      await db.prepare(`
+        UPDATE crawler_jobs
+        SET status = 'completed', completed_at = CURRENT_TIMESTAMP, error = ?
+        WHERE id = ?
+      `).run('superseded_by_crawler_os: legacy grant-discovery is handled by the Crawler OS (Robert)', jobId)
+      logJobEvent('superseded_by_crawler_os', 'legacy grant-discovery superseded by Crawler OS', { jobId, type: job.type })
+      return
+    }
+
     // If a previous dispatcher pass scheduled this job in the future, respect it.
     if (job.next_dispatch_at) {
       const nextAt = new Date(job.next_dispatch_at)
