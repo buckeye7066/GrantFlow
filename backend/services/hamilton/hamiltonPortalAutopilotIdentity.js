@@ -63,6 +63,7 @@ import {
 } from './hamiltonAutomationOrchestrator.js'
 import { suggestPortalLogin } from './hamiltonPortalLoginSuggester.js'
 import { hostOfUrl } from './hamiltonMissingCredential.js'
+import { registerOnPortal, buildSignupIdentity } from './hamiltonPortalSignupAdapter.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:hamilton-portal-autopilot-identity')
@@ -185,9 +186,18 @@ async function queueHandoff(db, { userId, profileId, portalHost, loginUrl, reaso
  * @param {string} [args.loginUrl]   resolved sign-in URL (for the handoff + gates)
  * @param {object} [args.registrationResult] optional: the result of a real
  *        browser registration attempt ({ status, blocker_kind, blocker_detail }).
- *        When omitted, the engine decides whether registration SHOULD be
- *        attempted and provisions the credential record for it.
- * @returns {Promise<{ state, host, detail, credential?, password_one_time_view? }>}
+ *        When supplied (e.g. by a caller that drove the browser itself), the
+ *        engine classifies it. When omitted, the engine — once it reaches the
+ *        ready-to-auto-provision state — provisions the credential AND drives the
+ *        signup adapter itself (hamiltonPortalSignupAdapter), classifying the
+ *        adapter's registrationResult inline.
+ * @param {object} [args.profile]       pre-loaded profile bundle for the signup
+ *        adapter's identity fields (first/last/full name, phone). Optional.
+ * @param {boolean} [args.dryRun]       plan only — provision the credential record
+ *        but DO NOT launch a browser (preview the autopilot run).
+ * @param {Function} [args.launchBrowser] injectable Playwright launcher (tests).
+ * @param {object}  [args.outlookProvider] injectable Graph mailbox (tests).
+ * @returns {Promise<{ state, host, detail, credential?, password_one_time_view?, registration? }>}
  */
 export async function runAutopilotIdentityForPortal(db, args = {}) {
   const host = registrableDomain(args.portalHost) || hostOfUrl(args.portalHost) || String(args.portalHost || '').toLowerCase()
@@ -202,6 +212,8 @@ export async function runAutopilotIdentityForPortal(db, args = {}) {
 
 async function _runAutopilotIdentityForPortal(db, {
   profileId, userId = 'system_admin_token', portalHost, loginUrl = null, registrationResult = null,
+  profile = null, dryRun = false, launchBrowser = null, outlookProvider = null,
+  verifyWaitMs = undefined, verifyPollMs = undefined,
   _host, _resolvedLoginUrl,
 } = {}) {
   const host = _host !== undefined ? _host : (registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase())
@@ -297,8 +309,8 @@ async function _runAutopilotIdentityForPortal(db, {
     }
 
     // 8. AUTO-PROVISION: generate a unique master-wrapped password + store the
-    // login record. (Driving the portal's real signup form is the browser layer's
-    // job; this records the credential the account will use, ready for it.)
+    // login record. This records the credential the account WILL use, ready for
+    // the browser registration that follows.
     const result = await saveAutoProvisionedCredential(db, {
       userId, profileId, portalHost: host, username: identityEmail,
       masterKey, loginUrl: resolvedLoginUrl, reason: 'portal_autopilot_identity',
@@ -307,13 +319,82 @@ async function _runAutopilotIdentityForPortal(db, {
       return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host, detail: 'A login already existed; Hamilton will use it.' }
     }
     log.info('auto_provisioned', { profileId: String(profileId), host })
+
+    // 9. DRIVE THE SIGNUP ADAPTER (the "hands"): perform the real browser-driven
+    // account registration with the identity + the password we just generated.
+    // A registrationResult supplied by the caller short-circuits the drive (the
+    // caller already ran the browser). A dry run provisions the credential record
+    // but does not launch a browser (preview).
+    let registration = registrationResult
+    if (!registration && !dryRun) {
+      try {
+        const identity = buildSignupIdentity({ profile: profile || {}, identityEmail, password: result.password_one_time_view })
+        registration = await registerOnPortal(db, {
+          portalHost: host, signupUrl: resolvedLoginUrl, identity, profile: profile || {},
+          launchBrowser, outlookProvider,
+          ...(verifyWaitMs !== undefined ? { verifyWaitMs } : {}),
+          ...(verifyPollMs !== undefined ? { verifyPollMs } : {}),
+        })
+      } catch (err) {
+        log.warn('signup_adapter_failed', { profileId: String(profileId), host, err: err?.message })
+        registration = { status: 'failed', blocker_kind: 'engine_error', blocker_detail: err?.message || String(err) }
+      }
+    }
+
+    // Classify the adapter outcome into the brain's terminal state.
+    if (registration && registration.status && registration.status !== 'registered'
+        && registration.status !== 'planned') {
+      if (registration.status === 'already_exists') {
+        // An account already existed on the portal — treat exactly like the
+        // existing-credentials path (Hamilton logs in with the saved login).
+        return {
+          state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host,
+          detail: 'An account already existed on the portal; Hamilton will log in with the saved credentials.',
+          credential: result.credential, registration,
+        }
+      }
+      if (registration.status === 'verification_pending') {
+        // Account created but the portal still needs the email verified and we
+        // couldn't auto-confirm → graceful handoff to co-browse / the user.
+        await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'email verification pending' })
+        return {
+          state: AUTOPILOT_STATE.NEEDS_USER, host,
+          detail: 'Hamilton created the account but the portal needs the email verified; finish it in a side-by-side login.',
+          credential: result.credential, registration, blocker: 'verification_pending',
+        }
+      }
+      // 'blocked' / 'failed' → route to a side-by-side handoff. automation_disabled
+      // maps to a queued (not co-browse) state; other blockers hand off.
+      if (registration.automation_disabled) {
+        return { state: AUTOPILOT_STATE.AUTOMATION_DISABLED, host, detail: registration.message || 'Browser automation not available; queued.', credential: result.credential, registration }
+      }
+      // The adapter already classified the blocker into a canonical
+      // hamiltonBlockerClassifier category (registration.blockerType). Trust it
+      // when present; otherwise re-classify the raw engine kind/detail.
+      const category = registration.blockerType || classifyBlocker({
+        kind: registration.blocker_kind,
+        text: registration.message,
+        detail: registration.blocker_detail || registration.message,
+        url: resolvedLoginUrl,
+      }).category
+      await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: category })
+      return {
+        state: AUTOPILOT_STATE.NEEDS_USER, host,
+        detail: `Hamilton created the login record but registration hit ${category}; handed off for a side-by-side login.`,
+        credential: result.credential, registration, blocker: category,
+      }
+    }
+
     return {
       state: AUTOPILOT_STATE.AUTO_PROVISIONED,
       host,
-      detail: 'Hamilton provisioned a unique login under your master passphrase.',
+      detail: dryRun
+        ? 'Hamilton provisioned a unique login under your master passphrase (dry run — registration not executed).'
+        : 'Hamilton provisioned a unique login under your master passphrase and registered the account.',
       credential: result.credential,
       // ONE-TIME plaintext so the caller can show it to the user; never persisted.
       password_one_time_view: result.password_one_time_view,
+      registration: registration || null,
     }
   } catch (err) {
     log.warn('autopilot_identity_failed', { profileId: String(profileId), host, err: err?.message })
@@ -330,7 +411,7 @@ async function _runAutopilotIdentityForPortal(db, {
  * the single-portal route so it can be shown once); the aggregate carries only
  * the state per host. Returns { results, summary }.
  */
-export async function runAutopilotIdentityForProfile(db, { profileId, userId = 'system_admin_token' } = {}) {
+export async function runAutopilotIdentityForProfile(db, { profileId, userId = 'system_admin_token', dryRun = false } = {}) {
   if (!db || !profileId) return { results: [], summary: {} }
   const { getProfilePortals } = await import('./profilePortalIndex.js')
   let portals = []
@@ -341,12 +422,20 @@ export async function runAutopilotIdentityForProfile(db, { profileId, userId = '
     log.warn('profile_portals_load_failed', { profileId: String(profileId), err: err?.message })
     portals = []
   }
+  // Load the profile bundle ONCE so the signup adapter can fill name/phone fields
+  // across every portal in the run (best-effort — null is fine, identity email +
+  // generated password are still enough for the generic form).
+  let profile = null
+  try {
+    const { _internal } = await import('./hamiltonAutomationOrchestrator.js')
+    profile = await _internal.loadProfileBundle(db, profileId)
+  } catch { profile = null }
   const results = []
   for (const p of portals) {
     const host = p?.portalHost
     if (!host) continue
     const r = await runAutopilotIdentityForPortal(db, {
-      profileId, userId, portalHost: host, loginUrl: p?.loginUrl || null,
+      profileId, userId, portalHost: host, loginUrl: p?.loginUrl || null, profile, dryRun,
     })
     // Strip any one-time plaintext from the aggregate — bulk runs never surface it.
     const { password_one_time_view, ...safe } = r
@@ -514,10 +603,47 @@ export async function scanPortalAutopilotReadiness(db, { limit = 500 } = {}) {
   }
   out.counts = counts
   out.awaiting_cobrowse = counts.awaiting_cobrowse || 0
+
+  // REGISTRATION-OUTCOME observability (Agent Observability Rule): so Sam + Anya
+  // can report on the signup adapter's real attempts — N registered / N awaiting
+  // co-browse / N verification-pending — count the durable artifacts those
+  // outcomes leave behind:
+  //   - registered           : Hamilton-auto-provisioned logins (generated_by
+  //                            'hamilton', reason portal_autopilot_identity).
+  //   - verification_pending : open session-capture handoffs queued because the
+  //                            email still needs verifying.
+  //   - blocked_awaiting_cobrowse : other open handoffs (CAPTCHA/2FA/terms/unknown
+  //                            form) the adapter couldn't pass → side-by-side login.
+  const registration = { registered: 0, verification_pending: 0, blocked_awaiting_cobrowse: 0 }
+  try {
+    const reg = await db.prepare(
+      `SELECT COUNT(*) AS n FROM hamilton_portal_credentials
+        WHERE generated_by = 'hamilton' AND generation_reason = 'portal_autopilot_identity'
+          AND has_master_wrap ${db?.dialect === 'postgres' ? '= TRUE' : '= 1'}`,
+    ).get().catch(() => null)
+    registration.registered = Number(reg?.n || 0)
+  } catch { /* table may be absent in a minimal test db */ }
+  try {
+    const rows = await db.prepare(
+      `SELECT reason, COUNT(*) AS n FROM hamilton_session_capture_requests
+        WHERE status IN ('pending','launched') GROUP BY reason`,
+    ).all().catch(() => [])
+    for (const r of rows || []) {
+      const reason = String(r?.reason || '').toLowerCase()
+      const n = Number(r?.n || 0)
+      if (/verification/.test(reason)) registration.verification_pending += n
+      else registration.blocked_awaiting_cobrowse += n
+    }
+  } catch { /* table may be absent */ }
+  out.registration = registration
+
   const cobrowseNote = out.awaiting_cobrowse
     ? ` ${out.awaiting_cobrowse} portal(s) can't be auto-merged and are awaiting a side-by-side login.`
     : ''
-  out.message = `${findings.length} portal autopilot item(s) need attention across ${out.scanned} profile(s).${cobrowseNote}`
+  const regNote = (registration.registered || registration.verification_pending || registration.blocked_awaiting_cobrowse)
+    ? ` Registration: ${registration.registered} registered, ${registration.blocked_awaiting_cobrowse} blocked-awaiting-co-browse, ${registration.verification_pending} verification-pending.`
+    : ''
+  out.message = `${findings.length} portal autopilot item(s) need attention across ${out.scanned} profile(s).${cobrowseNote}${regNote}`
   return out
 }
 
