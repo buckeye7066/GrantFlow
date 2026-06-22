@@ -44,6 +44,7 @@ export const NAV_GROUPS = [
   {
     groupId: "home",
     label: "Home",
+    groupI18nKey: "nav.group.home",
     icon: LayoutDashboard,
     items: [
       { title: "Dashboard", i18nKey: "nav.dashboard", routeName: "Dashboard", url: createPageUrl("Dashboard"), icon: LayoutDashboard },
@@ -53,14 +54,16 @@ export const NAV_GROUPS = [
   {
     groupId: "help",
     label: "Help",
+    groupI18nKey: "nav.group.help",
     icon: LifeBuoy,
     items: [
-      { title: "Help Center", routeName: "Help", url: createPageUrl("Help"), icon: LifeBuoy },
+      { title: "Help Center", i18nKey: "nav.helpCenter", routeName: "Help", url: createPageUrl("Help"), icon: LifeBuoy },
     ],
   },
   {
     groupId: "setup",
     label: "Setup",
+    groupI18nKey: "nav.group.setup",
     icon: Building2,
     items: [
       { title: "My Profiles", i18nKey: "nav.myProfiles", routeName: "MyProfiles", url: createPageUrl("MyProfiles"), icon: Building2 },
@@ -71,62 +74,66 @@ export const NAV_GROUPS = [
   {
     groupId: "find",
     label: "Find Funding",
+    groupI18nKey: "nav.group.find",
     icon: Search,
     items: [
       { title: "Discover Grants", i18nKey: "nav.discoverGrants", routeName: "DiscoverGrants", url: createPageUrl("DiscoverGrants"), icon: Search },
       { title: "Saved Grants", i18nKey: "nav.savedGrants", routeName: "SavedGrants", url: createPageUrl("SavedGrants"), icon: Star },
-      { title: "Funding Results", routeName: "FundingResults", url: createPageUrl("FundingResults"), icon: Search },
-      { title: "Smart Matcher", routeName: "SmartMatcher", url: createPageUrl("SmartMatcher"), icon: Brain },
-      { title: "Profile Matcher", routeName: "ProfileMatcher", url: createPageUrl("ProfileMatcher"), icon: Target },
-      { title: "Funding Opportunities", routeName: "FundingOpportunities", url: createPageUrl("FundingOpportunities"), icon: Layers },
-      { title: "Funding Library", routeName: "FundingLibrary", url: createPageUrl("FundingLibrary"), icon: Library },
-      { title: "Foundation Search", routeName: "FoundationSearch", url: createPageUrl("FoundationSearch"), icon: Database },
-      { title: "Funder", routeName: "Funder", url: createPageUrl("Funder"), icon: HandCoins },
-      { title: "Data Sources", routeName: "DataSources", url: createPageUrl("DataSources"), icon: Database },
-      { title: "Source Directory", routeName: "SourceDirectory", url: createPageUrl("SourceDirectory"), icon: DatabaseZap },
-      { title: "NOFO Parser", routeName: "NOFOParser", url: createPageUrl("NOFOParser"), icon: FileStack, isAdvanced: true },
-      { title: "AI Grant Scorer", routeName: "AIGrantScorer", url: createPageUrl("AIGrantScorer"), icon: Brain, isAdvanced: true },
+      { title: "Funding Results", i18nKey: "nav.fundingResults", routeName: "FundingResults", url: createPageUrl("FundingResults"), icon: Search },
+      { title: "Smart Matcher", i18nKey: "nav.smartMatcher", routeName: "SmartMatcher", url: createPageUrl("SmartMatcher"), icon: Brain },
+      { title: "Profile Matcher", i18nKey: "nav.profileMatcher", routeName: "ProfileMatcher", url: createPageUrl("ProfileMatcher"), icon: Target },
+      { title: "Funding Opportunities", i18nKey: "nav.fundingOpportunities", routeName: "FundingOpportunities", url: createPageUrl("FundingOpportunities"), icon: Layers },
+      { title: "Funding Library", i18nKey: "nav.fundingLibrary", routeName: "FundingLibrary", url: createPageUrl("FundingLibrary"), icon: Library },
+      { title: "Foundation Search", i18nKey: "nav.foundationSearch", routeName: "FoundationSearch", url: createPageUrl("FoundationSearch"), icon: Database },
+      { title: "Funder", i18nKey: "nav.funder", routeName: "Funder", url: createPageUrl("Funder"), icon: HandCoins },
+      { title: "Data Sources", i18nKey: "nav.dataSources", routeName: "DataSources", url: createPageUrl("DataSources"), icon: Database },
+      { title: "Source Directory", i18nKey: "nav.sourceDirectory", routeName: "SourceDirectory", url: createPageUrl("SourceDirectory"), icon: DatabaseZap },
+      { title: "NOFO Parser", i18nKey: "nav.nofoParser", routeName: "NOFOParser", url: createPageUrl("NOFOParser"), icon: FileStack, isAdvanced: true },
+      { title: "AI Grant Scorer", i18nKey: "nav.aiGrantScorer", routeName: "AIGrantScorer", url: createPageUrl("AIGrantScorer"), icon: Brain, isAdvanced: true },
     ],
   },
   {
     groupId: "work",
     label: "Work",
+    groupI18nKey: "nav.group.work",
     icon: Kanban,
     items: [
       { title: "Pipeline", i18nKey: "nav.pipeline", routeName: "Pipeline", url: createPageUrl("Pipeline"), icon: Kanban },
       { title: "Process with Hamilton", i18nKey: "nav.processWithHamilton", routeName: "HamiltonProcessing", url: createPageUrl("HamiltonProcessing"), icon: Sparkles },
       { title: "Applications", i18nKey: "nav.applications", routeName: "Applications", url: createPageUrl("Applications"), icon: ClipboardList },
       { title: "Proposals", i18nKey: "nav.proposals", routeName: "Proposals", url: createPageUrl("Proposals"), icon: FileText },
-      { title: "Documents", routeName: "Documents", url: createPageUrl("Documents"), icon: FolderOpen },
-      { title: "Printable Application", routeName: "PrintableApplication", url: createPageUrl("PrintableApplication"), icon: FileText },
+      { title: "Documents", i18nKey: "nav.documents", routeName: "Documents", url: createPageUrl("Documents"), icon: FolderOpen },
+      { title: "Printable Application", i18nKey: "nav.printableApplication", routeName: "PrintableApplication", url: createPageUrl("PrintableApplication"), icon: FileText },
     ],
   },
   {
     groupId: "track",
     label: "Track & Report",
+    groupI18nKey: "nav.group.track",
     icon: BarChart3,
     items: [
-      { title: "Grant Deadline", routeName: "GrantDeadline", url: createPageUrl("GrantDeadline"), icon: CalendarClock },
-      { title: "Grant Monitoring", routeName: "GrantMonitoring", url: createPageUrl("GrantMonitoring"), icon: BarChart3 },
+      { title: "Grant Deadline", i18nKey: "nav.grantDeadline", routeName: "GrantDeadline", url: createPageUrl("GrantDeadline"), icon: CalendarClock },
+      { title: "Grant Monitoring", i18nKey: "nav.grantMonitoring", routeName: "GrantMonitoring", url: createPageUrl("GrantMonitoring"), icon: BarChart3 },
       { title: "Reports & Analytics", i18nKey: "nav.reports", routeName: "Reports", url: createPageUrl("Reports"), icon: BarChart3 },
-      { title: "Advanced Analytics", routeName: "AdvancedAnalytics", url: createPageUrl("AdvancedAnalytics"), icon: LineChart },
-      { title: "Outreach", routeName: "Outreach", url: createPageUrl("Outreach"), icon: Megaphone },
-      { title: "Stewardship", routeName: "Stewardship", url: createPageUrl("Stewardship"), icon: ShieldCheck },
+      { title: "Advanced Analytics", i18nKey: "nav.advancedAnalytics", routeName: "AdvancedAnalytics", url: createPageUrl("AdvancedAnalytics"), icon: LineChart },
+      { title: "Outreach", i18nKey: "nav.outreach", routeName: "Outreach", url: createPageUrl("Outreach"), icon: Megaphone },
+      { title: "Stewardship", i18nKey: "nav.stewardship", routeName: "Stewardship", url: createPageUrl("Stewardship"), icon: ShieldCheck },
     ],
   },
   {
     groupId: "admin",
     label: "Admin / Operations",
+    groupI18nKey: "nav.group.admin",
     icon: Shield,
     items: [
-      { title: "Automation", routeName: "Automation", url: createPageUrl("Automation"), icon: Workflow },
+      { title: "Automation", i18nKey: "nav.automation", routeName: "Automation", url: createPageUrl("Automation"), icon: Workflow },
       { title: "Billing & Invoicing", i18nKey: "nav.billing", routeName: "Billing", url: createPageUrl("Billing"), icon: DollarSign },
-      { title: "Budgets", routeName: "Budgets", url: createPageUrl("Budgets"), icon: DollarSign },
-      { title: "Diagnostics", routeName: "Diagnostics", url: createPageUrl("Diagnostics"), icon: Beaker },
-      { title: "Crawl Coverage", routeName: "CrawlCoverage", url: createPageUrl("CrawlCoverage"), icon: Activity, isAdminOnly: true },
+      { title: "Budgets", i18nKey: "nav.budgets", routeName: "Budgets", url: createPageUrl("Budgets"), icon: DollarSign },
+      { title: "Diagnostics", i18nKey: "nav.diagnostics", routeName: "Diagnostics", url: createPageUrl("Diagnostics"), icon: Beaker },
+      { title: "Crawl Coverage", i18nKey: "nav.crawlCoverage", routeName: "CrawlCoverage", url: createPageUrl("CrawlCoverage"), icon: Activity, isAdminOnly: true },
       { title: "Admin Panel", i18nKey: "nav.adminPanel", routeName: "Admin", url: createPageUrl("Admin"), icon: Shield, isAdminOnly: true },
       // Incognito extension (privacy/broker removal) - requires incognitoEnabled flag
-      { title: "Incognito", routeName: "Incognito", url: createPageUrl("Incognito"), icon: ShieldCheck, requiresIncognitoEnabled: true },
+      { title: "Incognito", i18nKey: "nav.incognito", routeName: "Incognito", url: createPageUrl("Incognito"), icon: ShieldCheck, requiresIncognitoEnabled: true },
     ],
   },
 ];
@@ -214,6 +221,59 @@ export const ROUTE_LABELS = {
   HelpCenter: "Help Center",
 };
 
+/**
+ * Parallel i18n keys for breadcrumb / page labels. When a route has an entry
+ * here, the breadcrumb is rendered through t() so it follows the active
+ * language. Routes without an entry fall back to the English ROUTE_LABELS text.
+ */
+export const ROUTE_LABEL_I18N = {
+  Dashboard: "breadcrumb.home",
+  Organizations: "nav.organizations",
+  MyProfiles: "nav.myProfiles",
+  OrganizationProfile: "route.organization",
+  ProfileDetail: "route.profile",
+  Funder: "nav.funder",
+  DiscoverGrants: "nav.discoverGrants",
+  SavedGrants: "nav.savedGrants",
+  FundingResults: "nav.fundingResults",
+  FoundationSearch: "nav.foundationSearch",
+  FundingOpportunities: "nav.fundingOpportunities",
+  FundingLibrary: "nav.fundingLibrary",
+  ItemFunding: "route.itemFunding",
+  ProfileMatcher: "nav.profileMatcher",
+  Pipeline: "nav.pipeline",
+  HamiltonProcessing: "nav.processWithHamilton",
+  Applications: "nav.applications",
+  GrantDetail: "route.grant",
+  Apply: "route.apply",
+  VNextApplication: "route.application",
+  VNextFinishPacket: "route.finishApplication",
+  Outreach: "nav.outreach",
+  GrantDeadline: "nav.grantDeadline",
+  GrantMonitoring: "nav.grantMonitoring",
+  Proposals: "nav.proposals",
+  Stewardship: "nav.stewardship",
+  Reports: "nav.reports",
+  AdvancedAnalytics: "nav.advancedAnalytics",
+  Billing: "nav.billing",
+  Budgets: "nav.budgets",
+  Documents: "nav.documents",
+  Calendar: "nav.calendar",
+  Automation: "nav.automation",
+  DataSources: "nav.dataSources",
+  SourceDirectory: "nav.sourceDirectory",
+  PrintableApplication: "nav.printableApplication",
+  AIGrantScorer: "nav.aiGrantScorer",
+  NOFOParser: "nav.nofoParser",
+  Settings: "nav.settings",
+  Diagnostics: "nav.diagnostics",
+  CrawlCoverage: "nav.crawlCoverage",
+  Admin: "nav.adminPanel",
+  Incognito: "nav.incognito",
+  Help: "nav.helpCenter",
+  HelpCenter: "nav.helpCenter",
+};
+
 /** Grant lifecycle for header phase indicator. */
 export const LIFECYCLE_PHASES = [
   { id: "setup", label: "Set Up Organization", path: "/MyProfiles" },
@@ -234,11 +294,13 @@ export function getBreadcrumbSegments(pathname, search = "") {
   const groupId = getGroupIdForRoute(pathname);
   const group = NAV_GROUPS.find((g) => g.groupId === groupId);
   const pageLabel = ROUTE_LABELS[routeName] ?? routeName;
-  const home = { path: createPageUrl("Dashboard"), label: "Home" };
+  const pageLabelI18nKey = ROUTE_LABEL_I18N[routeName];
+  const home = { path: createPageUrl("Dashboard"), label: "Home", labelI18nKey: "breadcrumb.home" };
   if (routeName === "Dashboard" || routeName === "") {
     return [home];
   }
   const groupLabel = group?.label ?? "App";
+  const groupLabelI18nKey = group?.groupI18nKey;
   const groupPath = group?.items?.[0]?.url ?? createPageUrl("Dashboard");
   const currentPath = pathname + (search ? `?${search}` : "");
 
@@ -252,13 +314,13 @@ export function getBreadcrumbSegments(pathname, search = "") {
   if (isSingleItemGroup || isHomeGroup) {
     return [
       home,
-      { path: currentPath, label: pageLabel, isCurrent: true },
+      { path: currentPath, label: pageLabel, labelI18nKey: pageLabelI18nKey, isCurrent: true },
     ];
   }
 
   return [
     home,
-    { path: groupPath, label: groupLabel },
-    { path: currentPath, label: pageLabel, isCurrent: true },
+    { path: groupPath, label: groupLabel, labelI18nKey: groupLabelI18nKey },
+    { path: currentPath, label: pageLabel, labelI18nKey: pageLabelI18nKey, isCurrent: true },
   ];
 }

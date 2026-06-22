@@ -12,6 +12,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { groupBy, countBy, sumBy } from "lodash";
 import { format, subMonths, isPast, differenceInDays } from 'date-fns';
+import { canonicalStage } from '../../shared/pipelineStages.js';
 import { useToast } from "@/components/ui/use-toast";
 import {
   Dialog,
@@ -35,13 +36,14 @@ const pipelineStages = [
   { status: 'awarded', label: 'Awarded' },
 ];
 
-const StatCard = ({ title, value, icon: Icon, color }) => (
+const StatCard = ({ title, value, icon: Icon, color, subtitle }) => (
   <Card className="shadow-lg border-0">
     <CardContent className="p-6">
       <div className="flex justify-between items-start">
         <div>
           <p className={`text-sm font-medium ${color}`}>{title}</p>
           <p className="text-3xl font-bold text-slate-900 mt-2">{typeof value === 'number' ? value.toLocaleString() : value}</p>
+          {subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
         </div>
         <div className="p-3 bg-slate-100 rounded-xl">
           <Icon className={`w-6 h-6 ${color}`} />
@@ -147,33 +149,40 @@ export default function Reports() {
   };
 
   const filteredGrants = selectedOrgId === "all" ? grants : grants.filter(g => g.organization_id === selectedOrgId);
-  const awardedGrants = filteredGrants.filter(g => g.status === 'awarded');
-  
-  // Analytics calculations
-  const grantsByStatus = countBy(filteredGrants, 'status');
+  const awardedGrants = filteredGrants.filter(g => canonicalStage(g.status) === 'awarded');
+
+  // Analytics calculations.
+  // IMPORTANT: bucket by CANONICAL stage (same normalization the Pipeline
+  // Kanban uses via canonicalStage). Legacy statuses such as `auto_applied`,
+  // `pending_review`, `under_review` all roll up to `submitted`; without this
+  // the literal-status counts read 0 even when the Pipeline shows dozens of
+  // submitted grants. (shared/pipelineStages.js)
+  const grantsByStatus = countBy(filteredGrants, g => canonicalStage(g.status) || 'other');
   const funnelData = pipelineStages.map(stage => ({
     name: stage.label,
     value: grantsByStatus[stage.status] || 0,
     fill: COLORS[pipelineStages.indexOf(stage) % COLORS.length]
   }));
-  
+
   const submittedCount = (grantsByStatus['submitted'] || 0) + (grantsByStatus['awarded'] || 0) + (grantsByStatus['declined'] || 0);
   const successRate = submittedCount > 0 ? (grantsByStatus['awarded'] || 0) / submittedCount * 100 : 0;
-  const totalAwarded = sumBy(awardedGrants, g => g.awarded_amount || g.typical_award || g.amount_max || 0);
+  // amount_awarded is the canonical money column (schema); keep amount_max as a
+  // fallback for rows that recorded a ceiling but no settled award amount.
+  const totalAwarded = sumBy(awardedGrants, g => g.amount_awarded || g.amount_max || 0);
 
-  const fundingByFunderType = Object.entries(groupBy(awardedGrants, 'funder_type'))
+  const fundingByFunderType = Object.entries(groupBy(awardedGrants, g => g.funder_type || g.funding_source_type))
     .filter(([name]) => name && name !== 'undefined' && name !== 'null')
     .map(([name, grantGroup]) => ({
       name: name.charAt(0).toUpperCase() + name.slice(1),
-      value: sumBy(grantGroup, g => g.awarded_amount || g.typical_award || g.amount_max || 0)
+      value: sumBy(grantGroup, g => g.amount_awarded || g.amount_max || 0)
     }))
     .filter(d => d.value > 0);
 
   const stats = [
-    { title: "Total Awarded", value: totalAwarded, icon: Award, color: "text-emerald-600" },
-    { title: "Grants Submitted", value: submittedCount, icon: Target, color: "text-blue-600" },
-    { title: "Success Rate", value: `${successRate.toFixed(1)}%`, icon: Percent, color: "text-purple-600" },
-    { title: "Active Grants", value: filteredGrants.filter(g => ['interested', 'drafting', 'submitted'].includes(g.status)).length, icon: TrendingUp, color: "text-amber-600" },
+    { title: "Total Awarded", value: totalAwarded, icon: Award, color: "text-emerald-600", subtitle: "From recorded award outcomes" },
+    { title: "Grants Submitted", value: submittedCount, icon: Target, color: "text-blue-600", subtitle: "Submitted, awarded or declined" },
+    { title: "Success Rate", value: `${successRate.toFixed(1)}%`, icon: Percent, color: "text-purple-600", subtitle: "Awarded ÷ decided applications" },
+    { title: "Active Grants", value: filteredGrants.filter(g => ['saved', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'submitted', 'follow_up'].includes(canonicalStage(g.status))).length, icon: TrendingUp, color: "text-amber-600", subtitle: "In-progress pipeline stages" },
   ];
 
   // Filter compliance reports by selected org

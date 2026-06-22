@@ -65,7 +65,7 @@ export default function PipelineActionsCard() {
   }
 
   return (
-    <Card className="border border-border/70 shadow-none bg-card/80 text-card-foreground backdrop-blur-lg">
+    <Card className="border border-border/70 shadow-none bg-card text-card-foreground">
       <CardHeader className="pb-0">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">

@@ -488,13 +488,13 @@ export default function ApplicationTracker() {
     <div className="p-6 md:p-8 space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-bold text-slate-900">Application Tracker</h1>
           <p className="text-slate-600 mt-1">
             Track every application from draft to outcome — {apps.length} total
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 md:justify-end md:shrink-0">
           {profiles.length > 1 && (
             <>
               <Filter className="w-4 h-4 text-slate-500" />

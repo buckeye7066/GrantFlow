@@ -42,6 +42,13 @@ import {
 } from '../utils/accessControl.js'
 import { getProfilePortals } from '../services/hamilton/profilePortalIndex.js'
 import {
+  getPortalStatusMap,
+  markPortalMerged,
+  markPortalComplete,
+  PORTAL_STATUS,
+  portalStatusKeyHost,
+} from '../services/hamilton/portalCompletionStore.js'
+import {
   buildApplicationPacketHtml,
   packetDocumentName,
 } from '../../shared/applicationPacketHtml.js'
@@ -118,6 +125,24 @@ router.get('/profiles/:id/portals', async (req, res) => {
   }
   try {
     const result = await getProfilePortals(req.db, profileId)
+    // Annotate each portal tile with its MERGE/COMPLETION lifecycle status
+    // (distinct from the green/red "ready" status): 'merged' (terminal),
+    // 'complete' (application done but not merged), or 'unmerged' (default).
+    let statusMap = new Map()
+    try { statusMap = await getPortalStatusMap(req.db, profileId) } catch { statusMap = new Map() }
+    const portals = (result?.portals || []).map((p) => {
+      const key = p?.portalHost ? portalStatusKeyHost(p.portalHost) : ''
+      const st = key ? statusMap.get(key) : null
+      const mergeStatus = st?.status || PORTAL_STATUS.UNMERGED
+      return {
+        ...p,
+        mergeStatus,
+        isMerged: mergeStatus === PORTAL_STATUS.MERGED,
+        isComplete: mergeStatus === PORTAL_STATUS.COMPLETE,
+        completedAt: st?.completed_at || null,
+        mergedAt: st?.merged_at || null,
+      }
+    })
     // Annotate each mail/fax source with its saved-packet status so the page
     // reflects what Hamilton has already produced.
     const mailFaxSources = Array.isArray(result?.mailFaxSources) ? result.mailFaxSources : []
@@ -131,7 +156,7 @@ router.get('/profiles/:id/portals', async (req, res) => {
           : { generated: false, documentId: null, at: null },
       })
     }
-    return res.json({ portals: result?.portals || [], mailFaxSources: annotated })
+    return res.json({ portals, mailFaxSources: annotated })
   } catch (err) {
     // getProfilePortals already degrades to { portals: [], mailFaxSources: [] }
     // internally; this is a final net so the dashboard never sees a 500.
@@ -277,6 +302,37 @@ router.get('/profiles/:id/portals/packet/:documentId/download', async (req, res)
   } catch (err) {
     log.error('download_packet_failed', { profileId, documentId, err: err?.message })
     return res.status(500).json({ error: 'could not download packet' })
+  }
+})
+
+// ── POST: set a portal's MERGE/COMPLETION lifecycle status ────────────────────
+// The UI (or an automation) marks a portal 'merged' once its data has been
+// pulled into the profile, or 'complete' when a completed application is on file
+// but not yet merged. 'merged' is the only state that ends the weekly reminders.
+router.post('/profiles/:id/portals/status', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const body = req.body || {}
+  const portalHost = String(body.portalHost || body.host || '').trim()
+  const status = String(body.status || '').trim().toLowerCase()
+  if (!portalHost) return res.status(400).json({ error: 'portalHost required' })
+  if (status !== PORTAL_STATUS.MERGED && status !== PORTAL_STATUS.COMPLETE) {
+    return res.status(400).json({ error: 'status must be "merged" or "complete"' })
+  }
+  try {
+    const row = status === PORTAL_STATUS.MERGED
+      ? await markPortalMerged(req.db, { profileId, portalHost, source: 'manual' })
+      : await markPortalComplete(req.db, { profileId, portalHost, source: 'manual' })
+    if (!row) return res.status(400).json({ error: 'could not set status' })
+    return res.json({ ok: true, status: row.status, portalHost: row.portal_host })
+  } catch (err) {
+    log.error('set_portal_status_failed', { profileId, err: err?.message })
+    return res.status(500).json({ error: 'could not set portal status' })
   }
 })
 

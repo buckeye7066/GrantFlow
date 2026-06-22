@@ -3348,6 +3348,56 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 08:00 ET window
   }
 
+  // Monday-morning UNMERGED-PORTAL reminder — every Monday 09:00 America/New_York
+  // (owner requirement: "unmerged portals need to be sent as reminders at least
+  // once a week, Monday mornings"). For each profile with portals that are NOT
+  // merged (including completed-but-not-merged), send ONE reminder per profile to
+  // its contact emails via the existing comms channel. Same ET-week-key marker +
+  // hourly-tick pattern as the Hamilton digest (once-per-week guard + catch-up on
+  // restart). The marker is the primary idempotency guard; the reminder service
+  // also stamps last_reminded_at per portal.
+  function scheduleMondayPortalReminder(dbInstance) {
+    const MARKER = 'monday_portal_reminder_last_run'
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.MONDAY_PORTAL_REMINDER_HOUR_ET) || 9))
+    const nowEt = () => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(new Date())
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+      return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
+    }
+    // The Monday (YYYY-MM-DD, ET) whose TRIGGER_HOUR window has most recently
+    // opened; before that on Monday it points at the previous Monday.
+    const eligibleWeekKey = ({ weekday, hour, ymd }) => {
+      const off = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday] ?? 0
+      const back = weekday === 'Mon' && hour < TRIGGER_HOUR ? 7 : off
+      const [Y, M, D] = ymd.split('-').map(Number)
+      const d = new Date(Date.UTC(Y, M - 1, D))
+      d.setUTCDate(d.getUTCDate() - back)
+      return d.toISOString().slice(0, 10)
+    }
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const weekKey = eligibleWeekKey(nowEt())
+        const last = await kvGet(dbInstance, MARKER)
+        if (last === weekKey) return // already sent this week's Monday window
+        const { runMondayPortalReminder, isMondayPortalReminderEnabled } = await import('./services/hamilton/mondayPortalReminder.js')
+        if (!isMondayPortalReminderEnabled()) { await kvSet(dbInstance, MARKER, weekKey); return }
+        const summary = await runMondayPortalReminder(dbInstance, {})
+        console.log('[monday-portal-reminder]', summary)
+        // Observability: persist the last-run summary for Sam/admin/Anya status.
+        try { await kvSet(dbInstance, `${MARKER}_summary`, JSON.stringify({ week: weekKey, ...summary })) } catch { /* best-effort */ }
+        if (summary?.ran) await kvSet(dbInstance, MARKER, weekKey)
+      } catch (err) {
+        console.warn('[monday-portal-reminder] failed:', err.message)
+      }
+    }
+    setTimeout(runOnce, 90_000)
+    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 09:00 ET window
+  }
+
   // Sam's nightly maintenance sweep — every day 04:00 America/New_York. Enters a
   // maintenance window (same banner users see for a deploy), runs Sam in
   // repair-safe mode, and reopens only when green. Hourly tick + ET-day marker
@@ -3401,6 +3451,7 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleBillingCycle(db)
     scheduleWeeklyVerificationReport(db)
     scheduleHamiltonWeeklyDigest(db)
+    scheduleMondayPortalReminder(db)
     scheduleNightlyMaintenanceSweep(db)
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)

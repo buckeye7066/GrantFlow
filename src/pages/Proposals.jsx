@@ -156,9 +156,9 @@ export default function Proposals() {
         <div className="flex flex-col gap-4 mb-8">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">Applications</h1>
+              <h1 className="text-3xl font-bold text-slate-900">Proposals</h1>
               <p className="text-slate-600 mt-2">
-                Manage your active funding applications • {filteredProposals.length} of {activeProposals.length} applications
+                Manage your proposals • {filteredProposals.length} of {activeProposals.length} proposals
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -193,18 +193,18 @@ export default function Proposals() {
         </div>
 
         {isLoading ? (
-          <div className="text-center text-slate-500 py-10">Loading applications...</div>
+          <div className="text-center text-slate-500 py-10">Loading proposals...</div>
         ) : filteredProposals.length === 0 ? (
           <Card className="shadow-lg border-0">
             <CardContent className="p-12 text-center">
               <FileText className="w-16 h-16 mx-auto text-slate-300 mb-4" />
               <h3 className="text-xl font-semibold text-slate-900 mb-2">
-                {activeProposals.length === 0 ? 'No Active Applications' : 'No Applications Match Your Filters'}
+                {activeProposals.length === 0 ? 'No Active Proposals' : 'No Proposals Match Your Filters'}
               </h3>
               <p className="text-slate-600 mb-6">
                 {activeProposals.length === 0
-                  ? "Your active applications will appear here. Start by finding an opportunity and marking it as 'Interested' or 'Drafting' in your pipeline."
-                  : "Try adjusting your filters to see more applications."
+                  ? "Your active proposals will appear here. Start by finding an opportunity and marking it as 'Interested' or 'Drafting' in your pipeline."
+                  : "Try adjusting your filters to see more proposals."
                 }
               </p>
               <Link to={createPageUrl("DiscoverGrants")}>
@@ -278,7 +278,7 @@ export default function Proposals() {
                   </CardContent>
                   <CardFooter className="bg-slate-50 p-4 border-t">
                     <Link to={createPageUrl("GrantDetail", { id: proposal.id, tab: "proposal" })} className="w-full">
-                      <Button variant="outline" className="w-full bg-white">View Application</Button>
+                      <Button variant="outline" className="w-full bg-white">View Proposal</Button>
                     </Link>
                   </CardFooter>
                 </Card>

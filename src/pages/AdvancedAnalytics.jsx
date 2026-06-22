@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import { differenceInDays, format } from "date-fns"
+import { canonicalStage } from "../../shared/pipelineStages.js"
 
 export default function AdvancedAnalytics() {
   const [timeRange, setTimeRange] = useState("12m")
@@ -25,20 +26,25 @@ export default function AdvancedAnalytics() {
 
   // Calculate metrics
   const metrics = useMemo(() => {
-    const awarded = grants.filter(g => g.status === 'awarded')
-    const submitted = grants.filter(g => ['submitted', 'under_review', 'awarded', 'rejected'].includes(g.status))
-    
+    // Bucket by CANONICAL stage so legacy statuses (auto_applied,
+    // pending_review, under_review → submitted; rejected → declined) are
+    // counted the same way the Pipeline Kanban counts them. Comparing raw
+    // literal statuses made these metrics read 0 even with a full pipeline.
+    const awarded = grants.filter(g => canonicalStage(g.status) === 'awarded')
+    const submitted = grants.filter(g => ['submitted', 'awarded', 'declined'].includes(canonicalStage(g.status)))
+
     const totalAwarded = awarded.reduce((sum, g) => sum + (g.amount_awarded || 0), 0)
     const winRate = submitted.length > 0 ? (awarded.length / submitted.length * 100).toFixed(1) : 0
-    
-    // Calculate average time to award
-    const awardedWithDates = awarded.filter(g => g.submitted_date && g.awarded_date)
+
+    // Calculate average time to award. The schema column is `award_date`
+    // (not `awarded_date`); reading the wrong name silently produced 0 days.
+    const awardedWithDates = awarded.filter(g => g.submitted_date && g.award_date)
     const avgDays = awardedWithDates.length > 0
       ? Math.round(
           awardedWithDates.reduce((sum, g) => {
             try {
               const submittedDate = new Date(g.submitted_date)
-              const awardedDate = new Date(g.awarded_date)
+              const awardedDate = new Date(g.award_date)
               if (isNaN(submittedDate.getTime()) || isNaN(awardedDate.getTime())) {
                 return sum
               }
@@ -51,9 +57,10 @@ export default function AdvancedAnalytics() {
         )
       : 0
 
-    // Portfolio health score (simple calculation)
-    const active = grants.filter(g => ['interested', 'drafting', 'app_prep', 'revision', 'submitted', 'under_review'].includes(g.status))
-    const healthScore = grants.length > 0 ? Math.min(100, (active.length / grants.length * 100 + winRate) / 2).toFixed(0) : 0
+    // Portfolio health score (simple calculation). Active = in-progress
+    // canonical stages (everything pre-outcome that is past discovery).
+    const active = grants.filter(g => ['saved', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'submitted', 'follow_up'].includes(canonicalStage(g.status)))
+    const healthScore = grants.length > 0 ? Math.min(100, (active.length / grants.length * 100 + Number(winRate)) / 2).toFixed(0) : 0
 
     return {
       totalAwarded,
@@ -63,7 +70,7 @@ export default function AdvancedAnalytics() {
       awarded: awarded.length,
       submitted: submitted.length,
       active: active.length,
-      rejected: grants.filter(g => g.status === 'rejected').length,
+      rejected: grants.filter(g => canonicalStage(g.status) === 'declined').length,
     }
   }, [grants])
 
@@ -84,13 +91,16 @@ export default function AdvancedAnalytics() {
   const grantsByState = useMemo(() => {
     const stateMap = new Map()
     grants.forEach(grant => {
-      const state = grant.state || 'Unknown'
+      // grant.state is surfaced by GET /api/grants as
+      // COALESCE(funding_opportunity.state, organization.state). Fall back to
+      // any other location hint the row may carry before "Unknown".
+      const state = grant.state || grant.region || grant.organization_state || 'Unknown'
       if (!stateMap.has(state)) {
         stateMap.set(state, { state, count: 0, awarded: 0, total: 0 })
       }
       const data = stateMap.get(state)
       data.count++
-      if (grant.status === 'awarded') {
+      if (canonicalStage(grant.status) === 'awarded') {
         data.awarded++
         data.total += grant.amount_awarded || 0
       }
@@ -147,7 +157,7 @@ export default function AdvancedAnalytics() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">${metrics.totalAwarded.toLocaleString()}</div>
-              <p className="text-xs text-slate-600 mt-1">Lifetime funding</p>
+              <p className="text-xs text-slate-600 mt-1">Lifetime funding (recorded awards)</p>
             </CardContent>
           </Card>
           <Card>

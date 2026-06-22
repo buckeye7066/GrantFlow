@@ -538,6 +538,34 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    id: 'agent.hamilton.mondayPortalReminder',
+    label: 'Monday unmerged-portal reminder',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Confirms the Monday-09:00-ET reminder for UNMERGED portals (including completed-but-not-merged) is enabled and reports its last run summary from system_kv (reminded / portals_reminded / errors). Fails open before the first run.',
+    async run({ db }) {
+      let enabled = true
+      try {
+        const { isMondayPortalReminderEnabled } = await import('../hamilton/mondayPortalReminder.js')
+        enabled = isMondayPortalReminderEnabled()
+      } catch { /* best-effort */ }
+      let summary = null
+      try {
+        const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('monday_portal_reminder_last_run_summary')
+        summary = row?.value ? JSON.parse(row.value) : null
+      } catch { /* system_kv may not exist until first run */ }
+      const errored = summary && Number(summary.errors) > 0
+      return {
+        ok: !errored,
+        summary: errored
+          ? `Monday portal reminder last run had ${summary.errors} send error(s).`
+          : `Monday unmerged-portal reminder ${enabled ? 'enabled' : 'disabled'}${summary ? ` — last run reminded ${summary.reminded ?? 0} profile(s) across ${summary.portals_reminded ?? 0} portal(s)` : ' (not run yet)'}.`,
+        evidence: { enabled, last_summary: summary },
+      }
+    },
+  },
+  {
     id: 'maintenance.nightlySweep',
     label: 'Maintenance window + nightly sweep',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,

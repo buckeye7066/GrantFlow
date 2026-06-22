@@ -456,10 +456,18 @@ router.get('/', async (req, res) => {
     const urlFilter = typeof req.query.url === 'string' ? req.query.url : null
     const { limit, offset } = validatePagination(req.query);
     
+    // Expose a geographic state for analytics/reporting. grants rows do not
+    // carry their own state column, so we surface it from the best available
+    // upstream source: the linked funding opportunity first (most specific to
+    // the grant), then the owning organization/profile. Geographic Analysis
+    // (src/pages/AdvancedAnalytics.jsx) buckets on `grant.state`; without this
+    // every grant fell into "Unknown".
     let query = `
-      SELECT g.*, o.name as organization_name 
+      SELECT g.*, o.name as organization_name,
+             COALESCE(fo.state, o.state) AS state
       FROM grants g
       LEFT JOIN organizations o ON g.organization_id = o.id
+      LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
       WHERE 1=1
     `;
     const params = [];

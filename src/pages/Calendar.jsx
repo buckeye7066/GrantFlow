@@ -20,26 +20,31 @@ import ProfileSelect from "@/components/shared/ProfileSelect"
 export default function Calendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [selectedDay, setSelectedDay] = useState(null)
-  const [profileId, setProfileId] = useState("")
+  // Default to the "all" sentinel so the profile Select is controlled for its
+  // entire lifecycle (never undefined → no uncontrolled→controlled warning).
+  const [profileId, setProfileId] = useState("all")
+
+  // "all" means no profile filter — translate it to undefined for queries.
+  const effectiveProfileId = profileId && profileId !== "all" ? profileId : undefined
 
   const monthStr = format(currentMonth, "yyyy-MM")
 
   // Fetch deadlines from our new API
   const { data: calendarResult, isLoading: calLoading } = useQuery({
-    queryKey: ["calendar-deadlines", monthStr, profileId],
-    queryFn: () => getCalendarDeadlines({ month: monthStr, profileId: profileId || undefined }),
+    queryKey: ["calendar-deadlines", monthStr, effectiveProfileId],
+    queryFn: () => getCalendarDeadlines({ month: monthStr, profileId: effectiveProfileId }),
     staleTime: 60_000,
   })
   // Hamilton's scheduled application runs (profile-scoped) — folded into the
   // same calendar feed, each flagged when you may need to be available for 2FA.
   const { data: hamiltonResult } = useQuery({
-    queryKey: ["hamilton-calendar", monthStr, profileId],
-    queryFn: () => getHamiltonCalendar({ month: monthStr, profileId }),
-    enabled: !!profileId,
+    queryKey: ["hamilton-calendar", monthStr, effectiveProfileId],
+    queryFn: () => getHamiltonCalendar({ month: monthStr, profileId: effectiveProfileId }),
+    enabled: !!effectiveProfileId,
     staleTime: 60_000,
   })
 
-  const calEvents = useMemo(() => {
+  const apiCalEvents = useMemo(() => {
     const payload = calendarResult?.data ?? calendarResult ?? {}
     const deadlineEvents = Array.isArray(payload.events) ? payload.events : []
     const hPayload = hamiltonResult?.data ?? hamiltonResult ?? {}
@@ -63,29 +68,90 @@ export default function Calendar() {
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd })
   const startDayOfWeek = getDay(monthStart)
 
-  // Map deadlines to days
+  const isValidDate = (ds) => ds && !isNaN(new Date(ds).getTime())
+
+  // Parse a deadline to a LOCAL Date. A bare "YYYY-MM-DD" is otherwise parsed as
+  // UTC midnight by `new Date()`, which renders as the previous calendar day in
+  // negative-offset zones (US Eastern etc.) and lands the marker on the wrong /
+  // empty grid cell. Build it from local Y/M/D so it matches `format(day, ...)`.
+  const toLocalDate = (ds) => {
+    if (!ds) return null
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ds).trim())
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    const d = new Date(ds)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  // Pipeline grant deadlines (the dataset that actually has data). This is the
+  // single source of truth for BOTH the "Pipeline Deadlines" list and the
+  // "Upcoming (30 Days)" widget / calendar grid, so they can never diverge.
+  const upcomingGrants = useMemo(() => grants
+    .filter((g) => {
+      if (!["discovered", "interested", "drafting"].includes(g.status)) return false
+      if (!g.deadline || String(g.deadline).toLowerCase() === "rolling" || !isValidDate(g.deadline)) return false
+      return new Date(g.deadline) >= new Date(new Date().setHours(0, 0, 0, 0))
+    })
+    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline)), [grants])
+
+  // Normalise pipeline grants into the calendar-event shape and merge with the
+  // API feed (catalog + Hamilton runs), deduped by id. Both panels and the grid
+  // now read from this one combined list.
+  const calEvents = useMemo(() => {
+    const seen = new Set()
+    const merged = []
+    for (const g of upcomingGrants) {
+      const id = `grant:${g.id}`
+      seen.add(id)
+      merged.push({
+        id,
+        title: g.title,
+        sponsor: g.funder,
+        deadline: g.deadline,
+        amount_max: g.amount_max,
+        application_url: g.application_url,
+        source_url: g.source_url,
+        grant_id: g.id,
+        calendar_source: "pipeline",
+      })
+    }
+    for (const ev of apiCalEvents) {
+      // Avoid double-listing a pipeline grant that the API also returned.
+      const key = ev.grant_id ? `grant:${ev.grant_id}` : `api:${ev.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(ev)
+    }
+    return merged
+  }, [upcomingGrants, apiCalEvents])
+
+  // Map deadlines to local-date day keys. Normalise via the local calendar date
+  // (NOT a raw ISO string split) so timezone offsets can't push an event onto
+  // the wrong/empty day key vs. the grid's `format(day, "yyyy-MM-dd")`.
   const deadlinesByDay = useMemo(() => {
     const map = {}
     for (const ev of calEvents) {
-      if (!ev.deadline) continue
-      const day = ev.deadline.split("T")[0]
+      const d = toLocalDate(ev.deadline)
+      if (!d) continue
+      const day = format(d, "yyyy-MM-dd")
       if (!map[day]) map[day] = []
       map[day].push(ev)
     }
     return map
   }, [calEvents])
 
-  // Upcoming deadlines (next 30 days, from all sources)
+  // Upcoming deadlines (next 30 days, from all sources). Inclusive on both
+  // bounds; compare against start-of-today so a deadline "due today" (diff 0,
+  // possibly with a time-of-day component) is never truncated out of the window.
   const upcoming = useMemo(() => {
-    const now = new Date()
+    const todayStart = new Date(new Date().setHours(0, 0, 0, 0))
     return calEvents
       .filter((e) => {
-        if (!e.deadline) return false
-        const d = new Date(e.deadline)
-        const diff = differenceInDays(d, now)
+        const d = toLocalDate(e.deadline)
+        if (!d) return false
+        const diff = differenceInDays(d, todayStart)
         return diff >= 0 && diff <= 30
       })
-      .sort((a, b) => a.deadline.localeCompare(b.deadline))
+      .sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)))
       .slice(0, 20)
   }, [calEvents])
 
@@ -95,16 +161,6 @@ export default function Calendar() {
     const key = format(selectedDay, "yyyy-MM-dd")
     return deadlinesByDay[key] || []
   }, [selectedDay, deadlinesByDay])
-
-  // Pipeline grant deadlines (existing logic, enhanced)
-  const isValidDate = (ds) => ds && !isNaN(new Date(ds).getTime())
-  const upcomingGrants = grants
-    .filter((g) => {
-      if (!["discovered", "interested", "drafting"].includes(g.status)) return false
-      if (!g.deadline || g.deadline.toLowerCase() === "rolling" || !isValidDate(g.deadline)) return false
-      return new Date(g.deadline) >= new Date(new Date().setHours(0, 0, 0, 0))
-    })
-    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
 
   return (
     <div className="p-6 md:p-8">
@@ -118,12 +174,13 @@ export default function Calendar() {
             <ProfileSelect
               value={profileId}
               onValueChange={setProfileId}
+              showAllOption
               placeholder="All profiles"
             />
           </div>
         </div>
 
-        {profileId ? <HamiltonReadinessBanner profileId={profileId} /> : null}
+        {effectiveProfileId ? <HamiltonReadinessBanner profileId={effectiveProfileId} /> : null}
 
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Calendar Grid */}
@@ -251,14 +308,15 @@ export default function Calendar() {
                   <p className="text-sm text-slate-500 italic py-4 text-center">No upcoming deadlines</p>
                 ) : (
                   upcoming.map((ev, i) => {
-                    const daysLeft = Math.max(0, differenceInDays(new Date(ev.deadline), new Date()))
+                    const evDate = toLocalDate(ev.deadline)
+                    const daysLeft = Math.max(0, differenceInDays(evDate, new Date(new Date().setHours(0, 0, 0, 0))))
                     return (
                       <div key={i} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
                         <Clock className={`w-4 h-4 mt-0.5 flex-shrink-0 ${daysLeft <= 7 ? "text-red-500" : "text-slate-400"}`} />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-slate-900 truncate">{ev.title}</p>
                           <div className="flex items-center gap-2 text-xs text-slate-500">
-                            <span>{format(new Date(ev.deadline), "MMM d")}</span>
+                            <span>{format(evDate, "MMM d")}</span>
                             <Badge
                               variant="outline"
                               className={`text-[10px] ${daysLeft <= 7 ? "border-red-300 text-red-700" : ""}`}
@@ -287,7 +345,7 @@ export default function Calendar() {
                   <p className="text-sm text-slate-500 italic py-4 text-center">No pipeline deadlines</p>
                 ) : (
                   upcomingGrants.slice(0, 10).map((grant) => {
-                    const daysLeft = Math.max(0, differenceInDays(new Date(grant.deadline), new Date()))
+                    const daysLeft = Math.max(0, differenceInDays(toLocalDate(grant.deadline), new Date(new Date().setHours(0, 0, 0, 0))))
                     return (
                       <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
                         <div className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">

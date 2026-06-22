@@ -27,7 +27,11 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
     'disabled_person',
     'emergency_affected'
   ].includes(organization.applicant_type);
-  const isUnknownType = !organization.applicant_type || (!isOrganization && !isStudent && !isIndividual);
+  // Only nudge when the profile genuinely has NO type. The visible type badge
+  // renders whenever `applicant_type` is truthy (even for values outside the
+  // canonical org/student/individual buckets, e.g. "student" or "family"), so
+  // keying the nudge off the same field prevents nagging already-typed entries.
+  const isUnknownType = !organization.applicant_type;
 
   const { data: taxonomyItems = [] } = useQuery({
       queryKey: ['taxonomy', organization.applicant_type],

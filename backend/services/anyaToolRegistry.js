@@ -4300,6 +4300,27 @@ registerTool({
 })
 
 registerTool({
+  name: 'owner.run_portal_reminder',
+  description: 'OWNER ONLY. Send the weekly UNMERGED-portal reminder now — for each profile with portals that are not merged (including completed-but-not-merged), emails a reminder to its contacts. Normally runs every Monday morning. Use when the owner says "remind everyone about their unmerged portals".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileIds: { type: 'array', items: { type: 'string' } },
+      channel: { type: 'string', enum: ['auto', 'email', 'sms'] },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runMondayPortalReminder } = await import('./hamilton/mondayPortalReminder.js')
+    const profileIds = Array.isArray(params?.profileIds) ? params.profileIds.map(String) : null
+    const channel = params?.channel || 'auto'
+    return runMondayPortalReminder(db, { force: true, profileIds, channel })
+  },
+})
+
+registerTool({
   name: 'owner.run_robert_contact_scan',
   description: 'OWNER ONLY. Run Robert\'s email-contact lead scan now — reads the owner\'s Outlook contacts and tags client prospects for John. Use when the owner says "scan my contacts for leads".',
   requiresOwner: true,

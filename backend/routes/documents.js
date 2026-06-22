@@ -1058,6 +1058,25 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
         const { reconcileProfileDocumentUploads } = await import('../services/hamilton/applicationTaskStore.js')
         await reconcileProfileDocumentUploads(req.db, { profileId, documentName: docName })
       } catch { /* never block an upload on the Hamilton reconcile */ }
+
+      // Owner requirement (b): if this upload/URL is a COMPLETED application for a
+      // known funding-source portal (e.g. a completed FAFSA link), mark that
+      // portal complete-but-NOT-merged immediately — independent of whether the
+      // async AI parse job runs (so URL imports + heuristics-only ingests are
+      // covered too). The async worker runs the same detector again with the
+      // worker-extracted text; both calls are idempotent. Best-effort.
+      try {
+        const { detectAndMarkCompletedApplications } = await import('../services/hamilton/portalCompletionDetector.js')
+        await detectAndMarkCompletedApplications(req.db, {
+          profileId,
+          documentId: docId,
+          grantId: rawGrantId || null,
+          importUrl: typeof fileUrl === 'string' ? fileUrl : null,
+          fileUrl: publicUrl || null,
+          text: extractedText || '',
+          fileName: docName || null,
+        })
+      } catch { /* never block an upload on portal-completion detection */ }
     }
 
     // Create the canonical DocumentExtract row immediately (async worker fills it in).
