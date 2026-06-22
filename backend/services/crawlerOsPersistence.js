@@ -168,7 +168,44 @@ async function upsertRow(db, table, keyCols, row) {
  * @param {object} run   the runDiscovery result (telemetry).
  * @returns {{opportunities:number, matches:number, sources:number}}
  */
+/**
+ * ensureOsTables — self-heal the Crawler OS persistence schema on any DB (fresh
+ * test DBs, prod, local) regardless of migration state. Idempotent + tolerant:
+ * mirrors migrations 121/122 so persistRun never hits "no such table/column".
+ */
+async function ensureOsTables(db) {
+  const isPg = db.dialect === 'postgres';
+  const ts = isPg ? 'TIMESTAMPTZ' : 'DATETIME';
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS opportunity_sources (
+       opportunity_id TEXT NOT NULL, source_id TEXT NOT NULL,
+       external_id TEXT, apply_url TEXT, first_seen_at ${ts}, last_seen_at ${ts},
+       PRIMARY KEY (opportunity_id, source_id))`,
+    `CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
+       id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+       match_score REAL, match_decision TEXT, match_explanation TEXT, match_reasons TEXT,
+       match_explain_json TEXT, matcher_version TEXT, computed_at ${ts}, updated_at ${ts}, evaluated_at ${ts})`,
+  ];
+  for (const sql of stmts) { try { await db.prepare(sql).run(); } catch { /* exists */ } }
+  // additive columns (tolerant — may already exist)
+  const addCols = [
+    ['funding_opportunities', 'canonical_opportunity_key', 'TEXT'],
+    ['profile_opportunity_matches', 'match_explanation', 'TEXT'],
+    ['profile_opportunity_matches', 'match_reasons', 'TEXT'],
+    ['profile_opportunity_matches', 'match_explain_json', 'TEXT'],
+    ['profile_opportunity_matches', 'matcher_version', 'TEXT'],
+    ['profile_opportunity_matches', 'computed_at', ts],
+    ['profile_opportunity_matches', 'updated_at', ts],
+  ];
+  for (const [t, c, type] of addCols) {
+    try { await db.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`).run(); } catch { /* exists */ }
+  }
+  try { await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_fo_canonical_key ON funding_opportunities(canonical_opportunity_key)').run(); } catch { /* ok */ }
+  try { await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_pom_profile_opp ON profile_opportunity_matches(profile_id, opportunity_id)').run(); } catch { /* ok */ }
+}
+
 export async function persistRun(db, memStore, run) {
+  await ensureOsTables(db);
   const catalog = storage.listCatalog(memStore);
   // Durable cross-RUN dedup at the live-DB boundary. funding_opportunities has a
   // UNIQUE(fingerprint) constraint; the OS id folds in source_id, so the same
