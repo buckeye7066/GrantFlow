@@ -325,6 +325,13 @@ export function mapAccountRow(row) {
     custom_monthly_cents: row.custom_monthly_cents,
     custom_hourly_cents: row.custom_hourly_cents,
     metadata: parseMetadata(row.metadata),
+    // Free-period (trial) window — present only after ensureInvoiceSchema has
+    // added these columns; undefined columns map to null harmlessly.
+    free_until: row.free_until ?? null,
+    free_granted_at: row.free_granted_at ?? null,
+    free_kind: row.free_kind ?? null,
+    free_reason: row.free_reason ?? null,
+    free_notice_pending: Boolean(row.free_notice_pending),
     created_at: row.created_at,
     updated_at: row.updated_at,
     tier: row.tier_name

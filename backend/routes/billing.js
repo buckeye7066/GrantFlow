@@ -25,6 +25,12 @@ import {
   runBillingCycle,
   markInvoicePaid,
   backfillBillingAnchor,
+  grantFreePeriod,
+  grantFreePeriodGlobal,
+  revokeFreePeriod,
+  describeFreePeriod,
+  acknowledgeFreeNotice,
+  FREE_PERIOD_DAYS,
 } from '../services/billing/invoiceService.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -107,8 +113,9 @@ router.get('/me/:profileId', async (req, res) => {
         return res.status(403).json({ error: 'Not authorized to view this profile’s billing' })
       }
     }
-    await ensureBillingSchema(req.db)
-    const account = mapAccountRow(await ensureBillingAccount(req.db, profileId))
+    await ensureInvoiceSchema(req.db)
+    const accountRow = await ensureBillingAccount(req.db, profileId)
+    const account = mapAccountRow(accountRow)
     const billing = await computeEffectiveBilling(req.db, profileId, account)
     // Read-only view: tier + capabilities + effective amount. (Internal fields
     // like assigned_by/assigned_reason are admin-only; omit them here.)
@@ -123,6 +130,7 @@ router.get('/me/:profileId', async (req, res) => {
         custom_hourly_cents: account.custom_hourly_cents,
       },
       billing,
+      free_period: describeFreePeriod(accountRow),
       read_only: true,
     })
   } catch (error) {
@@ -149,6 +157,18 @@ router.put('/me/:profileId/cadence', async (req, res) => {
     await ensureBillingAccount(req.db, profileId)
     await req.db.prepare('UPDATE billing_accounts SET billing_cadence = ? WHERE profile_id = ?').run(cadence, profileId)
     res.json({ ok: true, cadence })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// USER: acknowledge the first-login free-period notice (clears the banner).
+router.post('/me/:profileId/free-notice/ack', async (req, res) => {
+  try {
+    const profileId = String(req.params.profileId)
+    if (!(await canAccessProfile(req, profileId))) return res.status(403).json({ error: 'Not authorized' })
+    const result = await acknowledgeFreeNotice(req.db, profileId)
+    res.json(result)
   } catch (error) {
     res.status(500).json(formatError(error))
   }
@@ -196,6 +216,47 @@ router.post('/admin/invoices/:id/mark-paid', requireAdmin, async (req, res) => {
   try {
     const result = await markInvoicePaid(req.db, { invoiceId: String(req.params.id), source: 'admin' })
     res.status(result.ok ? 200 : 404).json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: grant a free period (one week / one month free). The timer starts now.
+// Body: { kind: 'week'|'month', scope: 'profile'|'global', profileId?, reason? }
+//   - scope 'profile' (default) requires profileId.
+//   - scope 'global' applies to every profile's billing account.
+router.post('/admin/free/grant', requireAdmin, async (req, res) => {
+  try {
+    const kind = String(req.body?.kind || 'week').toLowerCase()
+    if (!FREE_PERIOD_DAYS[kind]) return res.status(400).json({ error: 'kind must be "week" or "month"' })
+    const scope = String(req.body?.scope || 'profile').toLowerCase()
+    const reason = req.body?.reason ? String(req.body.reason).slice(0, 500) : null
+    const grantedBy = req.user?.email ?? req.user?.userId ?? 'admin'
+    if (scope === 'global') {
+      const result = await grantFreePeriodGlobal(req.db, { kind, reason, grantedBy })
+      return res.json(result)
+    }
+    const profileId = req.body?.profileId ? String(req.body.profileId) : null
+    if (!profileId) return res.status(400).json({ error: 'profileId is required for scope "profile"' })
+    const result = await grantFreePeriod(req.db, { profileId, kind, reason, grantedBy })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: revoke a free period. Body: { scope: 'profile'|'global', profileId? }
+router.post('/admin/free/revoke', requireAdmin, async (req, res) => {
+  try {
+    const scope = String(req.body?.scope || 'profile').toLowerCase()
+    if (scope === 'global') {
+      const result = await revokeFreePeriod(req.db, {})
+      return res.json(result)
+    }
+    const profileId = req.body?.profileId ? String(req.body.profileId) : null
+    if (!profileId) return res.status(400).json({ error: 'profileId is required for scope "profile"' })
+    const result = await revokeFreePeriod(req.db, { profileId })
+    res.json(result)
   } catch (error) {
     res.status(500).json(formatError(error))
   }
@@ -335,11 +396,13 @@ function mapBillingAccountRow(row) {
   } catch {
     // profile-type resolution is best-effort metadata
   }
+  const mapped = mapAccountRow(row)
   return {
-    ...mapAccountRow(row),
+    ...mapped,
     profile_name: row.profile_name ?? null,
     profile_type: resolved.profile_type,
     profile_type_label: resolved.profile_type_label,
+    free_period: describeFreePeriod(mapped),
   }
 }
 

@@ -1,7 +1,7 @@
 ﻿import React, { Suspense } from 'react';
 import { lazyWithRetry } from '@/utils/lazyWithRetry';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop, Megaphone } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -23,6 +23,7 @@ import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionContro
 import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
 import AdminCredentialVault from '@/components/admin/AdminCredentialVault.jsx'
 import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
+import AdminBroadcast from '@/components/admin/AdminBroadcast.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -127,6 +128,10 @@ export default function Admin() {
               <Wrench className="w-4 h-4 mr-2" />
               Sam
             </TabsTrigger>
+            <TabsTrigger value="broadcast">
+              <Megaphone className="w-4 h-4 mr-2" />
+              Broadcast
+            </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
               Billing
@@ -219,6 +224,10 @@ export default function Admin() {
 
           <TabsContent value="sam" className="mt-6">
             <AdminSamConsole />
+          </TabsContent>
+
+          <TabsContent value="broadcast" className="mt-6">
+            <AdminBroadcast />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">

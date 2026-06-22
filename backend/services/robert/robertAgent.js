@@ -213,6 +213,23 @@ export async function runRobert({
       }
     }
 
+    // ---- Phase 1c: email-contact lead scan (Robert's ONLY lead source) ----
+    // Per owner scope: Robert finds LEADS only in the owner's email contacts and
+    // hands them to John (via robertJohnBridge). Gated by ROBERT_SCAN_EMAIL_CONTACTS
+    // + Graph Contacts.Read; self-no-ops otherwise. Funding discovery below is
+    // unaffected and never produces leads.
+    if (!dryRun) {
+      const contactScan = await safe(
+        async () => {
+          const { runContactScanForRobert } = await import('./robertContactDiscovery.js')
+          return runContactScanForRobert(db, {})
+        },
+        { errors: summary.errors, stage: 'contact_lead_scan' },
+      )
+      summary.contact_lead_scan = contactScan || { ran: false, reason: 'contact_scan_error' }
+      summary.notes.push({ stage: 'contact_lead_scan', ...(contactScan?.ran ? { tagged: contactScan.tagged } : { skipped: contactScan?.reason || 'unknown' }) })
+    }
+
     // ---- Phase 2: search plans (always derived; cheap) ----
     const allPlans = []
     for (const profileId of profilesToConsider) {

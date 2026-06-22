@@ -7,11 +7,12 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, PenSquare, ShieldCheck, Users, FileText } from "lucide-react"
+import { Loader2, PenSquare, ShieldCheck, Users, FileText, Gift, Clock } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
-import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview } from "@/api/billing"
+import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview, grantFreePeriod, revokeFreePeriod } from "@/api/billing"
 import TierMatrix from "@/components/billing/TierMatrix.jsx"
+import ContactAndNotifications from "@/components/comms/ContactAndNotifications.jsx"
 import { getProfile } from "@/api/profiles"
 import { labelForProfileType } from "@/services/profileTypes"
 import { Link } from "react-router-dom"
@@ -33,6 +34,84 @@ function formatCurrencyFromCents(cents) {
     currency: "USD",
     minimumFractionDigits: cents % 100 === 0 ? 0 : 2,
   }).format(cents / 100)
+}
+
+function freePeriodLabel(free) {
+  if (!free?.active) return null
+  const until = free.until ? new Date(free.until).toLocaleDateString() : null
+  const kind = free.kind === 'month' ? '1 month free' : free.kind === 'week' ? '1 week free' : 'Free period'
+  return until ? `${kind} · ${free.days_remaining}d left (until ${until})` : kind
+}
+
+/** Per-account free-period (trial) controls: grant 1 week / 1 month, or end early. */
+function FreePeriodControls({ account, onGrant, onRevoke, busy }) {
+  const free = account.free_period
+  const active = Boolean(free?.active)
+  return (
+    <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Gift className="w-4 h-4 text-amber-600" />
+          <span className="text-sm font-medium text-slate-700">Free period</span>
+          {active ? (
+            <Badge className="bg-amber-500 text-white flex items-center gap-1">
+              <Clock className="w-3 h-3" /> {freePeriodLabel(free)}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-xs text-slate-500">None active</Badge>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" disabled={busy}
+            onClick={() => onGrant(account.profile_id, 'week')}>
+            Give 1 week free
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy}
+            onClick={() => onGrant(account.profile_id, 'month')}>
+            Give 1 month free
+          </Button>
+          {active ? (
+            <Button variant="ghost" size="sm" className="text-rose-600" disabled={busy}
+              onClick={() => onRevoke(account.profile_id)}>
+              End free period
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <p className="text-xs text-slate-500">
+        Granting starts the timer immediately and suppresses invoices until it ends. Re-granting extends an
+        active period rather than shortening it. Billing resumes automatically when the timer runs out.
+      </p>
+    </div>
+  )
+}
+
+/** Admin-wide free-period controls: grant/end a free period for EVERY profile. */
+function GlobalFreePeriodPanel({ onGrantGlobal, onRevokeGlobal, busy }) {
+  return (
+    <Card className="border border-amber-200 bg-amber-50/40">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base font-semibold flex items-center gap-2">
+          <Gift className="w-4 h-4 text-amber-600" /> Promotions — free period for everyone
+        </CardTitle>
+        <CardDescription>
+          Give every profile a free week or month at once (e.g. a launch promotion). The timer starts now for
+          all accounts; invoices are suppressed until it ends.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => onGrantGlobal('week')}>
+          Give ALL 1 week free
+        </Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => onGrantGlobal('month')}>
+          Give ALL 1 month free
+        </Button>
+        <Button variant="ghost" size="sm" className="text-rose-600" disabled={busy} onClick={onRevokeGlobal}>
+          End all free periods
+        </Button>
+      </CardContent>
+    </Card>
+  )
 }
 
 function generateInvoiceHTML(invoiceData) {
@@ -226,7 +305,7 @@ function generateInvoiceHTML(invoiceData) {
   `
 }
 
-function BillingAccountCard({ account, tiers, onSave, saving }) {
+function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRevokeFree, freeBusy }) {
   const [form, setForm] = useState({
     tier_id: account.tier_id,
     discount_type: account.discount_type ?? "none",
@@ -312,9 +391,16 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
             Last updated {account.updated_at ? new Date(account.updated_at).toLocaleString() : "recently"}
           </CardDescription>
         </div>
-        <Badge className={account.is_pro_bono ? "bg-violet-600 text-white" : "bg-slate-900 text-white"}>
-          {account.is_pro_bono ? "Pro Bono" : tier?.name ?? "Tier pending"}
-        </Badge>
+        <div className="flex items-center gap-2 flex-wrap">
+          {account.free_period?.active ? (
+            <Badge className="bg-amber-500 text-white flex items-center gap-1">
+              <Clock className="w-3 h-3" /> {account.free_period.kind === 'month' ? '1mo free' : '1wk free'} · {account.free_period.days_remaining}d
+            </Badge>
+          ) : null}
+          <Badge className={account.is_pro_bono ? "bg-violet-600 text-white" : "bg-slate-900 text-white"}>
+            {account.is_pro_bono ? "Pro Bono" : tier?.name ?? "Tier pending"}
+          </Badge>
+        </div>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="grid gap-4 md:grid-cols-2">
@@ -413,6 +499,8 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
           ) : null}
         </div>
 
+        <FreePeriodControls account={account} onGrant={onGrantFree} onRevoke={onRevokeFree} busy={freeBusy} />
+
         <div className="flex justify-end gap-2">
           <Button
             variant="outline"
@@ -497,6 +585,21 @@ function MemberBillingCard({ profileId, billing, isLoading, onRefresh }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {billing.free_period?.active ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 flex gap-3 items-start">
+            <Gift className="w-5 h-5 text-amber-600 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-amber-700">
+                You're on a free {billing.free_period.kind === 'month' ? 'month' : 'week'}!
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                {billing.free_period.granted_at ? `Started ${new Date(billing.free_period.granted_at).toLocaleDateString()}. ` : ''}
+                {billing.free_period.days_remaining} day{billing.free_period.days_remaining === 1 ? '' : 's'} remaining
+                {billing.free_period.until ? ` (through ${new Date(billing.free_period.until).toLocaleDateString()})` : ''}. No invoices during this period.
+              </p>
+            </div>
+          </div>
+        ) : null}
         <div className="grid gap-4 md:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Tier</p>
@@ -591,6 +694,36 @@ export default function Billing() {
     updateMutation.mutate({ profileId, payload })
   }
 
+  // Free-period (trial) mutations — individual + global. The backend starts the
+  // timer at the moment of the grant and suppresses invoices while it's open.
+  const freeMutation = useMutation({
+    mutationFn: ({ kind, scope, profileId }) => grantFreePeriod({ kind, scope, profileId }),
+    onSuccess: (res, vars) => {
+      const what = vars.kind === 'month' ? '1 month free' : '1 week free'
+      toast({
+        title: vars.scope === 'global' ? `Granted ${what} to all profiles` : `Granted ${what}`,
+        description: vars.scope === 'global' && res?.granted !== null && res?.granted !== undefined ? `${res.granted} accounts updated.` : 'The free period timer has started.',
+      })
+      queryClient.invalidateQueries({ queryKey: ["billing-accounts"] })
+    },
+    onError: (error) => toast({ variant: "destructive", title: "Unable to grant free period", description: error instanceof Error ? error.message : "Try again." }),
+  })
+
+  const revokeFreeMutation = useMutation({
+    mutationFn: ({ scope, profileId }) => revokeFreePeriod({ scope, profileId }),
+    onSuccess: () => {
+      toast({ title: "Free period ended", description: "Normal billing resumes at the next cycle." })
+      queryClient.invalidateQueries({ queryKey: ["billing-accounts"] })
+    },
+    onError: (error) => toast({ variant: "destructive", title: "Unable to end free period", description: error instanceof Error ? error.message : "Try again." }),
+  })
+
+  const freeBusy = freeMutation.isPending || revokeFreeMutation.isPending
+  const handleGrantFree = (profileId, kind) => freeMutation.mutate({ kind, scope: 'profile', profileId })
+  const handleRevokeFree = (profileId) => revokeFreeMutation.mutate({ scope: 'profile', profileId })
+  const handleGrantFreeGlobal = (kind) => freeMutation.mutate({ kind, scope: 'global', profileId: null })
+  const handleRevokeFreeGlobal = () => revokeFreeMutation.mutate({ scope: 'global', profileId: null })
+
   if (isAdmin) {
     if (tiersQuery.isLoading || accountsQuery.isLoading) {
       return (
@@ -621,6 +754,12 @@ export default function Billing() {
           </div>
         </header>
 
+        <GlobalFreePeriodPanel
+          onGrantGlobal={handleGrantFreeGlobal}
+          onRevokeGlobal={handleRevokeFreeGlobal}
+          busy={freeBusy}
+        />
+
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
@@ -639,6 +778,9 @@ export default function Billing() {
                 tiers={tiers}
                 onSave={handleSaveAccount}
                 saving={updateMutation.isPending && updateMutation.variables?.profileId === account.profile_id}
+                onGrantFree={handleGrantFree}
+                onRevokeFree={handleRevokeFree}
+                freeBusy={freeBusy}
               />
             ))}
             {accounts.length === 0 ? (
@@ -683,6 +825,11 @@ export default function Billing() {
       <div className="mt-6">
         <TierMatrix currentTierId={activeAccountQuery.data?.account?.tier?.id || null} />
       </div>
+      {activeProfileId && activeProfileId !== '__admin__' ? (
+        <div className="mt-6">
+          <ContactAndNotifications profileId={activeProfileId} />
+        </div>
+      ) : null}
     </div>
   )
 }
