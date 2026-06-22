@@ -1711,7 +1711,7 @@ router.post('/bulk-populate', async (req, res) => {
     routeLogger.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
     
     // Import the crawler function
-    const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawlerOptimized.js')
+    const { processComprehensiveCrawlerJob } = await import('../services/legacyCrawlSuperseded.js')
     
     const batchSize = 100
     let totalInserted = 0
@@ -2093,7 +2093,7 @@ router.post('/crawl-grants-gov', async (req, res) => {
   try {
     routeLogger.info('[crawl-grants-gov] Starting Grants.gov crawl...')
     
-    const { crawlGrantsGov } = await import('../services/grantsDotGovCrawler.js')
+    const { crawlGrantsGov } = await import('../services/legacyCrawlSuperseded.js')
     
     const maxPages = req.body?.max_pages || 5
     const result = await crawlGrantsGov(req.db, { maxPages, rowsPerPage: 100 })
@@ -2173,7 +2173,7 @@ router.post('/seed-all-real', async (req, res) => {
   try {
     routeLogger.info('[seed-all-real] Starting comprehensive real funding seed...')
     
-    const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/realLocationFundingCrawler.js')
+    const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/legacyCrawlSuperseded.js')
     
     const result = await seedAllRealFunding(req.db)
     const counts = getOpportunityCountsByState(req.db)
@@ -2454,7 +2454,7 @@ router.post('/real-crawl', async (req, res) => {
     const { state = null, all_states = false } = req.body || {}
     
     // Dynamic import of the real crawler
-    const { crawlRealOpportunities, crawlAllStates } = await import('../services/realFundingCrawler.js')
+    const { crawlRealOpportunities, crawlAllStates } = await import('../services/legacyCrawlSuperseded.js')
     
     routeLogger.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
     
