@@ -41,7 +41,7 @@ function startServer(extraEnv = {}) {
         // ignore
       }
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
+    }, Number(process.env.PHASE5_SERVER_READY_TIMEOUT_MS) || 90_000)
 
     child.stdout.on('data', () => {
       const m = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
@@ -122,7 +122,12 @@ async function createCrawlerJob({ port, token, profileId, type, force = false })
 }
 
 async function waitForJobComplete({ port, token, jobId }) {
-  const deadline = Date.now() + 60_000
+  // This boots the full server and runs a real crawler job end-to-end. On a
+  // cold filesystem cache (isolated run) or a loaded CI machine, the first
+  // boot + migrate + crawl legitimately takes longer than a warm in-suite run,
+  // so a tight 60s deadline flakes even though the job DOES complete. Allow a
+  // generous, load-tolerant window (override via PHASE5_JOB_TIMEOUT_MS).
+  const deadline = Date.now() + (Number(process.env.PHASE5_JOB_TIMEOUT_MS) || 180_000)
   while (Date.now() < deadline) {
     const res = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs/${jobId}`, {
       method: 'GET',

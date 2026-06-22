@@ -65,3 +65,18 @@ export async function revokeFreePeriod({ scope = 'profile', profileId = null } =
     body: JSON.stringify({ scope, profileId }),
   })
 }
+
+// ── Account status: suspend / reactivate / ban / unban ───────────────────────
+
+export async function suspendAccount(profileId, reason = null) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/suspend`, { method: 'POST', body: JSON.stringify({ reason }) })
+}
+export async function reactivateAccount(profileId) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/reactivate`, { method: 'POST', body: JSON.stringify({}) })
+}
+export async function banAccountUser(profileId, reason = null) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/ban`, { method: 'POST', body: JSON.stringify({ reason }) })
+}
+export async function unbanAccountUser(profileId) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/unban`, { method: 'POST', body: JSON.stringify({}) })
+}

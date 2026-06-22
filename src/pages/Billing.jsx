@@ -7,10 +7,10 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, PenSquare, ShieldCheck, Users, FileText, Gift, Clock } from "lucide-react"
+import { Loader2, PenSquare, ShieldCheck, Users, FileText, Gift, Clock, PauseCircle, PlayCircle, Ban } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
-import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview, grantFreePeriod, revokeFreePeriod } from "@/api/billing"
+import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview, grantFreePeriod, revokeFreePeriod, suspendAccount, reactivateAccount, banAccountUser, unbanAccountUser } from "@/api/billing"
 import TierMatrix from "@/components/billing/TierMatrix.jsx"
 import ContactAndNotifications from "@/components/comms/ContactAndNotifications.jsx"
 import { getProfile } from "@/api/profiles"
@@ -305,7 +305,54 @@ function generateInvoiceHTML(invoiceData) {
   `
 }
 
-function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRevokeFree, freeBusy }) {
+/** Owner controls to pause/reactivate an account and ban/unban its user. */
+function AccountStatusControls({ account, onSuspend, onReactivate, onBan, onUnban, busy }) {
+  const status = account.profile_status || 'active'
+  const suspended = status === 'suspended'
+  const banned = status === 'banned'
+  return (
+    <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-700">Account status</span>
+          {banned ? <Badge className="bg-red-600 text-white">Banned</Badge>
+            : suspended ? <Badge className="bg-amber-600 text-white">Suspended</Badge>
+            : <Badge className="bg-emerald-600 text-white">Active</Badge>}
+        </div>
+        <div className="flex gap-2">
+          {suspended || banned ? (
+            <Button variant="outline" size="sm" className="gap-1" disabled={busy}
+              onClick={() => onReactivate(account.profile_id)}>
+              <PlayCircle className="w-4 h-4" /> Reactivate
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" className="gap-1 text-amber-700" disabled={busy}
+              onClick={() => onSuspend(account.profile_id)}>
+              <PauseCircle className="w-4 h-4" /> Suspend
+            </Button>
+          )}
+          {banned ? (
+            <Button variant="outline" size="sm" className="gap-1" disabled={busy}
+              onClick={() => onUnban(account.profile_id)}>
+              Unban
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" className="gap-1 text-red-600" disabled={busy}
+              onClick={() => { if (window.confirm('Ban this user? They will be unable to log in until unbanned.')) onBan(account.profile_id) }}>
+              <Ban className="w-4 h-4" /> Ban user
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="text-xs text-slate-500">
+        Suspending pauses access (auto-lifts when an overdue invoice is paid). Banning blocks the user's login
+        via the owner blocklist and suppresses outreach. Both notify the account and you.
+      </p>
+    </div>
+  )
+}
+
+function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRevokeFree, freeBusy, onSuspend, onReactivate, onBan, onUnban, statusBusy }) {
   const [form, setForm] = useState({
     tier_id: account.tier_id,
     discount_type: account.discount_type ?? "none",
@@ -500,6 +547,8 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
         </div>
 
         <FreePeriodControls account={account} onGrant={onGrantFree} onRevoke={onRevokeFree} busy={freeBusy} />
+
+        <AccountStatusControls account={account} onSuspend={onSuspend} onReactivate={onReactivate} onBan={onBan} onUnban={onUnban} busy={statusBusy} />
 
         <div className="flex justify-end gap-2">
           <Button
@@ -724,6 +773,27 @@ export default function Billing() {
   const handleGrantFreeGlobal = (kind) => freeMutation.mutate({ kind, scope: 'global', profileId: null })
   const handleRevokeFreeGlobal = () => revokeFreeMutation.mutate({ scope: 'global', profileId: null })
 
+  // Account status: suspend / reactivate / ban / unban.
+  const statusMutation = useMutation({
+    mutationFn: ({ action, profileId }) => {
+      if (action === 'suspend') return suspendAccount(profileId)
+      if (action === 'reactivate') return reactivateAccount(profileId)
+      if (action === 'ban') return banAccountUser(profileId)
+      return unbanAccountUser(profileId)
+    },
+    onSuccess: (_res, vars) => {
+      const labels = { suspend: 'Account suspended', reactivate: 'Account reactivated', ban: 'User banned', unban: 'User unbanned' }
+      toast({ title: labels[vars.action] || 'Done', description: 'The account and admin were notified where applicable.' })
+      queryClient.invalidateQueries({ queryKey: ["billing-accounts"] })
+    },
+    onError: (error) => toast({ variant: "destructive", title: "Action failed", description: error instanceof Error ? error.message : "Try again." }),
+  })
+  const statusBusy = statusMutation.isPending
+  const handleSuspend = (profileId) => statusMutation.mutate({ action: 'suspend', profileId })
+  const handleReactivate = (profileId) => statusMutation.mutate({ action: 'reactivate', profileId })
+  const handleBan = (profileId) => statusMutation.mutate({ action: 'ban', profileId })
+  const handleUnban = (profileId) => statusMutation.mutate({ action: 'unban', profileId })
+
   if (isAdmin) {
     if (tiersQuery.isLoading || accountsQuery.isLoading) {
       return (
@@ -781,6 +851,11 @@ export default function Billing() {
                 onGrantFree={handleGrantFree}
                 onRevokeFree={handleRevokeFree}
                 freeBusy={freeBusy}
+                onSuspend={handleSuspend}
+                onReactivate={handleReactivate}
+                onBan={handleBan}
+                onUnban={handleUnban}
+                statusBusy={statusBusy}
               />
             ))}
             {accounts.length === 0 ? (

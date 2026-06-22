@@ -22,6 +22,7 @@ import { sendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { createLogger } from '../../utils/logger.js'
 import { notifyProfile } from '../comms/commsService.js'
+import { suspendProfile, cadenceCycleDays } from './accountStatus.js'
 
 const log = createLogger('invoiceService')
 
@@ -236,17 +237,21 @@ export async function processDunning(db, { now = new Date() } = {}) {
     if (!issued) continue
     const ageDays = (now - issued) / 86400000
 
-    if (ageDays >= SUSPEND_DAYS() && canSuspend) {
+    // Suspend once an invoice is a full billing CYCLE past due (one week, two
+    // weeks, or one month depending on the account's cadence). An explicit
+    // BILLING_SUSPEND_DAYS override still wins if set.
+    const cycleDays = Number(process.env.BILLING_SUSPEND_DAYS) || cadenceCycleDays(inv.cadence)
+
+    if (ageDays >= cycleDays && canSuspend) {
       await db.prepare(`UPDATE billing_invoices SET status = 'suspended', suspended_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
-      try { await db.prepare(`UPDATE profiles SET status = 'suspended' WHERE id = ?`).run(inv.profile_id) } catch { /* status col */ }
-      const orgName = await resolveOrgName(db, inv.profile_id)
-      if (inv.recipient_email) {
-        await sendEmail({
-          to: inv.recipient_email, cc: ownerCc(),
-          subject: `Account access paused — invoice ${money(inv.amount_cents)} unpaid`,
-          text: `${orgName ? `Hi ${orgName},` : 'Hello,'}\n\nWe've temporarily paused this account because the invoice for ${inv.period_start}–${inv.period_end} (${money(inv.amount_cents)}) is now ${Math.floor(ageDays)} days past due. Settle it and access resumes right away — just reply and we'll help.\n\nThe GrantFlow team`,
-        })
-      }
+      // Single suspension path (sets profile status + notifies profile & admin
+      // with how to lift). Pass the invoice's payment link when present.
+      await suspendProfile(db, {
+        profileId: inv.profile_id,
+        reason: 'past_due',
+        suspendedBy: 'billing_dunning',
+        paymentLink: inv.stripe_payment_link || null,
+      }).catch((err) => log.warn('suspendProfile failed', { error: err?.message }))
       suspended += 1
     } else if (ageDays >= SECOND_NOTICE_DAYS() && inv.status === 'sent') {
       await db.prepare(`UPDATE billing_invoices SET status = 'second_notice', reminders_sent = reminders_sent + 1, last_reminder_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)

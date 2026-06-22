@@ -32,6 +32,12 @@ import {
   acknowledgeFreeNotice,
   FREE_PERIOD_DAYS,
 } from '../services/billing/invoiceService.js'
+import {
+  suspendProfile,
+  reactivateProfile,
+  banProfileUser,
+  unbanProfileUser,
+} from '../services/billing/accountStatus.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:billing')
@@ -262,6 +268,49 @@ router.post('/admin/free/revoke', requireAdmin, async (req, res) => {
   }
 })
 
+// ADMIN: manually suspend / reactivate a profile's account.
+router.post('/admin/accounts/:profileId/suspend', requireAdmin, async (req, res) => {
+  try {
+    const by = req.user?.email ?? req.user?.userId ?? 'admin'
+    const result = await suspendProfile(req.db, { profileId: String(req.params.profileId), reason: req.body?.reason || 'admin_suspend', suspendedBy: by })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/admin/accounts/:profileId/reactivate', requireAdmin, async (req, res) => {
+  try {
+    const by = req.user?.email ?? req.user?.userId ?? 'admin'
+    const result = await reactivateProfile(req.db, { profileId: String(req.params.profileId), reactivatedBy: by })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: ban / unban the user(s) behind a profile (routes through the owner
+// blocklist so login is blocked and outreach suppression is mirrored).
+router.post('/admin/accounts/:profileId/ban', requireAdmin, async (req, res) => {
+  try {
+    const by = req.user?.email ?? req.user?.userId ?? 'admin'
+    const result = await banProfileUser(req.db, { profileId: String(req.params.profileId), reason: req.body?.reason || 'owner_ban', bannedBy: by })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/admin/accounts/:profileId/unban', requireAdmin, async (req, res) => {
+  try {
+    const by = req.user?.email ?? req.user?.userId ?? 'admin'
+    const result = await unbanProfileUser(req.db, { profileId: String(req.params.profileId), unbannedBy: by })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
 router.get('/tiers', async (req, res) => {
   try {
     await ensureBillingSchema(req.db)
@@ -402,6 +451,7 @@ function mapBillingAccountRow(row) {
     profile_name: row.profile_name ?? null,
     profile_type: resolved.profile_type,
     profile_type_label: resolved.profile_type_label,
+    profile_status: row.profile_status ?? null,
     free_period: describeFreePeriod(mapped),
   }
 }
@@ -415,8 +465,8 @@ router.get('/accounts', requireAdmin, async (req, res) => {
 
   // Rich query: full tier flags + profile metadata for the admin console.
   const richQuery = req.db?.dialect === 'postgres'
-    ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
-    : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
+    ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.status AS profile_status, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
+    : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.status AS profile_status, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
 
   try {
     const rows = await req.db.prepare(richQuery).all()
@@ -430,7 +480,7 @@ router.get('/accounts', requireAdmin, async (req, res) => {
   // that may have drifted. Accounts still render with their core fields.
   try {
     const fallbackQuery =
-      `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, p.display_name AS profile_name FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id`
+      `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, p.display_name AS profile_name, p.status AS profile_status FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id`
     const rows = await req.db.prepare(fallbackQuery).all()
     return res.json(rows.map(mapBillingAccountRow))
   } catch (error) {
