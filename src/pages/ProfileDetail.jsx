@@ -38,6 +38,7 @@ import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
 import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
 import PortalSyncCard from "@/components/hamilton/PortalSyncCard.jsx"
 import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard.jsx"
+import ProfileFundingSourcesCard from "@/components/funding/ProfileFundingSourcesCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
 import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
@@ -862,6 +863,7 @@ export default function ProfileDetail() {
                   benefits for its type + state) is auto-listed. Green = ready,
                   red = click to log in once. No explainer clutter — the card
                   speaks for itself. Power-user manual entry lives under Advanced. */}
+              <ProfileFundingSourcesCard profileId={profileId} />
               <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
               {/* The manual portal-host/URL entry forms are de-emphasized: kept
                   for power users under a disclosure, since the dashboard above is

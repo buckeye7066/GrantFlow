@@ -1,5 +1,12 @@
 import { apiFetch } from '@/api/client'
 
+// Owner-facing curated funding-sources list (Crawler OS per-profile matches).
+export async function listProfileFundingSources(profileId, { minScore = 50 } = {}) {
+  if (!profileId) throw new Error('profileId is required')
+  const params = new URLSearchParams({ min_score: String(minScore) })
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/funding-sources?${params}`)
+}
+
 export async function matchProfileToGrants(profileId) {
   if (!profileId) throw new Error('profileId is required')
   return apiFetch(`/api/matching/profile/${profileId}/grants`)
