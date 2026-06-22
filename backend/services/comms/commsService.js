@@ -25,6 +25,8 @@
 import crypto from 'crypto'
 import { sendEmail } from '../email.js'
 import { sendSms, normalizePhone } from '../sms.js'
+import { getProfileLanguage } from './profileLanguage.js'
+import { t } from './commsMessages.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('comms')
@@ -40,6 +42,9 @@ export function ownerAliasEmail() {
 }
 
 let _ensured = false
+/** Test-only: reset the once-per-process schema guard so a fresh in-memory DB
+ *  re-runs ensureCommsSchema. No-op effect in production (called only by tests). */
+export function _ensuredReset() { _ensured = false }
 export async function ensureCommsSchema(db) {
   if (!db || _ensured) return
   const isPg = db?.dialect === 'postgres'
@@ -81,6 +86,27 @@ export async function ensureCommsSchema(db) {
   try {
     await db.exec(`ALTER TABLE profile_emails ADD COLUMN is_proxy ${isPg ? 'BOOLEAN DEFAULT FALSE' : 'BOOLEAN DEFAULT 0'}`)
   } catch { /* exists */ }
+
+  // SMS consent lifecycle columns on profile_phones (smsConsentService.js owns
+  // the state machine): consent_status (none|pending|opted_in|opted_out) +
+  // consent_requested_at. Additive — tolerated if already present. Default is
+  // 'none' (no consent asked), the TCPA-safe OFF state.
+  if (isPg) {
+    try { await db.exec(`ALTER TABLE profile_phones ADD COLUMN IF NOT EXISTS consent_status TEXT DEFAULT 'none'`) } catch { /* exists */ }
+    try { await db.exec(`ALTER TABLE profile_phones ADD COLUMN IF NOT EXISTS consent_requested_at ${ts}`) } catch { /* exists */ }
+  } else {
+    try { await db.exec(`ALTER TABLE profile_phones ADD COLUMN consent_status TEXT DEFAULT 'none'`) } catch { /* exists */ }
+    try { await db.exec(`ALTER TABLE profile_phones ADD COLUMN consent_requested_at ${ts}`) } catch { /* exists */ }
+  }
+  // Backfill: any row that was EXPLICITLY admin-opted-in before consent tracking
+  // existed (sms_opt_in true, status NULL) is treated as opted_in. Everything
+  // else with a NULL/empty status becomes 'none' (safe — stays OFF until asked).
+  try {
+    await db.exec(`UPDATE profile_phones SET consent_status = 'opted_in' WHERE (consent_status IS NULL OR consent_status = '') AND (sms_opt_in = ${isPg ? 'TRUE' : '1'})`)
+  } catch { /* best-effort */ }
+  try {
+    await db.exec(`UPDATE profile_phones SET consent_status = 'none' WHERE consent_status IS NULL OR consent_status = ''`)
+  } catch { /* best-effort */ }
 
   // Audit: one row per broadcast send + one per recipient.
   await db.exec(`
@@ -220,45 +246,60 @@ export async function listProfileContacts(db) {
   return result
 }
 
-/** Add (or re-opt-in) an SMS phone for a profile. opt_in defaults to true. */
-export async function addProfilePhone(db, { profileId, phone, label = null, optIn = true, addedBy = 'admin' } = {}) {
+/**
+ * Add (or re-opt-in) an SMS phone for a profile. opt_in defaults to true.
+ *
+ * consent_status is derived from optIn so the consent state machine stays in
+ * lockstep: an explicit opt-in (admin captured verbal consent, or the user's own
+ * choice) is 'opted_in'; otherwise the number lands in 'none' so the consent
+ * campaign will ask "is it ok?" before any text is sent (TCPA-safe). Callers that
+ * want to force the asked state can pass consentStatus explicitly.
+ */
+export async function addProfilePhone(db, { profileId, phone, label = null, optIn = true, addedBy = 'admin', consentStatus = null } = {}) {
   await ensureCommsSchema(db)
   const normalized = normalizePhone(phone)
   if (!normalized) return { ok: false, error: 'invalid_phone' }
-  const optVal = db?.dialect === 'postgres' ? Boolean(optIn) : (optIn ? 1 : 0)
+  const status = consentStatus || (optIn ? 'opted_in' : 'none')
+  const effectiveOptIn = status === 'opted_in'
+  const optVal = db?.dialect === 'postgres' ? Boolean(effectiveOptIn) : (effectiveOptIn ? 1 : 0)
   try {
     if (db?.dialect === 'postgres') {
       await db.prepare(
-        `INSERT INTO profile_phones (id, profile_id, phone, label, sms_opt_in, added_by)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (profile_id, phone) DO UPDATE SET label = EXCLUDED.label, sms_opt_in = EXCLUDED.sms_opt_in`,
-      ).run(crypto.randomUUID(), String(profileId), normalized, label, optVal, addedBy)
+        `INSERT INTO profile_phones (id, profile_id, phone, label, sms_opt_in, consent_status, added_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (profile_id, phone) DO UPDATE SET label = EXCLUDED.label, sms_opt_in = EXCLUDED.sms_opt_in, consent_status = EXCLUDED.consent_status`,
+      ).run(crypto.randomUUID(), String(profileId), normalized, label, optVal, status, addedBy)
     } else {
       await db.prepare(
-        `INSERT INTO profile_phones (id, profile_id, phone, label, sms_opt_in, added_by)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (profile_id, phone) DO UPDATE SET label = excluded.label, sms_opt_in = excluded.sms_opt_in`,
-      ).run(crypto.randomUUID(), String(profileId), normalized, label, optVal, addedBy)
+        `INSERT INTO profile_phones (id, profile_id, phone, label, sms_opt_in, consent_status, added_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (profile_id, phone) DO UPDATE SET label = excluded.label, sms_opt_in = excluded.sms_opt_in, consent_status = excluded.consent_status`,
+      ).run(crypto.randomUUID(), String(profileId), normalized, label, optVal, status, addedBy)
     }
   } catch (err) {
     return { ok: false, error: err?.message || 'insert_failed' }
   }
-  return { ok: true, profile_id: String(profileId), phone: normalized, opt_in: Boolean(optIn) }
+  return { ok: true, profile_id: String(profileId), phone: normalized, opt_in: effectiveOptIn, consent_status: status }
 }
 
-/** Set the SMS opt-in flag for a profile's phone (the user's own choice). */
+/**
+ * Set the SMS opt-in flag for a profile's phone (the user's own explicit choice).
+ * Keeps consent_status in lockstep: opting in is explicit consent (opted_in),
+ * opting out is an explicit withdrawal (opted_out).
+ */
 export async function setPhoneOptIn(db, { profileId, phone, optIn } = {}) {
   await ensureCommsSchema(db)
   const normalized = normalizePhone(phone)
   if (!normalized) return { ok: false, error: 'invalid_phone' }
   const optVal = db?.dialect === 'postgres' ? Boolean(optIn) : (optIn ? 1 : 0)
-  const res = await db.prepare('UPDATE profile_phones SET sms_opt_in = ? WHERE profile_id = ? AND phone = ?')
-    .run(optVal, String(profileId), normalized)
+  const status = optIn ? 'opted_in' : 'opted_out'
+  const res = await db.prepare('UPDATE profile_phones SET sms_opt_in = ?, consent_status = ? WHERE profile_id = ? AND phone = ?')
+    .run(optVal, status, String(profileId), normalized)
   // If the phone wasn't recorded yet but the user is opting in, create it.
   if ((res?.changes ?? 0) === 0 && optIn) {
-    return addProfilePhone(db, { profileId, phone: normalized, optIn: true, addedBy: 'user' })
+    return addProfilePhone(db, { profileId, phone: normalized, optIn: true, addedBy: 'user', consentStatus: 'opted_in' })
   }
-  return { ok: true, profile_id: String(profileId), phone: normalized, opt_in: Boolean(optIn) }
+  return { ok: true, profile_id: String(profileId), phone: normalized, opt_in: Boolean(optIn), consent_status: status }
 }
 
 export async function removeProfilePhone(db, { profileId, phone } = {}) {
@@ -291,10 +332,31 @@ function autoChannel(contacts) {
 /**
  * Send one message to one profile. `channel` is 'email' | 'sms' | 'auto'.
  * Email is sent to ALL usable emails (or all emails if none are usable and the
- * caller forced email). Returns { channelsUsed, results }.
+ * caller forced email). Returns { channelsUsed, results, lang }.
+ *
+ * Language-aware: the recipient profile's preferred language (getProfileLanguage,
+ * default 'en') is resolved and exposed as `lang`. Callers that send STANDARD
+ * (catalog-backed) copy pass `messageKey` (+ optional `subjectKey` and `vars`):
+ * the subject/body are then rendered from commsMessages in the recipient's
+ * language. Callers that send FREE-FORM owner copy (e.g. an admin broadcast the
+ * owner typed in one language) pass `subject`/`text` directly — those are sent
+ * verbatim, but `localePrefix:true` prepends the localized language tag so the
+ * recipient at least sees the SMS framing in their language. The choice of
+ * channel + the consent/opt-in gating are unchanged.
  */
-export async function notifyProfile(db, { profileId, subject, text, html = null, channel = 'auto', from = null } = {}) {
+export async function notifyProfile(db, {
+  profileId, subject, text, html = null, channel = 'auto', from = null,
+  messageKey = null, subjectKey = null, vars = null, lang = null,
+} = {}) {
   const contacts = await resolveProfileContacts(db, profileId)
+  const profileLang = lang || (await getProfileLanguage(db, profileId))
+  // Catalog-backed standard copy: render subject + body in the profile's language.
+  let effSubject = subject
+  let effText = text
+  if (messageKey) effText = t(profileLang, messageKey, vars)
+  if (subjectKey) effSubject = t(profileLang, subjectKey, vars)
+  subject = effSubject
+  text = effText
   const chosen = channel === 'auto' ? autoChannel(contacts) : channel
   const results = []
 
@@ -324,19 +386,33 @@ export async function notifyProfile(db, { profileId, subject, text, html = null,
     results.push({ channel: 'none', target: null, ok: false, error: 'no_contact' })
   }
 
-  return { profile_id: String(profileId), channelsUsed: chosen, results }
+  return { profile_id: String(profileId), channelsUsed: chosen, results, lang: profileLang }
 }
 
 /**
  * Broadcast a message to many profiles and persist an audit row. `channel`:
  *   'email' | 'sms' | 'auto'. Returns a summary { broadcast_id, profile_count,
  *   sent_email, sent_sms, failed, recipients }.
+ *
+ * PER-RECIPIENT LANGUAGE: each recipient's message is rendered in THAT
+ * recipient's preferred language (not one global language). For a STANDARD
+ * (catalog-backed) broadcast — pass `messageKey` (+ optional `subjectKey`/`vars`)
+ * — notifyProfile renders subject + body from commsMessages for each recipient.
+ * For a FREE-FORM broadcast (the owner typed `subject`/`body` themselves), that
+ * exact copy is sent as typed (we don't machine-translate arbitrary owner copy),
+ * but the per-recipient language is still resolved + audited so the owner can see
+ * which language each recipient prefers. The body/subject validation, channel
+ * choice, and consent/opt-in gating are unchanged.
  */
-export async function sendBroadcast(db, { profileIds = [], channel = 'auto', subject, body, html = null, sentBy = 'admin', kind = 'broadcast', from = null } = {}) {
+export async function sendBroadcast(db, { profileIds = [], channel = 'auto', subject, body, html = null, sentBy = 'admin', kind = 'broadcast', from = null, messageKey = null, subjectKey = null, vars = null } = {}) {
   await ensureCommsSchema(db)
   if (!Array.isArray(profileIds) || profileIds.length === 0) return { ok: false, error: 'no_recipients' }
-  if (!subject && channel !== 'sms') return { ok: false, error: 'subject_required' }
-  if (!body) return { ok: false, error: 'body_required' }
+  // Catalog-backed broadcasts supply the copy via keys; only require subject/body
+  // for the free-form path.
+  if (!messageKey) {
+    if (!subject && channel !== 'sms') return { ok: false, error: 'subject_required' }
+    if (!body) return { ok: false, error: 'body_required' }
+  }
 
   const broadcastId = crypto.randomUUID()
   let sentEmail = 0, sentSms = 0, failed = 0
@@ -345,7 +421,7 @@ export async function sendBroadcast(db, { profileIds = [], channel = 'auto', sub
   for (const profileId of profileIds) {
     let res
     try {
-      res = await notifyProfile(db, { profileId, subject, text: body, html, channel, from })
+      res = await notifyProfile(db, { profileId, subject, text: body, html, channel, from, messageKey, subjectKey, vars })
     } catch (err) {
       failed += 1
       recipients.push({ profile_id: String(profileId), channel: 'error', ok: false, error: err?.message })

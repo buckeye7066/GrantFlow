@@ -33,6 +33,18 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     now,
   })
 
+  // Make "no response → off" explicit: SMS consent requests that have sat in
+  // `pending` past the expiry window become opted_out (they were already OFF;
+  // this records the terminal state for the audit). Best-effort — never blocks
+  // the sweep. Reuses the existing nightly scheduler (no new scheduler added).
+  try {
+    const { expirePendingConsent } = await import('../comms/smsConsentService.js')
+    const expired = await expirePendingConsent(db)
+    if (expired?.expired > 0) log.info('expired stale SMS consent requests', expired)
+  } catch (err) {
+    log.warn('SMS consent expiry sweep failed (non-fatal)', { error: err?.message })
+  }
+
   let sam = null
   let criticals = 0
   try {

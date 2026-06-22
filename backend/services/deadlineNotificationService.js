@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'crypto'
 import { dispatchDeadlineAlerts } from './deadlineEmailSmsService.js'
+import { getProfileLanguage, getUserLanguage } from './comms/profileLanguage.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('deadlineNotificationService')
 
@@ -97,7 +98,7 @@ function daysUntil(value) {
  *
  * @returns {Promise<boolean>} true when a notification was created.
  */
-async function emitDeadlineNotification(db, isPostgres, { userId, userEmail, userPhone, title, deadline, daysRemaining, data }) {
+async function emitDeadlineNotification(db, isPostgres, { userId, userEmail, userPhone, profileId, title, deadline, daysRemaining, data }) {
   if (!userId) return false
   const dayLabel = daysRemaining === 1 ? 'tomorrow' : `in ${daysRemaining} days`
   const notifTitle = `Deadline ${dayLabel}: ${title}`
@@ -137,6 +138,13 @@ async function emitDeadlineNotification(db, isPostgres, { userId, userEmail, use
       )
       .run(randomUUID(), userId, notifTitle, notifMessage, JSON.stringify(data))
 
+    // Resolve the recipient's preferred language: prefer the specific profile
+    // (pipeline path has it) and fall back to any of the user's profiles.
+    let lang = 'en'
+    try {
+      lang = profileId ? await getProfileLanguage(db, profileId) : await getUserLanguage(db, userId)
+    } catch { lang = 'en' }
+
     dispatchDeadlineAlerts(db, {
       userId,
       userEmail,
@@ -144,6 +152,7 @@ async function emitDeadlineNotification(db, isPostgres, { userId, userEmail, use
       grantTitle: title,
       daysRemaining,
       deadline,
+      lang,
     }).catch((err) => console.warn('[deadlineNotifications] Email/SMS dispatch failed:', err?.message))
     return true
   } catch (error) {
@@ -167,6 +176,7 @@ async function notifyPipelineDeadlines(db, isPostgres, todayExpr, dateAddFn) {
            g.title AS grant_title,
            fo.title AS opp_title,
            fo.deadline AS deadline,
+           p.id AS profile_id,
            u.id AS user_id,
            u.primary_email AS user_email,
            u.primary_phone AS user_phone
@@ -196,6 +206,7 @@ async function notifyPipelineDeadlines(db, isPostgres, todayExpr, dateAddFn) {
       userId: row.user_id,
       userEmail: row.user_email,
       userPhone: row.user_phone,
+      profileId: row.profile_id,
       title,
       deadline: row.deadline,
       daysRemaining,

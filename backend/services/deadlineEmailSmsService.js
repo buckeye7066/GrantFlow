@@ -10,6 +10,8 @@
 import { Resend } from 'resend'
 import twilio from 'twilio'
 import { createLogger } from '../utils/logger.js'
+import { t, dayLabel as localizedDayLabel } from './comms/commsMessages.js'
+import { getUserLanguage } from './comms/profileLanguage.js'
 const log = createLogger('deadlineEmailSmsService')
 
 // ── Configuration (lazy, from env) ──────────────────────────────────────────
@@ -40,34 +42,38 @@ function getTwilioFrom() {
 
 // ── Email ───────────────────────────────────────────────────────────────────
 
-export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, deadline }) {
+export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, deadline, lang = 'en' }) {
   const resend = getResend()
   const from = getFromEmail()
   if (!resend || !from || !email) return false
 
-  const dayLabel = daysRemaining === 1 ? 'tomorrow' : `in ${daysRemaining} days`
-  const subject = `Deadline ${dayLabel}: ${grantTitle}`
+  // All copy localized to the recipient's language (defaults to English).
+  const dayLabel = localizedDayLabel(lang, daysRemaining)
+  const subject = t(lang, 'deadline_email_subject', { dayLabel, grantTitle })
+  const introHtml = t(lang, 'deadline_email_body_intro', {
+    grantTitle: `<strong>${escapeHtml(grantTitle)}</strong>`,
+    dayLabel: `<strong>${escapeHtml(dayLabel)}</strong>`,
+    deadline: escapeHtml(deadline),
+  })
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1e293b; margin-bottom: 8px;">Grant Deadline Approaching</h2>
+      <h2 style="color: #1e293b; margin-bottom: 8px;">${escapeHtml(t(lang, 'deadline_email_heading'))}</h2>
       <p style="color: #475569; font-size: 15px; line-height: 1.6;">
-        The deadline for <strong>${escapeHtml(grantTitle)}</strong> is <strong>${dayLabel}</strong>
-        (${escapeHtml(deadline)}).
+        ${introHtml}
       </p>
       ${daysRemaining === 1
-        ? '<p style="color: #dc2626; font-weight: 600;">This is your final reminder. Make sure your application is ready to submit.</p>'
-        : '<p style="color: #475569; font-size: 15px;">Log in to GrantFlow to review your application and submit before the deadline.</p>'
+        ? `<p style="color: #dc2626; font-weight: 600;">${escapeHtml(t(lang, 'deadline_email_body_final'))}</p>`
+        : `<p style="color: #475569; font-size: 15px;">${escapeHtml(t(lang, 'deadline_email_body_review'))}</p>`
       }
       <div style="margin-top: 24px;">
         <a href="${process.env.CORS_ORIGIN || 'https://grantflow.app'}/Pipeline"
            style="display: inline-block; background: #2563eb; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px;">
-          View in GrantFlow
+          ${escapeHtml(t(lang, 'deadline_email_cta'))}
         </a>
       </div>
       <p style="color: #94a3b8; font-size: 12px; margin-top: 32px;">
-        You're receiving this because you have deadline email reminders enabled in GrantFlow.
-        Update your preferences in Settings to opt out.
+        ${escapeHtml(t(lang, 'deadline_email_footer'))}
       </p>
     </div>
   `
@@ -84,13 +90,13 @@ export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, dead
 
 // ── SMS ─────────────────────────────────────────────────────────────────────
 
-export async function sendDeadlineSms(phone, { grantTitle, daysRemaining }) {
+export async function sendDeadlineSms(phone, { grantTitle, daysRemaining, lang = 'en' }) {
   const client = getTwilio()
   const from = getTwilioFrom()
   if (!client || !from || !phone) return false
 
-  const dayLabel = daysRemaining === 1 ? 'TOMORROW' : `in ${daysRemaining} days`
-  const body = `GrantFlow: Deadline ${dayLabel} for "${truncate(grantTitle, 80)}". Log in to review your application.`
+  const dayLabel = localizedDayLabel(lang, daysRemaining)
+  const body = t(lang, 'deadline_sms', { dayLabel, grantTitle: truncate(grantTitle, 80) })
 
   const payload = { to: phone, body }
   if (process.env.TWILIO_MESSAGING_SERVICE_SID?.trim()) {
@@ -123,8 +129,10 @@ export async function sendDeadlineSms(phone, { grantTitle, daysRemaining }) {
  * @param {string} params.grantTitle
  * @param {number} params.daysRemaining
  * @param {string} params.deadline
+ * @param {string} [params.lang] preferred language; resolved from the user's
+ *   profile when omitted (defaults to 'en').
  */
-export async function dispatchDeadlineAlerts(db, { userId, userEmail, userPhone, grantTitle, daysRemaining, deadline }) {
+export async function dispatchDeadlineAlerts(db, { userId, userEmail, userPhone, grantTitle, daysRemaining, deadline, lang = null }) {
   // Check user preferences
   let prefs = null
   try {
@@ -133,7 +141,10 @@ export async function dispatchDeadlineAlerts(db, { userId, userEmail, userPhone,
 
   const emailOptIn = prefs?.email_notifications !== 0 // default true if no prefs row
 
-  const context = { grantTitle, daysRemaining, deadline }
+  // Resolve the recipient's language (from any of their profiles) unless the
+  // caller already supplied it. Best-effort — defaults to 'en'.
+  const recipientLang = lang || (await getUserLanguage(db, userId))
+  const context = { grantTitle, daysRemaining, deadline, lang: recipientLang }
 
   if (emailOptIn && userEmail) {
     await sendDeadlineEmail(userEmail, context)

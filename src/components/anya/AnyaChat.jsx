@@ -12,7 +12,6 @@ import { toast } from "@/components/ui/use-toast"
 import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore"
 import { createLogger } from "@/utils/logger"
 import {
-  getAnyaSessions,
   createAnyaSession,
   deleteAnyaSession,
   getAnyaMessages,
@@ -23,6 +22,7 @@ import {
   createAnyaTask,
   updateAnyaTask,
 } from "@/lib/anyaClient"
+import { bootstrapAnyaSession } from "./anyaSession"
 import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
 import { createPageUrl } from "@/utils"
 import { useFeatureFlags } from "@/lib/featureFlags"
@@ -764,42 +764,48 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     let isMounted = true
     async function bootstrap() {
       setIsLoading(true)
+      // Clear any prior thread synchronously on (re)bootstrap so a profile
+      // switch never momentarily shows the previous profile's messages while
+      // the new session is being created. Also drop any half-typed input and
+      // transient nudge so the new profile's conversation starts truly fresh.
+      setMessages([])
+      setTasks([])
+      setInput("")
+      setNudgeMessage(null)
       try {
-        const sessions = await getAnyaSessions()
-
-        const findExisting = (targetProfileId) =>
-          sessions?.find((session) => {
-            if (targetProfileId) {
-              return session.profile_id === targetProfileId
-            }
-            return !session.profile_id
-          })
-
-        let desiredProfileId = effectiveProfileId ?? null
-        let activeSession = findExisting(desiredProfileId)
-
-        if (!activeSession) {
-          try {
-            activeSession = await createAnyaSession({ profileId: desiredProfileId ?? undefined })
-          } catch (error) {
-            // Common in admin contexts where `activeProfileId` can be unset/stale.
-            // If the backend says the profile doesn't exist, fall back to a general (profile-less) session.
-            const status = error?.status ?? null
-            const message = String(error?.message || '')
-            const isProfileMissing = status === 404 || /profile not found/i.test(message)
-            if (!isProfileMissing) throw error
-
-            desiredProfileId = null
-            activeSession = findExisting(null)
-            if (!activeSession) {
-              activeSession = await createAnyaSession({ profileId: undefined })
-            }
-          }
-        }
+        // OWNER REQUIREMENT: "Each time Anya is opened, the past conversation
+        // needs to be deleted so it doesn't bleed over. It also needs to stay
+        // profile aware."
+        //
+        // The Anya panel lives inside a Radix Sheet/Dialog portal, so closing
+        // it unmounts <AnyaChat> and re-opening remounts it fresh — local React
+        // `messages` state already resets to []. The bleed-over came from THIS
+        // bootstrap: it used to resume the most recent stored session for the
+        // current profile (`findExisting`) and reload its prior messages via
+        // `refreshMessages`, repopulating the just-cleared thread with the last
+        // conversation.
+        //
+        // Fix: on every open we mint a BRAND-NEW session scoped to the current
+        // profile and DO NOT load any prior messages. `createSession` always
+        // inserts a fresh row (randomUUID), so past sessions stay stored on the
+        // server (audit history is preserved — nothing is destructively purged);
+        // they simply never resurface in the opened panel. Profile-awareness is
+        // kept by threading `effectiveProfileId` into the new session and (when
+        // `profileId` changes) re-running this effect to start a fresh,
+        // profile-correct conversation. The create-fresh + profile-missing
+        // fallback lives in the testable `bootstrapAnyaSession` helper
+        // (./anyaSession.js).
+        const { session: activeSession } = await bootstrapAnyaSession({
+          profileId: effectiveProfileId ?? null,
+          createSession: createAnyaSession,
+        })
         if (!isMounted) return
         setSessionId(activeSession?.id ?? null)
+        // Start empty every open: we intentionally do NOT call refreshMessages
+        // here — a brand-new session has no history, so the thread is clean and
+        // no prior conversation bleeds in. Tasks load for the new (empty)
+        // session, which is also fresh.
         if (activeSession?.id) {
-          await refreshMessages(activeSession.id)
           await refreshTasks(activeSession.id, { withLoading: true })
         }
       } catch (error) {

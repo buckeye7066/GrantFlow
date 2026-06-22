@@ -640,6 +640,27 @@ export async function ensurePortalAutopilotIdentityTables(db, { logger = console
   )
 }
 
+/**
+ * profile_phones SMS-consent columns (both dialects) — consent_status +
+ * consent_requested_at (migration 126 / pg 0127). commsService owns the table
+ * DDL; smsConsentService owns the state machine. The consent campaign + the
+ * Twilio inbound webhook + the deadline-SMS path all read consent_status on
+ * paths that may run before any write created the columns, so we re-assert them
+ * on every boot at the single choke point. Delegates to ensureCommsSchema so the
+ * DDL lives in exactly one place.
+ */
+export async function ensureSmsConsentColumns(db, { logger = console } = {}) {
+  return runStep(
+    'profile_phones SMS consent (consent_status + consent_requested_at)',
+    '[database]',
+    logger,
+    async () => {
+      const { ensureCommsSchema } = await import('../services/comms/commsService.js')
+      await ensureCommsSchema(db)
+    },
+  )
+}
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   const steps = [
     ['agent_subsystem', ensureAgentSubsystem],
@@ -655,6 +676,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
     ['profile_portal_status', ensurePortalCompletionStatusTable],
     ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
+    ['sms_consent_columns', ensureSmsConsentColumns],
     ['perf_indexes', ensurePerfIndexes],
   ]
 
