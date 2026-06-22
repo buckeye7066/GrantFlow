@@ -165,6 +165,63 @@ router.post('/comprehensiveMatch', async (req, res) => {
 
     // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
     const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
+
+    // ── Crawler OS first ──────────────────────────────────────────────────
+    // Serve canonical OS matches when the OS has scored this profile, instead of
+    // recomputing with the legacy scorer. Additive + reversible (?legacy_matching=1).
+    if (matchProfileId && req.query.legacy_matching !== '1' && req.body?.legacy_matching !== '1') {
+      let osRows = []
+      try {
+        osRows = await req.db
+          .prepare(
+            `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+                    m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities o ON o.id = m.opportunity_id
+              WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+                AND (o.is_active IS NULL OR o.is_active = 1)
+                AND (o.is_hidden IS NULL OR o.is_hidden = 0)
+              ORDER BY m.match_score DESC`,
+          )
+          .all(matchProfileId)
+      } catch {
+        osRows = []
+      }
+      if (osRows.length > 0) {
+        const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
+        let mapped = osRows.map((o) => {
+          let reasons = []
+          try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
+          const kind = String(o.opportunity_kind ?? '').toUpperCase()
+          return {
+            ...o,
+            match_score: o.os_match_score,
+            match_decision: o.os_match_decision,
+            match_explanation: o.os_match_explanation,
+            match_reasons: reasons,
+            is_directory: kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL',
+            trust_tier: o.source_trust_tier ?? null,
+            url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+            actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+            engine: 'crawler-os',
+          }
+        })
+        if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+          mapped = await filterOutPipelineMembers(req.db, matchProfileId, mapped)
+        }
+        const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
+        return res.json({
+          success: true,
+          engine: 'crawler-os',
+          opportunities: qualified,
+          total: qualified.length,
+          page,
+          threshold_used: osMin,
+          total_evaluated: mapped.length,
+        })
+      }
+    }
+
     if (matchProfileId) {
       conditions.push('(profile_id IS NULL OR profile_id = ?)')
       params.push(matchProfileId)
