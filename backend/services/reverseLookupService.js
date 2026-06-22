@@ -174,11 +174,11 @@ async function searchLocalFoundationCatalog(db, { state, needCategories, limit =
          OR record_origin = 'cof_foundation_locator'
        )
        AND (
-         ? IS NULL OR state = ? OR is_national = 1
+         CAST(? AS TEXT) IS NULL OR state = ? OR is_national = 1
          OR LOWER(COALESCE(state, '')) IN ('nationwide', 'national')
        )
      ORDER BY
-       CASE WHEN ? IS NOT NULL AND state = ? THEN 0 ELSE 1 END,
+       CASE WHEN CAST(? AS TEXT) IS NOT NULL AND state = ? THEN 0 ELSE 1 END,
        updated_at DESC
      LIMIT ?`,
   ).all(state, state, state, state, limit)
