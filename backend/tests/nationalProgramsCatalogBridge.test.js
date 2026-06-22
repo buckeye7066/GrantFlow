@@ -186,3 +186,62 @@ describe('catalogBridge.bridgeProgramToCatalog (canonical reality gate + dedupe)
     expect(countOpps(db)).toBe(0)
   })
 })
+
+// V2 catalog-promotion: prove the bridge enforces policy AND keeps the
+// TRACK_A (client) / TRACK_B (provider) split — never merging them into one row.
+describe('catalogBridge V2 promotion — policy gate + TRACK_A/TRACK_B separation', () => {
+  let db
+  beforeEach(() => { db = makeDb() })
+
+  it('TRACK_B (PROVIDER) program promotes as a provider grant', async () => {
+    const res = await bridgeProgramToCatalog({
+      db,
+      track: 'PROVIDER',
+      program: realFederalProgram({
+        program_name: 'Medicaid HCBS Provider Reimbursement',
+        program_type: 'Reimbursement',
+        covered_services: 'Reimbursement to enrolled providers for home- and community-based services.',
+      }),
+      agent: federalAgent,
+    })
+    expect(res.inserted).toBe(true)
+    const row = db.prepare('SELECT opportunity_type, keywords FROM funding_opportunities LIMIT 1').get()
+    expect(row.opportunity_type).toBe('grant')
+    expect(String(row.keywords)).toMatch(/provider/i)
+  })
+
+  it('TRACK_A (CLIENT) program promotes as a client benefit', async () => {
+    const res = await bridgeProgramToCatalog({ db, track: 'CLIENT', program: realFederalProgram(), agent: federalAgent })
+    expect(res.inserted).toBe(true)
+    const row = db.prepare('SELECT opportunity_type, keywords FROM funding_opportunities LIMIT 1').get()
+    expect(row.opportunity_type).toBe('benefit')
+    expect(String(row.keywords)).toMatch(/benefit/i)
+  })
+
+  it('rejects a matching-fund / cost-share program at the policy gate (never reaches the catalog)', async () => {
+    const res = await bridgeProgramToCatalog({
+      db,
+      track: 'CLIENT',
+      program: realFederalProgram({
+        program_name: 'Community Facilities Cost-Share Program',
+        covered_services: 'Applicants must provide a 1:1 cash match (cost-share / matching funds required) to receive funds.',
+      }),
+      agent: federalAgent,
+    })
+    expect(res.inserted).toBe(false)
+    expect(res.skipped).toBe(true)
+    expect(String(res.reason)).toMatch(/match|cost|policy|reality|validation/i)
+    expect(countOpps(db)).toBe(0)
+  })
+
+  it('keeps TRACK_A and TRACK_B as SEPARATE catalog rows (never merged)', async () => {
+    // Same sponsor/url/title, different track → distinct fingerprint → two rows.
+    const client = await bridgeProgramToCatalog({ db, track: 'CLIENT', program: realFederalProgram(), agent: federalAgent })
+    const provider = await bridgeProgramToCatalog({ db, track: 'PROVIDER', program: realFederalProgram(), agent: federalAgent })
+    expect(client.inserted).toBe(true)
+    expect(provider.inserted).toBe(true)
+    expect(countOpps(db)).toBe(2)
+    const types = db.prepare('SELECT opportunity_type FROM funding_opportunities ORDER BY opportunity_type').all().map((r) => r.opportunity_type)
+    expect(types).toEqual(['benefit', 'grant']) // client benefit + provider grant, not merged
+  })
+})
