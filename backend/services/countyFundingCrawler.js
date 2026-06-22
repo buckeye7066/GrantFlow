@@ -19,6 +19,18 @@ import { upsertFundingOpportunity } from './opportunityInserter.js';
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('countyFundingCrawler')
 
+// This crawler historically synthesized one templated "program" per county×org
+// (e.g. "United Way of Franklin County") whose application_url was a NATIONAL
+// locator page — a dishonest geo-stub that violates the real-URL / honest-
+// directory rules and flooded profile pipelines. It is now:
+//   1. OFF by default (opt in with COUNTY_FUNDING_CRAWLER_ENABLED=true), and
+//   2. when on, emits HONEST DIRECTORY resources (real locator as source_url,
+//      application_url=null, "find your local …" titles) — never fake
+//      county-specific direct opportunities.
+export function isCountyCrawlerEnabled() {
+  return String(process.env.COUNTY_FUNDING_CRAWLER_ENABLED || 'false').toLowerCase() === 'true'
+}
+
 // NOTE: In some hosted environments, the complete county dataset file may not be present
 // (e.g. older deploy artifacts / missing repo data folder). We fall back to the bundled JSON.
 let COMPLETE_US_COUNTIES = [];
@@ -85,6 +97,7 @@ const ORG_PATTERNS = {
     ],
     fallback: 'https://www.unitedway.org/find-your-united-way',
     category: 'community',
+    resourceLabel: 'United Way chapter',
     title_template: (county, state) => `United Way of ${county} County`,
     description: 'Local United Way chapter providing community support, emergency assistance, and volunteer coordination.'
   },
@@ -94,6 +107,7 @@ const ORG_PATTERNS = {
     ],
     fallback: 'https://www.feedingamerica.org/find-your-local-foodbank',
     category: 'food',
+    resourceLabel: 'food bank',
     title_template: (county, state) => `Food Bank - ${county} County`,
     description: 'Local food bank providing emergency food assistance to families in need.'
   },
@@ -104,6 +118,7 @@ const ORG_PATTERNS = {
     ],
     fallback: 'https://www.hud.gov/program_offices/public_indian_housing/pha/contacts',
     category: 'housing',
+    resourceLabel: 'public housing authority (Section 8 / vouchers)',
     title_template: (county, state) => `${county} County Housing Authority`,
     description: 'Public housing authority offering Section 8 vouchers and affordable housing programs.'
   },
@@ -113,6 +128,7 @@ const ORG_PATTERNS = {
     ],
     fallback: 'https://communityactionpartnership.com/find-a-cap/',
     category: 'poverty',
+    resourceLabel: 'Community Action Agency',
     title_template: (county, state) => `Community Action Agency - ${county} County`,
     description: 'Local Community Action Agency helping families with housing, utilities, food, and employment.'
   },
@@ -122,6 +138,7 @@ const ORG_PATTERNS = {
     ],
     fallback: 'https://www.salvationarmyusa.org/usn/locate-a-salvation-army/',
     category: 'emergency',
+    resourceLabel: 'Salvation Army office',
     title_template: (county, state) => `Salvation Army - ${county} County`,
     description: 'Emergency assistance with rent, utilities, food, and disaster relief.'
   },
@@ -132,6 +149,7 @@ const ORG_PATTERNS = {
     ],
     fallback: 'https://www.fema.gov/grants/preparedness/firefighters',
     category: 'fire_department',
+    resourceLabel: 'fire department grant resources (FEMA AFG/SAFER)',
     title_template: (county, state) => `Volunteer Fire Department Grants - ${county} County`,
     description: 'FEMA Assistance to Firefighters Grant (AFG) and SAFER grants for volunteer fire departments. Equipment, training, and staffing/recruitment grants available annually.'
   },
@@ -153,22 +171,31 @@ async function loadCounties() {
  */
 function createCountyOpportunity(county, state, orgType, orgConfig) {
   const id = `${orgType}-${state.toLowerCase()}-${county.toLowerCase().replace(/\s+/g, '-')}`;
-  
+  // HONEST DIRECTORY shape: this is a finder/locator for a local resource near
+  // the county, NOT a specific county program. application_url is null so the
+  // policy + relevanceFilter treat it as a directory (never a direct
+  // opportunity); the real national locator stays as source_url evidence.
+  const resourceLabel = orgConfig.resourceLabel || 'local assistance';
+  const title = `Find your local ${resourceLabel} — ${county} County, ${state}`;
+
   return {
     id,
-    title: orgConfig.title_template(county, state),
-    sponsor: orgConfig.title_template(county, state),
+    title,
+    sponsor: orgConfig.resourceLabel || title,
     source: 'county_crawler',
     source_id: id,
     source_url: orgConfig.fallback,
-    application_url: orgConfig.fallback,
-    description: orgConfig.description,
+    application_url: null,            // directory: no direct application URL
+    url: orgConfig.fallback,
+    description: `Directory: ${orgConfig.description} Use this national locator to find the chapter/office serving ${county} County, ${state}.`,
     is_national: false,
     state: state,
     county: county,
-    categories: [orgConfig.category, 'local', 'community'],
-    keywords: [county.toLowerCase(), state.toLowerCase(), orgConfig.category, 'local', 'assistance'],
-    opportunity_type: 'program',
+    categories: [orgConfig.category, 'local', 'community', 'directory'],
+    keywords: [county.toLowerCase(), state.toLowerCase(), orgConfig.category, 'local', 'directory', 'find local'],
+    opportunity_type: 'directory',
+    opportunity_kind: 'DIRECTORY',
+    record_type: 'directory_resource',
     requires_501c3: false,
     requires_match: false,
   };
@@ -195,6 +222,10 @@ async function upsertOpportunity(db, opp) {
  * Crawl counties for a specific state
  */
 export async function crawlStateCounties(db, state, options = {}) {
+  if (!isCountyCrawlerEnabled() && options.force !== true) {
+    log.info('[CountyCrawler] disabled (set COUNTY_FUNDING_CRAWLER_ENABLED=true to emit honest directory resources)')
+    return { inserted: 0, updated: 0, errors: 0, disabled: true };
+  }
   const counties = await loadCounties();
   const stateCounties = counties.filter(c => c.state === state);
   
@@ -229,6 +260,10 @@ export async function crawlStateCounties(db, state, options = {}) {
  * Crawl all counties in all states
  */
 export async function crawlAllCounties(db, options = {}) {
+  if (!isCountyCrawlerEnabled() && options.force !== true) {
+    log.info('[CountyCrawler] disabled (set COUNTY_FUNDING_CRAWLER_ENABLED=true to emit honest directory resources)')
+    return { states: 0, counties: 0, inserted: 0, updated: 0, errors: 0, disabled: true };
+  }
   const { batchSize = 5, delayMs = 100 } = options;
   const counties = await loadCounties();
   const states = [...new Set(counties.map(c => c.state))];
