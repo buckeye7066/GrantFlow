@@ -47,6 +47,7 @@ import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import FreePeriodNotice from "@/components/banners/FreePeriodNotice.jsx";
 import MaintenanceGate from "@/components/maintenance/MaintenanceGate.jsx";
 import NotificationBell from "@/components/notifications/NotificationBell";
+import LoginAnnouncementModal from "@/components/announcements/LoginAnnouncementModal";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import UserStepCoach from "@/components/guidance/UserStepCoach";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
@@ -366,6 +367,7 @@ export default function Layout({ children, currentPageName }) {
               <MaintenanceGate />
               <ProBonoBanner />
               <FreePeriodNotice />
+              <LoginAnnouncementModal />
               {children}
             </div>
           </div>

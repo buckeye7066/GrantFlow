@@ -4185,6 +4185,50 @@ registerTool({
 })
 
 registerTool({
+  name: 'owner.create_announcement',
+  description: 'OWNER ONLY. Create a one-time, dismissible message shown to users when they next log in (an in-app announcement, not email/SMS). Use when the owner says "show users X on next login" / "tell everyone about X when they sign in". audience:"all" reaches every user; pass a profileId to target just that profile\'s users. Provide title + body (markdown ok).',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      audience: { type: 'string', description: '"all" for everyone, or a profileId to target one profile\'s users', default: 'all' },
+      title: { type: 'string' },
+      body: { type: 'string', description: 'The message (markdown). Explain plainly.' },
+      type: { type: 'string', enum: ['info', 'feature', 'warning'], default: 'feature' },
+      expires_in_days: { type: 'number', description: 'Optional auto-expiry (omit = no expiry)' },
+    },
+    required: ['title', 'body'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const audience = String(params.audience || 'all').trim() || 'all'
+    const title = String(params.title || '').trim()
+    const body = String(params.body || '').trim()
+    if (!title || !body) return { ok: false, error: 'title_and_body_required' }
+    const type = ['info', 'feature', 'warning'].includes(params.type) ? params.type : 'feature'
+    const id = (await import('node:crypto')).randomUUID()
+    const expiresClause = Number.isFinite(params.expires_in_days) && params.expires_in_days > 0
+      ? (db.dialect === 'postgres'
+        ? `now() + (${Number(params.expires_in_days)} || ' days')::interval`
+        : `datetime('now', '+${Number(params.expires_in_days)} days')`)
+      : 'NULL'
+    await db.prepare(
+      `INSERT INTO announcements (id, created_by, title, body, audience, type, active, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ${expiresClause})`,
+    ).run(id, context?.ctx?.email || 'anya_owner', title, body, audience, type)
+    return {
+      ok: true,
+      id,
+      audience,
+      message: audience === 'all'
+        ? 'Announcement created — every user will see it once on their next login.'
+        : `Announcement created — users of profile ${audience} will see it once on their next login.`,
+    }
+  },
+})
+
+registerTool({
   name: 'owner.grant_free_period',
   description: 'OWNER ONLY. Grant a free week or month (timer starts now; invoices are suppressed and the account is notified). scope:"global" applies to everyone; scope:"profile" needs profileId. Use when the owner says "give X a free week/month" or "give everyone a free month".',
   requiresOwner: true,

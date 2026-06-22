@@ -62,13 +62,13 @@ export default function AnyaFloatingButton({ profileId, className }) {
         >
           <img 
             src="/images/anya-avatar.svg" 
-            alt="Anya AI Assistant" 
+            alt="Anya, Administrative Assistant" 
             className={cn(
               "h-full w-full object-cover transition-transform",
               canOpen ? "group-hover:scale-110" : ""
             )}
           />
-          <span className="sr-only">Open Anya AI Assistant</span>
+          <span className="sr-only">Open Anya, Administrative Assistant</span>
         </Button>
 
         {/* Anya Badge on hover */}
@@ -106,10 +106,10 @@ export default function AnyaFloatingButton({ profileId, className }) {
                   />
                 </div>
                 <div>
-                  <SheetTitle className="text-lg font-bold">Anya AI Assistant</SheetTitle>
+                  <SheetTitle className="text-lg font-bold">Anya, Administrative Assistant</SheetTitle>
                   <SheetDescription className="text-xs">
                   {canOpen
-                    ? "Your intelligent grant management copilot"
+                    ? "Your administrative assistant for grants & funding"
                     : "Create a profile to get started"}
                   </SheetDescription>
                 </div>
