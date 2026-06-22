@@ -24,6 +24,7 @@ import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
 import AdminCredentialVault from '@/components/admin/AdminCredentialVault.jsx'
 import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
 import AdminBroadcast from '@/components/admin/AdminBroadcast.jsx'
+import AdminMaintenanceWindow from '@/components/admin/AdminMaintenanceWindow.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -245,7 +246,10 @@ export default function Admin() {
           </TabsContent>
 
           <TabsContent value="maintenance" className="mt-6">
-            <AdminMaintenance />
+            <div className="space-y-6">
+              <AdminMaintenanceWindow />
+              <AdminMaintenance />
+            </div>
           </TabsContent>
 
           <TabsContent value="exclusions" className="mt-6">

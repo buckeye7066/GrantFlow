@@ -480,7 +480,7 @@ router.get('/accounts', requireAdmin, async (req, res) => {
   // that may have drifted. Accounts still render with their core fields.
   try {
     const fallbackQuery =
-      `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, p.display_name AS profile_name, p.status AS profile_status FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id`
+      `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, p.display_name AS profile_name FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id`
     const rows = await req.db.prepare(fallbackQuery).all()
     return res.json(rows.map(mapBillingAccountRow))
   } catch (error) {

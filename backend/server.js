@@ -41,6 +41,8 @@ import realCrawlersRouter from './routes/realCrawlers.js';
 import matchingRouter from './routes/matching.js';
 import grantMonitoringRouter from './routes/grantMonitoring.js';
 import billingRouter from './routes/billing.js';
+import { maintenanceGuard } from './services/maintenance/maintenanceMode.js';
+const maintenanceGuardMw = maintenanceGuard();
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import incognitoRouter from './routes/incognito.js';
@@ -1924,6 +1926,13 @@ app.use('/api/activity', activityRouter);
 // entry funnel for new GrantFlow users: /start in the SPA talks to these
 // endpoints, finishes by creating a profile + email-OTP credential, and hands
 // the user off to /api/auth/email/verify with a stateless token.
+// Maintenance window: when a window is DOWN, non-admin /api calls get 503 so the
+// frontend can log users out of a glitching app. Status/auth/health are exempt
+// (set inside the guard). Mounted here — after the global db/auth-context
+// middleware so req.db/req.user/req.ctx are populated. Admin/owner pass through.
+app.use('/api', maintenanceGuardMw)
+// Public maintenance status + admin schedule/end + run-nightly-sweep.
+app.use('/api/maintenance', lazyRouter('./routes/maintenance.js'));
 app.use('/api/onboarding', lazyRouter('./routes/onboarding.js'));
 app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);
@@ -3343,6 +3352,52 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 08:00 ET window
   }
 
+  // Sam's nightly maintenance sweep — every day 04:00 America/New_York. Enters a
+  // maintenance window (same banner users see for a deploy), runs Sam in
+  // repair-safe mode, and reopens only when green. Hourly tick + ET-day marker
+  // (once-per-day guard + catch-up after a restart).
+  function scheduleNightlyMaintenanceSweep(dbInstance) {
+    const MARKER = 'nightly_maintenance_last_run'
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.NIGHTLY_MAINTENANCE_HOUR_ET) || 4))
+    const nowEt = () => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hour: 'numeric', hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(new Date())
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+      return { hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
+    }
+    // The ET day (YYYY-MM-DD) whose TRIGGER_HOUR window has opened; before that
+    // hour it points at the previous day so today isn't yet eligible.
+    const eligibleDayKey = ({ hour, ymd }) => {
+      if (hour >= TRIGGER_HOUR) return ymd
+      const [Y, M, D] = ymd.split('-').map(Number)
+      const d = new Date(Date.UTC(Y, M - 1, D))
+      d.setUTCDate(d.getUTCDate() - 1)
+      return d.toISOString().slice(0, 10)
+    }
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const dayKey = eligibleDayKey(nowEt())
+        const last = await kvGet(dbInstance, MARKER)
+        if (last === dayKey) return // already swept for this ET day
+        const { runNightlyMaintenanceSweep, isNightlySweepEnabled } = await import('./services/maintenance/nightlySweep.js')
+        if (!isNightlySweepEnabled()) { await kvSet(dbInstance, MARKER, dayKey); return }
+        const result = await runNightlyMaintenanceSweep(dbInstance, {})
+        console.log('[nightly-maintenance]', result)
+        // Mark done for the day regardless of green (we don't want to re-enter
+        // maintenance every hour); a non-green result leaves maintenance ON for a
+        // human, and the marker prevents a thrash loop.
+        await kvSet(dbInstance, MARKER, dayKey)
+      } catch (err) {
+        console.warn('[nightly-maintenance] failed:', err.message)
+      }
+    }
+    setTimeout(runOnce, 120_000)
+    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
+  }
+
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
@@ -3350,6 +3405,7 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleBillingCycle(db)
     scheduleWeeklyVerificationReport(db)
     scheduleHamiltonWeeklyDigest(db)
+    scheduleNightlyMaintenanceSweep(db)
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
     startHealthService(db);
