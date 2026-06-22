@@ -3073,21 +3073,15 @@ if (process.env.NODE_ENV !== 'test') {
     console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
 
-  // Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
+  // Daily profile-aware auto-discovery is now driven by the Crawler OS through
+  // Robert's scheduler (services/robert/robertScheduler.js -> runRobert ->
+  // Crawler OS), which is the SINGLE scheduled-discovery authority. The legacy
+  // scheduledAutoDiscovery crawler job is intentionally removed here so there is
+  // no competing old scheduled crawler job (cutover invariant: one discovery
+  // pipeline, no dual-run). To run scheduled discovery, enable Robert
+  // (ROBERT_ENABLED / ROBERT_RUN_ON_SCHEDULE).
   if (!BACKGROUND_SERVICES_DISABLED && process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
-    const SCHEDULE_CHECK_MS = 30 * 60 * 1000;
-    setInterval(() => {
-      import('./services/scheduledAutoDiscovery.js')
-        .then(({ checkScheduledAutoDiscovery }) => {
-          checkScheduledAutoDiscovery(db, { uploadDir: uploadsDir, getOpenAI: null }).catch((err) => {
-            console.error('[scheduled-auto-discovery] Scheduled check failed:', err?.message || err);
-          });
-        })
-        .catch((err) => {
-          serverLogger.debug('scheduled_auto_discovery.import_failed', { error: err?.message || String(err) });
-        });
-    }, SCHEDULE_CHECK_MS);
-    console.log('[scheduled-auto-discovery] Daily profile-aware discovery enabled (checking every 30 min)');
+    console.log('[scheduled-auto-discovery] Legacy daily discovery removed — Crawler OS via Robert scheduler is the discovery driver.');
   }
 
   // Deadline expiry + notification cron (runs daily at 2am, and once at startup after 5s delay).

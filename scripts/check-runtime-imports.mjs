@@ -57,14 +57,26 @@ const violations = []
 // trackable: when the legacy fallbacks are removed, this set goes empty and the
 // `legacy-crawler-ban` guard can be flipped to hard-fail. Set
 // FAIL_ON_LEGACY_CRAWLER=1 to enforce (used once the cutover teardown is done).
+// (A) legacy crawler EXECUTION engine + (B) legacy MATCH engine. These are what
+// the Crawler OS replaces and must NOT be reachable from the runtime. NOT
+// included: shared config/infra the OS-era pipeline + invariant enforcer still
+// use legitimately (config/matchThresholds, config/relevanceFloor,
+// opportunityTrust, contentFilter) — those are not the crawler/match engine.
 const LEGACY_CRAWLER_PATTERNS = [
+  // (B) legacy match engine — one match authority is the OS now
   /backend\/services\/matchEngine\.js$/,
+  /backend\/services\/matchingEngine\.js$/,
   /backend\/services\/opportunityMatcher\.js$/,
+  // (A) legacy crawler execution engine
   /backend\/services\/comprehensiveCrawler/,
   /backend\/services\/crawlerDispatcher\.js$/,
+  /backend\/services\/crawlerJobState\.js$/,
   /backend\/services\/autoDiscoveryCrawlers\.js$/,
   /backend\/services\/scheduledAutoDiscovery\.js$/,
   /backend\/services\/grantsDotGovCrawler\.js$/,
+  /backend\/services\/realFundingCrawler\.js$/,
+  /backend\/services\/realLocationFundingCrawler\.js$/,
+  /backend\/services\/localCrawler\.js$/,
   /backend\/services\/crawlers\//,
 ]
 const legacyReached = new Set()
