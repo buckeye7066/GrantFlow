@@ -606,6 +606,40 @@ export async function ensurePortalCompletionStatusTable(db, { logger = console }
   )
 }
 
+/**
+ * Portal Autopilot Identity tables (migration 125 / pg 0126):
+ *   - hamilton_portal_master_vault — per-profile master passphrase (salt +
+ *     verifier, never the passphrase) + autopilot identity email.
+ *   - hamilton_portal_credentials.has_master_wrap / wrapped_* — the password-
+ *     manager wrap columns on auto-provisioned logins.
+ * Both stores self-heal lazily, but the portals dashboard + autopilot runner read
+ * them on paths that may run before any write created the table/columns, so we
+ * re-assert them on every boot at the single choke point. Delegates to each
+ * store's ensure fn so the DDL lives in exactly one place.
+ */
+export async function ensurePortalAutopilotIdentityTables(db, { logger = console } = {}) {
+  return runStep(
+    'portal_autopilot_identity (master vault + credential wrap)',
+    '[database]',
+    logger,
+    async () => {
+      const { ensureMasterVaultSchema } = await import(
+        '../services/hamilton/hamiltonPortalMasterVault.js'
+      )
+      await ensureMasterVaultSchema(db)
+      // Re-assert the wrap columns on the credentials table (ensureSchema there
+      // is idempotent and adds has_master_wrap / wrapped_* if missing).
+      const { _resetCredentialSchemaCache, listCredentialsForProfile } = await import(
+        '../services/hamilton/hamiltonPortalCredentialService.js'
+      )
+      // Force a fresh ensureSchema pass on the credentials table so older deploys
+      // gain the new columns even if a prior call cached the table as ready.
+      _resetCredentialSchemaCache()
+      await listCredentialsForProfile(db, '__schema_probe__').catch(() => {})
+    },
+  )
+}
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   const steps = [
     ['agent_subsystem', ensureAgentSubsystem],
@@ -620,6 +654,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
     ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
     ['profile_portal_status', ensurePortalCompletionStatusTable],
+    ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
     ['perf_indexes', ensurePerfIndexes],
   ]
 

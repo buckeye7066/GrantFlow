@@ -24,6 +24,43 @@ import { normalizeHost } from './hamiltonCredentialSessionService.js'
 let schemaReady = new WeakMap()
 export function _resetPortalPolicySchemaCache() { schemaReady = new WeakMap() }
 
+/**
+ * IDENTITY-PROOFED hosts: portals that gate account creation behind real
+ * identity verification (SSN match, government ID, knowledge-based auth, ID.me /
+ * Login.gov IAL2 proofing, FSA ID). Hamilton may ATTEMPT them, but she must NOT
+ * fabricate identity / SSN / government-ID proofing (keep-me-legal). When
+ * registration hits one of these walls she hands off to the human session-capture
+ * flow and marks the portal "needs you" — a graceful handoff, not a failure.
+ *
+ * Matched on registrable domain via isIdentityProofedHost (so id.me, login.gov,
+ * any *.studentaid.gov, etc. are covered). The list is intentionally
+ * conservative — when in doubt the registration engine ALSO treats any
+ * identity-proofing wall surfaced at runtime (via hamiltonBlockerClassifier) the
+ * same way, so unlisted proofing portals still fall back gracefully.
+ */
+export const IDENTITY_PROOFED_HOSTS = Object.freeze([
+  'studentaid.gov', // FSA ID — SSN + identity match
+  'login.gov',      // federal shared sign-in, IAL2 identity proofing
+  'id.me',          // identity verification provider (gov / VA / IRS)
+  'irs.gov',        // ID.me / KBA identity proofing
+  'ssa.gov',        // Social Security — KBA identity proofing
+  'va.gov',         // VA — Login.gov / ID.me proofing
+  'medicare.gov',   // identity-proofed account creation
+  'healthcare.gov', // identity verification for marketplace accounts
+  'sam.gov',        // entity / Login.gov IAL2 proofing
+  'connect.gov',
+])
+
+/**
+ * Is this host an identity-proofed portal (account creation needs real identity
+ * verification)? Registrable-domain match so subdomains are covered.
+ */
+export function isIdentityProofedHost(portalHost) {
+  const host = normalizeHost(portalHost)
+  if (!host) return false
+  return IDENTITY_PROOFED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))
+}
+
 const SEED_POLICIES = Object.freeze([
   Object.freeze({
     portal_host: 'studentaid.gov',
@@ -32,6 +69,7 @@ const SEED_POLICIES = Object.freeze([
     scraping_allowed: false,
     api_available: false,
     manual_only: true,
+    identity_proofed: true,
     fallback_path: 'manual',
     source_of_policy: 'https://studentaid.gov/help/terms-of-service',
     notes: 'Hamilton never types an FSA ID or submits FAFSA on behalf of the student. Use saved authenticated session only when the user authorized session reuse, otherwise produce a manual checklist.',
@@ -139,6 +177,10 @@ function rowToPolicy(row) {
     scraping_allowed: !!row.scraping_allowed,
     api_available: !!row.api_available,
     manual_only: !!row.manual_only,
+    // Identity-proofed = account creation needs real identity verification. A DB
+    // override can't currently store this flag, so OR it with the canonical host
+    // list — a host on IDENTITY_PROOFED_HOSTS is always identity-proofed.
+    identity_proofed: !!row.identity_proofed || isIdentityProofedHost(row.portal_host),
     fallback_path: row.fallback_path || null,
     source_of_policy: row.source_of_policy || null,
     last_checked_at: row.last_checked_at || null,
@@ -170,7 +212,7 @@ export async function getPolicyFor(db, portalHost) {
   // Seed catalogue.
   const seed = SEED_POLICIES.find((p) => p.portal_host === host)
     || SEED_POLICIES.find((p) => host.endsWith(`.${p.portal_host}`))
-  if (seed) return { ...seed }
+  if (seed) return { ...seed, identity_proofed: !!seed.identity_proofed || isIdentityProofedHost(host) }
   return defaultPolicy(host)
 }
 
@@ -182,6 +224,9 @@ function defaultPolicy(host) {
     scraping_allowed: false,
     api_available: false,
     manual_only: false,
+    // Even with no host-specific policy row, a canonical identity-proofed host
+    // is still flagged so the autopilot identity engine hands off gracefully.
+    identity_proofed: isIdentityProofedHost(host),
     fallback_path: 'pdf_docx',
     source_of_policy: null,
     last_checked_at: null,

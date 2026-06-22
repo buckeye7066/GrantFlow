@@ -256,9 +256,10 @@ export default function YanaLeadReviewModal({ leadId, open, onClose, onAfterChan
             <Alert>
               <ShieldAlert className="w-4 h-4" />
               <AlertDescription className="text-xs">
-                Yana never sends outreach without explicit per-attempt approval. Send is
-                additionally gated by the suppression list, the relationship cooldown, and the
-                daily send cap.
+                <strong>Yana never sends email</strong> — she finds leads and drafts outreach for
+                your review. Sending is a separate action <strong>you</strong> take here, per
+                attempt. Any send is additionally gated by the suppression list, the relationship
+                cooldown, and the daily send cap.
               </AlertDescription>
             </Alert>
 

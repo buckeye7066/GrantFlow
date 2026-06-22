@@ -207,9 +207,38 @@ export async function markPortalComplete(db, opts = {}) {
   return setPortalStatus(db, { ...opts, status: PORTAL_STATUS.COMPLETE })
 }
 
-/** Mark a portal MERGED (terminal — excluded from reminders). */
+/**
+ * Mark a portal MERGED (terminal — excluded from reminders).
+ *
+ * TRUTHFUL-MERGE GUARD (owner: "ensure when the merge happens, it is true"):
+ * `merged` is the only state that ENDS the weekly reminder, so it must never be
+ * set on a loose inference. A merge is recorded ONLY with an explicit
+ * confirmation signal proving the portal's data was genuinely pulled/linked into
+ * the profile — one of:
+ *   - a real portal-sync READ that succeeded (evidence carries the run), OR
+ *   - an explicit human confirmation from the dashboard ("I merged this").
+ * Without that signal we refuse and leave the portal not-merged (still reminded).
+ * Pass { confirmed: true } (human) or a truthy `evidence`/`syncRunId`/`documentId`
+ * proving the merge. A bare markPortalMerged() with no proof is rejected.
+ *
+ * @returns the merged status row, or null when the merge is unconfirmed (refused).
+ */
 export async function markPortalMerged(db, opts = {}) {
-  return setPortalStatus(db, { ...opts, status: PORTAL_STATUS.MERGED })
+  const confirmed = opts.confirmed === true || opts.confirmed === 1 || opts.confirmed === 'true'
+  const hasProof = Boolean(opts.evidence || opts.syncRunId || opts.documentId || opts.grantId)
+  if (!confirmed && !hasProof) {
+    log.warn('merge_refused_unconfirmed', {
+      profileId: String(opts.profileId || ''),
+      host: portalStatusKeyHost(opts.portalHost),
+      source: opts.source || null,
+    })
+    return null
+  }
+  // Persist the proof so the merge is auditable (why it was considered true).
+  const evidence = opts.evidence
+    || (opts.syncRunId ? `portal_sync_run:${opts.syncRunId}` : null)
+    || (confirmed ? 'human_confirmed' : null)
+  return setPortalStatus(db, { ...opts, evidence, status: PORTAL_STATUS.MERGED })
 }
 
 /** Record that we sent a reminder for this portal (idempotency / audit). */

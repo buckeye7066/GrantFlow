@@ -2294,6 +2294,32 @@ registerTool({
 })
 
 import {
+  scanPortalAutopilotReadiness,
+  runAutopilotIdentityForProfile,
+  runAutopilotIdentityForPortal,
+} from './hamilton/hamiltonPortalAutopilotIdentity.js'
+import {
+  setMasterPassphrase as setPortalMasterPassphrase,
+  setAutopilotIdentity as setPortalAutopilotIdentity,
+} from './hamilton/hamiltonPortalMasterVault.js'
+
+// Makes the Portal Autopilot Identity capability observable to the agents: Anya
+// can answer "which portals need a master passphrase / unlock / human handoff"
+// and Sam mines the findings[] (see samRegistry hamilton.portalAutopilotReadiness).
+registerTool({
+  name: 'admin.hamilton.portalAutopilotReadiness',
+  description: 'Lists profiles/portals where Hamilton\'s Portal Autopilot Identity needs attention: vault locked, identity proofing required (human handoff), or no master passphrase set. Read-only. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Max active profiles to scan (default 500).' },
+    },
+  },
+  handler: async ({ limit } = {}, context) => scanPortalAutopilotReadiness(context?.db, { limit }),
+})
+
+import {
   getProfilePreferredLanguageAsync,
   scanProfileLanguageReadiness,
 } from './languagePreference.js'
@@ -4367,6 +4393,93 @@ registerTool({
     const profileIds = Array.isArray(params?.profileIds) ? params.profileIds.map(String) : null
     const channel = params?.channel || 'auto'
     return runMondayPortalReminder(db, { force: true, profileIds, channel })
+  },
+})
+
+// ── Portal Autopilot Identity (owner-gated) ───────────────────────────────────
+// Setting a master passphrase or running auto-provisioning makes Hamilton create
+// real portal accounts under the profile's identity — the same class of power as
+// owner.run_portal_sync — so both are requiresOwner:true (owner account only),
+// enforced in invokeTool BEFORE the handler. The passphrase is consumed
+// immediately and NEVER stored, logged, or returned.
+registerTool({
+  name: 'owner.set_portal_master_passphrase',
+  description: 'OWNER ONLY. Set (or rotate) a profile\'s portal master passphrase — the one passphrase that protects Hamilton\'s auto-provisioned portal logins (password-manager model). Optionally set the autopilot identity email Hamilton registers new accounts with. The passphrase is used immediately and never stored or echoed back. Use when the owner says "set the portal passphrase for <profile>".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile to protect.' },
+      passphrase: { type: 'string', description: 'The master passphrase (>= 8 chars). Never stored.' },
+      identityEmail: { type: 'string', description: 'Optional: the email/alias Hamilton registers new portal accounts with.' },
+    },
+    required: ['profileId', 'passphrase'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    const passphrase = String(params?.passphrase || '')
+    if (passphrase.length < 8) throw new Error('passphrase must be at least 8 characters')
+    const { status } = await setPortalMasterPassphrase(db, {
+      profileId, passphrase,
+      identityEmail: params?.identityEmail === undefined ? undefined : params.identityEmail,
+    })
+    // Return ONLY the public status — never the passphrase / salt / verifier.
+    return { ok: true, vault: status }
+  },
+})
+
+registerTool({
+  name: 'owner.set_portal_autopilot_identity',
+  description: 'OWNER ONLY. Set the autopilot identity email/alias a profile\'s Hamilton registers NEW portal accounts with (independent of the passphrase). Use when the owner says "register portals under <email> for <profile>".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile to update.' },
+      identityEmail: { type: 'string', description: 'The email/alias for new portal registrations (or empty to clear).' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    const status = await setPortalAutopilotIdentity(db, { profileId, identityEmail: params?.identityEmail ?? null })
+    return { ok: true, vault: status }
+  },
+})
+
+registerTool({
+  name: 'owner.run_portal_autopilot',
+  description: 'OWNER ONLY. Run Hamilton\'s Portal Autopilot Identity for a profile: for each applicable portal, log in with existing credentials, auto-provision a unique master-wrapped login (vault must be unlocked), or hand off to you when identity proofing / a blocker requires it. Pass portalHost to run a single portal. Use when the owner says "set up logins for <profile>\'s portals".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile to run.' },
+      portalHost: { type: 'string', description: 'Optional: run a single portal host, e.g. mtsu.edu.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    const userId = context?.ctx?.userId ?? context?.user?.id ?? 'anya_owner'
+    const portalHost = params?.portalHost ? String(params.portalHost).trim() : ''
+    if (portalHost) {
+      const result = await runAutopilotIdentityForPortal(db, { profileId, userId, portalHost })
+      // Strip any one-time password from the conversational result.
+      const { password_one_time_view, ...safe } = result
+      void password_one_time_view
+      return { ok: true, result: safe }
+    }
+    return { ok: true, ...(await runAutopilotIdentityForProfile(db, { profileId, userId })) }
   },
 })
 

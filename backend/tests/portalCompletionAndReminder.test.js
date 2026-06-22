@@ -69,9 +69,18 @@ describe('portalCompletionStore — complete vs merged lifecycle', () => {
   })
 
   it('a "complete" signal NEVER regresses a merged portal', async () => {
-    await markPortalMerged(db, { profileId: 'p1', portalHost: 'studentaid.gov' })
+    // A truthful merge requires explicit confirmation (owner: "ensure when the
+    // merge happens, it is true"); a bare unconfirmed merge is refused.
+    await markPortalMerged(db, { profileId: 'p1', portalHost: 'studentaid.gov', confirmed: true })
     const after = await markPortalComplete(db, { profileId: 'p1', portalHost: 'studentaid.gov' })
     expect(after.status).toBe(PORTAL_STATUS.MERGED)
+  })
+
+  it('REFUSES an unconfirmed merge (truthful-merge guard)', async () => {
+    const refused = await markPortalMerged(db, { profileId: 'p1', portalHost: 'unconfirmed.org' })
+    expect(refused).toBeNull()
+    const row = await getPortalStatus(db, 'p1', 'unconfirmed.org')
+    expect(row === null || row.status !== PORTAL_STATUS.MERGED).toBe(true)
   })
 
   it('keys on registrable host so a sub-host and full URL collapse to one row', async () => {
@@ -148,7 +157,7 @@ describe('mondayPortalReminder — selectUnmergedPortals (which portals are due)
 
   it('includes unmerged + complete, excludes merged', async () => {
     // Three status rows: one merged (excluded), one complete (due), one unmerged (due).
-    await markPortalMerged(db, { profileId: 'p1', portalHost: 'merged-portal.org' })
+    await markPortalMerged(db, { profileId: 'p1', portalHost: 'merged-portal.org', confirmed: true })
     await markPortalComplete(db, { profileId: 'p1', portalHost: 'studentaid.gov' })
     await setPortalStatus(db, { profileId: 'p1', portalHost: 'unfinished.org', status: PORTAL_STATUS.UNMERGED })
 
@@ -171,8 +180,8 @@ describe('mondayPortalReminder — selectUnmergedPortals (which portals are due)
     // (A bare profile may still surface relevance-gated PROCESS portals — FAFSA/
     // 211/SSA — as unmerged; the contract under test is that any host we marked
     // MERGED never appears in the due set, regardless of those.)
-    await markPortalMerged(db, { profileId: 'p1', portalHost: 'a.org' })
-    await markPortalMerged(db, { profileId: 'p1', portalHost: 'b.org' })
+    await markPortalMerged(db, { profileId: 'p1', portalHost: 'a.org', confirmed: true })
+    await markPortalMerged(db, { profileId: 'p1', portalHost: 'b.org', confirmed: true })
     const due = await selectUnmergedPortals(db, 'p1')
     const hosts = due.map((d) => d.host)
     expect(hosts).not.toContain('a.org')

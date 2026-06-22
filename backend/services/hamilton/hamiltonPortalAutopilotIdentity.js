@@ -1,0 +1,531 @@
+/**
+ * hamiltonPortalAutopilotIdentity.js
+ *
+ * "Portal Autopilot Identity" engine. For portals the owner has NOT signed up to,
+ * Hamilton auto-handles login so the owner doesn't manage a password per portal —
+ * but portals where an account already exists keep using existing vault creds.
+ *
+ * This is the REGISTRATION + FALLBACK state machine. It does NOT itself open a
+ * browser — it decides, per portal, which terminal state applies and (when a NEW
+ * account should be provisioned) generates + stores a unique master-wrapped
+ * password. The browser-driven registration itself rides the existing
+ * hamiltonAutomationOrchestrator / hamiltonAutopilotEngine gates; this module is
+ * the policy/identity brain that runs ahead of (and after) it.
+ *
+ * Per-portal terminal states (exposed on the portals dashboard):
+ *   - has_existing_credentials : a profile/admin-vault login already exists →
+ *                                 log in with it, never create a duplicate account.
+ *   - vault_locked             : a new registration is needed but the master
+ *                                 passphrase isn't unlocked → block with a clear
+ *                                 "unlock vault" status (never fabricate / fail
+ *                                 silently).
+ *   - identity_proof_required  : the portal gates account creation behind real
+ *                                 identity proofing (SSN/government-ID/FSA-ID/
+ *                                 Login.gov/ID.me). Hamilton may attempt but must
+ *                                 NOT fabricate proofing → hands off to human
+ *                                 session-capture and marks "needs you".
+ *   - needs_user               : registration hit a wall it cannot lawfully pass
+ *                                 (existing-account, CAPTCHA/anti-bot, ToS block,
+ *                                 2FA on signup) → graceful handoff to session
+ *                                 capture. NOT a crash.
+ *   - auto_provisioned         : Hamilton generated a unique password under the
+ *                                 master passphrase and stored the login (the
+ *                                 account is ready / created).
+ *   - automation_disabled      : browser automation is off / host not allowlisted
+ *                                 → queue honestly (don't fake success).
+ *
+ * SECURITY / LEGAL:
+ *   - Provisioning a LOGIN is distinct from SUBMITTING an application or a
+ *     payment. This module never submits an application and never touches the
+ *     autosubmit / authorization / payment gates.
+ *   - Identity proofing is never fabricated (keep-me-legal). When proofing is
+ *     required Hamilton hands off to the human.
+ *   - Passwords are unique + crypto-random + master-wrapped (see
+ *     saveAutoProvisionedCredential). The passphrase is never logged or returned.
+ */
+
+import {
+  getDecryptedCredentialWithFallback,
+  saveAutoProvisionedCredential,
+  registrableDomain,
+} from './hamiltonPortalCredentialService.js'
+import { findValidSession } from './hamiltonCredentialSessionService.js'
+import {
+  getMasterVaultStatus,
+  getUnlockedKey,
+} from './hamiltonPortalMasterVault.js'
+import { getPolicyFor, isIdentityProofedHost } from './hamiltonPortalPolicyRegistry.js'
+import { createCaptureRequest } from './hamiltonSessionCaptureRequests.js'
+import { classifyBlocker } from './hamiltonBlockerClassifier.js'
+import {
+  browserAutomationPermittedForUrl,
+  isBrowserAutomationEnabled,
+} from './hamiltonAutomationOrchestrator.js'
+import { suggestPortalLogin } from './hamiltonPortalLoginSuggester.js'
+import { hostOfUrl } from './hamiltonMissingCredential.js'
+import { createLogger } from '../../utils/logger.js'
+
+const log = createLogger('service:hamilton-portal-autopilot-identity')
+
+// Canonical per-portal autopilot states surfaced on the dashboard.
+export const AUTOPILOT_STATE = Object.freeze({
+  AUTO_PROVISIONED: 'auto_provisioned',
+  HAS_EXISTING_CREDENTIALS: 'has_existing_credentials',
+  IDENTITY_PROOF_REQUIRED: 'identity_proof_required',
+  VAULT_LOCKED: 'vault_locked',
+  NEEDS_USER: 'needs_user',
+  AUTOMATION_DISABLED: 'automation_disabled',
+})
+
+// The resolution path offered to the OWNER for a terminal/blocked state. The
+// ESCALATION LADDER (project_grantflow_portal_autopilot) makes side-by-side
+// co-browse the LAST RESORT — offered ONLY after every automated step
+// (existing-creds login → auto-register/auto-fill → other automation) has been
+// attempted/exhausted. A state that automation HANDLED (auto_provisioned /
+// has_existing_credentials) carries resolution=null: there is nothing to
+// co-browse. A terminal state automation cannot lawfully pass carries
+// SIDE_BY_SIDE_COBROWSE + a launch target so the dashboard can offer
+// "Open side-by-side login" — Hamilton helps the user answer live, assist-only
+// (auto-submit stays OFF; the human submits).
+export const RESOLUTION = Object.freeze({
+  NONE: null,
+  SIDE_BY_SIDE_COBROWSE: 'side_by_side_cobrowse',
+})
+
+// Terminal autopilot states where ALL automation has been exhausted and the only
+// remaining lawful path is the side-by-side co-browse. These are exactly the
+// states that mean the portal CANNOT be auto-merged by Hamilton.
+const COBROWSE_TERMINAL_STATES = new Set([
+  AUTOPILOT_STATE.IDENTITY_PROOF_REQUIRED,
+  AUTOPILOT_STATE.NEEDS_USER,
+  AUTOPILOT_STATE.AUTOMATION_DISABLED,
+])
+
+/**
+ * Decorate a terminal/blocked autopilot result with the LAST-RESORT side-by-side
+ * co-browse resolution + launch target, and mark it can't-auto-merge. The launch
+ * target is what the dashboard passes to startCloudLogin (HamiltonLiveLogin) so
+ * Hamilton helps the user answer the portal's questions live. States automation
+ * resolved (auto_provisioned / has_existing_credentials) are returned unchanged
+ * (resolution stays null) — co-browse is never offered before automation runs.
+ */
+function withCobrowseIfTerminal(result, { host, loginUrl } = {}) {
+  if (!result || !COBROWSE_TERMINAL_STATES.has(result.state)) {
+    return { canAutoMerge: result?.state === AUTOPILOT_STATE.AUTO_PROVISIONED || result?.state === AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS ? null : false, resolution: RESOLUTION.NONE, ...result }
+  }
+  const resolvedHost = host || result.host || null
+  return {
+    ...result,
+    // Plainly "can't auto-merge" — routed to the side-by-side assist.
+    canAutoMerge: false,
+    resolution: RESOLUTION.SIDE_BY_SIDE_COBROWSE,
+    cobrowse: {
+      host: resolvedHost,
+      loginUrl: loginUrl || (resolvedHost ? `https://${resolvedHost}` : null),
+    },
+  }
+}
+
+// Blocker categories (from hamiltonBlockerClassifier) that mean "registration
+// cannot lawfully proceed unattended" → graceful session-capture handoff.
+const HANDOFF_BLOCKER_CATEGORIES = new Set([
+  'captcha_required',
+  'portal_anti_bot_block',
+  'portal_terms_block',
+  'two_factor_required',
+  'sso_required',
+  'legal_attestation_required',
+  'payment_required',
+])
+
+/**
+ * Resolve the autopilot identity (username/email) Hamilton registers a new
+ * account with: the profile's master-vault identity_email if set, else the
+ * profile's designated email resolved by the existing login suggester. Returns ''
+ * when nothing usable is on file (the caller then marks needs_user).
+ */
+async function resolveIdentityEmail(db, profileId, portalHost) {
+  try {
+    const status = await getMasterVaultStatus(db, profileId)
+    if (status?.identity_email) return String(status.identity_email).trim()
+  } catch { /* fall through */ }
+  try {
+    const sugg = await suggestPortalLogin({ db, profileId, portalHost, allowAi: false })
+    if (sugg?.username) return String(sugg.username).trim()
+  } catch { /* fall through */ }
+  return ''
+}
+
+/**
+ * Queue a graceful human session-capture handoff for a portal Hamilton can't
+ * lawfully auto-register. Best-effort — a queue failure never throws.
+ */
+async function queueHandoff(db, { userId, profileId, portalHost, loginUrl, reason }) {
+  try {
+    await createCaptureRequest(db, {
+      userId, profileId, portalHost, loginUrl: loginUrl || null,
+      label: `Hamilton needs you to finish signing in (${reason})`,
+      requestedByEmail: null,
+    })
+  } catch (err) {
+    log.warn('handoff_queue_failed', { profileId: String(profileId), portalHost, err: err?.message })
+  }
+}
+
+/**
+ * Decide and execute the autopilot-identity outcome for ONE portal. Pure of HTTP;
+ * the route / orchestrator passes a resolved login URL. Never throws — any error
+ * degrades to a needs_user handoff with the error captured in `detail`.
+ *
+ * @param {object} db
+ * @param {object} args
+ * @param {string} args.profileId
+ * @param {string} args.userId
+ * @param {string} args.portalHost   registrable host or full host
+ * @param {string} [args.loginUrl]   resolved sign-in URL (for the handoff + gates)
+ * @param {object} [args.registrationResult] optional: the result of a real
+ *        browser registration attempt ({ status, blocker_kind, blocker_detail }).
+ *        When omitted, the engine decides whether registration SHOULD be
+ *        attempted and provisions the credential record for it.
+ * @returns {Promise<{ state, host, detail, credential?, password_one_time_view? }>}
+ */
+export async function runAutopilotIdentityForPortal(db, args = {}) {
+  const host = registrableDomain(args.portalHost) || hostOfUrl(args.portalHost) || String(args.portalHost || '').toLowerCase()
+  const resolvedLoginUrl = args.loginUrl || (host ? `https://${host}` : null)
+  // Every terminal/blocked outcome is decorated with the LAST-RESORT side-by-side
+  // co-browse resolution + launch target (and can't-auto-merge), so co-browse is
+  // offered only AFTER the automated ladder steps inside _runAutopilotIdentityForPortal
+  // have been attempted/exhausted — never as a shortcut.
+  const result = await _runAutopilotIdentityForPortal(db, { ...args, _host: host, _resolvedLoginUrl: resolvedLoginUrl })
+  return withCobrowseIfTerminal(result, { host, loginUrl: resolvedLoginUrl })
+}
+
+async function _runAutopilotIdentityForPortal(db, {
+  profileId, userId = 'system_admin_token', portalHost, loginUrl = null, registrationResult = null,
+  _host, _resolvedLoginUrl,
+} = {}) {
+  const host = _host !== undefined ? _host : (registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase())
+  const resolvedLoginUrl = _resolvedLoginUrl !== undefined ? _resolvedLoginUrl : (loginUrl || (host ? `https://${host}` : null))
+  if (!db || !profileId || !host) {
+    return { state: AUTOPILOT_STATE.NEEDS_USER, host: host || null, detail: 'missing profile or host' }
+  }
+
+  try {
+    // 1. EXISTING-CREDENTIALS path wins — never create a duplicate account.
+    // Check both a saved credential (profile or admin vault) and a valid session.
+    const existingCred = await getDecryptedCredentialWithFallback(db, { profileId, portalHost: host }).catch(() => null)
+    let hasSession = false
+    try {
+      const sess = await findValidSession(db, { profileId, portalHost: host })
+      hasSession = Boolean(sess)
+    } catch { hasSession = false }
+    // A vault-locked master-wrapped credential still COUNTS as "we have a login
+    // here" — Hamilton just needs the passphrase to use it, not a new account.
+    if ((existingCred && existingCred.vault_locked) ) {
+      return { state: AUTOPILOT_STATE.VAULT_LOCKED, host, detail: 'A login exists but the master passphrase is locked. Unlock the vault so Hamilton can use it.' }
+    }
+    if (existingCred || hasSession) {
+      return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host, detail: 'An account already exists; Hamilton will log in with the saved credentials.' }
+    }
+
+    // 2. IDENTITY-PROOFED portals: Hamilton may attempt but must not fabricate
+    // identity/SSN/government-ID proofing → graceful handoff to the human.
+    const policy = await getPolicyFor(db, host).catch(() => null)
+    if (isIdentityProofedHost(host) || policy?.identity_proofed) {
+      await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'identity verification required' })
+      return { state: AUTOPILOT_STATE.IDENTITY_PROOF_REQUIRED, host, detail: 'This portal verifies real identity (SSN / government ID). Hamilton will not fabricate proofing — sign in once and she takes over.' }
+    }
+
+    // 3. A real browser registration attempt was made and hit a blocker we can't
+    // lawfully pass unattended → graceful handoff (NOT a crash).
+    if (registrationResult && registrationResult.status && registrationResult.status !== 'registered') {
+      const classified = classifyBlocker({
+        kind: registrationResult.blocker_kind,
+        text: registrationResult.blocker_detail,
+        detail: registrationResult.blocker_detail,
+        url: resolvedLoginUrl,
+      })
+      if (HANDOFF_BLOCKER_CATEGORIES.has(classified.category)) {
+        await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: classified.category })
+        return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: `Registration hit ${classified.category}; handed off for you to finish.`, blocker: classified.category }
+      }
+    }
+
+    // 4. ToS compliance boundary: a portal whose terms forbid agent automation
+    // can never be auto-registered → graceful handoff (sign in once).
+    if (policy?.automation_allowed === false) {
+      await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'portal terms forbid automation' })
+      return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: `This portal's terms forbid agent automation; sign in once and Hamilton continues lawfully.` }
+    }
+
+    // 5. VAULT-LOCKED guard for NEW registrations: provisioning a login requires
+    // the master key to wrap the generated password. When the vault is locked (or
+    // no passphrase is set), block with a clear status rather than store an
+    // unwrapped password. Checked BEFORE the browser gate because it's the most
+    // actionable precondition for the owner — independent of browser availability.
+    const masterKey = getUnlockedKey(profileId)
+    if (!masterKey) {
+      const status = await getMasterVaultStatus(db, profileId).catch(() => null)
+      return {
+        state: AUTOPILOT_STATE.VAULT_LOCKED,
+        host,
+        detail: status?.has_passphrase
+          ? 'Master passphrase is set but the vault is locked. Unlock it so Hamilton can provision new logins.'
+          : 'Set a master passphrase first so Hamilton can provision new logins under it.',
+      }
+    }
+
+    // 6. Browser-automation gates: registration drives a real browser, so honor
+    // HAMILTON_ENABLE_BROWSER_AUTOMATION + the host allowlist. When automation is
+    // off or the host isn't permitted, queue honestly instead of faking success.
+    const browserOk = browserAutomationPermittedForUrl(resolvedLoginUrl, { extraAllowedHosts: [host] })
+    if (!browserOk) {
+      return {
+        state: AUTOPILOT_STATE.AUTOMATION_DISABLED,
+        host,
+        detail: isBrowserAutomationEnabled()
+          ? 'This portal host is not on the browser-automation allowlist; queued.'
+          : 'Browser automation is disabled (HAMILTON_ENABLE_BROWSER_AUTOMATION); queued.',
+      }
+    }
+
+    // 7. Resolve the identity Hamilton registers with.
+    const identityEmail = await resolveIdentityEmail(db, profileId, host)
+    if (!identityEmail) {
+      await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'no autopilot identity email on file' })
+      return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: 'No autopilot identity email is set for this profile; set one (or sign in once).' }
+    }
+
+    // 8. AUTO-PROVISION: generate a unique master-wrapped password + store the
+    // login record. (Driving the portal's real signup form is the browser layer's
+    // job; this records the credential the account will use, ready for it.)
+    const result = await saveAutoProvisionedCredential(db, {
+      userId, profileId, portalHost: host, username: identityEmail,
+      masterKey, loginUrl: resolvedLoginUrl, reason: 'portal_autopilot_identity',
+    })
+    if (result.already_existed) {
+      return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host, detail: 'A login already existed; Hamilton will use it.' }
+    }
+    log.info('auto_provisioned', { profileId: String(profileId), host })
+    return {
+      state: AUTOPILOT_STATE.AUTO_PROVISIONED,
+      host,
+      detail: 'Hamilton provisioned a unique login under your master passphrase.',
+      credential: result.credential,
+      // ONE-TIME plaintext so the caller can show it to the user; never persisted.
+      password_one_time_view: result.password_one_time_view,
+    }
+  } catch (err) {
+    log.warn('autopilot_identity_failed', { profileId: String(profileId), host, err: err?.message })
+    await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'unexpected error' })
+    return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: 'Hamilton could not complete auto-provisioning; handed off for you to finish.' }
+  }
+}
+
+/**
+ * Run autopilot identity across every portal that applies to a profile. Pulls the
+ * portal set from the live dashboard index (getProfilePortals) so it covers
+ * exactly the tiles the user sees, then resolves each one. NEVER returns a
+ * password in the aggregate result (the one-time plaintext is only returned from
+ * the single-portal route so it can be shown once); the aggregate carries only
+ * the state per host. Returns { results, summary }.
+ */
+export async function runAutopilotIdentityForProfile(db, { profileId, userId = 'system_admin_token' } = {}) {
+  if (!db || !profileId) return { results: [], summary: {} }
+  const { getProfilePortals } = await import('./profilePortalIndex.js')
+  let portals = []
+  try {
+    const data = await getProfilePortals(db, profileId, { refresh: true })
+    portals = Array.isArray(data?.portals) ? data.portals : []
+  } catch (err) {
+    log.warn('profile_portals_load_failed', { profileId: String(profileId), err: err?.message })
+    portals = []
+  }
+  const results = []
+  for (const p of portals) {
+    const host = p?.portalHost
+    if (!host) continue
+    const r = await runAutopilotIdentityForPortal(db, {
+      profileId, userId, portalHost: host, loginUrl: p?.loginUrl || null,
+    })
+    // Strip any one-time plaintext from the aggregate — bulk runs never surface it.
+    const { password_one_time_view, ...safe } = r
+    void password_one_time_view
+    results.push({ ...safe, label: p?.label || host })
+  }
+  const summary = {}
+  for (const r of results) summary[r.state] = (summary[r.state] || 0) + 1
+  return { results, summary }
+}
+
+/**
+ * READ-ONLY autopilot state for ONE portal — no registration, no handoff queued,
+ * no credential written. Used to annotate the portals dashboard (GET) so the
+ * green/red tiles reflect the autopilot lifecycle without side effects. A tile
+ * already known to have a credential/session (from the index's hasCredential/
+ * hasSession) short-circuits to has_existing_credentials.
+ *
+ * Each returned object carries `resolution` + `canAutoMerge` + (when terminal) a
+ * `cobrowse` launch target. A state where automation can still proceed
+ * (auto_provisioned, has_existing_credentials, or "ready to auto-provision") is
+ * NOT a co-browse terminal — co-browse is the LAST resort, offered only after the
+ * automated ladder is exhausted. Genuine terminal states (identity-proofing,
+ * ToS-forbidden, no-passphrase handoff) are decorated as can't-auto-merge →
+ * side-by-side co-browse.
+ *
+ * @returns {Promise<{ state, detail, resolution, canAutoMerge, cobrowse? }>}
+ */
+export async function describeAutopilotStateForPortal(db, args = {}) {
+  const host = registrableDomain(args.portalHost) || hostOfUrl(args.portalHost) || String(args.portalHost || '').toLowerCase()
+  const loginUrl = args.loginUrl || (host ? `https://${host}` : null)
+  const raw = await _describeAutopilotStateForPortal(db, { ...args, _host: host })
+  // "Ready to auto-provision" is pending-automation, NOT a co-browse terminal,
+  // even though it carries the needs_user enum — automation has not been
+  // exhausted. Keep it out of the co-browse path.
+  if (raw?._pendingAutoProvision) {
+    const { _pendingAutoProvision, ...rest } = raw
+    void _pendingAutoProvision
+    return { ...rest, resolution: RESOLUTION.NONE, canAutoMerge: true }
+  }
+  return withCobrowseIfTerminal({ ...raw, host: raw.host || host }, { host, loginUrl })
+}
+
+async function _describeAutopilotStateForPortal(db, { profileId, portalHost, hasCredential = false, hasSession = false, _host } = {}) {
+  const host = _host !== undefined ? _host : (registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase())
+  if (!db || !profileId || !host) return { state: AUTOPILOT_STATE.NEEDS_USER, detail: null }
+  try {
+    if (hasCredential || hasSession) {
+      // Distinguish a vault-locked master-wrapped credential from a usable one.
+      const cred = await getDecryptedCredentialWithFallback(db, { profileId, portalHost: host }).catch(() => null)
+      if (cred && cred.vault_locked) {
+        return { state: AUTOPILOT_STATE.VAULT_LOCKED, detail: 'A login exists but the master passphrase is locked.' }
+      }
+      return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, detail: 'An account already exists.' }
+    }
+    const policy = await getPolicyFor(db, host).catch(() => null)
+    if (isIdentityProofedHost(host) || policy?.identity_proofed) {
+      return { state: AUTOPILOT_STATE.IDENTITY_PROOF_REQUIRED, detail: 'Identity verification required; sign in once.' }
+    }
+    if (policy?.automation_allowed === false) {
+      return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Portal terms forbid automation; sign in once.' }
+    }
+    const status = await getMasterVaultStatus(db, profileId).catch(() => null)
+    if (!status?.has_passphrase) {
+      return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Set a master passphrase so Hamilton can provision a login.' }
+    }
+    if (!status?.is_unlocked) {
+      return { state: AUTOPILOT_STATE.VAULT_LOCKED, detail: 'Unlock the master passphrase so Hamilton can provision a login.' }
+    }
+    // Passphrase set + unlocked + no existing login + not identity-proofed →
+    // Hamilton CAN auto-provision; the dashboard shows it as pending that action.
+    // NOT a co-browse terminal — automation hasn't run yet.
+    return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Ready for Hamilton to auto-provision a login.', _pendingAutoProvision: true }
+  } catch {
+    return { state: AUTOPILOT_STATE.NEEDS_USER, detail: null }
+  }
+}
+
+/**
+ * OBSERVABILITY (Sam + Anya): scan the profiles with active Hamilton portal work
+ * and surface where Portal Autopilot Identity needs owner attention:
+ *   - vault_locked          : a master passphrase is set but locked (or a new
+ *                             registration needs it) — Hamilton can't provision /
+ *                             use auto-logins until it's unlocked.
+ *   - identity_proof_required + needs_user : portals waiting on a human handoff.
+ *   - no_passphrase         : a profile has portals that could be auto-provisioned
+ *                             but no master passphrase is set yet.
+ *
+ * Returns findings[] in the shape Sam mines ([{severity,title,description,...}]).
+ * Read-only — never registers / writes / queues. Never throws.
+ */
+export async function scanPortalAutopilotReadiness(db, { limit = 500 } = {}) {
+  const findings = []
+  const out = { ok: true, scanned: 0, findings, counts: {} }
+  if (!db) return out
+  const cap = Math.max(1, Math.min(2000, Number(limit) || 500))
+  let rows = []
+  try {
+    // Profiles with Hamilton application work in flight (the population that will
+    // actually hit portal logins). Falls back to all profiles if the join fails.
+    rows = await db.prepare(
+      `SELECT DISTINCT profile_id FROM application_tasks
+        WHERE status NOT IN ('completed','submitted','failed') LIMIT ${cap}`,
+    ).all().catch(() => [])
+  } catch { rows = [] }
+  if (!rows || rows.length === 0) {
+    try { rows = await db.prepare(`SELECT id AS profile_id FROM profiles LIMIT ${cap}`).all() } catch { rows = [] }
+  }
+  const counts = {}
+  for (const r of rows || []) {
+    const profileId = r?.profile_id || r?.id
+    if (!profileId) continue
+    out.scanned += 1
+    let vault = null
+    try { vault = await getMasterVaultStatus(db, profileId) } catch { vault = null }
+    let portals = []
+    try {
+      const { getProfilePortals } = await import('./profilePortalIndex.js')
+      const data = await getProfilePortals(db, profileId, { refresh: false })
+      portals = Array.isArray(data?.portals) ? data.portals : []
+    } catch { portals = [] }
+    for (const p of portals) {
+      if (!p?.portalHost) continue
+      let st = { state: null }
+      try {
+        st = await describeAutopilotStateForPortal(db, {
+          profileId, portalHost: p.portalHost,
+          hasCredential: Boolean(p.hasCredential), hasSession: Boolean(p.hasSession),
+        })
+      } catch { st = { state: null } }
+      if (!st.state) continue
+      counts[st.state] = (counts[st.state] || 0) + 1
+      // Observability: count portals whose ONLY remaining lawful path is the
+      // side-by-side co-browse (all automation exhausted / can't auto-merge) so
+      // Sam + Anya can report "N portals awaiting side-by-side login".
+      if (st.resolution === RESOLUTION.SIDE_BY_SIDE_COBROWSE) {
+        counts.awaiting_cobrowse = (counts.awaiting_cobrowse || 0) + 1
+      }
+      if (st.state === AUTOPILOT_STATE.VAULT_LOCKED) {
+        findings.push({
+          severity: 'medium',
+          title: `Portal vault locked for ${p.label || p.portalHost}`,
+          description: `${st.detail || 'The master passphrase is locked.'} Profile ${profileId}.`,
+          evidence: { profileId: String(profileId), portalHost: p.portalHost },
+          recommended_fix: 'Unlock the profile\'s portal master passphrase (Portals → Autopilot) so Hamilton can provision/use auto-logins.',
+        })
+      } else if (st.state === AUTOPILOT_STATE.IDENTITY_PROOF_REQUIRED) {
+        findings.push({
+          severity: 'low',
+          title: `Identity proofing needed: ${p.label || p.portalHost}`,
+          description: `${st.detail || 'This portal verifies real identity.'} Profile ${profileId}.`,
+          evidence: { profileId: String(profileId), portalHost: p.portalHost },
+          recommended_fix: 'Sign in to this portal once (session capture) — Hamilton will not fabricate identity proofing.',
+        })
+      } else if (st.state === AUTOPILOT_STATE.NEEDS_USER && !vault?.has_passphrase) {
+        findings.push({
+          severity: 'low',
+          title: `No portal master passphrase set (${p.label || p.portalHost})`,
+          description: `Profile ${profileId} has a portal Hamilton could auto-provision, but no master passphrase is set.`,
+          evidence: { profileId: String(profileId), portalHost: p.portalHost },
+          recommended_fix: 'Set a portal master passphrase for this profile so Hamilton can auto-provision logins under it.',
+        })
+      }
+    }
+  }
+  out.counts = counts
+  out.awaiting_cobrowse = counts.awaiting_cobrowse || 0
+  const cobrowseNote = out.awaiting_cobrowse
+    ? ` ${out.awaiting_cobrowse} portal(s) can't be auto-merged and are awaiting a side-by-side login.`
+    : ''
+  out.message = `${findings.length} portal autopilot item(s) need attention across ${out.scanned} profile(s).${cobrowseNote}`
+  return out
+}
+
+export default {
+  AUTOPILOT_STATE,
+  RESOLUTION,
+  runAutopilotIdentityForPortal,
+  runAutopilotIdentityForProfile,
+  describeAutopilotStateForPortal,
+  scanPortalAutopilotReadiness,
+}

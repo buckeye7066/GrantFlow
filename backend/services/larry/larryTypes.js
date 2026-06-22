@@ -8,15 +8,19 @@
  * Yana's mission:
  *   Find likely GrantFlow CLIENTS (prospective customers/users), verify public
  *   organization & contact info, score fit + urgency, build a structured lead
- *   packet, and (only with explicit admin approval per attempt) send outreach.
+ *   packet, and DRAFT outreach. Yana hands those drafts off for review (in the
+ *   canonical pipeline, John saves them to the Outlook DRAFT folder). **Yana
+ *   herself never sends email.** Sending is a SEPARATE, manual, human-approved
+ *   action — a person reviews a draft and sends it, or doesn't. It is not part
+ *   of Yana's automated cycle.
  *
  * Yana is NOT:
  *   - A funding-discovery agent (that is Robert).
  *   - A user-facing assistant (that is Anya).
  *   - A code-health agent (that is Sam).
  *   - A grant-writing agent.
- *   - An autonomous mass-emailer. Outreach send always requires per-attempt
- *     human approval.
+ *   - An emailer of any kind. Yana produces drafts only; the actual send is a
+ *     separate human-approved step, never something Yana triggers on her own.
  */
 
 export const LARRY_AGENT_NAME = 'Yana'

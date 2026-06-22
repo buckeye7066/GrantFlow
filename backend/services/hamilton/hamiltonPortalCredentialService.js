@@ -26,6 +26,11 @@ import psl from 'psl'
 import { encryptRuntimeSecret, decryptRuntimeSecret } from '../../utils/runtimeSecrets.js'
 import { normalizeHost } from './hamiltonCredentialSessionService.js'
 import { isValidTotpSecret } from './hamiltonTotp.js'
+import {
+  getUnlockedKey,
+  wrapSecretWithKey,
+  unwrapSecretWithKey,
+} from './hamiltonPortalMasterVault.js'
 
 /**
  * Registrable domain (eTLD+1) via the Public Suffix List. Returns null for
@@ -69,6 +74,17 @@ async function ensureSchema(db) {
       totp_secret_ciphertext TEXT,
       totp_secret_iv TEXT,
       totp_secret_tag TEXT,
+      -- Portal Autopilot Identity (password-manager layer): when Hamilton
+      -- auto-provisions a login under the master passphrase, the password is
+      -- additionally wrapped with the scrypt-derived master key BEFORE the
+      -- server-vault layer. has_master_wrap=1 marks such rows; the wrapped_*
+      -- columns hold the doubly-encrypted secret. password_ciphertext stays the
+      -- server-vault-only copy (NULL for master-wrapped rows so a leaked vault key
+      -- alone never recovers the password).
+      has_master_wrap ${isPostgres ? 'BOOLEAN' : 'INTEGER'} NOT NULL DEFAULT ${isPostgres ? 'FALSE' : '0'},
+      wrapped_ciphertext TEXT,
+      wrapped_iv TEXT,
+      wrapped_tag TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       last_used_at ${tsType},
       generated_by TEXT,
@@ -105,6 +121,10 @@ async function ensureSchema(db) {
       ['totp_secret_ciphertext', 'TEXT'],
       ['totp_secret_iv', 'TEXT'],
       ['totp_secret_tag', 'TEXT'],
+      ['has_master_wrap', 'INTEGER'],
+      ['wrapped_ciphertext', 'TEXT'],
+      ['wrapped_iv', 'TEXT'],
+      ['wrapped_tag', 'TEXT'],
     ]
     for (const [name, type] of wanted) {
       if (have.has(name)) continue
@@ -122,6 +142,10 @@ async function ensureSchema(db) {
       'totp_secret_ciphertext TEXT',
       'totp_secret_iv TEXT',
       'totp_secret_tag TEXT',
+      'has_master_wrap BOOLEAN NOT NULL DEFAULT FALSE',
+      'wrapped_ciphertext TEXT',
+      'wrapped_iv TEXT',
+      'wrapped_tag TEXT',
     ]) {
       try { await db.exec(`ALTER TABLE hamilton_portal_credentials ADD COLUMN IF NOT EXISTS ${col};`) }
       catch { /* benign */ }
@@ -151,10 +175,14 @@ function rowToMasked(row) {
     label: row.label || null,
     login_url: row.login_url || null,
     username_masked: maskUsername(row.username),
-    has_password: Boolean(row.password_ciphertext),
+    has_password: Boolean(row.password_ciphertext || row.wrapped_ciphertext),
     // Whether an authenticator-app (TOTP) seed is saved so Hamilton can clear a
     // 2FA gate on her own. The seed itself is NEVER returned — only this flag.
     has_totp: Boolean(row.totp_secret_ciphertext),
+    // Whether this login was auto-provisioned under the profile's master
+    // passphrase (its password is wrapped with the master key, not just the
+    // server vault). The wrapped secret itself is NEVER returned.
+    has_master_wrap: Boolean(row.has_master_wrap),
     status: row.status,
     last_used_at: row.last_used_at || null,
     // Hamilton-generated logins (he created the account on the user's behalf
@@ -457,16 +485,37 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
   const wantDomain = registrableDomain(host)
   if (!wantDomain) return null
   const match = (rows || []).find((r) => registrableDomain(r.portal_host) === wantDomain)
-  if (!match || !match.password_ciphertext) return null
+  if (!match) return null
+  if (!match.password_ciphertext && !match.wrapped_ciphertext) return null
   let password = null
-  try {
-    password = decryptRuntimeSecret({
-      value_ciphertext: match.password_ciphertext,
-      iv: match.password_iv,
-      tag: match.password_tag,
-    })
-  } catch {
-    return null
+  if (match.has_master_wrap && match.wrapped_ciphertext) {
+    // Auto-provisioned login: the password is wrapped with the profile's master
+    // key. We can only recover it when the vault is UNLOCKED (the key is held in
+    // the runtime cache). When locked we return a sentinel so the caller surfaces
+    // a clear "unlock vault" status instead of decrypting silently.
+    const key = getUnlockedKey(String(profileId))
+    if (!key) {
+      return { id: match.id, portal_host: match.portal_host, login_url: match.login_url || null, username: match.username || null, password: null, totp_secret: null, vault_locked: true }
+    }
+    try {
+      password = unwrapSecretWithKey({
+        wrapped_ciphertext: match.wrapped_ciphertext,
+        wrapped_iv: match.wrapped_iv,
+        wrapped_tag: match.wrapped_tag,
+      }, key)
+    } catch {
+      return { id: match.id, portal_host: match.portal_host, login_url: match.login_url || null, username: match.username || null, password: null, totp_secret: null, vault_locked: true }
+    }
+  } else {
+    try {
+      password = decryptRuntimeSecret({
+        value_ciphertext: match.password_ciphertext,
+        iv: match.password_iv,
+        tag: match.password_tag,
+      })
+    } catch {
+      return null
+    }
   }
   // Decrypt the authenticator seed too, when present, so the engine can derive
   // the live 2FA code. A decrypt failure here is non-fatal: Hamilton still has
@@ -678,6 +727,65 @@ export async function saveGeneratedCredential(db, {
     // the plaintext.
     password_one_time_view: password,
   }
+}
+
+/**
+ * Auto-provision a login under the profile's MASTER PASSPHRASE (Portal Autopilot
+ * Identity). Generates a UNIQUE crypto-random password (never reused), wraps it
+ * with the supplied master wrapping key (inner layer) on top of the server vault
+ * (outer layer), and stores it. password_ciphertext is left NULL — the password
+ * is recoverable only with BOTH the server vault key AND the master passphrase.
+ *
+ * Requires a non-null `masterKey` (the caller obtains it from the unlocked
+ * vault). Idempotent on (profile_id, portal_host): an existing active credential
+ * is returned untouched with already_existed:true so a working login is never
+ * rotated out from under the user.
+ *
+ * Returns BOTH the masked row AND the plaintext password ONCE so the caller can
+ * show it to the user. From then on only the server-side engine path
+ * (getDecryptedCredential, with the vault unlocked) ever sees the plaintext.
+ */
+export async function saveAutoProvisionedCredential(db, {
+  userId, profileId, portalHost, username, masterKey,
+  label = null, loginUrl = null, reason = null, passwordLength = 28,
+} = {}) {
+  if (!db || !userId || !profileId) throw new Error('userId and profileId required')
+  if (!masterKey) throw new Error('masterKey required (vault must be unlocked)')
+  const host = normalizeHost(portalHost)
+  if (!host) throw new Error('portalHost required')
+  if (!registrableDomain(host)) throw new Error('portalHost must be a full domain (e.g. mtsu.edu)')
+  if (!username || !String(username).trim()) throw new Error('username required')
+  await ensureSchema(db)
+
+  const existing = await db.prepare(
+    `SELECT * FROM hamilton_portal_credentials
+       WHERE profile_id = ? AND portal_host = ? AND status = 'active' LIMIT 1`,
+  ).get(String(profileId), host)
+  if (existing) {
+    return { credential: rowToMasked(existing), already_existed: true, password_one_time_view: null }
+  }
+
+  const password = generateStrongPassword(passwordLength)
+  const wrapped = wrapSecretWithKey(password, masterKey)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const trueVal = db?.dialect === 'postgres' ? 'TRUE' : '1'
+  const id = crypto.randomUUID()
+  await db.prepare(
+    `INSERT INTO hamilton_portal_credentials
+       (id, user_id, profile_id, portal_host, label, login_url, username,
+        has_master_wrap, wrapped_ciphertext, wrapped_iv, wrapped_tag, status,
+        generated_by, generation_reason, generated_at, managed_by,
+        created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ${trueVal}, ?, ?, ?, 'active', 'hamilton', ?, ${nowFn}, 'hamilton', ${nowFn}, ${nowFn})`,
+  ).run(
+    id, String(userId), String(profileId), host,
+    label || `Auto-provisioned by Hamilton for ${host}`,
+    loginUrl, String(username),
+    wrapped.wrapped_ciphertext, wrapped.wrapped_iv, wrapped.wrapped_tag,
+    reason ? String(reason) : 'portal_autopilot_identity',
+  )
+  const row = await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(id)
+  return { credential: rowToMasked(row), already_existed: false, password_one_time_view: password }
 }
 
 /**

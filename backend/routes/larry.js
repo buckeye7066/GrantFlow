@@ -74,10 +74,15 @@ router.get('/health', async (_req, res) => {
   res.json({
     ok: true,
     agent: LARRY_AGENT_NAME,
-    status: cfg.enabled ? 'enabled' : 'disabled',
+    // Yana's discovery + drafting are always available; "status" reflects that,
+    // not the separate manual-send switch. She never sends email herself.
+    status: 'ok',
+    role: 'lead_discovery_and_drafting',
+    sends_email: false,
+    discovery_and_drafting: 'always_on',
+    manual_send_step_enabled: cfg.enabled,
     mode: cfg.mode,
     require_approval_to_send: cfg.requireApprovalToSend,
-    auto_send_outreach: cfg.autoSendOutreach,
   })
 })
 
