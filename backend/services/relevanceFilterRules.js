@@ -428,6 +428,22 @@ function _hasConcreteDeadline(opportunity) {
 
 // ── Rule definitions ──────────────────────────────────────────────────────────
 
+// Templated geo-stub signature. These funder names are directory/referral
+// resources (per the crawler doctrine), NOT direct grant opportunities — and the
+// synthesized rows ("United Way near X", "Community Action Agency - X County",
+// "United Way of X County", "<X> County Housing Authority") carry national
+// locator URLs, not specific programs. A row carrying record_type=
+// 'directory_resource' / opportunity_kind='DIRECTORY' is an HONEST directory and
+// is exempt — only the dishonestly-shaped "direct opportunity" form is rejected.
+const GEO_STUB_TITLE_RX = /(?:United Way|Community Action Agency|Community Action Partnership|Food Bank|Feeding America|Salvation Army|Volunteer Fire Department Grants?)\b[^,]*?(?:\bnear\b|\bof\s+.+?\s+County\b|-\s+.+?\s+County\b)|\b.+?\s+County Housing Authority\b/i
+
+export function isTemplatedGeoStub(opportunity) {
+  if (!opportunity) return false
+  if (opportunity.record_type === 'directory_resource' || opportunity.opportunity_kind === 'DIRECTORY') return false
+  const title = String(opportunity.title || opportunity.name || '').trim()
+  return Boolean(title) && GEO_STUB_TITLE_RX.test(title)
+}
+
 export const RELEVANCE_RULES = [
   // ── 1a. Entity Type: individual-only programs for org profiles ────────────
   {
@@ -1020,6 +1036,21 @@ export const RELEVANCE_RULES = [
                 return !url || typeof url !== 'string' || !url.startsWith('http')
         },
         reason: 'Data quality: no actionable URL — cannot apply or visit this opportunity',
+  },
+
+  // — 19b. Templated geo-stub — reject synthesized "United Way near X" /
+  // "Community Action Agency - X County" rows that are locators dishonestly
+  // shaped as county-specific direct opportunities. Honest directory records
+  // (record_type=directory_resource) are exempt. This is the canonical guard
+  // that keeps geo-stubs from ever ranking as real funding again.
+  {
+        id: 'templated_geo_stub',
+        category: 'data_quality',
+        description: 'Templated geo-stub locator dishonestly shaped as a county-specific direct opportunity',
+        hard: true,
+        oppPattern: null,
+        profileCheck: (pd, oppText, opp) => isTemplatedGeoStub(opp),
+        reason: 'Data quality: templated geo-stub (directory/locator labeled as a county-specific opportunity)',
   },
 
     // — 20. Generic directory page — reject opportunities that are just org homepages
