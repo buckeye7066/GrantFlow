@@ -26,7 +26,7 @@ import path from 'path'
 // of them). Its API surface (lookup/lookupByState/lookupByCoords/codes/states)
 // matches `zipcodes`, so this is a drop-in swap that unlocks Canada coverage.
 import zipcodes from 'zipcodes-nrviens'
-import { searchGrants } from './grantsGovClient.js'
+import { searchGrants } from '../shared/grantsGovClient.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
 // Profile-driven Grants.gov query terms. When a profile context is supplied to
 // the geo crawl, we build the search keywords from the profile (type + needs +

@@ -7,7 +7,7 @@
  *   Opportunity validity rules (URL integrity, loan detection, matching funds,
  *   placeholder text, expiration, directory classification, source trust) are
  *   spread across at least five modules today:
- *     - backend/services/crawlers/opportunityPolicy.js
+ *     - backend/services/shared/opportunityPolicy.js
  *     - backend/services/opportunityValidator.js
  *     - backend/services/opportunityValidationLayer.js
  *     - backend/config/urlRules.js
@@ -54,7 +54,7 @@ import {
   isPlaceholderOpportunity,
   isValidRealUrl,
   isExpired as isExpiredPolicy,
-} from './crawlers/opportunityPolicy.js'
+} from './shared/opportunityPolicy.js'
 import {
   isPlaceholderUrl,
   isNonActionableUrl,
@@ -293,7 +293,7 @@ export function assessOpportunityTrust(opp, opts = {}) {
   //   - Directory-like rows are NEVER treated as expired by date, because
   //     they represent ongoing pointers to agencies/portals, not a single
   //     award cycle. The upstream `isExpiredPolicy` helper in
-  //     crawlers/opportunityPolicy.js does not know about directories and
+  //     shared/opportunityPolicy.js does not know about directories and
   //     would otherwise drop them as soon as any associated date passes.
   //   - Non-directory rows are checked with BOTH the policy and route
   //     expiration helpers so rolling/ongoing markers and ambiguous date

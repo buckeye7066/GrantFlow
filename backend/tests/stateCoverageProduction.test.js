@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { STATE_REGISTRY } from '../services/crawlers/data/stateRegistry.js'
-import { generateStatePrograms, isStateInRegistry } from '../services/crawlers/data/stateBase.js'
+import { STATE_REGISTRY } from '../services/shared/data/stateRegistry.js'
+import { generateStatePrograms, isStateInRegistry } from '../services/shared/data/stateBase.js'
 
 // Production-readiness contract for geographic coverage: every US state + DC must
 // be enumerated and must generate a complete set of REAL federal-passthrough

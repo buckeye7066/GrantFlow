@@ -38,7 +38,7 @@ import {
   isPlaceholderOpportunity,
   isValidRealUrl,
   isExpired as isExpiredPolicy,
-} from './crawlers/opportunityPolicy.js'
+} from './shared/opportunityPolicy.js'
 import {
   isPlaceholderUrl,
   isNonActionableUrl,

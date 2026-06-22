@@ -343,8 +343,8 @@ async function processLiveSearchJob({ db, job, profileContext }) {
 
   const [{ searchLiveFederalByProfile }, { searchLocalWebByProfile }, { ingestOpportunities }, { upsertFundingOpportunity }] =
     await Promise.all([
-      import('./crawlers/liveFederalSearch.js'),
-      import('./crawlers/liveWebSearch.js'),
+      import('./shared/liveFederalSearch.js'),
+      import('./shared/liveWebSearch.js'),
       import('./sources/ingestionService.js'),
       import('./opportunityInserter.js'),
     ])

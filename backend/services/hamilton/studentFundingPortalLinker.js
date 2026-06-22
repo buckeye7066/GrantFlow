@@ -35,7 +35,7 @@ import {
   upsertStudentPortal,
   normalizeSchoolName,
 } from './studentPortalStore.js'
-import { getKnownSchool } from '../crawlers/data/knownSchools.js'
+import { getKnownSchool } from '../shared/data/knownSchools.js'
 
 let ensuredLinkSchema = false
 

@@ -10,11 +10,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const getWithRetryMock = vi.fn()
 
-vi.mock('../services/crawlers/httpClient.js', () => ({
+vi.mock('../services/shared/httpClient.js', () => ({
   getWithRetry: (...a) => getWithRetryMock(...a),
 }))
 
-const { makeSearxngProvider } = await import('../services/crawlers/searxngProvider.js')
+const { makeSearxngProvider } = await import('../services/shared/searxngProvider.js')
 
 const SEARXNG_JSON = {
   results: [

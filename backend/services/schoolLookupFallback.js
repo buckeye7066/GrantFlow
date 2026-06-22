@@ -1,4 +1,4 @@
-import { getKnownSchool } from './crawlers/data/knownSchools.js'
+import { getKnownSchool } from './shared/data/knownSchools.js'
 
 export const EMPTY_SCHOOL_LOOKUP_DATA = Object.freeze({
   acceptanceRate: '—',

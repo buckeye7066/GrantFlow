@@ -2,7 +2,7 @@
  * seedScholarships.js
  *
  * Idempotent startup seed that pushes the curated SCHOLARSHIPS catalog
- * (services/crawlers/data/scholarships.js) into the funding_opportunities
+ * (services/shared/data/scholarships.js) into the funding_opportunities
  * table at server boot.
  *
  * Without this seed, the rich student-aid pool — including state TN HOPE /
@@ -23,7 +23,7 @@
  * upserts on source_id. Re-running has no effect beyond a touch.
  */
 
-import { SCHOLARSHIPS } from '../crawlers/data/scholarships.js'
+import { SCHOLARSHIPS } from '../shared/data/scholarships.js'
 import { bulkUpsertFundingOpportunities } from '../opportunityInserter.js'
 
 /**

@@ -2617,13 +2617,13 @@ if (process.env.NODE_ENV !== 'test') {
           const liveWeb = /^(1|true|yes|on)$/i.test(String(process.env.YANA_ALLOW_LIVE_WEB || ''))
           if (liveWeb) {
             // Yana's contact enricher shares ONE canonical web-search engine with
-            // profile discovery (services/crawlers/webSearchEngine.js): Brave when
+            // profile discovery (services/shared/webSearchEngine.js): Brave when
             // BRAVE_SEARCH_API_KEY is set, else keyless DuckDuckGo. This means Yana
             // can search the web even without a Brave key — YANA_ALLOW_LIVE_WEB is
             // the single master gate for Yana's outbound live-web access.
             const [{ searchWeb }, { makeHtmlFetcher }, { makeContactEnricher, setDefaultContactEnricher }] =
               await Promise.all([
-                import('./services/crawlers/webSearchEngine.js'),
+                import('./services/shared/webSearchEngine.js'),
                 import('./services/yana/webSearchProvider.js'),
                 import('./services/yana/yanaContactEnrichment.js'),
               ])

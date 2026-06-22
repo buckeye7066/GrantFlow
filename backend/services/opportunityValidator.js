@@ -21,7 +21,7 @@ import {
   isMatchingFunds,
   isPlaceholderOpportunity,
   pickRealUrl,
-} from './crawlers/opportunityPolicy.js'
+} from './shared/opportunityPolicy.js'
 
 import {
   normalizeUrlForDedupe,

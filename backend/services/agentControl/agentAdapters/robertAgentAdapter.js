@@ -13,7 +13,7 @@
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
-import { searchWeb } from '../../crawlers/webSearchEngine.js'
+import { searchWeb } from '../../shared/webSearchEngine.js'
 
 export class RobertAgentAdapter extends BaseAgentAdapter {
   constructor() {

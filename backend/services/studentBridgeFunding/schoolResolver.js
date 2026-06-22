@@ -19,7 +19,7 @@
  * website (passed by the user) when present.
  */
 
-import { KNOWN_SCHOOLS, getKnownSchool } from '../crawlers/data/knownSchools.js'
+import { KNOWN_SCHOOLS, getKnownSchool } from '../shared/data/knownSchools.js'
 
 const STATUS_RANK = {
   enrolled: 100,

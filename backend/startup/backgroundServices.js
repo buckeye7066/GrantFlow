@@ -153,7 +153,7 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
   }, 3000);
 
   // ── 4c. Seed curated SCHOLARSHIPS into funding_opportunities ──────────────
-  // Pushes services/crawlers/data/scholarships.js (TN HOPE / Promise / TSAA /
+  // Pushes services/shared/data/scholarships.js (TN HOPE / Promise / TSAA /
   // STEP UP / Aspire, Federal Pell / FSEOG, off-campus / room-and-board
   // scholarships, forensic / STEM / heritage funds) into the catalog so
   // queries like "off-campus living expenses at MTSU" return real student

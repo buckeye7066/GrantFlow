@@ -12,7 +12,7 @@ import {
   enrichOrgContact,
   extractPhones,
   extractContactName,
-} from '../services/crawlers/orgContactEnrichment.js'
+} from '../services/shared/orgContactEnrichment.js'
 import {
   runYanaWebCrawl,
   registerWebSource,

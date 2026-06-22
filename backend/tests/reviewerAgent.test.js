@@ -37,7 +37,7 @@ describe('reviewerAgent.reviewOpportunity', () => {
     // Must be rejected: exact-token placeholders and obvious filler phrasing.
     // "Test Grant" / "Sample Opportunity" / "Example Program" are intentionally
     // NOT in this list — the canonical placeholder filter in
-    // backend/services/crawlers/opportunityPolicy.js (runs before the reviewer)
+    // backend/services/shared/opportunityPolicy.js (runs before the reviewer)
     // decides on substring-based rejections, and the inserter-level contract
     // in tests/unit/opportunityInserter.test.mjs requires titles like
     // "Example Opportunity" to continue to flow through.

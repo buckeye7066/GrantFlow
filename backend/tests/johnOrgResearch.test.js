@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const searchWebMock = vi.fn()
 const anthropicCreateMock = vi.fn()
 
-vi.mock('../services/crawlers/webSearchEngine.js', () => ({
+vi.mock('../services/shared/webSearchEngine.js', () => ({
   searchWeb: (...a) => searchWebMock(...a),
 }))
 

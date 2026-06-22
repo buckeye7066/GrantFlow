@@ -17,7 +17,7 @@ import {
   getPlaceholderHostnames,
   pickRealUrl as policyPickRealUrl,
   isPlaceholderOpportunity,
-} from '../services/crawlers/opportunityPolicy.js'
+} from '../services/shared/opportunityPolicy.js'
 
 describe('urlRules drift protection', () => {
   it('opportunityPolicy reuses canonical placeholder hostnames', () => {

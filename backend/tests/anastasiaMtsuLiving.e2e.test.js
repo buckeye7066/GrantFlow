@@ -21,8 +21,8 @@ import { describe, it, expect } from 'vitest'
 import { interpretFundingIntentRules, detectPrimaryCategory } from '../services/smartMatcherIntent.js'
 import { buildProfileSignals } from '../services/profileHelpers.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
-import { NATIONAL_PROGRAMS } from '../services/crawlers/data/nationalPrograms.js'
-import { SCHOLARSHIPS } from '../services/crawlers/data/scholarships.js'
+import { NATIONAL_PROGRAMS } from '../services/shared/data/nationalPrograms.js'
+import { SCHOLARSHIPS } from '../services/shared/data/scholarships.js'
 
 const ANASTASIA_QUERY = 'Help me find funding for off-campus living expenses at MTSU'
 

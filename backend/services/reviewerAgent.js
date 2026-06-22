@@ -29,7 +29,7 @@
 
 // ── Placeholder / hallucination patterns ────────────────────────────────────
 // Deliberately NARROWER than a naive prefix match. The canonical placeholder
-// filter already lives in backend/services/crawlers/opportunityPolicy.js
+// filter already lives in backend/services/shared/opportunityPolicy.js
 // (`PLACEHOLDER_TEXT_PATTERNS` / `isPlaceholderOpportunity`) and runs BEFORE
 // the reviewer. Duplicating a loose `^(test|sample|example)\b` match here
 // broke the long-standing contract that legitimate titles like

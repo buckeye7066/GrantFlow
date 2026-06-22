@@ -11,7 +11,7 @@ import { runDomainCrawler, looksLikeLoan, looksLikeMatchingFunds } from './domai
 import { DOMAIN_CRAWLER_REGISTRY, selectRelevantDomainIds } from './domainCrawlerRegistry.js'
 import { runAllDomainEngines, DOMAIN_ENGINES } from './domainEngines/index.js'
 import { bulkUpsertFundingOpportunities } from '../opportunityInserter.js'
-import { headForVerification } from './httpClient.js'
+import { headForVerification } from '../shared/httpClient.js'
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('domainCorpusCrawler')
 

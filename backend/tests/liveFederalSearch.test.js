@@ -29,7 +29,7 @@ vi.mock('../services/sources/usaSpending.js', () => ({ fetchUSASpending: (...a) 
 vi.mock('../src/integrations/nihReporter.js', () => ({ fetchOpportunities: (...a) => fetchNihMock(...a) }))
 vi.mock('../services/sourceRegistry.js', () => ({ buildGrantsGovQueryTerms: (...a) => buildTermsMock(...a) }))
 
-const { searchLiveFederalByProfile } = await import('../services/crawlers/liveFederalSearch.js')
+const { searchLiveFederalByProfile } = await import('../services/shared/liveFederalSearch.js')
 
 const opp = (source, id, extra = {}) => ({
   source,

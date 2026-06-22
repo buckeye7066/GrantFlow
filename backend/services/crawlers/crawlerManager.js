@@ -16,20 +16,20 @@ import { loadProfileSignals, buildSignalsFromContext } from '../profileSignals/i
 import { matchPrograms } from './matchEngine.js';
 import { getStrategy, checkGates } from './strategyRegistry.js';
 import { normalizeState, statesMatch } from '../../utils/stateNormalization.js';
-import { FEDERAL_BENEFITS } from './data/federalBenefits.js';
-import { NATIONAL_PROGRAMS } from './data/nationalPrograms.js';
-import { BUSINESS_PROGRAMS } from './data/businessPrograms.js';
-import { SCHOLARSHIPS } from './data/scholarships.js';
-import { PRESCRIPTION_ASSISTANCE_PROGRAMS } from './data/prescriptionAssistance.js';
-import { SENIOR_PROGRAMS } from './data/seniorPrograms.js';
-import { PROPERTY_TAX_RELIEF_PROGRAMS } from './data/propertyTaxRelief.js';
-import { UTILITY_ASSISTANCE_PROGRAMS } from './data/utilityAssistance.js';
-import { FAITH_BASED_PROGRAMS } from './data/faithBasedPrograms.js';
-import { FAMILY_PROGRAMS } from './data/familyPrograms.js';
-import { SCHOOL_PROGRAMS } from './data/schoolPrograms.js';
-import { VOLUNTEER_FIRE_PROGRAMS } from './data/volunteerFirePrograms.js';
-import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
-import { enrichSchool } from './data/knownSchools.js';
+import { FEDERAL_BENEFITS } from '../shared/data/federalBenefits.js';
+import { NATIONAL_PROGRAMS } from '../shared/data/nationalPrograms.js';
+import { BUSINESS_PROGRAMS } from '../shared/data/businessPrograms.js';
+import { SCHOLARSHIPS } from '../shared/data/scholarships.js';
+import { PRESCRIPTION_ASSISTANCE_PROGRAMS } from '../shared/data/prescriptionAssistance.js';
+import { SENIOR_PROGRAMS } from '../shared/data/seniorPrograms.js';
+import { PROPERTY_TAX_RELIEF_PROGRAMS } from '../shared/data/propertyTaxRelief.js';
+import { UTILITY_ASSISTANCE_PROGRAMS } from '../shared/data/utilityAssistance.js';
+import { FAITH_BASED_PROGRAMS } from '../shared/data/faithBasedPrograms.js';
+import { FAMILY_PROGRAMS } from '../shared/data/familyPrograms.js';
+import { SCHOOL_PROGRAMS } from '../shared/data/schoolPrograms.js';
+import { VOLUNTEER_FIRE_PROGRAMS } from '../shared/data/volunteerFirePrograms.js';
+import { generateStatePrograms, isStateInRegistry } from '../shared/data/stateBase.js';
+import { enrichSchool } from '../shared/data/knownSchools.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('crawlerManager')

@@ -5,7 +5,7 @@
  */
 
 import crypto from 'crypto';
-import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js';
+import { enforceOpportunityPolicy } from '../shared/opportunityPolicy.js';
 import { validateOpportunity } from '../opportunityValidator.js';
 import { reviewOpportunity } from '../reviewerAgent.js';
 import { assessReality } from '../opportunityRealityGate.js';

@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { interpretFundingIntentRules } from '../services/smartMatcherIntent.js'
-import { NATIONAL_PROGRAMS } from '../services/crawlers/data/nationalPrograms.js'
+import { NATIONAL_PROGRAMS } from '../services/shared/data/nationalPrograms.js'
 import { seedNationalPrograms as _unused } from '../services/seed/seedNationalPrograms.js'
 void _unused
 

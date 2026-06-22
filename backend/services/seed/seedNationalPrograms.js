@@ -17,7 +17,7 @@
  * Re-running has no effect beyond a `last_verified_at`-style touch.
  */
 
-import { NATIONAL_PROGRAMS } from '../crawlers/data/nationalPrograms.js'
+import { NATIONAL_PROGRAMS } from '../shared/data/nationalPrograms.js'
 import { bulkUpsertFundingOpportunities } from '../opportunityInserter.js'
 
 /**

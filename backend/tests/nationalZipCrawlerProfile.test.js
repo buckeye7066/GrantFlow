@@ -23,7 +23,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest'
 
 // Capture every keyword the crawler sends to Grants.gov.
 const grantsGovCalls = []
-vi.mock('../services/crawlers/grantsGovClient.js', () => ({
+vi.mock('../services/shared/grantsGovClient.js', () => ({
   searchGrants: vi.fn(async (keyword) => {
     grantsGovCalls.push(keyword)
     // Return no hits so the test focuses on which terms were queried, not mapping.

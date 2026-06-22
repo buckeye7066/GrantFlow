@@ -36,7 +36,7 @@ import {
   isExpired,
   isPlaceholderOpportunity,
   getPlaceholderHostnames,
-} from './crawlers/opportunityPolicy.js'
+} from './shared/opportunityPolicy.js'
 
 /**
  * @typedef {Object} AuditFinding

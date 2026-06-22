@@ -11,12 +11,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const searchWebMock = vi.fn()
-vi.mock('../services/crawlers/webSearchEngine.js', () => ({
+vi.mock('../services/shared/webSearchEngine.js', () => ({
   searchWeb: (...a) => searchWebMock(...a),
 }))
 
 const { searchLocalWebByProfile, buildLocalFundingQueries } = await import(
-  '../services/crawlers/liveWebSearch.js'
+  '../services/shared/liveWebSearch.js'
 )
 
 const ctx = {

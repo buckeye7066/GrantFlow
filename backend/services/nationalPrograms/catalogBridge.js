@@ -27,7 +27,7 @@
  */
 
 import crypto from 'crypto'
-import { isValidRealUrl } from '../crawlers/opportunityPolicy.js'
+import { isValidRealUrl } from '../shared/opportunityPolicy.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
 
 /** Stable cross-run fingerprint so the same program is not re-inserted every 6h. */

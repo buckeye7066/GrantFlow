@@ -14,18 +14,18 @@ const makeBraveMock = vi.fn(() => braveSearchFn)
 const searxngSearchFn = vi.fn()
 const makeSearxngMock = vi.fn(() => searxngSearchFn)
 
-vi.mock('../services/crawlers/httpClient.js', () => ({
+vi.mock('../services/shared/httpClient.js', () => ({
   getWithRetry: (...a) => getWithRetryMock(...a),
 }))
 vi.mock('../services/yana/webSearchProvider.js', () => ({
   makeBraveSearchProvider: (...a) => makeBraveMock(...a),
 }))
-vi.mock('../services/crawlers/searxngProvider.js', () => ({
+vi.mock('../services/shared/searxngProvider.js', () => ({
   makeSearxngProvider: (...a) => makeSearxngMock(...a),
 }))
 
 const { searchWeb, _resetWebSearchEngineForTests } = await import(
-  '../services/crawlers/webSearchEngine.js'
+  '../services/shared/webSearchEngine.js'
 )
 
 // Minimal DuckDuckGo HTML: one real result (via uddg redirect) + one social

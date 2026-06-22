@@ -15,7 +15,7 @@
  */
 
 import { createOpenAIClient } from '../utils/openaiClient.js'
-import { expandNeed } from './crawlers/needTaxonomy.js'
+import { expandNeed } from './shared/needTaxonomy.js'
 
 const MAX_INPUT = 2000
 // Raised from 18 to 24 in the student_aid + professional_development

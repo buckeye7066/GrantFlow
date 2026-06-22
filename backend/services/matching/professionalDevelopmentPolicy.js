@@ -5,9 +5,9 @@
  * nursing foundations, HRSA, VR, and association scholarships — not SSI.
  */
 
-import { expandNeed } from '../crawlers/needTaxonomy.js'
-import NATIONAL_PROGRAMS from '../crawlers/data/nationalPrograms.js'
-import SCHOLARSHIPS from '../crawlers/data/scholarships.js'
+import { expandNeed } from '../shared/needTaxonomy.js'
+import NATIONAL_PROGRAMS from '../shared/data/nationalPrograms.js'
+import SCHOLARSHIPS from '../shared/data/scholarships.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('matching:professionalDevelopment')

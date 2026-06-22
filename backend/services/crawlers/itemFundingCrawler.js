@@ -34,14 +34,14 @@ function buildSearchKeywords(profile, maxKeywords = 10) {
   if (name) kw.add(name.split(/\s+/)[0]);
   return [...kw].slice(0, maxKeywords);
 }
-import { getWithRetry } from './httpClient.js'
+import { getWithRetry } from '../shared/httpClient.js'
 import { planCrawlerQueries } from './queryPlanner.js'
 import {
   resolveCrawlerContext,
   mergePlanKeywords,
   enforceCrawlerOpportunityContract,
-} from './crawlerOpportunityContract.js'
-import { enforceOpportunityPolicy } from './opportunityPolicy.js'
+} from '../shared/crawlerOpportunityContract.js'
+import { enforceOpportunityPolicy } from '../shared/opportunityPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('itemFundingCrawler')
 

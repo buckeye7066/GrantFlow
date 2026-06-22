@@ -76,8 +76,8 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 import { loadProfileContext } from './profileHelpers.js'
-import { searchWeb } from './crawlers/webSearchEngine.js'
-import { searchLocalWebByProfile } from './crawlers/liveWebSearch.js'
+import { searchWeb } from './shared/webSearchEngine.js'
+import { searchLocalWebByProfile } from './shared/liveWebSearch.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import {
@@ -2107,7 +2107,7 @@ registerTool({
 
 /**
  * Live web search for funding — the same canonical engine the discovery
- * pipeline and Yana use (services/crawlers/webSearchEngine.js: Brave when
+ * pipeline and Yana use (services/shared/webSearchEngine.js: Brave when
  * BRAVE_SEARCH_API_KEY is set, else keyless DuckDuckGo).
  *
  * Two modes, combinable:

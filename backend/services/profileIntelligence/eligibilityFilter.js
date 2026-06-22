@@ -17,7 +17,7 @@
  */
 
 import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
-import { isValidHttpUrl } from '../crawlers/crawlerOpportunityContract.js'
+import { isValidHttpUrl } from '../shared/crawlerOpportunityContract.js'
 import { isTruthyFlag } from '../opportunityTrust.js'
 
 /** Parse a DB field that may be a JSON array, CSV string, or already an array. */

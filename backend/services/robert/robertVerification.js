@@ -21,7 +21,7 @@
  *   { ok: false, reason: <REJECTION_REASONS code>, stage: <gate>, raw: <gate result>, warnings: [...] }
  */
 
-import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js'
+import { enforceOpportunityPolicy } from '../shared/opportunityPolicy.js'
 import { validateOpportunity } from '../opportunityValidator.js'
 import { reviewOpportunity } from '../reviewerAgent.js'
 import { assessReality } from '../opportunityRealityGate.js'

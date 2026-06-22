@@ -13,10 +13,10 @@ const searchWebMock = vi.fn()
 const searchLocalWebByProfileMock = vi.fn()
 const loadProfileContextMock = vi.fn()
 
-vi.mock('../services/crawlers/webSearchEngine.js', () => ({
+vi.mock('../services/shared/webSearchEngine.js', () => ({
   searchWeb: (...a) => searchWebMock(...a),
 }))
-vi.mock('../services/crawlers/liveWebSearch.js', () => ({
+vi.mock('../services/shared/liveWebSearch.js', () => ({
   searchLocalWebByProfile: (...a) => searchLocalWebByProfileMock(...a),
 }))
 vi.mock('../services/profileHelpers.js', () => ({

@@ -1,5 +1,5 @@
 /**
- * Unit tests for backend/services/crawlers/robotsPolicy.js
+ * Unit tests for backend/services/shared/robotsPolicy.js
  */
 
 import { describe, it, expect } from 'vitest'
@@ -8,7 +8,7 @@ import {
   isPathAllowed,
   crawlDelayFor,
   isUrlAllowed,
-} from '../services/crawlers/robotsPolicy.js'
+} from '../services/shared/robotsPolicy.js'
 
 const UA = 'GrantFlow Crawler/1.0'
 

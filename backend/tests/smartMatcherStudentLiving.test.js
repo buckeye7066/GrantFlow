@@ -200,8 +200,8 @@ describe('Smart Matcher — Student Living / Cost of Attendance', () => {
 //   3. NATIONAL_PROGRAMS contains the seed rows that those terms would
 //      reach (so SQL `LIKE '%pell grant%'` will match Federal Pell Grant).
 // ---------------------------------------------------------------------------
-import { NATIONAL_PROGRAMS } from '../services/crawlers/data/nationalPrograms.js'
-import { SCHOLARSHIPS } from '../services/crawlers/data/scholarships.js'
+import { NATIONAL_PROGRAMS } from '../services/shared/data/nationalPrograms.js'
+import { SCHOLARSHIPS } from '../services/shared/data/scholarships.js'
 
 describe('Anastasia / MTSU end-to-end smoke (regression)', () => {
   const ANASTASIA_QUERY = 'Help me find funding for off-campus living expenses at MTSU'

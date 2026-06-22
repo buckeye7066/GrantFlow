@@ -23,9 +23,9 @@
  */
 
 import crypto from 'node:crypto'
-import { getWithRetry, headForVerification } from '../crawlers/httpClient.js'
-import { isUrlAllowed } from '../crawlers/robotsPolicy.js'
-import { enrichOrgContact } from '../crawlers/orgContactEnrichment.js'
+import { getWithRetry, headForVerification } from '../shared/httpClient.js'
+import { isUrlAllowed } from '../shared/robotsPolicy.js'
+import { enrichOrgContact } from '../shared/orgContactEnrichment.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('yana-web-crawler')

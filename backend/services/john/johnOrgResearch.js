@@ -17,7 +17,7 @@
  * Gating: set JOHN_WEB_RESEARCH=off to disable entirely.
  */
 
-import { searchWeb } from '../crawlers/webSearchEngine.js'
+import { searchWeb } from '../shared/webSearchEngine.js'
 
 const MAX_RESULTS = 4
 const DEFAULT_TIMEOUT_MS = 6000
