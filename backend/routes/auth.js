@@ -33,7 +33,7 @@ import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
-import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
+import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import bcrypt from 'bcryptjs'
 
 import { createLogger } from '../utils/logger.js'
@@ -2041,7 +2041,7 @@ router.post('/email/verify', async (req, res) => {
 
   // Auto-trigger discovery crawlers on email login (fire and forget)
   if (activeProfileId) {
-    triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
+    runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
       console.error('[auth/email] Failed to queue auto-discovery crawlers:', err)
     })
   }
@@ -2357,7 +2357,7 @@ router.post('/phone/verify', async (req, res) => {
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)
   if (activeProfileId) {
-    triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
+    runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
       console.error('[auth/phone] Failed to queue auto-discovery crawlers:', err)
     })
   }
@@ -3127,7 +3127,7 @@ router.get('/:provider/callback', async (req, res) => {
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
     if (activeProfileId) {
-      triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
+      runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
         console.error(`[auth/${provider}] Failed to queue auto-discovery crawlers:`, err)
       })
     }
