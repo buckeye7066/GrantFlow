@@ -57,27 +57,32 @@ const violations = []
 // trackable: when the legacy fallbacks are removed, this set goes empty and the
 // `legacy-crawler-ban` guard can be flipped to hard-fail. Set
 // FAIL_ON_LEGACY_CRAWLER=1 to enforce (used once the cutover teardown is done).
-// (A) legacy crawler EXECUTION engine + (B) legacy MATCH engine. These are what
-// the Crawler OS replaces and must NOT be reachable from the runtime. NOT
-// included: shared config/infra the OS-era pipeline + invariant enforcer still
-// use legitimately (config/matchThresholds, config/relevanceFloor,
-// opportunityTrust, contentFilter) — those are not the crawler/match engine.
+// The legacy grant-DISCOVERY crawl ENGINE — what the Crawler OS replaces and
+// must NOT be reachable from the runtime. Scoped precisely to discovery-crawl
+// modules. INTENTIONALLY EXCLUDED (these are NOT the old crawler):
+//   - crawlerDispatcher / crawlerJobState / crawlerConcurrencyGuard / crawlerJobCreation:
+//     the shared job runner — still processes document_ingest / avatar_lookup /
+//     pipeline_automation jobs (discovery crawl is neutralized at the dispatch
+//     choke point in dispatchCrawlerJob).
+//   - matchEngine / opportunityMatcher: matchers used by Anya scout, validation
+//     gates, and non-discovery routes. The OS is the single DISCOVERY match
+//     authority (discovery routes are OS-first); these remain for other flows.
+//   - config/matchThresholds, config/relevanceFloor, opportunityTrust, contentFilter,
+//     relevanceFilterRules: shared config/relevance infra used by the OS-era
+//     pipeline + the invariant enforcer.
 const LEGACY_CRAWLER_PATTERNS = [
-  // (B) legacy match engine — one match authority is the OS now
-  /backend\/services\/matchEngine\.js$/,
-  /backend\/services\/matchingEngine\.js$/,
-  /backend\/services\/opportunityMatcher\.js$/,
-  // (A) legacy crawler execution engine
-  /backend\/services\/comprehensiveCrawler/,
-  /backend\/services\/crawlerDispatcher\.js$/,
-  /backend\/services\/crawlerJobState\.js$/,
+  /backend\/services\/comprehensiveCrawlerOptimized\.js$/,
   /backend\/services\/autoDiscoveryCrawlers\.js$/,
   /backend\/services\/scheduledAutoDiscovery\.js$/,
+  /backend\/services\/anyaAutonomousCrawler\.js$/,
   /backend\/services\/grantsDotGovCrawler\.js$/,
   /backend\/services\/realFundingCrawler\.js$/,
   /backend\/services\/realLocationFundingCrawler\.js$/,
   /backend\/services\/localCrawler\.js$/,
-  /backend\/services\/crawlers\//,
+  /backend\/services\/countyFundingCrawler\.js$/,
+  // the crawlers/ discovery engine (shared leaf utils already relocated to services/shared/)
+  /backend\/services\/crawlers\/(crawlerManager|domainCorpusCrawler|domainCrawlerEngine|domainCrawlerRegistry|domainCrawlers|ecfBenefitsCrawler|foundation990Crawler|itemFundingCrawler|nationalZipCrawler|stateWaiverBenefitsCrawler|studentBridgeFundingCrawler|strategyRegistry|queryPlanner|matchEngine|crawlerHelpers)\.js$/,
+  /backend\/services\/crawlers\/domainEngines\//,
 ]
 const legacyReached = new Set()
 

@@ -596,8 +596,17 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // pipeline automation) are unaffected and still run. There is intentionally
     // no flag to re-enable the old crawler (no dual-run); revert via git if ever
     // needed.
-    const NON_DISCOVERY_JOB_TYPES = new Set(['document_ingest', 'avatar_lookup', 'pipeline_automation'])
-    if (!NON_DISCOVERY_JOB_TYPES.has(job.type)) {
+    // Grant-DISCOVERY crawl job types — superseded by the Crawler OS. Everything
+    // NOT in this set (document_ingest, avatar_lookup, pipeline_automation,
+    // profile_enrichment, anya_match_scout, portal_check, …) still runs.
+    const DISCOVERY_CRAWL_JOB_TYPES = new Set([
+      'live_search', 'clinical_trials', 'local', 'scholarship', 'curated_benefits',
+      'health_resources', 'comprehensive', 'national', 'item_search', 'item_gift_search',
+      'student_bridge_funding', 'government_funding', 'student_grants', 'ecf_benefits',
+      'ecf_hcbs', 'special_needs', 'local_funding', 'item_matching', 'foundation_990',
+      'church', 'faith_based', 'ministry', 'family', 'school', 'k12', 'charter_school',
+    ])
+    if (DISCOVERY_CRAWL_JOB_TYPES.has(job.type)) {
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'completed', completed_at = CURRENT_TIMESTAMP, error = ?
