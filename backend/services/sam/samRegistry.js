@@ -538,6 +538,36 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    id: 'maintenance.nightlySweep',
+    label: 'Maintenance window + nightly sweep',
+    category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Reports the current maintenance phase (open/warning/down) and whether Sam\'s 04:00-ET nightly sweep ran for the current ET day. Flags when the app has been left in a DOWN window (e.g. a non-green nightly sweep that did not reopen). Fails open before the first run.',
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'maintenance: db unavailable' }
+      let phase = 'open'
+      try {
+        const { getMaintenanceStatus } = await import('../maintenance/maintenanceMode.js')
+        phase = (await getMaintenanceStatus(db))?.phase || 'open'
+      } catch { /* best-effort */ }
+      let lastSweep = null
+      try {
+        const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('nightly_maintenance_last_run')
+        lastSweep = row?.value || null
+      } catch { /* system_kv may not exist yet */ }
+      // A persistent DOWN window is worth surfacing (it means users are locked out).
+      const stuckDown = phase === 'down'
+      return {
+        ok: !stuckDown,
+        summary: stuckDown
+          ? 'App is in a DOWN maintenance window — verify the deploy/sweep finished and reopen.'
+          : `Maintenance phase: ${phase}. Last nightly sweep: ${lastSweep || 'not run yet'}.`,
+        evidence: { phase, last_nightly_sweep: lastSweep },
+      }
+    },
+  },
+  {
     id: 'comms.broadcastSurface',
     label: 'Owner broadcast / notifications surface',
     category: SAM_CATEGORIES.ROUTE_INTEGRITY,

@@ -4268,6 +4268,46 @@ registerTool({
   },
 })
 
+registerTool({
+  name: 'owner.set_maintenance',
+  description: 'OWNER ONLY. Put GrantFlow into (or out of) a maintenance window before/after code changes. action:"schedule" warns signed-in users then takes the app down after a grace period; action:"end" reopens it. Use when the owner says "take the site down for maintenance" / "bring the site back".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['schedule', 'end'] },
+      graceMinutes: { type: 'number', description: 'Warning grace before going down (default 5)' },
+      estimatedMinutes: { type: 'number', description: 'Expected downtime after grace (default 15)' },
+      message: { type: 'string' },
+    },
+    required: ['action'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const mod = await import('./maintenance/maintenanceMode.js')
+    const by = context?.ctx?.email || 'anya_owner'
+    if (params.action === 'end') return mod.endMaintenance(db, { by })
+    return mod.scheduleMaintenance(db, {
+      graceMinutes: params.graceMinutes, estimatedMinutes: params.estimatedMinutes,
+      reason: 'deploy', message: params.message || null, by,
+    })
+  },
+})
+
+registerTool({
+  name: 'owner.run_nightly_sweep',
+  description: 'OWNER ONLY. Run Sam\'s nightly maintenance sweep now: enter a maintenance window, run Sam in repair-safe mode, and reopen only if green. Use when the owner says "run the nightly maintenance" / "have Sam fix things now".',
+  requiresOwner: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runNightlyMaintenanceSweep } = await import('./maintenance/nightlySweep.js')
+    return runNightlyMaintenanceSweep(db, { force: true })
+  },
+})
+
 // ── Hamilton two-way portal sync ──────────────────────────────────────────
 //
 // Gating rationale: runPortalSync reads from / writes to a user's *authenticated*

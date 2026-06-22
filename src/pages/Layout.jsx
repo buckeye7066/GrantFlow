@@ -45,6 +45,7 @@ import { AnyaContextProvider } from "@/contexts/AnyaContext";
 import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import FreePeriodNotice from "@/components/banners/FreePeriodNotice.jsx";
+import MaintenanceGate from "@/components/maintenance/MaintenanceGate.jsx";
 import NotificationBell from "@/components/notifications/NotificationBell";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import UserStepCoach from "@/components/guidance/UserStepCoach";
@@ -362,6 +363,7 @@ export default function Layout({ children, currentPageName }) {
           <div className="flex-1 overflow-auto bg-background text-foreground">
             <div className="min-h-full">
               <AutoTimeTracker />
+              <MaintenanceGate />
               <ProBonoBanner />
               <FreePeriodNotice />
               {children}
