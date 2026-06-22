@@ -35,6 +35,9 @@ export default function PrintableApplication() {
           .p-8 {
             padding: 0 !important;
           }
+          .pt-20 {
+            padding-top: 0 !important;
+          }
           body, p, div, span {
             font-size: 11px !important;
             line-height: 1.3 !important;
@@ -133,7 +136,7 @@ export default function PrintableApplication() {
         </Button>
       </div>
 
-      <div className="max-w-4xl mx-auto p-8 bg-white">
+      <div className="max-w-4xl mx-auto p-8 pt-20 bg-white">
         <div className="text-center mb-6 pb-3 border-b-2 border-black avoid-break">
           <h1>COMPREHENSIVE PROFILE APPLICATION</h1>
           <p className="text-sm mt-2">Please complete all relevant sections below. If a section does not apply to you, simply leave it blank. This form helps us get to know you better, your background, achievements, and goals, all of which ensure we can serve you most effectively.</p>

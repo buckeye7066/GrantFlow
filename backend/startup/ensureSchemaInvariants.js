@@ -584,6 +584,28 @@ export async function ensureIngestionProvenanceTables(db, { logger = console } =
   )
 }
 
+/**
+ * profile_portal_status table (both dialects) — the per-profile portal
+ * MERGE/COMPLETION lifecycle (migration 124 / pg 0125). The store self-heals
+ * lazily (ensurePortalCompletionSchema), but the Monday-morning reminder sweep +
+ * the portals route read it on paths that may run before any write created the
+ * table, so we re-assert it on every boot like the other agent stores. Delegates
+ * to the store's ensure fn so the DDL lives in exactly one place.
+ */
+export async function ensurePortalCompletionStatusTable(db, { logger = console } = {}) {
+  return runStep(
+    'profile_portal_status',
+    '[database]',
+    logger,
+    async () => {
+      const { ensurePortalCompletionSchema } = await import(
+        '../services/hamilton/portalCompletionStore.js'
+      )
+      await ensurePortalCompletionSchema(db)
+    },
+  )
+}
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   const steps = [
     ['agent_subsystem', ensureAgentSubsystem],
@@ -597,6 +619,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['profile_discovery_column', ensureProfileDiscoveryColumn],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
     ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
+    ['profile_portal_status', ensurePortalCompletionStatusTable],
     ['perf_indexes', ensurePerfIndexes],
   ]
 

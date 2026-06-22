@@ -917,6 +917,24 @@ export async function processDocumentIngestionJob({
       } catch { /* never block ingestion on the Hamilton reconcile */ }
     }
 
+    // Owner requirement (b): if this document/URL is a COMPLETED application for a
+    // known funding-source portal (e.g. a completed FAFSA link), mark that portal
+    // complete-but-NOT-merged so the Portals dashboard reflects it and the weekly
+    // reminder keeps nudging until it's merged. Best-effort: never fail ingestion.
+    if (profile?.id) {
+      try {
+        const { detectAndMarkCompletedApplications } = await import('./hamilton/portalCompletionDetector.js')
+        await detectAndMarkCompletedApplications(db, {
+          profileId: profile.id,
+          documentId,
+          grantId: document.grant_id || null,
+          fileUrl: document.file_url || null,
+          text: document.extracted_text ?? document.notes ?? '',
+          fileName: document.name || null,
+        })
+      } catch { /* never block ingestion on portal-completion detection */ }
+    }
+
     const usedFallback = Boolean(openaiUnavailableMessage || openAIWarning)
     const summary = buildIngestSummaryFromUpdates(updates, {
       usedFallback,

@@ -85,7 +85,7 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
           >
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
               {GroupIcon && <GroupIcon className="w-3.5 h-3.5" />}
-              {group.label}
+              {group.groupI18nKey ? t(group.groupI18nKey) : group.label}
             </span>
             {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </SidebarMenuButton>
@@ -119,6 +119,7 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const { t } = useLanguage();
   const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen();
   const [showAdvancedTools, setShowAdvancedToolsState] = useState(getShowAdvancedTools);
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences();
@@ -225,7 +226,7 @@ export default function Layout({ children, currentPageName }) {
               </div>
               <div>
                 <h2 className="font-bold text-sidebar-foreground text-lg">GrantFlow</h2>
-                <p className="text-xs text-muted-foreground">Grant Management Suite</p>
+                <p className="text-xs text-muted-foreground">{t('layout.grantSuite')}</p>
               </div>
             </Link>
           </SidebarHeader>
@@ -247,7 +248,7 @@ export default function Layout({ children, currentPageName }) {
                 onClick={handleAdvancedToolsToggle}
                 className="text-[11px] text-muted-foreground hover:text-sidebar-foreground px-3 py-1.5"
               >
-                {showAdvancedTools ? "Hide advanced tools" : "Show advanced tools"}
+                {showAdvancedTools ? t('layout.hideAdvancedTools') : t('layout.showAdvancedTools')}
               </button>
             </div>
           </SidebarContent>
@@ -266,7 +267,7 @@ export default function Layout({ children, currentPageName }) {
               <button
                 onClick={handleLogout}
                 className="p-2 hover:bg-sidebar-accent rounded-lg transition-colors"
-                title="Logout"
+                title={t('layout.logout')}
               >
                 <LogOut className="w-4 h-4 text-muted-foreground" />
               </button>
@@ -275,18 +276,18 @@ export default function Layout({ children, currentPageName }) {
             {isAdmin ? (
               <div>
                 <div className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm text-sidebar-foreground">
-                  {displayName} (Admin View)
+                  {t('layout.adminViewLabel', { name: displayName })}
                 </div>
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Workspace shows data for{' '}
-                  <span className="font-medium text-sidebar-foreground">all profiles (admin)</span>
+                  {t('layout.workspaceShowsData')}{' '}
+                  <span className="font-medium text-sidebar-foreground">{t('layout.allProfilesAdmin')}</span>
                 </p>
               </div>
             ) : profiles?.length > 0 ? (
               <div>
                 <Select value={selectedProfileId || undefined} onValueChange={handleProfileChange}>
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Switch profile" />
+                    <SelectValue placeholder={t('layout.switchProfile')} />
                   </SelectTrigger>
                   <SelectContent>
                     {profiles.map((profile) => (
@@ -297,17 +298,17 @@ export default function Layout({ children, currentPageName }) {
                   </SelectContent>
                 </Select>
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Workspace shows data for{' '}
+                  {t('layout.workspaceShowsData')}{' '}
                   <span className="font-medium text-sidebar-foreground">
                     {profiles.find((p) => p.id === activeProfileId)?.display_name ??
                       profiles[0]?.display_name ??
-                      'your organization'}
+                      t('layout.yourOrganization')}
                   </span>
                 </p>
               </div>
             ) : null}
             <div className="pt-3 border-t border-sidebar-border text-center text-xs text-muted-foreground">
-              Created by <span className="font-semibold text-sidebar-foreground">John White</span>
+              {t('layout.createdBy')} <span className="font-semibold text-sidebar-foreground">John White</span>
             </div>
           </SidebarFooter>
         </Sidebar>
@@ -319,7 +320,7 @@ export default function Layout({ children, currentPageName }) {
                 <SidebarTrigger className="hover:bg-muted p-2 rounded-lg transition-colors duration-200 md:hidden" />
                 <div>
                   <h1 className="text-lg md:text-xl font-semibold text-foreground leading-tight">GrantFlow</h1>
-                  <p className="text-xs text-muted-foreground">AI-assisted grant management workspace</p>
+                  <p className="text-xs text-muted-foreground">{t('layout.headerSubtitle')}</p>
                 </div>
               </div>
           <div className="flex items-center gap-2 md:gap-3">
@@ -331,7 +332,7 @@ export default function Layout({ children, currentPageName }) {
             >
               <Link to={createPageUrl('Help')}>
                 <Sparkles className="w-3.5 h-3.5 mr-2" />
-                User Manual
+                {t('layout.userManual')}
               </Link>
             </Button>
             <NotificationBell />
@@ -339,7 +340,7 @@ export default function Layout({ children, currentPageName }) {
               variant="outline"
               size="icon"
               onClick={toggleDarkMode}
-              title={dashboardPrefs.darkMode ? "Switch to light mode" : "Switch to dark mode"}
+              title={dashboardPrefs.darkMode ? t('layout.switchToLight') : t('layout.switchToDark')}
             >
               {dashboardPrefs.darkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </Button>

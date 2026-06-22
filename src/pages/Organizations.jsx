@@ -314,7 +314,7 @@ const matchesSearch =
       <div className="max-w-7xl mx-auto">
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">Profiles</h1>
+            <h1 className="text-3xl font-bold text-slate-900">Organizations</h1>
             <p className="text-slate-600 mt-2">
               Manage organizations, students, and individuals seeking funding.
             </p>

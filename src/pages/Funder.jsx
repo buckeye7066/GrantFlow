@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react"
-import { HandCoins, Search, Mail, Phone, MapPin, Building2, DollarSign, Calendar, TrendingUp } from "lucide-react"
+import { HandCoins, Search, Mail, Phone, MapPin, Building2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,10 +9,12 @@ import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import { Link } from "react-router-dom"
 import { createPageUrl, formatAddress } from "@/utils"
+import FunderDetailDialog from "@/components/funding/FunderDetailDialog"
 
 export default function Funder() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedType, setSelectedType] = useState("all")
+  const [selectedFunder, setSelectedFunder] = useState(null)
 
   const normalizeList = (value) => {
     if (Array.isArray(value)) return value
@@ -51,58 +53,122 @@ export default function Funder() {
     staleTime: 60_000,
   })
 
-  // Extract unique funders from grants and opportunities
+  // Extract unique funders from grants and opportunities.
+  // NOTE: the LIST endpoints (/api/grants, /api/opportunities) return the raw
+  // DB columns — grant rows carry contact_email/contact_phone/funder_address/
+  // application_url (NOT the funder_email/funder_phone aliases that only the
+  // single-grant GET /:id adds), and opportunity rows carry sponsor/funder plus
+  // amount_min/amount_max/deadline/application_url. We read both shapes so the
+  // directory and detail view reflect the data that actually exists.
+  const ACTIVE_STATUSES = [
+    'submitted', 'under_review', 'pending_review', 'follow_up', 'awarded',
+    'gathering_documents', 'drafting', 'ready_to_submit', 'application_prep',
+    'app_prep', 'revision', 'portal', 'report',
+  ]
+
   const funders = useMemo(() => {
     const funderMap = new Map()
 
+    const ensureFunder = (name) => {
+      if (!funderMap.has(name)) {
+        funderMap.set(name, {
+          name,
+          email: null,
+          phone: null,
+          address: null,
+          url: null,
+          grants: [],
+          opportunities: [],
+          totalAwarded: 0,
+          activeGrants: 0,
+          fundingTypes: new Set(),
+          amountMin: null,
+          amountMax: null,
+          amountDescription: null,
+          nextDeadline: null,
+          deadlineType: null,
+        })
+      }
+      return funderMap.get(name)
+    }
+
+    // Merge a candidate amount range into the funder (widest observed range).
+    const mergeAmount = (funder, min, max, desc) => {
+      const lo = Number(min)
+      const hi = Number(max)
+      if (Number.isFinite(lo) && lo > 0) {
+        funder.amountMin = funder.amountMin === null ? lo : Math.min(funder.amountMin, lo)
+      }
+      if (Number.isFinite(hi) && hi > 0) {
+        funder.amountMax = funder.amountMax === null ? hi : Math.max(funder.amountMax, hi)
+      }
+      if (!funder.amountDescription && desc) funder.amountDescription = desc
+    }
+
+    // Track the soonest upcoming deadline (fixed dates only); preserve rolling/ongoing.
+    const mergeDeadline = (funder, deadline, type) => {
+      const t = type ? String(type).toLowerCase() : null
+      if (t === 'rolling' || t === 'ongoing') {
+        if (!funder.nextDeadline) funder.deadlineType = funder.deadlineType || t
+        return
+      }
+      if (!deadline) return
+      const d = new Date(deadline)
+      if (Number.isNaN(d.getTime())) return
+      const cur = funder.nextDeadline ? new Date(funder.nextDeadline) : null
+      if (!cur || d < cur) {
+        funder.nextDeadline = deadline
+        funder.deadlineType = t || 'fixed'
+      }
+    }
+
     // Add funders from grants
     grants.forEach(grant => {
-      if (grant.funder) {
-        if (!funderMap.has(grant.funder)) {
-          funderMap.set(grant.funder, {
-            name: grant.funder,
-            email: grant.funder_email || null,
-            phone: grant.funder_phone || null,
-            address: grant.funder_address || null,
-            grants: [],
-            opportunities: [],
-            totalAwarded: 0,
-            activeGrants: 0,
-          })
-        }
-        const funder = funderMap.get(grant.funder)
-        funder.grants.push(grant)
-        if (grant.status === 'awarded' && grant.amount_awarded) {
-          funder.totalAwarded += Number(grant.amount_awarded) || 0
-        }
-        if (['submitted', 'under_review', 'awarded'].includes(grant.status)) {
-          funder.activeGrants++
-        }
+      if (!grant.funder) return
+      const funder = ensureFunder(grant.funder)
+      funder.grants.push(grant)
+      // Correct column names from the list endpoint.
+      if (!funder.email) funder.email = grant.contact_email || grant.funder_email || null
+      if (!funder.phone) funder.phone = grant.contact_phone || grant.funder_phone || null
+      if (!funder.address) funder.address = grant.funder_address || null
+      if (!funder.url) funder.url = grant.url || grant.application_url || grant.portal_url || null
+      const gType = grant.opportunity_type || grant.funding_type
+      if (gType) funder.fundingTypes.add(gType)
+      mergeAmount(funder, grant.amount_min ?? grant.amount_requested, grant.amount_max ?? grant.amount_awarded)
+      mergeDeadline(funder, grant.deadline, grant.deadline_type)
+      if (grant.status === 'awarded' && grant.amount_awarded) {
+        funder.totalAwarded += Number(grant.amount_awarded) || 0
+      }
+      if (ACTIVE_STATUSES.includes(grant.status)) {
+        funder.activeGrants++
       }
     })
 
-    // Add funders from opportunities
+    // Add funders from opportunities (keyed by funder/sponsor)
     opportunities.forEach(opp => {
-      if (opp.funder) {
-        if (!funderMap.has(opp.funder)) {
-          funderMap.set(opp.funder, {
-            name: opp.funder,
-            email: null,
-            phone: null,
-            address: null,
-            grants: [],
-            opportunities: [],
-            totalAwarded: 0,
-            activeGrants: 0,
-          })
-        }
-        funderMap.get(opp.funder).opportunities.push(opp)
-      }
+      const name = opp.funder || opp.sponsor
+      if (!name) return
+      const funder = ensureFunder(name)
+      funder.opportunities.push(opp)
+      // Opportunities may carry a JSON contact_info blob; fall back gracefully.
+      const contact = opp.contact_info && typeof opp.contact_info === 'object' ? opp.contact_info : null
+      if (!funder.email) funder.email = opp.contact_email || contact?.email || null
+      if (!funder.phone) funder.phone = opp.contact_phone || contact?.phone || null
+      if (!funder.address) funder.address = opp.funder_address || contact?.address || null
+      if (!funder.url) funder.url = opp.application_url || opp.apply_url || opp.source_url || contact?.website || null
+      const oType = opp.opportunity_type || opp.funding_type
+      if (oType) funder.fundingTypes.add(oType)
+      mergeAmount(funder, opp.amount_min, opp.amount_max, opp.amount_description)
+      mergeDeadline(funder, opp.deadline, opp.deadline_type)
     })
 
-    return Array.from(funderMap.values()).sort((a, b) => 
-      b.totalAwarded - a.totalAwarded || b.grants.length - a.grants.length
-    )
+    return Array.from(funderMap.values())
+      .map((f) => ({ ...f, fundingTypes: Array.from(f.fundingTypes) }))
+      .sort((a, b) =>
+        b.totalAwarded - a.totalAwarded ||
+        b.grants.length - a.grants.length ||
+        b.opportunities.length - a.opportunities.length
+      )
   }, [grants, opportunities])
 
   const filteredFunders = useMemo(() => {
@@ -213,7 +279,20 @@ export default function Funder() {
         {filteredFunders.length > 0 ? (
           <div className="space-y-3">
             {filteredFunders.map((funder, index) => (
-              <Card key={`${funder.name}-${index}`} className="hover:border-blue-200 transition-colors">
+              <Card
+                key={`${funder.name}-${index}`}
+                role="button"
+                tabIndex={0}
+                aria-label={`View details for ${funder.name}`}
+                onClick={() => setSelectedFunder(funder)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setSelectedFunder(funder)
+                  }
+                }}
+                className="cursor-pointer hover:border-blue-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              >
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
@@ -273,11 +352,28 @@ export default function Funder() {
                       </div>
                     </div>
                     
-                    <Button variant="outline" size="sm" asChild>
-                      <Link to={`${createPageUrl("Pipeline")}?funder=${encodeURIComponent(funder.name)}`}>
-                        View Grants
-                      </Link>
-                    </Button>
+                    <div className="flex flex-col gap-2 shrink-0">
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedFunder(funder)
+                        }}
+                      >
+                        View Details
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        asChild
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Link to={`${createPageUrl("Pipeline")}?funder=${encodeURIComponent(funder.name)}`}>
+                          View Grants
+                        </Link>
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -297,6 +393,12 @@ export default function Funder() {
           </Card>
         )}
       </div>
+
+      <FunderDetailDialog
+        funder={selectedFunder}
+        open={Boolean(selectedFunder)}
+        onClose={() => setSelectedFunder(null)}
+      />
     </div>
   )
 }
