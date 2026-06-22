@@ -546,9 +546,9 @@ export const SECTION_METADATA = {
       },
       {
         "name": "funding_needs",
-        "label": "Funding needs",
+        "label": "Funding need range (estimate)",
         "format": "text",
-        "help": "What the applicant needs funding for."
+        "help": "A working estimate or range of the funding this profile needs (e.g. $15,000–$250,000). This is a planning range, not the single target goal (see Story & Goals > Funding goal) and not the currently-matched Pipeline Potential."
       },
       {
         "name": "funding_purpose",
@@ -1610,6 +1610,7 @@ export const SECTION_METADATA = {
   "university_applications": {
     "title": "University Applications",
     "description": "Student college application tracking (for scholarship targeting).",
+    "applies_to": STUDENT_TYPES,
     "fields": [
       {
         "name": "applications",
@@ -1944,9 +1945,9 @@ export const SECTION_METADATA = {
       },
       {
         "name": "funding_amount_needed",
-        "label": "Funding amount needed",
+        "label": "Funding goal (target amount)",
         "format": "currency_usd",
-        "help": "Requested or needed funding amount (numeric or descriptive)."
+        "help": "The single target / headline funding goal for this profile or project. Distinct from Financial Situation > Funding need range (a planning estimate) and from Pipeline Potential (the dollars currently matched in the pipeline)."
       },
       {
         "name": "timeline",

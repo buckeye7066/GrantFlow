@@ -75,10 +75,15 @@ const CRAWLER_OS_DISCOVERY_MODES = new Set([
  * per-profile matches via the OS persistence adapter. No legacy crawler/matcher
  * code runs. Populates Robert's counters/summary so the run record is unchanged.
  */
-async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summary }) {
+async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summary, dryRun = false }) {
   for (const profileId of profileIds) {
     try {
-      const { run, persisted, thesis } = await runProfileDiscoveryLive({ db, profileId })
+      // dryRun PREVIEW: run the real pipeline (plan + fetch + match) against an
+      // in-memory store but DO NOT flush to the live catalog/matches. This makes
+      // a dry-run an honest read-only preview of what discovery WOULD store, with
+      // real per-source outcomes — instead of silently skipping discovery and
+      // reporting a misleading 0/0/0.
+      const { run, persisted, thesis } = await runProfileDiscoveryLive({ db, profileId, dryRun })
       counters.urls_fetched += run.sources.reduce((a, s) => a + (s.fetched || 0), 0)
       counters.candidates_found += run.sources.reduce((a, s) => a + (s.parsed || 0), 0)
       counters.opportunities_ingested += persisted.opportunities
@@ -90,6 +95,7 @@ async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summar
         stored: run.stored,
         matches: persisted.matches,
         recommendations: run.recommendations.length,
+        dry_run: dryRun || undefined,
         sources: run.sources.map((s) => ({ source_id: s.source_id, outcome: s.outcome, reason: s.reason, stored: s.stored, deduped: s.deduped })),
         zero_result: run.zero_result?.reason ?? null,
       })
@@ -292,12 +298,26 @@ export async function runRobert({
     // Robert drives the Crawler OS as the single discovery/matching authority.
     // For discovery/match modes this REPLACES the legacy source-discovery,
     // opportunity-extraction, verification, ingestion, and legacy-match phases
-    // below (they are not executed for these modes — no dual-run, no split
-    // brain). Coverage analysis and the email feed above still run.
-    if (CRAWLER_OS_DISCOVERY_MODES.has(chosenMode) && !dryRun) {
-      await runRobertDiscoveryViaCrawlerOs({ db, profileIds: profilesToConsider, counters, summary })
-      summary.notes.push({ stage: 'discovery', engine: 'crawler-os', profiles: profilesToConsider.length })
-      return finishRun({ db, runId, status: RUN_STATUS.COMPLETED, counters, summary })
+    // below (they are NEVER executed for these modes — no dual-run, no split
+    // brain, and crucially no wasteful per-plan web-search calls that took ~51s
+    // and produced nothing). Coverage analysis and the email feed above still run.
+    //
+    // A dry-run still runs the OS pipeline, but as a READ-ONLY PREVIEW (the
+    // persistence flush is skipped), so a dry-run reports honest per-source
+    // outcomes instead of silently skipping discovery and returning a misleading
+    // 0 found / 0 verified / 0 ingested.
+    if (CRAWLER_OS_DISCOVERY_MODES.has(chosenMode)) {
+      await runRobertDiscoveryViaCrawlerOs({ db, profileIds: profilesToConsider, counters, summary, dryRun })
+      summary.notes.push({ stage: 'discovery', engine: 'crawler-os', profiles: profilesToConsider.length, dry_run: dryRun || undefined })
+      // Honest degradation: if discovery ran but every source was SKIPPED for
+      // missing env (e.g. an API key), or no source could be selected, surface a
+      // clear status reason rather than a healthy-looking empty run.
+      const degraded = summarizeDiscoveryDegradation(summary)
+      if (degraded) {
+        summary.status_reason = degraded.reason
+        summary.notes.push({ stage: 'discovery', degraded: degraded.reason, detail: degraded.detail })
+      }
+      return finishRun({ db, runId, status: RUN_STATUS.COMPLETED, counters, summary, statusReason: degraded?.reason || null })
     }
 
     // ---- Phase 3: source discovery (only if allowed) ----
@@ -601,6 +621,50 @@ function dedup(arr) {
   return Array.from(new Set(arr || []))
 }
 
+/**
+ * summarizeDiscoveryDegradation — inspect a Crawler-OS discovery run summary and
+ * return an honest status reason when the run produced nothing for an
+ * explainable CONFIG/ENV reason (so the dashboard/telemetry can show "discovery
+ * provider not configured" rather than a healthy-looking empty run). Returns
+ * null when discovery stored matches or when the empty result is a genuine
+ * "no funding for this profile" rather than a misconfiguration.
+ */
+export function summarizeDiscoveryDegradation(summary) {
+  const runs = Array.isArray(summary?.matched) ? summary.matched.filter((m) => Array.isArray(m.sources)) : []
+  if (runs.length === 0) return null
+  const stored = runs.reduce((a, m) => a + (Number(m.stored) || 0), 0)
+  if (stored > 0) return null // discovery worked — not degraded
+
+  // Flatten every source outcome across the profiles discovered this run.
+  const sources = runs.flatMap((m) => m.sources || [])
+  if (sources.length === 0) {
+    return { reason: 'no_sources_selected', detail: 'planner selected no in-scope sources for these profiles' }
+  }
+  const skippedMissingEnv = sources.filter(
+    (s) => s.outcome === 'skipped' && typeof s.reason === 'string' && s.reason.startsWith('missing_env:'),
+  )
+  const allSkipped = sources.every((s) => s.outcome === 'skipped')
+  if (allSkipped && skippedMissingEnv.length > 0) {
+    const keys = dedup(
+      skippedMissingEnv.flatMap((s) => String(s.reason).replace('missing_env:', '').split(',')),
+    ).filter(Boolean)
+    return {
+      reason: 'discovery_provider_not_configured',
+      detail: `every funding source was skipped for missing configuration: ${keys.join(', ')}`,
+    }
+  }
+  if (allSkipped) {
+    return { reason: 'all_sources_skipped', detail: 'every funding source was skipped (no adapter or out of scope)' }
+  }
+  const anyFetched = sources.some((s) => (Number(s.fetched) || 0) > 0)
+  if (!anyFetched) {
+    return { reason: 'all_fetches_failed', detail: 'no source returned a response (network egress / source outage)' }
+  }
+  // Sources ran and fetched but nothing cleared the floor — honest empty, not a
+  // misconfiguration. Leave status_reason unset.
+  return null
+}
+
 function maskedConfig(cfg) {
   return {
     enabled: cfg.enabled,
@@ -621,7 +685,7 @@ function maskedConfig(cfg) {
   }
 }
 
-async function finishRun({ db, runId, status, counters, summary, error = null }) {
+async function finishRun({ db, runId, status, counters, summary, error = null, statusReason = null }) {
   await safe(() => completeRun(db, runId, {
     status,
     counters,
@@ -629,10 +693,14 @@ async function finishRun({ db, runId, status, counters, summary, error = null })
     error: error ? String(error?.message || error) : null,
   }))
   return {
-    ok: status === RUN_STATUS.COMPLETED,
+    // A run that completed but produced nothing for a CONFIG reason is reported
+    // ok:false with a status_reason so health/telemetry shows the real cause
+    // (e.g. discovery_provider_not_configured) instead of a healthy empty run.
+    ok: status === RUN_STATUS.COMPLETED && !statusReason,
     run_id: runId,
     mode: summary.mode,
     status,
+    status_reason: statusReason,
     summary,
     coverage: summary.coverage,
     sources: summary.sources,

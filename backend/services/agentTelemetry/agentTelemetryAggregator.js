@@ -99,14 +99,48 @@ function pickTimeCol(cols, preferred = ['started_at', 'created_at', 'discovered_
   return null
 }
 
-function deriveHealth({ installed, last_failure_at, last_success_at, error_count }) {
+/**
+ * Whether an agent persisted any real output for the window. Generic across
+ * agents: counts unified activity (actions_in_window) plus every numeric
+ * primary metric the agent reports. Pure-zero (and an explicit
+ * `produced_output:false` override) means the run did work-less.
+ *
+ * This is intentionally inclusive — ANY non-zero numeric metric (pages
+ * fetched, leads, drafts, candidates, checks run, etc.) counts as output, so
+ * we only ever downgrade an agent that genuinely produced nothing.
+ */
+function agentProducedOutput(summary) {
+  if (!summary || typeof summary !== 'object') return false
+  if (summary.produced_output === true) return true
+  if (summary.produced_output === false) return false
+  if (Number(summary.actions_in_window || 0) > 0) return true
+  const metrics = summary.primary_metrics || {}
+  for (const v of Object.values(metrics)) {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return true
+  }
+  return false
+}
+
+/**
+ * Map a run result onto a health state. The honest distinction added here:
+ * an agent that completed WITHOUT error but produced ZERO output is
+ * RAN_NO_OUTPUT, not HEALTHY — so a silently-idle agent (e.g. Yana with 0
+ * pages / 0 leads) can't hide behind a green "healthy" badge. RAN_NO_OUTPUT
+ * is not an error and never drives a red System Status.
+ *
+ * Pass the full summary so we can read produced-output across all agents
+ * generically (actions + every numeric primary metric).
+ */
+function deriveHealth(summary) {
+  const { installed, last_failure_at, last_success_at, error_count } = summary
   if (!installed) return AGENT_HEALTH.NOT_INSTALLED
   if (error_count > 0 && last_failure_at && (!last_success_at || last_failure_at > last_success_at)) {
     return AGENT_HEALTH.ERROR
   }
   if (error_count > 0) return AGENT_HEALTH.WARNING
   if (!last_success_at) return AGENT_HEALTH.IDLE
-  return AGENT_HEALTH.HEALTHY
+  // Ran cleanly. Distinguish "did real work" from "ran but produced nothing".
+  return agentProducedOutput(summary) ? AGENT_HEALTH.HEALTHY : AGENT_HEALTH.RAN_NO_OUTPUT
 }
 
 async function unifiedAgentBase(db, agent, range) {
@@ -924,3 +958,6 @@ export async function aggregateTimeline(db, range, { agent, status, profile_id, 
   synth.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
   return { events: synth.slice(0, limit), source: 'synthetic' }
 }
+
+// Pure helpers exported for unit tests (no DB).
+export const __testing__ = { deriveHealth, agentProducedOutput }

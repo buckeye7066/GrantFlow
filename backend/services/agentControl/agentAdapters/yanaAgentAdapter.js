@@ -84,17 +84,26 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       return { ok: true, status: 'stopped', summary: result }
     }
 
+    // Honest reporting: when Yana qualified nothing, surface WHY (her
+    // noop_reason already explains it — e.g. live-web/prospect discovery
+    // disabled, or N of M orgs lacked a usable email). A dry-run intentionally
+    // never pushes to John, so 0 pushed is expected there (not a problem).
+    const noopReason = result?.noop_reason || null
+    const baseMsg = `Yana client discovery — ${result.candidates_qualified} qualified of ${result.candidates_total}, ${result.leads_pushed_to_john} pushed to John`
     await signal?.recordEvent?.({
       eventType: result.ok ? 'agent.yana.completed' : 'agent.yana.failed',
       severity: result.ok ? 'info' : 'warning',
-      message: `Yana client discovery — ${result.candidates_qualified} qualified of ${result.candidates_total}, ${result.leads_pushed_to_john} pushed to John`,
-      data: result,
+      message: dryRun
+        ? `${baseMsg} (dry-run: leads not pushed)`
+        : (noopReason ? `${baseMsg} — ${noopReason}` : baseMsg),
+      data: { ...result, dry_run: dryRun || undefined },
     })
 
     return {
       ok: result.ok !== false,
       status: result.ok === false ? 'failed' : 'completed',
-      summary: result,
+      status_reason: noopReason,
+      summary: { ...result, dry_run: dryRun || undefined },
       error: result.error || null,
     }
   }

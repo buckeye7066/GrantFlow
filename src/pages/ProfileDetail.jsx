@@ -565,12 +565,19 @@ export default function ProfileDetail() {
     (Array.isArray(healthMedical?.conditions) && healthMedical.conditions.length > 0) ||
     Boolean(String(healthMedical?.notes || "").trim())
 
+  // Personal/individual medical resources (copay assistance, clinical-trial
+  // matching to "conditions in YOUR medical profile") only make sense for a
+  // PERSON. An organization/nonprofit can have a disability flag captured on its
+  // record (e.g. "serves people with disabilities"), but that must NOT surface
+  // personal patient-assistance content as if the org itself were the patient.
+  // So the Health tab is gated to non-org profiles even when health signals exist.
   const isHealthProfile =
-    primaryType.includes("health") ||
-    primaryType.includes("patient") ||
-    profileTypeLabel.includes("health") ||
-    profileTypeLabel.includes("medical") ||
-    hasHealthSignals
+    !isOrgProfile &&
+    (primaryType.includes("health") ||
+      primaryType.includes("patient") ||
+      profileTypeLabel.includes("health") ||
+      profileTypeLabel.includes("medical") ||
+      hasHealthSignals)
 
   const studentState =
     basicInfo?.address?.state ??
@@ -1151,6 +1158,7 @@ export default function ProfileDetail() {
             <TabsContent value="health" className="mt-6">
               <div className="space-y-6">
                 <HealthResourcesCard
+                  isOrganization={isOrgProfile}
                   state={studentState}
                   conditions={healthMedical?.conditions}
                   supportNeeds={healthMedical?.support_needs}

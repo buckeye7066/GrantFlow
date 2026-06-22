@@ -6,7 +6,7 @@ import { createPageUrl } from '@/utils';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, Star, ArrowRightSquare, AlertCircle } from "lucide-react";
+import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, ArrowRightSquare, AlertCircle } from "lucide-react";
 import OrganizationProfileDetails from './OrganizationProfileDetails';
 import ProfileFilesPanel from '@/components/profiles/ProfileFilesPanel.jsx';
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
@@ -25,6 +25,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { isRealProfileId } from "@/api/profileIdGuards";
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
 import { runProfileAvatarLookup } from "@/services/profileAvatarAI";
+import { matchProfileToGrants } from "@/api/matching";
 
 
 const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
@@ -109,10 +110,28 @@ export default function OrganizationProfile({
     enabled: !!organizationId, // Only run if organization.id is available
   });
 
-  // Fetch grants for this organization - including drafting stage
+  // Fetch grants for this organization - including drafting stage.
+  // NOTE: this is the RAW, unscored pipeline (every grant row attached to the
+  // org). It backs the "Pipeline View" kanban (which must show the user's whole
+  // board). It must NOT back the "Opportunities" count — see matchedOpportunities
+  // below — because that count is meant to mean "matched funding opportunities"
+  // (the SAME number the profile-level Pipeline reports as "N matched"), not the
+  // raw row count, which includes legacy/orphan/low-score rows the matcher hides.
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants', organizationId],
     queryFn: () => client.entities.Grant.filter({ organization_id: organizationId }),
+    enabled: !!organizationId,
+  });
+
+  // Canonical MATCHED opportunities for this profile — the single matching
+  // authority shared with the profile-level Pipeline "N matched" surface
+  // (GET /api/matching/profile/:id/grants → computeMatchDecision, REJECTs and
+  // no-reason rows dropped). Both surfaces now read from this one query so the
+  // org "Opportunities (N)" badge and the profile "N matched" count agree.
+  // `organizationId` here is actually the profile id (see Profile.get above).
+  const { data: matchedOpportunities = [], isLoading: isLoadingMatched } = useQuery({
+    queryKey: ['matchedOpportunities', organizationId],
+    queryFn: () => matchProfileToGrants(organizationId),
     enabled: !!organizationId,
   });
 
@@ -537,7 +556,7 @@ export default function OrganizationProfile({
                 Funding Sources {fundingSources.length > 0 && `(${fundingSources.length})`}
               </TabsTrigger>
               <TabsTrigger value="matches">
-                Opportunities {grants.length > 0 && `(${grants.length})`}
+                Opportunities {matchedOpportunities.length > 0 && `(${matchedOpportunities.length})`}
               </TabsTrigger>
               <TabsTrigger value="pipeline">
                 Pipeline View
@@ -651,18 +670,19 @@ export default function OrganizationProfile({
                     Funding Opportunities
                   </CardTitle>
                   <p className="text-sm text-slate-600 mt-2">
-                    All opportunities discovered and tracked for this profile
+                    Funding opportunities matched to this profile. This is the same
+                    set the profile&apos;s Pipeline reports as matched.
                   </p>
                 </CardHeader>
                 <CardContent>
-                  {isLoadingGrants ? (
+                  {isLoadingMatched ? (
                     <div className="flex justify-center items-center py-16">
                       <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
                     </div>
-                  ) : grants.length === 0 ? (
+                  ) : matchedOpportunities.length === 0 ? (
                     <div className="text-center py-16 bg-slate-50 rounded-lg border">
                       <Target className="w-16 h-16 mx-auto text-slate-300 mb-4" />
-                      <h3 className="text-xl font-semibold text-slate-900 mb-2">No Opportunities Yet</h3>
+                      <h3 className="text-xl font-semibold text-slate-900 mb-2">No Matched Opportunities Yet</h3>
                       <p className="text-slate-600 mb-4">
                         Start by discovering grants for this profile.
                       </p>
@@ -675,17 +695,16 @@ export default function OrganizationProfile({
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {grants.map((grant) => {
+                      {matchedOpportunities.map((grant) => {
                         const statusBadge = getStatusBadge(grant.status);
-                        const amount = grant.typical_award || grant.amount_max || grant.amount_min;
+                        const score = Number(grant.match_score);
 
                         return (
-                          <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
+                          <Link key={grant.grant_id} to={createPageUrl("GrantDetail", { id: grant.grant_id })}>
                             <div className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50 hover:border-blue-300 transition-all cursor-pointer">
                               <div className="flex-1 min-w-0 pr-4">
                                 <div className="flex items-center gap-2 mb-1">
                                   <h4 className="font-semibold text-slate-900 truncate">{grant.title}</h4>
-                                  {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400 shrink-0" />}
                                 </div>
                                 <p className="text-sm text-slate-600 truncate">{grant.funder}</p>
                                 {grant.deadline && (
@@ -698,12 +717,12 @@ export default function OrganizationProfile({
                                 )}
                               </div>
                               <div className="flex items-center gap-3 shrink-0">
-                                {amount && (
+                                {Number.isFinite(score) && (
                                   <div className="text-right">
-                                    <div className="text-sm font-semibold text-emerald-600">
-                                      ${amount.toLocaleString()}
+                                    <div className="text-sm font-semibold text-blue-600">
+                                      {Math.round(score)}%
                                     </div>
-                                    <div className="text-xs text-slate-500">Award</div>
+                                    <div className="text-xs text-slate-500">Match</div>
                                   </div>
                                 )}
                                 <Badge className={statusBadge.className}>

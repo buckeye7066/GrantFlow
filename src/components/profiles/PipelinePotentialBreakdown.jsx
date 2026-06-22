@@ -305,7 +305,7 @@ export default function PipelinePotentialBreakdown({
           <ChevronRight className="h-3 w-3 opacity-70 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
         </p>
         <Money className="mt-1.5 block text-4xl font-bold leading-none tracking-tight">{formattedTotal}</Money>
-        <p className="money mt-1.5 text-[11px] opacity-70">Click to see the breakdown</p>
+        <p className="money mt-1.5 text-[11px] opacity-70">Currently matched in the pipeline · click to see the breakdown</p>
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

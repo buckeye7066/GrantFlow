@@ -9,15 +9,67 @@ import { runLarry, getLarryStatus } from '../../backend/services/larry/larryAgen
 import { LARRY_MODES } from '../../backend/services/larry/larryTypes.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
-test('refuses to run when LARRY_ENABLED=false', async () => {
+test('refuses ONLY the SEND mode when disabled (discovery/observe still run)', async () => {
   const db = createInMemoryDb()
+  // SEND is hard-refused while disabled — outbound cold email is the real gate.
+  const send = await runLarry({
+    db,
+    mode: LARRY_MODES.SEND_OUTREACH,
+    config: { enabled: false, mode: 'observe' },
+  })
+  assert.equal(send.ok, false)
+  assert.equal(send.reason, 'agent_disabled')
+})
+
+test('OBSERVE runs even when disabled (read-only, no agent_disabled bail)', async () => {
+  const db = createInMemoryDb()
+  // The owner asking "have Yana find leads" must not get a bare "agent disabled":
+  // observe/discovery/qualify/draft are safe and never send. Only SEND is gated.
   const result = await runLarry({
     db,
     mode: LARRY_MODES.OBSERVE,
     config: { enabled: false, mode: 'observe' },
   })
-  assert.equal(result.ok, false)
-  assert.equal(result.reason, 'agent_disabled')
+  assert.equal(result.ok, true, `disabled OBSERVE should run read-only, got ${JSON.stringify(result)}`)
+  assert.notEqual(result.reason, 'agent_disabled')
+  assert.ok(result.summary?.phases?.observe, 'observe phase should be present')
+})
+
+test('FULL_CYCLE while disabled runs non-send phases but sends nothing', async () => {
+  const db = createInMemoryDb()
+  const records = [
+    {
+      organization_name: 'Athens VFD',
+      organization_type: 'volunteer_fire_department',
+      applicant_type: 'volunteer_fire_department',
+      city: 'Athens', state: 'TN',
+      website_url: 'https://athensvfd.org',
+      primary_contact_email: 'chief@athensvfd.org',
+      ein: '123456789',
+      programs: ['turnout gear replacement'],
+    },
+  ]
+  const result = await runLarry({
+    db,
+    mode: LARRY_MODES.FULL_CYCLE,
+    options: {
+      searchAdapter: async () => ({ records }),
+      webChecker: async () => ({ ok: true, status: 200 }),
+    },
+    config: {
+      enabled: false, // DISABLED — yet discovery/draft must still run
+      mode: 'full-cycle',
+      maxProspectsPerRun: 50, maxVerifiesPerRun: 50, maxLeadsPerRun: 50,
+      maxOutreachDraftsPerRun: 50, maxOutreachSendsPerDay: 50,
+      requireApprovalToSend: true, allowLiveWeb: true, autoSendOutreach: false,
+      rateLimitPerDomainPerHour: 100, persistProspects: true, timeoutMs: 1000,
+      fromEmail: 'team@grantflow.app',
+    },
+  })
+  assert.equal(result.ok, true, `disabled full-cycle should run, got ${JSON.stringify(result)}`)
+  assert.notEqual(result.reason, 'agent_disabled')
+  // No email leaves while disabled: send phase sends nothing.
+  assert.equal(result.summary.phases.send.sent.length, 0, 'no send while disabled')
 })
 
 test('observe mode does not invoke any adapter', async () => {

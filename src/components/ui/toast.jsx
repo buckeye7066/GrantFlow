@@ -3,21 +3,28 @@ import { cva } from "class-variance-authority";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const ToastProvider = React.forwardRef(({ ...props }, ref) => (
-  <div
-    ref={ref}
-    className="fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]"
-    {...props}
-  />
+// Positioning notes:
+// - On mobile the stack hugs the top so it never collides with the bottom-right
+//   Anya launcher (AnyaFloatingButton, fixed bottom-6 right-6 z-50).
+// - On desktop (sm+) the stack sits bottom-right but is lifted clear ABOVE the
+//   launcher via `sm:bottom-24` (the launcher is ~56px tall at bottom-6 → its
+//   top edge is ~88px; bottom-24 = 6rem/96px keeps toasts above it with margin).
+// - `pointer-events-none` on the container means the empty padding/gaps between
+//   toasts never intercept clicks — only the toasts themselves opt back in via
+//   `pointer-events-auto` in `toastVariants`. This is what stops a click on (or
+//   just outside) a toast's dismiss button from bleeding through to the Anya
+//   launcher sitting beneath the viewport.
+// - `z-[120]` keeps the stack above the launcher (z-50) and app content.
+const TOAST_VIEWPORT_CLASS =
+  "pointer-events-none fixed top-0 z-[120] flex max-h-screen w-full flex-col-reverse gap-2 p-4 sm:bottom-24 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]";
+
+const ToastProvider = React.forwardRef(({ className, ...props }, ref) => (
+  <div ref={ref} className={cn(TOAST_VIEWPORT_CLASS, className)} {...props} />
 ));
 ToastProvider.displayName = "ToastProvider";
 
-const ToastViewport = React.forwardRef(({ ...props }, ref) => (
-  <div
-    ref={ref}
-    className="fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse gap-2 p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]"
-    {...props}
-  />
+const ToastViewport = React.forwardRef(({ className, ...props }, ref) => (
+  <div ref={ref} className={cn(TOAST_VIEWPORT_CLASS, className)} {...props} />
 ));
 ToastViewport.displayName = "ToastViewport";
 

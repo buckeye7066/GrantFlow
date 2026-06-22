@@ -13,7 +13,6 @@
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
-import { searchWeb } from '../../shared/webSearchEngine.js'
 
 export class RobertAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -73,29 +72,22 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
     // An admin explicitly authorising ingest through the Control Center IS the
     // authorization to run Robert's full cycle. Without this override, runRobert
     // re-reads the env safe-defaults (ROBERT_ENABLED / ROBERT_ALLOW_LIVE_WEB,
-    // both false by default) and silently downgrades the requested 'full-cycle'
-    // back to read-only 'observe' (robertAgent.js liveWebPermitted gate) — so
-    // toggling Robert ON in the app did nothing. Passing an explicit
-    // configOverride makes the in-app authorization authoritative over the env
-    // defaults; runRobert merges it over getRobertConfig().
+    // both false by default) and could downgrade the requested 'full-cycle' back
+    // to read-only 'observe'. Passing an explicit configOverride makes the
+    // in-app authorization authoritative over the env defaults; runRobert merges
+    // it over getRobertConfig().
     //
-    // Live source discovery (phase 3) needs deps.searchProvider. We now wire it
-    // to the SHARED canonical web-search engine (SearXNG → Brave → DuckDuckGo),
-    // the same tool Yana + Anya use, so Robert can actually discover funder URLs
-    // on the open web when an admin authorizes ingest (live web). It is
-    // failure-tolerant and only used when allowIngest is true. (Opportunity
-    // EXTRACTION — deps.opportunityAdapter, turning a discovered page into a
-    // structured opportunity via LLM — remains the next piece; without it Robert
-    // discovers + verifies sources but leans on its existing candidate stores
-    // for extraction.)
+    // DISCOVERY ENGINE: Robert now drives the canonical Crawler OS pipeline
+    // (registry sources -> SSRF-safe fetcher -> reality gate -> matcher), not the
+    // legacy per-plan web-search path. The OS pipeline does NOT consume
+    // deps.searchProvider; open-web -> opportunity EXTRACTION is Yana's job, not
+    // Robert's (owner role clarification). So we do NOT inject a web search
+    // provider here — that wiring was dead for the OS path and only added latency.
     const configOverride = allowIngest
       ? { enabled: true, allowLiveWeb: true, allowSourceDiscovery: true, autoIngestVerified: true }
       : { enabled: true }
 
     const deps = { configOverride }
-    if (allowIngest) {
-      deps.searchProvider = ({ query } = {}) => searchWeb(query, { count: 8 })
-    }
 
     let result
     try {
@@ -129,27 +121,57 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
       }
     }
 
+    // Honest degradation: runRobert sets a status_reason when a discovery run
+    // produced nothing for a CONFIG reason (every funding source skipped for a
+    // missing API key, no source selectable, or all fetches failed). We surface
+    // that reason on the summary + as a recorded event so the dashboard shows
+    // WHY the run was empty — but we do NOT report the step as `failed` (this is
+    // not a crash). The run produced 0 work units, so the unified telemetry layer
+    // already classifies it as a `noop` (not a healthy "succeeded"); the
+    // status_reason explains the noop.
+    const statusReason = result?.status_reason || result?.summary?.status_reason || null
+    const trueFailure = result?.ok === false && !statusReason
+
     await signal?.recordEvent?.({
       eventType: 'agent.robert.completed',
-      severity: result?.ok === false ? 'high' : 'info',
-      message: `Robert ${mode} ${result?.status || (result?.ok === false ? 'failed' : 'completed')}`,
+      severity: trueFailure ? 'high' : (statusReason ? 'medium' : 'info'),
+      message: statusReason
+        ? `Robert ${mode} completed with no results — ${statusReason}`
+        : `Robert ${mode} ${result?.status || (trueFailure ? 'failed' : 'completed')}`,
       data: {
         robert_run_id: result?.run_id || null,
         mode,
-        candidates_inserted: result?.summary?.candidates_inserted ?? 0,
-        opportunities_verified: result?.summary?.opportunities_verified ?? 0,
-        recommendations_created: result?.summary?.recommendations_created ?? 0,
+        status_reason: statusReason,
+        opportunities_ingested: result?.counters?.opportunities_ingested ?? 0,
+        opportunities_matched: result?.counters?.opportunities_matched ?? 0,
+        recommendations_created: result?.counters?.recommendations_created ?? 0,
       },
     })
 
     return {
-      ok: result?.ok !== false,
-      status: result?.ok === false ? 'failed' : 'completed',
+      // Only a genuine crash/error is `failed`. A config-degraded empty run
+      // reports completed (ok:true) but carries status_reason so telemetry shows
+      // the real cause (and counts 0 work → noop).
+      ok: !trueFailure,
+      status: trueFailure ? 'failed' : 'completed',
+      status_reason: statusReason,
+      error: trueFailure ? (result?.summary?.errors?.[0]?.error || 'robert_run_failed') : null,
       summary: {
         agent: 'robert',
         mode,
         robert_run_id: result?.run_id || null,
         ...(result?.summary || {}),
+        status_reason: statusReason,
+        // Surface the numeric work counters at the TOP LEVEL (AFTER the spread so
+        // they win) so the unified telemetry layer's countAgentWork() — which
+        // reads numbers like opportunities_ingested / recommendations_created /
+        // candidates_found — classifies a real discovery run as `succeeded`, not
+        // `noop`. Robert's own summary nests these in counters / arrays, so
+        // without this a genuinely productive run was undercounted to 0 work.
+        candidates_found: result?.counters?.candidates_found ?? 0,
+        opportunities_ingested: result?.counters?.opportunities_ingested ?? 0,
+        opportunities_matched: result?.counters?.opportunities_matched ?? 0,
+        recommendations_created: result?.counters?.recommendations_created ?? 0,
       },
     }
   }

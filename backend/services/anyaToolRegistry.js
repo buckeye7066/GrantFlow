@@ -2240,6 +2240,41 @@ registerTool({
   handler: adminHealthCheck,
 })
 
+// Makes the crawler-error benign-vs-real split observable to Anya (and via the
+// Sam crawler.recentJobErrors check, to diagnostics). Anya can answer "are
+// there any real crawler errors?" without the dashboard reading red on an
+// expected missing_item_request-class skip.
+registerTool({
+  name: 'admin.crawler.errorBreakdown',
+  description: 'Recent crawler job/log errors split into REAL failures vs. benign expected skips (e.g. missing_item_request). Admin only, read-only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {},
+  },
+  handler: async (_params, context) => {
+    const { getSystemDiagnostics } = await import('./diagnosticsService.js')
+    const diag = await getSystemDiagnostics(context.db)
+    const counts = diag?.error_counts || { total: 0, real: 0, benign: 0 }
+    // Surface as findings[] so Sam can mine the same shape if it delegates here.
+    const findings = (diag?.real_errors || []).slice(0, 50).map((e) => ({
+      severity: 'medium',
+      title: `Real crawler error: ${e.crawler_type || e.source || e.scope}`,
+      description: e.message || 'Unknown error',
+      evidence: { scope: e.scope, time: e.time },
+    }))
+    return {
+      ok: true,
+      success: true,
+      counts,
+      real_errors: diag?.real_errors || [],
+      benign_errors: diag?.benign_errors || [],
+      findings,
+      message: `${counts.real} real crawler error(s), ${counts.benign} benign skip(s) in the last 7 days.`,
+    }
+  },
+})
+
 import { scanHamiltonSessionReadiness } from './hamilton/hamiltonScheduleService.js'
 
 // Makes the session-import + scheduling capability observable to the agents:
@@ -4025,8 +4060,23 @@ registerTool({
     const userId = context?.ctx?.userId ?? context?.user?.id ?? null
     try {
       if (agent === 'yana') {
-        const { runYanaDiscovery } = await import('./yana/yanaLeadDiscovery.js')
-        return { agent, result: await runYanaDiscovery(db, { mode: params?.mode || 'observe', trigger: 'anya_owner', createdByUserId: userId }) }
+        const { runYanaDiscovery, getYanaConfig } = await import('./yana/yanaLeadDiscovery.js')
+        const yanaCfg = getYanaConfig()
+        // runYanaDiscovery takes allowLeads/allowLiveWeb, NOT a `mode` string —
+        // passing `mode` did nothing (prospect discovery silently NOOP'd because
+        // allowLiveWeb defaulted false). mode 'observe' => qualify but don't push
+        // to John; anything else => push qualified leads when allowed.
+        const observeOnly = String(params?.mode || '').toLowerCase() === 'observe'
+        return {
+          agent,
+          result: await runYanaDiscovery(db, {
+            trigger: 'anya_owner',
+            createdByUserId: userId,
+            allowLeads: !observeOnly,
+            allowLiveWeb: yanaCfg.allowLiveWeb,
+            prospectLimit: yanaCfg.prospectLimit,
+          }),
+        }
       }
       if (agent === 'john') {
         const { runJohn } = await import('./john/johnAgent.js')

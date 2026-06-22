@@ -98,7 +98,35 @@ export default function HealthResourcesCard({
   onEditHealth,
   onToggleStudyConsent,
   consentSaving = false,
+  isOrganization = false,
 }) {
+  // Defense in depth: personal patient-assistance content (copay help, clinical
+  // trials matched to "conditions in your medical profile") is for an individual
+  // person, never an organization — even if a disability flag is captured on the
+  // org record. ProfileDetail already hides the Health tab for orgs; if this card
+  // is ever rendered for an org anyway, show org-appropriate content only.
+  if (isOrganization) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <HeartPulse className="h-5 w-5 text-slate-700" />
+            Health &amp; disability-focused funding
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-slate-600">
+            Personal patient-assistance resources (copay help, clinical-trial matching, etc.) apply to an
+            individual person, not an organization. For an organization that serves people with health or
+            disability needs, use the funding discovery and pipeline tools to find disability- and
+            health-focused grants. Capture the populations you serve under Programs &amp; Services and
+            Story &amp; Goals so those opportunities surface.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
+
   const st = normalizeState(state)
   const conditionNames = normalizeConditionNames(conditions)
   const conditionBlob = conditionNames.join(" ").toLowerCase()

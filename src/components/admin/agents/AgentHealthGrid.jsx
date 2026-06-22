@@ -5,6 +5,9 @@ import { Activity, CheckCircle2, AlertTriangle, XCircle, MoonStar, Wrench } from
 
 const HEALTH_DISPLAY = {
   healthy: { Icon: CheckCircle2, color: 'text-emerald-600', label: 'Healthy' },
+  // Ran cleanly but produced no output — distinct from healthy (sky, info icon),
+  // not an error. Keeps the dashboard honest about silently-idle agents.
+  ran_no_output: { Icon: Activity, color: 'text-sky-600', label: 'Ran, no output' },
   warning: { Icon: AlertTriangle, color: 'text-amber-600', label: 'Warning' },
   error: { Icon: XCircle, color: 'text-red-600', label: 'Error' },
   idle: { Icon: MoonStar, color: 'text-slate-500', label: 'Idle' },

@@ -80,13 +80,33 @@ export const SYNTHETIC_EVENT_TYPES = Object.freeze({
 /**
  * Stable health states used in the overview cards and the
  * `/health` endpoint.
+ *
+ * RAN_NO_OUTPUT is the honest middle state between IDLE (never ran) and
+ * HEALTHY (ran AND produced work): the agent completed its run without error
+ * but persisted zero output for the window (e.g. Yana fetched 0 pages / found
+ * 0 leads). It must NOT read as plain "healthy" — that hid silently-idle
+ * agents behind a green badge. It is NOT an error either (nothing failed), so
+ * it never drives a red System Status.
  */
 export const AGENT_HEALTH = Object.freeze({
   HEALTHY: 'healthy',
+  RAN_NO_OUTPUT: 'ran_no_output',
   WARNING: 'warning',
   ERROR: 'error',
   IDLE: 'idle',
   NOT_INSTALLED: 'not_installed',
+})
+
+/**
+ * Human-readable label for each health state (used by overview cards / tabs).
+ */
+export const AGENT_HEALTH_LABELS = Object.freeze({
+  [AGENT_HEALTH.HEALTHY]: 'Healthy',
+  [AGENT_HEALTH.RAN_NO_OUTPUT]: 'Ran, no output',
+  [AGENT_HEALTH.WARNING]: 'Warning',
+  [AGENT_HEALTH.ERROR]: 'Error',
+  [AGENT_HEALTH.IDLE]: 'Idle',
+  [AGENT_HEALTH.NOT_INSTALLED]: 'Not installed',
 })
 
 /**

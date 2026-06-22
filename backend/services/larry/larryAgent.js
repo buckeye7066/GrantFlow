@@ -227,17 +227,34 @@ export async function runLarry({
   const cfg = config || getLarryConfig()
   const log = logger(req)
 
-  if (!cfg.enabled) {
-    log.info?.('[Yana/leads] disabled — refusing to run', safeMask({ mode }))
+  const requestedMode = mode || cfg.mode || LARRY_MODES.OBSERVE
+
+  // The master enable flag (YANA_LEADS_ENABLED/LARRY_ENABLED) historically
+  // hard-refused the ENTIRE agent, so an owner asking Anya to "have Yana find
+  // leads" got a bare "agent disabled" even though discovery/qualify/draft are
+  // safe, side-effect-light, and never send email. That violated the
+  // automation-first stance for no safety benefit.
+  //
+  // The genuine safety gate is SENDING outbound cold email — and that is already
+  // enforced independently and per-attempt by checkSendIsAllowed (which refuses
+  // when !cfg.enabled, when send is unapproved, on suppression/DNC, etc.). So we
+  // now ONLY hard-refuse the dedicated SEND mode when the agent is disabled; all
+  // read-only/discovery/qualify/draft modes run. FULL_CYCLE is allowed to run
+  // its non-send phases — its send phase still self-gates per attempt, so no
+  // email leaves while disabled.
+  const SEND_ONLY_MODE = requestedMode === LARRY_MODES.SEND_OUTREACH
+  if (!cfg.enabled && SEND_ONLY_MODE) {
+    log.info?.('[Yana/leads] disabled — refusing SEND', safeMask({ mode: requestedMode }))
     return {
       ok: false,
       agent: LARRY_AGENT_NAME,
       reason: 'agent_disabled',
-      mode: mode || cfg.mode,
+      detail: 'Yana lead OUTREACH SEND is disabled. Set YANA_LEADS_ENABLED=true to enable sending (discovery/qualify/draft already run).',
+      mode: requestedMode,
     }
   }
 
-  const effectiveMode = mode || cfg.mode || LARRY_MODES.OBSERVE
+  const effectiveMode = requestedMode
   const createdBy = req?.ctx?.userId || req?.ctx?.email || null
   const run = await startRun(db, { mode: effectiveMode, trigger, created_by_user_id: createdBy })
   const runId = run?.id || null

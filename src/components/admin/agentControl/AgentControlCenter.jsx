@@ -321,9 +321,20 @@ export default function AgentControlCenter() {
               <div className="text-emerald-700 dark:text-emerald-300">
                 Last success: {status.highlights.last_success?.completed_at?.slice(0, 19) || '—'}
               </div>
-              <div className="text-rose-700 dark:text-rose-300">
+              <div className={status.highlights.last_failure_is_stale
+                ? 'text-slate-500 dark:text-slate-400'
+                : 'text-rose-700 dark:text-rose-300'}>
                 Last failure: {status.highlights.last_failure?.completed_at?.slice(0, 19) || '—'}
                 {status.highlights.last_failure ? ` (${status.highlights.last_failure.error_message || status.highlights.last_failure.status})` : ''}
+                {status.highlights.last_failure && status.highlights.last_failure_is_stale ? (
+                  <span className="ml-1 italic">
+                    — stale
+                    {Number.isFinite(status.highlights.last_failure_age_hours)
+                      ? `, ${status.highlights.last_failure_age_hours}h ago`
+                      : ''}
+                    {status.highlights.last_failure_superseded_by_success ? ', resolved since' : ''}
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>

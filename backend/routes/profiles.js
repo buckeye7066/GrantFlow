@@ -30,7 +30,7 @@ import {
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { ADMIN_EMAILS } from '../config/constants.js'
-import { countSeats, describeSeatTier, evaluateSeatChange } from '../services/billing/seatTier.js'
+import { countSeats, describeSeatTier, evaluateSeatChange, billableSeatEmails } from '../services/billing/seatTier.js'
 import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
 import { normalizeAutomationToggles, AUTOMATION_TOGGLES } from '../../shared/automationPreferences.js'
 import { normalizeLanguageCode, isSupportedLanguage } from '../../shared/languages.js'
@@ -794,8 +794,14 @@ router.get('/:id/emails', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
-    const emails = await listProfileEmails(req.db, profileId)
-    res.json({ emails, seat_tier: describeSeatTier(countSeats(emails, ADMIN_EMAILS)) })
+    // Render the SAME set we count toward billing: the platform operator/admin
+    // email is linked to every profile for back-office visibility and is NOT a
+    // paid seat, so it must not appear in the login list either. Listing it
+    // while excluding it from the count is what produced the off-by-one
+    // (e.g. "1 seat" shown next to 2 listed logins).
+    const allEmails = await listProfileEmails(req.db, profileId)
+    const emails = billableSeatEmails(allEmails, ADMIN_EMAILS)
+    res.json({ emails, seat_tier: describeSeatTier(emails.length) })
   } catch (error) {
     res.status(500).json(formatError(error))
   }
@@ -852,10 +858,11 @@ router.post('/:id/emails', async (req, res) => {
 
     const addedBy = req.ctx?.userId ?? req.ctx?.email ?? null
     await addProfileEmails(req.db, { profileId, emails: normalized, addedBy })
-    const emails = await listProfileEmails(req.db, profileId)
+    // Same billable-set rule as the GET handler: list exactly what we count.
+    const emails = billableSeatEmails(await listProfileEmails(req.db, profileId), ADMIN_EMAILS)
     res.status(201).json({
       emails,
-      seat_tier: describeSeatTier(countSeats(emails, ADMIN_EMAILS)),
+      seat_tier: describeSeatTier(emails.length),
       tier_changed: change.crosses_up,
     })
   } catch (error) {
