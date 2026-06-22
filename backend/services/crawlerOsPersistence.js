@@ -15,11 +15,49 @@
 // Idempotent: re-running upserts by id / (profile_id, opportunity_id).
 
 import { storage } from '../crawler-os/index.js';
+import { recordDismissal, reconcileDismissedGrants } from './pipelineDismissals.js';
+import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
 
 const nowIso = () => new Date().toISOString();
+const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
+
+/**
+ * prunePipelineRejects — remove BAD MATCHES from the profile's pipelines. After
+ * the OS scores a profile, any opportunity it decided REJECT (ineligible, unsafe,
+ * below floor, loan/cost-share disallowed, off-topic) that is sitting in that
+ * profile's pipeline at a NON-protected (discovery) stage is dismissed via the
+ * canonical sticky-delete (recordDismissal + reconcileDismissedGrants), so it
+ * cannot resurface. User-progressed/awarded work (PROTECTED_PIPELINE_STATUSES)
+ * is never auto-purged — that invariant is preserved.
+ *
+ * @returns {number} count of pipeline entries dismissed
+ */
+async function prunePipelineRejects(db, memStore, idRemap) {
+  const rejects = memStore
+    .all('profile_opportunity_matches')
+    .filter((m) => m.decision === 'reject');
+  let dismissed = 0;
+  for (const m of rejects) {
+    const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id;
+    const grants = await db
+      .prepare('SELECT id, status FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?')
+      .all(m.profile_id, oppId);
+    if (!grants || grants.length === 0) continue;            // not in any pipeline → nothing to remove
+    if (grants.some((g) => g.status && PROTECTED.has(g.status))) continue; // preserve user-progressed work
+    await recordDismissal(db, {
+      profileId: m.profile_id,
+      // buildDismissalKey reads opportunity.id for the opportunity_id key.
+      opportunity: { id: oppId },
+      reason: 'crawler_os_reject',
+    });
+    dismissed += 1;
+  }
+  if (dismissed > 0) await reconcileDismissedGrants(db);
+  return dismissed;
+}
 
 function jparse(v, fallback) {
-  if (v == null) return fallback;
+  if (v === null || v === undefined) return fallback;
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return fallback; }
 }
@@ -195,7 +233,10 @@ export async function persistRun(db, memStore, run) {
     matches += 1;
   }
 
-  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0 };
+  // Remove bad matches (OS REJECTs) from the profile's pipelines too.
+  const pipelinePruned = await prunePipelineRejects(db, memStore, idRemap);
+
+  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned };
 }
 
 export default { profileContextToThesisInput, persistRun };

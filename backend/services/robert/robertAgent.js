@@ -53,8 +53,52 @@ import { scoreOpportunityForProfile } from './robertMatchBridge.js'
 import { createRecommendationIfHelpful } from './robertRecommendationService.js'
 import { mineCatalogForProfiles } from './robertCatalogMiner.js'
 import { runEmailFeedForRobert } from './robertEmailFeedBridge.js'
+import { runProfileDiscoveryLive } from '../crawlerOsService.js'
 
 const log = createLogger('robert-agent')
+
+// Modes where Robert DISCOVERS and MATCHES opportunities. These are driven by
+// the canonical Crawler OS pipeline (one discovery/matching authority), not the
+// legacy source-discovery/extract/ingest/legacy-match phases.
+const CRAWLER_OS_DISCOVERY_MODES = new Set([
+  ROBERT_MODES.DISCOVER_OPPORTUNITIES,
+  ROBERT_MODES.INGEST,
+  ROBERT_MODES.MATCH,
+  ROBERT_MODES.RECOMMEND,
+  ROBERT_MODES.FULL_CYCLE,
+])
+
+/**
+ * runRobertDiscoveryViaCrawlerOs — Robert's canonical discovery engine. For each
+ * target profile it runs the Crawler OS pipeline (buildThesis -> plan -> fetch
+ * -> realityGate -> normalize -> match) and persists the global catalog +
+ * per-profile matches via the OS persistence adapter. No legacy crawler/matcher
+ * code runs. Populates Robert's counters/summary so the run record is unchanged.
+ */
+async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summary }) {
+  for (const profileId of profileIds) {
+    try {
+      const { run, persisted, thesis } = await runProfileDiscoveryLive({ db, profileId })
+      counters.urls_fetched += run.sources.reduce((a, s) => a + (s.fetched || 0), 0)
+      counters.candidates_found += run.sources.reduce((a, s) => a + (s.parsed || 0), 0)
+      counters.opportunities_ingested += persisted.opportunities
+      counters.opportunities_matched += persisted.matches
+      counters.recommendations_created += run.recommendations.length
+      summary.matched.push({
+        profile_id: profileId,
+        applicant_types: thesis.applicant_types,
+        stored: run.stored,
+        matches: persisted.matches,
+        recommendations: run.recommendations.length,
+        sources: run.sources.map((s) => ({ source_id: s.source_id, outcome: s.outcome, reason: s.reason, stored: s.stored, deduped: s.deduped })),
+        zero_result: run.zero_result?.reason ?? null,
+      })
+    } catch (err) {
+      summary.errors.push({ stage: 'crawler_os_discovery', profile_id: profileId, error: String(err?.message || err) })
+    }
+  }
+  return summary
+}
 
 const MODE_REQUIRES_LIVE_WEB = new Set([
   ROBERT_MODES.DISCOVER_SOURCES,
@@ -101,9 +145,12 @@ export async function runRobert({
   let chosenMode = (mode || cfg.mode || DEFAULT_MODE).toLowerCase()
   if (!isValidMode(chosenMode)) chosenMode = DEFAULT_MODE
 
-  // Mode gating: live-web modes downgrade to observe when config says so.
+  // Mode gating: the legacy live-web downshift guarded the OLD unsafe web
+  // crawler. Crawler OS discovery modes are exempt — the OS fetcher is the safe
+  // canonical network path (safeUrl + DNS-rebind guard + rate limit), so OS
+  // discovery does not depend on the legacy allowLiveWeb flag.
   const liveWebPermitted = cfg.enabled && cfg.allowLiveWeb
-  if (MODE_REQUIRES_LIVE_WEB.has(chosenMode) && !liveWebPermitted) {
+  if (MODE_REQUIRES_LIVE_WEB.has(chosenMode) && !liveWebPermitted && !CRAWLER_OS_DISCOVERY_MODES.has(chosenMode)) {
     chosenMode = ROBERT_MODES.OBSERVE
   }
   if (chosenMode === ROBERT_MODES.DISCOVER_SOURCES && !cfg.allowSourceDiscovery) {
@@ -239,6 +286,18 @@ export async function runRobert({
       if (!demand) continue
       const plans = buildSearchPlans(demand, { maxPlans: 6 })
       for (const p of plans) allPlans.push(p)
+    }
+
+    // ---- CANONICAL DISCOVERY + MATCH: Crawler OS ----
+    // Robert drives the Crawler OS as the single discovery/matching authority.
+    // For discovery/match modes this REPLACES the legacy source-discovery,
+    // opportunity-extraction, verification, ingestion, and legacy-match phases
+    // below (they are not executed for these modes — no dual-run, no split
+    // brain). Coverage analysis and the email feed above still run.
+    if (CRAWLER_OS_DISCOVERY_MODES.has(chosenMode) && !dryRun) {
+      await runRobertDiscoveryViaCrawlerOs({ db, profileIds: profilesToConsider, counters, summary })
+      summary.notes.push({ stage: 'discovery', engine: 'crawler-os', profiles: profilesToConsider.length })
+      return finishRun({ db, runId, status: RUN_STATUS.COMPLETED, counters, summary })
     }
 
     // ---- Phase 3: source discovery (only if allowed) ----

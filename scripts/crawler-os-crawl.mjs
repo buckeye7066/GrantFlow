@@ -41,7 +41,7 @@ async function main() {
   }
   console.log(`[crawl] run: stored=${run.stored} rejected=${run.rejected} recommendations=${run.recommendations.length} ` +
     `zero_result=${run.zero_result?.reason ?? 'n/a'}`);
-  console.log(`[crawl] persisted to live DB: opportunities=${persisted.opportunities} matches=${persisted.matches} sources=${persisted.sources}`);
+  console.log(`[crawl] persisted to live DB: opportunities=${persisted.opportunities} matches=${persisted.matches} sources=${persisted.sources} pipeline_bad_matches_removed=${persisted.pipelinePruned}`);
 
   // Show top matches for this profile from the OS run.
   const top = run.recommendations.slice(0, 8);
