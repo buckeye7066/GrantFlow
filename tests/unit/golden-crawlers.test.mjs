@@ -9,11 +9,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchPrograms, scoreProgram } from '../../backend/services/crawlers/matchEngine.js';
 import { getStrategy, checkGates } from '../../backend/services/crawlers/strategyRegistry.js';
-import { expandNeed, scoreNeedMatch } from '../../backend/services/crawlers/needTaxonomy.js';
-import { FEDERAL_BENEFITS } from '../../backend/services/crawlers/data/federalBenefits.js';
-import { NATIONAL_PROGRAMS } from '../../backend/services/crawlers/data/nationalPrograms.js';
-import { BUSINESS_PROGRAMS } from '../../backend/services/crawlers/data/businessPrograms.js';
-import { SCHOLARSHIPS } from '../../backend/services/crawlers/data/scholarships.js';
+import { expandNeed, scoreNeedMatch } from '../../backend/services/shared/needTaxonomy.js';
+import { FEDERAL_BENEFITS } from '../../backend/services/shared/data/federalBenefits.js';
+import { NATIONAL_PROGRAMS } from '../../backend/services/shared/data/nationalPrograms.js';
+import { BUSINESS_PROGRAMS } from '../../backend/services/shared/data/businessPrograms.js';
+import { SCHOLARSHIPS } from '../../backend/services/shared/data/scholarships.js';
 
 // ═══════════════════════════════════════
 // GOLDEN FIXTURE PROFILES

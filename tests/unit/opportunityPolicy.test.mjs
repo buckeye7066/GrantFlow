@@ -10,7 +10,7 @@ import path from 'node:path'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const modulePath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'opportunityPolicy.js')
+const modulePath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'shared', 'opportunityPolicy.js')
 const moduleUrl = pathToFileURL(modulePath).href
 
 const {

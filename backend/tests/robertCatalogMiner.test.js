@@ -346,7 +346,7 @@ describe('runRobert cycle — email feed invoked + catalog mined', () => {
     insertOpp(db, { id: 'o-good', title: 'TN Good Grant', state: 'TN', record_origin: 'curated_catalog' })
   })
 
-  it('invokes the (mocked) email feeder during a recommend-mode cycle and produces catalog-mined recommendations', async () => {
+  it.skip('invokes the (mocked) email feeder during a recommend-mode cycle and produces catalog-mined recommendations' /* CUTOVER: Robert catalog-miner superseded by Crawler OS */, async () => {
     let feedCalls = 0
     const fakeFeed = async () => {
       feedCalls += 1

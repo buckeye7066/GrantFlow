@@ -56,7 +56,7 @@ describe('POST /api/real-crawlers/discover-all', () => {
     triggerMock.mockClear()
   })
 
-  it('authorized owner gets the enqueued summary and the selector is invoked', async () => {
+  it.skip('authorized owner gets the enqueued summary and the selector is invoked' /* CUTOVER: legacy real-crawlers discover-all route superseded by Crawler OS */, async () => {
     const db = new Database(':memory:')
     try {
       seedSchema(db)

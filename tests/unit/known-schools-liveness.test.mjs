@@ -1,5 +1,5 @@
 /**
- * Liveness check for every URL in `backend/services/crawlers/data/knownSchools.js`.
+ * Liveness check for every URL in `backend/services/shared/data/knownSchools.js`.
  *
  * Origin bug
  * ----------
@@ -32,7 +32,7 @@ import assert from 'node:assert/strict'
 import {
   KNOWN_SCHOOLS,
   LIVENESS_EXEMPT_HOSTS,
-} from '../../backend/services/crawlers/data/knownSchools.js'
+} from '../../backend/services/shared/data/knownSchools.js'
 
 const SKIP = process.env.SKIP_NETWORK_TESTS === '1'
 const TIMEOUT_MS = 15000

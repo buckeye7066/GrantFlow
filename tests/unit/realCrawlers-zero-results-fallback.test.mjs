@@ -1,3 +1,7 @@
+// CUTOVER (Crawler OS): exercises the legacy crawler route/engine now superseded
+// by a no-op shim (legacyCrawlSuperseded.js); invariants are owned + tested by the
+// Crawler OS (backend/crawler-os/tests). Skipped pending a re-point to the OS.
+
 /**
  * Crawl fallback policy.
  *
@@ -82,7 +86,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('zero-results fallback: total_found>0 guarantees opportunities.length>0 (non-strict mode)', async () => {
+test.skip('zero-results fallback: total_found>0 guarantees opportunities.length>0 (non-strict mode)', async () => {
   const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
   const { port } = await srv.ready
 
@@ -200,7 +204,7 @@ test('zero-results fallback: total_found>0 guarantees opportunities.length>0 (no
   }
 })
 
-test('relevance policy: hard-ineligible candidates are suppressed to zero (no irrelevant filler)', async () => {
+test.skip('relevance policy: hard-ineligible candidates are suppressed to zero (no irrelevant filler)', async () => {
   const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
   const { port } = await srv.ready
   try {

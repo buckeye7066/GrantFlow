@@ -37,7 +37,7 @@ const FIXES = [
   },
   {
     id: 'contract-title-fallback',
-    file: path.join(projectRoot, 'backend', 'services', 'crawlers', 'crawlerOpportunityContract.js'),
+    file: path.join(projectRoot, 'backend', 'services', 'shared', 'crawlerOpportunityContract.js'),
     check: 'rawDesc ? rawDesc.slice(0, 80)',
     description: 'Contract allows title fallback from description for URL-valid opps',
   },
@@ -83,14 +83,14 @@ function main() {
     console.log('     set included = top 50 by score and set score_fallback_applied: true in return.')
     console.log('   - In run-multiple, after loading profile: profile = mergeProfileAndData(profile, req.body?.profile_data).')
     console.log('     After requireFacets, apply same DB location override (profileState/profileZip/profileCity -> facets.geo, signals.location).')
-    console.log('2. backend/services/crawlers/crawlerOpportunityContract.js')
+    console.log('2. backend/services/shared/crawlerOpportunityContract.js')
     console.log('   - In enforceCrawlerOpportunityContract: validate URL first; then set title = rawTitle || (rawDesc.slice(0,80) || "Funding opportunity").')
     console.log('')
   }
 
   // Verification: contract file must require URL and allow title fallback
   let verifyOk = true
-  const contractPath = path.join(backend, 'services', 'crawlers', 'crawlerOpportunityContract.js')
+  const contractPath = path.join(backend, 'services', 'shared', 'crawlerOpportunityContract.js')
   const contractContent = readFile(contractPath) || ''
   if (!contractContent.includes('isValidHttpUrl(url)')) {
     report.errors.push('Contract must require isValidHttpUrl(url)')

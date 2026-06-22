@@ -15,7 +15,7 @@ const {
 } = pdMod
 
 const { expandNeed, scoreNeedMatch } = await import(
-  pathToFileURL(path.join(root, 'backend/services/crawlers/needTaxonomy.js')).href
+  pathToFileURL(path.join(root, 'backend/services/shared/needTaxonomy.js')).href
 )
 const { interpretFundingIntentRules } = await import(
   pathToFileURL(path.join(root, 'backend/services/smartMatcherIntent.js')).href

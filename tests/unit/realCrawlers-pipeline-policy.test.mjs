@@ -1,3 +1,8 @@
+// CUTOVER (Crawler OS): this file exercises the legacy crawler route/engine that
+// is now a superseded no-op shim (backend/services/legacyCrawlSuperseded.js). The
+// discovery/matching invariants it checked are owned + tested by the Crawler OS
+// (backend/crawler-os/tests, 149 tests). Skipped pending a re-point to the OS pipeline.
+
 /**
  * Integration test: realCrawlers DB-fallback pipeline drops forbidden opportunities.
  *
@@ -40,7 +45,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; keeps valid grant', async () => {
+test.skip('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; keeps valid grant', async () => {
   // Force live crawl timeout so we always use DB fallback path.
   // Disable token narrowing so the seeded valid grant is not filtered out by profile-derived LIKE clauses.
   const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
@@ -196,7 +201,7 @@ test('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; kee
   }
 })
 
-test('pipeline policy: min_match_score=100 filters everything below threshold', async () => {
+test.skip('pipeline policy: min_match_score=100 filters everything below threshold', async () => {
   const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
   const { port } = srv
 

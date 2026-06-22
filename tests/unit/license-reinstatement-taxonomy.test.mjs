@@ -11,10 +11,10 @@ import path from 'node:path'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const taxonomyPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'needTaxonomy.js')
+const taxonomyPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'shared', 'needTaxonomy.js')
 const itemCrawlerPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'itemFundingCrawler.js')
-const nationalPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'data', 'nationalPrograms.js')
-const scholarshipsPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'crawlers', 'data', 'scholarships.js')
+const nationalPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'shared', 'data', 'nationalPrograms.js')
+const scholarshipsPath = path.resolve(__dirname, '..', '..', 'backend', 'services', 'shared', 'data', 'scholarships.js')
 
 const taxonomyMod = await import(pathToFileURL(taxonomyPath).href)
 const { expandNeed, scoreNeedMatch } = taxonomyMod

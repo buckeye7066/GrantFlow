@@ -1,3 +1,7 @@
+// CUTOVER (Crawler OS): exercises the legacy crawler route/engine now superseded
+// by a no-op shim (legacyCrawlSuperseded.js); invariants are owned + tested by the
+// Crawler OS (backend/crawler-os/tests). Skipped pending a re-point to the OS.
+
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -28,7 +32,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('real crawler: local_funding runs with minimal profile (sparse context allowed for directory + DB fallback)', async () => {
+test.skip('real crawler: local_funding runs with minimal profile (sparse context allowed for directory + DB fallback)', async () => {
   const srv = await startServer()
   const { port } = srv
 
@@ -94,7 +98,7 @@ test('real crawler: local_funding runs with minimal profile (sparse context allo
   }
 })
 
-test('real crawler: DB fallback never returns 0 included when opportunities exist (directory resources survive)', async () => {
+test.skip('real crawler: DB fallback never returns 0 included when opportunities exist (directory resources survive)', async () => {
   // Force DB fallback by making the live crawl timeout immediately.
   // Disable token narrowing so seeded directory opportunities are not filtered out by profile tokens.
   const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })

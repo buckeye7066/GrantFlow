@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 import {
   FAKE_OPPORTUNITY_SOURCES,
   getPlaceholderUrlSqlPatterns,
-} from '../backend/services/crawlers/opportunityPolicy.js';
+} from '../backend/services/shared/opportunityPolicy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,7 +50,7 @@ console.log('[seed:demo] Using seed file:', realOppsPath);
 //
 // Rules sourced from the canonical opportunity policy module so production
 // crawlers and seed scripts use the same definitions of "fake". Do NOT add
-// new patterns here -- add them to backend/services/crawlers/opportunityPolicy.js.
+// new patterns here -- add them to backend/services/shared/opportunityPolicy.js.
 console.log('\n1. Removing fake opportunities...');
 
 const fakeSources = FAKE_OPPORTUNITY_SOURCES;

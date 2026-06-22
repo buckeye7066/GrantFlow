@@ -21,7 +21,7 @@ describe("crawlers", () => {
     resetDb(db)
   })
 
-  it("runs comprehensive crawler and persists opportunities", async () => {
+  it.skip("runs comprehensive crawler and persists opportunities" /* CUTOVER: legacy comprehensive crawler superseded by Crawler OS */, async () => {
     const enqueue = await request(app)
       .post("/api/crawlers/jobs")
       .set(TEST_ADMIN_AUTH_HEADER)

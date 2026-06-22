@@ -26,7 +26,7 @@ import {
   isPlaceholderOpportunity,
   isValidRealUrl,
   isSearchEngineUrl,
-} from '../../backend/services/crawlers/opportunityPolicy.js'
+} from '../../backend/services/shared/opportunityPolicy.js'
 
 import {
   isPlaceholderUrl,

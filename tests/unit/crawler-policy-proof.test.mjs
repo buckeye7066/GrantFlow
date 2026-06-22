@@ -40,7 +40,7 @@ import {
   filterByPolicy,
   getPolicyRejectionCounts,
   resetPolicyRejectionCounts,
-} from '../../backend/services/crawlers/opportunityPolicy.js'
+} from '../../backend/services/shared/opportunityPolicy.js'
 import {
   upsertFundingOpportunity,
   bulkUpsertFundingOpportunities,
@@ -367,7 +367,7 @@ test('P9: bulkUpsertFundingOpportunities pre-deduplicates by URL before upsert',
 // ---------------------------------------------------------------------------
 
 test('P10 (static): filterByPolicy does not invoke resetPolicyRejectionCounts in the module', () => {
-  const src = readRepoFile('backend/services/crawlers/opportunityPolicy.js')
+  const src = readRepoFile('backend/services/shared/opportunityPolicy.js')
   // filterByPolicy body: resetPolicyRejectionCounts() must not appear inside it.
   const fnStart = src.indexOf('export function filterByPolicy')
   assert.ok(fnStart >= 0)

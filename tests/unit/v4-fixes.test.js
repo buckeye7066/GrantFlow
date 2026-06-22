@@ -86,7 +86,7 @@ describe('State Normalization', () => {
 
 describe('Opportunity Expiration Detection', () => {
   it('detects expired fixed-deadline opportunities', async () => {
-    const { isExpired } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { isExpired } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     // Past deadline → expired
     expect(isExpired({ deadline: '2020-01-01', deadline_type: 'fixed' })).toBe(true)
@@ -94,14 +94,14 @@ describe('Opportunity Expiration Detection', () => {
   })
 
   it('does not expire rolling deadlines', async () => {
-    const { isExpired } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { isExpired } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     expect(isExpired({ deadline: '2020-01-01', deadline_type: 'rolling' })).toBe(false)
     expect(isExpired({ deadline_type: 'rolling' })).toBe(false)
   })
 
   it('does not expire opportunities without deadlines', async () => {
-    const { isExpired } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { isExpired } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     expect(isExpired({})).toBe(false)
     expect(isExpired({ deadline: null })).toBe(false)
@@ -109,7 +109,7 @@ describe('Opportunity Expiration Detection', () => {
   })
 
   it('does not expire future deadlines', async () => {
-    const { isExpired } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { isExpired } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     const future = new Date()
     future.setFullYear(future.getFullYear() + 1)
@@ -117,14 +117,14 @@ describe('Opportunity Expiration Detection', () => {
   })
 
   it('handles invalid date strings', async () => {
-    const { isExpired } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { isExpired } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     expect(isExpired({ deadline: 'not-a-date' })).toBe(false)
     expect(isExpired({ deadline: 'TBD' })).toBe(false)
   })
 
   it('enforceOpportunityPolicy rejects expired opportunities', async () => {
-    const { enforceOpportunityPolicy } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { enforceOpportunityPolicy } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     const expired = {
       title: 'Expired Grant',
@@ -138,7 +138,7 @@ describe('Opportunity Expiration Detection', () => {
   })
 
   it('enforceOpportunityPolicy allows expired when opt-in', async () => {
-    const { enforceOpportunityPolicy } = await import('../../backend/services/crawlers/opportunityPolicy.js')
+    const { enforceOpportunityPolicy } = await import('../../backend/services/shared/opportunityPolicy.js')
 
     const expired = {
       title: 'Expired Grant',

@@ -11,7 +11,7 @@ const contractPath = path.join(
   rootDir,
   'backend',
   'services',
-  'crawlers',
+  'shared',
   'crawlerOpportunityContract.js',
 )
 const contractUrl = pathToFileURL(contractPath).href

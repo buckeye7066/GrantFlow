@@ -30,7 +30,7 @@ import strategyMod, { listStrategies } from '../backend/services/crawlers/strate
 import { listSources } from '../backend/services/sourceRegistry.js'
 import { DOMAIN_ENGINES } from '../backend/services/crawlers/domainEngines/index.js'
 import { getSmokeSafeSources, buildRegistry } from '../backend/services/nationalCrawlerV2/registry.js'
-import { enforceOpportunityPolicy } from '../backend/services/crawlers/opportunityPolicy.js'
+import { enforceOpportunityPolicy } from '../backend/services/shared/opportunityPolicy.js'
 
 const OUT_DIR = path.resolve('test-results')
 const COMMANDS = ['node scripts/crawler-system-verify.mjs']

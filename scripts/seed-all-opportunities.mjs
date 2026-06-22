@@ -96,11 +96,11 @@ async function main() {
 
 async function seedCuratedPrograms(db, singleState) {
   const { upsertFundingOpportunity } = await imp('services/opportunityInserter.js');
-  const { FEDERAL_BENEFITS } = await imp('services/crawlers/data/federalBenefits.js');
-  const { NATIONAL_PROGRAMS } = await imp('services/crawlers/data/nationalPrograms.js');
-  const { BUSINESS_PROGRAMS } = await imp('services/crawlers/data/businessPrograms.js');
-  const { SCHOLARSHIPS } = await imp('services/crawlers/data/scholarships.js');
-  const { generateStatePrograms, isStateInRegistry } = await imp('services/crawlers/data/stateBase.js');
+  const { FEDERAL_BENEFITS } = await imp('services/shared/data/federalBenefits.js');
+  const { NATIONAL_PROGRAMS } = await imp('services/shared/data/nationalPrograms.js');
+  const { BUSINESS_PROGRAMS } = await imp('services/shared/data/businessPrograms.js');
+  const { SCHOLARSHIPS } = await imp('services/shared/data/scholarships.js');
+  const { generateStatePrograms, isStateInRegistry } = await imp('services/shared/data/stateBase.js');
 
   const stats = { total: 0, new: 0, updated: 0, federal: 0, national: 0, business: 0, scholarships: 0, state: 0 };
 
@@ -173,7 +173,7 @@ async function seedCuratedPrograms(db, singleState) {
     // Try dedicated state file first
     let statePrograms = [];
     try {
-      const mod = await import(pathToFileURL(join(backendRoot, 'services', 'crawlers', 'data', 'states', `${st}.js`)).href);
+      const mod = await import(pathToFileURL(join(backendRoot, 'services', 'shared', 'data', 'states', `${st}.js`)).href);
       statePrograms = (mod.STATE_BENEFITS || []).map(b => ({ ...b, stateRestriction: st }));
     } catch {
       // Fall back to generated

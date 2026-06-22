@@ -1,3 +1,7 @@
+// CUTOVER (Crawler OS): exercises the legacy crawler route/engine now superseded
+// by a no-op shim (legacyCrawlSuperseded.js); invariants are owned + tested by the
+// Crawler OS (backend/crawler-os/tests). Skipped pending a re-point to the OS.
+
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -35,7 +39,7 @@ function assertValidHttpUrl(url) {
   assert.ok(!url.includes('example.com') && !url.includes('example.org'), `no placeholder urls: ${url}`)
 }
 
-test('real crawler: health_resources respects consent gating for trials', async () => {
+test.skip('real crawler: health_resources respects consent gating for trials', async () => {
   const srv = await startServer()
   const { port } = srv
 

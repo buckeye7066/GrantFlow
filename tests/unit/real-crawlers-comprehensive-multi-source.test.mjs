@@ -1,3 +1,8 @@
+// CUTOVER (Crawler OS): this file exercises the legacy crawler route/engine that
+// is now a superseded no-op shim (backend/services/legacyCrawlSuperseded.js). The
+// discovery/matching invariants it checked are owned + tested by the Crawler OS
+// (backend/crawler-os/tests, 149 tests). Skipped pending a re-point to the OS pipeline.
+
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -33,7 +38,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('real crawler: comprehensive returns non-zero results from multiple funding sources', async () => {
+test.skip('real crawler: comprehensive returns non-zero results from multiple funding sources', async () => {
   const srv = await startServer({
     LIVE_CRAWL_TIMEOUT_MS: '1',
     MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK: '999',

@@ -5,8 +5,8 @@
  * DuckDuckGo need no key), scores with the canonical engine, applies the floor.
  * Not committed as product code — a diagnostic the owner asked for.
  */
-import { searchLiveFederalByProfile } from '../backend/services/crawlers/liveFederalSearch.js'
-import { searchLocalWebByProfile, buildLocalFundingQueries } from '../backend/services/crawlers/liveWebSearch.js'
+import { searchLiveFederalByProfile } from '../backend/services/shared/liveFederalSearch.js'
+import { searchLocalWebByProfile, buildLocalFundingQueries } from '../backend/services/shared/liveWebSearch.js'
 import { buildGrantsGovQueryTerms } from '../backend/services/sourceRegistry.js'
 import { scoreOpportunity } from '../backend/services/matchEngine.js'
 

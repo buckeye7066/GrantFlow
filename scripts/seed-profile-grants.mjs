@@ -43,7 +43,7 @@ import {
 import {
   FAKE_OPPORTUNITY_SOURCES,
   getPlaceholderUrlSqlPatterns,
-} from '../backend/services/crawlers/opportunityPolicy.js';
+} from '../backend/services/shared/opportunityPolicy.js';
 
 // Non-authoritative heuristic pre-score. Used ONLY as a junk filter and a
 // bounded ranking tool before the canonical engine runs. computeMatchDecision
@@ -136,7 +136,7 @@ const profiles = db.prepare('SELECT * FROM profiles WHERE id IS NOT NULL').all()
 console.log(`   Found ${profiles.length} profiles`);
 
 // First, clean up any fake grants from profiles using the canonical
-// policy lists (backend/services/crawlers/opportunityPolicy.js). This is the
+// policy lists (backend/services/shared/opportunityPolicy.js). This is the
 // SAME source of truth production paths use -- no script-local drift.
 console.log('\n3. Removing fake grants from all profiles...');
 const _fakeSourcePlaceholders = FAKE_OPPORTUNITY_SOURCES.map(() => '?').join(', ');

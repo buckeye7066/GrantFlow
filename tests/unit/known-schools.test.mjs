@@ -30,7 +30,7 @@ import {
   KNOWN_SCHOOLS,
   getKnownSchool,
   enrichSchool,
-} from '../../backend/services/crawlers/data/knownSchools.js'
+} from '../../backend/services/shared/data/knownSchools.js'
 import { generateSchoolCards } from '../../backend/services/crawlers/crawlerManager.js'
 
 describe('knownSchools registry — getKnownSchool', () => {

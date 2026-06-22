@@ -5,7 +5,7 @@ import {
   enforceCrawlerOpportunityContract,
   mergePlanKeywords,
   violatesMustNot,
-} from '../../backend/services/crawlers/crawlerOpportunityContract.js'
+} from '../../backend/services/shared/crawlerOpportunityContract.js'
 
 test('crawler opportunity contract: normalizes valid opportunity shape', () => {
   const normalized = enforceCrawlerOpportunityContract(

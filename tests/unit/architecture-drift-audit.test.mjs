@@ -41,7 +41,7 @@ import {
   isExpired,
   enforceOpportunityPolicy,
   filterByPolicy,
-} from '../../backend/services/crawlers/opportunityPolicy.js'
+} from '../../backend/services/shared/opportunityPolicy.js'
 import { SCORE_FLOOR } from '../../backend/config/matchThresholds.js'
 import { _internal_for_tests } from '../../backend/services/anyaGrantFlowAudits.js'
 
@@ -311,8 +311,8 @@ test('seed scripts import the shared opportunityPolicy and do not hard-code plac
     const src = readRepoFile(rel)
     assert.match(
       src,
-      /from\s+['"][./\w-]*crawlers\/opportunityPolicy\.js['"]/,
-      `${rel} must import from backend/services/crawlers/opportunityPolicy.js`,
+      /from\s+['"][./\w-]*shared\/opportunityPolicy\.js['"]/,
+      `${rel} must import from backend/services/shared/opportunityPolicy.js`,
     )
     // Raw LIKE strings for placeholder hosts are forbidden — use
     // getPlaceholderUrlSqlPatterns() instead.
