@@ -44,10 +44,10 @@ export async function runStartupOperations(db) {
       // Run county crawler after a 30 second delay to not block startup
       setTimeout(async () => {
         try {
-          log.info('[Anya Background] Starting county funding crawler...')
-          // const { crawlAllCounties } = await import('./countyFundingCrawler.js')
-          log.info('[Anya Background] County crawler not implemented yet')
-          // const result = await crawlAllCounties(db)
+          // County funding discovery is superseded by the Crawler OS; this
+          // legacy background hook is a no-op (the old countyFundingCrawler is
+          // no longer imported anywhere in the runtime).
+          log.info('[Anya Background] County funding handled by Crawler OS — legacy hook is a no-op')
           const result = { inserted: 0, counties: 0 }
           log.info(`[Anya Background] County crawler complete: ${result.inserted} new opportunities across ${result.counties} counties`)
         } catch (crawlErr) {

@@ -1775,7 +1775,7 @@ router.post('/crawl-all-counties', async (req, res) => {
   try {
     routeLogger.info('[crawl-all-counties] Starting county-level funding crawl...')
     
-    const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
+    const { crawlAllCounties } = await import('../services/legacyCrawlSuperseded.js')
     const result = await crawlAllCounties(req.db)
     
     const totalCount = Number(
@@ -1815,7 +1815,7 @@ router.post('/crawl-state-counties/:state', async (req, res) => {
   }
   
   try {
-    const { crawlStateCounties } = await import('../services/countyFundingCrawler.js')
+    const { crawlStateCounties } = await import('../services/legacyCrawlSuperseded.js')
     const result = await crawlStateCounties(req.db, state)
     
     res.json({
@@ -1837,7 +1837,7 @@ router.get('/county-status', async (req, res) => {
   const ctx = ensureAuth(req, res)
   if (!ctx) return
   try {
-    const { getCrawlerStatus } = await import('../services/countyFundingCrawler.js')
+    const { getCrawlerStatus } = await import('../services/legacyCrawlSuperseded.js')
     const status = await getCrawlerStatus(req.db)
     
     const totalOpps = Number(

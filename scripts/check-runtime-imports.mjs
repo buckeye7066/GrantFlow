@@ -74,7 +74,9 @@ const LEGACY_CRAWLER_PATTERNS = [
   /backend\/services\/comprehensiveCrawlerOptimized\.js$/,
   /backend\/services\/autoDiscoveryCrawlers\.js$/,
   /backend\/services\/scheduledAutoDiscovery\.js$/,
-  /backend\/services\/anyaAutonomousCrawler\.js$/,
+  // NOTE: anyaAutonomousCrawler.js is intentionally NOT here — despite the name
+  // it is Anya's autonomous CODE-audit tool (runAutonomousCodeCrawl), not a
+  // grant/funding crawler.
   /backend\/services\/grantsDotGovCrawler\.js$/,
   /backend\/services\/realFundingCrawler\.js$/,
   /backend\/services\/realLocationFundingCrawler\.js$/,
@@ -216,8 +218,12 @@ if (legacyReached.size > 0) {
     `[legacy-crawler] ${legacyReached.size} legacy crawler module(s) still reachable from the backend runtime (Crawler OS cutover fallback):`,
   )
   for (const f of [...legacyReached].sort()) console.log(`  - ${f}`)
-  if (process.env.FAIL_ON_LEGACY_CRAWLER === '1') {
-    console.error('[legacy-crawler] FAIL_ON_LEGACY_CRAWLER=1 and legacy crawler modules are still reachable.')
+  // The Crawler OS cutover is complete: the legacy grant-discovery crawl engine
+  // is unreachable from the backend runtime. This is now ENFORCED — if any
+  // runtime file imports a legacy crawler module again, CI fails. (Emergency
+  // escape hatch: CRAWLER_OS_ALLOW_LEGACY=1.)
+  if (process.env.CRAWLER_OS_ALLOW_LEGACY !== '1') {
+    console.error('[legacy-crawler] FAIL — the legacy crawler engine must not be reachable at runtime (Crawler OS is the discovery authority).')
     process.exit(1)
   }
 } else {

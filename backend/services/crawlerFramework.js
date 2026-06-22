@@ -8,7 +8,7 @@ const log = createLogger('crawlerFramework')
  */
 
 // Re-export the core crawler runner from crawlerManager
-export { runCrawler, SCHEMA } from './crawlers/crawlerManager.js'
+export { runCrawler, SCHEMA } from './legacyCrawlSuperseded.js'
 
 // Source adapters (real APIs)
 export { fetchSamGov as fetchGrantsGov } from './sources/samGov.js'
@@ -84,7 +84,7 @@ export async function runFullCrawl(db, profileId, options = {}) {
   try {
     let _runCrawler;
     try {
-      const module = await import('./crawlers/crawlerManager.js');
+      const module = await import('./legacyCrawlSuperseded.js');
       _runCrawler = module.runCrawler;
       if (!_runCrawler) throw new Error('runCrawler not exported');
     } catch (importErr) {

@@ -17,7 +17,7 @@
 import {
   fetchGrantsGov as _canonicalFetch,
   transformGrantsGovOpportunity as _canonicalTransform,
-} from '../grantsDotGovCrawler.js'
+} from '../shared/grantsGovApiClient.js'
 
 /**
  * Legacy-shape wrapper: fetches from Grants.gov and normalizes the response

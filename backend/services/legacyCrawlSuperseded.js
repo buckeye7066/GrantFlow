@@ -39,6 +39,19 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId) {
   }
 }
 
+// crawlerManager / itemFundingCrawler / domainCrawlerRegistry surfaces used by
+// admin audit, crawlerFramework, and Sam diagnostics — no-ops post-cutover.
+export async function runCrawler() { return { ...SUPERSEDED, results: [] } }
+export const SCHEMA = Object.freeze({})
+export async function crawlItemFunding() { return { ...SUPERSEDED, items: [] } }
+export const DOMAIN_CRAWLER_REGISTRY = Object.freeze({})
+
+// countyFundingCrawler surface (admin county-crawl endpoints) — no-ops post-cutover.
+export async function crawlAllCounties() { return { ...SUPERSEDED, counties: 0 } }
+export async function crawlStateCounties() { return { ...SUPERSEDED, counties: 0 } }
+export async function getCrawlerStatus() { return { ...SUPERSEDED, running: false } }
+export function isCountyCrawlerEnabled() { return false }
+
 export async function processComprehensiveCrawlerJob() { return { ...SUPERSEDED } }
 export async function crawlGrantsGov() { return { ...SUPERSEDED } }
 export async function crawlRealOpportunities() { return { ...SUPERSEDED } }

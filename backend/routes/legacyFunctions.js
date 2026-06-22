@@ -6,7 +6,7 @@ import {
   isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
-import { crawlGrantsGov } from '../services/grantsDotGovCrawler.js'
+import { crawlGrantsGov } from '../services/legacyCrawlSuperseded.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { searchStateBenefits } from '../services/connectors/benefitsGovConnector.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'

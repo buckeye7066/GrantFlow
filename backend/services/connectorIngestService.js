@@ -29,7 +29,7 @@ import { fetchOpportunities as fetchFederalRegister } from '../src/integrations/
 import { fetchAssistanceListings } from '../src/integrations/samAssistanceListings.js'
 import { fetchOpportunities as fetchSimplerGrants } from '../src/integrations/simplerGrants.js'
 import { searchOrganizations, orgToFundingOpportunity } from '../src/integrations/propublica990.js'
-import { fetchGrantsGov, transformGrantsGovOpportunity } from './grantsDotGovCrawler.js'
+import { fetchGrantsGov, transformGrantsGovOpportunity } from './shared/grantsGovApiClient.js'
 import { fetchUSASpending } from './sources/usaSpending.js'
 import {
   searchClinicalTrials,
