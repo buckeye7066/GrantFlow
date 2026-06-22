@@ -50,6 +50,25 @@ const ENTRY_POINTS = [
 const visited = new Set()
 const violations = []
 
+// ── Crawler OS cutover tracking ──────────────────────────────────────────
+// Legacy crawler/matching modules that the Crawler OS replaces. They are still
+// imported as a reversible fallback by the discovery/matching routes during the
+// staged cutover. This is a MEASUREMENT (non-failing) so the teardown is
+// trackable: when the legacy fallbacks are removed, this set goes empty and the
+// `legacy-crawler-ban` guard can be flipped to hard-fail. Set
+// FAIL_ON_LEGACY_CRAWLER=1 to enforce (used once the cutover teardown is done).
+const LEGACY_CRAWLER_PATTERNS = [
+  /backend\/services\/matchEngine\.js$/,
+  /backend\/services\/opportunityMatcher\.js$/,
+  /backend\/services\/comprehensiveCrawler/,
+  /backend\/services\/crawlerDispatcher\.js$/,
+  /backend\/services\/autoDiscoveryCrawlers\.js$/,
+  /backend\/services\/scheduledAutoDiscovery\.js$/,
+  /backend\/services\/grantsDotGovCrawler\.js$/,
+  /backend\/services\/crawlers\//,
+]
+const legacyReached = new Set()
+
 const IMPORT_RE = /(?:^|\s|;|\()\s*(?:import|export)\s+(?:[\s\S]*?\bfrom\s+)?['"]([^'"]+)['"]/g
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 
@@ -117,6 +136,9 @@ function walk(filePath) {
   const rel = path.relative(repoRoot, filePath).replace(/\\/g, '/')
   if (rel.startsWith('node_modules/')) return
 
+  // Track (don't fail) legacy crawler modules still reachable at runtime.
+  if (LEGACY_CRAWLER_PATTERNS.some((re) => re.test(rel))) legacyReached.add(rel)
+
   const source = readSourceSafe(filePath)
   const specifiers = new Set()
   let match
@@ -170,6 +192,20 @@ const totalFiles = visited.size
 console.log(
   `[check-runtime-imports] ok — ${totalFiles} backend-reachable files all live inside the Dockerfile runtime image`,
 )
+
+// Crawler OS cutover progress (measurement; non-failing unless enforced).
+if (legacyReached.size > 0) {
+  console.log(
+    `[legacy-crawler] ${legacyReached.size} legacy crawler module(s) still reachable from the backend runtime (Crawler OS cutover fallback):`,
+  )
+  for (const f of [...legacyReached].sort()) console.log(`  - ${f}`)
+  if (process.env.FAIL_ON_LEGACY_CRAWLER === '1') {
+    console.error('[legacy-crawler] FAIL_ON_LEGACY_CRAWLER=1 and legacy crawler modules are still reachable.')
+    process.exit(1)
+  }
+} else {
+  console.log('[legacy-crawler] ok — no legacy crawler modules reachable from the backend runtime')
+}
 
 // Silence unused-import warning under strict mode without changing the API.
 void pathToFileURL
