@@ -2014,6 +2014,7 @@ app.use('/api', lazyRouter('./routes/studentPortals.js'));
 // a resolved login URL + label + green/red status. Same /:id path convention as
 // studentPortals; does not collide with the main profiles router.
 app.use('/api', lazyRouter('./routes/profilePortals.js'));
+app.use('/api', lazyRouter('./routes/fundingSources.js'));
 // Committed-college financial-aid workspace (commit one school → others archive;
 // aggregate COA / FAFSA / aid / matched funding / Hamilton status). Same
 // /:profileId path convention as studentPortals.

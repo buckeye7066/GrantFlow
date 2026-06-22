@@ -38,7 +38,7 @@ const INDIVIDUAL_TYPES = new Set(['individual', 'family', 'student', 'veteran'])
 
 function classifyBad(opp, thesis) {
   // 1) geo-stub
-  if (isTemplatedGeoStub({ title: opp.title, record_type: opp.record_type, opportunity_kind: opp.opportunity_kind })) {
+  if (isTemplatedGeoStub({ title: opp.title, opportunity_kind: opp.opportunity_kind })) {
     return 'geo_stub';
   }
   // 2) applicant-type ineligibility for an individual/household profile
@@ -59,7 +59,7 @@ function classifyBad(opp, thesis) {
 async function cleanseProfile(db, profileId) {
   const grants = await db
     .prepare(`SELECT g.id, g.status, g.title, g.funding_opportunity_id,
-                     fo.title AS fo_title, fo.description, fo.sponsor, fo.record_type, fo.opportunity_kind
+                     fo.title AS fo_title, fo.description, fo.sponsor, fo.opportunity_kind
                 FROM grants g LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
                WHERE g.profile_id = ?`)
     .all(profileId);
@@ -75,7 +75,7 @@ async function cleanseProfile(db, profileId) {
   const bad = [];
   for (const g of grants) {
     if (g.status && PROTECTED.has(g.status)) continue; // never purge user-progressed work
-    const opp = { title: g.fo_title || g.title, description: g.description, sponsor: g.sponsor, record_type: g.record_type, opportunity_kind: g.opportunity_kind };
+    const opp = { title: g.fo_title || g.title, description: g.description, sponsor: g.sponsor, opportunity_kind: g.opportunity_kind };
     const reason = classifyBad(opp, thesis);
     if (reason) bad.push({ grantId: g.id, oppId: g.funding_opportunity_id, title: opp.title, status: g.status, reason });
   }
