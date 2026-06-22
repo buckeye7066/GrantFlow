@@ -1208,6 +1208,19 @@ router.post('/', createProfileLimiter, async (req, res) => {
     console.warn('[profiles] Failed to schedule initial crawl for new profile:', scheduleError?.message || String(scheduleError))
   }
 
+  // "All incoming profiles, do the same" — enqueue the SMS consent ask for any
+  // phone this profile already has in `none` state (sends now if Twilio is
+  // configured + the number isn't suppressed; otherwise the next consent
+  // campaign tick asks). Best-effort, fire-and-forget; never blocks creation.
+  try {
+    const { requestConsentForProfile } = await import('../services/comms/smsConsentService.js')
+    requestConsentForProfile(req.db, { profileId }).catch((err) => {
+      console.warn('[profiles] consent enqueue failed for new profile:', err?.message || String(err))
+    })
+  } catch (consentError) {
+    console.warn('[profiles] consent enqueue unavailable for new profile:', consentError?.message || String(consentError))
+  }
+
   res.status(201).json(mapProfile(refreshed))
 })
 

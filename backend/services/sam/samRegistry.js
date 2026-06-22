@@ -617,6 +617,42 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Probes the admin Broadcast recipient surface so a mount-point / route regression in owner messaging (promotions, notifications, free-period + suspension notices) is caught before deploy.',
   },
   {
+    id: 'comms.smsConsent',
+    label: 'SMS consent (opt-in) state',
+    category: SAM_CATEGORIES.PRODUCTION_CONFIG,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Makes the SMS consent state machine observable: is Twilio configured (so consent texts CAN be sent), and how many phones are in each consent state (none = new/awaiting ask, pending = asked/awaiting reply, opted_in, opted_out). Flags only when there are numbers awaiting consent (state=none) but SMS is NOT configured — i.e. the consent campaign can never run, so new profiles will never be asked. Fails open before the table exists.',
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'sms consent: db unavailable' }
+      let counts
+      try {
+        const { getConsentStatusCounts } = await import('../comms/smsConsentService.js')
+        counts = await getConsentStatusCounts(db)
+      } catch (err) {
+        // Table not migrated yet / service unavailable — environment gap, not a defect.
+        return { ok: true, summary: `sms consent check skipped (${err?.message || 'unknown'})` }
+      }
+      const awaiting = Number(counts?.none || 0)
+      const configured = Boolean(counts?.configured)
+      // Real signal: there are numbers that still need the consent ask, but SMS
+      // can't send, so the campaign is dead. Everything else is informational.
+      if (awaiting > 0 && !configured) {
+        return {
+          ok: false,
+          summary: `${awaiting} phone(s) await SMS consent but Twilio is NOT configured — the consent campaign cannot run, so new/existing profiles will never be asked. Set TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_MESSAGING_SERVICE_SID (or TWILIO_FROM_NUMBER).`,
+          evidence: counts,
+          recommended_fix: 'Configure the Twilio env vars on Railway, then run owner.sms_consent_campaign (dry-run first, then confirm:true).',
+        }
+      }
+      return {
+        ok: true,
+        summary: `SMS consent: configured=${configured}; none(awaiting)=${awaiting}, pending=${counts?.pending || 0}, opted_in=${counts?.opted_in || 0}, opted_out=${counts?.opted_out || 0}.`,
+        evidence: counts,
+      }
+    },
+  },
+  {
     id: 'connector.clinicalTrials',
     label: 'Clinical-trials connector + dispatcher job type',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,

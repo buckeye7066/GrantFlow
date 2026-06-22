@@ -75,6 +75,14 @@ router.post('/phones', async (req, res) => {
     const { profileId, phone, label = null, optIn = true } = req.body ?? {}
     if (!profileId || !phone) return res.status(400).json({ error: 'profileId and phone are required' })
     const result = await addProfilePhone(req.db, { profileId: String(profileId), phone: String(phone), label, optIn: optIn !== false, addedBy: actor(req) })
+    // If the admin did NOT capture explicit consent (optIn=false → 'none'),
+    // enqueue the SMS consent ask so this number gets the same opt-in flow.
+    if (result.ok && result.consent_status === 'none') {
+      try {
+        const { requestConsentForProfile } = await import('../services/comms/smsConsentService.js')
+        requestConsentForProfile(req.db, { profileId: String(profileId) }).catch(() => {})
+      } catch { /* best-effort */ }
+    }
     res.status(result.ok ? 200 : 400).json(result)
   } catch (error) {
     res.status(500).json(formatError(error))
@@ -171,6 +179,49 @@ router.get('/robert-contacts/status', async (req, res) => {
       pendingLeads = Number(r?.c || 0)
     } catch { /* table may not exist yet */ }
     res.json({ enabled: isContactScanEnabled(), tagged_contact_leads: pendingLeads })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ── SMS consent campaign (the "is it ok to text you?" opt-in flow) ──────────
+//
+// CRITICAL SAFETY: the campaign DEFAULTS TO DRY-RUN. It previews who WOULD be
+// texted and sends nothing unless the caller passes confirm:true (or send:true).
+// It never texts a blocklisted/suppressed number and never re-asks a number that
+// is already pending/opted_in/opted_out.
+router.post('/sms-consent/campaign', async (req, res) => {
+  try {
+    const { runConsentCampaign } = await import('../services/comms/smsConsentService.js')
+    const confirm = req.body?.confirm === true || req.body?.send === true
+    const limit = Number(req.body?.limit) || 500
+    const summary = await runConsentCampaign(req.db, { confirm, limit, requestedBy: actor(req) })
+    res.json(summary)
+  } catch (error) {
+    log.error('sms consent campaign failed', { error: error?.message })
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Consent status counts (none / pending / opted_in / opted_out) + SMS configured.
+router.get('/sms-consent/status', async (req, res) => {
+  try {
+    const { getConsentStatusCounts } = await import('../services/comms/smsConsentService.js')
+    const counts = await getConsentStatusCounts(req.db)
+    res.json(counts)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Expire stale pending consents now (numbers asked but never replied → opted_out).
+// Normally driven by the nightly sweep; exposed for the owner to run on demand.
+router.post('/sms-consent/expire', async (req, res) => {
+  try {
+    const { expirePendingConsent } = await import('../services/comms/smsConsentService.js')
+    const days = req.body?.days !== undefined && req.body?.days !== null ? Number(req.body.days) : null
+    const result = await expirePendingConsent(req.db, { days })
+    res.json(result)
   } catch (error) {
     res.status(500).json(formatError(error))
   }

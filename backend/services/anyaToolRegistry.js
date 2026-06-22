@@ -4260,6 +4260,39 @@ registerTool({
   },
 })
 
+// SMS consent campaign — text profiles asking "is it ok to text you?" (opt-in).
+// DRY-RUN by default: previews who WOULD be texted and sends nothing unless the
+// owner passes confirm:true. Never texts a blocklisted number; never re-asks a
+// number already pending/opted_in/opted_out.
+registerTool({
+  name: 'owner.sms_consent_campaign',
+  description: 'OWNER ONLY. Run the SMS consent (opt-in) campaign: text profiles that have a phone with no recorded consent, asking permission to send grant-deadline & account texts (Reply YES / STOP). DRY-RUN by default — it PREVIEWS who would be texted and sends NOTHING unless you pass confirm:true. Pass action:"status" to just see the consent counts (none / pending / opted_in / opted_out). Never texts a blocklisted number or re-asks a number that already replied. Use when the owner says "ask my users if it\'s ok to text them" or "how many opted in to texts?".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['campaign', 'status'], description: 'campaign = run the opt-in send; status = just show counts', default: 'campaign' },
+      confirm: { type: 'boolean', description: 'Must be EXACTLY true to actually send. Omit/false = dry-run preview only.' },
+      limit: { type: 'number', description: 'Max numbers to process (default 500)' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runConsentCampaign, getConsentStatusCounts } = await import('./comms/smsConsentService.js')
+    if (String(params?.action || 'campaign') === 'status') {
+      return { ok: true, action: 'status', counts: await getConsentStatusCounts(db) }
+    }
+    const confirm = params?.confirm === true
+    const summary = await runConsentCampaign(db, {
+      confirm,
+      limit: Number(params?.limit) || 500,
+      requestedBy: context?.ctx?.email || 'anya_owner',
+    })
+    return { ok: true, action: 'campaign', ...summary }
+  },
+})
+
 registerTool({
   name: 'owner.create_announcement',
   description: 'OWNER ONLY. Create a one-time, dismissible message shown to users when they next log in (an in-app announcement, not email/SMS). Use when the owner says "show users X on next login" / "tell everyone about X when they sign in". audience:"all" reaches every user; pass a profileId to target just that profile\'s users. Provide title + body (markdown ok).',

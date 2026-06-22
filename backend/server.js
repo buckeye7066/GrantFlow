@@ -493,6 +493,11 @@ app.use((req, res, next) => {
 
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter)
 
+// Twilio inbound-SMS webhook. Mounted BEFORE express.json() because Twilio POSTs
+// application/x-www-form-urlencoded (the router parses its own body) and signs
+// the raw request — see backend/routes/smsInbound.js. req.db is already attached.
+app.use('/api/sms', lazyRouter('./routes/smsInbound.js'));
+
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
 // Wrap every request in an AsyncLocalStorage profile context so the SQL
