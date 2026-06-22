@@ -35,6 +35,19 @@ test('a strong, well-matched grant ACCEPTs with a high score', () => {
   assert.equal(m.profile_id, thesis.profile_id);
 });
 
+test('a topically-irrelevant grant (no specific need overlap) is capped at REVIEW, never ACCEPT', () => {
+  // Open to the profile's applicant type, national, official, funded — but its
+  // only need overlap is the catch-all 'programs'. A VFD needing equipment/
+  // emergency should NOT see this as an apply-now ACCEPT.
+  const offTopic = strongOpp({
+    title: 'U.S. Mission Cultural Exchange Program',
+    need_categories: ['programs'],
+  });
+  const m = computeMatchDecision(offTopic, thesis);
+  assert.notEqual(m.decision, MATCH_DECISION.ACCEPT, `off-topic grant must not ACCEPT (got ${m.decision} @ ${m.match_score})`);
+  assert.ok(m.match_explain.warnings.some((w) => /weak topical relevance/i.test(w)));
+});
+
 test('the result carries an explainable breakdown and reasons', () => {
   const m = computeMatchDecision(strongOpp(), thesis);
   assert.ok(m.match_explain);

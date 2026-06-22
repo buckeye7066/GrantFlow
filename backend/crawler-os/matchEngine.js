@@ -21,6 +21,13 @@ export const WEIGHTS = Object.freeze({
   funding: 10, urgency: 5, amount: 5, trust: 5,
 });
 
+// "Generic" needs describe HOW funds are used (operating support), not WHAT the
+// grant is topically about. Matching only these is not real topical relevance:
+// e.g. a "U.S. Mission to Morocco Tech Lab" mentions "program", so it matches
+// the catch-all 'programs' need for a church food pantry — but it is not a
+// fundable fit. An apply-now ACCEPT requires at least one SPECIFIC need overlap.
+const GENERIC_NEEDS = new Set(['programs', 'operations']);
+
 /**
  * computeMatchDecision — score one opportunity against one profile thesis and
  * return a fully-explained decision.
@@ -45,6 +52,20 @@ export function computeMatchDecision(opportunity, thesis, opts = {}) {
     ? WEIGHTS.need * 0.6
     : ratioScore(matchedNeeds.length, Math.max(1, thesis.needs.length), WEIGHTS.need);
   if (!needWild && matchedNeeds.length === 0 && thesis.needs.length > 0) warnings.push('no need-category overlap');
+  // Topical-relevance gate: if the profile has specific (non-generic) needs but
+  // the opportunity overlaps NONE of them (matched only catch-all needs, or
+  // nothing), it is not a fundable apply-now fit — flag it so decide() caps it at
+  // REVIEW instead of ACCEPT. Explicit-wildcard opportunities are exempt.
+  // The gate applies to wildcard-need opportunities too: a grant that declares
+  // no specific topical focus ('*') provides no evidence it fits this profile's
+  // specific needs, so it is REVIEW, not an apply-now ACCEPT. (Federal search
+  // APIs like grants.gov often return only a title, so most rows fall here —
+  // which is correct: surface them to review, do not auto-recommend them.)
+  const specificThesisNeeds = thesis.needs.filter((n) => !GENERIC_NEEDS.has(n));
+  const specificMatched = matchedNeeds.filter((n) => !GENERIC_NEEDS.has(n));
+  if (specificThesisNeeds.length > 0 && specificMatched.length === 0) {
+    warnings.push('weak topical relevance: no specific need overlap');
+  }
 
   // applicant (20). Treat '*' as broad only when there is no concrete applicant
   // signal. If concrete applicant types exist, they control the match.
@@ -111,7 +132,7 @@ function decide(score, floor, opportunity, warnings) {
     return MATCH_DECISION.REVIEW;
   }
   if (score < floor) return MATCH_DECISION.REJECT;
-  const hardWarn = warnings.some((w) => /disallows|not served|no apply URL/i.test(w));
+  const hardWarn = warnings.some((w) => /disallows|not served|no apply URL|weak topical relevance/i.test(w));
   if (hardWarn) return MATCH_DECISION.REVIEW;
   if (score >= Math.max(floor, 70)) return MATCH_DECISION.ACCEPT;
   return MATCH_DECISION.REVIEW;

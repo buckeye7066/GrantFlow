@@ -54,6 +54,10 @@ function gatherText(profile) {
   return parts.join(' \n ').toLowerCase();
 }
 
+// Applicant types that describe an ORGANIZATION (vs. a person/household).
+const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'business', 'farm', 'government']);
+const INDIVIDUAL_APPLICANT_TYPES = new Set(['individual', 'family', 'student', 'veteran']);
+
 function deriveApplicantTypes(profile, blob) {
   const explicit = []
     .concat(profile?.applicant_types ?? [])
@@ -71,6 +75,26 @@ function deriveApplicantTypes(profile, blob) {
       if (syns.some((s) => e.includes(s))) found.add(canon);
     }
   }
+
+  // Identity guard: applicant TYPE (who you are) is not a NEED (what you need).
+  // A profile whose PRIMARY type is a person/household (individual / family /
+  // student / veteran — including compounds like "high_school_student") must NOT
+  // acquire organizational applicant types from free-text noise — otherwise the
+  // words "community" or "education" make a high-school student look like a
+  // "government" or "school" applicant and pull in org/agency grants they can
+  // never apply for. An individual is not an organization, period. Individual
+  // primary identity takes precedence: note "high_school_student" CONTAINS the
+  // substring "school", so a naive org-substring check would misfire — we detect
+  // the person tokens with word boundaries (+ a "student" catch-all) instead.
+  const primaryRaw = lc(profile?.profile_type ?? profile?.type ?? '');
+  const primaryIsIndividual =
+    INDIVIDUAL_APPLICANT_TYPES.has(primaryRaw) ||
+    primaryRaw.includes('student') ||
+    /\b(individual|person|resident|family|household|parent|parents|caregiver|scholar|undergraduate|graduate|pupil|veteran)\b/.test(primaryRaw);
+  if (primaryIsIndividual) {
+    for (const t of [...found]) if (ORG_APPLICANT_TYPES.has(t)) found.delete(t);
+  }
+
   if (found.size === 0) found.add('individual'); // safe default; never zero
   return [...found];
 }

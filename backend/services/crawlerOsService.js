@@ -22,6 +22,8 @@
 import dns from 'node:dns';
 
 import { getDb } from '../db/index.js';
+import { loadProfileContext } from './profileHelpers.js';
+import { profileContextToThesisInput, persistRun } from './crawlerOsPersistence.js';
 import {
   createSqlStore,
   createMemoryStore,
@@ -121,11 +123,40 @@ export async function runProfileDiscovery(profile, opts = {}) {
   return runDiscovery({ store, fetcher }, { thesis, matchProfiles, floor: opts.floor });
 }
 
+/**
+ * runProfileDiscoveryLive — the production-safe discovery entry for ONE live
+ * GrantFlow profile, on ANY dialect. It loads the profile through the app's
+ * loadProfileContext, builds the OS thesis, runs the REAL pipeline against an
+ * in-memory OS store (synchronous, dialect-free), then flushes the results into
+ * the live tables via the async persistence adapter. This is the seam Robert and
+ * the discovery routes call — no legacy crawler/matching code is involved.
+ *
+ * @param {object} opts
+ * @param {object} [opts.db]         live DB (defaults to getDb()).
+ * @param {string} opts.profileId    the profile to discover for.
+ * @param {object} [opts.fetcher]    OS fetcher (defaults to the production fetcher).
+ * @param {number} [opts.floor]      match floor override.
+ * @returns {Promise<{run:object, persisted:object, thesis:object}>}
+ */
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor } = {}) {
+  if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
+  const ctx = await loadProfileContext(db, profileId);
+  const thesis = buildThesis(profileContextToThesisInput(ctx));
+  const store = createMemoryStore();
+  const run = await runDiscovery(
+    { store, fetcher: fetcher ?? makeProductionFetcher() },
+    { thesis, matchProfiles: [thesis], floor },
+  );
+  const persisted = await persistRun(db, store, run);
+  return { run, persisted, thesis };
+}
+
 export default {
   getCrawlerOsStore,
   makeProductionFetcher,
   ensureCrawlerOsSchema,
   runProfileDiscovery,
+  runProfileDiscoveryLive,
   runDiscovery,
   buildThesis,
   computeMatchDecision,
