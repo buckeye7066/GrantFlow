@@ -405,6 +405,72 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               }
       }
 
+      // ── Crawler OS first: serve canonical per-profile matches ────────────
+      // The Crawler OS is the single matching authority. When it has scored this
+      // profile (profile_opportunity_matches rows with matcher_version
+      // 'crawler-os'), serve those — mapped to the response shape, pipeline
+      // members excluded — instead of recomputing with the legacy scorer. The
+      // legacy path below remains as a reversible fallback (?legacy_matching=1)
+      // and for profiles the OS has not yet scored.
+      if (req.query.legacy_matching !== '1') {
+        let osRows = []
+        try {
+          osRows = await req.db
+            .prepare(
+              `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+                      m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
+                 FROM profile_opportunity_matches m
+                 JOIN funding_opportunities o ON o.id = m.opportunity_id
+                WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+                  AND (o.is_active IS NULL OR o.is_active = 1)
+                  AND (o.is_hidden IS NULL OR o.is_hidden = 0)
+                ORDER BY m.match_score DESC`,
+            )
+            .all(profileId)
+        } catch {
+          osRows = []
+        }
+        if (osRows.length > 0) {
+          const osMin = Number.isFinite(Number.parseInt(req.query.min_score, 10))
+            ? Number.parseInt(req.query.min_score, 10)
+            : 50
+          let mapped = osRows.map((o) => {
+            const kind = String(o.opportunity_kind ?? '').toUpperCase()
+            const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
+            let reasons = []
+            try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
+            return {
+              ...o,
+              match_score: o.os_match_score,
+              match_decision: o.os_match_decision,
+              match_explanation: o.os_match_explanation,
+              match_reasons: reasons,
+              is_directory: isDirectory,
+              trust_tier: o.source_trust_tier ?? null,
+              url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+              actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+              engine: 'crawler-os',
+            }
+          })
+          mapped = dedupeOpportunityList(mapped)
+          mapped = await filterOutPipelineMembers(req.db, profileId, mapped)
+          const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
+          const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
+          return res.json({
+            profile_id: profileId,
+            engine: 'crawler-os',
+            min_score: osMin,
+            total_scored: mapped.length,
+            returned: qualified.length,
+            qualified_count: qualified.length,
+            score_histogram: [],
+            opportunities: qualified,
+            referrals: [],
+            profile_field_prompts: profileFieldPrompts,
+          })
+        }
+      }
+
       const minScore = Number.parseInt(req.query.min_score ?? '50', 10)
       // When strict=1 (Discover slider), do not relax threshold — honor the user's minimum match %.
       const strictMin =
