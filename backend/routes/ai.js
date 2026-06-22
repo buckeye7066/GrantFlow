@@ -29,6 +29,11 @@ import {
 
 import { createLogger } from '../utils/logger.js'
 import { buildLanguageDirectiveForProfileAsync } from '../services/languagePreference.js'
+import {
+  todoSectionIsComplete,
+  formatTodoDate,
+  sanitizeTodoPlan,
+} from '../services/profileTodoPlan.js'
 const routeLogger = createLogger('route:ai')
 
 const router = express.Router();
@@ -1482,6 +1487,33 @@ router.post('/generate-profile-todo', enforceTierCapability(TIER_CAPABILITIES.DO
       }
     } catch { /* profile_sections may not exist */ }
 
+    // Live section-completion status so the plan never tells the user to redo
+    // finished work (#3). Combine profile_sections with the denormalized profile
+    // columns (older profiles store some sections as columns, not rows).
+    const completeSectionKeys = new Set();
+    for (const s of sections) {
+      if (todoSectionIsComplete(s.data)) completeSectionKeys.add(String(s.key).toLowerCase());
+    }
+    const COLUMN_SECTION_MAP = {
+      basic_information: p.basic,
+      education: p.education,
+      employment: p.employment,
+      health_medical: p.health,
+      financial_information: p.financial,
+      housing: p.housing,
+      narrative: p.narrative,
+      additional: p.additional,
+    };
+    for (const [key, data] of Object.entries(COLUMN_SECTION_MAP)) {
+      if (todoSectionIsComplete(data)) completeSectionKeys.add(key);
+    }
+    const completeSectionList = Array.from(completeSectionKeys);
+
+    // Anchor everything to the CURRENT server date (#2). The LLM otherwise emits
+    // deadlines from its training period (2023-2024); we also post-process below.
+    const now = new Date();
+    const todayIso = formatTodoDate(now);
+
     const activeGrants = grants.filter(g =>
       !['declined', 'declined_no_review', 'closed'].includes(g.status)
     );
@@ -1496,6 +1528,14 @@ router.post('/generate-profile-todo', enforceTierCapability(TIER_CAPABILITIES.DO
     }));
 
     const prompt = `You are an expert case manager and grant advisor. Analyze this person's complete profile and their funding pipeline, then generate a COMPREHENSIVE, ACTIONABLE TODO CHECKLIST they can print out and work through step by step.
+
+=== TODAY'S DATE ===
+${todayIso}
+ALL deadlines and timeframes MUST be on or after today (${todayIso}). NEVER output a date in the past. When you give a specific date, compute it forward from today (e.g. critical items within ~1 week, high within ~2 weeks, medium within ~1 month). If you don't have a concrete funder deadline, use a relative timeframe ("within 2 weeks") instead of inventing a calendar date.
+
+=== ALREADY-COMPLETE PROFILE SECTIONS (do NOT ask the user to fill these in again) ===
+${completeSectionList.length > 0 ? completeSectionList.join(', ') : '(none captured yet)'}
+These sections already contain data. Do NOT generate "Complete the X section" / "Fill in X" tasks for any section listed above — that work is already done. You may still reference them for context or suggest reviewing/refining specific fields, but never tell the user to complete a section that is already complete.
 
 === PROFILE ===
 Name: ${applicantName}
@@ -1539,7 +1579,7 @@ Be SPECIFIC to this person's actual situation. Reference their real profile data
 Return ONLY valid JSON:
 {
   "applicant_name": "the person's name",
-  "generated_date": "today's date",
+  "generated_date": "${todayIso}",
   "summary": "1-2 sentence overview of where this person stands and what they need to focus on",
   "categories": [
     {
@@ -1577,6 +1617,13 @@ Return ONLY valid JSON:
     try { parsed = JSON.parse(rawText); } catch {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       if (jsonMatch) try { parsed = JSON.parse(jsonMatch[0]); } catch { /* use raw */ }
+    }
+
+    // Net (don't trust the LLM): strip any "complete an already-complete section"
+    // tasks and rewrite past-dated deadlines to a future offset by priority, so a
+    // freshly generated plan is never overdue and never contradicts the profile.
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.categories)) {
+      parsed = sanitizeTodoPlan(parsed, { today: now, completeSectionKeys });
     }
 
     res.json({

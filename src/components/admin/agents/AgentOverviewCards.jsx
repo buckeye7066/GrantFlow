@@ -16,10 +16,24 @@ const AGENT_ORDER = ['anya', 'sam', 'robert', 'yana', 'hamilton', 'john']
 
 const HEALTH_STYLES = {
   healthy: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-200',
+  // "Ran, no output": ran cleanly but produced nothing — distinct from healthy
+  // (sky/blue, not green) and from error (not red). Honest middle state.
+  ran_no_output: 'bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-900/40 dark:text-sky-200',
   warning: 'bg-amber-100 text-amber-900 border-amber-200 dark:bg-amber-900/40 dark:text-amber-200',
   error: 'bg-red-100 text-red-900 border-red-200 dark:bg-red-900/40 dark:text-red-200',
   idle: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300',
   not_installed: 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-900 dark:text-slate-500',
+}
+
+// Compact, human-readable badge text per health state. Keeps the green
+// "healthy" claim honest: a clean-but-work-less run reads "Ran · no output".
+const HEALTH_LABELS = {
+  healthy: 'healthy',
+  ran_no_output: 'ran · no output',
+  warning: 'warning',
+  error: 'error',
+  idle: 'idle',
+  not_installed: 'not installed',
 }
 
 function formatTime(iso) {
@@ -141,7 +155,7 @@ export default function AgentOverviewCards({ agents }) {
                 </CardTitle>
               </div>
               <Badge variant="outline" className={`text-[10px] uppercase ${healthCls}`}>
-                {agent.health}
+                {HEALTH_LABELS[agent.health] || agent.health}
               </Badge>
             </CardHeader>
             <CardContent className="pt-0">

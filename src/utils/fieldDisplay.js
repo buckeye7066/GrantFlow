@@ -214,6 +214,41 @@ function normalizeStringArrayEntry(value) {
 }
 
 /**
+ * Clean up a string-array value for DISPLAY: split on common separators,
+ * trim, de-duplicate (case-insensitive), and drop empties / sentinels. This
+ * fixes legacy / intake fields (notably `keywords (intake)`) whose stored
+ * value is a single string with run-together + comma-separated duplicates
+ * (e.g. ["churchministry, church, ministry"]) so the user sees a clean,
+ * unique, comma-separated list instead of repeated, jammed-together tokens.
+ *
+ * Display-only: it never mutates stored data.
+ */
+export function cleanStringArrayForDisplay(value) {
+  // Flatten arrays/objects to scalar strings first.
+  const flat = normalizeStringArrayEntry(value)
+  const out = []
+  const seen = new Set()
+  for (const entry of flat) {
+    // Split a run-together blob on commas, semicolons, pipes, slashes, and
+    // newlines. We deliberately do NOT split on spaces — multi-word tags like
+    // "youth ministry" are legitimate single keywords.
+    const tokens = String(entry)
+      .split(/[,;|/\n]+/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+    for (const token of tokens) {
+      const cleaned = normalizeDisplayString(token)
+      if (!cleaned) continue
+      const dedupeKey = cleaned.toLowerCase()
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+      out.push(cleaned)
+    }
+  }
+  return out
+}
+
+/**
  * Infer a sensible format from a raw value's runtime type when no
  * metadata is declared. Used as the fallback path for formatFieldValue
  * so legacy / intake / new fields always render cleanly.
@@ -273,12 +308,10 @@ export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION
     return "—"
   }
   if (format === "string_array") {
-    if (Array.isArray(value)) {
-      return value.flatMap((entry) => normalizeStringArrayEntry(entry)).filter(Boolean).join(", ") || "—"
-    }
-    if (typeof value === "string") return normalizeDisplayString(value) ?? "—"
-    if (typeof value === "object") return normalizeStringArrayEntry(value).join(", ") || "—"
-    return "—"
+    // De-dupe + split run-together tokens for display so legacy/intake fields
+    // (e.g. keywords) never show repeated, jammed-together values.
+    const cleaned = cleanStringArrayForDisplay(value)
+    return cleaned.length > 0 ? cleaned.join(", ") : "—"
   }
   if (format === "json") {
     return formatJsonValue(value) ?? "—"

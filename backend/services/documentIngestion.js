@@ -25,6 +25,7 @@ export {
   extractOrganizationDetailsHeuristics,
 }
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+import { sanitizeDbErrorMessage } from '../utils/sanitizeDbError.js'
 import {
   ensureDocumentExtract,
   getDocumentExtract,
@@ -588,7 +589,12 @@ export async function processDocumentIngestionJob({
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    // Log the FULL error server-side (silent-failure aversion) but persist only
+    // a sanitized, non-leaky message — the UI renders documents.processing_error
+    // verbatim, so a raw Postgres CHECK-constraint string (e.g. the
+    // document_extracts_source_type_check violation) must never reach it.
+    console.error('[documentIngestion] extraction failed for document', documentId, error)
+    const message = sanitizeDbErrorMessage(error)
     await markDocumentExtractFailed(db, documentId, { warnings: [message] })
     await db.prepare(
       `
@@ -974,6 +980,9 @@ export async function processDocumentIngestionJob({
       result_meta: resultMeta,
     }
   } catch (error) {
+    // Log the full error, persist only the sanitized message (see the extraction
+    // catch above for rationale).
+    console.error('[documentIngestion] AI parsing/section phase failed for document', documentId, error)
     await db.prepare(
       `
         UPDATE documents
@@ -985,7 +994,7 @@ export async function processDocumentIngestionJob({
             END
         WHERE id = ?
       `,
-    ).run(error instanceof Error ? error.message : String(error), documentId)
+    ).run(sanitizeDbErrorMessage(error), documentId)
     throw error
   }
 }

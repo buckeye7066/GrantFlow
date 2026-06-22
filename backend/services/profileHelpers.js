@@ -692,6 +692,38 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
 export function extractStateFromContext({ profile, sections, jobParameters = {} }) {
   const addr = sections?.basic_information?.address
   const compAddr = sections?.comprehensive_application?.address
+
+  // ── SERVICE-AREA PRECEDENCE (canonical_rules G4 geographic matching) ──────
+  // A profile's geographic FIT is driven by where it DELIVERS services (its
+  // service area / geographic focus), NOT by where its mail is delivered. A
+  // ministry headquartered in Cleveland, TN that serves the Pine Ridge
+  // Reservation, SD must match SD sources, not TN ones. So the explicit
+  // "Location Focus / service area / geographic focus" fields are resolved
+  // FIRST — they win over the mailing/home address below. This only fires when
+  // the service-area field names a concrete state; otherwise we fall through to
+  // the mailing-address candidates (single-address individuals are unchanged,
+  // since they typically leave Location Focus blank and their home == service
+  // area). `service_states`/`states_served` arrays are intentionally NOT used
+  // here (the singular primary should reflect ONE state); they still join the
+  // multi-state `states[]` list in buildProfileSignals.
+  const serviceAreaCandidates = [
+    sections?.location_focus?.service_area,
+    sections?.location_focus?.geographic_focus,
+    sections?.location_focus?.primary_state,
+    sections?.location_focus?.state,
+    sections?.comprehensive_application?.geographic_focus,
+    sections?.narrative?.geographic_focus,
+  ]
+  for (const value of serviceAreaCandidates) {
+    if (typeof value !== 'string' || !value.trim()) continue
+    const trimmed = value.trim()
+    const resolved =
+      (trimmed.length === 2 ? normalizeState(trimmed) : null) ||
+      STATE_NAME_TO_ABBR[trimmed.toLowerCase()] ||
+      normalizeStateFromText(trimmed)
+    if (resolved) return resolved
+  }
+
   const candidates = [
     jobParameters.state,
     sections?.basic_information?.state,
@@ -1189,11 +1221,42 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     if (!value) return
     const raw = String(value).trim()
     if (!raw) return
-    // Accept a 2-letter code directly, else parse a state out of a freeform string.
-    const st = raw.length === 2 ? raw.toUpperCase() : (extractStateFromAddress(raw) || null)
+    // Accept a 2-letter code directly, else parse a state out of a freeform
+    // string: try an "XX 12345" address pattern first, then a full state name
+    // ("Tennessee" → TN) so home/service states entered as names are covered.
+    const st = raw.length === 2
+      ? normalizeState(raw)
+      : (extractStateFromAddress(raw) || normalizeState(raw) || normalizeStateFromText(raw) || null)
     if (st && st.length === 2 && !states.includes(st)) states.push(st)
   }
   for (const loc of locations) addState(loc?.state)
+
+  // SERVICE-AREA state (canonical_rules G4): the geographic focus / service area
+  // is where the profile DELIVERS services and is the PREFERRED geographic
+  // signal. extractStateFromContext already promotes it into `location.state`
+  // (so it is primary above), but we also parse it directly here so the
+  // service-area state is in `states[]` even when `location.state` happened to
+  // resolve from a ZIP/address. normalizeStateFromText pulls a full state name
+  // out of freeform text like "Pine Ridge Reservation, South Dakota" → SD.
+  for (const text of [
+    locationFocus?.service_area, locationFocus?.geographic_focus,
+    comprehensive?.geographic_focus,
+  ]) {
+    if (typeof text === 'string' && text.trim()) {
+      const st = normalizeStateFromText(text)
+      if (st && st.length === 2 && !states.includes(st)) states.push(st)
+    }
+  }
+
+  // Mailing/home-address state still belongs in the coverage list (so home-state
+  // sources remain eligible) but ranks AFTER the service area — it is appended
+  // here, not unshifted ahead of it. When the profile has no service area this
+  // is already the primary, so single-address profiles are unchanged.
+  addState(extractStateFromAddress(basic.address))
+  addState(extractStateFromAddress(comprehensive.address))
+  for (const homeState of [basic?.state, comprehensive?.state, profile?.state]) {
+    addState(homeState)
+  }
 
   // STRICTLY ADDITIVE multi-location coverage for the CRAWL path. The primary +
   // basic.secondary_address are handled above; a second address (or extra service

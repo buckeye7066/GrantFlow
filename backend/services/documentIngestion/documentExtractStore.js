@@ -1,22 +1,64 @@
 import crypto from 'node:crypto'
 
-// The document_extracts.source_type CHECK constraint only permits these values.
-// Any other detector output (e.g. 'html'/'url' from a web/URL import, or
-// 'unknown' for an unrecognized mime) would violate the constraint and abort the
-// insert. We clamp at THIS write choke point so no upstream code path can ever
-// trip the constraint again: web/text-ish sources become 'text' (extracts are
-// readable text), and anything unrecognized falls back to 'text' too.
-const ALLOWED_SOURCE_TYPES = new Set(['docx', 'pdf', 'image', 'text'])
+// The document_extracts.source_type CHECK constraint
+// (document_extracts_source_type_check) only permits these values. This Set is
+// the single application-code source of truth that MUST stay in lockstep with
+// the CHECK in backend/db/schema.sql + migrations 016/0020. Any other detector
+// output (e.g. 'html'/'url' from a web/URL import, or 'unknown' for an
+// unrecognized mime) would violate the constraint and abort the insert.
+//
+// The constraint's intent is "which readable bucket did this extract come from",
+// NOT an exhaustive mime taxonomy — so web/text-ish content legitimately belongs
+// in the 'text' bucket (a stored extract is readable text by nature). We
+// therefore REMAP (not widen the constraint) at this write choke point so no
+// upstream code path can ever trip the constraint again.
+export const ALLOWED_SOURCE_TYPES = Object.freeze(['docx', 'pdf', 'image', 'text'])
+const ALLOWED_SOURCE_TYPE_SET = new Set(ALLOWED_SOURCE_TYPES)
+
+// Sources that legitimately produce a readable-text extract and so map to 'text'
+// rather than being rejected. URL/web imports arrive here as html/url/unknown.
+const TEXT_BUCKET_SOURCE_TYPES = new Set(['html', 'htm', 'url', 'web', 'text', 'unknown', ''])
+
+/**
+ * Is `value` one of the exact values the CHECK constraint accepts? (NULL is
+ * allowed by the constraint and is treated as valid here too.)
+ */
+export function isValidSourceType(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return true
+  return ALLOWED_SOURCE_TYPE_SET.has(String(value).toLowerCase().trim())
+}
+
+/**
+ * Validate a source_type BEFORE insert, throwing a friendly, non-leaky error for
+ * a genuinely unmappable value. Web/text-ish values are mapped to 'text' (see
+ * normalizeSourceType) rather than rejected, so this only ever throws for an
+ * unexpected token — yielding a controlled error instead of a raw DB CHECK
+ * violation. Returns the normalized, constraint-safe value.
+ */
+export function assertValidSourceType(value) {
+  const normalized = normalizeSourceType(value)
+  if (!isValidSourceType(normalized)) {
+    // Friendly + non-leaky: never echoes the constraint name or SQL.
+    throw new Error("Couldn't import or parse this source.")
+  }
+  return normalized
+}
+
 function normalizeSourceType(value) {
   // Preserve NULL: the CHECK constraint permits NULL, and callers hydrate the
   // real type later via COALESCE(source_type, ?). Only a NON-NULL invalid value
   // (e.g. 'html'/'url'/'unknown') trips the constraint — map those to 'text'.
   if (value === null || value === undefined || String(value).trim() === '') return null
   const v = String(value).toLowerCase().trim()
-  if (ALLOWED_SOURCE_TYPES.has(v)) return v
+  if (ALLOWED_SOURCE_TYPE_SET.has(v)) return v
   // Web/text-ish or unrecognized: a stored extract is readable text by nature.
+  if (TEXT_BUCKET_SOURCE_TYPES.has(v)) return 'text'
+  // Anything else is also coerced to 'text' so we never trip the CHECK; the
+  // caller that wants a hard rejection should use assertValidSourceType().
   return 'text'
 }
+
+export { normalizeSourceType }
 
 function jsonOrNull(value) {
   if ((value === null || value === undefined)) return null
@@ -43,7 +85,11 @@ export async function ensureDocumentExtract(db, {
   fileHash = null,
 } = {}) {
   if (!documentId) throw new Error('documentId is required')
-  sourceType = normalizeSourceType(sourceType)
+  // Validate against the CHECK-constraint allowed set BEFORE any insert so an
+  // invalid source_type yields a controlled, friendly error instead of a raw
+  // Postgres constraint violation leaking to the UI. Web/text-ish values are
+  // remapped to 'text' here (not rejected).
+  sourceType = assertValidSourceType(sourceType)
   if (!fileHash) {
     console.warn('[documentExtractStore] ensureDocumentExtract called without fileHash for document', documentId, 'â hash-reuse will be unavailable')
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  cleanStringArrayForDisplay,
   formatFieldLabel,
   formatFieldValue,
   humanizeFieldKey,
@@ -183,5 +184,41 @@ describe("formatFieldLabel", () => {
     expect(formatFieldValue("brand_new_section", "some_new_field", { a: "x", b: "y" })).toBe("a: x, b: y")
     expect(formatFieldValue("brand_new_section", "some_new_field", true)).toBe("Yes")
     expect(formatFieldValue("brand_new_section", "some_new_field", null)).toBe("—")
+  })
+})
+
+describe("string_array display normalization (keywords run-together / duplicate regression)", () => {
+  it("de-dupes case-insensitively and splits a comma/semicolon blob", () => {
+    expect(cleanStringArrayForDisplay(["ministry", "Ministry", "youth", "ministry"])).toEqual([
+      "ministry",
+      "youth",
+    ])
+    expect(cleanStringArrayForDisplay("ministry, youth; ministry | outreach")).toEqual([
+      "ministry",
+      "youth",
+      "outreach",
+    ])
+  })
+
+  it("splits a single run-together comma blob stored as one array entry", () => {
+    // The reported Focus Forward bug: one entry holding repeated then
+    // comma-separated keywords. We split + dedupe so the display is clean.
+    const messy = ["ministry, ministry, youth, youth, outreach, outreach"]
+    expect(cleanStringArrayForDisplay(messy)).toEqual(["ministry", "youth", "outreach"])
+  })
+
+  it("drops empties and sentinels, keeps multi-word tags intact", () => {
+    expect(cleanStringArrayForDisplay(["youth ministry", "", "unknown", "youth ministry"])).toEqual([
+      "youth ministry",
+    ])
+  })
+
+  it("formatFieldValue(string_array) renders a clean unique comma list for keywords", () => {
+    expect(
+      formatFieldValue("basic_information", "keywords", ["ministry, ministry, youth, youth"]),
+    ).toBe("ministry, youth")
+    expect(
+      formatFieldValue("basic_information", "keywords", ["Faith", "faith", "community", "Community"]),
+    ).toBe("Faith, community")
   })
 })

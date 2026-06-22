@@ -391,11 +391,38 @@ export async function getActiveRun(db) {
   }
 }
 
+// A "Last failure" older than this, OR superseded by a more recent success, is
+// stale: it must not be presented as the system's CURRENT/standing failure
+// (the 6/18 "Could not acquire lock" still showing on a clean 6/22 run). It is
+// still RETURNED (with stale flags) so history is auditable — the consumer
+// decides whether to show it muted / hidden.
+const STALE_FAILURE_TTL_MS = 24 * 60 * 60 * 1000 // 24h
+
+function failureTimestamp(run) {
+  return run?.completed_at || run?.started_at || run?.created_at || null
+}
+
 /**
  * Latest terminal run of each kind, used by Mission Control summary.
+ *
+ * The `last_failure` is annotated so the UI never presents a long-stale
+ * failure as the standing one:
+ *   - `last_failure_is_stale`  true when older than STALE_FAILURE_TTL_MS OR
+ *                              when a success has occurred since it.
+ *   - `last_failure_age_hours` age of the failure in whole hours.
+ *   - `last_failure_superseded_by_success` true when last_success is newer.
  */
 export async function getRunHighlights(db) {
-  if (!db) return { last: null, last_full_cycle: null, last_success: null, last_failure: null }
+  const empty = {
+    last: null,
+    last_full_cycle: null,
+    last_success: null,
+    last_failure: null,
+    last_failure_is_stale: false,
+    last_failure_age_hours: null,
+    last_failure_superseded_by_success: false,
+  }
+  if (!db) return empty
   try {
     const last = await db
       .prepare(`SELECT * FROM agent_control_runs ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
@@ -409,14 +436,39 @@ export async function getRunHighlights(db) {
     const last_failure = await db
       .prepare(`SELECT * FROM agent_control_runs WHERE status IN ('failed','stop_failed','partial_stop') ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
       .get()
+
+    const failureRow = row(last_failure)
+    const successRow = row(last_success)
+
+    let isStale = false
+    let ageHours = null
+    let supersededBySuccess = false
+    if (failureRow) {
+      const failTs = failureTimestamp(failureRow)
+      const failMs = failTs ? new Date(failTs).getTime() : null
+      if (Number.isFinite(failMs)) {
+        ageHours = Math.max(0, Math.floor((Date.now() - failMs) / (60 * 60 * 1000)))
+        if (Date.now() - failMs > STALE_FAILURE_TTL_MS) isStale = true
+      }
+      const succTs = successRow ? failureTimestamp(successRow) : null
+      const succMs = succTs ? new Date(succTs).getTime() : null
+      if (Number.isFinite(succMs) && Number.isFinite(failMs) && succMs >= failMs) {
+        supersededBySuccess = true
+        isStale = true
+      }
+    }
+
     return {
       last: row(last),
       last_full_cycle: row(last_full_cycle),
-      last_success: row(last_success),
-      last_failure: row(last_failure),
+      last_success: successRow,
+      last_failure: failureRow,
+      last_failure_is_stale: isStale,
+      last_failure_age_hours: ageHours,
+      last_failure_superseded_by_success: supersededBySuccess,
     }
   } catch {
-    return { last: null, last_full_cycle: null, last_success: null, last_failure: null }
+    return empty
   }
 }
 

@@ -292,11 +292,24 @@ export default function AdminDiagnostics() {
   }
 
   // Success state - render organized sections
-  // Determine system status based on diagnostics data
-  const hasRecentErrors = diagnostics.errors && diagnostics.errors.length > 0;
+  // Determine system status based on diagnostics data.
+  //
+  // Only REAL crawler errors drive a red status. Benign/expected outcomes
+  // (e.g. missing_item_request — an item-matching crawler run with no item
+  // specified) are reported separately and never red out the dashboard. The
+  // backend already splits these into error_counts.{real,benign}; fall back to
+  // filtering the annotated `errors[].benign` flag for older payloads.
+  const allErrors = Array.isArray(diagnostics.errors) ? diagnostics.errors : [];
+  const realErrorCount =
+    diagnostics.error_counts?.real ??
+    allErrors.filter((e) => !e?.benign).length;
+  const benignErrorCount =
+    diagnostics.error_counts?.benign ??
+    allErrors.filter((e) => e?.benign).length;
+  const hasRecentErrors = realErrorCount > 0;
   const hasEmptyOpportunities = diagnostics.db?.tables?.funding_opportunities === 0;
   const dbNotOk = !diagnostics.db?.ok;
-  
+
   // Truth rules: only show "OK" if truly ok
   let systemStatus = 'ok';
   let statusColor = 'green';
@@ -712,7 +725,15 @@ export default function AdminDiagnostics() {
               <Alert variant="destructive" className="mt-3">
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  {diagnostics.errors.length} crawler error(s) detected
+                  {realErrorCount} crawler error(s) detected
+                </AlertDescription>
+              </Alert>
+            )}
+            {!hasRecentErrors && benignErrorCount > 0 && (
+              <Alert className="mt-3 border-slate-300 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
+                <AlertCircle className="h-4 w-4 text-slate-500" />
+                <AlertDescription className="text-slate-700 dark:text-slate-300">
+                  {benignErrorCount} expected crawler skip(s) (e.g. no item specified) — not errors.
                 </AlertDescription>
               </Alert>
             )}

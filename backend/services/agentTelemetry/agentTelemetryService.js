@@ -194,6 +194,9 @@ export async function getHealth(db) {
     if (states.includes(AGENT_HEALTH.WARNING)) return AGENT_HEALTH.WARNING
     if (states.every((s) => s === AGENT_HEALTH.NOT_INSTALLED)) return AGENT_HEALTH.NOT_INSTALLED
     if (states.includes(AGENT_HEALTH.HEALTHY)) return AGENT_HEALTH.HEALTHY
+    // No agent did real work, but at least one ran cleanly with zero output:
+    // report that honestly rather than collapsing to plain "idle" (never ran).
+    if (states.includes(AGENT_HEALTH.RAN_NO_OUTPUT)) return AGENT_HEALTH.RAN_NO_OUTPUT
     return AGENT_HEALTH.IDLE
   })()
 

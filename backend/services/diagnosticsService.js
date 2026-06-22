@@ -31,6 +31,13 @@ export async function getSystemDiagnostics(db) {
     // Ignore if we can't read package.json
   }
   
+  const errors = await getRecentErrors(db);
+  // Split benign (expected no-input / skipped) from real failures so the
+  // System Status rollup only goes red on genuine errors. `errors` keeps the
+  // full annotated list for the detail view; the counts drive status.
+  const realErrors = errors.filter((e) => !e.benign);
+  const benignErrors = errors.filter((e) => e.benign);
+
   const diagnostics = {
     timestamp,
     app: {
@@ -43,9 +50,19 @@ export async function getSystemDiagnostics(db) {
     db: await getDatabaseDiagnostics(db),
     env_flags: getEnvironmentFlags(),
     last_activity: await getLastActivity(db),
-    errors: await getRecentErrors(db),
+    errors,
+    // Canonical, status-driving counts. `real_errors`/`benign_errors` make the
+    // benign-vs-real split explicit so the dashboard never reds out on an
+    // expected missing_item_request-class skip.
+    error_counts: {
+      total: errors.length,
+      real: realErrors.length,
+      benign: benignErrors.length,
+    },
+    real_errors: realErrors,
+    benign_errors: benignErrors,
   };
-  
+
   return diagnostics;
 }
 
@@ -412,7 +429,56 @@ async function getLastActivity(db) {
 }
 
 /**
+ * Benign / expected crawler outcomes that must NOT count as real errors.
+ *
+ * Several crawler job types legitimately produce no records and record a
+ * "failure" reason that is really a "no input / not applicable / skipped"
+ * condition — most notably `missing_item_request` (an item-matching crawler
+ * run with no item specified, which simply returns []). Counting these as
+ * errors drove the whole System Status to red even though the DB + schema were
+ * green. We re-classify them here so genuine failures still surface and still
+ * count, while benign skips are reported separately (benign:true) and never
+ * drive a red status.
+ *
+ * Matching is case-insensitive substring on the error/reason text. Keep this
+ * list to truly benign "no input / nothing to do" reasons only — anything that
+ * indicates a broken adapter, bad key, timeout, or crash must NOT be added.
+ */
+export const BENIGN_CRAWLER_ERROR_CODES = Object.freeze([
+  'missing_item_request',
+  'no_item_request',
+  'no item request',
+  'no item specified',
+  'missing_profile',
+  'profile_deleted',
+  'profile_unhydrated',
+  'no_input',
+  'no input',
+  'nothing to crawl',
+  'no_targets',
+  'no targets',
+  'skipped',
+  'noop',
+  'not_applicable',
+  'no_profile_address',
+])
+
+/**
+ * True when a crawler job/log error message is one of the known-benign
+ * "no input / skipped / not applicable" outcomes rather than a real failure.
+ */
+export function isBenignCrawlerError(message) {
+  if (!message) return false
+  const text = String(message).toLowerCase()
+  return BENIGN_CRAWLER_ERROR_CODES.some((code) => text.includes(code))
+}
+
+/**
  * Get recent errors from crawler jobs and crawl logs
+ *
+ * Each returned entry carries a `benign` boolean: benign:true marks an
+ * EXPECTED no-input/skipped outcome (see isBenignCrawlerError) that must not
+ * drive System Status to red. Genuine failures are benign:false.
  * @param {Object} db - Database connection
  * @returns {Array} Recent errors
  */
@@ -420,7 +486,7 @@ async function getRecentErrors(db) {
   if (!db) {
     return [];
   }
-  
+
   const errors = [];
   
   try {
@@ -472,6 +538,7 @@ async function getRecentErrors(db) {
         profile_id: job.profile_id ?? null,
         organization_id: job.organization_id ?? null,
         message: job.error || 'Unknown error',
+        benign: isBenignCrawlerError(job.error),
         time: job.created_at,
       });
     });
@@ -493,6 +560,7 @@ async function getRecentErrors(db) {
         source: log.source,
         status: log.status ?? 'error',
         message: log.error_message || 'Unknown error',
+        benign: isBenignCrawlerError(log.error_message),
         time: log.created_at,
       });
     });
@@ -548,16 +616,19 @@ export function analyzeSystemHealth(diagnostics) {
     warnings.push('No AI API key configured (ANTHROPIC_API_KEY or OPENAI_API_KEY)');
   }
   
-  // Check for recent errors
-  if (diagnostics.errors.length > 0) {
-    const recentErrors = diagnostics.errors.filter(e => {
+  // Check for recent REAL errors only. Benign (expected no-input / skipped)
+  // crawler outcomes — e.g. missing_item_request — are excluded so they never
+  // drive a degraded status.
+  if (Array.isArray(diagnostics.errors) && diagnostics.errors.length > 0) {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentRealErrors = diagnostics.errors.filter((e) => {
+      if (e.benign) return false;
       const errorTime = new Date(e.time);
-      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
       return errorTime > dayAgo;
     });
-    
-    if (recentErrors.length > 0) {
-      warnings.push(`${recentErrors.length} error(s) in the last 24 hours`);
+
+    if (recentRealErrors.length > 0) {
+      warnings.push(`${recentRealErrors.length} error(s) in the last 24 hours`);
     }
   }
   

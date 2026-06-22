@@ -758,6 +758,43 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    id: 'crawler.recentJobErrors',
+    label: 'Recent crawler job errors (real vs. benign)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Mirrors the System Diagnostics "crawler error(s) detected" signal into Sam, but counts only REAL failures. Expected no-input/skipped outcomes (missing_item_request and similar benign codes) are reclassified as benign and never raise a finding — so Sam no longer carries a standing "1 error" for a clean system. Fails only when GENUINE crawler failures are present in the last 7 days. Fails open when the diagnostics service or crawler tables are unavailable.',
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'crawler job errors: db unavailable' }
+      let real = 0
+      let benign = 0
+      try {
+        const { getSystemDiagnostics } = await import('../diagnosticsService.js')
+        const diag = await getSystemDiagnostics(db)
+        real = Number(diag?.error_counts?.real ?? 0)
+        benign = Number(diag?.error_counts?.benign ?? 0)
+      } catch (err) {
+        // Environment gap (tables not migrated / service unavailable) — not a defect.
+        return { ok: true, summary: `crawler job error scan skipped (${err?.message || 'unknown'})` }
+      }
+      if (real > 0) {
+        return {
+          ok: false,
+          summary: `${real} real crawler job error(s) in the last 7 days (plus ${benign} benign skip(s) excluded).`,
+          evidence: { real_errors: real, benign_skips: benign },
+          recommended_fix: 'Open System Diagnostics → real_errors to triage; benign skips (e.g. missing_item_request) are expected and excluded.',
+        }
+      }
+      return {
+        ok: true,
+        summary: benign > 0
+          ? `no real crawler job errors; ${benign} benign skip(s) (e.g. missing_item_request) excluded.`
+          : 'no recent crawler job errors.',
+        evidence: { real_errors: real, benign_skips: benign },
+      }
+    },
+  },
+  {
     id: 'crawler.coverageDegraded',
     label: 'Crawler coverage degraded (source failure rate)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,

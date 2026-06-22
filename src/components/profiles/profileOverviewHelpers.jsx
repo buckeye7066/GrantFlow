@@ -9,6 +9,7 @@ import React from "react"
 import { Badge } from "@/components/ui/badge"
 import { hasMeaningfulProfileValue } from "@/utils/profileCompletion"
 import {
+  cleanStringArrayForDisplay,
   formatFieldValue,
   getFieldFormat,
   isSentinelDisplayValue,
@@ -25,9 +26,8 @@ export function formatInlinePreviewValue(inner) {
       (item) => item === null || item === undefined || ["string", "number", "boolean"].includes(typeof item),
     )
     if (!allPrimitive) return null
-    const values = inner
-      .map((item) => (item === null || item === undefined ? null : normalizeDisplayString(item)))
-      .filter(Boolean)
+    // De-dupe + split run-together tokens so list previews never repeat values.
+    const values = cleanStringArrayForDisplay(inner)
     return values.length > 0 ? values.join(", ") : null
   }
   return null

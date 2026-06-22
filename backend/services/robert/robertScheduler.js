@@ -85,8 +85,18 @@ async function kickOff({ db, deps, logger, trigger }) {
   if (_stopped || _running) return
   _running = true
   try {
-    const result = await runRobert({ db, deps, trigger, mode: null })
-    if (logger?.info) logger.info('robert.scheduler.run', { run_id: result?.run_id, mode: result?.mode, status: result?.status })
+    // Automation-first: a SCHEDULED/STARTUP Robert run should actually DISCOVER,
+    // not just analyze coverage. Previously this passed mode:null → runRobert
+    // fell back to cfg.mode (ROBERT_MODE, default 'observe'), so the recurring
+    // scheduler never ran the Crawler-OS discovery pipeline and Robert silently
+    // did nothing on its own cadence. We now default the scheduled mode to
+    // 'full-cycle' (the canonical discover→match→recommend run) unless the
+    // operator explicitly pins ROBERT_SCHEDULED_MODE. On-demand/API runs are
+    // unaffected (they pass their own mode). The OS pipeline is SSRF-safe and
+    // self-throttling, and an empty run now degrades honestly.
+    const scheduledMode = (process.env.ROBERT_SCHEDULED_MODE || 'full-cycle').toLowerCase()
+    const result = await runRobert({ db, deps, trigger, mode: scheduledMode })
+    if (logger?.info) logger.info('robert.scheduler.run', { run_id: result?.run_id, mode: result?.mode, status: result?.status, status_reason: result?.status_reason || null })
   } catch (err) {
     if (logger?.error) logger.error('robert.scheduler.error', { message: String(err?.message || err) })
   } finally {

@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
@@ -195,8 +195,21 @@ function TodoItemCard({ item, profileId }) {
   )
 }
 
+// Lightweight staged status so the ~12-14s generation isn't a bare spinner.
+// These are cosmetic checkpoints timed to the typical request duration — they
+// give the user a sense of progress without claiming to know the exact server
+// stage. The final stage holds until the request resolves.
+const GENERATION_STAGES = [
+  { at: 0, label: "Analyzing profile…" },
+  { at: 3000, label: "Reviewing your pipeline…" },
+  { at: 6000, label: "Drafting tasks…" },
+  { at: 9000, label: "Setting deadlines & priorities…" },
+  { at: 12000, label: "Finishing up…" },
+]
+
 export default function PrintableProfileTodo({ profileId, profileName }) {
   const [todoData, setTodoData] = useState(null)
+  const [progressLabel, setProgressLabel] = useState(GENERATION_STAGES[0].label)
 
   const generateMutation = useMutation({
     mutationFn: () =>
@@ -210,6 +223,19 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
       }
     },
   })
+
+  const isGenerating = generateMutation.isPending
+
+  // Advance the staged status text while a generation is in flight; reset to the
+  // first stage whenever a new generation starts.
+  useEffect(() => {
+    if (!isGenerating) return undefined
+    setProgressLabel(GENERATION_STAGES[0].label)
+    const timers = GENERATION_STAGES.slice(1).map((stage) =>
+      setTimeout(() => setProgressLabel(stage.label), stage.at),
+    )
+    return () => timers.forEach(clearTimeout)
+  }, [isGenerating])
 
   const handlePrint = () => {
     if (!todoData?.todo) return
@@ -264,17 +290,27 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
           <Button
             className="gap-2"
             onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
+            disabled={isGenerating}
           >
-            {generateMutation.isPending ? (
+            {isGenerating ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <ClipboardList className="w-4 h-4" />
             )}
-            {todo ? "Regenerate" : "Generate Checklist"}
+            {isGenerating ? progressLabel : todo ? "Regenerate" : "Generate Checklist"}
           </Button>
         </div>
       </CardHeader>
+
+      {isGenerating && (
+        <CardContent>
+          <div className="flex items-center gap-2 text-sm text-slate-600" aria-live="polite">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+            <span>{progressLabel}</span>
+            <span className="text-xs text-slate-400">This usually takes about 10-15 seconds.</span>
+          </div>
+        </CardContent>
+      )}
 
       {generateMutation.isError && (
         <CardContent>

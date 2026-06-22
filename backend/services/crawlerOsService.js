@@ -136,9 +136,13 @@ export async function runProfileDiscovery(profile, opts = {}) {
  * @param {string} opts.profileId    the profile to discover for.
  * @param {object} [opts.fetcher]    OS fetcher (defaults to the production fetcher).
  * @param {number} [opts.floor]      match floor override.
+ * @param {boolean} [opts.dryRun]    when true, run the real pipeline against the
+ *                                   in-memory store but DO NOT flush to the live
+ *                                   catalog/matches — returns a preview of what
+ *                                   WOULD be stored (read-only).
  * @returns {Promise<{run:object, persisted:object, thesis:object}>}
  */
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
   const thesis = buildThesis(profileContextToThesisInput(ctx));
@@ -147,6 +151,25 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     { store, fetcher: fetcher ?? makeProductionFetcher() },
     { thesis, matchProfiles: [thesis], floor },
   );
+  if (dryRun) {
+    // Read-only preview: report what discovery FOUND/MATCHED in the memory store
+    // without touching the live tables. Mirrors persistRun's return shape.
+    const catalog = storage.listCatalog(store);
+    const matchRows = store.all('profile_opportunity_matches');
+    const sourceRows = store.all('opportunity_sources');
+    return {
+      run,
+      persisted: {
+        opportunities: catalog.length,
+        matches: matchRows.length,
+        sources: sourceRows.length,
+        rejected: run?.rejected ?? 0,
+        pipelinePruned: 0,
+        dry_run: true,
+      },
+      thesis,
+    };
+  }
   const persisted = await persistRun(db, store, run);
   return { run, persisted, thesis };
 }
