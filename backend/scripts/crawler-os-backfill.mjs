@@ -1,14 +1,9 @@
-// scripts/crawler-os-backfill.mjs
-//
 // Run the Crawler OS over every active profile and persist results, so the
-// discovery routes (now OS-first) serve OS matches for all profiles instead of
-// falling back to the legacy scorer. Safe to re-run (idempotent upserts +
-// per-profile match reconciliation). In-container: railway ssh "node scripts/crawler-os-backfill.mjs"
-//
-//   node scripts/crawler-os-backfill.mjs [--limit=N] [--profile=ID]
-
-import { getDb } from '../backend/db/index.js';
-import { runProfileDiscoveryLive } from '../backend/services/crawlerOsService.js';
+// OS-first discovery routes serve OS matches for all profiles (prerequisite for
+// removing the legacy route fallback). Idempotent.
+// In-container: railway ssh "node backend/scripts/crawler-os-backfill.mjs [--limit=N] [--profile=ID]"
+import { getDb } from '../db/index.js';
+import { runProfileDiscoveryLive } from '../services/crawlerOsService.js';
 
 const limitArg = process.argv.find((a) => a.startsWith('--limit='));
 const oneArg = process.argv.find((a) => a.startsWith('--profile='));
@@ -38,9 +33,7 @@ async function main() {
       ok += 1;
       totalMatches += persisted.matches;
       totalPruned += persisted.pipelinePruned || 0;
-      console.log(
-        `[backfill] ok ${id}: stored=${run.stored} matches=${persisted.matches} recs=${run.recommendations.length} pruned=${persisted.pipelinePruned}`,
-      );
+      console.log(`[backfill] ok ${id}: stored=${run.stored} matches=${persisted.matches} recs=${run.recommendations.length} pruned=${persisted.pipelinePruned}`);
     } catch (err) {
       failed += 1;
       console.error(`[backfill] FAIL ${id}: ${err?.message || err}`);

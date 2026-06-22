@@ -1,5 +1,6 @@
-// Read-only prod schema probe. Run in-container: railway ssh "node scripts/prod-probe-schema.mjs"
-import { getDb } from '../backend/db/index.js';
+// Read-only prod schema probe for the Crawler OS cutover.
+// In-container: railway ssh "node backend/scripts/crawler-os-probe.mjs"
+import { getDb } from '../db/index.js';
 const db = getDb();
 console.log('dialect:', db.dialect);
 async function has(table, col) {
@@ -14,10 +15,11 @@ async function tableExists(table) {
     .get(table);
   return Boolean(r);
 }
-console.log('funding_opportunities.canonical_opportunity_key:', await has('funding_opportunities', 'canonical_opportunity_key'));
+console.log('fo.canonical_opportunity_key:', await has('funding_opportunities', 'canonical_opportunity_key'));
 console.log('opportunity_sources table:', await tableExists('opportunity_sources'));
-console.log('profile_opportunity_matches.matcher_version:', await has('profile_opportunity_matches', 'matcher_version'));
-console.log('profile_opportunity_matches.match_explain_json:', await has('profile_opportunity_matches', 'match_explain_json'));
+console.log('pom.matcher_version:', await has('profile_opportunity_matches', 'matcher_version'));
+console.log('pom.match_explain_json:', await has('profile_opportunity_matches', 'match_explain_json'));
+console.log('pom.match_decision:', await has('profile_opportunity_matches', 'match_decision'));
 const p = await db.prepare('SELECT COUNT(*) AS c FROM profiles').get();
 console.log('prod profiles:', p.c ?? p.C);
 try {

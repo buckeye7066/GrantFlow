@@ -73,7 +73,7 @@
     "crawler-os:test": "node --test backend/crawler-os/tests/*.test.mjs",
     "crawler-os:lint": "node backend/crawler-os/scripts/lint.mjs",
     "crawler-os:crawl": "node scripts/crawler-os-crawl.mjs",
-    "crawler-os:backfill": "node scripts/crawler-os-backfill.mjs",
+    "crawler-os:backfill": "node backend/scripts/crawler-os-backfill.mjs",
     "opps:check-national-minimum": "node backend/crawler-os/scripts/checkNationalMinimum.mjs",
     "opps:ensure-national-minimum": "node ./scripts/opportunities-national-minimum.mjs ensure",
     "opps:backfill": "node ./scripts/backfill-opportunity-fields.mjs",
