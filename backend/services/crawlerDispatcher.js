@@ -3,23 +3,15 @@ import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
 import { processAvatarLookupJob } from './avatarCrawler.js'
-import { processLocalCrawlerJob } from './localCrawler.js'
 // scholarshipCrawler + health_resources removed — replaced by curated_benefits via crawlerManager
-import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
-import { processItemCrawlerJob } from './itemCrawler.js'
-import { processItemGiftCrawlerJob } from './itemGiftCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapshotSerialization.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
-import { processFoundation990Job } from './crawlers/foundation990Crawler.js'
-import { processNationalJob } from './nationalJobRouter.js'
-import { processStudentBridgeFundingJob } from './crawlers/studentBridgeFundingCrawler.js'
 import { processAnyaMatchScoutJob } from './anyaMatchScout.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
-import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
 import { runPortalCheck } from './portalCheckService.js'
 import { createLogger } from '../utils/logger.js'
@@ -146,116 +138,6 @@ async function processPortalCheckJob({ db, job }) {
 }
 
 
-async function processCuratedBenefitsJob({ db, job, profileContext }) {
-  const profileId = job?.profile_id || profileContext?.profile?.id;
-  if (!profileId) {
-    // Profile-scoped crawl with no profile to scope to (deleted profile /
-    // unhydrated snapshot). Honest no-op instead of a failed job + error log.
-    return {
-      result_count: 0,
-      result_meta: { skipped: true, noop_reason: 'no profile_id to scope curated benefits crawl' },
-    };
-  }
-  const params = typeof job?.parameters === 'string' ? JSON.parse(job.parameters) : (job?.parameters || {});
-  // Map job types to strategy IDs (e.g. 'scholarship' → 'student_grants', 'health_resources' → 'health_resources')
-  const JOB_TYPE_TO_STRATEGY = {
-    scholarship: 'student_grants',
-    curated_benefits: 'curated_benefits',
-    health_resources: 'health_resources',
-    government_funding: 'government_funding',
-    student_grants: 'student_grants',
-    ecf_benefits: 'ecf_benefits',
-    ecf_hcbs: 'ecf_benefits',       // alias used by autoDiscoveryCrawlers.js
-    special_needs: 'special_needs',
-    local_funding: 'local_funding',
-    item_matching: 'item_matching',
-    nonprofit_org: 'nonprofit_org',
-    volunteer_fire: 'volunteer_fire',
-    church: 'church',
-    faith_based: 'church',
-    ministry: 'church',
-    family: 'family',
-    school: 'school',
-    k12: 'school',
-    charter_school: 'school',
-
-    // Phase 4 expansion: local-government / education / public-institution
-    // / specialized-nonprofit verticals. Aliases route to the same
-    // canonical strategy so legacy job names keep working.
-    county_government: 'county_government',
-    county: 'county_government',
-    county_official: 'county_government',
-    local_government: 'county_government',
-    municipality: 'municipality',
-    city: 'municipality',
-    town: 'municipality',
-    public_agency: 'public_agency',
-    regional_planning_agency: 'county_government',
-    economic_development_agency: 'county_government',
-    tribal_government: 'tribal_government',
-    tribal: 'tribal_government',
-
-    teacher: 'teacher_classroom',
-    classroom_teacher: 'teacher_classroom',
-    educator: 'teacher_classroom',
-    teacher_classroom: 'teacher_classroom',
-    pta_pto: 'teacher_classroom',
-
-    school_district: 'school_district_department',
-    public_school: 'school_district_department',
-    special_education_program: 'school_district_department',
-    school_food_service: 'school_district_department',
-    school_transportation: 'school_district_department',
-    library_media_center: 'school_district_department',
-
-    library: 'library',
-    public_library: 'library',
-    museum: 'library',
-
-    parks_department: 'parks_recreation',
-    parks_recreation: 'parks_recreation',
-    community_center: 'parks_recreation',
-
-    public_health_department: 'public_health_department',
-    health_department: 'public_health_department',
-
-    animal_rescue: 'animal_rescue',
-    animal_shelter: 'animal_rescue',
-    humane_society: 'animal_rescue',
-
-    food_pantry: 'food_pantry',
-    food_bank: 'food_pantry',
-    soup_kitchen: 'food_pantry',
-
-    homeless_shelter: 'homeless_services',
-    homeless_services: 'homeless_services',
-    transitional_housing: 'homeless_services',
-    domestic_violence_shelter: 'homeless_services',
-    reentry_program: 'homeless_services',
-  };
-  const crawlerType = JOB_TYPE_TO_STRATEGY[job?.type] || 'comprehensive';
-  const result = await runCuratedCrawler(db, profileId, {
-    minScore: params.minScore ?? 25,
-    maxResults: params.maxResults ?? 100,
-    crawlerType,
-    profileContext,
-  }).catch(error => {
-    throw new Error(`Curated crawler failed: ${error.message}`);
-  })
-  return {
-    result_count: result.results.length,
-    result_meta: {
-      total_matched: result.results.length,
-      // Rows actually written to funding_opportunities — surfaced so the crawl
-      // log records found-vs-imported instead of always reporting imported=0.
-      inserted: Number(result.inserted || 0),
-      state: result.analysis?.location?.state,
-      applicant_type: result.analysis?.applicantType,
-      top_match: result.results[0]?.name || null,
-      statePortal: result.statePortal?.benefitsPortal || null,
-    },
-  };
-}
 
 /**
  * Clinical-trials study discovery for opted-in medical-need profiles.
@@ -266,56 +148,6 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
  * 'clinicaltrials.gov' source gate); when the profile has not consented the
  * source reports `not_applicable` and inserts nothing.
  */
-async function processClinicalTrialsJob({ db, job, profileContext }) {
-  const profileId = job?.profile_id || profileContext?.profile?.id
-  if (!profileId) throw new Error('clinical_trials requires a profile_id')
-
-  // Lazy import keeps the dispatcher's static import graph lean and avoids a
-  // cycle (connectorIngestService → opportunityInserter → …).
-  const { ingestFromConnectors } = await import('./connectorIngestService.js')
-  const { buildProfileSignals } = await import('./profileHelpers.js')
-
-  let ctx = profileContext
-  if (!ctx?.profile) {
-    ctx = await buildProfileContext(db, profileId)
-  }
-  let signals = {}
-  try {
-    signals = buildProfileSignals({ profile: ctx.profile, sections: ctx.sections })
-  } catch (err) {
-    log.warn('[clinicalTrials] buildProfileSignals failed (continuing):', err?.message || err)
-  }
-
-  // Run ONLY the clinical-trials source. The gate inside the service enforces
-  // opt-in; we additionally filter the coverage report so the job result is
-  // scoped to this source.
-  const { coverage } = await ingestFromConnectors({
-    db,
-    profileContext: ctx,
-    signals,
-    onlySources: ['clinicaltrials.gov'],
-  })
-  const ct = (coverage || []).find((r) => r.source === 'clinicaltrials.gov') || {
-    fetched: 0,
-    inserted: 0,
-    updated: 0,
-    skipped: 0,
-    status: 'not_run',
-  }
-
-  return {
-    result_count: ct.inserted,
-    result_meta: {
-      source: 'clinicaltrials.gov',
-      status: ct.status,
-      fetched: ct.fetched,
-      inserted: ct.inserted,
-      updated: ct.updated,
-      skipped: ct.skipped,
-      opt_in_gated: ct.status === 'not_applicable',
-    },
-  }
-}
 
 /**
  * Live profile-driven acquisition — the job that surfaces NEW real funding
@@ -331,106 +163,19 @@ async function processClinicalTrialsJob({ db, job, profileContext }) {
  * Fully failure-tolerant: a dead source / missing key degrades to fewer results
  * with a structured meta entry, never a failed job.
  */
-async function processLiveSearchJob({ db, job, profileContext }) {
-  const profileId = job?.profile_id || profileContext?.profile?.id
-  if (!profileId) {
-    return { result_count: 0, result_meta: { skipped: true, noop_reason: 'no profile_id to scope live search' } }
-  }
-  let ctx = profileContext
-  if (!ctx?.profile) {
-    ctx = await buildProfileContext(db, profileId)
-  }
 
-  const [{ searchLiveFederalByProfile }, { searchLocalWebByProfile }, { ingestOpportunities }, { upsertFundingOpportunity }] =
-    await Promise.all([
-      import('./shared/liveFederalSearch.js'),
-      import('./shared/liveWebSearch.js'),
-      import('./sources/ingestionService.js'),
-      import('./opportunityInserter.js'),
-    ])
-
-  const meta = {}
-  let federalInserted = 0
-  let webInserted = 0
-
-  if (process.env.DISCOVERY_LIVE_FEDERAL !== '0') {
-    try {
-      const { opportunities, debug } = await searchLiveFederalByProfile(ctx, { timeoutMs: 15000 })
-      meta.federal = debug
-      if (opportunities.length) {
-        // Ingest only ACTIONABLE opportunities. USASpending returns past awards
-        // (is_active=0) — intelligence, not catalog opportunities — which would
-        // otherwise be rejected as unknown_source and clutter the catalog. Per
-        // the reality-gate philosophy (closed/expired excluded), past awards do
-        // not belong in funding_opportunities.
-        const ingestable = opportunities.filter((o) => o.is_active !== 0 && o.is_active !== false)
-        const res = await ingestOpportunities(db, ingestable, 'live_federal')
-        federalInserted = Number(res?.inserted || 0)
-        meta.federal_inserted = federalInserted
-        meta.federal_updated = Number(res?.updated || 0)
-      }
-    } catch (e) {
-      meta.federal_error = String(e?.message || e)
-    }
-  }
-
-  if (process.env.DISCOVERY_LIVE_WEB !== '0') {
-    try {
-      const { opportunities, debug } = await searchLocalWebByProfile(ctx, { timeoutMs: 15000 })
-      meta.web = debug
-      for (const lead of opportunities) {
-        const r = await upsertFundingOpportunity(
-          db,
-          { ...lead, profile_id: profileId, is_active: 1 },
-          { allowDirectories: true },
-        ).catch(() => null)
-        if (r?.inserted) webInserted++
-      }
-      meta.web_inserted = webInserted
-    } catch (e) {
-      meta.web_error = String(e?.message || e)
-    }
-  }
-
-  return {
-    result_count: federalInserted + webInserted,
-    result_meta: { inserted: federalInserted + webInserted, federal_inserted: federalInserted, web_inserted: webInserted, ...meta },
-  }
-}
-
+// Only NON-discovery job handlers remain. Every grant-discovery crawl type is
+// superseded by the Crawler OS at the dispatch choke point (DISCOVERY_CRAWL_JOB_TYPES
+// above) and its handler/import has been removed — the old crawler engine is no
+// longer reachable from the runtime. Document ingest, avatar lookup, pipeline
+// automation, profile enrichment, Anya match scout, and portal checks still run.
 const HANDLERS = {
   avatar_lookup: processAvatarLookupJob,
-  live_search: processLiveSearchJob,
-  clinical_trials: processClinicalTrialsJob,
-  local: processLocalCrawlerJob,
-  scholarship: processCuratedBenefitsJob,
-  curated_benefits: processCuratedBenefitsJob,
-  health_resources: processCuratedBenefitsJob,
-  comprehensive: processComprehensiveCrawlerJob,
-  national: processNationalJob,
-  item_search: processItemCrawlerJob,
-  item_gift_search: processItemGiftCrawlerJob,
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,
   profile_enrichment: processProfileEnrichmentJob,
-  student_bridge_funding: processStudentBridgeFundingJob,
   anya_match_scout: processAnyaMatchScoutJob,
-  government_funding: processCuratedBenefitsJob,
-  student_grants: processCuratedBenefitsJob,
-  ecf_benefits: processCuratedBenefitsJob,
-  ecf_hcbs: processCuratedBenefitsJob,   // alias used by autoDiscoveryCrawlers.js
-  special_needs: processCuratedBenefitsJob,
-  local_funding: processCuratedBenefitsJob,
-  item_matching: processCuratedBenefitsJob,
-  foundation_990: processFoundation990Job,
   portal_check: processPortalCheckJob,
-  church: processCuratedBenefitsJob,
-  faith_based: processCuratedBenefitsJob,
-  ministry: processCuratedBenefitsJob,
-  family: processCuratedBenefitsJob,
-  school: processCuratedBenefitsJob,
-  k12: processCuratedBenefitsJob,
-  charter_school: processCuratedBenefitsJob,
 }
 
 function parseJSON(value) {
