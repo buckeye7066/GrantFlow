@@ -19,8 +19,14 @@ const APPLICANT_TYPE_SYNONYMS = {
   school: ['school', 'district', 'k-12', 'education', 'university', 'college'],
   vfd: ['volunteer fire', 'fire department', 'vfd', 'first responder', 'ems'],
   business: ['business', 'company', 'llc', 'startup', 'small business', 'employer'],
-  farm: ['farm', 'farmer', 'agriculture', 'rural', 'ranch'],
-  government: ['government', 'municipal', 'city', 'county', 'community', 'tribal'],
+  // NOTE: applicant-type synonyms must be IDENTITY words, not theme words.
+  // 'rural'/'community'/'city'/'county' are themes that appear in almost any
+  // mission statement — a rural church is not a "farm" applicant and a community
+  // center is not a "government" applicant. They were pulling unrelated org
+  // grants into every org's results, so they are excluded here (they remain
+  // useful as NEED/geo signals elsewhere).
+  farm: ['farm', 'farmer', 'agriculture', 'ranch'],
+  government: ['government', 'municipal', 'tribal', 'municipality'],
   veteran: ['veteran', 'military', 'service member'],
 };
 
