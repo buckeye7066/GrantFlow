@@ -386,6 +386,81 @@ export function listProfilePortals(profileId) {
   return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals`)
 }
 
+// ── Portal Autopilot Identity: master vault + identity + run ─────────────────
+// The password-manager layer that lets Hamilton self-provision logins on portals
+// the owner hasn't signed up to (ONE master passphrase per profile + a unique
+// generated password per portal). The passphrase is sent over the authenticated
+// request, consumed server-side, and NEVER stored/echoed/returned — responses
+// carry only the public vault STATUS (has_passphrase / is_unlocked /
+// identity_email).
+
+// Read the master-vault / autopilot-identity status for a profile.
+export function getPortalAutopilotStatus(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot`)
+}
+
+// Set / rotate the master passphrase (optionally the identity email too).
+export function setPortalAutopilotPassphrase(profileId, { passphrase, identityEmail = undefined } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!passphrase) return Promise.reject(new Error('passphrase required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/passphrase`, {
+    method: 'POST',
+    body: JSON.stringify({ passphrase, identityEmail }),
+  })
+}
+
+// Unlock the vault for this server process (passphrase consumed + discarded).
+export function unlockPortalAutopilot(profileId, { passphrase } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!passphrase) return Promise.reject(new Error('passphrase required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/unlock`, {
+    method: 'POST',
+    body: JSON.stringify({ passphrase }),
+  })
+}
+
+// Lock the vault (drop the in-memory wrapping key).
+export function lockPortalAutopilot(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/lock`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+// Set / clear the autopilot identity email (the username Hamilton registers with).
+export function setPortalAutopilotIdentity(profileId, { identityEmail } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/identity`, {
+    method: 'POST',
+    body: JSON.stringify({ identityEmail: identityEmail ?? null }),
+  })
+}
+
+// Run Portal Autopilot: the whole profile (omit portalHost) or ONE portal. A
+// single-portal run may return a one-time password view for a newly provisioned
+// login; bulk runs never do.
+export function runPortalAutopilot(profileId, { portalHost = null, loginUrl = null } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/run`, {
+    method: 'POST',
+    body: JSON.stringify({ portalHost: portalHost || undefined, loginUrl: loginUrl || undefined }),
+  })
+}
+
+// Mark a portal MERGED (terminal, ends weekly reminders) or COMPLETE. A merge is
+// only accepted server-side with explicit confirmation that the data was pulled
+// into the profile — the dashboard "I merged this" is that confirmation.
+export function setPortalMergeStatus(profileId, { portalHost, status, evidence = null } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!portalHost) return Promise.reject(new Error('portalHost required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals/status`, {
+    method: 'POST',
+    body: JSON.stringify({ portalHost, status, evidence }),
+  })
+}
+
 // Render + SAVE an application packet for a non-portal funding source as a durable
 // Document on this profile (so the page reflects what Hamilton produced). Returns
 // { documentId, reused, at }. Idempotent: re-saving the same source returns the

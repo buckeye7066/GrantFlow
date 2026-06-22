@@ -1,15 +1,25 @@
 /**
  * Yana — Lead Pipeline orchestrator (legacy filename `larryAgent.js`).
  *
- * Owns the full pipeline:
- *   discover-prospects → verify-contacts → score-fit
- *   → build-packets   → qualify          → draft-outreach
- *   → (admin approval) → send-outreach   → track-relationships
+ * ARCHITECTURE (authoritative, owner-clarified): **Yana does NOT send email.**
+ * Yana's job is lead DISCOVERY + DRAFTING — she finds + qualifies leads and
+ * turns them into reviewable drafts. A human (or, in the canonical pipeline,
+ * John saving to the Outlook DRAFT folder) reviews drafts and decides whether
+ * to send. Sending is a SEPARATE, manual, human-approved action — it is NOT
+ * part of Yana's automated cycle.
  *
- * Each phase is its own callable mode so admins can step the pipeline
- * forward one phase at a time, and the scheduler can run a configurable
- * subset (e.g. discovery-only off-hours, send-approval-only inside a
- * staffed time window).
+ * Yana's automated pipeline (what runs end-to-end, freely):
+ *   discover-prospects → verify-contacts → score-fit
+ *   → build-packets   → qualify          → draft-outreach   → (drafts saved for review)
+ *
+ * Separate, human-gated, NOT automated by Yana:
+ *   send-outreach   (a person explicitly approves an attempt, then transmits)
+ *
+ * FULL_CYCLE therefore runs discovery → draft only and STOPS at saved drafts;
+ * it never transmits. The send-outreach mode is the one explicit place a human
+ * can push an already-approved draft out the door, and it self-gates per
+ * attempt. Each phase is its own callable mode so admins can step the pipeline
+ * forward one phase at a time.
  *
  * The orchestrator never calls the network or the email provider directly.
  * Adapters are injected by the caller (route layer / scheduler).
@@ -229,27 +239,29 @@ export async function runLarry({
 
   const requestedMode = mode || cfg.mode || LARRY_MODES.OBSERVE
 
-  // The master enable flag (YANA_LEADS_ENABLED/LARRY_ENABLED) historically
-  // hard-refused the ENTIRE agent, so an owner asking Anya to "have Yana find
-  // leads" got a bare "agent disabled" even though discovery/qualify/draft are
-  // safe, side-effect-light, and never send email. That violated the
-  // automation-first stance for no safety benefit.
+  // Yana's real job — finding leads and DRAFTING outreach — never sends email,
+  // so it always runs. There is no "agent disabled" wall in front of discovery,
+  // qualify, or draft: producing reviewable drafts is safe and is the normal,
+  // intended steady state. Auto-send being off is NOT a degraded state; it is
+  // how Yana is meant to operate (drafts only).
   //
-  // The genuine safety gate is SENDING outbound cold email — and that is already
-  // enforced independently and per-attempt by checkSendIsAllowed (which refuses
-  // when !cfg.enabled, when send is unapproved, on suppression/DNC, etc.). So we
-  // now ONLY hard-refuse the dedicated SEND mode when the agent is disabled; all
-  // read-only/discovery/qualify/draft modes run. FULL_CYCLE is allowed to run
-  // its non-send phases — its send phase still self-gates per attempt, so no
-  // email leaves while disabled.
+  // The single genuine gate is the SEPARATE, human-approved send-outreach step
+  // (the one place a person transmits an already-approved draft). That step is
+  // not part of Yana's automated cycle, and it self-gates per attempt via
+  // checkSendIsAllowed (refuses when !cfg.enabled, when unapproved, on
+  // suppression/DNC, etc.). We hard-refuse the dedicated SEND mode up front only
+  // so an operator who explicitly triggers a send while the master switch is off
+  // gets an honest reason instead of silent per-attempt blocks. FULL_CYCLE does
+  // NOT include the send phase at all — it stops at saved drafts.
   const SEND_ONLY_MODE = requestedMode === LARRY_MODES.SEND_OUTREACH
   if (!cfg.enabled && SEND_ONLY_MODE) {
-    log.info?.('[Yana/leads] disabled — refusing SEND', safeMask({ mode: requestedMode }))
+    log.info?.('[Yana/leads] send disabled — refusing the manual SEND step', safeMask({ mode: requestedMode }))
     return {
       ok: false,
       agent: LARRY_AGENT_NAME,
-      reason: 'agent_disabled',
-      detail: 'Yana lead OUTREACH SEND is disabled. Set YANA_LEADS_ENABLED=true to enable sending (discovery/qualify/draft already run).',
+      reason: 'send_disabled',
+      detail: 'Manual outreach SEND is off. Yana finds leads and saves drafts for review regardless; ' +
+        'set YANA_LEADS_ENABLED=true only if you also want the separate human-approved send step enabled.',
       mode: requestedMode,
     }
   }
@@ -298,13 +310,20 @@ export async function runLarry({
     if (effectiveMode === LARRY_MODES.DRAFT_OUTREACH || effectiveMode === LARRY_MODES.FULL_CYCLE) {
       summary.phases.draft = await phaseDraft({ db, options, config: cfg })
     }
-    if (effectiveMode === LARRY_MODES.SEND_OUTREACH || effectiveMode === LARRY_MODES.FULL_CYCLE) {
+    // SEND is a SEPARATE, human-approved action — NOT part of Yana's automated
+    // cycle. FULL_CYCLE deliberately stops at saved drafts; only an explicit
+    // send-outreach request reaches the (self-gating) send phase.
+    if (effectiveMode === LARRY_MODES.SEND_OUTREACH) {
       summary.phases.send = await phaseSend({ db, options, config: cfg })
     }
 
     summary.completed_at = new Date().toISOString()
     const counters = collectCountersForRun(summary)
     await updateRun(db, runId, counters)
+    // Honest, positive status: a run that found leads and/or saved drafts is a
+    // SUCCESS, not a noop. Yana never sends, so "0 sent" is never a failure —
+    // the meaningful outputs are leads qualified and drafts saved for review.
+    summary.status_note = buildStatusNote(summary, counters)
     await completeRun(db, runId, { status: LARRY_RUN_STATUS.COMPLETED, summary })
 
     return {
@@ -312,6 +331,7 @@ export async function runLarry({
       agent: LARRY_AGENT_NAME,
       mode: effectiveMode,
       run_id: runId,
+      status_note: summary.status_note,
       summary,
     }
   } catch (err) {
@@ -331,6 +351,27 @@ export async function runLarry({
       error: err?.message || String(err),
     }
   }
+}
+
+/**
+ * A human-readable, honest, positively-framed status line for a completed run.
+ * Yana FINDS LEADS and SAVES DRAFTS for review — she never sends — so the
+ * headline reflects that work, never "agent disabled" or a bare "0 sent".
+ */
+function buildStatusNote(summary, counters) {
+  const qualified = Number(counters.leads_qualified || 0)
+  const drafted = Number(counters.outreach_drafted || 0)
+  const discovered = Number(counters.prospects_considered || 0)
+  if (drafted > 0 || qualified > 0) {
+    const parts = []
+    if (qualified > 0) parts.push(`${qualified} lead${qualified === 1 ? '' : 's'} qualified`)
+    if (drafted > 0) parts.push(`${drafted} draft${drafted === 1 ? '' : 's'} saved for your review`)
+    return `Yana ${parts.join(' / ')}. Review the drafts and send them yourself when ready (Yana never sends).`
+  }
+  if (discovered > 0) {
+    return `Yana evaluated ${discovered} prospect${discovered === 1 ? '' : 's'}; none qualified for outreach this run.`
+  }
+  return 'Yana found no new leads to draft this run.'
 }
 
 function collectCountersForRun(summary) {
@@ -370,17 +411,26 @@ export async function getLarryStatus(db, { config = null } = {}) {
   ])
   return {
     agent: LARRY_AGENT_NAME,
+    // Yana's discovery + drafting always run; `enabled` only governs the
+    // SEPARATE, human-approved send step. Surface that plainly so the console
+    // never reads "Yana disabled" for an agent that is happily finding leads
+    // and saving drafts.
+    role: 'lead_discovery_and_drafting',
+    sends_email: false,
+    discovery_and_drafting: 'always_on',
+    send_step_enabled: cfg.enabled,
     enabled: cfg.enabled,
     mode: cfg.mode,
     require_approval_to_send: cfg.requireApprovalToSend,
     allow_live_web: cfg.allowLiveWeb,
-    auto_send_outreach: cfg.autoSendOutreach,
-    daily_send_cap: cfg.maxOutreachSendsPerDay,
+    // Renamed in meaning: this is the cap on the SEPARATE manual send step, not
+    // anything Yana does on her own.
+    manual_send_daily_cap: cfg.maxOutreachSendsPerDay,
     samples: {
       any_prospects: prospects.length > 0,
       any_contact_verified: verifiedSample.length > 0,
       any_qualified: qualifiedSample.length > 0,
-      any_approved_for_outreach: approvedSample.length > 0,
+      any_approved_for_manual_send: approvedSample.length > 0,
     },
   }
 }

@@ -1,6 +1,13 @@
 /**
  * Yana — Lead Pipeline orchestrator: mode gating, observe-mode safety,
  * full-cycle flow with injected adapters.
+ *
+ * CORRECTED MODEL (owner-authoritative): Yana FINDS LEADS and DRAFTS outreach;
+ * she NEVER sends email. Discovery + qualify + draft run end-to-end and produce
+ * drafts regardless of any switch — that is the normal, intended state, not a
+ * degraded one. FULL_CYCLE stops at saved drafts and never transmits. The only
+ * gated thing is the SEPARATE, human-approved send-outreach step (which is not
+ * part of Yana's automated cycle).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,22 +16,25 @@ import { runLarry, getLarryStatus } from '../../backend/services/larry/larryAgen
 import { LARRY_MODES } from '../../backend/services/larry/larryTypes.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
-test('refuses ONLY the SEND mode when disabled (discovery/observe still run)', async () => {
+test('the SEPARATE manual SEND step is refused when its switch is off (honest reason, not "agent disabled")', async () => {
   const db = createInMemoryDb()
-  // SEND is hard-refused while disabled — outbound cold email is the real gate.
+  // Sending is a separate human action, not Yana's job. When its switch is off
+  // an explicit send request is refused with an honest `send_disabled` reason —
+  // NOT a misleading "agent_disabled" that would imply Yana herself is broken.
   const send = await runLarry({
     db,
     mode: LARRY_MODES.SEND_OUTREACH,
     config: { enabled: false, mode: 'observe' },
   })
   assert.equal(send.ok, false)
-  assert.equal(send.reason, 'agent_disabled')
+  assert.equal(send.reason, 'send_disabled')
+  assert.notEqual(send.reason, 'agent_disabled')
 })
 
-test('OBSERVE runs even when disabled (read-only, no agent_disabled bail)', async () => {
+test('OBSERVE runs even when the send switch is off (discovery is always on)', async () => {
   const db = createInMemoryDb()
-  // The owner asking "have Yana find leads" must not get a bare "agent disabled":
-  // observe/discovery/qualify/draft are safe and never send. Only SEND is gated.
+  // The owner asking "have Yana find leads" must never get a bare "agent
+  // disabled": discovery/qualify/draft are safe and never send.
   const result = await runLarry({
     db,
     mode: LARRY_MODES.OBSERVE,
@@ -32,10 +42,11 @@ test('OBSERVE runs even when disabled (read-only, no agent_disabled bail)', asyn
   })
   assert.equal(result.ok, true, `disabled OBSERVE should run read-only, got ${JSON.stringify(result)}`)
   assert.notEqual(result.reason, 'agent_disabled')
+  assert.notEqual(result.reason, 'send_disabled')
   assert.ok(result.summary?.phases?.observe, 'observe phase should be present')
 })
 
-test('FULL_CYCLE while disabled runs non-send phases but sends nothing', async () => {
+test('FULL_CYCLE discovers + drafts to completion and NEVER reaches a send phase', async () => {
   const db = createInMemoryDb()
   const records = [
     {
@@ -57,7 +68,8 @@ test('FULL_CYCLE while disabled runs non-send phases but sends nothing', async (
       webChecker: async () => ({ ok: true, status: 200 }),
     },
     config: {
-      enabled: false, // DISABLED — yet discovery/draft must still run
+      // Send switch OFF — the NORMAL state. Discovery + drafting still run.
+      enabled: false,
       mode: 'full-cycle',
       maxProspectsPerRun: 50, maxVerifiesPerRun: 50, maxLeadsPerRun: 50,
       maxOutreachDraftsPerRun: 50, maxOutreachSendsPerDay: 50,
@@ -66,10 +78,15 @@ test('FULL_CYCLE while disabled runs non-send phases but sends nothing', async (
       fromEmail: 'team@grantflow.app',
     },
   })
-  assert.equal(result.ok, true, `disabled full-cycle should run, got ${JSON.stringify(result)}`)
+  assert.equal(result.ok, true, `full-cycle should run, got ${JSON.stringify(result)}`)
   assert.notEqual(result.reason, 'agent_disabled')
-  // No email leaves while disabled: send phase sends nothing.
-  assert.equal(result.summary.phases.send.sent.length, 0, 'no send while disabled')
+  // The automated cycle stops at saved drafts: it has a draft phase and NO send
+  // phase at all (send is a separate human action, never part of the cycle).
+  assert.ok(result.summary.phases.draft, 'draft phase should run')
+  assert.equal(result.summary.phases.send, undefined, 'FULL_CYCLE must never reach a send phase')
+  // Status is honest + positive, never "agent disabled".
+  assert.ok(typeof result.status_note === 'string' && result.status_note.length > 0, 'a status note should be present')
+  assert.doesNotMatch(result.status_note, /disabled/i, 'status note must not imply the agent is disabled')
 })
 
 test('observe mode does not invoke any adapter', async () => {
@@ -157,17 +174,19 @@ test('discover-prospects + verify + score + qualify + draft happy path', async (
   assert.ok(summary.phases.verify.verified.length >= 1, 'verify should mark ≥1 verified')
   assert.ok(summary.phases.score_and_packet.built.length >= 1, 'score_and_packet should build ≥1 lead')
   assert.ok(summary.phases.qualify.qualified.length >= 1, 'qualify should pass ≥1 lead')
-  assert.ok(summary.phases.draft.drafts.length >= 1, 'draft should produce ≥1 attempt')
+  assert.ok(summary.phases.draft.drafts.length >= 1, 'draft should produce ≥1 draft')
 
-  // Send phase should NOT have any approved attempts since admin never approved.
-  assert.equal(summary.phases.send.sent.length, 0)
+  // FULL_CYCLE stops at saved drafts — there is no send phase, and a run that
+  // produced drafts is a SUCCESS (positive, honest status note).
+  assert.equal(summary.phases.send, undefined, 'FULL_CYCLE must not run a send phase')
+  assert.match(result.status_note, /draft/i, 'a drafting run should report drafts saved for review')
 })
 
-test('getLarryStatus returns enabled/mode/samples without sending anything', async () => {
+test('getLarryStatus reports the draft-only role honestly (Yana never sends)', async () => {
   const db = createInMemoryDb()
   const status = await getLarryStatus(db, {
     config: {
-      enabled: true,
+      enabled: false, // send step off — the NORMAL state
       mode: 'observe',
       requireApprovalToSend: true,
       allowLiveWeb: false,
@@ -176,6 +195,11 @@ test('getLarryStatus returns enabled/mode/samples without sending anything', asy
     },
   })
   assert.equal(status.agent, 'Yana')
-  assert.equal(status.enabled, true)
+  // Honest framing: discovery/drafting are always on; Yana never sends; only the
+  // separate manual send step follows the switch.
+  assert.equal(status.sends_email, false)
+  assert.equal(status.discovery_and_drafting, 'always_on')
+  assert.equal(status.send_step_enabled, false)
   assert.equal(typeof status.samples.any_prospects, 'boolean')
+  assert.equal(typeof status.samples.any_approved_for_manual_send, 'boolean')
 })

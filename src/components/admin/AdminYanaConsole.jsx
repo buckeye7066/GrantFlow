@@ -105,20 +105,32 @@ export default function AdminYanaConsole() {
     }
   }
 
+  // Yana's discovery + drafting are ALWAYS available — she finds leads and saves
+  // drafts for review; she never sends email. The badge therefore never reads a
+  // bare "Disabled" (that would wrongly imply Yana is broken). It reflects only
+  // the SEPARATE, manual send step's switch.
   const enabledBadge = useMemo(() => {
     if (!status) return null
-    if (status.enabled) {
-      return (
-        <Badge className="bg-emerald-100 text-emerald-700 border border-emerald-200">
-          <CheckCircle2 className="w-3 h-3 mr-1" />
-          Enabled
-        </Badge>
-      )
-    }
     return (
+      <Badge className="bg-emerald-100 text-emerald-700 border border-emerald-200">
+        <CheckCircle2 className="w-3 h-3 mr-1" />
+        Finding leads
+      </Badge>
+    )
+  }, [status])
+
+  const sendStepBadge = useMemo(() => {
+    if (!status) return null
+    const sendOn = status.send_step_enabled ?? status.enabled
+    return sendOn ? (
+      <Badge className="bg-amber-100 text-amber-700 border border-amber-200">
+        <CheckCircle2 className="w-3 h-3 mr-1" />
+        Manual send: on
+      </Badge>
+    ) : (
       <Badge className="bg-slate-100 text-slate-700 border border-slate-200">
         <XCircle className="w-3 h-3 mr-1" />
-        Disabled
+        Manual send: off
       </Badge>
     )
   }, [status])
@@ -129,8 +141,9 @@ export default function AdminYanaConsole() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mail className="w-5 h-5 text-amber-600" />
-            Yana — Lead Discovery & Outreach Agent
+            Yana — Lead Discovery & Drafting Agent
             {enabledBadge}
+            {sendStepBadge}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -139,13 +152,16 @@ export default function AdminYanaConsole() {
             <AlertDescription>
               <p className="text-sm">
                 Yana finds likely GrantFlow <strong>clients</strong>, verifies public contact info,
-                scores fit and urgency, builds lead packets, and (only with explicit per-attempt
-                approval) sends outreach. Yana is <strong>not</strong> Anya, Robert, or a code-fixing
-                agent. Auto-send is off by default.
+                scores fit and urgency, builds lead packets, and <strong>drafts outreach</strong>.
+                Drafts are <strong>saved for your review</strong> (in the canonical pipeline John
+                saves them to your Outlook draft folder) — <strong>Yana never sends email</strong>.
+                Sending is a separate, manual step you do yourself. Yana is <strong>not</strong> Anya,
+                Robert, or a code-fixing agent.
               </p>
               {status ? (
                 <p className="mt-2 text-[11px] text-slate-500">
-                  mode={status.mode} · daily_send_cap={status.daily_send_cap} · approval_required=
+                  mode={status.mode} · manual_send_daily_cap=
+                  {status.manual_send_daily_cap ?? status.daily_send_cap} · approval_required=
                   {String(status.require_approval_to_send)} · live_web=
                   {String(status.allow_live_web)}
                 </p>

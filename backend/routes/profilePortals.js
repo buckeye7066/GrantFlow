@@ -49,6 +49,18 @@ import {
   portalStatusKeyHost,
 } from '../services/hamilton/portalCompletionStore.js'
 import {
+  getMasterVaultStatus,
+  setMasterPassphrase,
+  setAutopilotIdentity,
+  unlockVault,
+  lockVault,
+} from '../services/hamilton/hamiltonPortalMasterVault.js'
+import {
+  describeAutopilotStateForPortal,
+  runAutopilotIdentityForPortal,
+  runAutopilotIdentityForProfile,
+} from '../services/hamilton/hamiltonPortalAutopilotIdentity.js'
+import {
   buildApplicationPacketHtml,
   packetDocumentName,
 } from '../../shared/applicationPacketHtml.js'
@@ -130,19 +142,50 @@ router.get('/profiles/:id/portals', async (req, res) => {
     // 'complete' (application done but not merged), or 'unmerged' (default).
     let statusMap = new Map()
     try { statusMap = await getPortalStatusMap(req.db, profileId) } catch { statusMap = new Map() }
-    const portals = (result?.portals || []).map((p) => {
+    // Per-profile master-vault / autopilot-identity status (read-only): whether a
+    // master passphrase is set, whether it's unlocked, and the autopilot identity
+    // email Hamilton would register new accounts with.
+    let vaultStatus = { has_passphrase: false, is_unlocked: false, identity_email: null }
+    try { vaultStatus = await getMasterVaultStatus(req.db, profileId) } catch { /* default */ }
+    const portals = []
+    for (const p of result?.portals || []) {
       const key = p?.portalHost ? portalStatusKeyHost(p.portalHost) : ''
       const st = key ? statusMap.get(key) : null
       const mergeStatus = st?.status || PORTAL_STATUS.UNMERGED
-      return {
+      // Per-portal autopilot lifecycle state (auto_provisioned / needs_user /
+      // identity_proof_required / has_existing_credentials / vault_locked).
+      // Read-only — no registration / handoff is triggered on a GET.
+      let autopilot = { state: null, detail: null, resolution: null, canAutoMerge: null, cobrowse: null }
+      if (p?.portalHost) {
+        try {
+          autopilot = await describeAutopilotStateForPortal(req.db, {
+            profileId, portalHost: p.portalHost, loginUrl: p.loginUrl || null,
+            hasCredential: Boolean(p.hasCredential), hasSession: Boolean(p.hasSession),
+          })
+        } catch { autopilot = { state: null, detail: null, resolution: null, canAutoMerge: null, cobrowse: null } }
+      }
+      // A portal Hamilton CAN'T auto-merge (terminal autopilot state, all
+      // automation exhausted) is plainly flagged and routed to the LAST-RESORT
+      // side-by-side co-browse. `canAutoMerge === false` + a cobrowse target ⇒
+      // the tile shows "Can't auto-merge — open side-by-side login".
+      const offerCobrowse = autopilot.resolution === 'side_by_side_cobrowse'
+      portals.push({
         ...p,
         mergeStatus,
         isMerged: mergeStatus === PORTAL_STATUS.MERGED,
         isComplete: mergeStatus === PORTAL_STATUS.COMPLETE,
         completedAt: st?.completed_at || null,
         mergedAt: st?.merged_at || null,
-      }
-    })
+        autopilotState: autopilot.state,
+        autopilotDetail: autopilot.detail,
+        autopilotResolution: autopilot.resolution || null,
+        // null = automation handled it (no merge concept needed); false = can't
+        // auto-merge → co-browse; (true only via the read-only describe path).
+        canAutoMerge: autopilot.canAutoMerge ?? null,
+        cantAutoMerge: autopilot.canAutoMerge === false && offerCobrowse,
+        cobrowse: offerCobrowse ? (autopilot.cobrowse || { host: p.portalHost, loginUrl: p.loginUrl || null }) : null,
+      })
+    }
     // Annotate each mail/fax source with its saved-packet status so the page
     // reflects what Hamilton has already produced.
     const mailFaxSources = Array.isArray(result?.mailFaxSources) ? result.mailFaxSources : []
@@ -156,12 +199,12 @@ router.get('/profiles/:id/portals', async (req, res) => {
           : { generated: false, documentId: null, at: null },
       })
     }
-    return res.json({ portals, mailFaxSources: annotated })
+    return res.json({ portals, mailFaxSources: annotated, vaultStatus })
   } catch (err) {
     // getProfilePortals already degrades to { portals: [], mailFaxSources: [] }
     // internally; this is a final net so the dashboard never sees a 500.
     log.error('profile_portals_failed', { profileId, err: err?.message })
-    return res.json({ portals: [], mailFaxSources: [] })
+    return res.json({ portals: [], mailFaxSources: [], vaultStatus: { has_passphrase: false, is_unlocked: false, identity_email: null } })
   }
 })
 
@@ -325,14 +368,165 @@ router.post('/profiles/:id/portals/status', async (req, res) => {
     return res.status(400).json({ error: 'status must be "merged" or "complete"' })
   }
   try {
-    const row = status === PORTAL_STATUS.MERGED
-      ? await markPortalMerged(req.db, { profileId, portalHost, source: 'manual' })
-      : await markPortalComplete(req.db, { profileId, portalHost, source: 'manual' })
+    let row
+    if (status === PORTAL_STATUS.MERGED) {
+      // TRUTHFUL MERGE: a manual mark from the dashboard is an explicit human
+      // confirmation ("I merged this"), which the store accepts as proof. The
+      // store refuses any merge lacking real confirmation (returns null) so a
+      // portal can never be silently/loosely marked merged.
+      row = await markPortalMerged(req.db, {
+        profileId, portalHost, source: 'manual',
+        confirmed: true,
+        evidence: typeof body.evidence === 'string' ? body.evidence.slice(0, 240) : null,
+      })
+      if (!row) return res.status(400).json({ error: 'merge_unconfirmed', detail: 'A merge requires explicit confirmation that the portal data was pulled into the profile.' })
+    } else {
+      row = await markPortalComplete(req.db, { profileId, portalHost, source: 'manual' })
+    }
     if (!row) return res.status(400).json({ error: 'could not set status' })
     return res.json({ ok: true, status: row.status, portalHost: row.portal_host })
   } catch (err) {
     log.error('set_portal_status_failed', { profileId, err: err?.message })
     return res.status(500).json({ error: 'could not set portal status' })
+  }
+})
+
+// ── Portal Autopilot Identity: master passphrase + identity + run ─────────────
+// SECURITY: the master passphrase is accepted only over the authenticated,
+// profile-scoped request, used immediately to set/unlock the vault, and is NEVER
+// stored, logged, or returned. Responses carry only the public vault STATUS
+// (has_passphrase / is_unlocked / identity_email), never the salt/verifier.
+
+// GET the master-vault / autopilot-identity status for a profile.
+router.get('/profiles/:id/portal-autopilot', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  try {
+    const status = await getMasterVaultStatus(req.db, profileId)
+    return res.json({ ok: true, vault: status })
+  } catch (err) {
+    log.error('portal_autopilot_status_failed', { profileId, err: err?.message })
+    return res.status(500).json({ error: 'could not read vault status' })
+  }
+})
+
+// Set / rotate the master passphrase (and optionally the identity email). The
+// passphrase is consumed here and never persisted.
+router.post('/profiles/:id/portal-autopilot/passphrase', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const passphrase = String(req.body?.passphrase || '')
+  if (!passphrase) return res.status(400).json({ error: 'passphrase required' })
+  try {
+    const identityEmail = req.body?.identityEmail ?? req.body?.identity_email
+    const { status } = await setMasterPassphrase(req.db, {
+      profileId, passphrase,
+      identityEmail: identityEmail === undefined ? undefined : identityEmail,
+    })
+    return res.json({ ok: true, vault: status })
+  } catch (err) {
+    return res.status(400).json({ error: 'set_passphrase_failed', detail: err?.message })
+  }
+})
+
+// Unlock the vault for this process (derives + caches the wrapping key). The
+// passphrase is consumed and discarded.
+router.post('/profiles/:id/portal-autopilot/unlock', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const passphrase = String(req.body?.passphrase || '')
+  if (!passphrase) return res.status(400).json({ error: 'passphrase required' })
+  try {
+    const result = await unlockVault(req.db, { profileId, passphrase })
+    if (!result.ok) {
+      // Do NOT distinguish "wrong passphrase" from "no passphrase set" beyond the
+      // boolean — avoid an oracle. (reason is coarse-grained.)
+      return res.status(401).json({ ok: false, error: 'unlock_failed', reason: result.reason || 'wrong_passphrase' })
+    }
+    const status = await getMasterVaultStatus(req.db, profileId)
+    return res.json({ ok: true, vault: status })
+  } catch (err) {
+    return res.status(500).json({ error: 'unlock_failed', detail: err?.message })
+  }
+})
+
+// Lock the vault (drop the in-memory wrapping key).
+router.post('/profiles/:id/portal-autopilot/lock', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  lockVault(profileId)
+  try {
+    const status = await getMasterVaultStatus(req.db, profileId)
+    return res.json({ ok: true, vault: status })
+  } catch {
+    return res.json({ ok: true, vault: { profile_id: profileId, has_passphrase: false, is_unlocked: false } })
+  }
+})
+
+// Set / clear the autopilot identity email (independent of the passphrase).
+router.post('/profiles/:id/portal-autopilot/identity', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  try {
+    const identityEmail = req.body?.identityEmail ?? req.body?.identity_email ?? null
+    const status = await setAutopilotIdentity(req.db, { profileId, identityEmail })
+    return res.json({ ok: true, vault: status })
+  } catch (err) {
+    return res.status(400).json({ error: 'set_identity_failed', detail: err?.message })
+  }
+})
+
+// Run autopilot identity for the whole profile (every applicable portal), or for
+// ONE portal when `portalHost` is supplied. A single-portal run may return a
+// one-time password view for an auto_provisioned login; bulk runs never do.
+router.post('/profiles/:id/portal-autopilot/run', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const userId = user?.id || user?.userId || 'system_admin_token'
+  const portalHost = String(req.body?.portalHost || req.body?.portal_host || '').trim()
+  try {
+    if (portalHost) {
+      const result = await runAutopilotIdentityForPortal(req.db, {
+        profileId, userId, portalHost,
+        loginUrl: req.body?.loginUrl || req.body?.login_url || null,
+      })
+      return res.json({ ok: true, result })
+    }
+    const { results, summary } = await runAutopilotIdentityForProfile(req.db, { profileId, userId })
+    return res.json({ ok: true, results, summary })
+  } catch (err) {
+    log.error('portal_autopilot_run_failed', { profileId, err: err?.message })
+    return res.status(500).json({ error: 'autopilot_run_failed', detail: err?.message })
   }
 })
 
