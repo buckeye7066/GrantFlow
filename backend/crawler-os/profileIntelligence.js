@@ -71,27 +71,35 @@ function deriveApplicantTypes(profile, blob) {
     .concat(profile?.profile_type ?? [])
     .map(lc)
     .filter(Boolean);
-  const found = new Set(explicit);
-  for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
-    if (syns.some((s) => blob.includes(s))) found.add(canon);
-  }
-  // Map common explicit strings onto canonical buckets.
+  const found = new Set();
+
+  // Applicant TYPE = WHO the applicant is. It comes from the DECLARED identity
+  // (applicant_types / profile_type), never from free-text. Free text describes
+  // NEEDS and CONTEXT — a student whose file mentions a parent's "military"
+  // service, or a church whose mission mentions "education"/"community", is not
+  // a veteran/school/government applicant. Augmenting the declared identity from
+  // the blob was the root false-positive driver (veteran-only grants matched to
+  // students; farm/government grants matched to a church). So:
+  //   1. canonicalize the EXPLICIT identity strings (trusted), and
+  //   2. ONLY when the profile declares no identity at all, fall back to a blob
+  //      scan so a bare profile still searches something (never zero).
   for (const e of explicit) {
+    if (APPLICANT_TYPE_SYNONYMS[e]) found.add(e); // already a canonical bucket
     for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
       if (syns.some((s) => e.includes(s))) found.add(canon);
     }
   }
+  if (found.size === 0) {
+    // Fallback only — no declared identity. Infer from free text.
+    for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
+      if (syns.some((s) => blob.includes(s))) found.add(canon);
+    }
+  }
 
-  // Identity guard: applicant TYPE (who you are) is not a NEED (what you need).
-  // A profile whose PRIMARY type is a person/household (individual / family /
-  // student / veteran — including compounds like "high_school_student") must NOT
-  // acquire organizational applicant types from free-text noise — otherwise the
-  // words "community" or "education" make a high-school student look like a
-  // "government" or "school" applicant and pull in org/agency grants they can
-  // never apply for. An individual is not an organization, period. Individual
-  // primary identity takes precedence: note "high_school_student" CONTAINS the
-  // substring "school", so a naive org-substring check would misfire — we detect
-  // the person tokens with word boundaries (+ a "student" catch-all) instead.
+  // Identity guard: a person/household primary identity must NOT carry
+  // organizational applicant types (an individual is not an organization).
+  // "high_school_student" CONTAINS "school", so detect person tokens with word
+  // boundaries (+ a "student" catch-all) rather than a naive org-substring test.
   const primaryRaw = lc(profile?.profile_type ?? profile?.type ?? '');
   const primaryIsIndividual =
     INDIVIDUAL_APPLICANT_TYPES.has(primaryRaw) ||
@@ -99,6 +107,10 @@ function deriveApplicantTypes(profile, blob) {
     /\b(individual|person|resident|family|household|parent|parents|caregiver|scholar|undergraduate|graduate|pupil|veteran)\b/.test(primaryRaw);
   if (primaryIsIndividual) {
     for (const t of [...found]) if (ORG_APPLICANT_TYPES.has(t)) found.delete(t);
+    // A person applicant is an INDIVIDUAL applicant — ensure individual-eligible
+    // opportunities still match even when the only declared subtype is e.g.
+    // "student". This is a correct structural implication, not free-text noise.
+    found.add('individual');
   }
 
   if (found.size === 0) found.add('individual'); // safe default; never zero
