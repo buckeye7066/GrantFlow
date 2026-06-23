@@ -46,6 +46,31 @@ test('a topically-irrelevant grant (no specific need overlap) is capped at REVIE
   const m = computeMatchDecision(offTopic, thesis);
   assert.notEqual(m.decision, MATCH_DECISION.ACCEPT, `off-topic grant must not ACCEPT (got ${m.decision} @ ${m.match_score})`);
   assert.ok(m.match_explain.warnings.some((w) => /weak topical relevance/i.test(w)));
+  // 2026-06-23: the SCORE must also be capped below the 75 surfacing bar so the
+  // irrelevant grant stays in the master catalog but never clutters the pipeline
+  // (previously it scored ~80-85 and surfaced as a high match).
+  assert.ok(m.match_score <= 60, `off-topic grant score must be capped <=60, got ${m.match_score}`);
+});
+
+test('a multi-need profile is NOT penalized for a focused grant — one real specific-need match scores well', () => {
+  // Regression for the 2026-06-23 false-NEGATIVE: need = matched/total meant a
+  // profile listing 4 needs that matched a grant on exactly ONE got 1/4 credit
+  // and the genuinely-relevant grant was REJECTED. Full credit comes at
+  // NEED_FULL_CREDIT_HITS specific overlaps, so one strong specific match alone
+  // earns at least half of the need weight (not a quarter).
+  const multiNeed = buildThesis({
+    id: 'p_multi', profile_type: 'nonprofit', applicant_types: ['nonprofit'],
+    needs: ['capital', 'operations', 'programs', 'education'],
+    location: { state: 'TN' },
+  });
+  const focused = strongOpp({
+    title: 'Capital Facilities Grant', applicant_types: ['nonprofit'],
+    need_categories: ['capital'], geography: { states: ['TN'] },
+  });
+  const m = computeMatchDecision(focused, multiNeed);
+  const needShare = m.match_explain.score_breakdown.need;
+  assert.ok(needShare >= WEIGHTS.need * 0.5, `one specific-need match should earn >=50% of need weight, got ${needShare}/${WEIGHTS.need}`);
+  assert.notEqual(m.decision, MATCH_DECISION.REJECT, `a real specific-need match must not be rejected (got ${m.decision} @ ${m.match_score})`);
 });
 
 test('the result carries an explainable breakdown and reasons', () => {

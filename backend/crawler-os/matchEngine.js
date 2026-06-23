@@ -28,6 +28,26 @@ export const WEIGHTS = Object.freeze({
 // fundable fit. An apply-now ACCEPT requires at least one SPECIFIC need overlap.
 const GENERIC_NEEDS = new Set(['programs', 'operations']);
 
+// Topical-relevance ceiling. An opportunity that overlaps NONE of a profile's
+// SPECIFIC needs is not a quality match for THAT profile — however eligible,
+// national, and trustworthy it is. Without this, any real nonprofit-eligible
+// national federal grant scored ~80-85 for ANY nonprofit (wildcard need = 15/25,
+// national geo = 15/15, eligibility 15, funding 10, amount 5, trust 5), so a
+// Vermilion church matched "Coral Reef Conservation" / "Moonshot: Artemis" at
+// 85. We cap the PER-PROFILE score below the surfacing bar (75) so the match
+// stays in the master catalog + REVIEW but does not clutter the pipeline. This
+// is the score-side companion to the decision-side topical-relevance gate.
+const WEAK_RELEVANCE_CEILING = 60;
+
+// Need-alignment full-credit target. A profile that lists MANY needs must not be
+// penalized for a grant that addresses only a few of them: a funder realistically
+// covers one or two of a person/org's needs, and matching that strongly IS a
+// complete need fit. Without this, need = matched/total, so a church that needs
+// [capital, operations, programs, education] matching a real Capital grant scored
+// 1/4 = 6/25 and the genuinely-relevant grant was REJECTED (false negative). Full
+// credit at this many SPECIFIC hits (mirrors legacy matchThresholds.NEED_FULL_CREDIT_HITS).
+const NEED_FULL_CREDIT_HITS = 2;
+
 /**
  * computeMatchDecision — score one opportunity against one profile thesis and
  * return a fully-explained decision.
@@ -48,9 +68,12 @@ export function computeMatchDecision(opportunity, thesis, opts = {}) {
   const oppNeeds = stripWildcard(opportunity.need_categories);
   const matchedNeeds = intersect(oppNeeds.length ? oppNeeds : opportunity.need_categories, thesis.needs);
   const needWild = opportunity.need_categories.includes('*') && oppNeeds.length === 0;
+  // Full credit at NEED_FULL_CREDIT_HITS specific overlaps, not matched/total —
+  // so a multi-need profile is not penalized for a focused grant (see constant).
+  const needTarget = Math.min(Math.max(1, thesis.needs.length), NEED_FULL_CREDIT_HITS);
   breakdown.need = needWild
     ? WEIGHTS.need * 0.6
-    : ratioScore(matchedNeeds.length, Math.max(1, thesis.needs.length), WEIGHTS.need);
+    : ratioScore(matchedNeeds.length, needTarget, WEIGHTS.need);
   if (!needWild && matchedNeeds.length === 0 && thesis.needs.length > 0) warnings.push('no need-category overlap');
   // Topical-relevance gate: if the profile has specific (non-generic) needs but
   // the opportunity overlaps NONE of them (matched only catch-all needs, or
@@ -104,7 +127,20 @@ export function computeMatchDecision(opportunity, thesis, opts = {}) {
   breakdown.trust = (TRUST_TIER_WEIGHT[opportunity.trust_tier] ?? 0.25) * WEIGHTS.trust;
 
   const raw = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  const matchScore = Math.round(clamp(raw, 0, 100));
+  let matchScore = Math.round(clamp(raw, 0, 100));
+
+  // Topical-relevance ceiling: if the profile declares SPECIFIC needs but the
+  // opportunity overlaps none of them, cap the per-profile score below the
+  // surfacing bar so it stays in the master catalog + REVIEW (queryable) but is
+  // not surfaced as a high match for this profile. Keeps "bad matches" out of
+  // the pipeline without deleting the opportunity. The decision-side gate
+  // (below) independently downgrades it out of ACCEPT.
+  const topicallyWeak = specificThesisNeeds.length > 0 && specificMatched.length === 0;
+  if (topicallyWeak && matchScore > WEAK_RELEVANCE_CEILING) {
+    breakdown._topical_cap = WEAK_RELEVANCE_CEILING - matchScore; // negative adj, for explainability
+    matchScore = WEAK_RELEVANCE_CEILING;
+  }
+
   const floor = Number.isFinite(opts.floor) ? opts.floor : (thesis.min_match_score ?? 55);
   const decision = decide(matchScore, floor, opportunity, warnings);
 
