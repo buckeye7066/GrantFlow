@@ -76,6 +76,25 @@ const CRAWLER_OS_DISCOVERY_MODES = new Set([
  * code runs. Populates Robert's counters/summary so the run record is unchanged.
  */
 async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summary, dryRun = false }) {
+  // Charter doctrine: "match every newly stored opportunity against ALL known
+  // profiles". Build every active profile's thesis ONCE and pass them as
+  // matchProfiles so each profile's discovered opps are matched against all the
+  // others in-run (the live catalog can't reconstruct match fields). The
+  // discovering profile is PRIMARY (authoritative 'crawler-os' set); others get
+  // additive 'crawler-os-xmatch'. Clear last cycle's cross-matches once up front
+  // so they rebuild fresh (no staleness). Skipped on dry-run and single-profile.
+  let allTheses = null;
+  if (!dryRun && profileIds.length > 1) {
+    const { buildThesisForProfile } = await import('../crawlerOsService.js');
+    allTheses = (await Promise.all(
+      profileIds.map((pid) => buildThesisForProfile(db, pid).catch(() => null)),
+    )).filter(Boolean);
+    try {
+      await db.prepare(`DELETE FROM profile_opportunity_matches WHERE matcher_version = 'crawler-os-xmatch'`).run();
+    } catch (err) {
+      summary.errors.push({ stage: 'xmatch_reset', error: String(err?.message || err) });
+    }
+  }
   for (const profileId of profileIds) {
     try {
       // dryRun PREVIEW: run the real pipeline (plan + fetch + match) against an
@@ -83,7 +102,8 @@ async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summar
       // a dry-run an honest read-only preview of what discovery WOULD store, with
       // real per-source outcomes — instead of silently skipping discovery and
       // reporting a misleading 0/0/0.
-      const { run, persisted, thesis } = await runProfileDiscoveryLive({ db, profileId, dryRun })
+      const { run, persisted, thesis } = await runProfileDiscoveryLive({ db, profileId, dryRun, matchProfiles: allTheses || undefined })
+      counters.cross_matches = (counters.cross_matches || 0) + (run.cross_matches || 0)
       counters.urls_fetched += run.sources.reduce((a, s) => a + (s.fetched || 0), 0)
       counters.candidates_found += run.sources.reduce((a, s) => a + (s.parsed || 0), 0)
       counters.opportunities_ingested += persisted.opportunities
