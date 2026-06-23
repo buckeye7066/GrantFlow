@@ -204,8 +204,17 @@ async function ensureOsTables(db) {
   try { await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_pom_profile_opp ON profile_opportunity_matches(profile_id, opportunity_id)').run(); } catch { /* ok */ }
 }
 
-export async function persistRun(db, memStore, run) {
+export async function persistRun(db, memStore, run, opts = {}) {
   await ensureOsTables(db);
+  // When a run matched against MULTIPLE profiles (Robert's cross-profile cycle),
+  // primaryProfileId is the profile whose own discovery this was — its full
+  // 'crawler-os' match set is authoritative (reconcile = delete+insert). EVERY
+  // OTHER profile's matches are CROSS-matches (an opp this profile didn't search
+  // for but is eligible to): they are written additively as 'crawler-os-xmatch'
+  // with ON CONFLICT DO NOTHING, so a profile's own match always wins and the
+  // primary reconcile never wipes them. Default (null) = legacy single-profile
+  // behavior: reconcile every profile present in matchRows as 'crawler-os'.
+  const primaryProfileId = opts.primaryProfileId ?? null;
   const catalog = storage.listCatalog(memStore);
   // Durable cross-RUN dedup at the live-DB boundary. funding_opportunities has a
   // UNIQUE(fingerprint) constraint; the OS id folds in source_id, so the same
@@ -247,28 +256,58 @@ export async function persistRun(db, memStore, run) {
   // profile silently keeps obsolete, ineligible matches.
   const matchRows = memStore.all('profile_opportunity_matches');
   const profileIds = [...new Set(matchRows.map((m) => m.profile_id).filter(Boolean))];
-  for (const pid of profileIds) {
+  // Reconcile 'crawler-os' (own-discovery) matches. With a primary set, only the
+  // primary profile's own set is rebuilt; otherwise (legacy) every profile's.
+  const reconcileProfiles = primaryProfileId ? [primaryProfileId] : profileIds;
+  for (const pid of reconcileProfiles) {
     await db.prepare(
       `DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND matcher_version = 'crawler-os'`,
     ).run(pid);
   }
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP';
   let matches = 0;
+  let crossMatches = 0;
   for (const m of matchRows) {
     const explain = jparse(m.match_explain_json, {});
     const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id; // follow cross-run dedup remap
-    await upsertRow(db, 'profile_opportunity_matches', ['profile_id', 'opportunity_id'], {
-      id: `${m.profile_id}:${oppId}`, // deterministic PK (table PK is id)
-      profile_id: m.profile_id, opportunity_id: oppId,
-      match_score: m.match_score,
-      match_decision: m.decision ?? null,
-      match_explanation: explain.why ?? null,
-      match_reasons: JSON.stringify(explain.matched_needs ?? []),
-      match_explain_json: m.match_explain_json ?? '{}',
-      matcher_version: 'crawler-os',
-      computed_at: nowIso(), updated_at: nowIso(), evaluated_at: nowIso(),
-    });
-    matches += 1;
+    const isPrimary = !primaryProfileId || m.profile_id === primaryProfileId;
+    if (isPrimary) {
+      await upsertRow(db, 'profile_opportunity_matches', ['profile_id', 'opportunity_id'], {
+        id: `${m.profile_id}:${oppId}`, // deterministic PK (table PK is id)
+        profile_id: m.profile_id, opportunity_id: oppId,
+        match_score: m.match_score,
+        match_decision: m.decision ?? null,
+        match_explanation: explain.why ?? null,
+        match_reasons: JSON.stringify(explain.matched_needs ?? []),
+        match_explain_json: m.match_explain_json ?? '{}',
+        matcher_version: 'crawler-os',
+        computed_at: nowIso(), updated_at: nowIso(), evaluated_at: nowIso(),
+      });
+      matches += 1;
+    } else if (String(m.decision ?? '').toLowerCase() === 'reject') {
+      // A REJECT cross-match is not a match — never store it as one.
+      continue;
+    } else {
+      // Cross-match: a profile that did NOT search for this opp but is eligible.
+      // Additive (DO NOTHING) so the profile's own 'crawler-os' match — if it has
+      // one for this opp — always wins. Robert clears 'crawler-os-xmatch' once at
+      // cycle start, so these are rebuilt fresh each cycle (no staleness).
+      try {
+        await db.prepare(
+          `INSERT INTO profile_opportunity_matches
+             (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, match_explain_json, matcher_version, computed_at, updated_at, evaluated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'crawler-os-xmatch', ${nowFn}, ${nowFn}, ${nowFn})
+           ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+        ).run(
+          `xm:${m.profile_id}:${oppId}`, m.profile_id, oppId,
+          m.match_score, m.decision ?? null, explain.why ?? null,
+          JSON.stringify(explain.matched_needs ?? []), m.match_explain_json ?? '{}',
+        );
+        crossMatches += 1;
+      } catch { /* opp may not be persisted (rejected at catalog) — skip */ }
+    }
   }
+  run.cross_matches = crossMatches;
 
   // Stamp profiles.last_discovery_at so the discovery routes treat these
   // profiles as discovered (OS-served) rather than discovery_pending. This is

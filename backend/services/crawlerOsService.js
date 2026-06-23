@@ -156,7 +156,7 @@ function skippedDiscoveryResult(profileId, reason) {
   };
 }
 
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
   // Lifecycle guard: never crawl a deleted/archived/merged profile (no-op, no writes).
@@ -165,10 +165,19 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     return skippedDiscoveryResult(profileId, `profile_${profileStatus || 'deleted'}`);
   }
   const thesis = buildThesis(profileContextToThesisInput(ctx));
+  // CROSS-PROFILE matching (Robert charter: "match every newly stored opportunity
+  // against ALL known profiles"). When the caller supplies matchProfiles (all
+  // active theses), each stored opp is matched against all of them in-run (the
+  // live catalog can't reconstruct match fields, so this must happen here). The
+  // discovering profile is PRIMARY; others get additive 'crawler-os-xmatch'.
+  // Single-profile callers (the user-facing /run route) pass nothing → exact
+  // legacy behavior.
+  const effMatchProfiles = Array.isArray(matchProfiles) && matchProfiles.length > 0 ? matchProfiles : [thesis];
+  const crossProfile = effMatchProfiles.length > 1;
   const store = createMemoryStore();
   const run = await runDiscovery(
     { store, fetcher: fetcher ?? makeProductionFetcher() },
-    { thesis, matchProfiles: [thesis], floor },
+    { thesis, matchProfiles: effMatchProfiles, floor },
   );
   if (dryRun) {
     // Read-only preview: report what discovery FOUND/MATCHED in the memory store
@@ -189,7 +198,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       thesis,
     };
   }
-  const persisted = await persistRun(db, store, run);
+  const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
 
   // Individual long-tail: the registry has no API for local/private scholarships
   // (they live on the open web), so the OS pipeline alone leaves individuals with
@@ -217,7 +226,26 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     }
   }
 
-  return { run, persisted, thesis, webScholarships };
+  // Return the full-fidelity stored opportunities (OS shape, with
+  // applicant_types/need_categories/geography/kind) so the caller can cross-match
+  // them against OTHER profiles in the same cycle — the live funding_opportunities
+  // table does NOT persist those matching fields, so they can only be matched
+  // in-memory while the run objects are alive.
+  const opportunities = storage.listCatalog(store);
+  return { run, persisted, thesis, webScholarships, opportunities };
+}
+
+/**
+ * Build the Crawler-OS thesis for one live profile (loadProfileContext ->
+ * thesis). Returns null for a deleted/archived profile. Used by Robert to
+ * assemble ALL active theses for cross-profile matching.
+ */
+export async function buildThesisForProfile(db = getDb(), profileId) {
+  if (!profileId) return null;
+  const ctx = await loadProfileContext(db, profileId);
+  const status = String(ctx?.profile?.status ?? '').trim().toLowerCase();
+  if (NON_DISCOVERABLE_PROFILE_STATUSES.has(status) || ctx?.profile?.deleted_at) return null;
+  return buildThesis(profileContextToThesisInput(ctx));
 }
 
 export default {

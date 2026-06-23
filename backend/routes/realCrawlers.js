@@ -426,7 +426,7 @@ router.post('/run', ensureAuth, async (req, res) => {
               m.match_score, m.match_decision, m.match_explanation
          FROM profile_opportunity_matches m
          JOIN funding_opportunities fo ON fo.id = m.opportunity_id
-        WHERE m.profile_id = ? AND m.matcher_version IN ('crawler-os', 'web-llm')
+        WHERE m.profile_id = ? AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch', 'web-llm')
           AND (fo.is_active IS NULL OR fo.is_active = 1)
         ORDER BY m.match_score DESC`,
     ).all(String(profile_id))
