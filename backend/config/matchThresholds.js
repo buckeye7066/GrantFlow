@@ -22,8 +22,14 @@ export const W_CATEGORY = 0.20
 
 // ── Discovery / Comprehensive Match ─────────────────────────────────────
 
-/** Default minimum score for discovery results */
-export const DEFAULT_MIN_SCORE = 50
+/**
+ * Default minimum score for discovery results — the "slider" default.
+ * Owner directive (2026-06-23): the bar for what surfaces in a profile's
+ * pipeline/discovery view is 75. Anything below is NOT junk — it stays in the
+ * master funding_opportunities catalog (deduped) so it can match another
+ * profile later — it just doesn't clutter THIS profile's pipeline.
+ */
+export const DEFAULT_MIN_SCORE = 75
 
 /**
  * Number of matched profile needs that earns FULL need-alignment credit.
@@ -159,14 +165,19 @@ export const ADMIN_SEED_MIN_SCORE = 45
 
 // ── Frontend Display (sync with src/lib/matchDisplayThresholds.js) ──────
 
-/** Score at which results are auto-added to pipeline */
-export const AUTO_ADD_SCORE = 70
+/**
+ * Score at or above which results are auto-added to a profile's pipeline.
+ * Aligned to the 75 bar (owner directive 2026-06-23) so a "bad match" (< 75)
+ * never auto-lands in the working pipeline; it lives in the master catalog
+ * instead.
+ */
+export const AUTO_ADD_SCORE = 75
 
 /** Strong match bucket threshold */
 export const STRONG_MATCH_SCORE = 85
 
-/** Good match bucket threshold */
-export const GOOD_MATCH_SCORE = 70
+/** Good match bucket threshold (aligned to the 75 bar, owner directive). */
+export const GOOD_MATCH_SCORE = 75
 
 /** Moderate match bucket threshold */
 export const MODERATE_MATCH_SCORE = 40

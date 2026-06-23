@@ -18,6 +18,7 @@ import {
 } from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
+import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import {
   applyFundableOpportunityNormalization,
   evaluateFundableOpportunity,
@@ -472,7 +473,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         }
       }
 
-      const minScore = Number.parseInt(req.query.min_score ?? '50', 10)
+      const minScore = Number.parseInt(req.query.min_score ?? String(DEFAULT_MIN_SCORE), 10)
       // When strict=1 (Discover slider), do not relax threshold — honor the user's minimum match %.
       const strictMin =
         req.query.strict === '1' ||

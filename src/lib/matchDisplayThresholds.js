@@ -5,9 +5,11 @@
  * Do not hardcode score cutoffs in components — import from here.
  */
 
-export const AUTO_ADD_SCORE = 70
+// Aligned to the 75 quality bar (owner directive 2026-06-23) — keep in sync
+// with backend/config/matchThresholds.js.
+export const AUTO_ADD_SCORE = 75
 export const STRONG_MATCH_SCORE = 85
-export const GOOD_MATCH_SCORE = 70
+export const GOOD_MATCH_SCORE = 75
 export const MODERATE_MATCH_SCORE = 40
 export const SCORE_FLOOR = 5
 
