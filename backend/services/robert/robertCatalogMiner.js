@@ -79,11 +79,17 @@ export async function fetchCatalogForProfile(db, geo = {}, cap = 100) {
   // profile's geo, the rows tagged to that state/county. Active + non-hidden
   // only. We intentionally do NOT filter on link_status (directory + freshly
   // ingested rows often start 'unverified'; link_unverified ≠ dead).
+  // Dialect-safe boolean predicates. These columns are BOOLEAN in Postgres and
+  // 0/1 INTEGER in SQLite; `COALESCE(is_active, 1)` throws on PG ("COALESCE types
+  // boolean and integer cannot be matched"), which was silently caught below and
+  // returned 0 rows from the 96k catalog — Robert produced ZERO recommendations
+  // in prod as a result. `COALESCE(col, <bool literal>) = <bool literal>` works
+  // on both dialects (SQLite treats true/false as 1/0).
   const clauses = [
-    "COALESCE(is_active, 1) IN (1, TRUE, 'true', 't')",
-    "COALESCE(is_hidden, 0) IN (0, FALSE, 'false', 'f')",
+    'COALESCE(is_active, true) = true',
+    'COALESCE(is_hidden, false) = false',
   ]
-  const geoOr = ["COALESCE(is_national, 0) IN (1, TRUE, 'true', 't')"]
+  const geoOr = ['COALESCE(is_national, false) = true']
   const params = []
   if (state) {
     geoOr.push('UPPER(state) = ?')

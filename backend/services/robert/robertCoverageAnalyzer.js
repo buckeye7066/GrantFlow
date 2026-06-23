@@ -162,9 +162,12 @@ async function defaultQueryProfileMatchableCount(db, _profileId) {
   if (!db?.prepare) return 0
   try {
     const row = await db.prepare(
+      // Dialect-safe booleans (PG boolean / SQLite 0-1). COALESCE(col,1)=1 threw
+      // on Postgres and was swallowed by the catch below, returning matchable=0 →
+      // every profile falsely read zeroResultRisk=100. See robertCatalogMiner.js.
       `SELECT COUNT(*) AS c FROM funding_opportunities
-         WHERE COALESCE(is_active, 1) = 1
-           AND COALESCE(is_hidden, 0) = 0`,
+         WHERE COALESCE(is_active, true) = true
+           AND COALESCE(is_hidden, false) = false`,
     ).get()
     return Number(row?.c || 0)
   } catch {
