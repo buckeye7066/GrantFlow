@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto'
 import { requireAuthenticatedUser, isAdminUserWithDb } from '../utils/accessControl.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { createLogger } from '../utils/logger.js'
+import { isValidEmail } from '../utils/validation.js'
 import {
   createRun,
   getRun,
@@ -273,6 +274,23 @@ async function acceptLead(req, item) {
   const evidence = []
   if (item.provenance?.snippet) evidence.push({ type: 'laptop_file', text: item.provenance.snippet })
   const sourceUrls = p.website_url ? [p.website_url] : []
+
+  // Qualification gate — mirror Yana's rule that 'qualified' MUST mean reachable
+  // by email (qualifyScore in yanaLeadDiscovery.js). Force-qualifying an
+  // approved lead with no email used to push it to John, who then silently
+  // dropped it as no_usable_email_contact (the lead vanished). Instead:
+  //   - usable email            → 'qualified' (ready for John to draft)
+  //   - no email but a website  → 'needs_enrichment' (Yana can find a contact)
+  //   - neither                 → 'candidate'  (parked for the operator; not
+  //                                surfaced to John, so it never silently drops)
+  const contactEmail = String(p.contact_email || '').trim() || null
+  const hasEmail = contactEmail && isValidEmail(contactEmail)
+  const status = hasEmail
+    ? 'qualified'
+    : (p.website_url ? 'needs_enrichment' : 'candidate')
+  const reasons = ['approved_from_laptop_connector', `status:${status}`]
+  if (!hasEmail) reasons.push('no_usable_email')
+
   try {
     await req.db
       .prepare(
@@ -281,7 +299,7 @@ async function acceptLead(req, item) {
             contact_email, funding_need_summary, grantflow_fit_summary,
             public_evidence_json, source_urls_json, fit_score, lead_score,
             qualification_status, qualification_reasons_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'qualified', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -290,19 +308,20 @@ async function acceptLead(req, item) {
         p.entity_type || null,
         p.website_url || null,
         p.location || null,
-        p.contact_email || null,
+        contactEmail,
         p.funding_need_summary || null,
         p.grantflow_fit_summary || null,
         JSON.stringify(evidence),
         JSON.stringify(sourceUrls),
         leadScore,
         leadScore,
-        JSON.stringify(['approved_from_laptop_connector']),
+        status,
+        JSON.stringify(reasons),
       )
   } catch (err) {
     return { ok: false, status: 500, message: `yana insert failed: ${err?.message}` }
   }
-  return { ok: true, routed_to: 'yana', target_id: id }
+  return { ok: true, routed_to: 'yana', target_id: id, qualification_status: status }
 }
 
 async function acceptFunding(req, item) {

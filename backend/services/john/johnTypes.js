@@ -57,6 +57,13 @@ export const DRAFT_STATUS = Object.freeze({
   REVIEWED: 'reviewed',
   SENT_MANUALLY: 'sent_manually',
   ARCHIVED: 'archived',
+  // The operator deleted the draft from the Outlook mailbox. This is the
+  // owner's curation decision ("I decide which get sent and which don't") — a
+  // TERMINAL, handled state. It is intentionally NOT in hasDraftForLead's
+  // re-draft-eligible exclusion set, so John never resurrects a draft the
+  // owner has deliberately removed. Distinct from ARCHIVED (which IS eligible
+  // to redraft) precisely so deletion reads as rejection, not loss.
+  DELETED_BY_USER: 'deleted_by_user',
 })
 
 export const ALL_DRAFT_STATUSES = Object.freeze(Object.values(DRAFT_STATUS))
@@ -76,6 +83,7 @@ export const AUDIT_STATUS = Object.freeze({
   SAFETY_FAILED: 'safety_failed',
   REVIEWED: 'reviewed',
   SENT_MANUALLY: 'sent_manually',
+  DELETED_IN_OUTLOOK: 'deleted_in_outlook',
 })
 
 export const SUPPRESSION_TYPE = Object.freeze({
