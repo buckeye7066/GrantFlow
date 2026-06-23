@@ -302,11 +302,14 @@ export default function DiscoverGrants() {
   const navigate = useNavigate()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [minMatchScore, setMinMatchScore] = useState(35);
+  // Owner directive (2026-06-23): default the match-score slider to 75 — the
+  // quality bar below which a match is treated as a "bad match" for this profile
+  // (kept in the master catalog, not surfaced here).
+  const [minMatchScore, setMinMatchScore] = useState(75);
   // Debounce the slider value used to KEY the catalog query so dragging the
   // slider through intermediate values doesn't fire a heavy 2000-row matching
   // query per step (that thundering herd saturated the DB → 503/504 cascade).
-  const [debouncedMinMatchScore, setDebouncedMinMatchScore] = useState(35);
+  const [debouncedMinMatchScore, setDebouncedMinMatchScore] = useState(75);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedMinMatchScore(minMatchScore), 450);
     return () => clearTimeout(t);

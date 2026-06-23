@@ -19,7 +19,7 @@ import {
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
-import { SCORE_FLOOR } from '../config/matchThresholds.js'
+import { SCORE_FLOOR, DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import { searchLiveFederalByProfile } from '../services/shared/liveFederalSearch.js'
 import { searchLocalWebByProfile } from '../services/shared/liveWebSearch.js'
 import { ingestOpportunities } from '../services/sources/ingestionService.js'
@@ -409,7 +409,7 @@ router.post('/run', ensureAuth, async (req, res) => {
   // OS pipeline for the profile and returns its per-profile matches (the legacy
   // strategy/crawlerManager pipeline is superseded — see legacyCrawlSuperseded.js).
   const { crawler_type, profile_id, min_match_score: bodyMinScore } = req.body
-  let min_match_score = 50
+  let min_match_score = DEFAULT_MIN_SCORE
   if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) min_match_score = bodyMinScore
   else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore)) min_match_score = Math.min(100, Math.max(0, parseInt(bodyMinScore, 10)))
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
@@ -483,7 +483,7 @@ router.get('/list', ensureAuth, (req, res) => {
  * POST /api/real-crawlers/run-multiple
  */
 router.post('/run-multiple', ensureAuth, async (req, res) => {
-  const { profile_id, crawler_types, min_match_score = 50 } = req.body
+  const { profile_id, crawler_types, min_match_score = DEFAULT_MIN_SCORE } = req.body
 
   if (!profile_id) {
     return res.status(400).json({
@@ -983,7 +983,7 @@ router.get('/health-check', async (req, res) => {
 router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   const {
     profile_id,
-    min_match_score = 50,
+    min_match_score = DEFAULT_MIN_SCORE,
     primary_category: clientPrimaryCategory = null,
     intent_terms: clientIntentTerms = null,
     need_text = '',
@@ -1001,7 +1001,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   // Stamp the per-profile "discovery has run" signal (best-effort, never blocks):
   // run-smart is a discovery path for this profile.
   void stampLastDiscoveryAt(db, profile_id)
-  const minScore = Number(min_match_score) || 50
+  const minScore = Number(min_match_score) || DEFAULT_MIN_SCORE
   const allOpportunities = []
   const seenTitles = new Set()
 
