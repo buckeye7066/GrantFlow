@@ -55,6 +55,31 @@ export function runQueueRecovery({ db, uploadsDir }) {
     }
   })();
 
+  // ── 1b. Reconcile stale 'running' Robert runs ─────────────────────────────
+  // robert_runs only clears 'running' on completeRun(); a mid-run crash/deploy
+  // leaves an orphan forever (the charter audit found 2 stuck for 5+ days), and
+  // Mission Control then reads Robert as perpetually mid-run. Mark runs that
+  // have been 'running' for >2h as failed. (better-sqlite3 ignores unknown
+  // tables gracefully via the try/catch.)
+  ;(async () => {
+    try {
+      const isPostgres = db?.dialect === 'postgres';
+      const r = await db
+        .prepare(
+          isPostgres
+            ? `UPDATE robert_runs SET status = 'failed', error = 'reconciled_stale_running', completed_at = NOW()
+                WHERE status = 'running' AND started_at < (NOW() - INTERVAL '2 hours')`
+            : `UPDATE robert_runs SET status = 'failed', error = 'reconciled_stale_running', completed_at = datetime('now')
+                WHERE status = 'running' AND started_at < datetime('now', '-2 hours')`,
+        )
+        .run();
+      const count = Number(r?.changes ?? r?.rowCount ?? 0);
+      if (count > 0) console.log(`[startup] Reconciled ${count} stale 'running' Robert run(s)`);
+    } catch (err) {
+      console.warn('[startup] Robert stale-run reconcile failed (non-fatal):', err?.message || err);
+    }
+  })();
+
   // ── 2. Re-queue concurrency-exhausted jobs ─────────────────────────────────
   ;(async () => {
     try {
