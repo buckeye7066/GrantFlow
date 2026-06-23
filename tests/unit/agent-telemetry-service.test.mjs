@@ -46,12 +46,16 @@ test('getYana returns aggregated funnel + summary for installed agent', async ()
   db._raw
     .prepare('INSERT INTO yana_runs (id, status, urls_fetched, leads_found) VALUES (?, ?, ?, ?)')
     .run(nextId('yr'), 'succeeded', 100, 25)
+  // 10 qualified candidates; 4 pushed to John. leads_sent_to_john is now
+  // sourced from the PRIMARY pushed_to_john flag (the legacy yana_john_queue
+  // is no longer authoritative — it double-counted re-pushes). The queue
+  // rows below are seeded only to prove the flag path wins.
   for (let i = 0; i < 10; i += 1) {
     db._raw
-      .prepare('INSERT INTO yana_lead_candidates (id, qualification_status) VALUES (?, ?)')
-      .run(nextId('ylc'), 'qualified')
+      .prepare('INSERT INTO yana_lead_candidates (id, qualification_status, pushed_to_john) VALUES (?, ?, ?)')
+      .run(nextId('ylc'), 'qualified', i < 4 ? 1 : 0)
   }
-  for (let i = 0; i < 4; i += 1) {
+  for (let i = 0; i < 99; i += 1) {
     db._raw.prepare('INSERT INTO yana_john_queue (id, lead_id) VALUES (?, ?)').run(nextId('yjq'), 'lid')
   }
   const out = await getYana(db, { range: '24h' })

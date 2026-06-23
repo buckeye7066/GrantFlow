@@ -156,7 +156,10 @@ test('canonical admin can call /status and gets adapter snapshot', async () => {
     assert.equal(r.status, 200)
     assert.equal(r.body.ok, true)
     assert.equal(r.body.canonical_admin, ADMIN_EMAIL)
-    assert.deepEqual(Object.keys(r.body.agents).sort(), ['hamilton', 'john', 'robert', 'sam', 'yana'])
+    // agents = STATUS snapshot (canonical 5 + anya, status-only/observed).
+    assert.deepEqual(Object.keys(r.body.agents).sort(), ['anya', 'hamilton', 'john', 'robert', 'sam', 'yana'])
+    // available_agents = the CONTROLLABLE set (ALL_AGENTS): anya is never
+    // started/stopped via the control center, so she is NOT listed here.
     assert.deepEqual(r.body.available_agents.sort(), ['hamilton', 'john', 'robert', 'sam', 'yana'])
   } finally { server.close() }
 })

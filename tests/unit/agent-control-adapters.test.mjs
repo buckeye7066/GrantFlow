@@ -15,7 +15,7 @@ import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import { BaseAgentAdapter, makeSignal } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
 import { getAdapter, listAdapters, setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
-import { ALL_AGENTS, FULL_CYCLE_ORDER, RUN_TYPES, resolveAgentsForRun, agentLockName, FULL_CYCLE_LOCK } from '../../backend/services/agentControl/agentControlTypes.js'
+import { ALL_AGENTS, STATUS_AGENTS, FULL_CYCLE_ORDER, RUN_TYPES, resolveAgentsForRun, agentLockName, FULL_CYCLE_LOCK } from '../../backend/services/agentControl/agentControlTypes.js'
 
 function makeDb() {
   const sqlite = new Database(':memory:')
@@ -51,13 +51,20 @@ test('agentControlTypes: lock names are stable + per-agent', () => {
   assert.equal(agentLockName('hamilton'), 'agent_control:agent:hamilton')
 })
 
-test('registry returns one adapter per canonical agent', () => {
+test('registry returns one adapter per status agent (canonical + status-only anya)', () => {
   resetRegistry()
   const all = listAdapters()
-  assert.deepEqual(Object.keys(all).sort(), ['hamilton', 'john', 'robert', 'sam', 'yana'])
-  for (const name of ALL_AGENTS) {
+  // The registry serves every STATUS_AGENT: the 5 canonical full-cycle
+  // agents PLUS anya (status-only / interactive, observed but never driven
+  // by the automated cycle — see agentControlTypes.STATUS_AGENTS).
+  assert.deepEqual(Object.keys(all).sort(), [...STATUS_AGENTS].sort())
+  for (const name of STATUS_AGENTS) {
     assert.ok(getAdapter(name), `adapter missing for ${name}`)
     assert.equal(getAdapter(name).name, name)
+  }
+  // Every canonical agent is still present (start/stop gate on ALL_AGENTS).
+  for (const name of ALL_AGENTS) {
+    assert.ok(getAdapter(name), `canonical adapter missing for ${name}`)
   }
 })
 

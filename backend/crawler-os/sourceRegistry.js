@@ -52,7 +52,7 @@ export const SOURCES = Object.freeze([
     name: 'SAM.gov assistance listings',
     source_type: 'api',
     trust_tier: TRUST_TIER.OFFICIAL_API,
-    base_url: 'https://api.sam.gov',
+    base_url: 'https://sam.gov',
     directory: false,
     loan_allowed: true, // CFDA includes loan programs; gated per profile downstream
     cost_share_allowed: true,
@@ -61,7 +61,9 @@ export const SOURCES = Object.freeze([
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.PROGRAM],
     crawler_method: 'api',
-    requires_env: ['SAM_GOV_API_KEY'],
+    // Keyless: the sam.gov assistance-listings search needs no API key (the old
+    // api.sam.gov host that required SAM_GOV_API_KEY was retired — see samGovAdapter.js).
+    requires_env: [],
     refresh_frequency_days: 7,
     priority_score: 90,
   },

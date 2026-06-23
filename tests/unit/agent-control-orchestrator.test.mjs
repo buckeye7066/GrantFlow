@@ -435,7 +435,9 @@ describe('Agent Control Center — notifications + status', () => {
     assert.equal(status.admin_email, ADMIN_EMAIL)
     assert.ok(status.active_run)
     assert.equal(status.active_run.id, run.id)
-    assert.deepEqual(Object.keys(status.agents).sort(), ['hamilton', 'john', 'robert', 'sam', 'yana'])
+    // STATUS_AGENTS = the 5 canonical full-cycle agents + anya (status-only,
+    // surfaced for observability but never driven by the automated cycle).
+    assert.deepEqual(Object.keys(status.agents).sort(), ['anya', 'hamilton', 'john', 'robert', 'sam', 'yana'])
     // Cleanup so the in-flight sam adapter loop doesn't run forever.
     await emergencyStopRun(db, run.id, { user: adminUser() })
     await new Promise((r) => setTimeout(r, 150))
