@@ -54,6 +54,42 @@ test('an individual/student profile never acquires organizational applicant type
   assert.ok(th.applicant_types.includes('individual') || th.applicant_types.includes('high_school_student'));
 });
 
+test('declared identity is NOT augmented by free-text — a student whose file mentions military/family is not a veteran/family applicant', () => {
+  // Regression for the 2026-06-23 false-positive audit: blob-scanning added
+  // "veteran" (from a parent's military service text) and "family" to a STUDENT,
+  // pulling veteran-only grants into a student's pipeline.
+  const th = buildThesis({
+    id: 'p_student2',
+    profile_type: 'student',
+    applicant_types: ['student'],
+    sections: [
+      { title: 'family_life', body: 'her father is a military veteran and service member; lives with parents in a household' },
+    ],
+    location: { state: 'TN' },
+  });
+  assert.ok(!th.applicant_types.includes('veteran'), `student must not be typed veteran (got ${th.applicant_types.join(',')})`);
+  assert.ok(!th.applicant_types.includes('family'), `student must not be typed family from text (got ${th.applicant_types.join(',')})`);
+  assert.ok(th.applicant_types.includes('student'));
+  assert.ok(th.applicant_types.includes('individual'), 'a person applicant is also an individual applicant');
+});
+
+test('an organization (church/nonprofit) is not over-broadened to farm/government/school by mission text', () => {
+  // Regression: a church whose mission mentions education/community/family was
+  // typed as farm/government/school/individual, matching Coral-Reef/Lunar grants.
+  const th = buildThesis({
+    id: 'p_church',
+    profile_type: 'nonprofit',
+    applicant_types: ['nonprofit', '501c3'],
+    sections: [{ title: 'mission', body: 'education and community outreach to rural families; government partnerships; farm-area ministry' }],
+    location: { state: 'OH' },
+  });
+  for (const t of ['farm', 'government', 'school', 'individual', 'family', 'veteran', 'student']) {
+    assert.ok(!th.applicant_types.includes(t), `church must not be typed ${t} from text (got ${th.applicant_types.join(',')})`);
+  }
+  assert.ok(th.applicant_types.includes('nonprofit'));
+  assert.equal(th.is_org, true);
+});
+
 test('an organization profile (VFD) still keeps its organizational applicant types', () => {
   const th = buildThesis({ id: 'p_vfd', type: 'vfd', state: 'TN', mission: 'rural community fire response' });
   assert.ok(th.applicant_types.includes('vfd'), 'explicit org type retained');
