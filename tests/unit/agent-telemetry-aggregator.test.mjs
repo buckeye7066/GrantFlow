@@ -54,17 +54,24 @@ test('Yana funnel: websites checked vs leads sent to John', async () => {
   db._raw
     .prepare('INSERT INTO yana_runs (id, status, urls_fetched, leads_found) VALUES (?, ?, ?, ?)')
     .run(nextId('yr'), 'succeeded', 120, 30)
+  // 18 qualified candidates; 9 of them have been pushed to John. The
+  // aggregator now sources leads_sent_to_john from the PRIMARY
+  // pushed_to_john flag on the candidate (the legacy yana_john_queue is no
+  // longer written in production — it double-counted re-pushes and grew
+  // unbounded). We still insert into yana_john_queue below to prove the
+  // primary flag path wins over the legacy fallback.
   for (let i = 0; i < 18; i += 1) {
     db._raw
-      .prepare('INSERT INTO yana_lead_candidates (id, qualification_status) VALUES (?, ?)')
-      .run(nextId('ylc'), 'qualified')
+      .prepare('INSERT INTO yana_lead_candidates (id, qualification_status, pushed_to_john) VALUES (?, ?, ?)')
+      .run(nextId('ylc'), 'qualified', i < 9 ? 1 : 0)
   }
   for (let i = 0; i < 12; i += 1) {
     db._raw
       .prepare('INSERT INTO yana_lead_candidates (id, qualification_status, rejection_reason) VALUES (?, ?, ?)')
       .run(nextId('ylc'), 'rejected', i % 2 ? 'no_public_evidence' : 'compliance')
   }
-  for (let i = 0; i < 9; i += 1) {
+  // Legacy queue rows (should be IGNORED now that pushed_to_john exists).
+  for (let i = 0; i < 99; i += 1) {
     db._raw.prepare('INSERT INTO yana_john_queue (id, lead_id) VALUES (?, ?)').run(nextId('yjq'), nextId('lid'))
   }
 

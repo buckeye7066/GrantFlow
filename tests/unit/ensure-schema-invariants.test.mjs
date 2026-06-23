@@ -115,6 +115,9 @@ test('ensureSchemaInvariants runs every declared step (ran === step count)', asy
       'profile_discovery_column',
       'funding_opportunity_verification_columns',
       'ingestion_provenance_tables',
+      'profile_portal_status',
+      'portal_autopilot_identity',
+      'sms_consent_columns',
       'perf_indexes',
     ],
   )

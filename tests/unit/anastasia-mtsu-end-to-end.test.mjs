@@ -356,7 +356,12 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
     })
     const result = await adapter.start({ db, controlRunId: 'r', stepId: 's', options: {}, signal })
     assert.equal(result.ok, true)
-    assert.equal(result.status, 'completed')
+    // An empty queue is an honest NOOP, NOT "completed work" (charter
+    // AGENT_NOOP_CONDITIONS): the adapter reports status 'noop' with a
+    // noop_reason so dashboards that only surface `status` don't read an
+    // idle run as a green completion. ok:true still means "ran without error".
+    assert.equal(result.status, 'noop')
+    assert.equal(result.summary.noop_reason, 'empty_queue')
     assert.equal(result.summary.attempted, 0)
     assert.equal(result.summary.processed, 0)
   })

@@ -69,7 +69,7 @@ export function makeFakeFetch(options = {}) {
     if (url.includes('api.grants.gov')) return resp(200, grantsGovBody(grants), url);
     if (url.includes('cof.org')) return resp(200, '<html><body>Community Foundation Locator</body></html>', url);
     if (url.includes('benefits.gov')) return resp(200, '<html><body>Benefit Finder</body></html>', url);
-    if (url.includes('api.sam.gov')) return resp(200, { _embedded: { results: [] } }, url);
+    if (url.includes('sam.gov/api/prod/sgs')) return resp(200, { _embedded: { results: [] } }, url);
     // default: empty 200
     return resp(200, '', url);
   };

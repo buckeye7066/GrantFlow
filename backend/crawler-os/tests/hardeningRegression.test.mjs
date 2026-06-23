@@ -40,30 +40,34 @@ test('StudentAid.gov stores as an honest DIRECTORY, not a broken scholarship wit
 
 test('SAM.gov PROGRAM rows with an info_url store for REVIEW instead of failing missing apply_url', async () => {
   const store = createMemoryStore();
+  // Live HAL shape from sam.gov/api/prod/sgs/v1/search (2026-06): nested org name,
+  // an isActive flag (historical/inactive rows are dropped), and the FAL deep-link _id.
   const samBody = {
     _embedded: {
       results: [{
         programNumber: '10.766',
         title: 'Community Facilities Direct Loan and Grant Program',
-        organizationName: 'U.S. Department of Agriculture',
-        objective: 'Provides affordable funding to develop essential community facilities in rural areas.',
+        organizationHierarchy: { name: 'U.S. Department of Agriculture' },
+        isActive: true,
+        _id: 'fal-10766-abc',
       }],
     },
   };
-  const fetcher = makeOfflineFetcher({ routes: { 'api.sam.gov': samBody } });
+  const fetcher = makeOfflineFetcher({ routes: { 'sam.gov/api/prod/sgs': samBody } });
   const profile = {
     id: 'profile_nonprofit_1', name: 'Rural Clinic', type: 'nonprofit',
     location: { state: 'TN' }, needs: ['capital'], allow_loans: true,
   };
   const thesis = buildThesis(profile);
-  const run = await runDiscovery({ store, fetcher, env: { SAM_GOV_API_KEY: 'test-key' } }, { thesis, matchProfiles: [thesis], runId: 'sam_success' });
+  // No SAM_GOV_API_KEY in env: the assistance-listings search is keyless and must still run.
+  const run = await runDiscovery({ store, fetcher }, { thesis, matchProfiles: [thesis], runId: 'sam_success' });
   const sam = run.sources.find((s) => s.source_id === 'sam_gov');
   assert.ok(sam, 'sam_gov source ran');
   assert.equal(sam.outcome, 'ok');
   const row = storage.listCatalog(store).find((o) => o.source_id === 'sam_gov');
   assert.ok(row, 'SAM program stored');
   assert.equal(row.apply_url, null);
-  assert.ok(row.info_url.includes('sam.gov/fal/10.766/view'));
+  assert.ok(row.info_url.includes('sam.gov/fal/fal-10766-abc/view'));
   const match = storage.getMatchesForProfile(store, thesis.profile_id).find((m) => m.opportunity_id === row.id);
   assert.ok(match, 'SAM program was matched to profile');
   assert.equal(match.decision, 'review');
