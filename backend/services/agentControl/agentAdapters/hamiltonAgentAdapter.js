@@ -221,7 +221,11 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       }
     }
 
-    const status = stopped ? 'stopped' : failed > 0 ? 'completed' : 'completed'
+    // Honest NOOP: an empty queue is not "completed work" — report it as a noop
+    // with a reason (charter AGENT_NOOP_CONDITIONS: say WHY nothing happened),
+    // so dashboards that surface only `status` don't read idle as a green run.
+    const isNoop = !stopped && tasks.length === 0
+    const status = stopped ? 'stopped' : isNoop ? 'noop' : 'completed'
     const summary = {
       agent: 'hamilton',
       queue_depth: queueDepth,
@@ -230,15 +234,18 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       failed,
       blocked,
       stopped,
+      ...(isNoop ? { noop_reason: 'empty_queue' } : {}),
       results,
     }
 
     await signal?.recordEvent?.({
-      eventType: stopped ? 'agent.hamilton.stopped' : 'agent.hamilton.completed',
+      eventType: stopped ? 'agent.hamilton.stopped' : isNoop ? 'agent.hamilton.noop' : 'agent.hamilton.completed',
       severity: failed > 0 ? 'high' : 'info',
       message: stopped
         ? `Hamilton stopped after processing ${processed} of ${tasks.length} task(s).`
-        : `Hamilton processed ${processed} task(s) (${failed} failed, ${blocked} blocked).`,
+        : isNoop
+          ? 'Hamilton had no application tasks to process (empty queue).'
+          : `Hamilton processed ${processed} task(s) (${failed} failed, ${blocked} blocked).`,
       data: summary,
     })
 
