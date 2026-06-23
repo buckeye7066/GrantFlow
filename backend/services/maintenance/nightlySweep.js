@@ -49,13 +49,20 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
   let criticals = 0
   try {
     const { runSam } = await import('../sam/samAgent.js')
+    const { makeInternalHttpProbe } = await import('../sam/samHttpProbe.js')
     sam = await runSam({
       db,
-      ctx: { samAuthorised: true }, // authorise repair-safe writes for the scheduled sweep
-      mode: 'repair-safe',
-      dryRun: false,
+      // Charter: the scheduler NEVER mutates code/data on a cron. The sweep ran
+      // 'repair-safe' but supplied no fixIds, so it applied nothing anyway —
+      // observe makes that explicit and removes the doc/behavior contradiction.
+      mode: 'observe',
+      dryRun: true,
       trigger: 'scheduled',
       persist: true,
+      // Credentialed loopback probe so the nightly health verdict actually
+      // executes the HTTP-class checks instead of fail-skipping them (this was
+      // the one autonomous caller still missing the probe).
+      httpProbe: makeInternalHttpProbe(),
     })
     const findings = Array.isArray(sam?.findings) ? sam.findings : []
     criticals = findings.filter((f) => String(f?.severity || '').toLowerCase() === 'critical').length
