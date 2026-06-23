@@ -42,6 +42,7 @@
 
 import {
   ALL_AGENTS,
+  STATUS_AGENTS,
   CANONICAL_ADMIN_EMAIL_DEFAULT,
   DEFAULT_RUN_OPTIONS,
   FULL_CYCLE_LOCK,
@@ -537,7 +538,9 @@ export async function getControlCenterStatus(db) {
   if (active) activeSteps = await listSteps(db, active.id)
 
   const agents = {}
-  for (const name of ALL_AGENTS) {
+  // STATUS_AGENTS = ALL_AGENTS + anya (status-only). Anya is surfaced for
+  // observability but never started/stopped here (those gate on ALL_AGENTS).
+  for (const name of STATUS_AGENTS) {
     try {
       agents[name] = await getAdapter(name).getStatus({ db })
     } catch (err) {

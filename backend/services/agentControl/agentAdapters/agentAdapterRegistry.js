@@ -16,6 +16,7 @@ import { RobertAgentAdapter } from './robertAgentAdapter.js'
 import { YanaAgentAdapter } from './yanaAgentAdapter.js'
 import { JohnAgentAdapter } from './johnAgentAdapter.js'
 import { HamiltonAgentAdapter } from './hamiltonAgentAdapter.js'
+import { AnyaAgentAdapter } from './anyaAgentAdapter.js'
 
 let adapters = null
 
@@ -26,6 +27,9 @@ function buildDefaultAdapters() {
     yana: new YanaAgentAdapter(),
     john: new JohnAgentAdapter(),
     hamilton: new HamiltonAgentAdapter(),
+    // Status-only (interactive, not in the automated full-cycle / ALL_AGENTS):
+    // surfaced in getControlCenterStatus via STATUS_AGENTS for observability.
+    anya: new AnyaAgentAdapter(),
   }
 }
 
