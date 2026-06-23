@@ -1027,9 +1027,15 @@ router.get('/', async (req, res) => {
 router.get('/meta/ingestion', async (req, res) => {
   try {
     const { getIngestionStatus } = await import('../services/sources/ingestionService.js');
-    const status = getIngestionStatus(req.db);
+    const status = await getIngestionStatus(req.db);
     res.json(status);
   } catch (error) {
+    // Graceful degradation: when the ingestion_runs table hasn't been migrated
+    // in this deployment, report an empty/unavailable status instead of 500
+    // (mission: a read endpoint must not hard-fail on a missing optional table).
+    if (/no such table|relation .* does not exist|no such column/i.test(String(error?.message || ''))) {
+      return res.json({ available: false, runs: [], last_run: null, reason: 'ingestion tables not present in this deployment' });
+    }
     console.error('Error getting ingestion status:', error);
     res.status(500).json({ error: error.message });
   }

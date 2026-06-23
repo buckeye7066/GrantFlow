@@ -119,6 +119,14 @@ router.get('/me/:profileId', async (req, res) => {
         return res.status(403).json({ error: 'Not authorized to view this profile’s billing' })
       }
     }
+    // A missing profile is a 404, not a 500. ensureBillingAccount INSERTs a
+    // billing_accounts row whose profile_id FK references profiles(id) — for a
+    // non-existent profile that INSERT fails the FK constraint and 500s. Guard
+    // first so the contract is an honest 404.
+    const profExists = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profExists) {
+      return res.status(404).json({ error: 'profile_not_found', profile_id: profileId })
+    }
     await ensureInvoiceSchema(req.db)
     const accountRow = await ensureBillingAccount(req.db, profileId)
     const account = mapAccountRow(accountRow)

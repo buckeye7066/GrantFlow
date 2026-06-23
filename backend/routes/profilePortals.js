@@ -343,6 +343,12 @@ router.get('/profiles/:id/portals/packet/:documentId/download', async (req, res)
     res.setHeader('Content-Disposition', `inline; filename="${fileName}"`)
     return res.send(html)
   } catch (err) {
+    // Graceful degradation: a deployment missing the packet storage columns/
+    // table (e.g. documents.file_bytes not yet migrated) must 404 "not found"
+    // rather than 500 — there is simply no packet to serve here.
+    if (/no such table|relation .* does not exist|no such column/i.test(String(err?.message || ''))) {
+      return res.status(404).json({ error: 'not found' })
+    }
     log.error('download_packet_failed', { profileId, documentId, err: err?.message })
     return res.status(500).json({ error: 'could not download packet' })
   }

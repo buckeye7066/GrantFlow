@@ -344,7 +344,17 @@ router.get('/profile-region/:profileId', requireAuthenticatedUserMiddleware, asy
     const profileId = String(req.params.profileId)
     if (!(await ensureProfileAccess(req, res, profileId))) return
 
-    const baseContext = await loadProfileContext(req.db, profileId)
+    let baseContext
+    try {
+      baseContext = await loadProfileContext(req.db, profileId)
+    } catch (ctxErr) {
+      // loadProfileContext THROWS for an unknown id — a missing profile is a
+      // 404, not a 500.
+      if (/not found|no such|does not exist/i.test(String(ctxErr?.message || ''))) {
+        return res.status(404).json({ error: 'profile_not_found', profile_id: profileId })
+      }
+      throw ctxErr
+    }
     const profileContext = buildProfileFacets(baseContext)
     const state = profileContext?.facets?.geo?.state ?? null
     const zip = profileContext?.facets?.geo?.zip ?? profileContext?.facets?.geo?.zip_code ?? null

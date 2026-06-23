@@ -212,7 +212,10 @@ export async function getFailureStatistics(db, since = null) {
       ORDER BY total_failures DESC
     `
 
-  const rows = await db.prepare(query).all(since || undefined)
+  // When `since` is null the query has NO bind placeholder — passing
+  // `undefined` as a parameter makes better-sqlite3 throw "Too many parameter
+  // values were provided". Bind only when the placeholder exists.
+  const rows = since ? await db.prepare(query).all(since) : await db.prepare(query).all()
   return rows
 }
 
