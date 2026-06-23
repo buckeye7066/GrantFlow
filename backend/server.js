@@ -2424,6 +2424,10 @@ app.use('/api/admin/agent-control', lazyRouter('./routes/adminAgentControl.js'))
 // "did the crawler know where to look, did it query, what failed, what was
 // found vs accepted vs rejected" — plus stale sources + weak-data profiles.
 app.use('/api/admin/crawl-coverage', lazyRouter('./routes/adminCrawlCoverage.js'));
+// "Which crawlers fire for this profile, and why?" — explainable plan + a
+// coverage audit that flags zero-coverage / org-directory-only profiles so a
+// VFD can never silently miss FEMA AFG again (architecture: crawler planning).
+app.use('/api/admin/crawler-plan', lazyRouter('./routes/adminCrawlerPlan.js'));
 // Owner-initiated outbound messaging (Broadcast screen): list recipients, send
 // promotional/notification email (dr.johnwhite alias) or SMS, manage phones +
 // opt-in. Admin-only inside the router.

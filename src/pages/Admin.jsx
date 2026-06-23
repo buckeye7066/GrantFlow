@@ -21,6 +21,7 @@ import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
 import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionControl'
 import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
+import AdminCrawlerPlan from '@/components/admin/AdminCrawlerPlan.jsx'
 import AdminCredentialVault from '@/components/admin/AdminCredentialVault.jsx'
 import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
 import AdminBroadcast from '@/components/admin/AdminBroadcast.jsx'
@@ -95,6 +96,10 @@ export default function Admin() {
             <TabsTrigger value="knowledge">Knowledge Base</TabsTrigger>
             <TabsTrigger value="upload">Upload Profile Document</TabsTrigger>
             <TabsTrigger value="geo">Geo Crawl</TabsTrigger>
+            <TabsTrigger value="crawler_plan">
+              <Search className="w-4 h-4 mr-2" />
+              Crawler Plan
+            </TabsTrigger>
             <TabsTrigger value="automation">
               <Workflow className="w-4 h-4 mr-2" />
               Automation
@@ -189,6 +194,10 @@ export default function Admin() {
 
           <TabsContent value="geo" className="mt-6">
             <AdminGeoCrawl />
+          </TabsContent>
+
+          <TabsContent value="crawler_plan" className="mt-6">
+            <AdminCrawlerPlan />
           </TabsContent>
 
           <TabsContent value="automation" className="mt-6">

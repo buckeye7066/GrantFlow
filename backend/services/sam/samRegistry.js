@@ -163,6 +163,52 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Mission guard: NO active profile may resolve to zero relatable crawlers,
+    // and no ORGANIZATION profile may be hard-excluded down to directory-only
+    // (the VFD-misses-FEMA class of bug). Sam scans active profiles through the
+    // SAME deterministic planner discovery uses and flags any coverage gap so a
+    // profile-type / keyword mapping regression is caught automatically instead
+    // of silently starving a real applicant.
+    id: 'discovery.profileCoverage',
+    label: 'Per-profile crawler coverage',
+    category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Scans active profiles through the crawler-os planner and flags any profile that resolves to ZERO sources (mission failure) or, for an organization, to directory-only sources (likely a profile-type/keyword gap — e.g. a VFD that would miss FEMA AFG).',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; coverage scan skipped' }
+      let audit
+      try {
+        const { auditCrawlerCoverage } = await import('../crawlerPlanService.js')
+        audit = await auditCrawlerCoverage(db, { limit: 300 })
+      } catch (err) {
+        // Schema not ready / module load issue is an environment limitation.
+        return { ok: true, skipped: true, summary: `coverage scan unavailable: ${err?.message || err}` }
+      }
+      const zero = audit.zero_coverage || []
+      const orgDir = audit.org_directory_only || []
+      if (zero.length === 0 && orgDir.length === 0) {
+        return { ok: true, summary: `all ${audit.scanned} active profiles reach at least one relatable source` }
+      }
+      const sample = (arr) => arr.slice(0, 8).map((p) => `${p.display_name || p.profile_id} (${p.primary_type})`).join('; ')
+      return {
+        ok: false,
+        summary:
+          `${zero.length} profile(s) have ZERO crawler coverage` +
+          `${zero.length ? ` [${sample(zero)}]` : ''}; ` +
+          `${orgDir.length} organization profile(s) resolved to directory-only` +
+          `${orgDir.length ? ` [${sample(orgDir)}]` : ''}.`,
+        evidence: {
+          scanned: audit.scanned,
+          zero_coverage: zero.map((p) => ({ profile_id: p.profile_id, primary_type: p.primary_type, applicant_types: p.applicant_types })),
+          org_directory_only: orgDir.map((p) => ({ profile_id: p.profile_id, primary_type: p.primary_type, applicant_types: p.applicant_types })),
+        },
+        recommended_fix: 'Open Admin → Crawler Plan, select each flagged profile, and confirm its applicant_types. Add the type to PRIMARY_TYPE_TO_APPLICANT (profileIntelligence.js) or fix the profile type so it reaches the right sources.',
+        confidence: 0.9,
+      }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
