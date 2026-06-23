@@ -443,6 +443,44 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
     },
   },
+  // Yana / John / Anya health. Before this, Sam had ZERO checks for three of
+  // the six agents (2026-06-23 audit) — they could silently no-op and Sam would
+  // never flag it, violating the agent-observability rule. These probe the same
+  // agent-telemetry surface Mission Control reads, so a broken/absent agent
+  // summary surfaces as a Sam finding.
+  {
+    id: 'agent.yana.health',
+    label: 'Yana agent health (lead discovery)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/agent-telemetry/yana',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms Yana telemetry is reachable and her lead-candidate/run summary is populated, so a silent discovery no-op is caught.',
+  },
+  {
+    id: 'agent.john.health',
+    label: 'John agent health (outreach drafts)',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/agent-telemetry/john',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms John telemetry is reachable and his draft/run summary is populated (drafts, runs, reconcile), so a silent drafting no-op is caught.',
+  },
+  {
+    id: 'agent.anya.health',
+    label: 'Anya agent health (administrative assistant)',
+    category: SAM_CATEGORIES.ADMIN_TOOL_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/agent-telemetry/anya',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms Anya telemetry is reachable and her tool-usage/run summary is populated, so a regression in her tool surface is caught.',
+  },
   {
     id: 'agent.robert.discoveryPhases',
     label: 'Robert discovery phases (catalog mine + email feed)',
