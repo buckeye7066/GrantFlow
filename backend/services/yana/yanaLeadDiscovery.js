@@ -523,6 +523,11 @@ export async function discoverProspects(db, {
     const geo = await loadOwnGeography(db)
     if (geo) bySource.google_maps = { ...(bySource.google_maps || {}), location: geo }
   }
+  // OpenStreetMap (free, keyless) anchors on the same own-org geography.
+  if (sourceNames.includes('openstreetmap') && !bySource.openstreetmap?.location) {
+    const geo = await loadOwnGeography(db)
+    if (geo) bySource.openstreetmap = { ...(bySource.openstreetmap || {}), location: geo }
+  }
 
   for (const name of sourceNames) {
     const provider = getProspectSource(name)
