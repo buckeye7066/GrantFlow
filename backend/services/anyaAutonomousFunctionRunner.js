@@ -3,6 +3,7 @@ import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { createCrawlerJob } from './crawlerJobCreation.js'
+import { runProfileDiscoveryLive } from './crawlerOsService.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
@@ -79,6 +80,92 @@ async function auditLog(entry, context) {
 }
 
 /**
+ * runAutonomousCrawlersViaOs — the Crawler-OS implementation of autonomous
+ * discovery. For each in-scope profile it runs the canonical OS pipeline
+ * (runProfileDiscoveryLive), which builds the thesis, plans relatable sources,
+ * fetches them SSRF-safely, gates reality, persists opportunities + matches +
+ * recommendations to the live tables, and (for individuals) runs the bounded
+ * web-LLM scholarship pass. This REPLACES the retired legacy fleet
+ * (local/scholarship/curated_benefits/comprehensive/profile_enrichment) which
+ * synthesized templated geo-stub junk and fat per-job snapshots. Returns a report
+ * shape compatible with the scheduler (profiles_processed/jobs_created/jobs_completed).
+ */
+async function runAutonomousCrawlersViaOs(options, context) {
+  const { profileIds = null } = options || {}
+  const { db } = context
+  const startTime = Date.now()
+  const report = {
+    started_at: new Date(startTime).toISOString(),
+    engine: 'crawler-os',
+    crawler_types: ['crawler-os'],
+    profiles_processed: 0,
+    jobs_created: 0,
+    jobs_completed: 0,
+    jobs_failed: 0,
+    jobs_retried: 0,
+    opportunities_stored: 0,
+    matches_created: 0,
+    errors: [],
+    jobs: [],
+  }
+  await auditLog({ action: 'start', engine: 'crawler-os', options }, context)
+
+  let profiles
+  if (profileIds && Array.isArray(profileIds) && profileIds.length > 0) {
+    const placeholders = profileIds.map(() => '?').join(',')
+    profiles = await db
+      .prepare(`SELECT id, display_name, status FROM profiles WHERE id IN (${placeholders})`)
+      .all(...profileIds)
+  } else {
+    profiles = await db
+      .prepare(`SELECT id, display_name, status FROM profiles WHERE status = 'active'`)
+      .all()
+  }
+  report.profiles_processed = profiles.length
+
+  for (const profile of profiles) {
+    try {
+      const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: profile.id })
+      if (run?.skipped) {
+        report.jobs.push({
+          profile_id: profile.id, profile_name: profile.display_name,
+          engine: 'crawler-os', status: 'skipped', skipped_reason: run.reason || 'skipped',
+        })
+        continue
+      }
+      const stored = persisted?.opportunities ?? run?.stored ?? 0
+      const matches = persisted?.matches ?? 0
+      report.jobs_created++
+      report.jobs_completed++
+      report.opportunities_stored += stored
+      report.matches_created += matches
+      report.jobs.push({
+        profile_id: profile.id, profile_name: profile.display_name,
+        engine: 'crawler-os', status: 'completed', stored, matches,
+      })
+    } catch (error) {
+      report.jobs_failed++
+      report.errors.push({ profile_id: profile.id, error: error.message })
+      report.jobs.push({
+        profile_id: profile.id, profile_name: profile.display_name,
+        engine: 'crawler-os', status: 'failed', error: error.message,
+      })
+    }
+  }
+
+  report.completed_at = new Date().toISOString()
+  report.duration_seconds = Math.round((Date.now() - startTime) / 1000)
+  await auditLog({
+    action: 'complete', engine: 'crawler-os',
+    summary: {
+      profiles: report.profiles_processed, stored: report.opportunities_stored,
+      matches: report.matches_created, failed: report.jobs_failed,
+    },
+  }, context)
+  return report
+}
+
+/**
  * Run crawlers for all profiles or specific profiles
  * @param {Object} options
  * @param {Array<string>} options.profileIds - Specific profile IDs to run crawlers for (or null for all)
@@ -106,6 +193,18 @@ export async function runAutonomousCrawlers(options, context) {
 
   if (!db) {
     throw new Error('Database connection unavailable')
+  }
+
+  // CUTOVER (2026-06-23): autonomous discovery runs through the Crawler OS, not
+  // the retired legacy fleet. The legacy fleet was still firing on the Anya
+  // autonomous schedule (~every 2h), enqueuing local/scholarship/curated_benefits/
+  // comprehensive/profile_enrichment jobs that synthesized templated geo-stub junk
+  // (89k inert local_directory_* rows) and fat per-job snapshots that grew
+  // crawler_jobs to 8.3GB and triggered prod disk-full failures. The OS path
+  // (runProfileDiscoveryLive) is the same engine Robert + /discover-all already use.
+  // Set ANYA_AUTONOMOUS_LEGACY_FLEET=1 ONLY to temporarily resurrect the old fleet.
+  if (process.env.ANYA_AUTONOMOUS_LEGACY_FLEET !== '1') {
+    return runAutonomousCrawlersViaOs(options, context)
   }
 
   const startTime = Date.now()
