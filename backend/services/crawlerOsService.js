@@ -142,9 +142,28 @@ export async function runProfileDiscovery(profile, opts = {}) {
  *                                   WOULD be stored (read-only).
  * @returns {Promise<{run:object, persisted:object, thesis:object}>}
  */
+// Profile lifecycle statuses for which discovery is a no-op. A deleted/archived
+// profile must NOT be crawled — the live audit (2026-06-23) found a DELETED,
+// empty church profile still producing 74 stored matches (incl. accept-decisioned
+// false positives). Discovery only runs for live profiles.
+const NON_DISCOVERABLE_PROFILE_STATUSES = new Set(['deleted', 'archived', 'removed', 'inactive', 'merged']);
+
+function skippedDiscoveryResult(profileId, reason) {
+  return {
+    run: { skipped: true, reason, profile_id: profileId, planned: 0, stored: 0, rejected: 0, sources: [], zero_result: null },
+    persisted: { opportunities: 0, matches: 0, sources: 0, rejected: 0, pipelinePruned: 0, skipped: true, reason },
+    thesis: null,
+  };
+}
+
 export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
+  // Lifecycle guard: never crawl a deleted/archived/merged profile (no-op, no writes).
+  const profileStatus = String(ctx?.profile?.status ?? '').trim().toLowerCase();
+  if (NON_DISCOVERABLE_PROFILE_STATUSES.has(profileStatus) || ctx?.profile?.deleted_at) {
+    return skippedDiscoveryResult(profileId, `profile_${profileStatus || 'deleted'}`);
+  }
   const thesis = buildThesis(profileContextToThesisInput(ctx));
   const store = createMemoryStore();
   const run = await runDiscovery(
