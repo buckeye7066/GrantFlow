@@ -18,6 +18,13 @@ export const CANONICAL_ADMIN_EMAIL_DEFAULT = 'buckeye7066@gmail.com'
  */
 export const ALL_AGENTS = Object.freeze(['sam', 'robert', 'yana', 'john', 'hamilton'])
 
+// Agents surfaced in the Control-Center STATUS view. Anya is included for
+// observability (agent-observability rule) but is NOT in ALL_AGENTS because she
+// is interactive/on-demand — she is never started/stopped or run in the
+// automated full-cycle. start/stop validate against ALL_AGENTS; status reads
+// STATUS_AGENTS.
+export const STATUS_AGENTS = Object.freeze([...ALL_AGENTS, 'anya'])
+
 export const AGENT_LABELS = Object.freeze({
   sam: 'Sam',
   robert: 'Robert',

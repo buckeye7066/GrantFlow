@@ -777,7 +777,6 @@ export async function invokeTool(name, params, context) {
   }
 
   const tool = tools.get(name)
-  validateToolParams(tool, params ?? {})
 
   // Check admin access: prefer the already-resolved ctx.isAdmin (DB-backed,
   // canonical from requestContext middleware) before falling back to a fresh DB lookup.
@@ -846,6 +845,11 @@ export async function invokeTool(name, params, context) {
       console.warn('[anyaToolRegistry] failed to write audit log:', error?.message || error)
     }
   }
+
+  // Validate params AFTER the admin/owner gate so an unauthorized caller gets a
+  // 403 — not a 400 that discloses an owner-only tool's required parameters
+  // (the schema itself is already owner-only via listToolMetadata).
+  validateToolParams(tool, params ?? {})
 
   // Record the invocation in anya_tool_usage regardless of outcome.
   // The admin.brain.stats / admin.diagnostics checks read from this table to
