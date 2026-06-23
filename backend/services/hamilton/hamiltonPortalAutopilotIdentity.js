@@ -47,6 +47,7 @@
 import {
   getDecryptedCredentialWithFallback,
   saveAutoProvisionedCredential,
+  markCredentialRegistered,
   registrableDomain,
 } from './hamiltonPortalCredentialService.js'
 import { findValidSession } from './hamiltonCredentialSessionService.js'
@@ -236,6 +237,14 @@ async function _runAutopilotIdentityForPortal(db, {
     if ((existingCred && existingCred.vault_locked) ) {
       return { state: AUTOPILOT_STATE.VAULT_LOCKED, host, detail: 'A login exists but the master passphrase is locked. Unlock the vault so Hamilton can use it.' }
     }
+    // A login Hamilton auto-provisioned earlier whose account registration never
+    // completed (handed off to side-by-side) is NOT a working account — do NOT
+    // over-claim it as has_existing_credentials on a re-run, and do NOT rotate the
+    // provisioned password. A captured session (hasSession) means the user did
+    // finish signing in, so that still counts as a real account.
+    if (existingCred && existingCred.pending_registration && !hasSession) {
+      return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: 'Hamilton provisioned a login here but the account registration was not completed; finish it in a side-by-side login.', blocker: 'pending_registration' }
+    }
     if (existingCred || hasSession) {
       return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host, detail: 'An account already exists; Hamilton will log in with the saved credentials.' }
     }
@@ -346,7 +355,9 @@ async function _runAutopilotIdentityForPortal(db, {
         && registration.status !== 'planned') {
       if (registration.status === 'already_exists') {
         // An account already existed on the portal — treat exactly like the
-        // existing-credentials path (Hamilton logs in with the saved login).
+        // existing-credentials path (Hamilton logs in with the saved login). The
+        // account is real, so clear the provisioned-but-unregistered flag.
+        if (result.credential?.id) await markCredentialRegistered(db, result.credential.id).catch(() => {})
         return {
           state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host,
           detail: 'An account already existed on the portal; Hamilton will log in with the saved credentials.',
@@ -383,6 +394,14 @@ async function _runAutopilotIdentityForPortal(db, {
         detail: `Hamilton created the login record but registration hit ${category}; handed off for a side-by-side login.`,
         credential: result.credential, registration, blocker: category,
       }
+    }
+
+    // Account genuinely registered on the portal → the provisioned login is now a
+    // real working account; clear the pending flag so re-runs + the dashboard
+    // treat it as has_existing_credentials. A dry run / planned / caller-driven run
+    // with no confirmed 'registered' status leaves it pending (not yet real).
+    if (!dryRun && registration && registration.status === 'registered' && result.credential?.id) {
+      await markCredentialRegistered(db, result.credential.id).catch(() => {})
     }
 
     return {
@@ -488,6 +507,12 @@ async function _describeAutopilotStateForPortal(db, { profileId, portalHost, has
       const cred = await getDecryptedCredentialWithFallback(db, { profileId, portalHost: host }).catch(() => null)
       if (cred && cred.vault_locked) {
         return { state: AUTOPILOT_STATE.VAULT_LOCKED, detail: 'A login exists but the master passphrase is locked.' }
+      }
+      // A provisioned-but-unregistered login is not a working account (unless the
+      // user has since captured a session) — report it as awaiting the side-by-side
+      // login so the tile doesn't render a false green "ready".
+      if (cred && cred.pending_registration && !hasSession) {
+        return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Login provisioned, but registration was not completed; finish it in a side-by-side login.' }
       }
       return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, detail: 'An account already exists.' }
     }

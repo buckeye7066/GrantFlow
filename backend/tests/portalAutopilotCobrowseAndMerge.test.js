@@ -27,7 +27,8 @@ const {
   setMasterPassphrase, lockVault, _resetMasterVaultSchemaCache, _resetUnlockCache,
 } = await import('../services/hamilton/hamiltonPortalMasterVault.js')
 const {
-  saveCredential, _resetCredentialSchemaCache,
+  saveCredential, saveAutoProvisionedCredential, markCredentialRegistered,
+  _resetCredentialSchemaCache,
 } = await import('../services/hamilton/hamiltonPortalCredentialService.js')
 const {
   runAutopilotIdentityForPortal, describeAutopilotStateForPortal,
@@ -96,6 +97,44 @@ describe('(A) escalation ordering — co-browse is the LAST resort', () => {
     expect(st.resolution).toBe(RESOLUTION.SIDE_BY_SIDE_COBROWSE)
     expect(st.canAutoMerge).toBe(false)
     expect(st.cobrowse?.host).toBe('commonapp.org')
+  })
+})
+
+describe('(D) provisioned-but-unregistered is not over-claimed as a working login', () => {
+  let db
+  beforeEach(() => {
+    db = makeDb()
+    _resetMasterVaultSchemaCache()
+    _resetCredentialSchemaCache()
+    _resetUnlockCache()
+  })
+
+  it('an auto-provisioned login whose signup never completed reports needs_user → co-browse, NOT has_existing_credentials', async () => {
+    const { key } = await setMasterPassphrase(db, { profileId: 'pP', passphrase: 'master-pass-1' })
+    await saveAutoProvisionedCredential(db, {
+      userId: 'u1', profileId: 'pP', portalHost: 'fastweb.com', username: 'tishka@example.com', masterKey: key,
+    })
+    // Read-only dashboard state must not show a false green "ready" tile.
+    const st = await describeAutopilotStateForPortal(db, { profileId: 'pP', portalHost: 'fastweb.com', hasCredential: true })
+    expect(st.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(st.canAutoMerge).toBe(false)
+    expect(st.resolution).toBe(RESOLUTION.SIDE_BY_SIDE_COBROWSE)
+
+    // A merge RE-RUN must not claim the account exists (and must not rotate the password).
+    const r = await runAutopilotIdentityForPortal(db, { profileId: 'pP', userId: 'u1', portalHost: 'fastweb.com' })
+    expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r.blocker).toBe('pending_registration')
+    expect(r.canAutoMerge).toBe(false)
+  })
+
+  it('once registration is confirmed (markCredentialRegistered) the login becomes has_existing_credentials', async () => {
+    const { key } = await setMasterPassphrase(db, { profileId: 'pP', passphrase: 'master-pass-1' })
+    const { credential } = await saveAutoProvisionedCredential(db, {
+      userId: 'u1', profileId: 'pP', portalHost: 'fastweb.com', username: 'tishka@example.com', masterKey: key,
+    })
+    await markCredentialRegistered(db, credential.id)
+    const st = await describeAutopilotStateForPortal(db, { profileId: 'pP', portalHost: 'fastweb.com', hasCredential: true })
+    expect(st.state).toBe(AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS)
   })
 })
 

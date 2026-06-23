@@ -85,6 +85,13 @@ async function ensureSchema(db) {
       wrapped_ciphertext TEXT,
       wrapped_iv TEXT,
       wrapped_tag TEXT,
+      -- An auto-provisioned login's password is written BEFORE the headless signup
+      -- completes. pending_registration=1 marks a row whose account was NOT yet
+      -- confirmed-registered on the portal (the signup was handed off to a
+      -- side-by-side login). It is cleared once registration completes. The
+      -- dashboard + a merge re-run must NOT report such a row as a working login
+      -- ("merged only when truly merged").
+      pending_registration ${isPostgres ? 'BOOLEAN' : 'INTEGER'} NOT NULL DEFAULT ${isPostgres ? 'FALSE' : '0'},
       status TEXT NOT NULL DEFAULT 'active',
       last_used_at ${tsType},
       generated_by TEXT,
@@ -125,6 +132,7 @@ async function ensureSchema(db) {
       ['wrapped_ciphertext', 'TEXT'],
       ['wrapped_iv', 'TEXT'],
       ['wrapped_tag', 'TEXT'],
+      ['pending_registration', 'INTEGER'],
     ]
     for (const [name, type] of wanted) {
       if (have.has(name)) continue
@@ -146,6 +154,7 @@ async function ensureSchema(db) {
       'wrapped_ciphertext TEXT',
       'wrapped_iv TEXT',
       'wrapped_tag TEXT',
+      'pending_registration BOOLEAN NOT NULL DEFAULT FALSE',
     ]) {
       try { await db.exec(`ALTER TABLE hamilton_portal_credentials ADD COLUMN IF NOT EXISTS ${col};`) }
       catch { /* benign */ }
@@ -183,6 +192,11 @@ function rowToMasked(row) {
     // passphrase (its password is wrapped with the master key, not just the
     // server vault). The wrapped secret itself is NEVER returned.
     has_master_wrap: Boolean(row.has_master_wrap),
+    // True while an auto-provisioned login's account has not yet been
+    // confirmed-registered on the portal (signup handed off to side-by-side).
+    // Surfaced so the dashboard renders "provisioned — finish sign-in" rather
+    // than a green "ready" tile.
+    pending_registration: Boolean(row.pending_registration),
     status: row.status,
     last_used_at: row.last_used_at || null,
     // Hamilton-generated logins (he created the account on the user's behalf
@@ -537,6 +551,9 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
     username: match.username || null,
     password,
     totp_secret: totpSecret,
+    // Provisioned-but-not-yet-registered: the engine uses this to avoid claiming
+    // a working account when only the vault password exists.
+    pending_registration: Boolean(match.pending_registration),
   }
 }
 
@@ -662,6 +679,25 @@ export async function markCredentialUsed(db, id) {
 }
 
 /**
+ * Clear pending_registration once an auto-provisioned login's account is
+ * confirmed-registered on the portal (the autopilot engine calls this when the
+ * signup adapter returns 'registered', or when the account already existed). From
+ * then on the row is a real "has existing credentials" login. Best-effort.
+ */
+export async function markCredentialRegistered(db, id) {
+  if (!db || !id) return false
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const falseVal = db?.dialect === 'postgres' ? 'FALSE' : '0'
+  try {
+    const res = await db.prepare(
+      `UPDATE hamilton_portal_credentials SET pending_registration = ${falseVal}, updated_at = ${nowFn} WHERE id = ?`,
+    ).run(String(id))
+    return (res?.changes ?? res?.rowCount ?? 0) > 0
+  } catch { return false }
+}
+
+/**
  * Save a credential Hamilton GENERATED for a portal that didn't have one yet.
  * Generates a strong password, encrypts it, persists the row, and returns
  * BOTH the masked row AND the plaintext password so the caller can show it
@@ -773,10 +809,11 @@ export async function saveAutoProvisionedCredential(db, {
   await db.prepare(
     `INSERT INTO hamilton_portal_credentials
        (id, user_id, profile_id, portal_host, label, login_url, username,
-        has_master_wrap, wrapped_ciphertext, wrapped_iv, wrapped_tag, status,
+        has_master_wrap, wrapped_ciphertext, wrapped_iv, wrapped_tag,
+        pending_registration, status,
         generated_by, generation_reason, generated_at, managed_by,
         created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ${trueVal}, ?, ?, ?, 'active', 'hamilton', ?, ${nowFn}, 'hamilton', ${nowFn}, ${nowFn})`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ${trueVal}, ?, ?, ?, ${trueVal}, 'active', 'hamilton', ?, ${nowFn}, 'hamilton', ${nowFn}, ${nowFn})`,
   ).run(
     id, String(userId), String(profileId), host,
     label || `Auto-provisioned by Hamilton for ${host}`,
