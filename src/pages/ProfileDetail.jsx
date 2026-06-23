@@ -853,6 +853,17 @@ export default function ProfileDetail() {
               isUploadingDocument={uploadDocumentMutation.isPending}
               fundsTotal={profile.pipeline_funds_total ?? 0}
               onNavigateToUniversities={isStudentProfile ? () => setActiveTab("universities") : undefined}
+              onNavigateToPortals={() => {
+                // The per-profile Portals dashboard (ProfilePortalsCard, Hamilton
+                // sign-in + autopilot) lives in the Pipeline tab under #portal-logins.
+                // Switch tabs, then scroll once the pipeline content has mounted.
+                setActiveTab("pipeline")
+                setTimeout(() => {
+                  document
+                    .getElementById("portal-logins")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }, 80)
+              }}
               onRenameProfile={handleRenameProfile}
               isRenamingProfile={renameProfileMutation.isPending}
             />

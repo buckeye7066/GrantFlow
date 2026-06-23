@@ -41,6 +41,7 @@ import {
   Upload,
   UploadCloud,
   Globe,
+  KeyRound,
 } from "lucide-react"
 import { normalizeTargetColleges } from "@/utils/targetCollegesSync"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
@@ -910,6 +911,7 @@ export default function ProfileOverview({
   fundsTotal = 0,
   billing = null,
   onNavigateToUniversities,
+  onNavigateToPortals,
   onRenameProfile,
   isRenamingProfile = false,
 }) {
@@ -1270,6 +1272,30 @@ export default function ProfileOverview({
           </div>
         </div>
       </section>
+
+      {onNavigateToPortals ? (
+        <section>
+          <button
+            type="button"
+            onClick={onNavigateToPortals}
+            className="group w-full text-left rounded-3xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-sm p-6 md:p-7 flex items-center justify-between gap-4 transition hover:border-blue-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-200"
+          >
+            <div className="flex items-start gap-4">
+              <span className="p-3 rounded-2xl bg-blue-50 text-blue-600 shrink-0">
+                <KeyRound className="w-5 h-5" />
+              </span>
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold text-slate-900">Portals &amp; Hamilton</h2>
+                <p className="text-sm text-slate-600">
+                  Open this profile&apos;s application portals and let Hamilton sign in, fill forms, and run
+                  portal automations.
+                </p>
+              </div>
+            </div>
+            <ArrowRight className="w-5 h-5 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-blue-600" />
+          </button>
+        </section>
+      ) : null}
 
       {isRealProfileId(profile.id) ? (
         <section>
