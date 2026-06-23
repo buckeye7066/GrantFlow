@@ -139,12 +139,18 @@ export async function runSam(args = {}) {
 
   try {
     // ---------- Diagnostics (every mode runs these) -----------------------
+    // HEAVY code-quality checks (source-tree walks, ESLint, multi-route HTTP
+    // fan-outs) run ONLY in gatekeeper mode (the CI/release sweep). observe /
+    // advise — including the autonomous scheduler and the Agent-Control cycle —
+    // run the fast operational diagnostics so Sam's preflight can never stall
+    // the Robert→Yana→John→Hamilton chain. Explicit checkIds always run as-is.
     const diag = await runDiagnostics({
       db,
       ctx,
       checkIds,
       invokeTool,
       httpProbe,
+      includeHeavy: mode === SAM_MODES.GATEKEEPER,
     })
     findings.push(...diag.findings)
     checkResults.push(...diag.results)

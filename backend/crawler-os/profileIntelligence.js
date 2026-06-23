@@ -64,6 +64,80 @@ function gatherText(profile) {
 const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'business', 'farm', 'government']);
 const INDIVIDUAL_APPLICANT_TYPES = new Set(['individual', 'family', 'student', 'veteran']);
 
+// AUTHORITATIVE primary_type -> applicant-bucket map. The substring-synonym
+// scan below cannot recognize multi-word canonical types whose stored
+// primary_type uses underscores (e.g. 'volunteer_fire_department',
+// 'food_pantry', 'local_housing_authority') — those silently fell through to
+// the 'individual' default and were then HARD-EXCLUDED from grants_gov/sam_gov
+// (their applicant_types omit 'individual'), producing zero real funding for
+// fire departments, food pantries, shelters, libraries, government agencies,
+// etc. — a mission-rule violation (zero-results / hard boolean filter).
+// This map is consulted FIRST so every canonical type lands in the correct
+// funding-eligibility bucket(s). Multiple buckets widen recall; the match
+// engine still scores relevance so this never floods.
+const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
+  // Person / household (federal grant APIs don't serve these directly; they
+  // get benefit directories + foundation locator + scholarship web discovery).
+  individual: ['individual'],
+  medical_need: ['individual'],
+  senior: ['individual'],
+  veteran: ['veteran', 'individual'],
+  disabled_adult: ['individual'],
+  teacher: ['individual'],
+  classroom_teacher: ['individual'],
+  educator: ['individual'],
+  family: ['family', 'individual'],
+  homeschool_family: ['family', 'individual'],
+  // Students
+  student: ['student', 'individual'],
+  high_school_student: ['student', 'individual'],
+  college_student: ['student', 'individual'],
+  graduate_student: ['student', 'individual'],
+  // Schools / education institutions
+  school: ['school'],
+  school_district: ['school', 'government'],
+  public_school: ['school', 'government'],
+  special_education_program: ['school'],
+  school_food_service: ['school', 'government'],
+  school_transportation: ['school', 'government'],
+  library: ['nonprofit', 'government'],
+  library_media_center: ['nonprofit', 'government'],
+  pta_pto: ['nonprofit'],
+  // Nonprofits / community orgs
+  nonprofit: ['nonprofit'],
+  organization: ['nonprofit'], // legacy seed string
+  food_pantry: ['nonprofit'],
+  homeless_shelter: ['nonprofit'],
+  animal_rescue: ['nonprofit'],
+  mental_health_nonprofit: ['nonprofit'],
+  substance_recovery_org: ['nonprofit'],
+  reentry_program: ['nonprofit'],
+  community_center: ['nonprofit'],
+  museum: ['nonprofit'],
+  domestic_violence_shelter: ['nonprofit'],
+  // Faith-based (also nonprofit-eligible for federal/foundation funding)
+  church: ['church', 'nonprofit'],
+  ministry: ['ministry', 'nonprofit'],
+  // Emergency services
+  volunteer_fire_department: ['vfd', 'government'],
+  // Government / public agencies
+  county_government: ['government'],
+  local_government: ['government'],
+  municipality: ['government'],
+  public_agency: ['government'],
+  local_housing_authority: ['government'],
+  parks_department: ['government'],
+  regional_planning_agency: ['government'],
+  economic_development_agency: ['government'],
+  tribal_government: ['government'],
+  public_health_department: ['government'],
+  // Business
+  business: ['business'],
+  small_business: ['business'], // legacy seed string
+  minority_owned_business: ['business'],
+  women_owned_business: ['business'],
+});
+
 function deriveApplicantTypes(profile, blob) {
   const explicit = []
     .concat(profile?.applicant_types ?? [])
@@ -80,9 +154,16 @@ function deriveApplicantTypes(profile, blob) {
   // a veteran/school/government applicant. Augmenting the declared identity from
   // the blob was the root false-positive driver (veteran-only grants matched to
   // students; farm/government grants matched to a church). So:
-  //   1. canonicalize the EXPLICIT identity strings (trusted), and
+  //   0. map EXACT canonical primary_type strings to their funding bucket(s)
+  //      (authoritative — handles underscore multi-word types the synonym scan
+  //      misses, e.g. volunteer_fire_department, food_pantry),
+  //   1. canonicalize the EXPLICIT identity strings via synonyms (trusted), and
   //   2. ONLY when the profile declares no identity at all, fall back to a blob
   //      scan so a bare profile still searches something (never zero).
+  for (const e of explicit) {
+    const mapped = PRIMARY_TYPE_TO_APPLICANT[e];
+    if (mapped) for (const bucket of mapped) found.add(bucket);
+  }
   for (const e of explicit) {
     if (APPLICANT_TYPE_SYNONYMS[e]) found.add(e); // already a canonical bucket
     for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
@@ -111,6 +192,21 @@ function deriveApplicantTypes(profile, blob) {
     // opportunities still match even when the only declared subtype is e.g.
     // "student". This is a correct structural implication, not free-text noise.
     found.add('individual');
+  }
+
+  // Structural implication: faith-based organizations (church / ministry) are
+  // eligible for federal and foundation funding on the SAME basis as nonprofits
+  // — grants.gov classifies faith-based orgs under its "Nonprofits" eligibility,
+  // and HHS / CDBG / USDA community-facilities / FEMA programs are open to them.
+  // Without this, a pure church/ministry profile (applicant_types=['church'])
+  // is HARD-EXCLUDED from grants_gov + sam_gov at the planner (their
+  // applicant_types omit church/ministry) → ZERO federal grants for a church,
+  // a mission-rule violation ("hard boolean filters forbidden unless the source
+  // is explicitly exclusive"; "avoid zero results"). We ADD nonprofit (keeping
+  // the church/ministry identity tag) so federal/foundation sources fire; the
+  // match engine still scores relevance, so this widens recall without flooding.
+  if (!primaryIsIndividual && (found.has('church') || found.has('ministry'))) {
+    found.add('nonprofit');
   }
 
   if (found.size === 0) found.add('individual'); // safe default; never zero

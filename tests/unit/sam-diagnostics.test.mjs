@@ -46,7 +46,15 @@ test('every diagnostic check has a valid category + kind', () => {
     assert.ok(SAM_CATEGORY_LIST.includes(check.category), `bad category for ${check.id}`)
     assert.ok(Object.values(CHECK_KIND).includes(check.kind), `bad kind for ${check.id}`)
   }
-  assert.deepEqual(defaultDiagnosticIds(), DIAGNOSTIC_CHECKS.map((c) => c.id))
+  // The operational default (observe/advise + agent-control cycle) EXCLUDES the
+  // heavy code-quality checks (source-tree walks / ESLint / route fan-outs) so
+  // Sam's preflight can never stall the agent cycle; includeHeavy=true
+  // (gatekeeper/CI) runs the full set.
+  const heavy = DIAGNOSTIC_CHECKS.filter((c) => c.heavy).map((c) => c.id)
+  const nonHeavy = DIAGNOSTIC_CHECKS.filter((c) => !c.heavy).map((c) => c.id)
+  assert.ok(heavy.length > 0, 'expected at least one heavy (gatekeeper-only) check')
+  assert.deepEqual(defaultDiagnosticIds(), nonHeavy)
+  assert.deepEqual(defaultDiagnosticIds({ includeHeavy: true }), DIAGNOSTIC_CHECKS.map((c) => c.id))
 })
 
 test('production-gate scripts are unique and reference valid categories', () => {

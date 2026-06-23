@@ -56,6 +56,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.code.scan',
     parameters: { dryRun: true },
     severityOnFailure: SEVERITY.LOW,
+    // HEAVY: walks the entire source tree. Belongs to the gatekeeper/CI sweep,
+    // not the operational agent-control cycle (it would add tens of seconds to
+    // every Sam preflight and stall the Robert→Yana→John→Hamilton chain).
+    heavy: true,
     description: 'Delegates to Anya admin.code.scan to find TODO / debugger / leftover console.* statements without mutating any files.',
   },
   {
@@ -66,6 +70,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.code.crawl',
     parameters: { dryRun: true, maxFiles: 200 },
     severityOnFailure: SEVERITY.MEDIUM,
+    heavy: true, // walks the source tree
     description: 'Delegates to Anya admin.code.crawl to find broken imports, missing handlers, structural drift across the codebase.',
   },
   {
@@ -76,6 +81,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.code.lint',
     parameters: { dryRun: true },
     severityOnFailure: SEVERITY.LOW,
+    heavy: true, // shells out to ESLint over the tree
     description: 'Delegates to Anya admin.code.lint to surface ESLint-style issues without applying autofixes.',
   },
   {
@@ -86,6 +92,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.code.missionAudit',
     parameters: {},
     severityOnFailure: SEVERITY.HIGH,
+    heavy: true, // runs the mission audit across the whole tree
     description: 'Delegates to runMissionAudit so Sam can see canonical-field violations, unsafe SQL, hardcoded placeholders, etc.',
   },
   {
@@ -96,6 +103,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.codeGuard.endpointHealth',
     parameters: {},
     severityOnFailure: SEVERITY.HIGH,
+    heavy: true, // fans out HTTP probes across many live routes
     description: 'Delegates to codeGuardService.testEndpoints to probe live API routes and report broken/missing/slow endpoints.',
   },
   {
@@ -106,6 +114,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.codeGuard.missionVerify',
     parameters: {},
     severityOnFailure: SEVERITY.HIGH,
+    heavy: true, // scans the tree / fans out to verify every mission goal
     description: 'Delegates to codeGuardService.verifyMissionGoals — the canonical mission-readiness scorecard.',
   },
   {
@@ -1050,8 +1059,19 @@ export function findSafeFixById(id) {
 // ---------------------------------------------------------------------------
 // Default check set used by `observe` / `advise` modes
 // ---------------------------------------------------------------------------
-export function defaultDiagnosticIds() {
-  return DIAGNOSTIC_CHECKS.map((c) => c.id)
+export function defaultDiagnosticIds({ includeHeavy = false } = {}) {
+  // HEAVY checks (source-tree walks, ESLint shell-outs, multi-route HTTP
+  // fan-outs) belong to the gatekeeper/CI sweep. The operational agent-control
+  // cycle and the autonomous scheduler run in observe/advise mode where they
+  // MUST stay fast and hang-proof — a 60s+ code scan in Sam's preflight stalls
+  // the entire Robert→Yana→John→Hamilton chain (2026-06-23 full-cycle audit).
+  // includeHeavy=true (gatekeeper / explicit request) runs the full set.
+  return DIAGNOSTIC_CHECKS.filter((c) => includeHeavy || !c.heavy).map((c) => c.id)
+}
+
+/** Ids of the heavy (gatekeeper-only by default) checks. */
+export function heavyDiagnosticIds() {
+  return DIAGNOSTIC_CHECKS.filter((c) => c.heavy).map((c) => c.id)
 }
 
 export function getCheckById(id) {

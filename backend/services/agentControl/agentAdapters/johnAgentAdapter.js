@@ -121,6 +121,42 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
     }
 
     const draftsCreated = result?.drafts_created ?? 0
+    // The Outlook mail provider being unconfigured (no MICROSOFT_* / mailbox env)
+    // is an ENVIRONMENT provisioning gap, NOT a John loop failure: John ran
+    // correctly, found leads, and honestly declined to draft because there is no
+    // mailbox to draft into. Treat it like Sam/Hamilton environment-skips —
+    // report a 'skipped' step with John's note (which lists exactly what to set)
+    // instead of a 'failed' step that makes the whole agent cycle look broken.
+    const providerNotConfigured = result?.ok === false && result?.provider_ready === false
+    if (providerNotConfigured) {
+      await signal?.recordEvent?.({
+        eventType: 'agent.john.skipped',
+        severity: 'info',
+        message:
+          `John skipped drafting — Outlook provider not configured. ` +
+          `${result?.leads_considered ?? 0} lead(s) considered. ${result?.note || ''}`.trim(),
+        data: {
+          john_run_id: result?.run_id || null,
+          provider_ready: false,
+          provider_missing: result?.provider_missing ?? null,
+          leads_considered: result?.leads_considered ?? 0,
+          note: result?.note || null,
+        },
+      })
+      return {
+        ok: true,
+        status: 'skipped',
+        summary: {
+          agent: 'john',
+          reason: 'outlook_provider_not_configured',
+          john_run_id: result?.run_id || null,
+          provider_ready: false,
+          provider_missing: result?.provider_missing ?? null,
+          leads_considered: result?.leads_considered ?? 0,
+          note: result?.note || null,
+        },
+      }
+    }
     const producedNothing = result?.ok === false || draftsCreated === 0
     // A run that produced zero drafts is NOT an unqualified success. Raise its
     // severity and carry John's own explanation (provider not configured / no

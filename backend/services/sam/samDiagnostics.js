@@ -45,16 +45,43 @@ import {
  * @param {Function} [args.httpProbe]        async (path) => { status, body }
  * @returns {Promise<{ findings, results }>}
  */
+// Hard per-check timeout. No single diagnostic may hang Sam — because Sam's
+// preflight gates the whole Agent-Control cycle, one stuck check freezes every
+// downstream agent. A check that exceeds this bound is recorded as an INFO skip
+// ("check_timeout") and the sweep continues. Generous enough for legitimate
+// DB/HTTP checks; heavy code-tooling checks are excluded by default anyway.
+const CHECK_TIMEOUT_MS = Number(process.env.SAM_CHECK_TIMEOUT_MS) || 15000
+
+function withCheckTimeout(promise, check) {
+  let timer
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({
+      __timed_out: true,
+      detail: { ok: true, skipped: true, reason: `check_timeout_${CHECK_TIMEOUT_MS}ms`, check_id: check.id },
+      findings: [makeFinding({
+        severity: SEVERITY.INFO,
+        category: check.category,
+        title: `Sam check skipped: ${check.label} exceeded ${CHECK_TIMEOUT_MS}ms`,
+        description: `The check did not complete within the per-check time budget and was skipped so the cycle never hangs. Not a production-readiness defect by itself.`,
+        evidence: { check_id: check.id, timeout_ms: CHECK_TIMEOUT_MS },
+        confidence: 0.5,
+      })],
+    }), CHECK_TIMEOUT_MS)
+  })
+  return Promise.race([promise.finally(() => clearTimeout(timer)), timeout])
+}
+
 export async function runDiagnostics({
   db,
   ctx,
   checkIds = null,
   invokeTool = null,
   httpProbe = null,
+  includeHeavy = false,
 } = {}) {
   const ids = Array.isArray(checkIds) && checkIds.length > 0
     ? checkIds
-    : defaultDiagnosticIds()
+    : defaultDiagnosticIds({ includeHeavy })
 
   const findings = []
   const results = []
@@ -73,7 +100,10 @@ export async function runDiagnostics({
     }
 
     try {
-      const result = await runOneCheck({ check, db, ctx, invokeTool, httpProbe })
+      const result = await withCheckTimeout(
+        runOneCheck({ check, db, ctx, invokeTool, httpProbe }),
+        check,
+      )
       results.push({ check_id: check.id, ...result.detail })
       findings.push(...(result.findings || []))
     } catch (err) {
