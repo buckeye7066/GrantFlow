@@ -39,6 +39,7 @@ import { runDiagnostics } from './samDiagnostics.js'
 import { planRepairs } from './samRepairPlanner.js'
 import {
   applySafeFixes,
+  deriveSafeFixesFromFindings,
   runWhitelistedCommand,
 } from './samSafeFixes.js'
 import { escalateSamCritical } from './samEscalation.js'
@@ -182,13 +183,28 @@ export async function runSam(args = {}) {
     }
 
     // ---------- Safe fixes (repair-safe only) -----------------------------
-    if (mode === SAM_MODES.REPAIR_SAFE && Array.isArray(fixIds) && fixIds.length > 0) {
-      const fixes = await applySafeFixes({
-        fixIds,
-        context: { authorisedByAdmin, mode },
-        maxFixes,
-      })
-      appliedFixes.push(...fixes)
+    // "Act, not just report": on the human-AUTHORIZED repair-safe path, when the
+    // admin didn't hand-pick fix ids, auto-derive the safe fixes applicable to
+    // this run's findings and apply them. This NEVER runs on the scheduler/cron
+    // (which is observe — no autonomous code mutation) and applySafeFixes still
+    // re-enforces admin + repair-safe + policy gates.
+    if (mode === SAM_MODES.REPAIR_SAFE) {
+      let effectiveFixIds = Array.isArray(fixIds) ? fixIds : []
+      let perFixParams = {}
+      if (effectiveFixIds.length === 0 && authorisedByAdmin) {
+        const derived = deriveSafeFixesFromFindings(findings)
+        effectiveFixIds = derived.fixIds
+        perFixParams = derived.perFixParams
+      }
+      if (effectiveFixIds.length > 0) {
+        const fixes = await applySafeFixes({
+          fixIds: effectiveFixIds,
+          perFixParams,
+          context: { authorisedByAdmin, mode },
+          maxFixes,
+        })
+        appliedFixes.push(...fixes)
+      }
     }
 
     const score = computeHealthScore(findings)

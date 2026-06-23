@@ -108,6 +108,32 @@ export async function applySafeFix({ fixId, context = {}, params = {} } = {}) {
   }
 }
 
+/**
+ * Derive the safe fixes applicable to the current findings, so an admin running
+ * repair-safe actually gets Sam's safe fixes APPLIED instead of having to
+ * hand-type fix ids (the "act, not just report" gap). Conservative by design:
+ *   - only fixes in SAFE_FIX_REGISTRY (risk_level 'safe'),
+ *   - the always-safe, auditable readiness-log regeneration once per run,
+ *   - eslint --fix ONLY for a finding that explicitly set safe_auto_fix_available
+ *     AND points at a real code file under src/ or backend/.
+ * Returns { fixIds, perFixParams }. Caller still passes these through
+ * applySafeFixes, which re-enforces admin + repair-safe + policy gates, so this
+ * never widens authority — it only removes the manual-id-entry step.
+ */
+export function deriveSafeFixesFromFindings(findings = []) {
+  const fixIds = ['docs.regenerate-readiness-log'] // always safe + idempotent
+  const perFixParams = {}
+  for (const f of Array.isArray(findings) ? findings : []) {
+    if (!f?.safe_auto_fix_available) continue
+    const file = (f.affected_files || []).find((p) => /^(src|backend)[/\\]/.test(String(p || '')))
+    if (file && !perFixParams['lint.eslint-fix-file']) {
+      if (!fixIds.includes('lint.eslint-fix-file')) fixIds.push('lint.eslint-fix-file')
+      perFixParams['lint.eslint-fix-file'] = { file }
+    }
+  }
+  return { fixIds, perFixParams }
+}
+
 export async function applySafeFixes({
   fixIds = [],
   context = {},
