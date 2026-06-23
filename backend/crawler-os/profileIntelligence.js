@@ -45,6 +45,59 @@ const NEED_KEYWORDS = {
   energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar'],
 };
 
+// HIGH-PRECISION phrase → applicant-bucket safety net. Unlike the broad
+// single-word synonym scan (which only runs as a last-resort fallback because
+// theme words like "community"/"military" caused false positives), these are
+// multi-word, unambiguous funding-IDENTITY phrases. They run ADDITIVELY for
+// ORGANIZATION-class profiles only (never on a person/household primary
+// identity) so a profile whose TYPE field is generic ('organization', 'other',
+// blank) but whose text clearly says what it is still reaches the right
+// sources. Canonical example: a profile typed 'organization' whose mission says
+// "we are a volunteer fire department" must still pull FEMA AFG — it must never
+// silently miss it again. Additive only → recall, never suppression; the match
+// engine still scores relevance so this cannot flood.
+// Deliberately NARROW. Earlier theme-prone buckets (farm/government/school/
+// church via single words like "farm-area", "community", "education") caused
+// exactly the over-broadening the 2026-06-23 false-positive audit guards
+// against — a church whose mission mentioned "rural families / farm-area
+// ministry" was wrongly typed farm. Those identities are already covered
+// reliably by the declared-type PRIMARY_TYPE_TO_APPLICANT map. The ONE case
+// that genuinely needs a free-text safety net is fire/EMS: a profile typed
+// generically ('organization'/'other') but whose text clearly says it is a
+// fire department must still reach FEMA AFG. These phrases are multi-word and
+// unambiguous (they do not appear as themes in other orgs' missions), and the
+// add is purely additive recall (the match engine still scores relevance).
+const PHRASE_APPLICANT_TRIGGERS = Object.freeze([
+  {
+    add: 'vfd',
+    label: 'fire / EMS / first-responder',
+    re: /\b(volunteer\s+fire|fire\s+department|fire\s+district|fire\s+protection\s+district|fire\s+rescue|firefighter|first\s+responder|emergency\s+medical\s+services?|\bvfd\b|fema\s+afg|\bafg\s+grant|safer\s+grant|assistance\s+to\s+firefighter)/i,
+  },
+]);
+
+/**
+ * detectKeywordApplicantTriggers — scan free text for high-precision identity
+ * phrases. Returns the buckets that fired with the matched phrase, so the
+ * crawler-plan explainer (and Anya's plan-for-profile tool) can show EXACTLY
+ * which keyword pulled in which source. ORG-only by design — pass
+ * isIndividual=true to suppress (a person who volunteers at a fire dept is not
+ * a VFD applicant).
+ *
+ * @param {string} blob lowercased profile text
+ * @param {boolean} isIndividual whether the primary identity is a person/household
+ * @returns {Array<{add:string,label:string,matched:string}>}
+ */
+export function detectKeywordApplicantTriggers(blob, isIndividual) {
+  if (isIndividual) return [];
+  const text = String(blob ?? '');
+  const fired = [];
+  for (const trig of PHRASE_APPLICANT_TRIGGERS) {
+    const m = text.match(trig.re);
+    if (m) fired.push({ add: trig.add, label: trig.label, matched: m[0].trim() });
+  }
+  return fired;
+}
+
 function lc(x) { return String(x ?? '').toLowerCase(); }
 
 function gatherText(profile) {
@@ -138,7 +191,7 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   women_owned_business: ['business'],
 });
 
-function deriveApplicantTypes(profile, blob) {
+function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   const explicit = []
     .concat(profile?.applicant_types ?? [])
     .concat(profile?.type ?? [])
@@ -192,6 +245,20 @@ function deriveApplicantTypes(profile, blob) {
     // opportunities still match even when the only declared subtype is e.g.
     // "student". This is a correct structural implication, not free-text noise.
     found.add('individual');
+  }
+
+  // HIGH-PRECISION keyword safety net (ORG-class profiles only): pull in the
+  // correct applicant bucket(s) for profiles whose TYPE is generic but whose
+  // text unambiguously identifies them (e.g. type='organization' + mission
+  // "volunteer fire department" → add 'vfd' so FEMA AFG fires). Additive only.
+  const firedTriggers = detectKeywordApplicantTriggers(blob, primaryIsIndividual);
+  for (const t of firedTriggers) {
+    if (!found.has(t.add)) {
+      found.add(t.add);
+      if (Array.isArray(triggerCollector)) triggerCollector.push(t);
+    } else if (Array.isArray(triggerCollector)) {
+      triggerCollector.push({ ...t, already_present: true });
+    }
   }
 
   // Structural implication: faith-based organizations (church / ministry) are
@@ -258,7 +325,8 @@ function deriveLocation(profile) {
  */
 export function buildThesis(profile = {}) {
   const blob = gatherText(profile);
-  const applicant_types = deriveApplicantTypes(profile, blob);
+  const keywordTriggers = [];
+  const applicant_types = deriveApplicantTypes(profile, blob, keywordTriggers);
   const needs = deriveNeeds(profile, blob);
   const location = deriveLocation(profile);
 
@@ -289,6 +357,12 @@ export function buildThesis(profile = {}) {
       : (isOrg ? 60 : 55),
     // Searchable keyword seeds (deduped) for the planner's query builders.
     keywords: [...new Set([...needs, ...applicant_types])],
+    // Which high-precision identity phrases (if any) pulled in an applicant
+    // bucket from free text — surfaced so the crawler-plan explainer / Anya can
+    // show WHY a source fired (e.g. "FEMA AFG fired because the mission text
+    // says 'volunteer fire department'"). Empty for individuals and for
+    // profiles whose declared type already covered everything.
+    keyword_triggers: keywordTriggers,
     raw_profile_present: Boolean(profile && Object.keys(profile).length),
   };
 }

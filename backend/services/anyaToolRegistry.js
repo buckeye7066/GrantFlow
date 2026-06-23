@@ -1044,6 +1044,34 @@ registerTool({
 })
 
 registerTool({
+  name: 'crawlers.planForProfile',
+  description:
+    'Decides and EXPLAINS which discovery crawlers/sources will fire for a profile and WHY — from the profile type, derived applicant types, needs, location, AND high-precision keyword/phrase triggers in the profile text. Example: a profile whose mission says "volunteer fire department" or mentions "FEMA AFG" pulls in the FEMA AFG source even when its type field is generic, so a VFD never silently misses a FEMA grant. Returns selected sources, excluded sources with plain-language reasons, the keyword triggers that fired, real-funder vs directory breakdown, and coverage flags an operator should act on.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile ID to plan crawlers for.' },
+      profile_id: { type: 'string', description: 'Alias for profileId.' },
+    },
+  },
+  handler: async (params, context) => {
+    if (!context?.db) {
+      throw new Error('Database connection unavailable')
+    }
+    const profileId = String(params?.profileId || params?.profile_id || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(context?.ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+    const { explainCrawlerPlanForProfile } = await import('./crawlerPlanService.js')
+    const plan = await explainCrawlerPlanForProfile(context.db, profileId)
+    return { success: true, ...plan }
+  },
+})
+
+registerTool({
   name: 'grants.explainMatch',
   description: "Explains why a specific funding opportunity matched (or didn't fully match) the user's profile. Returns a breakdown of matching signals like applicant type, location, keywords, and financial need.",
   schema: {
