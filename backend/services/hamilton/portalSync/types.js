@@ -73,6 +73,10 @@
  * @property {string} id        stable id (e.g. 'mtsu').
  * @property {string} label     human label (e.g. 'Middle Tennessee State University').
  * @property {RegExp} hostMatch matches the portal host(s) this connector drives.
+ * @property {boolean} [requiresSession]  when true, this portal cannot be driven
+ *           from a saved username/password alone (SSO / 2FA) — a captured login
+ *           session (durable storageState) is mandatory. runPortalSync fails
+ *           honestly instead of running an unauthenticated, empty sync.
  * @property {(page: import('playwright').Page, ctx: PortalSyncContext) => Promise<PortalReadResult>} read
  * @property {(page: import('playwright').Page, ctx: PortalSyncContext, data: object) => Promise<PortalWriteResult>} write
  */

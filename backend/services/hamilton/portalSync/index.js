@@ -240,6 +240,16 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
     return fail('no authenticated session or saved login for this profile + portal host')
   }
 
+  // HONESTY GATE: a connector that declares requiresSession (SSO / 2FA portal,
+  // e.g. MTSU via Microsoft) cannot be authenticated from a saved username/
+  // password alone — the sync only ever APPLIES a captured storageState, it never
+  // logs in. Without a session we'd open a browser, read the login wall, and
+  // record a misleading "completed, 0 awards". Fail honestly instead, pointing the
+  // user at the side-by-side login that captures the session.
+  if (connector.requiresSession && !storageState) {
+    return fail('this portal needs a captured login session (use the side-by-side login first); a saved password alone cannot clear its SSO/2FA', { needs_session: true })
+  }
+
   // Launch Playwright exactly like runAutopilot does.
   let chromium
   try { ({ chromium } = await import('playwright')) } catch (err) {

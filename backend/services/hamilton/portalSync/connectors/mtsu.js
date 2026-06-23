@@ -30,6 +30,14 @@ export const label = 'Middle Tennessee State University (PipelineMT / AcademicWo
 // AcademicWorks tenant mtsu.academicworks.com).
 export const hostMatch = /(^|\.)mtsu\.edu$|mtsu\.academicworks\.com$/i
 
+// MTSU federates auth through Microsoft (login.microsoftonline.com) with 2FA, so
+// a saved username/password alone CANNOT authenticate a headless sync — the sync
+// must reuse a captured login session (durable Playwright storageState from the
+// side-by-side login). requiresSession=true makes runPortalSync fail honestly
+// ("needs a captured session") instead of running an unauthenticated, misleading
+// "completed, 0 awards" pass. See portalSync/index.js.
+export const requiresSession = true
+
 // How long any single page interaction waits before we treat the element as
 // absent. Short on purpose: a missing selector should fail FAST into `notFound`,
 // not hang the whole sync.
@@ -341,7 +349,7 @@ export function matchesCredential({ host, username = null, label = null } = {}) 
 }
 
 /** @type {import('../types.js').PortalConnector} */
-const connector = { id, label, hostMatch, matchesCredential, read, write }
+const connector = { id, label, hostMatch, requiresSession, matchesCredential, read, write }
 
 // Convenience: does this connector claim the given host?
 export function matchesHost(host) {
