@@ -254,15 +254,17 @@ export async function discoverScholarshipsViaWeb(db, {
         }
         const decision = computeMatchDecision(osOpp, thesis)
         await db.prepare(
+          // id is the NOT-NULL PK with no default; use the same deterministic
+          // "{profile}:{opp}" id persistRun uses so re-runs update in place.
           `INSERT INTO profile_opportunity_matches
-             (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, computed_at, updated_at, evaluated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})
+             (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, computed_at, updated_at, evaluated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})
            ON CONFLICT (profile_id, opportunity_id) DO UPDATE SET
              match_score = excluded.match_score, match_decision = excluded.match_decision,
              match_explanation = excluded.match_explanation, matcher_version = excluded.matcher_version,
              updated_at = ${nowFn}`,
         ).run(
-          String(profileId), String(oppId), Math.round(decision.match_score || 0),
+          `${profileId}:${oppId}`, String(profileId), String(oppId), Math.round(decision.match_score || 0),
           decision.decision || 'review', (decision.match_explain?.why || '').slice(0, 500),
           WEB_LLM_MATCHER_VERSION,
         )
