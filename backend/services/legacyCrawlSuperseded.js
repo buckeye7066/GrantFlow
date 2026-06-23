@@ -28,14 +28,58 @@ export async function stampLastDiscoveryAt() { /* OS persistence stamps last_dis
 
 // The legacy "trigger auto-discovery" entrypoint now drives the Crawler OS, so
 // the user-facing "discover" actions still work — via the OS, not the old crawler.
-export async function triggerAutoDiscoveryCrawlers(db, profileId) {
-  if (!db || !profileId) return { ...SUPERSEDED }
+//
+// CONTRACT: must keep the historical jobs_enqueued / crawler_types fields the
+// realCrawlers.js /discover-all route, the auth.js login fire-and-forget, and
+// the DiscoverGrants UI ("show toast / poll" loop) all read from. Routes were
+// reading summary?.jobs_enqueued ?? 0 against a shape that didn't carry that
+// key, so the UI silently fell into "0 jobs enqueued" and skipped the toast +
+// progress polling — making Discover feel broken even when the OS run actually
+// produced rows. We now ALWAYS report the OS run as one synchronous "fleet"
+// (jobs_enqueued = 1) plus the per-source counts, AND set synchronous:true so
+// the client knows discovery is already complete by the time we return.
+export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {}) {
+  if (!db || !profileId) {
+    return {
+      ...SUPERSEDED,
+      jobs_enqueued: 0,
+      crawler_types: [],
+      job_ids: [],
+      engine: 'crawler-os',
+      synchronous: true,
+    }
+  }
   const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
   try {
     const { run, persisted } = await runProfileDiscoveryLive({ db, profileId })
-    return { engine: 'crawler-os', stored: run.stored, matches: persisted.matches, recommendations: run.recommendations.length }
+    const sourceTypes = Array.isArray(run?.sources)
+      ? [...new Set(run.sources.map((s) => s?.source_id || s?.id).filter(Boolean))]
+      : []
+    return {
+      // Historical UI / route contract (DiscoverGrants reads these):
+      jobs_enqueued: 1,
+      crawler_types: sourceTypes.length > 0 ? sourceTypes : ['crawler-os'],
+      job_ids: [],
+      // OS run details (used by tests + admin diagnostics):
+      engine: 'crawler-os',
+      synchronous: true,
+      stored: run?.stored ?? 0,
+      planned: run?.planned ?? 0,
+      rejected: run?.rejected ?? 0,
+      matches: persisted?.matches ?? 0,
+      opportunities: persisted?.opportunities ?? 0,
+      recommendations: Array.isArray(run?.recommendations) ? run.recommendations.length : 0,
+      sources: run?.sources ?? [],
+    }
   } catch (e) {
-    return { engine: 'crawler-os', error: e?.message || String(e) }
+    return {
+      jobs_enqueued: 0,
+      crawler_types: [],
+      job_ids: [],
+      engine: 'crawler-os',
+      synchronous: true,
+      error: e?.message || String(e),
+    }
   }
 }
 

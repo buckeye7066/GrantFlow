@@ -410,9 +410,25 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // The Crawler OS is the single matching authority. When it has scored this
       // profile (profile_opportunity_matches rows with matcher_version
       // 'crawler-os'), serve those — mapped to the response shape, pipeline
-      // members excluded — instead of recomputing with the legacy scorer. The
-      // legacy path below remains as a reversible fallback (?legacy_matching=1)
-      // and for profiles the OS has not yet scored.
+      // members excluded — instead of recomputing with the legacy scorer.
+      //
+      // RECALL FLOOR: a sparse OS run (e.g. an individual student whose only
+      // OS-stored matches are the 3 directory pointers) MUST NOT starve
+      // Discover. When OS qualified.length < OS_RECALL_FLOOR we fall through
+      // to the legacy matcher (which scans the full 90k+ catalog) and merge
+      // the OS qualified rows on top so OS-discovered scholarships and
+      // directories stay surfaced. This honors the workspace mission rules:
+      //   - "Avoid zero results when relevant funding likely exists. Recall
+      //     over suppression."
+      //   - "Directory-style or general funding resources must always
+      //     survive filtering unless explicitly excluded."
+      //   - "If total_found > 0 and included === 0, log why, relax, re-score."
+      //
+      // The legacy path below remains the reversible fallback for explicit
+      // `?legacy_matching=1` callers and for profiles the OS has not yet
+      // scored at all.
+      const OS_RECALL_FLOOR = Number(process.env.OS_RECALL_FLOOR) || 10
+      let osMergeRows = null  // populated when we fall through to legacy
       if (req.query.legacy_matching !== '1') {
         let osRows = []
         try {
@@ -428,7 +444,13 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
                 ORDER BY m.match_score DESC`,
             )
             .all(profileId)
-        } catch {
+        } catch (osQueryErr) {
+          // Surface schema/dialect drift instead of silently swallowing —
+          // a missing profile_opportunity_matches table would otherwise look
+          // identical to "OS hasn't run yet" and silently fall back forever.
+          routeLogger.warn(
+            `[matching] OS rows query failed for profile ${profileId}: ${osQueryErr?.message || osQueryErr}`,
+          )
           osRows = []
         }
         if (osRows.length > 0) {
@@ -457,19 +479,36 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           mapped = dedupeOpportunityList(mapped).results
           mapped = (await filterOutPipelineMembers(req.db, profileId, mapped)).results
           const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
-          const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
-          return res.json({
-            profile_id: profileId,
-            engine: 'crawler-os',
-            min_score: osMin,
-            total_scored: mapped.length,
-            returned: qualified.length,
-            qualified_count: qualified.length,
-            score_histogram: [],
-            opportunities: qualified,
-            referrals: [],
-            profile_field_prompts: profileFieldPrompts,
-          })
+
+          if (qualified.length >= OS_RECALL_FLOOR) {
+            const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
+            return res.json({
+              profile_id: profileId,
+              engine: 'crawler-os',
+              min_score: osMin,
+              total_scored: mapped.length,
+              returned: qualified.length,
+              qualified_count: qualified.length,
+              score_histogram: [],
+              opportunities: qualified,
+              referrals: [],
+              profile_field_prompts: profileFieldPrompts,
+            })
+          }
+
+          // Sparse OS recall — keep ALL mapped OS rows (qualified + directories)
+          // for the merge below. Directories are protected even when their
+          // score is under min so the Foundation Center / studentaid.gov-style
+          // pointers remain discoverable.
+          const directoryOsRows = mapped.filter((o) => o.is_directory)
+          osMergeRows = [
+            ...qualified,
+            ...directoryOsRows.filter((d) => !qualified.some((q) => q.id === d.id)),
+          ]
+          routeLogger.info(
+            `[matching] OS recall sparse for profile ${profileId}: qualified=${qualified.length} ` +
+            `directories=${directoryOsRows.length} floor=${OS_RECALL_FLOOR} — merging legacy matcher results`,
+          )
         }
       }
 
@@ -1215,6 +1254,34 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         }
       }
 
+      // Merge OS-discovered rows that the early-return path saved for us when
+      // OS qualified.length was below OS_RECALL_FLOOR. We dedupe by id /
+      // fingerprint / source_id (the same keys the OS persistence uses) and
+      // sort by match_score so the highest-confidence rows lead. Without
+      // this, a sparse OS run would stream three directory pointers to a
+      // student profile and hide the 90k-row legacy catalog forever.
+      let osMergeMergedCount = 0
+      if (Array.isArray(osMergeRows) && osMergeRows.length > 0) {
+        const cappedIds = new Set(capped.map((o) => o?.id).filter(Boolean))
+        const cappedFingerprints = new Set(capped.map((o) => o?.fingerprint).filter(Boolean))
+        const cappedSourceIds = new Set(capped.map((o) => o?.source_id).filter(Boolean))
+        const newOsRows = osMergeRows.filter((r) =>
+          r &&
+          !cappedIds.has(r.id) &&
+          !(r.fingerprint && cappedFingerprints.has(r.fingerprint)) &&
+          !(r.source_id && cappedSourceIds.has(r.source_id)),
+        )
+        if (newOsRows.length > 0) {
+          osMergeMergedCount = newOsRows.length
+          capped = [...newOsRows, ...capped].sort(
+            (a, b) => Number(b.match_score ?? 0) - Number(a.match_score ?? 0),
+          )
+          routeLogger.info(
+            `[matching] merged ${newOsRows.length} crawler-os rows on top of legacy results for profile ${profileId}`,
+          )
+        }
+      }
+
       // Mission rule (Phase 3): every match output must carry a
       // profile_signal_audit so users/Anya/tests can answer "what facts from
       // my profile did the matcher actually use?".
@@ -1277,6 +1344,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               profile_field_prompts: profileFieldPrompts,
               primary_category: effectivePrimaryCategory || null,
               excluded_categories: Array.from(excludedCategories),
+              engine: osMergeMergedCount > 0 ? 'crawler-os+legacy' : 'legacy',
+              os_merged_count: osMergeMergedCount > 0 ? osMergeMergedCount : undefined,
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
               total_scored: rawCandidates.length,
               returned: capped.length,

@@ -738,9 +738,16 @@ export default function DiscoverGrants() {
       })
       const enqueued = Number(dispatch?.jobs_enqueued) || 0
       const crawlerTypes = Array.isArray(dispatch?.crawler_types) ? dispatch.crawler_types : []
-      setDiscovery({ active: enqueued > 0, enqueued, running: enqueued, crawlerTypes })
+      // synchronous=true means the OS shim ran the entire profile discovery
+      // INSIDE the request — by the time we see this response the catalog
+      // has already been updated and there is nothing to poll for. Polling
+      // anyway just adds 12s+ of wasted spinner time before fetchCatalogMatches.
+      const synchronous = Boolean(dispatch?.synchronous)
+      const stored = Number(dispatch?.stored) || 0
+      const matches = Number(dispatch?.matches) || 0
+      setDiscovery({ active: enqueued > 0, enqueued, running: enqueued, crawlerTypes, synchronous })
 
-      if (enqueued > 0) {
+      if (enqueued > 0 && !synchronous) {
         toast({
           title: 'Searching funding sources matched to your profile',
           description: `Running ${enqueued} relevant crawler${enqueued === 1 ? '' : 's'}${crawlerTypes.length ? ` (${crawlerTypes.slice(0, 6).join(', ')}${crawlerTypes.length > 6 ? '…' : ''})` : ''}. Matches appear below as each finishes — this can take a few minutes.`,
@@ -762,6 +769,13 @@ export default function DiscoverGrants() {
           // they drained), with a short grace window in case status lags.
           if (running === 0 && (sawRunning || Date.now() - start > 8000)) break
         }
+      } else if (synchronous) {
+        toast({
+          title: 'Searched funding sources matched to your profile',
+          description: stored > 0 || matches > 0
+            ? `Crawler OS found ${stored} new opportunit${stored === 1 ? 'y' : 'ies'} and scored ${matches} match${matches === 1 ? '' : 'es'}${crawlerTypes.length ? ` across ${crawlerTypes.length} source${crawlerTypes.length === 1 ? '' : 's'}` : ''}.`
+            : 'Crawler OS finished. Pulling the latest matches now.',
+        })
       }
 
       // Final pass: pull the complete, profile-matched catalog and hand it to the

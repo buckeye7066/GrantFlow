@@ -4,9 +4,18 @@
  * Runs triggerAutoDiscoveryCrawlers() for each active profile once per day,
  * using the same profile/sections/signals logic as login auto-discovery.
  * Skips profiles already crawled today unless material profile content changed.
+ *
+ * NOTE: this used to import triggerAutoDiscoveryCrawlers from
+ * autoDiscoveryCrawlers.js — that path enqueues legacy `crawler_jobs` rows
+ * which the dispatcher now marks `superseded_by_crawler_os` and never runs
+ * (post-cutover). Daily auto-discovery was therefore a silent no-op. We now
+ * import from legacyCrawlSuperseded.js so the scheduled run drives the
+ * Crawler OS (runProfileDiscoveryLive) for each profile — same code path as
+ * login auto-discovery and the Discover button.
  */
 
-import { triggerAutoDiscoveryCrawlers } from './autoDiscoveryCrawlers.js'
+import { randomUUID } from 'crypto'
+import { triggerAutoDiscoveryCrawlers } from './legacyCrawlSuperseded.js'
 import { computeProfileDigest } from './profileHelpers.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { createLogger } from '../utils/logger.js'
@@ -121,6 +130,39 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
         profileDigest: decision.digest,
         trigger: 'scheduled_daily',
       })
+
+      // Stamp a digest-aware marker row so shouldRunProfileDailyDiscovery
+      // (which still queries crawler_jobs) can see "ran today" + "ran for
+      // this profile snapshot" on the next batch. The OS shim no longer
+      // writes crawler_jobs rows, so without this marker the scheduler
+      // would re-run discovery for every active profile every batch
+      // regardless of whether the profile changed.
+      //
+      // status='completed' so the dispatcher never picks it up. type='local'
+      // is used because crawler_jobs.type has a CHECK constraint and 'local'
+      // is the canonical lightweight discovery marker (the legacy fleet's
+      // first job was always 'local'); the scheduler keys off created_at +
+      // parameters._profile_digest, not the type. The _engine field records
+      // that the OS actually ran, for audits.
+      try {
+        await db.prepare(
+          `INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by, completed_at)
+           VALUES (?, 'local', 'completed', ?, ?, 'scheduled-auto-discovery',
+                   ${db?.dialect === 'postgres' ? 'now()' : `datetime('now')`})`,
+        ).run(
+          randomUUID(),
+          profile.id,
+          JSON.stringify({
+            _profile_digest: decision.digest ?? null,
+            _trigger: 'scheduled_daily',
+            _engine: 'crawler-os',
+          }),
+        )
+      } catch (markerErr) {
+        // Marker is best-effort; scheduling still works (just less efficient)
+        // if this fails.
+        log.warn(`[scheduled-auto-discovery] marker insert failed for ${profile.id}: ${markerErr?.message || markerErr}`)
+      }
 
       report.profiles_queued += 1
     } catch (err) {
