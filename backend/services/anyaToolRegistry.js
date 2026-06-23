@@ -4696,3 +4696,144 @@ registerTool({
     return { ok: true, profile_id: profileId, portal_host: portalHost, count: runs.length, runs }
   },
 })
+
+// ── Profile dedupe / combine (owner only) ─────────────────────────────────────
+//
+// These three tools expose the profileDedupeService merge engine to Anya so the
+// owner can say "combine the duplicate profiles" in chat and have it actually
+// happen — instead of being told to go find an Admin Tools panel. Gating: merging
+// rewrites/soft-deletes profile rows and repoints every foreign key, so it is the
+// same destructive class as owner.run_crawler / owner.edit_profile_section and is
+// gated requiresOwner:true (ADMIN_EMAIL only), enforced in invokeTool BEFORE the
+// handler runs. End-user Anya never sees these — she stays a helpful guide.
+//
+// Safety contract mirrors the service: merges default to a DRY-RUN preview. Anya
+// shows the owner exactly which profiles would fold into which winner, then re-runs
+// with apply:true to actually commit. This satisfies the system prompt's honesty
+// rule (never claim a side-effect happened unless the tool actually did it).
+
+function ownerActorUserId(context) {
+  return context?.ctx?.userId ?? context?.user?.id ?? 'anya_owner'
+}
+
+registerTool({
+  name: 'owner.find_duplicate_profiles',
+  description: 'OWNER ONLY. Find groups of likely-duplicate profiles so they can be combined. Read-only — nothing is changed. Returns each group with its suggested winner (the most complete / user-owned profile) and the losers that would fold into it, with their ids. Use when the owner says "find duplicate profiles" / "which profiles look like duplicates?" before merging.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      strategy: {
+        type: 'string',
+        enum: ['exact_name', 'similar_name', 'email_or_phone'],
+        description: "How to group duplicates: 'exact_name' (default), 'similar_name' (fuzzy), or 'email_or_phone' (shared contact signal).",
+      },
+      limitGroups: { type: 'number', description: 'Max duplicate groups to return (default 50).' },
+      includeInactive: { type: 'boolean', description: 'Include already-deleted profiles (default false).' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const strategy = ['exact_name', 'similar_name', 'email_or_phone'].includes(params?.strategy)
+      ? params.strategy
+      : 'exact_name'
+    const limitGroups = Math.max(1, Math.min(200, Number(params?.limitGroups) || 50))
+    const includeInactive = params?.includeInactive === true
+    const { findDuplicateProfileGroups } = await import('./profileDedupeService.js')
+    const report = await findDuplicateProfileGroups(db, { strategy, limitGroups, includeInactive })
+    return {
+      ok: true,
+      strategy,
+      scanned: report?.scanned ?? 0,
+      capped: report?.capped ?? false,
+      group_count: report?.groups?.length ?? 0,
+      groups: report?.groups ?? [],
+    }
+  },
+})
+
+registerTool({
+  name: 'owner.merge_profiles',
+  description: 'OWNER ONLY. Combine one or more duplicate profiles into a single winner. Non-destructive: only fills empty fields on the winner (never overwrites existing data) and repoints all documents, applications, crawler jobs, sessions, billing, and opportunities to the winner; losers are soft-deleted. Defaults to a DRY-RUN preview (apply:false) — call again with apply:true to actually commit. Use when the owner says "merge these profiles" / "combine profile X into Y".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      winnerId: { type: 'string', description: 'The profile id to KEEP (everything folds into this one).' },
+      loserIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'One or more profile ids to fold into the winner and then soft-delete.',
+      },
+      apply: { type: 'boolean', description: 'false (default) = preview only; true = actually perform the merge.' },
+    },
+    required: ['winnerId', 'loserIds'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const winnerId = String(params?.winnerId || '').trim()
+    const loserIds = Array.isArray(params?.loserIds)
+      ? params.loserIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : []
+    if (!winnerId) throw new Error('winnerId is required')
+    if (loserIds.length === 0) throw new Error('loserIds must contain at least one profile id')
+    const apply = params?.apply === true
+    const { mergeProfiles } = await import('./profileDedupeService.js')
+    const result = await mergeProfiles(db, {
+      winnerId,
+      loserIds,
+      dryRun: !apply,
+      actorUserId: ownerActorUserId(context),
+    })
+    return {
+      ok: true,
+      applied: apply,
+      preview: !apply,
+      ...result,
+    }
+  },
+})
+
+registerTool({
+  name: 'owner.deduplicate_profiles',
+  description: 'OWNER ONLY. Auto-combine ALL duplicate profile groups in one pass — picks a deterministic winner per group (most complete / user-owned) and folds the rest in. Defaults to a DRY-RUN preview (apply:false) so the owner can review what would merge; call again with apply:true to commit every group. Use when the owner says "combine similar profiles" / "deduplicate all profiles" / "clean up duplicate profiles".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      strategies: {
+        type: 'array',
+        items: { type: 'string', enum: ['exact_name', 'similar_name', 'email_or_phone'] },
+        description: 'Which matching strategies to run. Default: all three.',
+      },
+      includeInactive: { type: 'boolean', description: 'Include already-deleted profiles (default false).' },
+      apply: { type: 'boolean', description: 'false (default) = preview only; true = actually merge every group.' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const apply = params?.apply === true
+    const includeInactive = params?.includeInactive === true
+    const { deduplicateProfileGroups, PROFILE_DEDUPE_STRATEGIES } = await import('./profileDedupeService.js')
+    const allowed = new Set(PROFILE_DEDUPE_STRATEGIES)
+    const requested = Array.isArray(params?.strategies)
+      ? params.strategies.map((s) => String(s || '').trim()).filter((s) => allowed.has(s))
+      : []
+    const strategies = requested.length > 0 ? requested : PROFILE_DEDUPE_STRATEGIES
+    const result = await deduplicateProfileGroups(db, {
+      strategies,
+      includeInactive,
+      dryRun: !apply,
+      actorUserId: ownerActorUserId(context),
+    })
+    return {
+      ok: true,
+      applied: apply,
+      preview: !apply,
+      ...result,
+    }
+  },
+})
