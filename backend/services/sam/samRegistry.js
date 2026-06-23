@@ -119,6 +119,41 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Delegates to adminHealthCheck for a system-wide health snapshot.',
   },
   {
+    // Make operator-provisionable funding sources DISCOVERABLE: a source that is
+    // inactive only because an optional API key is unset is not a failure (the
+    // system degrades honestly), but it should be visible in Mission Control so
+    // the owner knows exactly what to provision to widen coverage — instead of
+    // the source silently contributing nothing.
+    id: 'discovery.sourceCredentials',
+    label: 'Funding source credentials',
+    category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Lists funding/discovery sources inactive because an optional API key is unset (e.g. CareerOneStop scholarships, Google-Maps geo-local prospects). Informational — provisioning each key widens coverage; none blocks a core goal.',
+    async run() {
+      const inactive = []
+      try {
+        const { SOURCES } = await import('../../crawler-os/sourceRegistry.js')
+        for (const s of SOURCES) {
+          const missing = (s.requires_env || []).filter((k) => !process.env[k] || !String(process.env[k]).trim())
+          if (missing.length) inactive.push({ source: s.source_id, missing_env: missing })
+        }
+      } catch { /* registry load issue is benign for this check */ }
+      // Yana's geo-local prospect source (not a crawler-os registry source).
+      if (!process.env.GOOGLE_MAPS_API_KEY || !String(process.env.GOOGLE_MAPS_API_KEY).trim()) {
+        inactive.push({ source: 'google_maps (Yana geo-local prospects)', missing_env: ['GOOGLE_MAPS_API_KEY'] })
+      }
+      if (inactive.length === 0) return { ok: true, summary: 'all funding sources have their required credentials' }
+      return {
+        ok: false, // surfaced as a LOW (informational) finding, not a real failure
+        summary: `${inactive.length} funding source(s) inactive for missing optional key(s): ${inactive.map((i) => i.source).join(', ')}`,
+        evidence: { inactive },
+        recommended_fix: 'Provision to widen coverage: ' + inactive.map((i) => `${i.source} needs ${i.missing_env.join(' + ')}`).join('; '),
+        confidence: 1,
+      }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
