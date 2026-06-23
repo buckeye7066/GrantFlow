@@ -389,15 +389,22 @@ export function createOutlookProvider({
   }
 
   /**
-   * Verify the primary mailbox is reachable. Tries /users/{mailbox} which
-   * returns 200 for an existing mailbox, 404 otherwise.
+   * Verify the primary mailbox is reachable. Probes the mailbox's Drafts folder
+   * (`/users/{mailbox}/mailFolders/drafts`) rather than `/users/{mailbox}`: the
+   * app-only role John actually has is Mail.ReadWrite, which CAN read the drafts
+   * folder but CANNOT read the directory user object — so `/users/{mailbox}`
+   * returned 403 Authorization_RequestDenied and the verifier mislabeled it
+   * `mailbox_not_found`, sending operators down the wrong path. The drafts probe
+   * confirms exactly what John needs (the mailbox is reachable AND he can write
+   * drafts into it) using only the permission he has. A 403 is reported honestly
+   * as an insufficient-privileges signal, not a missing mailbox.
    */
   async function verifyMailbox() {
     if (!ready) {
       return { ok: false, reason: 'not_configured', missing }
     }
     const token = await getAccessToken()
-    const url = `${GRAPH_BASE}/users/${encodeURIComponent(config.primaryMailbox)}`
+    const url = `${GRAPH_BASE}/users/${encodeURIComponent(config.primaryMailbox)}/mailFolders/drafts`
     const res = await fetchImpl(url, {
       method: 'GET',
       headers: { authorization: `Bearer ${token}` },
@@ -407,11 +414,17 @@ export function createOutlookProvider({
       return {
         ok: true,
         primary_mailbox: config.primaryMailbox,
-        user_principal_name: json?.userPrincipalName || null,
+        drafts_folder_id: json?.id || null,
       }
     }
     const text = await safeText(res)
-    return { ok: false, reason: 'graph_returned_error', status: res.status, detail: redact(text) }
+    // Honest, actionable reasons (the verifier maps these to its report).
+    const reason = res.status === 403
+      ? 'insufficient_graph_privileges'
+      : res.status === 404
+        ? 'mailbox_not_found'
+        : 'graph_returned_error'
+    return { ok: false, reason, status: res.status, detail: redact(text) }
   }
 
   return {

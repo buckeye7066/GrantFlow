@@ -63,6 +63,11 @@ export async function verifyAlias({
     details.steps.push({ step: 'verify_mailbox', ok: !!mailbox.ok, ...mailbox })
     if (!mailbox.ok) {
       const detailsClean = maskSecrets(details)
+      // Surface the provider's honest reason instead of collapsing every
+      // non-200 to "mailbox_not_found": a 403 is insufficient Graph privileges
+      // (the app has Mail.ReadWrite but not directory read), NOT a missing
+      // mailbox — mislabeling it sent operators down the wrong path.
+      const reason = mailbox.reason || 'mailbox_not_found'
       if (db) {
         await recordAliasCheck(db, {
           primary_mailbox: config.primaryMailbox,
@@ -71,10 +76,10 @@ export async function verifyAlias({
           alias_send_supported: false,
           test_draft_provider_id: null,
           details_json: detailsClean,
-          error: 'mailbox_not_found',
+          error: reason,
         })
       }
-      return { ok: false, reason: 'mailbox_not_found', report: aliasReport }
+      return { ok: false, reason, report: aliasReport }
     }
 
     if (!config.fromAlias) {
