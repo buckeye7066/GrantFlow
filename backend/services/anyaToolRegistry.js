@@ -871,6 +871,19 @@ export async function invokeTool(name, params, context) {
       const db = context?.db
       if (db && typeof db.prepare === 'function') {
         const user = context?.user || {}
+        // user_id FKs to users(id). Autonomous callers (Sam's diagnostics run
+        // Anya tools as a synthetic actor like 'agent:sam'/'system_admin_token')
+        // have no users row, so inserting their id FK-violated on EVERY call —
+        // the usage row was lost (Anya undercounted for mission-goal grounding)
+        // and the log was spammed. Persist the id only when it's a real user.
+        const rawUserId = user.userId ?? user.id ?? null
+        let usageUserId = null
+        if (rawUserId !== null && rawUserId !== undefined) {
+          try {
+            const u = await db.prepare('SELECT 1 AS x FROM users WHERE id = ? LIMIT 1').get(String(rawUserId))
+            if (u) usageUserId = String(rawUserId)
+          } catch { usageUserId = null }
+        }
         await db
           .prepare(
             `INSERT INTO anya_tool_usage
@@ -881,7 +894,7 @@ export async function invokeTool(name, params, context) {
             randomUUID(),
             String(name),
             context?.sessionId ?? context?.session_id ?? null,
-            user.userId ?? user.id ?? null,
+            usageUserId,
             context?.profile_id ?? context?.profileId ?? null,
             JSON.stringify(params ?? {}).slice(0, 4000),
             ok ? 1 : 0,
@@ -4073,7 +4086,7 @@ registerTool({
   schema: {
     type: 'object',
     properties: {
-      agent: { type: 'string', enum: ['yana', 'john', 'hamilton', 'robert'], description: 'Which agent to run' },
+      agent: { type: 'string', enum: ['yana', 'john', 'hamilton', 'robert', 'sam'], description: 'Which agent to run' },
       profileId: { type: 'string', description: 'Profile to act on (Hamilton/Robert)' },
       mode: { type: 'string', description: 'Run mode where applicable (e.g. observe|execute)' },
     },
@@ -4117,6 +4130,13 @@ registerTool({
         const { runRobert } = await import('./robert/robertAgent.js').catch(() => ({}))
         if (typeof runRobert !== 'function') return { agent, result: { skipped: 'robert_runner_unavailable' } }
         return { agent, result: await runRobert({ db, profileId: params?.profileId || null, trigger: 'anya_owner', createdByUserId: userId }) }
+      }
+      if (agent === 'sam') {
+        // Sam is the diagnostics/health agent — the one Control-Center agent Anya
+        // previously could not drive ("Unknown agent sam"), a gap in the
+        // every-agent-usable-by-Anya rule. Default to observe (read-only audit).
+        const { runSam } = await import('./sam/samAgent.js')
+        return { agent, result: await runSam({ db, mode: params?.mode || 'observe', trigger: 'anya_owner', createdByUserId: userId }) }
       }
       throw new Error(`Unknown agent "${agent}"`)
     } catch (err) {
