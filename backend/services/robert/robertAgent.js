@@ -88,13 +88,36 @@ async function runRobertDiscoveryViaCrawlerOs({ db, profileIds, counters, summar
       counters.candidates_found += run.sources.reduce((a, s) => a + (s.parsed || 0), 0)
       counters.opportunities_ingested += persisted.opportunities
       counters.opportunities_matched += persisted.matches
-      counters.recommendations_created += run.recommendations.length
+      // CRITICAL FIX (charter audit 2026-06-23): the OS path used to only
+      // INCREMENT a counter by run.recommendations.length and never wrote a
+      // robert_profile_recommendations row — so the count was fiction and the
+      // user never saw a Robert toast (the delivery stream reads that empty
+      // table). Actually persist each ACCEPT-band recommendation now, and count
+      // only the ones really created. Skipped on dry-run (preview only).
+      let recsCreated = 0
+      if (!dryRun) {
+        for (const rec of run.recommendations || []) {
+          const res = await safe(() => createRecommendationIfHelpful({
+            db,
+            profileId,
+            opportunityId: rec.opportunity_id,
+            matchDecision: rec.decision,
+            matchScore: rec.match_score,
+            opportunityTitle: rec.title || '',
+            whyFound: 'Robert discovery (crawler-os)',
+          }), { errors: summary.errors, stage: `persist_recommendation:${profileId}` })
+          if (res?.created) recsCreated += 1
+        }
+      } else {
+        recsCreated = run.recommendations.length // preview count only
+      }
+      counters.recommendations_created += recsCreated
       summary.matched.push({
         profile_id: profileId,
         applicant_types: thesis.applicant_types,
         stored: run.stored,
         matches: persisted.matches,
-        recommendations: run.recommendations.length,
+        recommendations: recsCreated,
         dry_run: dryRun || undefined,
         sources: run.sources.map((s) => ({ source_id: s.source_id, outcome: s.outcome, reason: s.reason, stored: s.stored, deduped: s.deduped })),
         zero_result: run.zero_result?.reason ?? null,
