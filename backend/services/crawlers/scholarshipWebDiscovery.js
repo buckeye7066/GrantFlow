@@ -36,6 +36,42 @@ export function isScholarshipWebDiscoveryEnabled() {
   return Boolean(process.env.BRAVE_SEARCH_API_KEY) && Boolean(process.env.ANTHROPIC_API_KEY)
 }
 
+/**
+ * Scholarship-CENTRIC queries for an individual. The generic local-funding query
+ * builder is geo-anchored ("Bradley County grant") and surfaces local-government
+ * /directory pages, not applyable scholarships — so for individuals we query by
+ * FIELD OF STUDY + level + interests + state, which is what actually returns real
+ * awards (e.g. "Paramedic scholarship Tennessee"). Falls back to need/level when
+ * a major isn't known.
+ */
+export function buildScholarshipQueries(profileContext = {}, thesis = {}) {
+  const s = profileContext?.sections ?? {}
+  const edu = s.education ?? {}
+  const loc = profileContext?.signals?.location ?? {}
+  const state = loc.state || profileContext?.profile?.state || ''
+  const major = String(edu.intended_major || edu.major || edu.field_of_study || '').trim()
+  const levelRaw = String(edu.highest_level || '').toLowerCase()
+  const level = /graduate|master|phd|doctoral/.test(levelRaw)
+    ? 'graduate'
+    : (/undergrad|college|associate|bachelor|student/.test(levelRaw) ? 'undergraduate' : '')
+  const interests = []
+  try { for (const i of profileContext?.signals?.interests ?? []) interests.push(String(i)) } catch { /* set/iterable */ }
+
+  const queries = []
+  const push = (q) => { const v = String(q || '').replace(/\s+/g, ' ').trim(); if (v && !queries.includes(v)) queries.push(v) }
+
+  if (major) {
+    push(`${major} scholarship ${state}`)
+    push(`scholarship for ${major} students ${level}`)
+  }
+  for (const it of interests.slice(0, 2)) push(`${it} scholarship ${state}`)
+  if (state) push(`${level || 'college'} scholarship ${state} application 2026`)
+  push(`scholarship application 2026 ${major || level || 'college'} ${state}`)
+
+  const out = queries.slice(0, 6)
+  return out
+}
+
 /** Fetch a page and return readable text (bounded), or '' on any failure. */
 async function fetchPageText(url, { timeoutMs = 8000, maxChars = 6000 } = {}) {
   if (typeof fetch !== 'function') return ''
@@ -142,9 +178,10 @@ export async function discoverScholarshipsViaWeb(db, {
   if (!profileId) return { ok: false, reason: 'no_profile_id', inserted: 0, matched: 0 }
 
   const deadline = Date.now() + timeoutMs
-  // Scholarship-biased queries from the full profile (reuses the local-funding
-  // query builder; it already emits "<need> scholarship <place>" for students).
-  const queries = buildLocalFundingQueries(profileContext, 6)
+  // Scholarship-CENTRIC queries (field/level/interests/state). Fall back to the
+  // generic local-funding builder only if we couldn't form any.
+  let queries = buildScholarshipQueries(profileContext, thesis)
+  if (queries.length === 0) queries = buildLocalFundingQueries(profileContext, 6)
   if (queries.length === 0) return { ok: true, inserted: 0, matched: 0, reason: 'no_queries' }
 
   // 1) Brave search → dedup leads by URL.
