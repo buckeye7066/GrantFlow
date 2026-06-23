@@ -24,6 +24,7 @@
 
 import { runSam } from './samAgent.js'
 import { SAM_MODES, SAM_TRIGGERS } from './samTypes.js'
+import { makeInternalHttpProbe } from './samHttpProbe.js'
 
 let activeTimer = null
 let starting = false
@@ -95,6 +96,9 @@ export function startSamScheduler({ db, logger = console } = {}) {
         mode: chooseScheduledMode(),
         trigger: SAM_TRIGGERS.STARTUP,
         dryRun: true,
+        // Without a probe, autonomous Sam fail-skips every HTTP check yet still
+        // reports a green score. Loopback probe with the server's admin token.
+        httpProbe: makeInternalHttpProbe(),
       }).catch((err) => logger.warn?.('[sam:scheduler] startup run failed:', err?.message || err))
     }
     if (shouldRunOnSchedule()) {
@@ -128,6 +132,7 @@ function scheduleNext({ db, logger }) {
         mode: chooseScheduledMode(),
         trigger: SAM_TRIGGERS.SCHEDULED,
         dryRun: true,
+        httpProbe: makeInternalHttpProbe(),
       })
     } catch (err) {
       logger.warn?.('[sam:scheduler] scheduled run failed:', err?.message || err)

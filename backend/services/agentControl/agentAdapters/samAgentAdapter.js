@@ -86,8 +86,10 @@ export class SamAgentAdapter extends BaseAgentAdapter {
     }
 
     let runSam
+    let makeInternalHttpProbe = () => null
     try {
       ({ runSam } = await import('../../sam/samAgent.js'))
+      ;({ makeInternalHttpProbe } = await import('../../sam/samHttpProbe.js'))
     } catch (err) {
       return {
         ok: false,
@@ -108,6 +110,9 @@ export class SamAgentAdapter extends BaseAgentAdapter {
         trigger: 'admin-ui',
         dryRun,
         persist: true,
+        // Credentialed loopback probe so the Control-Center run actually
+        // executes Sam's HTTP-class checks instead of fail-skipping them.
+        httpProbe: makeInternalHttpProbe(),
       })
     } catch (err) {
       return {
