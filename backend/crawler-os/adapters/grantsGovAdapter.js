@@ -18,19 +18,73 @@ import { buildCrawlerQueries, inferCandidateProfile, inferFundingFlags } from '.
 const SEARCH_ENDPOINT = 'https://api.grants.gov/v1/api/search2';
 const DETAIL_BASE = 'https://www.grants.gov/search-results-detail';
 
+// Map our canonical applicant buckets → grants.gov applicant-eligibility codes
+// (verified against the live Search2 eligibility facets). Filtering the query by
+// these codes is server-side precision: a CHURCH (nonprofit) no longer receives
+// school-district/IHE-only grants (OESE/OSEP special-ed etc.), which were
+// scoring 85-95 as false positives because the adapter tagged every grant with
+// the source row's broad org applicant types. '99' (unrestricted) is always
+// included so genuinely-open grants still surface.
+const GRANTS_GOV_ELIGIBILITY_CODES = Object.freeze({
+  nonprofit: ['12', '13'],
+  church: ['12', '13'],
+  ministry: ['12', '13'],
+  school: ['05', '06', '20'],
+  government: ['00', '01', '02', '04', '07'],
+  business: ['22', '23'],
+  vfd: ['04', '02'],
+  farm: ['25'],
+  individual: ['21'],
+  family: ['21'],
+  student: ['21'],
+  veteran: ['21'],
+});
+const UNRESTRICTED_ELIGIBILITY = '99';
+
+/**
+ * Build the grants.gov `eligibilities` filter for a thesis. Returns '' (no
+ * filter — preserve recall) when the profile's applicant types are unknown or
+ * explicitly broad ('*'); otherwise a comma-separated code list = the profile's
+ * codes + unrestricted.
+ */
+export function eligibilitiesFor(thesis = {}) {
+  const types = Array.isArray(thesis.applicant_types) ? thesis.applicant_types : [];
+  if (types.length === 0 || types.includes('*')) return '';
+  const codes = new Set([UNRESTRICTED_ELIGIBILITY]);
+  for (const t of types) {
+    for (const c of GRANTS_GOV_ELIGIBILITY_CODES[String(t).toLowerCase()] ?? []) codes.add(c);
+  }
+  // Only 99 → nothing profile-specific mapped; don't constrain (recall).
+  if (codes.size <= 1) return '';
+  // grants.gov Search2 ORs eligibility codes with a PIPE delimiter. A comma
+  // returns 0 hits (treated as one invalid token) — verified against the live
+  // API — so the delimiter choice is load-bearing, not cosmetic.
+  return [...codes].join('|');
+}
+
 export function createGrantsGovAdapter() {
   return createBaseAdapter({
     source_id: 'grants_gov',
     family: 'api',
     requiredEnv: [], // public API
     buildRequests(thesis, source) {
+      const eligibilities = eligibilitiesFor(thesis);
       return buildCrawlerQueries(thesis, source, { limit: 4 }).map((keyword) => ({
         url: SEARCH_ENDPOINT,
         query: keyword,
         init: {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify({ keyword, oppStatuses: 'posted', rows: 25, startRecordNum: 0 }),
+          // Server-side eligibility filter scopes results to what the profile can
+          // actually apply for (precision); omitted entirely for broad/unknown
+          // profiles to preserve recall.
+          body: JSON.stringify({
+            keyword,
+            oppStatuses: 'posted',
+            rows: 25,
+            startRecordNum: 0,
+            ...(eligibilities ? { eligibilities } : {}),
+          }),
         },
         parseCfg: grantsSearchParseCfg(),
       }));
