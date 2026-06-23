@@ -493,10 +493,15 @@ function summarisePageState(page, fields, buttons) {
 async function captureConfirmation(page, screenshotsDir) {
   const url = (() => { try { return page.url() } catch { return null } })()
   const html = await page.content().catch(() => '')
-  // Extract a confirmation reference if any looks like one.
+  // Extract a confirmation reference if any looks like one. The label match is
+  // case-insensitive, but a real confirmation/reference CODE is alphanumeric and
+  // contains at least one digit — so we reject prose captured by the old
+  // case-insensitive `[A-Z0-9-]{6,}` (it matched plain words like "designed" /
+  // "through" off "Application designed to…", recording meaningless references
+  // on auto-submitted runs and making "submitted" untrustworthy).
   let reference = null
-  const m = html.match(/(?:Confirmation|Reference|Application)[\s#:.]*([A-Z0-9-]{6,})/i)
-  if (m) reference = m[1]
+  const m = html.match(/(?:Confirmation|Reference|Application)(?:\s*(?:number|no\.?|#|id|code))?[\s#:.]*([A-Za-z0-9][A-Za-z0-9-]{5,})/i)
+  if (m && /\d/.test(m[1]) && !/^[a-z]+$/.test(m[1])) reference = m[1]
   let screenshotPath = null
   try {
     if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true })

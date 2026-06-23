@@ -41,15 +41,27 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       queueDepth = Number(r?.c || 0)
     } catch { /* table may not exist */ }
     try {
+      // resolved_at is a timestamptz in Postgres; COALESCE(resolved_at,'')=''
+      // throws "invalid input syntax for type timestamp with time zone" (caught
+      // below), so open_blockers was ALWAYS 0 and health never escalated.
       const r = await db
-        ?.prepare(`SELECT COUNT(*) AS c FROM hamilton_blockers WHERE COALESCE(resolved_at, '') = ''`)
+        ?.prepare(`SELECT COUNT(*) AS c FROM hamilton_blockers WHERE resolved_at IS NULL`)
         .get()
       openBlockers = Number(r?.c || 0)
     } catch { /* table may not exist */ }
     try {
-      const r = await db
-        ?.prepare(`SELECT id, status, started_at FROM hamilton_runs ORDER BY started_at DESC LIMIT 1`)
+      // Real run history lives in hamilton_autopilot_runs (hamilton_runs is never
+      // written, so reading it left last_status/health permanently 'idle' — a
+      // broken observability surface for Sam/Anya). Prefer the autopilot table,
+      // fall back to hamilton_runs for any env that still populates it.
+      let r = await db
+        ?.prepare(`SELECT id, status, started_at FROM hamilton_autopilot_runs ORDER BY started_at DESC LIMIT 1`)
         .get()
+      if (!r) {
+        r = await db
+          ?.prepare(`SELECT id, status, started_at FROM hamilton_runs ORDER BY started_at DESC LIMIT 1`)
+          .get()
+      }
       last = r || null
     } catch { /* table may not exist */ }
     const lastRunAt = (await getLastRunAtFromEvents(db, 'hamilton')) || last?.started_at || null
