@@ -143,6 +143,28 @@ export const SOURCES = Object.freeze([
     default_kinds: [OPPORTUNITY_KIND.SCHOLARSHIP],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
   },
+  {
+    // The first REAL specific-opportunity source for INDIVIDUALS — DOL's
+    // CareerOneStop Scholarship Finder (a structured scholarship database).
+    // Closes the audit gap where individuals only ever got directory/finder
+    // pointers (0 matches >=75). Gated on a free DOL API token; honest
+    // SKIPPED(missing_env) until CAREERONESTOP_USER_ID + CAREERONESTOP_TOKEN are
+    // set — never fabricates rows.
+    source_id: 'careeronestop_scholarships',
+    name: 'CareerOneStop Scholarship Finder (U.S. DOL)',
+    source_type: 'api',
+    trust_tier: TRUST_TIER.OFFICIAL_API,
+    base_url: 'https://api.careeronestop.org',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['student', 'individual', 'family', 'veteran'],
+    need_categories: ['education'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.SCHOLARSHIP],
+    crawler_method: 'api',
+    requires_env: ['CAREERONESTOP_USER_ID', 'CAREERONESTOP_TOKEN'],
+    refresh_frequency_days: 7,
+    priority_score: 80,
+  },
 ]);
 
 const BY_ID = Object.freeze(Object.fromEntries(SOURCES.map((s) => [s.source_id, s])));

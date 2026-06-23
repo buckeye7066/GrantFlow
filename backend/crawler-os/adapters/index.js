@@ -11,6 +11,7 @@ import { createBenefitsGovAdapter } from './benefitsGovAdapter.js';
 import { createUsdaRdAdapter } from "./usdaRdAdapter.js";
 import { createFemaAfgAdapter } from "./femaAfgAdapter.js";
 import { createStudentAidGovAdapter } from "./studentAidGovAdapter.js";
+import { createCareerOneStopAdapter } from "./careerOneStopAdapter.js";
 const FACTORIES = Object.freeze({
   grants_gov: createGrantsGovAdapter,
   sam_gov: createSamGovAdapter,
@@ -19,6 +20,7 @@ const FACTORIES = Object.freeze({
   usda_rd: createUsdaRdAdapter,
   fema_afg: createFemaAfgAdapter,
   studentaid_gov: createStudentAidGovAdapter,
+  careeronestop_scholarships: createCareerOneStopAdapter,
   // .
   // The pipeline records SKIPPED(no_adapter) for these until implemented.
 });
