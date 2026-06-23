@@ -662,16 +662,13 @@ export async function pushQualifiedToJohn(
       )
       .run(...ids)
 
-    // Record the hand-offs in Yana's John queue (Mission Control's
-    // leads_sent_to_john metric) in ONE multi-row insert (was N → 1).
-    // Best-effort: yana_john_queue is created by migration 0096/100 + boot
-    // self-heal, but older DBs may lack it.
-    try {
-      const queueValues = ids.map(() => `(?, 'queued', ${nowFn})`).join(', ')
-      await db
-        .prepare(`INSERT INTO yana_john_queue (lead_candidate_id, status, created_at) VALUES ${queueValues}`)
-        .run(...ids)
-    } catch { /* queue table missing on older DBs — non-fatal */ }
+    // NOTE: we deliberately do NOT write yana_john_queue. It was a write-only
+    // dead-end: nothing consumed it as a work queue (John reads qualified leads
+    // directly from yana_lead_candidates via listQualifiedLeads), it had no
+    // dedup, and it grew forever — so the Mission Control leads_sent_to_john
+    // metric that COUNTed it drifted above reality (re-pushes/re-runs re-inserted
+    // the same lead). The truthful signal is the pushed_to_john flag set above,
+    // which the telemetry aggregator now counts directly (one row per lead).
   }
 
   const pushed = ids.length

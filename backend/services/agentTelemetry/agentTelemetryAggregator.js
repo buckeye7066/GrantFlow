@@ -653,27 +653,24 @@ export async function aggregateYana(db, range) {
           }
         }
       }
-      if (johnQ) {
+      // TRUTHFUL leads_sent_to_john = distinct lead candidates flagged
+      // pushed_to_john (one flag per lead). This is now PRIMARY: the legacy
+      // yana_john_queue is no longer written (it double-counted re-pushes and
+      // grew forever); we only fall back to counting it on a legacy DB whose
+      // candidates table predates the pushed_to_john column.
+      const lcols2 = leads ? new Set(await columnsFor(db, 'yana_lead_candidates')) : new Set()
+      const ltcol2 = pickTimeCol(lcols2)
+      if (leads && ltcol2 && lcols2.has('pushed_to_john')) {
+        // pushed_to_john is an integer flag (0/1) — compare to 1 (valid on both
+        // SQLite and Postgres; `= TRUE` throws integer=boolean on PG).
+        const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE pushed_to_john = 1 AND ${ltcol2} >= ?`).get(since)
+        out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
+      } else if (johnQ) {
         const jcols = new Set(await columnsFor(db, 'yana_john_queue'))
         const jtcol = pickTimeCol(jcols)
         if (jtcol) {
           const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_john_queue WHERE ${jtcol} >= ?`).get(since)
           out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
-        }
-      } else if (leads) {
-        // Fallback: count leads flagged as pushed to John directly on the
-        // lead-candidates table when the dedicated queue table is absent.
-        const lcols = new Set(await columnsFor(db, 'yana_lead_candidates'))
-        const ltcol = pickTimeCol(lcols)
-        if (ltcol && lcols.has('pushed_to_john')) {
-          // pushed_to_john is stored as an integer flag (0/1). Comparing it to a
-          // boolean literal (`= TRUE`) throws `operator does not exist:
-          // integer = boolean` on Postgres — compare to 1 so it's valid on both
-          // SQLite and Postgres.
-          const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE pushed_to_john = 1 AND ${ltcol} >= ?`).get(since)
-          out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
-        } else {
-          out.primary_metrics.leads_sent_to_john = 0
         }
       } else {
         out.primary_metrics.leads_sent_to_john = 0
