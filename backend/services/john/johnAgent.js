@@ -41,6 +41,7 @@ import { draftEmailForLead } from './johnDraftService.js'
 import { verifyAlias } from './johnAliasVerifier.js'
 import { createOutlookProvider } from './johnOutlookProvider.js'
 import { makeSuppressionChecker } from './johnSuppressionService.js'
+import { reconcileDeletedDrafts } from './johnDraftReconcile.js'
 
 function normalizeMode(mode) {
   const m = String(mode || '').trim().toLowerCase()
@@ -135,6 +136,24 @@ export async function runJohn({
       return { ok: result.ok, run_id: runId, mode: m, status, ...summary }
     }
 
+    // Reconcile tracked drafts against the live mailbox BEFORE deciding what to
+    // draft. A draft the owner deleted in Outlook is their "reject" decision; we
+    // retire its row to DELETED_BY_USER so the system stops reporting a draft
+    // that no longer exists (and never resurrects one the owner removed). Runs
+    // in every non-verify mode; best-effort — a not-ready provider or any error
+    // is swallowed so it can never block the run. Reuse pInst below.
+    const pInst = provider || createOutlookProvider({ config: cfg, logger })
+    // Observe mode is contractually "never calls Outlook", so skip the live
+    // mailbox check there; every drafting mode reconciles first.
+    if (m !== JOHN_MODES.OBSERVE) {
+      try {
+        const rec = await reconcileDeletedDrafts({ db, provider: pInst, logger })
+        summary.drafts_reconciled_deleted = rec.reconciled || 0
+      } catch (err) {
+        logger?.warn?.('[John] draft reconcile failed (non-fatal)', { error: err?.message })
+      }
+    }
+
     // Pull candidate leads (always — observe mode also lists them).
     const fetched = await fetchLeadsForJohn({
       db,
@@ -187,7 +206,7 @@ export async function runJohn({
     }
 
     const aliasCheck = await getLatestAliasCheck(db).catch(() => null)
-    const pInst = provider || createOutlookProvider({ config: cfg, logger })
+    // pInst was created above for draft reconciliation; reuse it here.
 
     // Honest reporting: a "completed" run that produced nothing has, until now,
     // looked identical to a successful one in Mission Control. Surface the two

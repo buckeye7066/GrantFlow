@@ -26,6 +26,7 @@ import { SAFETY_STATUS } from './johnTypes.js'
 import { interpretLead } from './johnLeadInterpreter.js'
 import { listDrafts, updateDraft } from './johnRunStore.js'
 import { createOutlookProvider } from './johnOutlookProvider.js'
+import { markDraftDeletedInOutlook } from './johnDraftReconcile.js'
 
 // Statuses whose Outlook draft is still live and editable.
 const REFRESHABLE_STATUSES = new Set(['created', 'needs_sender_alias_review', 'needs_review'])
@@ -176,7 +177,13 @@ export async function refreshDraftBodies(db, opts = {}) {
       results.push({ ...label, status: 'updated', is_draft: patchRes.is_draft })
     } catch (err) {
       if (err?.notFound || err?.status === 404) {
+        // The owner deleted this draft in Outlook. Retire the row to
+        // DELETED_BY_USER (same choke-point semantics as John's pre-run
+        // reconcile) so the system stops tracking a draft that's gone.
         skipped += 1
+        await markDraftDeletedInOutlook(db, row, { logger }).catch((e) =>
+          logger?.warn?.('[John] refresh could not retire deleted draft', { draft_id: row.id, error: e?.message }),
+        )
         results.push({ ...label, status: 'missing_in_outlook' })
         continue
       }
