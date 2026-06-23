@@ -15,17 +15,23 @@ export function createFoundationDirectoryAdapter() {
     source_id: 'cof_locator',
     family: 'directory',
     requiredEnv: [],
-    buildRequests(thesis, source) {
+    buildRequests(_thesis, source) {
       const url = `${source.base_url}/page/community-foundation-locator`;
-      const state = thesis.location?.state ?? null;
+      // The title MUST agree with the stored match-scope. This locator is a single
+      // NATIONAL page (geography: { national: true } in the source registry) and it
+      // dedups on the shared URL, so there is exactly one COF row in the corpus for
+      // every profile. Earlier this baked the crawling profile's state into the
+      // title ("...serving OH..."), but since the row matches every profile
+      // nationwide, a Tennessee student would see an Ohio label — a misleading,
+      // wrong-geo suggestion that violates honest-matching (goals #1/#6). Always
+      // label it as the national directory it actually is; the user searches their
+      // own area on cof.org.
       return [{
         url,
         parseCfg: {
           directoryCandidate: {
             kind: OPPORTUNITY_KIND.DIRECTORY,
-            title: state
-              ? `Community foundations serving ${state} (locator)`
-              : 'Community Foundation Locator (national directory)',
+            title: 'Community Foundation Locator (national directory)',
             sponsor: 'Council on Foundations',
             summary: 'Searchable directory of community foundations. Use it to find local funders, then apply to each foundation directly.',
             info_url: url,
