@@ -27,6 +27,7 @@ import { searchOrganizations as realSearchOrganizations } from '../../src/integr
 import { NTEE_DESCRIPTIONS, NEED_TO_NTEE_MAP } from '../../constants/nteeMapping.js'
 import { createLogger } from '../../utils/logger.js'
 import { searchPlaces as realSearchPlaces, getGoogleMapsApiKey } from './googleMapsProvider.js'
+import { searchPlaces as realOsmSearchPlaces } from './osmProvider.js'
 
 const log = createLogger('yanaProspectSources')
 
@@ -264,6 +265,49 @@ export function makeGoogleMapsSource(deps = {}) {
   }
 }
 
+/**
+ * OpenStreetMap (Overpass) prospect source — the FREE, keyless geo-local source.
+ * Finds local mission/community orgs near the discovery geography. Unlike Google
+ * Maps it needs no API key/billing; it only needs a `location` (it geo-anchors
+ * via Nominatim), so it honestly no-ops when no location is known.
+ *
+ * @param {object} [deps]
+ * @param {Function} [deps.searchPlaces] injectable for tests — defaults to the live OSM integration.
+ */
+export function makeOpenStreetMapSource(deps = {}) {
+  const search = typeof deps.searchPlaces === 'function' ? deps.searchPlaces : realOsmSearchPlaces
+  return {
+    name: 'openstreetmap',
+    async discover({ limit = 40, location = null } = {}) {
+      if (!location) {
+        log.info('openstreetmap source skipped — no discovery location to anchor on')
+        return []
+      }
+      let places = []
+      try {
+        places = await search({ location, limit })
+      } catch (err) {
+        log.warn(`openstreetmap search failed: ${err?.message || err}`)
+        return []
+      }
+      const out = []
+      const seen = new Set()
+      for (const place of places || []) {
+        if (out.length >= limit) break
+        const prospect = mapPlaceToProspect(place, { source: 'openstreetmap' })
+        if (!prospect) continue
+        const key = prospect.external_id
+          ? `id:${prospect.external_id}`
+          : `name:${String(prospect.organization_name).trim().toLowerCase()}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(prospect)
+      }
+      return out
+    },
+  }
+}
+
 function registerDefaults() {
   if (!providers.has('propublica_990')) {
     registerProspectSource('propublica_990', makePropublica990Source())
@@ -273,6 +317,11 @@ function registerDefaults() {
   // behavior for operators who haven't supplied a key.
   if (!providers.has('google_maps')) {
     registerProspectSource('google_maps', makeGoogleMapsSource())
+  }
+  // OpenStreetMap: the free, keyless geo-local source — active by default (no
+  // key needed), so geo-local prospecting works out of the box.
+  if (!providers.has('openstreetmap')) {
+    registerProspectSource('openstreetmap', makeOpenStreetMapSource())
   }
 }
 
