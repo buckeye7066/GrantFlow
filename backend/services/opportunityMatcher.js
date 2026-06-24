@@ -18,6 +18,7 @@ import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
+import { extractHostname } from '../config/urlRules.js'
 import { RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR, isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { evaluateExclusion } from './exclusionEngine.js'
 import {
@@ -847,6 +848,21 @@ function buildDedupeKey(opp) {
   return `title:${normTitle}|scope:${scope}`
 }
 
+/** Registrable-ish hostname for an opportunity's primary URL (lowercased, no www). */
+function dedupeDomainOf(opp) {
+  const url = opp?.application_url || opp?.apply_url || opp?.url || opp?.source_url || ''
+  return extractHostname(url)
+}
+
+// A handful of aggregator domains legitimately host MANY distinct listings
+// (one domain, many real opportunities). The domain-collapse pass must NOT
+// reduce these to a single row, so we exempt them — within-scope title dedupe
+// (phase 2) still removes true repeats.
+const MULTI_LISTING_DOMAINS = new Set([
+  'grants.gov', 'sam.gov', 'simpler.grants.gov', 'benefits.gov',
+  'usaspending.gov', 'propublica.org', 'foundationcenter.org', 'candid.org',
+])
+
 /**
  * Deduplicate a list of opportunity objects for display purposes.
  * Does NOT mutate the DB. Keeps the highest-source-trust record when duplicates collide.
@@ -909,5 +925,37 @@ export function deduplicateOpportunities(opportunities) {
     if (!dropped.has(i)) kept.push(oppI)
   }
 
-  return kept
+  // Phase 3: domain-aware near-duplicate collapse.
+  //
+  // Phase 2 keys on title similarity ≥ 0.85 WITHIN the same geographic scope, so
+  // the same source domain re-listed under nuanced titles (e.g. Scholarships.com
+  // appearing 5×, a single college appearing 3×) survives. Collapse rows that
+  // share the same registrable domain AND a moderately-similar title (≥ 0.60) —
+  // keeping the highest-source-trust representative. Aggregator domains that
+  // legitimately host many distinct listings are exempt.
+  const domainKept = []
+  const domainDropped = new Set()
+  for (let i = 0; i < kept.length; i++) {
+    if (domainDropped.has(i)) continue
+    const oppI = kept[i]
+    const domI = dedupeDomainOf(oppI)
+    if (!domI || MULTI_LISTING_DOMAINS.has(domI)) { domainKept.push(oppI); continue }
+    const normI = normalizeTitleForDedupe(oppI?.title ?? oppI?.program_name ?? '')
+    for (let j = i + 1; j < kept.length; j++) {
+      if (domainDropped.has(j)) continue
+      const oppJ = kept[j]
+      if (dedupeDomainOf(oppJ) !== domI) continue
+      const normJ = normalizeTitleForDedupe(oppJ?.title ?? oppJ?.program_name ?? '')
+      if (titleSimilarity(normI, normJ) >= 0.6) {
+        if (getSourceRank(oppJ) > getSourceRank(oppI)) {
+          domainDropped.add(i)
+          break
+        }
+        domainDropped.add(j)
+      }
+    }
+    if (!domainDropped.has(i)) domainKept.push(oppI)
+  }
+
+  return domainKept
 }

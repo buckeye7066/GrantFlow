@@ -278,6 +278,51 @@ export function calculateConfidence(opportunity, oppNorm = null) {
 // Eligibility evaluation
 // ---------------------------------------------------------------------------
 
+// A title that names a specific COUNTY or local SCHOOL DISTRICT / education
+// foundation. These are intensely local awards (one district / one county). We
+// match the structural shape only — "<Name> County Schools", "<Name> County
+// Public Schools", "<Name> School District", "<Name> Unified", "<Name>
+// Education Foundation", "<Name> County" — so it works regardless of which US
+// county it is, without needing a county→state lookup table.
+const LOCAL_DISTRICT_TITLE_RX = new RegExp(
+  [
+    /\b[a-z][a-z.'-]+\s+county\s+(?:public\s+)?schools?\b/i.source,
+    /\b[a-z][a-z.'-]+\s+(?:unified\s+)?school\s+district\b/i.source,
+    /\b[a-z][a-z.'-]+\s+education\s+foundation\b/i.source,
+    /\b[a-z][a-z.'-]+\s+county\b/i.source,
+  ].join('|'),
+  'i',
+)
+
+function titleNamesLocalDistrict(title) {
+  const t = String(title || '').trim()
+  if (!t) return false
+  return LOCAL_DISTRICT_TITLE_RX.test(t)
+}
+
+/**
+ * True when the opportunity is national, in-state for ANY of the profile's
+ * states, or its location is simply unknown (missing = neutral). Only when this
+ * is FALSE — the opp resolves to a state that is NOT any of the profile's — does
+ * the out-of-state local-award flag fire. State is resolved from the normalized
+ * geography first, then the title, mirroring scoreGeoComponent.
+ */
+function geoLooksNationalOrInState(profileNorm, oppNorm) {
+  const geo = oppNorm?.geography ?? {}
+  if (geo.isNational || oppNorm?.isNational) return true
+
+  const profStateList = (Array.isArray(profileNorm?.states) && profileNorm.states.length)
+    ? profileNorm.states.map((s) => normalizeState(s)).filter(Boolean)
+    : (profileNorm?.state ? [normalizeState(profileNorm.state)] : [])
+  // Unknown profile location ⇒ neutral (never penalize).
+  if (profStateList.length === 0) return true
+
+  const oppState = normalizeState(geo.state) || (_extractStateNameFromTitle(oppNorm?.title) || '')
+  // Unknown opp state ⇒ neutral.
+  if (!oppState) return true
+  return profStateList.includes(String(oppState).toUpperCase())
+}
+
 /**
  * Evaluate hard eligibility rules.
  * @param {Object} profileNorm - From normalizeProfile()
@@ -361,7 +406,47 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     const isOrdinaryIndividual = !profileNorm.isNonprofit && !profileNorm.isBusiness &&
       profileNorm.entityType !== 'researcher' && profileNorm.entityType !== 'organization'
     if (isOrdinaryIndividual) {
-      ineligibilityReasons.push('Opportunity is for institutions or research organizations only')
+      // Already-awarded NSF/NIH/USASpending records get a specific reason so the
+      // pipeline/log makes clear WHY a $300k research grant was declined for an
+      // individual: it is not an open opportunity, it is funder-lead intel.
+      ineligibilityReasons.push(
+        oppNorm.isAlreadyAwarded
+          ? 'Opportunity is an already-awarded institutional research grant (named awardee/PI); not open to individuals'
+          : 'Opportunity is for institutions or research organizations only',
+      )
+    }
+  }
+
+  // Education-level mismatch: a K-12 / elementary / middle-school-only award is
+  // for children, not an adult college student. Per canonical G4 this is an
+  // effective exclusivity (an elementary-school award cannot be applied for by a
+  // 20-year-old community-college student), but we keep it a MISSING field rather
+  // than a hard reject when the profile MIGHT have a school-age child in the
+  // household (a parent could legitimately pursue it). Either way it can no longer
+  // ACCEPT for an adult higher-ed profile — eligible becomes 'maybe' (→ REVIEW)
+  // and the score is capped downstream.
+  if (oppNorm.educationLevel === 'k12') {
+    const ageNum = Number(profileNorm.age)
+    const isAdult = (Number.isFinite(ageNum) && ageNum >= 18) ||
+      (profileNorm.ageGroup && /adult|senior/i.test(String(profileNorm.ageGroup))) ||
+      profileNorm.entityType === 'business' || profileNorm.entityType === 'nonprofit'
+    const isHigherEdStudent = profileNorm.isStudent && isAdult
+    const couldBeForAChild = profileNorm.householdHasChildren === true || profileNorm.isCaregiver
+    if ((isHigherEdStudent || isAdult) && !couldBeForAChild) {
+      missingFields.push('education_level_mismatch_k12')
+    }
+  }
+
+  // Out-of-state LOCAL award: a row whose TITLE names a specific county or school
+  // district (e.g. "Polk County Schools", "Polk Education Foundation") that is in
+  // a state which is NOT any of the profile's states. These are intensely local
+  // (a single district) and not accessible to an out-of-state resident, yet they
+  // keyword-collide on "scholarship"/"education" and scored 90%+/ACCEPT. We flag
+  // the geographic mismatch (→ score cap + REVIEW) without a hard reject so a
+  // genuinely national program that merely mentions a county is not lost.
+  if (!geoLooksNationalOrInState(profileNorm, oppNorm)) {
+    if (titleNamesLocalDistrict(oppNorm.title)) {
+      missingFields.push('local_award_out_of_state')
     }
   }
 
@@ -2901,6 +2986,23 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (eligibilityEval.eligible === 'maybe' && finalScore > 80) {
     finalScore = 80
     scoreCaps.push('Capped at 80: eligibility is incomplete and needs user review.')
+  }
+
+  // Education-level and out-of-state-local mismatches must never ACCEPT for an
+  // adult college / out-of-state profile. A K-12-only award for an adult college
+  // student, or a single-district / out-of-state-county award, is at best a
+  // REVIEW: cap firmly below ACCEPT_SCORE so the keyword collision on
+  // "scholarship"/"education" can no longer drive a 90%+/ACCEPT (e.g. the
+  // "Elementary & Middle School Scholarships - Polk State College" 97% ACCEPT).
+  const elderMissing = eligibilityEval.missingFields ?? []
+  const MISMATCH_CAP = Math.max(0, ACCEPT_SCORE - 10)
+  if (elderMissing.includes('education_level_mismatch_k12') && finalScore > MISMATCH_CAP) {
+    finalScore = MISMATCH_CAP
+    scoreCaps.push(`Capped at ${MISMATCH_CAP}: K-12 / elementary award not aligned with an adult higher-ed profile (review).`)
+  }
+  if (elderMissing.includes('local_award_out_of_state') && finalScore > MISMATCH_CAP) {
+    finalScore = MISMATCH_CAP
+    scoreCaps.push(`Capped at ${MISMATCH_CAP}: local single-district / out-of-state-county award (review geography).`)
   }
 
   if (

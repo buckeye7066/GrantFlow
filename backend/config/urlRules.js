@@ -94,11 +94,14 @@ export const INVALID_URL_PATTERNS = [
   // Phase G — generic search-engine result URLs are never a real
   // funding portal. Reject at ingest so they can never be saved as a
   // direct opportunity's application_url.
-  /\bgoogle\.com\/search\b/i, // audit:allow placeholder
-  /\bgoogle\.com\/url\?/i, // audit:allow placeholder
-  /\bbing\.com\/search\b/i, // audit:allow placeholder
-  /\bduckduckgo\.com\/\?/i, // audit:allow placeholder
-  /\byahoo\.com\/search\b/i, // audit:allow placeholder
+  //
+  // The canonical list lives in SEARCH_ENGINE_URL_PATTERNS (above). We spread
+  // it in here so the placeholder-URL gate (isPlaceholderUrl → pickRealUrl →
+  // assessReality) and the isSearchEngineUrl() helper can never drift apart:
+  // adding an engine in one place covers BOTH the reality gate and the
+  // content/junk filter. (Previously this list duplicated only google/bing/
+  // yahoo and silently let yandex/baidu/ecosia search URLs through.)
+  ...SEARCH_ENGINE_URL_PATTERNS,
 ]
 
 // ── Placeholder text patterns (used in title/description validation) ────
