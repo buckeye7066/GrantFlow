@@ -176,33 +176,41 @@ export async function enrichProfileGeo(profile) {
  * Compute a small, honest match/confidence adjustment from a pre-attached
  * verification signal. Pure + synchronous — safe to call in the matcher.
  *
- * Rules (intentionally conservative):
- *   - verified === true  → +confidence (a verified tax-exempt sponsor is real).
- *   - verified === false AND the opp is org-targeted → SMALL score down-weight
- *     (the API actively said this org is not a listed tax-exempt entity). We
- *     down-weight, we NEVER hard-reject — honest-data rule + invariants.
- *   - verified == null (API down / not checked) → NO adjustment.
+ * BOOST-ONLY by design. The ProPublica Nonprofit Explorer dataset is the set of
+ * IRS Form 990 FILERS. Many LEGITIMATE entities GrantFlow exists to serve are
+ * absent from it BY DESIGN — churches / faith-based orgs (statutorily exempt
+ * from filing a 990), brand-new nonprofits, government entities, and
+ * non-501(c)(3) orgs. Absence from a 990 dataset is therefore NOT evidence an
+ * org is fake. Penalizing a registry "miss" would violate both GrantFlow's
+ * goal of serving many entity types and the honest-data rule. So:
+ *
+ *   - verified === true  → small +confidence boost (a confirmed, currently
+ *     tax-exempt sponsor really exists).
+ *   - verified === false (not found / no-confident-match) OR verified == null
+ *     (API down / not checked / not org-targeted) → STRICTLY NEUTRAL: ZERO
+ *     score change, ZERO confidence change, no "suspicious" flag. We only ever
+ *     assert what the API positively confirmed.
+ *
+ * `orgTargeted` is accepted for call-site symmetry but no longer gates any
+ * penalty (there is none).
  *
  * @param {object|null} verification the attached `verification` signal
- * @param {object} [opts]
- * @param {boolean} [opts.orgTargeted] whether the opp targets organizations
+ * @param {object} [_opts]
+ * @param {boolean} [_opts.orgTargeted] whether the opp targets organizations (unused; boost-only)
  * @returns {{ scoreDelta:number, confidenceDelta:number, reasons:string[] }}
  */
-export function verificationMatchAdjustment(verification, { orgTargeted = false } = {}) {
+export function verificationMatchAdjustment(verification, _opts = {}) {
   const out = { scoreDelta: 0, confidenceDelta: 0, reasons: [] }
   if (!verification || typeof verification !== 'object') return out
 
   if (verification.verified === true) {
     out.confidenceDelta += 8
     out.reasons.push(`Verified tax-exempt sponsor (${verification.source || verification.sources?.[0] || 'registry'})`)
-  } else if (verification.verified === false && orgTargeted) {
-    // The API ANSWERED and the org is not a listed tax-exempt entity. Small
-    // down-weight only — never a hard reject (never block discovery).
-    out.scoreDelta -= 10
-    out.confidenceDelta -= 10
-    out.reasons.push('Org sponsor not found in IRS tax-exempt registry (down-weighted, not rejected)')
   }
-  // verified == null → no adjustment (API down / not checked / not org-targeted).
+  // verified === false (registry miss) OR verified == null (API down / not
+  // checked) → ZERO adjustment. A 990-dataset miss is NOT evidence of fakery;
+  // churches, new nonprofits, government, and non-501(c)(3) orgs are legitimately
+  // absent. Never down-weight, never penalize, never flag.
   return out
 }
 

@@ -43,7 +43,7 @@ const ORG_OPP = {
   funding_type: 'grant',
 }
 
-describe('verificationMatchAdjustment (pure)', () => {
+describe('verificationMatchAdjustment (pure, BOOST-ONLY)', () => {
   it('boosts confidence for a verified tax-exempt sponsor', () => {
     const adj = verificationMatchAdjustment({ source: 'propublica', verified: true }, { orgTargeted: true })
     expect(adj.confidenceDelta).toBeGreaterThan(0)
@@ -51,16 +51,21 @@ describe('verificationMatchAdjustment (pure)', () => {
     expect(adj.reasons.join(' ')).toMatch(/verified tax-exempt/i)
   })
 
-  it('down-weights an org-targeted sponsor the API said is NOT registered', () => {
+  it('registry MISS (verified:false) is STRICTLY NEUTRAL — a 990-dataset miss is not evidence of fakery', () => {
+    // Churches/faith-based, brand-new nonprofits, government, and non-501(c)(3)
+    // orgs are legitimately absent from ProPublica's 990-filer dataset. We must
+    // NEVER down-weight them.
     const adj = verificationMatchAdjustment({ source: 'propublica', verified: false }, { orgTargeted: true })
-    expect(adj.scoreDelta).toBeLessThan(0)
-    expect(adj.confidenceDelta).toBeLessThan(0)
-  })
-
-  it('does NOT down-weight a verified:false signal when the opp is NOT org-targeted', () => {
-    const adj = verificationMatchAdjustment({ verified: false }, { orgTargeted: false })
     expect(adj.scoreDelta).toBe(0)
     expect(adj.confidenceDelta).toBe(0)
+    expect(adj.reasons).toEqual([])
+  })
+
+  it('registry MISS is neutral regardless of org-targeting', () => {
+    expect(verificationMatchAdjustment({ verified: false }, { orgTargeted: false }))
+      .toEqual({ scoreDelta: 0, confidenceDelta: 0, reasons: [] })
+    expect(verificationMatchAdjustment({ verified: false }, { orgTargeted: true }))
+      .toEqual({ scoreDelta: 0, confidenceDelta: 0, reasons: [] })
   })
 
   it('NEVER adjusts when the API did not answer (verified === null)', () => {
@@ -95,13 +100,19 @@ describe('computeMatchDecision verification influence (verified vs unverified vs
     expect(r.reasons.join(' ')).toMatch(/verified tax-exempt/i)
   })
 
-  it('UNVERIFIED (API said false): score is down-weighted vs the verified case, NOT rejected', () => {
-    const verified = { ...ORG_OPP, id: 'v', verification: { source: 'propublica', verified: true } }
-    const unverified = { ...ORG_OPP, id: 'u', verification: { source: 'propublica', verified: false } }
-    const rVer = computeMatchDecision(ORG_PROFILE, verified, {})
-    const rUnv = computeMatchDecision(ORG_PROFILE, unverified, {})
-    expect(rUnv.decision).not.toBe('REJECT')
-    expect(rUnv.score).toBeLessThan(rVer.score)
+  it('REGISTRY MISS (verified:false): score IDENTICAL to no-signal baseline (never penalized)', () => {
+    const baseline = computeMatchDecision(ORG_PROFILE, { ...ORG_OPP, id: 'b1' }, {})
+    const unverified = computeMatchDecision(ORG_PROFILE, { ...ORG_OPP, id: 'u', verification: { source: 'propublica', verified: false } }, {})
+    expect(unverified.decision).not.toBe('REJECT')
+    expect(unverified.score).toBe(baseline.score)
+    expect(unverified.confidence).toBe(baseline.confidence)
+  })
+
+  it('VERIFIED scores >= baseline (confidence boost, never below the unverified/baseline case)', () => {
+    const baseline = computeMatchDecision(ORG_PROFILE, { ...ORG_OPP, id: 'b2' }, {})
+    const verified = computeMatchDecision(ORG_PROFILE, { ...ORG_OPP, id: 'v', verification: { source: 'propublica', verified: true } }, {})
+    expect(verified.score).toBeGreaterThanOrEqual(baseline.score)
+    expect(verified.confidence).toBeGreaterThanOrEqual(baseline.confidence)
   })
 
   it('API-DOWN (verified:null): score identical to no-signal baseline (never penalized)', () => {
@@ -111,11 +122,13 @@ describe('computeMatchDecision verification influence (verified vs unverified vs
     expect(apiDown.decision).toBe(baseline.decision)
   })
 
-  it('REGRESSION: a verified:false signal cannot turn an otherwise-eligible org match into a REJECT', () => {
+  it('REGRESSION: a verified:false signal (e.g. a church absent from the 990 dataset) cannot reject or down-weight an eligible org match', () => {
+    const baseline = computeMatchDecision(ORG_PROFILE, { ...ORG_OPP, id: 'b3' }, {})
     const unverified = { ...ORG_OPP, id: 'u2', verification: { source: 'propublica', verified: false } }
     const r = computeMatchDecision(ORG_PROFILE, unverified, {})
     expect(r.decision).not.toBe('REJECT')
     expect(r.eligible).not.toBe(false)
+    expect(r.score).toBe(baseline.score)
   })
 
   it('Census geo: attached county fills a missing geo_county for the matcher', () => {

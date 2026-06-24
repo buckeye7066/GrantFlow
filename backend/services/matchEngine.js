@@ -3083,10 +3083,13 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // ── Free, keyless verification influence (ProPublica + Census) ──
   // Pure + synchronous: reads a `verification` signal ATTACHED EARLIER during
   // async discovery/normalization enrichment (no network in this hot loop).
-  // Conservative + honest: a verified tax-exempt sponsor nudges confidence up;
-  // an org-targeted row the IRS registry actively said is NOT a listed
-  // tax-exempt entity is gently down-weighted — NEVER hard-rejected, and the
-  // adjustment is ZERO whenever the API did not answer (verified == null).
+  // BOOST-ONLY + honest: a CONFIRMED tax-exempt sponsor nudges confidence up.
+  // A registry MISS (verified:false) or API-down (verified:null) is STRICTLY
+  // NEUTRAL — many legitimate orgs GrantFlow serves (churches/faith-based,
+  // new nonprofits, government, non-501(c)(3)) are absent from the IRS 990
+  // dataset by design, so absence is NOT evidence of fakery. The adjustment
+  // never down-weights and never rejects. (scoreDelta is retained defensively;
+  // verificationMatchAdjustment only ever returns 0 for it under boost-only.)
   const verificationSignal = rawOpportunity?.verification ?? null
   if (verificationSignal) {
     const orgTargeted = verificationTargetsOrganizations(oppNorm)

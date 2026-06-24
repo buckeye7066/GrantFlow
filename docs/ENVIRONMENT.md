@@ -147,10 +147,12 @@ The architecture works as follows:
     `backend/services/verification/`.
   - **`ENABLE_REGISTRY_VERIFICATION`** - `"true"` (DEFAULT) to confirm
     organization sponsors against the IRS tax-exempt registry. `"false"` fully
-    disables the network path. A *verified* tax-exempt sponsor nudges confidence
-    up; an org-targeted row the registry actively says is NOT a listed
-    tax-exempt entity is gently down-weighted — never rejected. No adjustment is
-    made when the API does not answer.
+    disables the network path. **BOOST-ONLY:** a *verified* tax-exempt sponsor
+    nudges confidence up; a registry MISS or API-down is STRICTLY NEUTRAL —
+    never down-weighted, never rejected, never flagged. (ProPublica only holds
+    IRS Form 990 FILERS; churches/faith-based orgs, brand-new nonprofits,
+    government entities, and non-501(c)(3) orgs are legitimately absent, so a
+    miss is NOT evidence an org is fake.)
   - **`ENABLE_CENSUS_GEO`** - `"true"` (DEFAULT) to deterministically resolve
     ZIP/address → county + FIPS for sharper geo matching (reduces out-of-state
     false positives). `"false"` disables the network path; the matcher falls
