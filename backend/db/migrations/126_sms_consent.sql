@@ -19,6 +19,21 @@
 -- boot, so the feature works even before this migration runs; this keeps prod
 -- schema in lockstep.
 
+-- profile_phones is normally created at runtime by ensureCommsSchema
+-- (backend/services/comms/commsService.js). A fresh SQL-only migration chain
+-- never runs that JS, so create it here too — idempotent (no-op once it exists).
+CREATE TABLE IF NOT EXISTS profile_phones (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  phone TEXT NOT NULL,
+  label TEXT,
+  sms_opt_in BOOLEAN DEFAULT 1,
+  added_by TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_profile_phones_profile ON profile_phones(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_profile_phones_profile_phone ON profile_phones(profile_id, phone);
+
 ALTER TABLE profile_phones ADD COLUMN consent_status TEXT DEFAULT 'none';
 ALTER TABLE profile_phones ADD COLUMN consent_requested_at TIMESTAMP;
 
