@@ -55,6 +55,7 @@
 import { createLogger } from '../utils/logger.js'
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
+import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -713,6 +714,114 @@ export async function enforceProfileScopedPipeline(db) {
 }
 
 /**
+ * INVARIANT: PROFILE display_name IS NEVER A DOUBLED NAME
+ * (data-integrity — a person's name appears ONCE).
+ *
+ * The profile-merge path (services/profileDedupeService.js) historically JOINED
+ * two overlapping forms of the same name when it merged two profiles'
+ * basic_information.full_name — e.g. "Robert White" + "Robert Michael White"
+ * became "Robert White\nRobert Michael White", which synced into
+ * profiles.display_name and rendered as "Robert White Robert Michael White" in
+ * the profile header AND the generated Pipeline Potential Breakdown PDF title.
+ *
+ * The producer is now fixed (mergeValues collapses person-name fields), but this
+ * sweep is the NET: it repairs EVERY already-doubled name on boot, regardless of
+ * which path created it, so no row needs a hand-edit. It uses the SAME shared
+ * collapser the producer uses (dedupeProfileDisplayName), so the two can never
+ * drift, and that collapser is deliberately conservative — it only touches a
+ * value when it is provably a doubled personal name (exact whole-string repeat,
+ * or two halves sharing first+last where one is a fuller form). Org names and
+ * legitimately-repeated/compound names are left untouched, so this can never
+ * mangle a real name. It also strips any stray internal newline so a display
+ * name never contains a literal "\n".
+ *
+ * BOTH fields are repaired in lockstep: profiles.display_name AND the
+ * basic_information section's full_name (profile_sections.section_key =
+ * 'basic_information', JSON field full_name) — production doubled them together,
+ * so fixing only one would leave the pair inconsistent (and a later display-name
+ * ↔ full_name sync could re-double).
+ *
+ * Idempotent: a collapsed name is not doubled, so a re-run is a no-op.
+ */
+export async function enforceProfileDisplayNameNotDoubled(db) {
+  return runInvariant('profile_display_name_not_doubled', async () => {
+    let scanned = 0
+    let repairedDisplayName = 0
+    let repairedFullName = 0
+
+    // ── 1. profiles.display_name ──────────────────────────────────────────────
+    let rows
+    try {
+      rows = await db
+        .prepare("SELECT id, display_name FROM profiles WHERE display_name IS NOT NULL AND TRIM(display_name) <> ''")
+        .all()
+    } catch (err) {
+      // profiles table / display_name column absent on a very old/test schema —
+      // nothing to repair; degrade silently like the other sweeps.
+      const msg = String(err?.message || '')
+      if (/no such (table|column)|does not exist|relation .* does not exist/i.test(msg)) {
+        return { scanned: 0, repaired: 0 }
+      }
+      throw err
+    }
+    scanned += (rows || []).length
+    for (const row of rows || []) {
+      const current = String(row.display_name)
+      const collapsed = dedupeProfileDisplayName(current)
+      // Compare against the RAW stored value: only repair when the collapser
+      // actually changed it (removed a double or a stray newline) — both are safe.
+      if (collapsed !== current) {
+        const result = await db
+          .prepare('UPDATE profiles SET display_name = ? WHERE id = ?')
+          .run(collapsed, row.id)
+        repairedDisplayName += changesOf(result) || 1
+      }
+    }
+
+    // ── 2. basic_information.full_name (doubled in lockstep with display_name) ──
+    // Best-effort: profile_sections may be absent on a minimal/test schema.
+    let sectionRows = []
+    try {
+      sectionRows = await db
+        .prepare("SELECT profile_id, data FROM profile_sections WHERE section_key = 'basic_information'")
+        .all()
+    } catch {
+      sectionRows = []
+    }
+    scanned += (sectionRows || []).length
+    for (const row of sectionRows || []) {
+      let data
+      try {
+        data = typeof row.data === 'object' && row.data ? row.data : JSON.parse(row.data || '{}')
+      } catch {
+        continue // unparseable section — leave it untouched
+      }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
+      const current = data.full_name
+      if (typeof current !== 'string' || current.trim() === '') continue
+      const collapsed = dedupeProfileDisplayName(current)
+      if (collapsed === current) continue
+      const nextData = { ...data, full_name: collapsed }
+      const result = await db
+        .prepare("UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = 'basic_information'")
+        .run(JSON.stringify(nextData), row.profile_id)
+      repairedFullName += changesOf(result) || 1
+    }
+
+    const repaired = repairedDisplayName + repairedFullName
+    if (repaired > 0) {
+      log.info('collapsed doubled profile names', {
+        repaired,
+        display_name: repairedDisplayName,
+        full_name: repairedFullName,
+        scanned,
+      })
+    }
+    return { scanned, repaired, repairedDisplayName, repairedFullName }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -737,6 +846,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   steps.push(await enforceProfileScopedPipeline(db))
   steps.push(await enforceNoDuplicateGrants(db))
   steps.push(await enforceRelevanceFloor(db))
+  // Profile-level data repair (not pipeline): collapse any doubled display_name
+  // (e.g. "Robert White Robert Michael White") back to a single name.
+  steps.push(await enforceProfileDisplayNameNotDoubled(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)

@@ -1,5 +1,14 @@
 import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
+import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
+
+// Section fields that hold a person's name. Merging two profiles must NEVER
+// concatenate two overlapping forms of the same name (the historic
+// "Robert White Robert Michael White" doubling bug). For these fields we collapse
+// the merge result back to the single most-complete name. Centralized so the
+// producer (this merge) and the boot sweep (enforceInvariants) agree on which
+// fields are name-shaped.
+const PERSON_NAME_FIELDS = new Set(['full_name', 'display_name', 'name', 'legal_name'])
 
 function normalizeWhitespace(value) {
   return String(value ?? '')
@@ -185,7 +194,7 @@ function deepNonEmptyCount(value) {
   return 0
 }
 
-function mergeValues(existingValue, incomingValue) {
+function mergeValues(existingValue, incomingValue, key = null) {
   if (incomingValue === undefined || incomingValue === null) return existingValue
 
   if (typeof incomingValue === 'string') {
@@ -196,6 +205,14 @@ function mergeValues(existingValue, incomingValue) {
     const existingTrimmed = existingValue.trim()
     if (!existingTrimmed) return trimmed
     if (existingTrimmed.toLowerCase().includes(trimmed.toLowerCase())) return existingTrimmed
+    // Person-name fields are SINGLE-VALUED: never accumulate two forms of the
+    // same name as multi-line text (that synced into display_name and produced
+    // the "Robert White Robert Michael White" double). Keep the most-complete
+    // single name instead — prefer the longer form, then collapse defensively.
+    if (key && PERSON_NAME_FIELDS.has(String(key).toLowerCase())) {
+      const longer = trimmed.length > existingTrimmed.length ? trimmed : existingTrimmed
+      return dedupeProfileDisplayName(longer)
+    }
     return `${existingTrimmed}\n${trimmed}`.trim()
   }
 
@@ -223,7 +240,7 @@ function mergeValues(existingValue, incomingValue) {
   if (incomingValue && typeof incomingValue === 'object') {
     const next = { ...(existingValue && typeof existingValue === 'object' && !Array.isArray(existingValue) ? existingValue : {}) }
     for (const [k, v] of Object.entries(incomingValue)) {
-      next[k] = mergeValues(next[k], v)
+      next[k] = mergeValues(next[k], v, k)
     }
     return next
   }
@@ -234,7 +251,7 @@ function mergeValues(existingValue, incomingValue) {
 function mergeSection(existingSection = {}, incomingSection = {}) {
   const merged = { ...(existingSection && typeof existingSection === 'object' ? existingSection : {}) }
   for (const [key, value] of Object.entries(incomingSection && typeof incomingSection === 'object' ? incomingSection : {})) {
-    merged[key] = mergeValues(merged[key], value)
+    merged[key] = mergeValues(merged[key], value, key)
   }
   return merged
 }
