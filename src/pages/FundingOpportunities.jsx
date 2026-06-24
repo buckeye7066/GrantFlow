@@ -58,6 +58,17 @@ import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, pa
 
 const NOT_AVAILABLE = 'N/A'
 
+// Safely parse a URL hostname, falling back to the raw string when the value
+// is not a valid absolute URL (crawler data can contain relative paths/garbage).
+function safeHostname(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return ""
+  try {
+    return new URL(rawUrl).hostname
+  } catch {
+    return rawUrl
+  }
+}
+
 const STATE_CODES = new Set([
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
   "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
@@ -137,11 +148,13 @@ function formatDeadline(deadline, deadlineType) {
 }
 
 function formatAmount(min, max) {
-  if (!min && !max) return "Varies"
-  if (min && max && min !== max) {
+  const hasMin = min != null
+  const hasMax = max != null
+  if (!hasMin && !hasMax) return "Varies"
+  if (hasMin && hasMax && min !== max) {
     return `$${min.toLocaleString()} – $${max.toLocaleString()}`
   }
-  const amount = (min ?? max ?? 0).toLocaleString()
+  const amount = (hasMin ? min : hasMax ? max : 0).toLocaleString()
   return `$${amount}`
 }
 
@@ -171,7 +184,7 @@ function buildOpportunitySummary(opportunity, profile, match) {
   } else if (opportunity.deadline_type) {
     lines.push(`Deadline type: ${opportunity.deadline_type}`)
   }
-  if (match?.score !== null) {
+  if (typeof match?.score === "number") {
     lines.push(`Match score: ${match.score}%`)
   }
   if (Array.isArray(match?.reasons) && match.reasons.length) {
@@ -290,8 +303,11 @@ function OpportunityCard({
   
   const typeBadge = getTypeBadge(opportunity.type)
 
-  // Get match color based on score
+  // Get match color based on score. Guard against non-numeric input.
   const getMatchColor = (score) => {
+    if (typeof score !== "number" || !Number.isFinite(score)) {
+      return "text-slate-600 bg-slate-50 border-slate-200"
+    }
     if (score >= 80) return "text-emerald-600 bg-emerald-50 border-emerald-200"
     if (score >= 60) return "text-blue-600 bg-blue-50 border-blue-200"
     if (score >= 40) return "text-amber-600 bg-amber-50 border-amber-200"
@@ -301,7 +317,11 @@ function OpportunityCard({
   const handleQuickAdd = async (event) => {
     event.stopPropagation()
     if (onAddToPipeline) {
-      await onAddToPipeline(opportunity)
+      try {
+        await onAddToPipeline(opportunity)
+      } catch {
+        // Errors are surfaced via toast in the caller.
+      }
     }
   }
 
@@ -720,13 +740,13 @@ function OpportunityDetail({
                         rel="noopener noreferrer"
                         className="hover:underline truncate"
                       >
-                        Evidence URL: {new URL(opportunity.evidence_url).hostname}
+                        Evidence URL: {safeHostname(opportunity.evidence_url)}
                       </a>
                     </div>
                   )}
                   {opportunity.last_verified_at && (
                     <p className="text-xs text-slate-600">
-                      Verified on {format(new Date(opportunity.last_verified_at), "PPP")}
+                      Verified on {formatDeadline(opportunity.last_verified_at)}
                     </p>
                   )}
                 </div>
@@ -768,7 +788,7 @@ function OpportunityDetail({
                         target="_blank"
                         rel="noopener noreferrer"
                       >
-                        Application: {new URL(opportunity.application_url).hostname}
+                        Application: {safeHostname(opportunity.application_url)}
                       </a>
                     ) : null}
                     {!opportunity.application_url && opportunity.source_url ? (
@@ -778,7 +798,7 @@ function OpportunityDetail({
                         target="_blank"
                         rel="noopener noreferrer"
                       >
-                        Source: {new URL(opportunity.source_url).hostname}
+                        Source: {safeHostname(opportunity.source_url)}
                       </a>
                     ) : null}
                   </div>
@@ -1005,10 +1025,20 @@ export default function FundingOpportunities() {
     refetchInterval: filters.geo_run_id ? 3000 : false,
   })
   
-  // Reset to page 1 when filters change
+  // Reset to page 1 when filters that affect the result set change.
+  // Depend on specific fields (not the whole filters object identity) so URL
+  // sync / geo_run_id changes don't trigger redundant page resets.
   React.useEffect(() => {
     setCurrentPage(1)
-  }, [filters])
+  }, [
+    filters.search,
+    filters.state,
+    filters.source,
+    filters.nationalOnly,
+    filters.profileId,
+    filters.compliance,
+    filters.geo_run_id,
+  ])
 
   const sourcesQuery = useQuery({
     queryKey: ["opportunity-sources", filters.compliance],
@@ -1036,9 +1066,10 @@ export default function FundingOpportunities() {
   const autoDiscoveryQuery = useQuery({
     queryKey: ["auto-discovery-status", filters.profileId],
     queryFn: () => fetchCrawlerStatus(filters.profileId),
-    refetchInterval: (data) => {
+    // React Query v5: refetchInterval receives the Query object, not data.
+    refetchInterval: (query) => {
       // Poll every 5s if crawlers are running
-      if (data?.running > 0) return 5000
+      if (query?.state?.data?.running > 0) return 5000
       // Stop polling after completion
       return false
     },
@@ -1166,23 +1197,28 @@ export default function FundingOpportunities() {
     })
   }, [organizedOpportunities, filters.profileId, selectedProfile])
 
-  // Pagination calculations (Server-side)
-  const totalPages = Math.ceil(totalResults / ITEMS_PER_PAGE)
+  // Pagination calculations (Server-side). Clamp to at least 1 to avoid 0/NaN.
+  const totalPages = Math.max(1, Math.ceil((Number(totalResults) || 0) / ITEMS_PER_PAGE))
 
   // Apply client-side filters: hide dismissed grants + boolean search
   const booleanFilter = useMemo(() => parseBooleanQuery(filters.search), [filters.search])
+  // Compute once whether the search uses boolean operators (constant per search).
+  const usesBooleanOperators = useMemo(
+    () => /\b(AND|OR|NOT)\b/.test(filters.search),
+    [filters.search],
+  )
   const paginatedOpportunities = useMemo(() => {
     return opportunitiesWithMatch.filter(({ opportunity }) => {
       // Hidden grants filter
       if (!showHidden && isHidden(opportunity.id)) return false
       // Boolean search (client-side refinement on top of server search)
-      if (/\b(AND|OR|NOT)\b/.test(filters.search)) {
+      if (usesBooleanOperators) {
         const text = [opportunity.title, opportunity.description, opportunity.sponsor].filter(Boolean).join(" ")
         if (!booleanFilter(text)) return false
       }
       return true
     })
-  }, [opportunitiesWithMatch, showHidden, isHidden, filters.search, booleanFilter])
+  }, [opportunitiesWithMatch, showHidden, isHidden, usesBooleanOperators, booleanFilter])
 
   const handleAddToPipeline = async (opportunity) => {
     if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
@@ -1225,8 +1261,8 @@ export default function FundingOpportunities() {
             sponsor: opportunity.sponsor || opportunity.funder,
             deadline: opportunity.deadline,
             url: opportunity.url || opportunity.application_url,
-            awardMin: opportunity.amount_min || opportunity.amount_min,
-            awardMax: opportunity.amount_max || opportunity.amount_max,
+            awardMin: opportunity.amount_min ?? null,
+            awardMax: opportunity.amount_max ?? null,
             descriptionMd: opportunity.description,
             eligibilityBullets: opportunity.eligibility_bullets || [],
             source: opportunity.source || "database",
@@ -1504,7 +1540,7 @@ export default function FundingOpportunities() {
                   value={filters.search}
                   onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))}
                 />
-                {/\b(AND|OR|NOT)\b/.test(filters.search) && (
+                {usesBooleanOperators && (
                   <p className="text-[10px] text-blue-600 mt-1">Boolean mode active</p>
                 )}
               </div>
@@ -1873,7 +1909,7 @@ export default function FundingOpportunities() {
               </Button>
               
               <span className="text-sm text-slate-500 ml-4">
-                Page {currentPage} of {totalPages} ({totalResults.toLocaleString()} total)
+                Page {currentPage} of {totalPages} ({Number(totalResults || 0).toLocaleString()} total)
               </span>
             </div>
           )}

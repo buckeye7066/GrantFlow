@@ -13,7 +13,7 @@ import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import PrintablePipeline from "@/components/pipeline/PrintablePipeline";
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel";
 import { usePrintMode } from '@/components/hooks/usePrintMode';
-import { format } from "date-fns";
+import { format, isValid } from "date-fns";
 import OrganizationEmailComposer from './OrganizationEmailComposer';
 import ErrorBoundary from '@/components/shared/ErrorBoundary';
 import AutoTimeTracker from '../billing/AutoTimeTracker';
@@ -29,6 +29,17 @@ import { matchProfileToGrants } from "@/api/matching";
 
 
 const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
+
+// Safely validate a URL has an http/https scheme before opening it.
+const isSafeHttpUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
 
 // REBUILT: This component is now a "dumb" component. It receives all data as props
 // and passes all update events up to the parent. It no longer fetches its own data.
@@ -52,6 +63,8 @@ export default function OrganizationProfile({
   const [manualRetryCount, setManualRetryCount] = React.useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const isPrint = usePrintMode();
+  // Track a pending "Wait & Retry" timeout so we can clear it on unmount.
+  const waitRetryTimeoutRef = useRef(null);
 
   // Fetch organization data based on organizationId
   const { data: orgData, isLoading, error, refetch } = useQuery({
@@ -59,17 +72,21 @@ export default function OrganizationProfile({
     queryFn: async () => {
       log.debug('fetching organization', { organizationId })
 
-      // Check if we already have this in cache (from upload)
-      const cached = queryClient.getQueryData(['organization', organizationId]);
-      if (cached) {
-        log.debug('found in cache; using cached data')
-        return cached;
+      // Only apply the propagation delay on the very first attempt (no prior
+      // manual retries / retryKey bumps). Existing profiles load immediately.
+      if (retryKey === 0 && manualRetryCount === 0) {
+        // Check if we already have this in cache (from upload). Read the same
+        // composite key the query writes so manual retries actually bypass it.
+        const cached = queryClient.getQueryData(['organization', organizationId, retryKey, manualRetryCount]);
+        if (cached) {
+          log.debug('found in cache; using cached data')
+          return cached;
+        }
+        // Add delay to allow database propagation for freshly created profiles.
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
 
       try {
-        // Add delay to allow database propagation
-        await new Promise(resolve => setTimeout(resolve, 300));
-
         // FIXED: Use Profile API instead of Organization API since IDs are profile IDs
         const result = await client.entities.Profile.get(organizationId);
         log.debug('query completed')
@@ -94,7 +111,7 @@ export default function OrganizationProfile({
       return failureCount < 3;
     },
     retryDelay: (attemptIndex) => {
-      // Shorter retry delays: 500ms, 1s, 2s
+      // Shorter retry delays: 500ms, 1s, 2s — capped at 2000ms.
       return Math.min(500 * Math.pow(2, attemptIndex), 2000);
     },
     staleTime: 0,
@@ -150,28 +167,54 @@ export default function OrganizationProfile({
     }
   }, [grants, orgData]);
 
+  // Clear any pending "Wait & Retry" timeout on unmount to avoid state updates
+  // on an unmounted component.
+  useEffect(() => {
+    return () => {
+      if (waitRetryTimeoutRef.current) {
+        clearTimeout(waitRetryTimeoutRef.current);
+        waitRetryTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
-    // Flatten sections data into orgData so child components can read flat fields
-      const flatOrgData = React.useMemo(() => {
-            if (!orgData) return null;
-                if (!Array.isArray(orgData.sections) || orgData.sections.length === 0) return orgData;
-                    const flat = { ...orgData };
-                        orgData.sections.forEach(section => {
-                                if (section && section.data && typeof section.data === 'object') {
-                                          Object.entries(section.data).forEach(([key, value]) => {
-                                                      // Only set if not already present at top level (top-level wins)
-                                                                if (flat[key] === undefined || flat[key] === null) {
-                                                                              flat[key] = value;
-                                                                }
-                                                              });
-                                                            }
-                                                          });
-                                                              // Also ensure keywords comes from tags if not set
-                                                                  if (!flat.keywords && Array.isArray(flat.tags)) {
-                                                                          flat.keywords = flat.tags;
-                                                                  }
-                                                                      return flat;
-                                                                }, [orgData]);
+
+  // Flatten sections data into orgData so child components can read flat fields.
+  // Precedence: top-level orgData fields win over section.data; among sections,
+  // earlier sections win for duplicate scalar keys, but plain object values are
+  // deep-merged so later sections do not silently drop nested data.
+  const flatOrgData = React.useMemo(() => {
+    if (!orgData) return null;
+    if (!Array.isArray(orgData.sections) || orgData.sections.length === 0) return orgData;
+
+    const isPlainObject = (v) =>
+      v && typeof v === 'object' && !Array.isArray(v);
+
+    const deepMerge = (target, source) => {
+      const out = { ...target };
+      Object.entries(source).forEach(([key, value]) => {
+        if (isPlainObject(value) && isPlainObject(out[key])) {
+          out[key] = deepMerge(out[key], value);
+        } else if (out[key] === undefined || out[key] === null) {
+          out[key] = value;
+        }
+      });
+      return out;
+    };
+
+    let flat = { ...orgData };
+    orgData.sections.forEach(section => {
+      if (section && section.data && typeof section.data === 'object') {
+        flat = deepMerge(flat, section.data);
+      }
+    });
+
+    // Also ensure keywords comes from tags if not set
+    if (!flat.keywords && Array.isArray(flat.tags)) {
+      flat.keywords = flat.tags;
+    }
+    return flat;
+  }, [orgData]);
 
   const avatarSourceUrl = React.useMemo(() => {
     if (!orgData) return null
@@ -293,14 +336,14 @@ export default function OrganizationProfile({
           <p className="text-red-700 mb-2">
             The profile couldn't be loaded at this time.
           </p>
-          <p className="text-sm text-red-600 mb-4">
-            This might happen if:
+          <div className="text-sm text-red-600 mb-4">
+            <p>This might happen if:</p>
             <ul className="text-left mt-2 space-y-1 ml-4">
               <li>• The profile was just created and needs a moment to sync</li>
               <li>• There was a temporary connection issue</li>
               <li>• The profile ID is incorrect</li>
             </ul>
-          </p>
+          </div>
           <div className="flex gap-3 justify-center flex-wrap">
             <Button
               onClick={() => {
@@ -319,7 +362,11 @@ export default function OrganizationProfile({
                   title: "Waiting for sync...",
                   description: "Waiting 3 seconds for the database to sync, then retrying...",
                 });
-                setTimeout(() => {
+                if (waitRetryTimeoutRef.current) {
+                  clearTimeout(waitRetryTimeoutRef.current);
+                }
+                waitRetryTimeoutRef.current = setTimeout(() => {
+                  waitRetryTimeoutRef.current = null;
                   setManualRetryCount(prev => prev + 1);
                   refetch();
                 }, 3000);
@@ -407,7 +454,7 @@ export default function OrganizationProfile({
       await queryClient.invalidateQueries({ queryKey: ['organization', organizationId] })
       await queryClient.invalidateQueries({ queryKey: ['profile', organizationId] })
 
-      if (result.ok) {
+      if (result && result.ok) {
         toast({
           title: 'Picture found',
           description: 'We saved a profile photo from the organization website.',
@@ -432,16 +479,15 @@ export default function OrganizationProfile({
   };
 
   const triggerPrint = () => {
-    // FIX: Explicitly wait for all data to be loaded before printing.
-    if (isLoading || isLoadingContacts || isLoadingGrants || !orgData) {
+    // Wait for the per-section data to be loaded before printing.
+    if (isLoadingContacts || isLoadingGrants || !orgData) {
         toast({
           title: "Data Loading",
           description: "Some data is still loading, please wait a moment before printing.",
-          variant: "warning",
         });
         return;
     }
-    // FIX: Replaced the call to the removed hook with a direct call to the browser's native print function.
+    // Direct call to the browser's native print function.
     window.print();
   };
 
@@ -462,6 +508,18 @@ export default function OrganizationProfile({
       report: { label: 'Reporting', className: 'bg-cyan-100 text-cyan-700' },
     };
     return statusConfig[status] || statusConfig.discovered;
+  };
+
+  const handleOpenExternal = (url) => {
+    if (!isSafeHttpUrl(url)) {
+      toast({
+        title: 'Invalid link',
+        description: 'This source has no valid website URL.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -642,7 +700,7 @@ export default function OrganizationProfile({
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => window.open(source.website_url, '_blank')}
+                                onClick={() => handleOpenExternal(source.website_url)}
                               >
                                 <ExternalLink className="w-4 h-4" />
                               </Button>
@@ -698,6 +756,8 @@ export default function OrganizationProfile({
                       {matchedOpportunities.map((grant) => {
                         const statusBadge = getStatusBadge(grant.status);
                         const score = Number(grant.match_score);
+                        const deadlineDate = grant.deadline ? new Date(grant.deadline) : null;
+                        const hasValidDeadline = deadlineDate && isValid(deadlineDate);
 
                         return (
                           <Link key={grant.grant_id} to={createPageUrl("GrantDetail", { id: grant.grant_id })}>
@@ -707,11 +767,11 @@ export default function OrganizationProfile({
                                   <h4 className="font-semibold text-slate-900 truncate">{grant.title}</h4>
                                 </div>
                                 <p className="text-sm text-slate-600 truncate">{grant.funder}</p>
-                                {grant.deadline && (
+                                {hasValidDeadline && (
                                   <div className="flex items-center gap-1 mt-1">
                                     <Calendar className="w-3 h-3 text-slate-400" />
                                     <span className="text-xs text-slate-500">
-                                      {format(new Date(grant.deadline), 'MMM d, yyyy')}
+                                      {format(deadlineDate, 'MMM d, yyyy')}
                                     </span>
                                   </div>
                                 )}

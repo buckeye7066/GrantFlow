@@ -85,6 +85,8 @@ import {
   UserCheck,
   Wand2,
   PanelsTopLeft,
+  Copy,
+  X,
 } from "lucide-react"
 
 // Plain, human-readable label per autopilot state for the dashboard. Co-browse /
@@ -181,6 +183,12 @@ function sourceKey(src, idx) {
   return src?.grantId || src?.opportunityId || `${src?.title || "source"}-${idx}`
 }
 
+// Stable identifier for a mail/fax source row (independent of object identity).
+function sourceKeyOf(src) {
+  if (!src || typeof src !== "object") return ""
+  return src.grantId || src.opportunityId || `${src.host || ""}-${src.title || ""}`
+}
+
 const KIND_GROUPS = [
   { key: "school", title: "Schools", Icon: GraduationCap },
   { key: "process", title: "Applications & forms", Icon: ClipboardList },
@@ -196,15 +204,81 @@ const BTN_CORAL =
 const BTN_EMERALD =
   "inline-flex items-center gap-1.5 rounded-[10px] border border-transparent bg-current-emerald px-3.5 py-2 text-sm font-semibold text-white transition-transform hover:-translate-y-px disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
 
+// Dedicated one-time-password modal. The secret is shown explicitly, with a
+// copy action and a clear warning, never logged, and dismissible by the user.
+function OneTimePasswordModal({ value, onClose }) {
+  const [copied, setCopied] = React.useState(false)
+  if (!value) return null
+  const handleCopy = async () => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      }
+    } catch {
+      // Clipboard unavailable — the user can still read + copy manually.
+    }
+  }
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="One-time login password"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-current-line bg-current-card p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-display text-[18px] font-bold text-current-ink">Login provisioned</h3>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-[10px] border border-current-line bg-transparent p-1.5 text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mt-2 text-sm text-current-ink/70">
+          Hamilton created a login. This one-time password is shown <strong>only now</strong> — copy and
+          store it somewhere safe. It will not be shown again.
+        </p>
+        <div className="mt-4 flex items-center gap-2">
+          <code className="money flex-1 select-all break-all rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink">
+            {value}
+          </code>
+          <button type="button" className={BTN_BASE} onClick={handleCopy}>
+            <Copy className="h-4 w-4" />
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button type="button" className={BTN_EMERALD} onClick={onClose}>
+            I&rsquo;ve saved it
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+
+  // One-time provisioned password shown in a dedicated, dismissible modal
+  // (never via an ephemeral toast, never logged).
+  const [oneTimePassword, setOneTimePassword] = React.useState(null)
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["hamilton-profile-portals", profileId],
     queryFn: () => listProfilePortals(profileId),
     enabled: !!profileId,
-    staleTime: 30_000,
+    staleTime: 120_000,
   })
 
   const portals = Array.isArray(data?.portals) ? data.portals : []
@@ -217,6 +291,48 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
 
   const refetchPortals = () =>
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
+
+  // Track the popup-close poll so we never leak it / accumulate multiple.
+  const loginPollRef = React.useRef(null)
+  React.useEffect(() => {
+    return () => {
+      if (loginPollRef.current) {
+        clearInterval(loginPollRef.current)
+        loginPollRef.current = null
+      }
+    }
+  }, [])
+
+  // Watch the popup for close/completion and refetch ONCE when it closes — this
+  // avoids refetching on unrelated tab returns and avoids leaking/accumulating
+  // window focus listeners.
+  const watchPopupClose = (popup) => {
+    if (!popup || typeof popup.closed !== "function" && typeof popup.closed !== "boolean") {
+      // Fall back: if popup exposes no close info, refetch shortly after.
+      refetchPortals()
+      return
+    }
+    if (loginPollRef.current) {
+      clearInterval(loginPollRef.current)
+      loginPollRef.current = null
+    }
+    const isClosed = () => {
+      try {
+        if (typeof popup.isClosed === "function") return popup.isClosed()
+        if (typeof popup.closed === "function") return popup.closed()
+        return Boolean(popup.closed)
+      } catch {
+        return true
+      }
+    }
+    loginPollRef.current = setInterval(() => {
+      if (isClosed()) {
+        clearInterval(loginPollRef.current)
+        loginPollRef.current = null
+        refetchPortals()
+      }
+    }, 1000)
+  }
 
   // Click a RED tile → start a cloud login and open the prefilled secure window.
   // The popup is opened SYNCHRONOUSLY in the click handler (see startLogin) and
@@ -233,25 +349,21 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onSuccess: (res, { popup }) => {
       const url = resolveLiveLoginUrl(res)
       if (!url) {
-        popup?.fail("We couldn't open the secure login. Please try again.")
+        popup?.fail?.("We couldn't open the secure login. Please try again.")
         showErrorToast(toast, "Could not start the secure login", "No login window link was returned. Please try again.")
         return
       }
-      popup?.navigate(url)
+      popup?.navigate?.(url)
       showSuccessToast(
         toast,
         "Secure login window opened",
         "Sign in + approve 2FA in the new window, then click “Done” there. We’ll update this list automatically.",
       )
-      // Refetch when the user returns to this tab (window closed / login done).
-      const onFocus = () => {
-        refetchPortals()
-        window.removeEventListener("focus", onFocus)
-      }
-      if (typeof window !== "undefined") window.addEventListener("focus", onFocus)
+      // Refetch when the secure login window closes — not on arbitrary tab focus.
+      watchPopupClose(popup)
     },
     onError: (err, { popup }) => {
-      popup?.fail(err?.message || "Could not start the secure login. Please try again.")
+      popup?.fail?.(err?.message || "Could not start the secure login. Please try again.")
       showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again.")
     },
   })
@@ -261,7 +373,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // silently starting a session they can't see.
   const startLogin = (portal) => {
     const popup = openPendingLoginWindow()
-    if (popup.blocked) {
+    if (!popup || popup.blocked) {
       showErrorToast(
         toast,
         "Allow pop-ups to sign in",
@@ -357,15 +469,20 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
 
   const identityMutation = useMutation({
     mutationFn: ({ identityEmail }) => setPortalAutopilotIdentity(profileId, { identityEmail }),
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       refetchPortals()
-      showSuccessToast(toast, "Autopilot identity saved", "Hamilton will register new portal accounts with this email.")
+      if (vars?.identityEmail) {
+        showSuccessToast(toast, "Autopilot identity saved", "Hamilton will register new portal accounts with this email.")
+      } else {
+        showSuccessToast(toast, "Identity email cleared", "Hamilton has no email on file to register new portal accounts.")
+      }
     },
     onError: (err) => showErrorToast(toast, "Could not save the identity email", err?.message || "Please try again."),
   })
 
   // Run autopilot for the whole profile, or one portal. A single-portal run may
-  // return a one-time generated password to show once; we surface it in a toast.
+  // return a one-time generated password to show once; we surface it in a
+  // dedicated dismissible modal (never a toast / log).
   const autopilotRunMutation = useMutation({
     mutationFn: ({ portalHost = null, loginUrl = null } = {}) =>
       runPortalAutopilot(profileId, { portalHost, loginUrl }),
@@ -373,7 +490,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       refetchPortals()
       const onetime = res?.result?.password_one_time_view
       if (onetime) {
-        showSuccessToast(toast, "Login provisioned", `Hamilton created a login. One-time password (save it now): ${onetime}`)
+        setOneTimePassword(onetime)
       } else if (res?.summary) {
         const provisioned = res.summary.auto_provisioned || 0
         showSuccessToast(toast, "Autopilot finished", `${provisioned} login(s) provisioned. See each tile for its state.`)
@@ -418,6 +535,10 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       !offerCobrowse &&
       portal.autopilotState !== "identity_proof_required"
 
+    // Build the served-sources text as a single, robust string (no fragile
+    // inline index/comma logic, no empty string nodes).
+    const servedText = sources.map((src) => src?.title || "Untitled").join(", ")
+
     return (
       <li
         key={tileKey}
@@ -436,12 +557,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             {sources.length > 0 && (
               <p className="text-[13px] text-current-ink/70">
                 <span className="text-current-ink/55">Serves:</span>{" "}
-                {sources.map((src, idx) => (
-                  <span key={sourceKey(src, idx)}>
-                    {idx > 0 ? ", " : ""}
-                    {src?.title || "Untitled"}
-                  </span>
-                ))}
+                {servedText}
               </p>
             )}
             {/* Honest last-sync status for ready portals. */}
@@ -602,7 +718,12 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     const packet = (src.packet && typeof src.packet === "object") ? src.packet : {}
     const packetSaved = Boolean(packet.generated && packet.documentId)
     const downloadHref = packetSaved ? packetDownloadUrl(profileId, packet.documentId) : null
-    const isSaving = packetMutation.isPending && packetMutation.variables === src
+    // Compare a STABLE identifier, not object identity, so the spinner shows on
+    // the right row even after data is re-derived on refetch.
+    const isSaving =
+      packetMutation.isPending &&
+      packetMutation.variables &&
+      sourceKeyOf(packetMutation.variables) === sourceKeyOf(src)
     // Open the printable packet AND save a durable copy to Documents in one click.
     const handlePacket = () => {
       openApplicationPacket({ profileName, source: src })
@@ -672,6 +793,29 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     </div>
   )
 
+  // Resolve the vault badge in ONE place so every state (incl. unexpected ones)
+  // has a defined, consistent appearance.
+  const vaultBadge = (() => {
+    if (!vaultStatus.has_passphrase) {
+      return {
+        cls: "border-[#f1cabd] bg-current-coralSoft text-[#9a3320]",
+        node: (<><AlertTriangle className="h-3 w-3" /> No passphrase</>),
+      }
+    }
+    if (vaultStatus.is_unlocked) {
+      return {
+        cls: "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]",
+        node: (<><Unlock className="h-3 w-3" /> Unlocked</>),
+      }
+    }
+    return {
+      cls: "border-current-line bg-transparent text-current-ink/70",
+      node: (<><Lock className="h-3 w-3" /> Locked</>),
+    }
+  })()
+
+  const trimmedPass = passInput.trim()
+
   return (
     <Card>
       <CardHeader>
@@ -707,6 +851,9 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       </CardHeader>
 
       <CardContent className="space-y-7">
+        {/* One-time provisioned password modal (secret never goes through a toast). */}
+        <OneTimePasswordModal value={oneTimePassword} onClose={() => setOneTimePassword(null)} />
+
         {/* ── Portal Autopilot (master vault) controls ──────────────────────
             ONE master passphrase + an identity email let Hamilton self-provision
             a unique login per portal. The passphrase is a password field, sent
@@ -718,21 +865,9 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 <KeyRound className="h-4 w-4" /> Portal Autopilot
               </span>
               <span
-                className={`money inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${
-                  !vaultStatus.has_passphrase
-                    ? "border-[#f1cabd] bg-current-coralSoft text-[#9a3320]"
-                    : vaultStatus.is_unlocked
-                      ? "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]"
-                      : "border-current-line bg-transparent text-current-ink/70"
-                }`}
+                className={`money inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${vaultBadge.cls}`}
               >
-                {!vaultStatus.has_passphrase ? (
-                  <><AlertTriangle className="h-3 w-3" /> No passphrase</>
-                ) : vaultStatus.is_unlocked ? (
-                  <><Unlock className="h-3 w-3" /> Unlocked</>
-                ) : (
-                  <><Lock className="h-3 w-3" /> Locked</>
-                )}
+                {vaultBadge.node}
               </span>
             </summary>
             <div className="space-y-4 pb-4 pt-1">
@@ -762,7 +897,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   onClick={() => identityMutation.mutate({ identityEmail: identityInput.trim() || null })}
                 >
                   {identityMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <UserCheck className="h-4 w-4" />}
-                  Save identity
+                  {identityInput.trim() ? "Save identity" : "Clear identity"}
                 </button>
               </div>
 
@@ -785,8 +920,12 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   <button
                     type="button"
                     className={BTN_EMERALD}
-                    disabled={unlockMutation.isPending || !passInput}
-                    onClick={() => unlockMutation.mutate({ passphrase: passInput })}
+                    disabled={unlockMutation.isPending || !trimmedPass}
+                    onClick={() => {
+                      const value = passInput
+                      setPassInput("")
+                      unlockMutation.mutate({ passphrase: value })
+                    }}
                   >
                     {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Unlock className="h-4 w-4" />}
                     Unlock
@@ -795,8 +934,12 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   <button
                     type="button"
                     className={BTN_EMERALD}
-                    disabled={passphraseMutation.isPending || passInput.length < 8}
-                    onClick={() => passphraseMutation.mutate({ passphrase: passInput, identityEmail: identityInput.trim() || undefined })}
+                    disabled={passphraseMutation.isPending || trimmedPass.length < 8}
+                    onClick={() => {
+                      const value = passInput
+                      setPassInput("")
+                      passphraseMutation.mutate({ passphrase: value, identityEmail: identityInput.trim() || undefined })
+                    }}
                   >
                     {passphraseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <KeyRound className="h-4 w-4" />}
                     Set passphrase

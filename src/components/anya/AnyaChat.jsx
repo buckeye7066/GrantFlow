@@ -504,6 +504,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const [adminToolForm, setAdminToolForm] = useState({})
   const [invokingAdminTool, setInvokingAdminTool] = useState(null)
   const isSendingRef = useRef(false)
+  // Tracks the last prefill text we actually consumed, so a prefill message is
+  // never re-sent across a sessionId change even if the parent hasn't cleared
+  // the prop yet (e.g. on "New conversation").
+  const consumedPrefillRef = useRef(null)
 
   // ---------------------------------------------------------------------------
   // Auto-start onboarding when first-run and the panel mounts
@@ -519,9 +523,15 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   // First onboarding step: language. Switch the app immediately + persist, then
   // continue to the welcome step.
   const handlePickLanguage = useCallback((code) => {
-    try { setLanguage(code) } catch { /* provider always present at app root */ }
+    try {
+      setLanguage(code)
+    } catch (err) {
+      // Surface the failure in logs rather than silently swallowing it; the
+      // provider is always present at app root so this should be rare.
+      log.warn("[onboarding] setLanguage failed:", err?.message ?? err)
+    }
     setOnboardingStep(0)
-  }, [setLanguage])
+  }, [setLanguage, log])
 
   // Handle advancing onboarding steps (null = complete → persist to profile)
   const handleOnboardingAdvance = useCallback(async (nextStep) => {
@@ -554,7 +564,17 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
             primary_type: primaryType,
           }),
         })
-        profileId = created.id
+        // Validate response shape explicitly — distinguish "no response body"
+        // from "response present but missing id" so an API contract mismatch is
+        // not masked by the generic guard below.
+        if (!created || typeof created !== "object") {
+          throw new Error('[onboarding] profile create returned no response body')
+        }
+        const createdId = created.id ?? created?.data?.id ?? null
+        if (!createdId) {
+          throw new Error('[onboarding] profile create response missing id field')
+        }
+        profileId = createdId
       } else {
         // Update existing profile's primary_type
         await apiFetch(`/api/profiles/${profileId}`, {
@@ -599,6 +619,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     } catch (err) {
       // Persistence failed — surface it and leave onboarding UNmarked so the user
       // can retry rather than being told their profile was saved when it wasn't.
+      // This single catch covers profile create/update, state persistence, and
+      // the life-situation Promise.all so any failure is reported to the user.
       log.warn("[onboarding] Failed to persist profile data:", err.message)
       toast({
         variant: "destructive",
@@ -622,9 +644,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     if (!activeProfile) return
 
     const sectionsComplete = Number(activeProfile?.sections_complete ?? 0)
-    const pct = Math.round((sectionsComplete / TOTAL_PROFILE_SECTIONS) * 100)
+    // Clamp so the copy never goes nonsensical if the backend reports more
+    // sections than TOTAL_PROFILE_SECTIONS (or the constant drifts).
+    const rawPct = Math.round((sectionsComplete / TOTAL_PROFILE_SECTIONS) * 100)
+    const pct = Math.max(0, Math.min(100, rawPct))
     if (pct < 50) {
-      const missingSections = TOTAL_PROFILE_SECTIONS - sectionsComplete
+      const missingSections = Math.max(0, TOTAL_PROFILE_SECTIONS - sectionsComplete)
       const nudge = `Quick tip: Your profile is ${pct}% complete. Adding ${missingSections} more section${missingSections === 1 ? "" : "s"} would unlock more matches. Want me to guide you there?`
       setNudgeMessage(nudge)
       sessionStorage.setItem(NUDGE_SS_KEY, "1")
@@ -708,6 +733,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       completed: 2,
       cancelled: 3,
     }
+    const safeTime = (value) => {
+      const t = new Date(value).getTime()
+      return Number.isNaN(t) ? 0 : t
+    }
     return [...tasks].sort((a, b) => {
       const aWeight = statusWeight[a.status] ?? 99
       const bWeight = statusWeight[b.status] ?? 99
@@ -720,7 +749,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       } else if (!a.due_date && b.due_date) {
         return 1
       }
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      return safeTime(a.created_at) - safeTime(b.created_at)
     })
   }, [tasks])
   const openTaskCount = useMemo(
@@ -824,7 +853,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     if (effectiveProfileId || isAdmin) {
       bootstrap()
     } else {
-      // No profile bound â surface a synthetic guidance message so Anya
+      // No profile bound — surface a synthetic guidance message so Anya
       // fulfils Goal 10 (profile improvement) and Goal 14 (strategist).
       setMessages([
         {
@@ -890,12 +919,16 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
     if (adapter) {
       if (adapter.pageType) ctx.pageType = adapter.pageType
-      if (adapter.completion?.resultCount !== null) ctx.resultCount = adapter.completion.resultCount
-      if (adapter.completion?.pipelineCount !== null) ctx.pipelineCount = adapter.completion.pipelineCount
+      // Use loose != null so undefined values are skipped (not injected as
+      // `undefined` keys) for adapters that omit these fields.
+      if (adapter.completion?.resultCount != null) ctx.resultCount = adapter.completion.resultCount
+      if (adapter.completion?.pipelineCount != null) ctx.pipelineCount = adapter.completion.pipelineCount
       const primary = adapter.primaryEntityId ?? null
       if (primary) {
         if (adapter.pageType === 'grant_detail' || adapter.pageType === 'grant') {
-          ctx.selectedApplicationId = String(primary)
+          // A grant id is NOT an application id — only set the grant id so
+          // backend tools reading selectedApplicationId aren't grounded on the
+          // wrong entity.
           ctx.selectedGrantId = String(primary)
         } else if (adapter.pageType === 'opportunity' || adapter.pageType === 'discover_grants') {
           ctx.selectedOpportunityId = String(primary)
@@ -907,14 +940,26 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     return ctx
   }, [anyaContext?.adapter, currentPage, location?.pathname, effectiveProfileId])
 
+  // Keep a ref of the latest page context / consume callback so the prefill
+  // effect can read fresh values without re-subscribing on every navigation
+  // (which would risk re-firing the send). The ref always holds current values.
+  const prefillSendDepsRef = useRef({ currentPage, pageContextPayload, onPrefillConsumed, refreshMessages })
+  useEffect(() => {
+    prefillSendDepsRef.current = { currentPage, pageContextPayload, onPrefillConsumed, refreshMessages }
+  }, [currentPage, pageContextPayload, onPrefillConsumed, refreshMessages])
+
   // Auto-send a pre-filled message when the panel is opened with one (e.g. from zero-result guidance).
-  // Declared after `pageContextPayload` so the effect's closure reads an
-  // initialized memo on first render (avoids a temporal-dead-zone read).
+  // We guard against re-sending the same prefill across sessionId changes using
+  // `consumedPrefillRef` (a per-text consumed marker) rather than relying solely
+  // on the parent clearing the prop or the transient isSendingRef.
   useEffect(() => {
     if (!prefillMessage || !sessionId || isSendingRef.current) return
     const trimmed = prefillMessage.trim()
     if (!trimmed) return
-    if (typeof onPrefillConsumed === "function") onPrefillConsumed()
+    if (consumedPrefillRef.current === trimmed) return
+    consumedPrefillRef.current = trimmed
+    const { currentPage: cp, pageContextPayload: ctx, onPrefillConsumed: consume, refreshMessages: refresh } = prefillSendDepsRef.current
+    if (typeof consume === "function") consume()
     isSendingRef.current = true
     setIsSending(true)
     const optimisticId = uuid()
@@ -922,7 +967,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       ...prev,
       { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
     ])
-    postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
+    postAnyaMessage(sessionId, trimmed, { currentPage: cp, pageContext: ctx })
       .then((response) => {
         if (Array.isArray(response?.messages) && response.messages.length > 0) {
           setMessages((prev) => {
@@ -930,7 +975,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
             return [...without, ...response.messages]
           })
         } else {
-          refreshMessages(sessionId)
+          // No structured messages came back — log the reason so a backend/send
+          // anomaly isn't silently masked, then fall back to a full refresh.
+          console.warn("[AnyaChat] prefill send returned no messages; falling back to refresh", response)
+          refresh(sessionId)
         }
       })
       .catch((err) => {
@@ -981,7 +1029,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         description: err instanceof Error ? err.message : "Please try again.",
       })
     }
-  }, [navigate, sessionId, effectiveProfileId, refreshMessages])
+  }, [navigate, sessionId, effectiveProfileId, refreshMessages, pageContextPayload])
   const [isSendingContext, setIsSendingContext] = useState(false)
   const handleUseCurrentScreen = useCallback(async () => {
     if (!sessionId) return
@@ -989,7 +1037,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     try {
       const ctx = serializeAnyaContext(anyaContext)
       const text = "Here's my current screen context: " + JSON.stringify(ctx)
-      await postAnyaMessage(sessionId, text)
+      // Carry the same grounding metadata every other request guarantees.
+      await postAnyaMessage(sessionId, text, { currentPage, pageContext: pageContextPayload })
       toast({ title: "Context sent", description: "Anya can use this to tailor answers." })
       await refreshMessages(sessionId)
     } catch (err) {
@@ -1001,23 +1050,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     } finally {
       setIsSendingContext(false)
     }
-  }, [sessionId, anyaContext, refreshMessages])
+  }, [sessionId, anyaContext, refreshMessages, currentPage, pageContextPayload])
 
   const [isClearingConversation, setIsClearingConversation] = useState(false)
 
-  /** Clear messages locally (keeps the same session) */
-  const handleClearConversation = useCallback(async () => {
-    setIsClearingConversation(true)
-    try {
-      setMessages([])
-      setTasks([])
-      // Intentionally a local-only clear: the session and its server-side
-      // history are preserved so the user can scroll back if they remount.
-      // The toast copy is updated to set accurate expectations.
-      toast({ title: "Conversation cleared", description: "Messages hidden locally. History is preserved on the server â use \"New conversation\" to start fresh." })
-    } finally {
-      setIsClearingConversation(false)
-    }
+  /** Clear messages locally (keeps the same session). Synchronous: nothing awaited. */
+  const handleClearConversation = useCallback(() => {
+    setMessages([])
+    setTasks([])
+    // Intentionally a local-only clear: the session and its server-side
+    // history are preserved so the user can scroll back if they remount.
+    // The toast copy is updated to set accurate expectations.
+    toast({ title: "Conversation cleared", description: "Messages hidden locally. History is preserved on the server — use \"New conversation\" to start fresh." })
   }, [])
 
   /** Delete current session and start a brand-new one */
@@ -1027,11 +1071,26 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       if (sessionId) {
         try {
           await deleteAnyaSession(sessionId)
-        } catch (_e) { log.debug('[AnyaChat] deleteAnyaSession error (non-critical)', _e) }
+        } catch (_e) {
+          // Deleting the old session is best-effort: a new session is created
+          // below regardless. Inform the user the previous session may persist
+          // server-side, but don't block starting fresh.
+          log.warn('[AnyaChat] deleteAnyaSession failed (non-blocking)', _e)
+          toast({
+            title: "Previous session not removed",
+            description: "We couldn't delete the old conversation on the server, but a new one has been started.",
+          })
+        }
       }
       setMessages([])
       setTasks([])
       setSessionId(null)
+      // Allow the (possibly identical) prefill text to be sent again into the
+      // new session if the parent intends it; otherwise the parent should have
+      // cleared the prop. Reset the consumed marker so a deliberate re-prefill
+      // works, but the marker still prevents accidental double-sends within a
+      // single session.
+      consumedPrefillRef.current = null
       const newSession = await createAnyaSession({ profileId: effectiveProfileId ?? undefined })
       setSessionId(newSession?.id ?? null)
       toast({ title: "New conversation started" })
@@ -1068,14 +1127,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   async function handleSend() {
     const trimmed = input.trim()
     if (!trimmed || isDisabled) {
-      log.debug('handleSend returning early', { hasText: Boolean(trimmed), isDisabled })
       return
     }
     // Synchronous ref guard prevents rapid double-sends before React re-renders the disabled state
     if (isSendingRef.current) return
     isSendingRef.current = true
     setIsSending(true)
-    log.debug('sending message', { sessionId })
     let optimisticId = null
     try {
       optimisticId = uuid()
@@ -1096,6 +1153,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           return [...withoutOptimistic, ...response.messages]
         })
       } else {
+        // No structured messages — log the response so a backend anomaly isn't
+        // silently masked, then fall back to a full refresh of the thread.
+        console.warn("[AnyaChat] send returned no messages; falling back to refresh", response)
         await refreshMessages(sessionId)
       }
       // The backend returns degraded=true when the AI service failed and Anya
@@ -1108,7 +1168,6 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           description: "That last reply is a fallback — please try again in a moment.",
         })
       }
-      log.debug('messages refreshed')
     } catch (error) {
       console.error("[AnyaChat] send failed:", error)
       if (optimisticId) {
@@ -1315,7 +1374,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const buildAdminToolParameters = (tool) => {
     const properties = tool?.schema?.properties || {}
     const form = adminToolForm?.[tool.name] || {}
-    const parameters = { profile_id: effectiveProfileId }
+    // Only inject profile_id when we actually have one — tools that validate
+    // presence should not receive an explicit null vs an absent key.
+    const parameters = effectiveProfileId ? { profile_id: effectiveProfileId } : {}
     for (const [name, schema] of Object.entries(properties)) {
       const raw = form[name] ?? (isProfileSchemaField(name) ? effectiveProfileId : undefined)
       if (raw === undefined || raw === null || raw === "") continue
@@ -1833,6 +1894,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                               return [...without, ...response.messages]
                             })
                           } else {
+                            console.warn("[AnyaChat] suggestion send returned no messages; falling back to refresh", response)
                             refreshMessages(sessionId)
                           }
                         })

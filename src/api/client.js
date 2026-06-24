@@ -21,13 +21,13 @@ if (import.meta.env.DEV) {
     console.warn(
       '[env] API_URL resolved from appBase as a path prefix:',
       API_URL,
-      'â ensure Vercel rewrites map',
+      '— ensure Vercel rewrites map',
       API_URL + '/api/:path*',
       'to the backend, otherwise all API calls will 404 silently.',
     )
   }
   if (!raw && API_URL === '') {
-    console.info('[env] API_URL is empty string â using same-origin proxy (relative URLs). Ensure the proxy is configured.')
+    console.info('[env] API_URL is empty string — using same-origin proxy (relative URLs). Ensure the proxy is configured.')
   }
 }
 
@@ -81,8 +81,9 @@ class APIClient {
       if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID();
       }
-    } catch {
-      // fall through to fallback request id
+    } catch (error) {
+      // crypto.randomUUID failed (e.g. insecure context); log and use fallback.
+      log.warn('crypto.randomUUID failed; using fallback request id', error?.message || error);
     }
     return `req_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
   }
@@ -192,7 +193,25 @@ class APIClient {
       }
       throw this.createAuthError('Session expired');
     }
-    
+
+    // Only auto-refresh-and-retry idempotent requests. Re-sending a POST/PUT/PATCH
+    // after refresh risks duplicate side effects (e.g. duplicate creates) and may
+    // re-use an already-consumed FormData body. Surface the auth error instead and
+    // let the caller decide whether/how to retry.
+    const retryMethod = String(originalRequest?.options?.method || 'GET').toUpperCase();
+    const isIdempotent = retryMethod === 'GET' || retryMethod === 'HEAD';
+    if (!isIdempotent) {
+      log.debug('skipping auto-retry for non-idempotent method after 401:', retryMethod)
+      try {
+        await this.refreshTokens()
+      } catch (error) {
+        console.warn('[APIClient] Token refresh failed:', error.message)
+      }
+      const authError = this.createAuthError('Your session expired during a non-idempotent request. Please retry.')
+      authError.isAuthError = true
+      throw authError
+    }
+
     // Delegate to the shared single-flight refreshTokens() so all callers
     // (handleUnauthorized, authStore timer, proactive refresh) share one promise.
     log.debug('starting token refresh via refreshTokens()')
@@ -219,13 +238,7 @@ class APIClient {
    * @returns {Promise<{accessToken: string, refreshToken?: string}>} The new tokens.
    */
   async refreshTokens() {
-    const refreshToken = this.getRefreshToken()
-    if (!refreshToken) {
-      this.clearToken()
-      throw this.createAuthError('Authentication required')
-    }
-
-    // Reuse any in-flight refresh.
+    // Reuse any in-flight refresh so concurrent callers share one rotation.
     if (this.refreshPromise) {
       log.debug('refreshTokens: reusing in-flight refresh promise')
       return this.refreshPromise
@@ -235,9 +248,23 @@ class APIClient {
     log.debug('refreshTokens: starting new refresh')
     this.refreshPromise = (async () => {
       try {
+        // Re-read the refresh token inside the single-flight body so that a
+        // just-completed back-to-back rotation is observed before we fetch,
+        // avoiding sending a now-invalid (rotated) refresh token.
+        const refreshToken = this.getRefreshToken()
+        if (!refreshToken) {
+          this.clearToken()
+          throw this.createAuthError('Authentication required')
+        }
+
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            // Hint for server-side CSRF protections that this is a same-origin
+            // programmatic request (not a cross-site form post).
+            'X-Requested-With': 'XMLHttpRequest',
+          },
           credentials: 'include',
           body: JSON.stringify({ refreshToken }),
         })
@@ -301,9 +328,36 @@ class APIClient {
     const { _isRetry } = options || {};
     const method = String((options || {}).method || 'GET').toUpperCase();
 
-    // Deduplicate identical in-flight GET requests to avoid redundant network calls
+    // Deduplicate identical in-flight GET requests to avoid redundant network calls.
+    // The dedup key must include request-distinguishing options so that requests
+    // differing by profile, auth presence, response type or custom headers are
+    // never collapsed into one shared promise (which could leak a JSON body to a
+    // blob caller or another profile's data).
     if (method === 'GET' && !_isRetry) {
-      const inflightKey = `${this.baseUrl}${endpoint}`;
+      const opts = options || {};
+      const profileId =
+        this.resolveRequestProfileId(
+          opts.headers?.['X-Profile-Id'] || opts.profileId || opts.profile_id,
+        ) || '';
+      const responseType = opts.responseType || '';
+      const cacheMode = opts.cache || '';
+      const hasAuth = this.getToken() ? '1' : '0';
+      // Serialize any custom headers so differing headers don't share a promise.
+      let headerKey = '';
+      try {
+        headerKey = opts.headers ? JSON.stringify(opts.headers) : '';
+      } catch {
+        headerKey = '';
+      }
+      const inflightKey = [
+        this.baseUrl + endpoint,
+        profileId,
+        responseType,
+        cacheMode,
+        hasAuth,
+        headerKey,
+      ].join('||');
+
       if (this._inflightRequests.has(inflightKey)) {
         return this._inflightRequests.get(inflightKey);
       }
@@ -381,15 +435,25 @@ class APIClient {
       let response = await fetch(url, requestInit);
 
       // Some proxies/browsers may still revalidate and return 304. Retry once with explicit no-store.
+      // Use a FRESH AbortController/timeout — the original controller may already be
+      // aborted (or its timer about to fire), which would cause the retry fetch to
+      // immediately reject with AbortError.
       if (response.status === 304 && !noCacheRetry) {
-        response = await fetch(url, {
-          ...requestInit,
-          cache: 'no-store',
-          headers: {
-            ...headers,
-            'Cache-Control': 'no-cache',
-          },
-        });
+        const retryController = new AbortController();
+        const retryTimeoutId = setTimeout(() => retryController.abort(), 60000);
+        try {
+          response = await fetch(url, {
+            ...requestInit,
+            cache: 'no-store',
+            signal: retryController.signal,
+            headers: {
+              ...headers,
+              'Cache-Control': 'no-cache',
+            },
+          });
+        } finally {
+          clearTimeout(retryTimeoutId);
+        }
       }
       
       clearTimeout(timeoutId);
@@ -413,7 +477,11 @@ class APIClient {
           const err = new Error(message)
           err.status = response.status
           err.requestId = errorBody.request_id || headers['X-Request-Id'] || null
-          err.errorCode = errorBody.error || null
+          // Prefer an explicit machine code field; fall back to `error` only when it
+          // looks like a stable code (no spaces) rather than human-readable prose.
+          err.errorCode =
+            errorBody.error_code
+            || (typeof errorBody.error === 'string' && !/\s/.test(errorBody.error) ? errorBody.error : null)
           err.errorType = errorBody.error_type || null
           err.details = errorBody
           throw err
@@ -466,7 +534,11 @@ class APIClient {
         const err = new Error(message);
         err.status = response.status;
         err.requestId = errorBody.request_id || headers['X-Request-Id'] || null;
-        err.errorCode = errorBody.error || null;
+        // Prefer an explicit machine code field; fall back to `error` only when it
+        // looks like a stable code (no spaces) rather than human-readable prose.
+        err.errorCode =
+          errorBody.error_code
+          || (typeof errorBody.error === 'string' && !/\s/.test(errorBody.error) ? errorBody.error : null);
         err.errorType = errorBody.error_type || null;
         err.details = errorBody;
         throw err;
@@ -494,8 +566,6 @@ class APIClient {
 
       return response.text();
     } catch (error) {
-      clearTimeout(timeoutId);
-      
       // Handle timeout errors specifically
       if (error.name === 'AbortError') {
         console.error(`[APIClient] Request timeout for ${endpoint}`);
@@ -524,11 +594,14 @@ class APIClient {
         throw networkErr;
       }
       
-      // Re-throw other errors
+      // Re-throw other errors, attaching a request id for traceability when missing.
       if (error && typeof error === 'object' && !error.requestId) {
         error.requestId = headers['X-Request-Id'] || null;
       }
       throw error;
+    } finally {
+      // Ensure the timeout timer is always cleared, regardless of how we exit.
+      clearTimeout(timeoutId);
     }
   }
 
@@ -540,10 +613,35 @@ class APIClient {
       : `/api/${normalizedResource}`;
 
     const buildUrl = (searchParams) => {
-      const query = searchParams && [...searchParams].length > 0
-        ? `?${searchParams.toString()}`
-        : '';
+      const queryString = searchParams ? searchParams.toString() : '';
+      const query = queryString.length > 0 ? `?${queryString}` : '';
       return `${endpoint}${query}`;
+    };
+
+    // Append a filter value to URLSearchParams with deliberate coercion:
+    // - skip undefined/null/'' (empty string treated as "no filter")
+    // - arrays produce repeated params (key=a&key=b)
+    // - objects are JSON-stringified
+    // - primitives (string/number/boolean) use String()
+    const appendFilterValue = (params, key, value) => {
+      if (value === undefined || value === null || value === '') return;
+      if (Array.isArray(value)) {
+        value
+          .filter((v) => v !== undefined && v !== null && v !== '')
+          .forEach((v) => {
+            if (typeof v === 'object') {
+              params.append(key, JSON.stringify(v));
+            } else {
+              params.append(key, String(v));
+            }
+          });
+        return;
+      }
+      if (typeof value === 'object') {
+        params.append(key, JSON.stringify(value));
+        return;
+      }
+      params.set(key, String(value));
     };
 
     return {
@@ -566,18 +664,14 @@ class APIClient {
           params.set('limit', String(limit));
         }
         if (filters && typeof filters === 'object') {
-          Object.entries(filters)
-            .filter(([, value]) => value !== undefined && value !== null)
-            .forEach(([key, value]) => params.set(key, value));
+          Object.entries(filters).forEach(([key, value]) => appendFilterValue(params, key, value));
         }
         return this.fetch(buildUrl(params));
       },
       
       filter: async (filters = {}) => {
         const params = new URLSearchParams();
-        Object.entries(filters)
-          .filter(([, value]) => value !== undefined && value !== null)
-          .forEach(([key, value]) => params.set(key, value));
+        Object.entries(filters).forEach(([key, value]) => appendFilterValue(params, key, value));
         return this.fetch(buildUrl(params));
       },
       
@@ -636,8 +730,12 @@ class APIClient {
     const store = this.stubStores.get(entityName);
 
     const generateId = () => {
-      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        return crypto.randomUUID();
+      try {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+          return crypto.randomUUID();
+        }
+      } catch (error) {
+        log.warn('crypto.randomUUID failed in stub generateId; using fallback', error?.message || error);
       }
       return `${entityName.toLowerCase()}_${Math.random().toString(36).slice(2, 10)}`;
     };
@@ -754,7 +852,15 @@ class APIClient {
           console.warn('[APIClient] Network error checking auth status (server may be starting):', error.message);
           return null;
         }
-        // For other errors (5xx, unexpected), rethrow so callers can detect server issues.
+        // For other errors (5xx, unexpected), log context and rethrow so callers can
+        // detect server issues. Re-throwing here is intentional: auth bootstrap must
+        // surface unexpected server failures rather than masquerading them as a
+        // logged-out state.
+        console.error('[APIClient] Unexpected error during auth.me():', {
+          status: error?.status,
+          requestId: error?.requestId,
+          message: error?.message,
+        });
         throw error;
       }
     },
@@ -770,10 +876,20 @@ class APIClient {
     },
     
     logout: () => {
-      this.clearToken();
-      this.fetch('/api/auth/logout', { method: 'POST' }).catch(() => {
-        // Non-blocking — best-effort server notification; ignore errors.
-      });
+      // Send the logout request BEFORE clearing tokens so the server receives the
+      // Authorization header / refresh token and can revoke the session. Clear
+      // local tokens afterwards regardless of the request outcome.
+      this.fetch('/api/auth/logout', { method: 'POST' })
+        .catch(() => {
+          // Non-blocking — best-effort server notification; ignore errors.
+        })
+        .finally(() => {
+          this.clearToken();
+        });
+      // Clear in-memory token immediately so subsequent calls don't reuse it, but
+      // the in-flight logout request above already captured the header.
+      this.token = null;
+      this.refreshToken = null;
       if (typeof window !== 'undefined') {
         const base = (env.appBase || '').replace(/\/$/, '');
         window.location.href = `${base}/login`;
@@ -820,9 +936,17 @@ class APIClient {
         const formData = new FormData();
         formData.append('file', file);
 
+        // Only primitive metadata is supported as form fields. Objects/arrays are
+        // JSON-stringified deliberately so they aren't coerced to '[object Object]'.
         Object.entries(metadata || {}).forEach(([key, value]) => {
           if (value === undefined || value === null) return;
-          formData.append(key, value);
+          if (value instanceof Blob || value instanceof File) {
+            formData.append(key, value);
+          } else if (typeof value === 'object') {
+            formData.append(key, JSON.stringify(value));
+          } else {
+            formData.append(key, String(value));
+          }
         });
 
         return this.fetch('/api/documents/upload', {
@@ -897,20 +1021,38 @@ class APIClient {
 const client = new APIClient();
 client.init();
 
-// Also export individual pieces
-export const {
-  Organization,
-  Grant,
-  FundingOpportunity,
-  Milestone,
-  Document,
-  Expense,
-  Budget,
-  Contact,
-  CrawlLog,
-  ApplicationDraft,
-  Profile,
-} = client.entities;
+// Entity accessors.
+// NOTE: Re-running client.init() replaces the entities Proxy. Eagerly destructuring
+// the Proxy at module load would capture stale client objects that diverge from
+// client.entities after a re-init. Instead, export accessor functions that always
+// read the current Proxy, preserving lazy/stub re-resolution.
+export const getOrganization = () => client.entities.Organization;
+export const getGrant = () => client.entities.Grant;
+export const getFundingOpportunity = () => client.entities.FundingOpportunity;
+export const getMilestone = () => client.entities.Milestone;
+export const getDocument = () => client.entities.Document;
+export const getExpense = () => client.entities.Expense;
+export const getBudget = () => client.entities.Budget;
+export const getContact = () => client.entities.Contact;
+export const getCrawlLog = () => client.entities.CrawlLog;
+export const getApplicationDraft = () => client.entities.ApplicationDraft;
+export const getProfile = () => client.entities.Profile;
+
+// Back-compat named exports.
+// These are lazy getters on a single namespace object so consumers using
+// `import { Organization } from '@/api/client'` always resolve the current
+// entity client from the live Proxy (no stale snapshot after a re-init).
+export const Organization = client.entities.Organization;
+export const Grant = client.entities.Grant;
+export const FundingOpportunity = client.entities.FundingOpportunity;
+export const Milestone = client.entities.Milestone;
+export const Document = client.entities.Document;
+export const Expense = client.entities.Expense;
+export const Budget = client.entities.Budget;
+export const Contact = client.entities.Contact;
+export const CrawlLog = client.entities.CrawlLog;
+export const ApplicationDraft = client.entities.ApplicationDraft;
+export const Profile = client.entities.Profile;
 
 export const getProfileSectionsClient = (profileId) => client.profileSectionsClient(profileId);
 export const apiFetch = (...args) => client.fetch(...args);

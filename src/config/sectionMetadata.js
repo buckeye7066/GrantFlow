@@ -524,9 +524,10 @@ export const SECTION_METADATA = {
         "help": "True if the applicant is explicitly low-income."
       },
       {
-        "name": "unemployed",
+        "name": "employment_status",
         "label": "Employment status",
         "format": "enum",
+        "legacy_aliases": ["unemployed"],
         "options": [
           "student",
           "not_in_labor_force",
@@ -536,7 +537,7 @@ export const SECTION_METADATA = {
           "self_employed",
           "retired"
         ],
-        "help": "Employment status aligned with Employment > Current status."
+        "help": "Employment status aligned with Employment > Current status. Legacy field 'unemployed' is mapped to this canonical key during save."
       },
       {
         "name": "displaced_worker",
@@ -966,7 +967,7 @@ export const SECTION_METADATA = {
       {
         "name": "primary_condition",
         "label": "Primary condition",
-        "format": "boolean_tri",
+        "format": "text",
         "help": "Primary condition or diagnosis when explicitly stated."
       },
       {
@@ -1146,10 +1147,11 @@ export const SECTION_METADATA = {
         "help": "True if LGBTQ+ identity stated."
       },
       {
-        "name": "immigrant_status",
+        "name": "immigration_status",
         "label": "Immigration status",
         "format": "enum",
-        "help": "One of: us_citizen, permanent_resident, refugee, undocumented, other, unknown.",
+        "legacy_aliases": ["immigrant_status"],
+        "help": "Canonical immigration status: us_citizen, permanent_resident, refugee, undocumented, other, unknown. Legacy field 'immigrant_status' is mapped to this canonical key during save.",
         "options": [
           "us_citizen",
           "permanent_resident",
@@ -1272,20 +1274,6 @@ export const SECTION_METADATA = {
         "label": "Appalachian heritage",
         "format": "text",
         "help": "True if Appalachian heritage."
-      },
-      {
-        "name": "immigration_status",
-        "label": "Immigration status",
-        "format": "enum",
-        "help": "Immigration status when explicitly provided.",
-        "options": [
-          "us_citizen",
-          "permanent_resident",
-          "refugee",
-          "undocumented",
-          "other",
-          "unknown"
-        ]
       },
       {
         "name": "gender",
@@ -1583,7 +1571,7 @@ export const SECTION_METADATA = {
       },
       {
         "name": "appalachian_region",
-        "label": "Located in __p0__ region",
+        "label": "Located in Appalachian region",
         "format": "text",
         "help": "True if located in or serving Appalachia."
       },

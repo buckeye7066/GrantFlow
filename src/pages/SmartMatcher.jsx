@@ -23,10 +23,22 @@ import { createPageUrl } from "@/utils"
 import { formatReasonText } from "@/utils/reasonText"
 
 // ---------------------------------------------------------------------------
-// Persistent needs helpers – stored in localStorage keyed per profile
+// Persistent needs helpers \u2013 stored in localStorage keyed per profile
 // ---------------------------------------------------------------------------
 
 const NEEDS_STORAGE_PREFIX = "grantflow:matcher-needs:"
+
+// Collision-resistant id generator for custom needs. Combines a timestamp with
+// an always-incrementing counter (and crypto.randomUUID when available) so two
+// needs created in the same millisecond never share an id.
+let customNeedCounter = 0
+function generateCustomNeedId() {
+    customNeedCounter += 1
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return "need_custom_" + crypto.randomUUID()
+    }
+    return "need_custom_" + Date.now() + "_" + customNeedCounter
+}
 
 function loadNeeds(profileId) {
     if (!profileId) return { checked: {}, customItems: [] }
@@ -47,7 +59,10 @@ function saveNeeds(profileId, state) {
     if (!profileId) return
     try {
         localStorage.setItem(NEEDS_STORAGE_PREFIX + profileId, JSON.stringify(state))
-    } catch { /* ignore quota errors */ }
+    } catch (err) {
+        // Surface the failure instead of silently swallowing it (e.g. quota).
+        console.warn("[SmartMatcher] Failed to persist needs state to localStorage:", err)
+    }
 }
 
 // Impact badge colors for profile gaps
@@ -57,17 +72,21 @@ const IMPACT_COLORS = {
   medium: "bg-blue-100 text-blue-700 border-blue-200",
 }
 
-// Fixed 0–80 guidance zones, ALWAYS rendered (a visible guide even before
-// results exist), enriched with live counts + dominant source from
-// `score_histogram` (buckets align with these zones) when available.
+// Match score scale upper bound. Aligned to the full 0\u2013100 scale so the
+// slider can reach the very highest matches (85+).
+const SCORE_MAX = 100
+
+// Guidance zones spanning the full 0\u2013100 scale, ALWAYS rendered (a visible
+// guide even before results exist), enriched with live counts + dominant source
+// from `score_histogram` when available.
 const GUIDANCE_ZONES = [
-  { min: 0, max: 20, label: "Broad matches", hint: "Wide net" },
-  { min: 20, max: 40, label: "Good matches", hint: "Worth a look" },
-  { min: 40, max: 60, label: "Strong matches", hint: "Solid fit" },
-  { min: 60, max: 80, label: "Best matches", hint: "Closest fit" },
+  { min: 0, max: 40, label: "Broad matches", hint: "Wide net" },
+  { min: 40, max: 70, label: "Good matches", hint: "Worth a look" },
+  { min: 70, max: 85, label: "Strong matches", hint: "Solid fit" },
+  { min: 85, max: 100, label: "Best matches", hint: "Closest fit" },
 ]
 
-function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
+function MatchScoreGuidanceBand({ histogram, max = SCORE_MAX, value }) {
   const buckets = Array.isArray(histogram) ? histogram : []
   const byMin = new Map(buckets.map((b) => [Number(b?.min) || 0, b]))
   const maxCount = buckets.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
@@ -81,16 +100,19 @@ function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
           const topSource = live?.top_source ? String(live.top_source) : null
           const isActiveZone = typeof value === "number" && value >= z.min && value < z.max
           const ratio = hasData ? count / maxCount : 0
-          const staticRatio = z.min / max
-          const intensity = hasData ? 0.2 + 0.65 * ratio : 0.16 + 0.5 * staticRatio
-          const bg = hasData && count === 0 ? "rgb(241 245 249)" : `rgba(34, 197, 94, ${intensity})`
-          const sub = hasData ? (count > 0 ? `${count}${topSource ? ` · ${topSource.toLowerCase()}` : ""}` : z.hint) : z.hint
+          // When we have no data, render a neutral uniform color rather than a
+          // gradient that would imply high-score matches already exist.
+          const intensity = hasData ? 0.2 + 0.65 * ratio : 0
+          const bg = hasData
+            ? (count === 0 ? "rgb(241 245 249)" : `rgba(34, 197, 94, ${intensity})`)
+            : "rgb(226 232 240)"
+          const sub = hasData ? (count > 0 ? `${count}${topSource ? ` \u00b7 ${topSource.toLowerCase()}` : ""}` : z.hint) : z.hint
           return (
             <div
               key={`band-${z.min}`}
               className="flex flex-col"
               style={{ flexGrow: 1, flexBasis: 0 }}
-              title={`${z.label} (${z.min}–${z.max}%)${hasData ? ` · ${count} match${count === 1 ? "" : "es"}` : ""}${topSource ? ` · mostly ${topSource.toLowerCase()}` : ` · ${z.hint}`}`}
+              title={`${z.label} (${z.min}\u2013${z.max}%)${hasData ? ` \u00b7 ${count} match${count === 1 ? "" : "es"}` : ""}${topSource ? ` \u00b7 mostly ${topSource.toLowerCase()}` : ` \u00b7 ${z.hint}`}`}
             >
               <div
                 className={`h-2.5 rounded-sm ${isActiveZone ? "ring-2 ring-emerald-600" : ""}`}
@@ -210,12 +232,12 @@ function ImproveMatchesCard({ prompts, profileId, onDismiss, variant = "banner" 
 export default function SmartMatcher() {
     const [selectedProfileId, setSelectedProfileId] = useState("")
     const [searchQuery, setSearchQuery] = useState("")
-    /** When set, catalog query uses OR across these terms (from “Understand & search”). */
+    /** When set, catalog query uses OR across these terms (from \u201cUnderstand & search\u201d). */
     const [parsedSearchTerms, setParsedSearchTerms] = useState(null)
     const [intentSummary, setIntentSummary] = useState("")
     // Captured from interpretMatcherIntent so the catalog query can skip
     // SSI/SNAP/TANF when the user is searching for professional development /
-    // continuing education funding (Smart Matcher spec §3, §4).
+    // continuing education funding (Smart Matcher spec \u00a73, \u00a74).
     const [intentPrimaryCategory, setIntentPrimaryCategory] = useState(null)
     const [intentExcludedCategories, setIntentExcludedCategories] = useState([])
     const [intentBrandedProgram, setIntentBrandedProgram] = useState(null)
@@ -243,7 +265,9 @@ export default function SmartMatcher() {
   const [needsState, setNeedsState] = useState({ checked: {}, customItems: [] })
   const [newNeedText, setNewNeedText] = useState("")
 
-  // Load needs when profile changes
+  // Load needs when profile changes. loadNeeds is a cheap synchronous read of a
+  // single localStorage key keyed by profile, so it only re-runs when the
+  // profile id actually changes (effect dependency).
   useEffect(() => {
         setNeedsState(loadNeeds(selectedProfileId))
   }, [selectedProfileId])
@@ -290,7 +314,7 @@ export default function SmartMatcher() {
   const addCustomNeed = useCallback(() => {
         const text = newNeedText.trim()
         if (!text) return
-        const id = "need_custom_" + Date.now()
+        const id = generateCustomNeedId()
         setNeedsState((prev) => ({
                 ...prev,
                 customItems: [...prev.customItems, { id, name: text, category: "custom" }],
@@ -317,7 +341,14 @@ export default function SmartMatcher() {
   const inferredNeeds = useMemo(() => {
         const payload = suggestionsResponse?.data ?? suggestionsResponse ?? {}
         const suggestions = payload?.suggestions ?? []
-        return Array.isArray(suggestions) ? suggestions : []
+        if (!Array.isArray(suggestions)) return []
+        // Ensure every inferred need has a stable unique id used both for the
+        // checked-state map key and the React render key. Falls back to a
+        // name+index-namespaced id when the backend omits one.
+        return suggestions.map((s, idx) => {
+            const stableId = s?.id != null ? String(s.id) : `need_inferred_${idx}_${s?.name ?? ""}`
+            return { ...s, _key: stableId }
+        })
   }, [suggestionsResponse])
 
   // -- Auto-populate search keywords from inferred needs on first profile load --
@@ -354,6 +385,14 @@ export default function SmartMatcher() {
       const payload = raw?.data ?? raw ?? {}
       const terms = Array.isArray(payload.search_terms) ? payload.search_terms.filter(Boolean) : []
       if (terms.length === 0) {
+        // Clear any stale intent from a prior successful interpretation so the
+        // catalog query does not silently keep reusing old terms.
+        setParsedSearchTerms(null)
+        setIntentSummary("")
+        setIntentPrimaryCategory(null)
+        setIntentExcludedCategories([])
+        setIntentBrandedProgram(null)
+        setIntentCredentials([])
         toast({
           title: "Could not extract search terms",
           description: "Try rephrasing with what you need (for example travel, vehicle, rent, medical).",
@@ -410,20 +449,25 @@ export default function SmartMatcher() {
 
   const handleSearchNeeds = useCallback(() => {
         const checkedInferred = inferredNeeds
-                .filter((s) => needsState.checked[s.name])
+                .filter((s) => needsState.checked[s._key])
                 .map((s) => s.name)
         const checkedCustom = needsState.customItems
                 .filter((i) => needsState.checked[i.id])
                 .map((i) => i.name)
-        const allChecked = [...checkedInferred, ...checkedCustom]
+        const allChecked = [...checkedInferred, ...checkedCustom].filter(Boolean)
         if (allChecked.length === 0) return
+
+        const parsed = allChecked
+          .flatMap((t) => String(t).toLowerCase().trim().split(/\s+/))
+          .filter(Boolean)
+        if (parsed.length === 0) return
 
         const query = allChecked.join(" ")
         setSearchQuery(query)
-        setParsedSearchTerms(
-          allChecked.map((t) => String(t).toLowerCase().trim()).filter(Boolean),
-        )
+        setParsedSearchTerms(parsed)
         setIntentSummary("")
+        // Only flip into the "searching needs" state once we know there is a
+        // valid, non-empty query to run.
         setIsSearchingNeeds(true)
 
         // Force refetch even if keywords haven't changed
@@ -454,11 +498,15 @@ export default function SmartMatcher() {
                   Array.isArray(parsedSearchTerms) && parsedSearchTerms.length > 0
                     ? parsedSearchTerms.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
                     : null
-                const manual = searchQuery?.trim() ? [searchQuery.trim().toLowerCase()] : []
+                // Split multi-word manual queries into individual terms so they use
+                // OR (q_terms) semantics rather than matching one long literal phrase.
+                const manual = searchQuery?.trim()
+                  ? searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean)
+                  : []
                 const terms = fromIntent && fromIntent.length > 0 ? fromIntent : manual
                 if (terms.length === 1) {
                   qs.set('q', terms[0])
-                } else                 if (terms.length > 1) {
+                } else if (terms.length > 1) {
                   for (const t of terms) {
                     qs.append('q_terms', t)
                   }
@@ -479,9 +527,15 @@ export default function SmartMatcher() {
   })
 
   useEffect(() => {
-        if (!isScoring && isSearchingNeeds) {
-                setIsSearchingNeeds(false)
-                document.getElementById("match-results")?.scrollIntoView({ behavior: "smooth" })
+        // Only react to a needs-search that was explicitly initiated. When scoring
+        // settles, reset the flag deterministically and scroll to results if the
+        // anchor is mounted; otherwise just clear the flag (no silent surprise
+        // scroll on unrelated refetches and no scroll when results are absent).
+        if (isScoring || !isSearchingNeeds) return
+        setIsSearchingNeeds(false)
+        const anchor = document.getElementById("match-results")
+        if (anchor) {
+                anchor.scrollIntoView({ behavior: "smooth" })
         }
   }, [isScoring, isSearchingNeeds])
 
@@ -492,7 +546,7 @@ export default function SmartMatcher() {
   }, [scoredResponse])
 
   // Feature A: backend returns discovery_pending:true when this profile has
-  // never had discovery run — show a run-discovery prompt instead of an empty
+  // never had discovery run \u2014 show a run-discovery prompt instead of an empty
   // list. Feature B: score_histogram drives the guidance band (graceful when
   // absent on older responses).
   const discoveryPending = useMemo(() => {
@@ -516,8 +570,8 @@ export default function SmartMatcher() {
 
   const filteredOpportunities = useMemo(() => {
         // Defense in depth: even if any backend path leaks a sub-threshold row,
-        // the UI honors the slider as a HARD floor — nothing below minScore shows.
-        const floor = Math.min(100, Math.max(0, Number(minScore) || 0))
+        // the UI honors the slider as a HARD floor \u2014 nothing below minScore shows.
+        const floor = Math.min(SCORE_MAX, Math.max(0, Number(minScore) || 0))
         return [...scoredOpportunities]
           .filter((o) => {
             const score = Number(o.match_score ?? o.match ?? -Infinity)
@@ -636,7 +690,7 @@ export default function SmartMatcher() {
                                                                           <div className="relative">
                                                                                             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                                                                                             <Input
-                                                                                                                  placeholder="Single phrase filter, or edit after “Understand & search”…"
+                                                                                                                  placeholder="Single phrase filter, or edit after \u201cUnderstand & search\u201d\u2026"
                                                                                                                   value={searchQuery}
                                                                                                                   onChange={(e) => {
                                                                                                                     setSearchQuery(e.target.value)
@@ -649,20 +703,20 @@ export default function SmartMatcher() {
                                                                           {parsedSearchTerms && parsedSearchTerms.length > 1 ? (
                                                                             <p className="text-xs text-slate-500 mt-1">
                                                                               Matching opportunities that mention any of:{" "}
-                                                                              {parsedSearchTerms.slice(0, 8).join(" · ")}
-                                                                              {parsedSearchTerms.length > 8 ? " …" : ""}
+                                                                              {parsedSearchTerms.slice(0, 8).join(" \u00b7 ")}
+                                                                              {parsedSearchTerms.length > 8 ? " \u2026" : ""}
                                                                             </p>
                                                                           ) : null}
                                                           </div>
                                                           <div>
                                                                           <Label>Minimum match score</Label>
-                                                                          {/* Feature B: data-driven, color-coded guidance band (0–80). */}
-                                                                          <MatchScoreGuidanceBand histogram={scoreHistogram} max={80} value={minScore} />
+                                                                          {/* Feature B: data-driven, color-coded guidance band (0\u2013100). */}
+                                                                          <MatchScoreGuidanceBand histogram={scoreHistogram} max={SCORE_MAX} value={minScore} />
                                                                           <div className="flex items-center gap-2">
                                                                                             <SlidersHorizontal className="w-4 h-4 text-slate-400" />
                                                                                             <input
-                                                                                                                  type="range" min="0" max="80"
-                                                                                                                  value={Math.min(80, minScore)}
+                                                                                                                  type="range" min="0" max="100"
+                                                                                                                  value={Math.min(SCORE_MAX, minScore)}
                                                                                                                   onChange={(e) => setMinScore(Number(e.target.value))}
                                                                                                                   className="flex-1"
                                                                                                                 />
@@ -695,7 +749,7 @@ export default function SmartMatcher() {
                       </Card>
               
                 {/* ----------------------------------------------------------------- */}
-                {/* Search by Profile Needs – inferred needs checklist              */}
+                {/* Search by Profile Needs \u2013 inferred needs checklist              */}
                 {/* ----------------------------------------------------------------- */}
                 {selectedProfileId && selectedProfileId !== 'all' && (
                     <Card>
@@ -720,20 +774,20 @@ export default function SmartMatcher() {
                                   ) : (
                                       <>
                                           {inferredNeeds.map((suggestion) => {
-                                              const isNeedChecked = !!needsState.checked[suggestion.name]
+                                              const isNeedChecked = !!needsState.checked[suggestion._key]
                                               const reasonText = Array.isArray(suggestion.reasons)
                                                   ? formatReasonText(suggestion.reasons[0])
                                                   : ''
                                               return (
-                                              <div key={suggestion.name}>
+                                              <div key={suggestion._key}>
                                                 <div className="flex items-center gap-3">
                                                   <Checkbox
-                                                      id={`need-${suggestion.name}`}
+                                                      id={`need-${suggestion._key}`}
                                                       checked={isNeedChecked}
-                                                      onCheckedChange={() => toggleNeed(suggestion.name)}
+                                                      onCheckedChange={() => toggleNeed(suggestion._key)}
                                                   />
                                                   <label
-                                                      htmlFor={`need-${suggestion.name}`}
+                                                      htmlFor={`need-${suggestion._key}`}
                                                       className={`flex-1 text-sm cursor-pointer select-none ${isNeedChecked ? "line-through text-slate-400" : "text-slate-700"}`}
                                                   >
                                                       {suggestion.name}
@@ -780,7 +834,7 @@ export default function SmartMatcher() {
                                   <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
                                       <Plus className="w-4 h-4 text-slate-400 shrink-0" />
                                       <Input
-                                          placeholder="Add a custom need…"
+                                          placeholder="Add a custom need\u2026"
                                           value={newNeedText}
                                           onChange={(e) => setNewNeedText(e.target.value)}
                                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomNeed() } }}
@@ -799,7 +853,7 @@ export default function SmartMatcher() {
                                           onClick={handleSearchNeeds}
                                           disabled={
                                               isSearchingNeeds ||
-                                              ![...inferredNeeds.map((s) => s.name), ...needsState.customItems.map((i) => i.id)]
+                                              ![...inferredNeeds.map((s) => s._key), ...needsState.customItems.map((i) => i.id)]
                                                   .some((id) => needsState.checked[id])
                                           }
                                       >

@@ -52,11 +52,50 @@ import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { getApplicableSectionKeys } from "@/utils/profileCompletion"
 import { formatReasonText } from "@/utils/reasonText"
 
+/**
+ * Safely build a Date and validate it. Returns a valid Date instance or null
+ * when the input is missing or unparseable, so callers can avoid passing
+ * Invalid Date values to date-fns helpers (which throw RangeError).
+ */
+function parseValidDate(value) {
+  if (value === null || value === undefined) return null
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d
+}
+
+/**
+ * Safe wrapper around date-fns formatDistanceToNow. Returns `fallback` when the
+ * input date is missing or invalid instead of throwing.
+ */
+function safeDistanceToNow(value, fallback = null) {
+  const d = parseValidDate(value)
+  if (!d) return fallback
+  return formatDistanceToNow(d, { addSuffix: true })
+}
+
+/**
+ * Safe wrapper around date-fns format. Returns `fallback` when the input date
+ * is missing or invalid instead of throwing.
+ */
+function safeFormat(value, pattern, fallback = "") {
+  const d = parseValidDate(value)
+  if (!d) return fallback
+  return format(d, pattern)
+}
+
 async function startGeoCrawl(payload) {
-  return apiFetch("/api/geo-crawl/start", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+  // Defensively catch and rethrow so that callers (mutations) always receive a
+  // proper Error, and any accidental fire-and-forget usage does not surface as
+  // an unhandled promise rejection at the global level.
+  try {
+    return await apiFetch("/api/geo-crawl/start", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error))
+  }
 }
 
 const JOB_LABELS = {
@@ -89,6 +128,7 @@ const STATUS_VARIANTS = {
  * `completed` → `partial` when the backend recorded a partial-completion run
  * (worker died / withTimeout aborted after real, durable progress was flushed
  * to result_meta). Falls back to the raw `status` field for everything else.
+ * Returns null when no job is provided so callers can detect missing data.
  */
 function getEffectiveJobStatus(job) {
   if (!job) return null
@@ -272,23 +312,35 @@ function summarizeJob(job) {
     }
     case "document_ingest": {
       if (typeof meta.summary === "string" && meta.summary.trim()) {
-        summary = meta.summary.length > 200 ? `${meta.summary.slice(0, 199)}…` : meta.summary
+        summary = meta.summary.length > 200 ? `${meta.summary.slice(0, 200)}…` : meta.summary
         break
       }
-      const total =
-        formatNumber(meta.total_sections_updated) ??
-        (Array.isArray(meta.sections_updated) ? formatNumber(meta.sections_updated.length) : null)
-      if (total) {
-        summary = `Extracted data into ${total} section${total === "1" ? "" : "s"}`
+      const rawTotal =
+        typeof meta.total_sections_updated === "number"
+          ? meta.total_sections_updated
+          : Array.isArray(meta.sections_updated)
+          ? meta.sections_updated.length
+          : null
+      if (typeof rawTotal === "number" && rawTotal > 0) {
+        const display = formatNumber(rawTotal)
+        summary = `Extracted data into ${display} section${rawTotal === 1 ? "" : "s"}`
       }
       break
     }
     case "pipeline_automation": {
-      const advanced = formatNumber(meta.advanced)
-      const handoffs = formatNumber(meta.handoffs)
+      const advancedRaw =
+        typeof meta.advanced === "number" ? meta.advanced : Number(meta.advanced)
+      const handoffsRaw =
+        typeof meta.handoffs === "number" ? meta.handoffs : Number(meta.handoffs)
+      const advanced = formatNumber(
+        Number.isFinite(advancedRaw) ? advancedRaw : NaN,
+      )
+      const handoffs = formatNumber(
+        Number.isFinite(handoffsRaw) ? handoffsRaw : NaN,
+      )
       const parts = []
-      if (advanced) parts.push(`Advanced ${advanced} grant${meta.advanced === 1 ? "" : "s"}`)
-      if (handoffs) parts.push(`${handoffs} handoff${meta.handoffs === 1 ? "" : "s"}`)
+      if (advanced) parts.push(`Advanced ${advanced} grant${advancedRaw === 1 ? "" : "s"}`)
+      if (handoffs) parts.push(`${handoffs} handoff${handoffsRaw === 1 ? "" : "s"}`)
       summary = parts.length > 0 ? parts.join(" • ") : null
       break
     }
@@ -305,9 +357,19 @@ function summarizeJob(job) {
     case "avatar_lookup":
       summary = "Generated AI avatar"
       break
+    case "portal_check": {
+      const inserted = formatNumber(meta.inserted ?? job.result_count)
+      const evaluated = formatNumber(meta.evaluated)
+      const parts = []
+      if (inserted) parts.push(`Synced ${inserted} award notification${meta.inserted === 1 ? "" : "s"}`)
+      if (evaluated) parts.push(`checked ${evaluated} portal${meta.evaluated === 1 ? "" : "s"}`)
+      summary = parts.length > 0 ? parts.join(" • ") : "Checked award portals"
+      break
+    }
     default: {
-      const resultCount = formatNumber(job.result_count)
-      summary = resultCount ? `Processed ${resultCount} record${job.result_count === 1 ? "" : "s"}` : null
+      const rawCount = Number(job.result_count)
+      const resultCount = formatNumber(Number.isFinite(rawCount) ? rawCount : NaN)
+      summary = resultCount ? `Processed ${resultCount} record${rawCount === 1 ? "" : "s"}` : null
       break
     }
   }
@@ -377,14 +439,11 @@ function OverallMetricsCard({ overall, generatedAt, isLoading, onOpenQueue }) {
       ? overall.failure_reasons[0]
       : null
   const avgDuration = overall?.average_duration_seconds ?? null
-  const lastActivity = overall?.last_activity
-    ? formatDistanceToNow(new Date(overall.last_activity), { addSuffix: true })
-    : null
-  const lastRetryText = overall?.last_retry_at
-    ? formatDistanceToNow(new Date(overall.last_retry_at), { addSuffix: true })
-    : null
+  const lastActivity = safeDistanceToNow(overall?.last_activity)
+  const lastRetryText = safeDistanceToNow(overall?.last_retry_at)
   const isActive = running > 0 || queued > 0
   const isClickable = typeof onOpenQueue === "function"
+  const generatedText = safeDistanceToNow(generatedAt, "moments ago")
 
   return (
     <Card
@@ -464,8 +523,7 @@ function OverallMetricsCard({ overall, generatedAt, isLoading, onOpenQueue }) {
         </div>
         <div className="col-span-2 flex items-center justify-between text-xs text-slate-500">
           <span>
-            Generated{" "}
-            {generatedAt ? formatDistanceToNow(new Date(generatedAt), { addSuffix: true }) : "moments ago"}
+            Generated {generatedText ?? "moments ago"}
           </span>
           <div className="flex items-center gap-3">
             {avgDuration ? (
@@ -505,12 +563,12 @@ function RecentActivityChart({ activity }) {
   const totals = activity.map(
     (entry) => (entry?.completed ?? 0) + (entry?.failed ?? 0),
   )
-  const max = Math.max(...totals, 1)
+  const max = totals.reduce((m, v) => Math.max(m, v), 1)
 
   return (
     <div className="space-y-1">
       <div className="flex h-16 items-end gap-1">
-        {activity.map((entry) => {
+        {activity.map((entry, entryIndex) => {
           const total = (entry?.completed ?? 0) + (entry?.failed ?? 0)
           const height = total > 0 ? Math.max(4, Math.round((total / max) * 56)) : 4
           const completedRatio = total > 0 ? (entry?.completed ?? 0) / total : 0
@@ -526,13 +584,25 @@ function RecentActivityChart({ activity }) {
             completedHeight = Math.max(0, height - failedHeight)
           }
 
-          const dayLabel = format(new Date(entry.date), "EEE")
-          const tooltip = `${dayLabel} • ${entry.completed ?? 0} completed${
-            entry.failed ? `, ${entry.failed} failed` : ""
+          // Guard: when there were runs but rounding zeroed both segments,
+          // force the dominant segment to a minimum height so a nonzero day
+          // never renders as the slate "zero" bar.
+          if (total > 0 && completedHeight === 0 && failedHeight === 0) {
+            if ((entry?.completed ?? 0) >= (entry?.failed ?? 0)) {
+              completedHeight = Math.max(2, height)
+            } else {
+              failedHeight = Math.max(2, height)
+            }
+          }
+
+          const dayLabel = safeFormat(entry?.date, "EEE", "—")
+          const tooltip = `${dayLabel} • ${entry?.completed ?? 0} completed${
+            entry?.failed ? `, ${entry.failed} failed` : ""
           }`
+          const key = entry?.date ?? `activity-${entryIndex}`
 
           return (
-            <div key={entry.date} className="flex flex-1 flex-col items-center gap-1">
+            <div key={key} className="flex flex-1 flex-col items-center gap-1">
               <div className="flex w-full flex-col justify-end" title={tooltip} aria-label={tooltip}>
                 {completedHeight > 0 ? (
                   <div
@@ -559,9 +629,9 @@ function RecentActivityChart({ activity }) {
         })}
       </div>
       <div className="grid grid-cols-7 gap-1 text-[10px] uppercase tracking-wide text-slate-400">
-        {activity.map((entry) => (
-          <span key={`${entry.date}-label`} className="text-center">
-            {format(new Date(entry.date), "EEE")}
+        {activity.map((entry, entryIndex) => (
+          <span key={`${entry?.date ?? entryIndex}-label`} className="text-center">
+            {safeFormat(entry?.date, "EEE", "—")}
           </span>
         ))}
       </div>
@@ -600,9 +670,7 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
   const totalRetries = retryStats.total_retries ?? 0
   const jobsWithRetries = retryStats.jobs_with_retries ?? 0
   const recentRetryJobs = retryStats.recent_retry_jobs ?? 0
-  const lastRetryAtText = retryStats.last_retry_at
-    ? formatDistanceToNow(new Date(retryStats.last_retry_at), { addSuffix: true })
-    : null
+  const lastRetryAtText = safeDistanceToNow(retryStats.last_retry_at)
   const topFailureReason =
     Array.isArray(metric.failure_reasons) && metric.failure_reasons.length > 0
       ? metric.failure_reasons[0]
@@ -611,9 +679,8 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
   const lastJob = metric.last_job ?? null
   const summary = lastJob?.summary ?? metric.last_summary ?? "Awaiting first run"
   const lastCompletedAt = lastJob?.completed_at
-  const lastRunText = lastCompletedAt
-    ? `Last run ${formatDistanceToNow(new Date(lastCompletedAt), { addSuffix: true })}`
-    : "Awaiting first run"
+  const lastRunDistance = safeDistanceToNow(lastCompletedAt)
+  const lastRunText = lastRunDistance ? `Last run ${lastRunDistance}` : "Awaiting first run"
   const hasAttention = failed > 0
   const isActive = running > 0 || queued > 0
   const isInspecting =
@@ -788,12 +855,9 @@ function LiveQueueCard({
   const renderJobRow = (job) => {
     const summary = summarizeJob(job)
     const parameters = describeJobParameters(job)
-    const createdText = job.created_at
-      ? formatDistanceToNow(new Date(job.created_at), { addSuffix: true })
-      : null
-    const lastRetryText = job.last_retry_at
-      ? formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })
-      : null
+    const createdText = safeDistanceToNow(job.created_at)
+    const lastRetryText = safeDistanceToNow(job.last_retry_at)
+    const jobIdText = job.id !== undefined && job.id !== null ? String(job.id) : ""
 
     return (
       <li
@@ -812,7 +876,7 @@ function LiveQueueCard({
           })()}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-          <span className="font-mono text-[10px] text-slate-400">{job.id.slice(0, 10)}…</span>
+          <span className="font-mono text-[10px] text-slate-400">{jobIdText.slice(0, 10)}…</span>
           {createdText ? <span>Queued {createdText}</span> : null}
           {job.profile_id ? <span>Profile {job.profile_id}</span> : null}
           {job.retried_from_job_id ? (
@@ -862,12 +926,9 @@ function LiveQueueCard({
   const renderFailureRow = (job) => {
     const summary = summarizeJob(job)
     const parameters = describeJobParameters(job)
-    const failedText = job.completed_at
-      ? formatDistanceToNow(new Date(job.completed_at), { addSuffix: true })
-      : null
-    const lastRetryText = job.last_retry_at
-      ? formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })
-      : null
+    const failedText = safeDistanceToNow(job.completed_at)
+    const lastRetryText = safeDistanceToNow(job.last_retry_at)
+    const jobIdText = job.id !== undefined && job.id !== null ? String(job.id) : ""
 
     return (
       <li
@@ -879,7 +940,7 @@ function LiveQueueCard({
           <Badge className="text-[10px] uppercase tracking-wide bg-red-100 text-red-700">Failed</Badge>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-red-600">
-          <span className="font-mono text-[10px] text-red-400">{job.id.slice(0, 10)}…</span>
+          <span className="font-mono text-[10px] text-red-400">{jobIdText.slice(0, 10)}…</span>
           {failedText ? <span>Failed {failedText}</span> : null}
           {job.retried_from_job_id ? (
             <span className="text-red-400">
@@ -1115,9 +1176,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
             <div>
               <span className="text-xs uppercase tracking-wide text-slate-500">Last retry</span>
               <p className="text-xs text-slate-600 mt-1">
-                {job.last_retry_at
-                  ? formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })
-                  : "—"}
+                {safeDistanceToNow(job.last_retry_at, "—")}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1179,12 +1238,8 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                 {attemptTimeline.map((attempt, index) => {
                   const isCurrent = attempt.id === job.id
                   const attemptNumber = index + 1
-                  const queuedText = attempt.created_at
-                    ? formatDistanceToNow(new Date(attempt.created_at), { addSuffix: true })
-                    : null
-                  const completedText = attempt.completed_at
-                    ? formatDistanceToNow(new Date(attempt.completed_at), { addSuffix: true })
-                    : null
+                  const queuedText = safeDistanceToNow(attempt.created_at)
+                  const completedText = safeDistanceToNow(attempt.completed_at)
                   const resultCount =
                     typeof attempt.result_count === "number"
                       ? attempt.result_count
@@ -1235,9 +1290,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                         {attempt.last_retry_at ? (
                           <span>
                             Last retry{" "}
-                            {formatDistanceToNow(new Date(attempt.last_retry_at), {
-                              addSuffix: true,
-                            })}
+                            {safeDistanceToNow(attempt.last_retry_at, "—")}
                           </span>
                         ) : null}
                         {resultCount !== null ? <span>Result count {formatNumber(resultCount)}</span> : null}
@@ -1499,16 +1552,10 @@ function AutomationTasksPanel({
               const isCompleted = task.status === "completed"
               const isInProgress = task.status === "in_progress"
               const isUpdatingTask = isUpdating && updatingTaskId === task.id
-              const dueDate = task.due_date ? new Date(`${task.due_date}T00:00:00`) : null
-              const createdAt = task.created_at ? new Date(task.created_at) : null
-              const dueDistance =
-                dueDate && !Number.isNaN(dueDate.getTime())
-                  ? formatDistanceToNow(dueDate, { addSuffix: true })
-                  : null
-              const isOverdue =
-                dueDate && !Number.isNaN(dueDate.getTime())
-                  ? dueDate.getTime() < new Date().setHours(0, 0, 0, 0)
-                  : false
+              const dueDate = task.due_date ? parseValidDate(`${task.due_date}T00:00:00`) : null
+              const createdAt = parseValidDate(task.created_at)
+              const dueDistance = dueDate ? formatDistanceToNow(dueDate, { addSuffix: true }) : null
+              const isOverdue = dueDate ? dueDate.getTime() < new Date().setHours(0, 0, 0, 0) : false
 
               return (
                 <div
@@ -1547,7 +1594,7 @@ function AutomationTasksPanel({
                       ) : (
                         <span className="text-slate-400">No due date</span>
                       )}
-                      {createdAt && !Number.isNaN(createdAt.getTime()) ? (
+                      {createdAt ? (
                         <span>Logged {formatDistanceToNow(createdAt, { addSuffix: true })}</span>
                       ) : null}
                     </div>
@@ -1697,7 +1744,7 @@ export default function Automation() {
       toast({
         title: "Automation queued",
         description: job?.id
-          ? `Job ${job.id.slice(0, 8)}… is running.`
+          ? `Job ${String(job.id).slice(0, 8)}… is running.`
           : "Crawler will start shortly.",
       })
       queryClient.invalidateQueries({ queryKey: ["crawler-jobs"] })
@@ -2244,12 +2291,13 @@ export default function Automation() {
                     {jobs.map((job) => {
                       const jobSummary = summarizeJob(job)
                       const parameterSummary = describeJobParameters(job)
+                      const jobIdText = job.id !== undefined && job.id !== null ? String(job.id) : ""
                       return (
                         <tr key={job.id} className="hover:bg-slate-50/60">
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-1">
                               <JobTypeBadge job={job} />
-                              <span className="font-mono text-[11px] text-slate-500">{job.id.slice(0, 10)}…</span>
+                              <span className="font-mono text-[11px] text-slate-500">{jobIdText.slice(0, 10)}…</span>
                               {job.retried_from_job_id ? (
                                 <span className="text-[10px] uppercase tracking-wide text-slate-400">
                                   Retry of {String(job.retried_from_job_id).slice(0, 10)}…
@@ -2277,7 +2325,7 @@ export default function Automation() {
                               ) : null}
                               {job.last_retry_at ? (
                                 <span className="text-[11px] text-slate-400">
-                                  Last retry {formatDistanceToNow(new Date(job.last_retry_at), { addSuffix: true })}
+                                  Last retry {safeDistanceToNow(job.last_retry_at, "—")}
                                 </span>
                               ) : null}
                             </div>

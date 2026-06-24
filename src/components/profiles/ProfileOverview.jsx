@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react"
-import { format, formatDistanceToNow } from "date-fns"
+import { format, formatDistanceToNow, parseISO } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -96,6 +96,68 @@ const LEGACY_BENEFIT_FIELDS = [
   "tanf_recipient",
   "section8_housing",
 ]
+
+// Valid US state / territory 2-letter codes. Used to validate the secondary
+// address state field so we don't silently truncate arbitrary text like
+// "Tennessee" into "TE".
+const US_STATE_CODES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+  "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+  "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  "DC", "PR", "VI", "GU", "AS", "MP",
+])
+
+// Map common full state names to their 2-letter code so a user typing
+// "Tennessee" gets normalized to "TN" rather than silently truncated.
+const US_STATE_NAME_TO_CODE = {
+  "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+  "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+  "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+  "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+  "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+  "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+  "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+  "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+  "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+  "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+  "puerto rico": "PR",
+}
+
+function resolveStateCode(raw) {
+  const trimmed = String(raw ?? "").trim()
+  if (!trimmed) return { code: "", valid: true }
+  const upper = trimmed.toUpperCase()
+  if (upper.length === 2 && US_STATE_CODES.has(upper)) {
+    return { code: upper, valid: true }
+  }
+  const byName = US_STATE_NAME_TO_CODE[trimmed.toLowerCase()]
+  if (byName) return { code: byName, valid: true }
+  return { code: upper.slice(0, 2), valid: false }
+}
+
+// Read a section out of the normalized sections collection without ever
+// silently yielding undefined because the collection turned out to be a
+// plain object or array instead of a Map. normalizeProfileSections is
+// expected to return a Map keyed by section key, but this helper tolerates
+// the other shapes defensively so the editor never opens with empty data.
+function getSection(sections, key) {
+  if (!sections || !key) return undefined
+  if (typeof sections.get === "function") {
+    return sections.get(key)
+  }
+  if (Array.isArray(sections)) {
+    return sections.find((entry) => entry?.section_key === key || entry?.key === key)
+  }
+  if (typeof sections === "object") {
+    return sections[key]
+  }
+  return undefined
+}
 
 function toEditableString(value) {
   if (value === null || value === undefined) return ""
@@ -275,11 +337,28 @@ function formatCurrency(value, { cents = false } = {}) {
   }).format(cents ? amount / 100 : amount)
 }
 
+// Parse a date string defensively. Prefer date-fns parseISO for ISO-like
+// strings (deterministic across browsers/locales) and only fall back to the
+// native Date constructor when the string is clearly not ISO. Returns null
+// when the value cannot be parsed into a valid date.
+function parseDateSafe(value) {
+  const normalized = normalizeDisplayString(value)
+  if (!normalized) return null
+  // ISO-ish strings start with YYYY-MM-DD (optionally with time).
+  if (/^\d{4}-\d{2}-\d{2}/.test(normalized)) {
+    const isoDate = parseISO(normalized)
+    if (!Number.isNaN(isoDate.getTime())) return isoDate
+  }
+  const fallback = new Date(normalized)
+  if (!Number.isNaN(fallback.getTime())) return fallback
+  return null
+}
+
 function formatDateValue(value, { includeTime = false } = {}) {
   const normalized = normalizeDisplayString(value)
   if (!normalized) return null
-  const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return normalized
+  const date = parseDateSafe(normalized)
+  if (!date) return normalized
   return includeTime ? format(date, "PP p") : format(date, "PP")
 }
 
@@ -488,6 +567,8 @@ function SectionPreview({
   const isInteractive = Boolean(onEdit) && !isSaving && !isAIProcessing
   const canInlineEdit = Boolean(onSaveField) && !isSaving && !isAIProcessing
 
+  const updatedAtDate = section?.updated_at ? parseDateSafe(section.updated_at) : null
+
   const handleCardClick = () => {
     if (!isInteractive || !onEdit) return
     onEdit(sectionKey, section?.data ?? {})
@@ -660,8 +741,8 @@ function SectionPreview({
         <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
           <span className="flex items-center gap-2">
             <CalendarClock className="w-3.5 h-3.5" />
-            {hasData && section?.updated_at
-              ? `Updated ${formatDistanceToNow(new Date(section.updated_at), { addSuffix: true })}`
+            {hasData && updatedAtDate
+              ? `Updated ${formatDistanceToNow(updatedAtDate, { addSuffix: true })}`
               : "Not updated yet"}
           </span>
           <div className="flex items-center gap-2">
@@ -741,6 +822,7 @@ function SecondaryAddressCard({ value, onSave, isSaving }) {
   )
   const [open, setOpen] = useState(hasExisting)
   const [form, setForm] = useState(initial)
+  const [stateError, setStateError] = useState(null)
 
   React.useEffect(() => {
     setForm(initial)
@@ -748,15 +830,25 @@ function SecondaryAddressCard({ value, onSave, isSaving }) {
   }, [initial, hasExisting])
 
   const canSave = Boolean(onSave) && !isSaving
-  const setField = (key) => (event) =>
+  const setField = (key) => (event) => {
+    if (key === "state") setStateError(null)
     setForm((prev) => ({ ...prev, [key]: event.target.value }))
+  }
 
   const handleSave = async () => {
     if (!canSave) return
+    const { code: stateCode, valid: stateValid } = resolveStateCode(form.state)
+    if (!stateValid) {
+      setStateError(
+        "Enter a valid 2-letter US state code (e.g. TN) or a recognized state name.",
+      )
+      return
+    }
+    setStateError(null)
     const trimmed = {
       line1: form.line1.trim(),
       city: form.city.trim(),
-      state: form.state.trim().toUpperCase().slice(0, 2),
+      state: stateCode,
       zip: form.zip.trim(),
       type: form.type.trim(),
     }
@@ -767,6 +859,7 @@ function SecondaryAddressCard({ value, onSave, isSaving }) {
 
   const handleClear = async () => {
     if (!canSave) return
+    setStateError(null)
     setForm({ line1: "", city: "", state: "", zip: "", type: "" })
     await onSave(null)
   }
@@ -851,8 +944,8 @@ function SecondaryAddressCard({ value, onSave, isSaving }) {
                   value={form.state}
                   onChange={setField("state")}
                   disabled={!canSave}
-                  maxLength={2}
                   placeholder="TN"
+                  aria-invalid={stateError ? "true" : undefined}
                 />
               </div>
               <div className="space-y-1.5">
@@ -866,6 +959,9 @@ function SecondaryAddressCard({ value, onSave, isSaving }) {
                 />
               </div>
             </div>
+            {stateError ? (
+              <p className="text-xs text-red-600">{stateError}</p>
+            ) : null}
             <div className="flex items-center gap-2">
               <Button type="button" size="sm" onClick={handleSave} disabled={!canSave}>
                 {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
@@ -926,50 +1022,62 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const profileCompletion = useMemo(() => calculateProfileCompletion(profile), [profile])
-  const applicableSectionKeys = profileCompletion.applicableSectionKeys
+
+  // Guard: profile may be null/undefined during loading. Compute completion
+  // defensively and bail out early before any code dereferences profile.
+  const profileCompletion = useMemo(
+    () => (profile ? calculateProfileCompletion(profile) : null),
+    [profile],
+  )
   const sectionsMap = useMemo(() => {
-    return normalizeProfileSections(profile.sections)
-  }, [profile.sections])
+    return profile ? normalizeProfileSections(profile.sections) : null
+  }, [profile])
 
   const fileInputRef = useRef(null)
   const documentInputRef = useRef(null)
 
   const avatarInitials = useMemo(() => {
-    const words = profile.display_name?.split(/\s+/g) ?? []
+    const words = profile?.display_name?.split(/\s+/g) ?? []
     if (!words.length) return "U"
     return words.slice(0, 2).map((word) => word.charAt(0).toUpperCase()).join("")
-  }, [profile.display_name])
+  }, [profile?.display_name])
 
   const avatarCacheBuster = useMemo(() => {
     // Prefer avatar_url (it changes per upload), then updated_at as a stable fallback.
-    const raw = profile.avatar_url || profile.updated_at || ""
+    const raw = profile?.avatar_url || profile?.updated_at || ""
     const trimmed = String(raw || "").trim()
     return trimmed ? encodeURIComponent(trimmed) : null
-  }, [profile.avatar_url, profile.updated_at])
+  }, [profile?.avatar_url, profile?.updated_at])
 
-  // Compute avatar URL, handling protected API endpoints
+  // Compute avatar URL, handling protected API endpoints. Robustly handle
+  // empty/malformed urls and non-routable ids so we never emit a URL that
+  // would 404 into a broken image.
   const avatarUrl = useMemo(() => {
-    if (profile.avatar_download_url) {
+    if (!profile) return null
+    const downloadUrl = String(profile.avatar_download_url ?? "").trim()
+    if (downloadUrl) {
       // IMPORTANT: avatar_download_url is stable across uploads, so add a cache-buster so the UI
       // refetches after a successful upload (otherwise users see a "stuck" avatar / broken image).
-      const base = String(profile.avatar_download_url)
-      return avatarCacheBuster ? `${base}${base.includes("?") ? "&" : "?"}v=${avatarCacheBuster}` : base
+      return avatarCacheBuster
+        ? `${downloadUrl}${downloadUrl.includes("?") ? "&" : "?"}v=${avatarCacheBuster}`
+        : downloadUrl
     }
+    const rawAvatarUrl = String(profile.avatar_url ?? "").trim()
     // Only emit /api/profiles/<id>/avatar/download for routable ids -- the
     // admin sentinel would 404 the avatar request and surface as a broken
     // image in the dashboard.
     if (
-      profile.avatar_url &&
-      String(profile.avatar_url).includes('/uploads/') &&
+      rawAvatarUrl &&
+      rawAvatarUrl.includes("/uploads/") &&
       isRealProfileId(profile.id)
     ) {
       const base = `/api/profiles/${profile.id}/avatar/download`
       return avatarCacheBuster ? `${base}?v=${avatarCacheBuster}` : base
     }
-    return profile.avatar_url || null
-  }, [profile.avatar_download_url, profile.avatar_url, profile.id, avatarCacheBuster])
-  
+    // Only return a non-empty avatar_url; otherwise fall through to initials.
+    return rawAvatarUrl || null
+  }, [profile, avatarCacheBuster])
+
   // Use authenticated avatar hook to handle protected API endpoints
   const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarUrl)
 
@@ -979,7 +1087,11 @@ export default function ProfileOverview({
       currency: "USD",
       maximumFractionDigits: 0,
     })
-    return formatter.format(Math.max(0, Math.round(fundsTotal)))
+    // Coerce and validate so a bad (non-numeric) fundsTotal never renders as
+    // "$NaN" -- fall back to 0 instead.
+    const n = Number(fundsTotal)
+    const safe = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0
+    return formatter.format(safe)
   }, [fundsTotal])
 
   const handleAvatarButton = () => {
@@ -989,32 +1101,54 @@ export default function ProfileOverview({
   }
 
   const handleAvatarFileChange = (event) => {
-    const file = event.target.files?.[0]
-    if (file && onUploadAvatar) {
-      onUploadAvatar(file)
-    }
-    if (event.target) {
-      event.target.value = ""
+    try {
+      const file = event.target.files?.[0]
+      if (file && onUploadAvatar) {
+        onUploadAvatar(file)
+      }
+    } catch (error) {
+      // Defensive: never let a file-selection error crash the component.
+      // eslint-disable-next-line no-console
+      console.error("Failed to handle avatar file selection", error)
+    } finally {
+      if (event.target) {
+        event.target.value = ""
+      }
     }
   }
 
   const handleDocumentFileChange = (event) => {
-    const file = event.target.files?.[0]
-    if (file && onUploadDocument) {
-      onUploadDocument(file)
-    }
-    if (event.target) {
-      event.target.value = ""
+    try {
+      const file = event.target.files?.[0]
+      if (file && onUploadDocument) {
+        onUploadDocument(file)
+      }
+    } catch (error) {
+      // Defensive: never let a file-selection error crash the component.
+      // eslint-disable-next-line no-console
+      console.error("Failed to handle document file selection", error)
+    } finally {
+      if (event.target) {
+        event.target.value = ""
+      }
     }
   }
 
-  const totalSections = profileCompletion.totalSections
-  const completedSections = profileCompletion.completedSections
+  const totalSections = profileCompletion?.totalSections ?? 0
+  const completedSections = profileCompletion?.completedSections ?? 0
+  const applicableSectionKeys = profileCompletion?.applicableSectionKeys ?? []
 
-  const lastUpdated = profile.updated_at ? format(new Date(profile.updated_at), "PPP p") : "Not recorded"
-  const relativeUpdated = profile.updated_at
-    ? formatDistanceToNow(new Date(profile.updated_at), { addSuffix: true })
+  const updatedAtDate = profile?.updated_at ? parseDateSafe(profile.updated_at) : null
+  const lastUpdated = updatedAtDate ? format(updatedAtDate, "PPP p") : "Not recorded"
+  const relativeUpdated = updatedAtDate
+    ? formatDistanceToNow(updatedAtDate, { addSuffix: true })
     : null
+
+  // Early guard AFTER all hooks have been declared so we never break the
+  // Rules of Hooks. When there's no profile (loading state) render nothing.
+  if (!profile || !profileCompletion) {
+    return null
+  }
 
   const headerMetrics = [
     {
@@ -1256,14 +1390,14 @@ export default function ProfileOverview({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => onEditSection("basic_information", sectionsMap.get("basic_information")?.data ?? {})}
+                  onClick={() => onEditSection("basic_information", getSection(sectionsMap, "basic_information")?.data ?? {})}
                 >
                   Edit Basic Info
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => onEditSection("narrative", sectionsMap.get("narrative")?.data ?? {})}
+                  onClick={() => onEditSection("narrative", getSection(sectionsMap, "narrative")?.data ?? {})}
                 >
                   Update Narrative
                 </Button>
@@ -1384,7 +1518,7 @@ export default function ProfileOverview({
             <SectionPreview
               key={sectionKey}
               sectionKey={sectionKey}
-              section={sectionsMap.get(sectionKey)}
+              section={getSection(sectionsMap, sectionKey)}
               onEdit={onEditSection}
               onAskAI={onAskSection ? () => onAskSection(sectionKey) : undefined}
               onSaveField={onSaveField}
@@ -1395,7 +1529,7 @@ export default function ProfileOverview({
           ))}
           {onSaveField ? (
             <SecondaryAddressCard
-              value={sectionsMap.get("basic_information")?.data?.secondary_address}
+              value={getSection(sectionsMap, "basic_information")?.data?.secondary_address}
               onSave={(next) => onSaveField("basic_information", "secondary_address", next)}
               isSaving={savingSectionKey === "basic_information"}
             />

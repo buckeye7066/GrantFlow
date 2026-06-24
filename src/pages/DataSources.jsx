@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -16,7 +16,7 @@ import { runRealCrawler } from '@/api/crawlers';
 import { apiFetch } from '@/api/client';
 import { createLogger } from '@/utils/logger'
 
-const CRAWLERS = [
+const RAW_CRAWLERS = [
   {
     name: 'Comprehensive',
     crawlerType: 'comprehensive',
@@ -84,6 +84,18 @@ const CRAWLERS = [
   },
 ];
 
+// Validate the static crawler config to guard against malformed entries
+// before they're used in application logic. Only well-formed entries pass.
+const CRAWLER_TYPE_RE = /^[a-z0-9_]+$/;
+const CRAWLERS = RAW_CRAWLERS.filter((c) => {
+  if (!c || typeof c !== 'object') return false;
+  if (typeof c.name !== 'string' || !c.name.trim()) return false;
+  if (typeof c.crawlerType !== 'string' || !CRAWLER_TYPE_RE.test(c.crawlerType)) return false;
+  if (typeof c.description !== 'string') return false;
+  if (c.profileSignals && !Array.isArray(c.profileSignals)) return false;
+  return true;
+});
+
 const COLOR_MAP = {
   purple: { bg: 'bg-purple-50', icon: 'text-purple-500' },
   blue:   { bg: 'bg-blue-50',   icon: 'text-blue-500' },
@@ -95,6 +107,13 @@ const COLOR_MAP = {
   orange: { bg: 'bg-orange-50', icon: 'text-orange-500' },
   pink:   { bg: 'bg-pink-50',   icon: 'text-pink-500' },
 };
+
+// Canonical metric for total opportunities found, used consistently across
+// the aggregate, the breakdown list, and the per-crawler tiles.
+function foundCount(r) {
+  if (!r) return 0;
+  return r.total_found ?? r.count ?? 0;
+}
 
 function StatCard({ label, value, icon: Icon, colorClass, expanded, onToggle, children }) {
   return (
@@ -126,41 +145,50 @@ function StatCard({ label, value, icon: Icon, colorClass, expanded, onToggle, ch
 }
 
 function OpportunityDrawer({ crawlerType, result, onClose }) {
-  if (!result?.opportunities?.length) return null;
-  const opps = result.opportunities.slice(0, 15);
+  const label = (typeof crawlerType === 'string' && crawlerType.trim())
+    ? crawlerType.replace(/_/g, ' ')
+    : 'Crawler';
+  const opps = Array.isArray(result?.opportunities) ? result.opportunities.slice(0, 15) : [];
   return (
     <div className="fixed inset-0 z-50 bg-black/30 flex justify-end" onClick={onClose}>
       <div className="bg-white w-full max-w-lg h-full overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between z-10">
-          <h3 className="font-semibold text-lg capitalize">{crawlerType.replace(/_/g, ' ')} Results</h3>
+          <h3 className="font-semibold text-lg capitalize">{label} Results</h3>
           <Button variant="ghost" size="sm" onClick={onClose}><X className="w-4 h-4" /></Button>
         </div>
         <div className="p-4 space-y-3">
-          {opps.map((opp, i) => (
-            <Card key={opp.id || i} className="border shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex justify-between items-start gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-slate-900 truncate">{opp.title}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{opp.sponsor || 'Unknown sponsor'}</p>
+          {opps.length === 0 ? (
+            <p className="text-center text-sm text-slate-400 py-8">
+              No detailed opportunities were returned for this crawler
+              {(result?.count ?? 0) > 0 ? ' (only summary counts available).' : '.'}
+            </p>
+          ) : (
+            opps.map((opp, i) => (
+              <Card key={opp.id || i} className="border shadow-sm">
+                <CardContent className="p-4">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-slate-900 truncate">{opp.title}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{opp.sponsor || 'Unknown sponsor'}</p>
+                    </div>
+                    {typeof opp.match_score === 'number' && (
+                      <Badge variant="outline" className={`shrink-0 ${opp.match_score >= 70 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                        {opp.match_score}%
+                      </Badge>
+                    )}
                   </div>
-                  {opp.match_score !== null && (
-                    <Badge variant="outline" className={`shrink-0 ${opp.match_score >= 70 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                      {opp.match_score}%
-                    </Badge>
+                  {opp.description && <p className="text-xs text-slate-600 mt-2 line-clamp-2">{opp.description}</p>}
+                  {opp.application_url && (
+                    <a href={opp.application_url} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-2">
+                      <ExternalLink className="w-3 h-3" /> View opportunity
+                    </a>
                   )}
-                </div>
-                {opp.description && <p className="text-xs text-slate-600 mt-2 line-clamp-2">{opp.description}</p>}
-                {opp.application_url && (
-                  <a href={opp.application_url} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-2">
-                    <ExternalLink className="w-3 h-3" /> View opportunity
-                  </a>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-          {(result.count ?? 0) > 15 && (
+                </CardContent>
+              </Card>
+            ))
+          )}
+          {(result?.count ?? 0) > 15 && opps.length > 0 && (
             <p className="text-center text-xs text-slate-400 py-2">
               Showing 15 of {result.count} results
             </p>
@@ -182,16 +210,27 @@ export default function DataSources() {
   const { toast } = useToast();
   const log = useMemo(() => createLogger('DataSources'), []);
 
+  // Synchronous mirror of running crawlers so the Run All loop never relies
+  // on the async React state captured in a memoized callback closure.
+  const runningCrawlersRef = useRef(new Set());
+
   const { data: profiles = [], isLoading: isLoadingProfiles } = useQuery({
     queryKey: ['profiles'],
     queryFn: () => listProfiles(),
     staleTime: 60_000,
   });
 
-  const { data: crawlerHealth } = useQuery({
+  const {
+    data: crawlerHealth,
+    isError: crawlerHealthError,
+    error: crawlerHealthErrorObj,
+  } = useQuery({
     queryKey: ['crawlerHealth'],
-    queryFn: () => apiFetch('/api/crawlers/health').catch(() => null),
+    // Surface fetch errors instead of swallowing them with .catch(() => null);
+    // React Query manages the error state so outages are no longer masked.
+    queryFn: () => apiFetch('/api/crawlers/health'),
     staleTime: 30_000,
+    retry: 1,
     refetchInterval: runningCrawlers.size > 0 ? 5000 : false,
   });
 
@@ -217,9 +256,11 @@ export default function DataSources() {
       });
     },
     onMutate: ({ crawlerType }) => {
+      runningCrawlersRef.current.add(crawlerType);
       setRunningCrawlers((prev) => new Set(prev).add(crawlerType));
     },
     onSuccess: (data, { crawlerType }) => {
+      runningCrawlersRef.current.delete(crawlerType);
       setRunningCrawlers((prev) => {
         const next = new Set(prev);
         next.delete(crawlerType);
@@ -233,6 +274,7 @@ export default function DataSources() {
       });
     },
     onError: (error, { crawlerType }) => {
+      runningCrawlersRef.current.delete(crawlerType);
       setRunningCrawlers((prev) => {
         const next = new Set(prev);
         next.delete(crawlerType);
@@ -268,6 +310,7 @@ export default function DataSources() {
       });
       return;
     }
+    if (runningCrawlersRef.current.has(crawler.crawlerType)) return;
     crawlMutation.mutate({
       crawlerType: crawler.crawlerType,
       itemReq: crawler.requiresItemRequest ? itemRequest.trim() : null,
@@ -281,14 +324,16 @@ export default function DataSources() {
     }
     for (const crawler of CRAWLERS) {
       if (crawler.requiresItemRequest) continue;
-      if (!runningCrawlers.has(crawler.crawlerType)) {
+      // Use the synchronous ref so crawlers dispatched earlier in this loop
+      // (or by a rapid double-click) are correctly skipped.
+      if (!runningCrawlersRef.current.has(crawler.crawlerType)) {
         crawlMutation.mutate({ crawlerType: crawler.crawlerType });
       }
     }
-  }, [selectedProfileId, runningCrawlers, crawlMutation, toast]);
+  }, [selectedProfileId, crawlMutation, toast]);
 
   const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
-  const totalFound = Object.values(crawlerResults).reduce((sum, r) => sum + (r?.total_found ?? r?.count ?? 0), 0);
+  const totalFound = Object.values(crawlerResults).reduce((sum, r) => sum + foundCount(r), 0);
   const completedCount = Object.values(crawlerResults).filter((r) => r && !r.error).length;
   const errorCount = Object.values(crawlerResults).filter((r) => r?.error).length;
 
@@ -350,6 +395,20 @@ export default function DataSources() {
             </div>
           )}
 
+          {crawlerHealthError && (
+            <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-red-900">Crawler health unavailable</p>
+                  <p className="text-xs text-red-700">
+                    {crawlerHealthErrorObj?.message || 'Could not reach the crawler health endpoint.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {runningCrawlers.size > 0 && (
             <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
               <div className="flex items-center gap-3">
@@ -373,12 +432,12 @@ export default function DataSources() {
             expanded={expandedStat === 'found'}
             onToggle={() => setExpandedStat(expandedStat === 'found' ? null : 'found')}
           >
-            {Object.entries(crawlerResults).filter(([, r]) => r?.count > 0).length > 0 ? (
-              Object.entries(crawlerResults).filter(([, r]) => r?.count > 0).map(([type, r]) => (
+            {Object.entries(crawlerResults).filter(([, r]) => foundCount(r) > 0).length > 0 ? (
+              Object.entries(crawlerResults).filter(([, r]) => foundCount(r) > 0).map(([type, r]) => (
                 <div key={type} className="flex justify-between mt-1 cursor-pointer hover:text-blue-600"
                   onClick={(e) => { e.stopPropagation(); setDrawerCrawler(type); }}>
                   <span className="capitalize">{type.replace(/_/g, ' ')}</span>
-                  <span className="font-semibold">{r.count}</span>
+                  <span className="font-semibold">{foundCount(r)}</span>
                 </div>
               ))
             ) : (
@@ -425,6 +484,9 @@ export default function DataSources() {
             )}
             {crawlerHealth?.worker_online === false && (
               <p className="text-red-600 font-medium mt-1">Worker appears offline</p>
+            )}
+            {crawlerHealthError && (
+              <p className="text-red-600 font-medium mt-1">Health data unavailable.</p>
             )}
           </StatCard>
 
@@ -522,7 +584,7 @@ export default function DataSources() {
                         >
                           <div className="bg-slate-50 rounded-lg p-3 text-center hover:bg-slate-100 transition-colors">
                             <p className="text-xs text-slate-500">Found</p>
-                            <p className="text-xl font-bold text-slate-900">{result.total_found ?? result.count ?? 0}</p>
+                            <p className="text-xl font-bold text-slate-900">{foundCount(result)}</p>
                           </div>
                           <div className="bg-emerald-50 rounded-lg p-3 text-center hover:bg-emerald-100 transition-colors">
                             <p className="text-xs text-emerald-600">Returned</p>
@@ -577,31 +639,34 @@ export default function DataSources() {
             <Card>
               <CardContent className="p-0">
                 <div className="divide-y">
-                  {Object.entries(crawlerResults).map(([type, result]) => (
-                    <div
-                      key={type}
-                      className="p-4 hover:bg-slate-50 transition-colors cursor-pointer"
-                      onClick={() => result?.count > 0 && setDrawerCrawler(type)}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <p className="font-semibold text-slate-900 capitalize">{type.replace(/_/g, ' ')}</p>
-                            <Badge variant="outline" className={result.error ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'}>
-                              {result.error ? 'failed' : 'completed'}
-                            </Badge>
+                  {Object.entries(crawlerResults).map(([type, result]) => {
+                    const hasOpps = Array.isArray(result?.opportunities) && result.opportunities.length > 0;
+                    return (
+                      <div
+                        key={type}
+                        className={`p-4 hover:bg-slate-50 transition-colors ${hasOpps ? 'cursor-pointer' : ''}`}
+                        onClick={() => hasOpps && setDrawerCrawler(type)}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="font-semibold text-slate-900 capitalize">{type.replace(/_/g, ' ')}</p>
+                              <Badge variant="outline" className={result.error ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'}>
+                                {result.error ? 'failed' : 'completed'}
+                              </Badge>
+                            </div>
+                            {result.error && <p className="text-sm text-red-600 mt-1">{result.error}</p>}
+                            {result.threshold_fallback_message && <p className="text-xs text-amber-600 mt-1">{result.threshold_fallback_message}</p>}
                           </div>
-                          {result.error && <p className="text-sm text-red-600 mt-1">{result.error}</p>}
-                          {result.threshold_fallback_message && <p className="text-xs text-amber-600 mt-1">{result.threshold_fallback_message}</p>}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-slate-500">Found: {result.total_found ?? 0}</p>
-                          <p className="text-sm font-semibold text-emerald-600">Returned: {result.count ?? 0}</p>
-                          {result.duration && <p className="text-xs text-slate-400">{(result.duration / 1000).toFixed(1)}s</p>}
+                          <div className="text-right">
+                            <p className="text-sm text-slate-500">Found: {foundCount(result)}</p>
+                            <p className="text-sm font-semibold text-emerald-600">Returned: {result.count ?? 0}</p>
+                            {result.duration && <p className="text-xs text-slate-400">{(result.duration / 1000).toFixed(1)}s</p>}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
