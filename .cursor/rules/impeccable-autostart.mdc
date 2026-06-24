@@ -1,0 +1,26 @@
+---
+description: Auto-start every session by engaging the Impeccable init flow — load existing design context, or run init once if the project isn't initialized yet. GrantFlow is a PRODUCT surface.
+alwaysApply: true
+---
+
+# Impeccable: auto-init at session start
+
+At the START of every session, before any frontend/design work, engage the
+Impeccable initialization flow (the `.cursor/skills/impeccable` skill). Do this
+the SMART way — never re-run a heavy interview that's already been done:
+
+1. **Look for existing context.** Check for `PRODUCT.md` and `DESIGN.md` at the
+   project root (also `.agents/context/` or `docs/`, case-insensitive).
+2. **If both exist:** READ them to load design context for this session. Do NOT
+   re-interview, do NOT overwrite. (Every Impeccable command reads these before
+   working — loading them up front is the whole point of "init at start".)
+3. **If PRODUCT.md or DESIGN.md is missing:** run the full Impeccable init flow —
+   read `.cursor/skills/impeccable/reference/init.md` and follow it. This is a
+   one-time setup; once the files exist, future sessions only do step 2.
+4. **Register is fixed:** GrantFlow is a **product** surface (app UI: profiles,
+   Discover, pipeline, admin). Use `product` register; don't re-ask it.
+
+Keep step 2 lightweight — it must not add noticeable latency to unrelated
+(e.g. backend) work. Never silently overwrite an existing PRODUCT.md / DESIGN.md;
+confirm before any write. This complements (never overrides) mission-goals,
+auto-push-fixes, optimization-doctrine, and ponytail.
