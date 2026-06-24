@@ -718,8 +718,15 @@ export async function runAutopilot({
         if (!clicked) {
           return { status: 'failed', blocker_kind: 'click_failed', blocker_detail: 'Submit button could not be clicked', filled_fields: filled, pages_visited: pagesVisited, trace }
         }
-        // Wait for navigation/state-change.
+        // Wait for navigation/state-change. A submit usually navigates to a
+        // confirmation page (classic form POST) but may update in place (SPA).
+        // `domcontentloaded` alone can resolve against the *pre-submit* document
+        // before the navigation commits, racing detectValidationErrors and
+        // captureConfirmation into stale HTML and dropping the confirmation
+        // reference. Follow it with `networkidle` so the in-flight POST and the
+        // confirmation render actually settle before we read the page.
         await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+        await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
         const errors = await detectValidationErrors(page)
         if (errors.length > 0) {
           trace.push({ step: 'submit_validation_failed', detail: { errors: errors.slice(0, 5) } })

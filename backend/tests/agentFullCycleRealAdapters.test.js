@@ -91,7 +91,6 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
     const finalRun = await waitForTerminal(db, run.id, 90_000)
     if (!finalRun || !TERMINAL.has(finalRun.status)) {
       const dbg = await listSteps(db, run.id)
-      // eslint-disable-next-line no-console
       console.log('[fullcycle-debug] run status:', finalRun?.status,
         'steps:', dbg.map((s) => `${s.agent_name}:${s.step_name}=${s.status}`).join(' | '))
     }
@@ -108,7 +107,7 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
         `step ${s.agent_name}:${s.step_name} ended '${s.status}' (error: ${s.error_message || 'none'})`,
       ).toBe(true)
       expect(
-        s.error_message == null || s.error_message === '',
+        s.error_message === undefined || s.error_message === null || s.error_message === '',
         `step ${s.agent_name}:${s.step_name} carried an error: ${s.error_message}`,
       ).toBe(true)
     }

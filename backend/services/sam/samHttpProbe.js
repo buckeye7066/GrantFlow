@@ -29,7 +29,7 @@ const PROBE_TIMEOUT_MS = Number(process.env.SAM_HTTP_PROBE_TIMEOUT_MS) || 8000
 // of waiting out a timeout on every check.
 function resolveLoopbackPort() {
   const raw = process.env.PORT
-  if (raw == null || raw === '') return null
+  if (raw === undefined || raw === null || raw === '') return null
   const n = Number(raw)
   if (!Number.isInteger(n) || n <= 0 || n > 65535) return null
   return n

@@ -281,7 +281,6 @@ export async function setRunStatus(db, runId, status, extra = {}) {
         // Do NOT throw — legacy callers still rely on best-effort
         // semantics, and a thrown error here would crash the
         // orchestrator's fire-and-forget execute path.
-        // eslint-disable-next-line no-console
         console.warn(
           `[agent-control] setRunStatus refused: runId=${runId} from='${current}' to='${status}' reason='${decision.reason}'`,
         )
@@ -292,7 +291,6 @@ export async function setRunStatus(db, runId, status, extra = {}) {
     // State machine import or DB read failed — fall through to the
     // raw write so we don't block boot/legacy paths if the module
     // can't be loaded for any reason.
-    // eslint-disable-next-line no-console
     console.warn(
       `[agent-control] setRunStatus state-machine check skipped (non-fatal): ${smErr?.message || smErr}`,
     )

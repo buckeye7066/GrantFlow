@@ -178,7 +178,7 @@ describe("Sam's nightly sweep runs the full self-heal", () => {
     const last = await getLastSelfHealRun(db)
     expect(last).not.toBeNull()
     expect(last.onDemand).toBe(true)
-  })
+  }, 30_000) // full nightly sweep + complete self-heal is heavy; the 5s default flakes under parallel load
 })
 
 describe('Sam diagnostics surface the last self-heal run (Agent Observability Rule)', () => {

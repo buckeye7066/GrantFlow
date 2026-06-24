@@ -823,7 +823,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   // just don't enter the pipeline unattended.
   const autoAddOk = profileId ? await discoveryAutoAddAllowedForProfile(db, profileId) : false
   if (profileId && !autoAddOk) {
-    console.info(`[comprehensiveCrawler] discovery_auto_add OFF for profile ${profileId} — skipping pipeline auto-add (${topOpps.length} opps left for manual add)`)
+    log.info(`[comprehensiveCrawler] discovery_auto_add OFF for profile ${profileId} — skipping pipeline auto-add (${topOpps.length} opps left for manual add)`)
   }
   if (profileId && autoAddOk) {
     for (const opp of topOpps) {

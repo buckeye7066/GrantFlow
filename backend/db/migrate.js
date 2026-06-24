@@ -10,7 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { getDb } from './index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -114,9 +114,10 @@ async function applyMigration(filename) {
   // unsafeMode), and they're responsible for inserting their own row into
   // _migrations only on success — but for symmetry we record afterwards.
   if (filename.endsWith('.mjs')) {
-    // Import via file: URL so Windows paths work; cache-bust by filename so
-    // repeated invocations in the same process get fresh module instances.
-    const mod = await import(`file://${fullPath.replace(/\\/g, '/')}`)
+    // Import via file: URL so Windows paths work. pathToFileURL emits a valid
+    // file:///C:/... URL (a bare `file://C:/...` parses the drive letter as a
+    // hostname, which Node/Vite reject) and percent-encodes spaces/specials.
+    const mod = await import(pathToFileURL(fullPath).href)
     const fn = typeof mod?.default === 'function' ? mod.default : mod?.up
     if (typeof fn !== 'function') {
       throw new Error(`Migration ${filename} must export a default function or 'up' (received ${typeof fn})`)
