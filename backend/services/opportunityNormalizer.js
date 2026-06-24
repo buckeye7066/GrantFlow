@@ -59,6 +59,44 @@ const RESEARCH_ONLY_PATTERNS = [
 ]
 
 // ---------------------------------------------------------------------------
+// Already-awarded research/award records.
+//
+// NSF AwardSearch (api.nsf.gov), NIH RePORTER, and USASpending records describe
+// grants that have ALREADY been awarded to an institution + a named Principal
+// Investigator. They are funder/lead intelligence, NOT open opportunities — and
+// they are NEVER available to an ordinary individual (you cannot apply to an
+// award that an institution already holds). The connector ingest (`wantsResearch`
+// gate) keeps these out of an individual's *ingest*, but the funding_opportunities
+// catalog is shared across profiles, so a row that entered for a research-seeking
+// org must still be hard-rejected when the matcher scores it against an individual.
+//
+// We treat these as institutional-research-only by construction. The single
+// downstream gate (evaluateEligibility: isInstitutionalOnly || isResearchOnly)
+// then rejects them for ordinary individuals while still letting genuine
+// research orgs/businesses see them.
+const AWARD_RECORD_SOURCES = new Set([
+  'nsf.awards', 'nsf_awards', 'nih.reporter', 'nih_reporter',
+  'usaspending.gov', 'usaspending', 'usa_spending',
+])
+
+// "Awardee: <Institution>" + "PI: <Name>" is the structural fingerprint the
+// award adapters emit (see backend/src/integrations/nsfAwards.js). A row that
+// names an awardee institution is, by definition, already awarded.
+const ALREADY_AWARDED_TEXT_RX = /\bawardee:\s*\S|\bprincipal investigator:\s*\S|\bpi:\s*[a-z]/i
+
+function isAlreadyAwardedRecord(rawOpp, text) {
+  const source = String(rawOpp?.source ?? '').toLowerCase().trim()
+  const oppType = String(rawOpp?.opportunity_type ?? '').toLowerCase().trim()
+  if (AWARD_RECORD_SOURCES.has(source)) return true
+  // Generic award record from any source: an explicit "award" type that also
+  // names an awardee/PI in its text. We require BOTH so a normal grant whose
+  // title merely contains the word "award" (e.g. "Excellence Award Scholarship")
+  // is not misclassified.
+  if (oppType === 'award' && ALREADY_AWARDED_TEXT_RX.test(text)) return true
+  return false
+}
+
+// ---------------------------------------------------------------------------
 // University / off-campus resource indicators (requires student status)
 // ---------------------------------------------------------------------------
 const UNIVERSITY_STUDENT_ONLY_PATTERNS = [
@@ -70,6 +108,45 @@ const UNIVERSITY_STUDENT_ONLY_PATTERNS = [
   'student health fee', 'student services fee', 'university resource',
   'campus resource', 'college resource', 'university program',
 ]
+
+// ---------------------------------------------------------------------------
+// Education-level indicators.
+//
+// K-12 / elementary / middle-school awards are for children, not an adult
+// college student. They keyword-collide with college aid ("scholarship",
+// "education") and were scoring 90%+/ACCEPT for an out-of-state adult college
+// profile. We detect an opportunity that is SPECIFICALLY for K-12 / pre-college
+// learners so the eligibility gate can decline to ACCEPT it for an adult higher-ed
+// profile (per canonical G4: education-level mismatch reduces fit; an
+// elementary-only award is effectively exclusive to children).
+//
+// Higher-ed-only signals are tracked too (college/university/postsecondary) so a
+// K-12 student is not auto-ACCEPTed into a college-only award.
+// ---------------------------------------------------------------------------
+const K12_EDUCATION_PATTERNS = [
+  'elementary school', 'middle school', 'elementary & middle', 'elementary and middle',
+  'primary school', 'grade school', 'k-12', 'k12', 'pre-k', 'prek', 'pre-school',
+  'preschool', 'kindergarten', 'grades k', 'high schoolers', 'grade level',
+  'children in grades', 'students in grades', 'young learners', 'gifted children',
+  'advanced learners', 'summer seminars for', 'elementary students', 'middle schoolers',
+]
+const HIGHER_ED_PATTERNS = [
+  'undergraduate', 'graduate student', 'college student', 'university student',
+  'postsecondary', 'post-secondary', 'community college', 'higher education',
+  'associate degree', "bachelor's", "master's", 'doctoral', 'phd', 'tuition',
+  'two-year college', 'four-year college', 'vocational', 'trade school',
+]
+
+function detectEducationLevel(text) {
+  const lower = String(text || '').toLowerCase()
+  const isK12 = K12_EDUCATION_PATTERNS.some((p) => containsSearchPhrase(lower, p))
+  const isHigherEd = HIGHER_ED_PATTERNS.some((p) => containsSearchPhrase(lower, p))
+  // An award that mentions BOTH (e.g. "scholarships for K-12 and college") is not
+  // exclusively either — treat as neutral so it is never hard-capped.
+  if (isK12 && !isHigherEd) return 'k12'
+  if (isHigherEd && !isK12) return 'higher_ed'
+  return null
+}
 
 // ---------------------------------------------------------------------------
 // Disease-specific / condition-specific indicators
@@ -535,11 +612,22 @@ export function normalizeOpportunity(rawOpp) {
   const isReferralOnly = Boolean(rawOpp.is_referral_only) ||
     matchesAnyPattern(text, REFERRAL_ONLY_PATTERNS)
 
+  // -- Education level the opportunity targets ('k12' | 'higher_ed' | null) --
+  const educationLevel = detectEducationLevel(text)
+
+  // -- Already-awarded research/award record (NSF/NIH/USASpending) --
+  // These name an awardee institution + PI and are never open to an individual.
+  // Classify them as institutional-research-only so the single eligibility gate
+  // hard-rejects them for ordinary individuals (but not for research orgs).
+  const isAlreadyAwarded = isAlreadyAwardedRecord(rawOpp, text)
+
   // -- Institutional / research-only flags --
   const isInstitutionalOnly = Boolean(rawOpp.is_institutional_only) ||
+    isAlreadyAwarded ||
     matchesAnyPattern(text, INSTITUTIONAL_PATTERNS)
 
   const isResearchOnly = Boolean(rawOpp.is_research_only) ||
+    isAlreadyAwarded ||
     matchesAnyPattern(text, RESEARCH_ONLY_PATTERNS)
 
   // -- Disease-specific flag --
@@ -654,6 +742,8 @@ export function normalizeOpportunity(rawOpp) {
     isReferralOnly,
     isInstitutionalOnly,
     isResearchOnly,
+    isAlreadyAwarded,
+    educationLevel,
     diseaseSpecific,
     requiresDisasterContext,
     isDmeOrEquipment,

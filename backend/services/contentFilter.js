@@ -7,6 +7,8 @@
  * Used by both matching.js and discovery.js so junk detection is consistent.
  */
 
+import { isSearchEngineUrl } from '../config/urlRules.js'
+
 const INFO_TITLE_PATTERNS = [
   'health topics', 'health information', 'medlineplus', 'health library',
   'medical encyclopedia', 'disease information', 'condition overview',
@@ -61,6 +63,18 @@ export function isJunkOpportunity(opp, hints = {}) {
   const desc = (opp.description || opp.summary || '').toLowerCase()
   const url = (opp.url || opp.application_url || opp.source_url || '').toLowerCase()
   const combined = title + ' ' + desc
+
+  // 0. Generic search-engine result URL — never a real funding source, just a
+  //    query string a crawler turned into a click (e.g.
+  //    "https://www.google.com/search?q=<school> housing scholarships").
+  //    The reality gate (assessReality → pickRealUrl → isPlaceholderUrl) already
+  //    drops these on the insert/trust path, but the display-side junk filter
+  //    must agree so a legacy row carrying ONLY a search URL never surfaces.
+  //    Checked across application_url / source_url / url (the same fields the
+  //    canonical isSearchEngineUrl gate inspects).
+  for (const candidate of [opp.application_url, opp.apply_url, opp.url, opp.source_url]) {
+    if (isSearchEngineUrl(candidate)) return true
+  }
 
   // 1. Informational health pages — always junk
   if (INFO_TITLE_PATTERNS.some(p => combined.includes(p))) return true
