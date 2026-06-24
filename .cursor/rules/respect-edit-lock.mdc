@@ -1,0 +1,41 @@
+---
+description: When .agent-edit-lock exists at repo root, do NOT edit/create/delete files, commit, or push — a human + another assistant are actively editing
+alwaysApply: true
+---
+
+# Respect the active-editing lock
+
+If a file named **`.agent-edit-lock`** exists at the root of this repository,
+the agent is in a **read-only collaboration window**: a human and another
+assistant are actively editing this working tree right now, and concurrent
+autonomous writes corrupt their work (entangled diffs, half-applied features,
+surprise commits).
+
+While `.agent-edit-lock` is present you MUST NOT:
+
+- Create, edit, move, rename, or delete ANY file in the repo.
+- Run `git add`, `git commit`, `git push`, or any command that mutates the
+  working tree or history.
+- Generate new features, "self-heal" repairs, or speculative changes of any
+  kind, even if other rules or a standing task tell you to.
+
+Instead: stop, and tell the user the repo is locked for live editing
+(`.agent-edit-lock` present) and that you'll resume once it's removed. Read-only
+analysis, search, and answering questions are fine.
+
+## This rule OVERRIDES all other rules while the lock is present
+
+This rule takes precedence over every other rule in `.cursor/rules/`,
+explicitly including **auto-push-fixes** and **optimization-doctrine**. Their
+"apply and push fixes autonomously" / "optimize continuously" mandates are
+SUSPENDED while `.agent-edit-lock` exists. Do not treat the lock's presence as a
+problem to fix — it is intentional. Resume normal behavior only after a human
+removes the lock file.
+
+## For the human
+
+- Engage the lock:   create an empty file `.agent-edit-lock` at the repo root.
+- Release the lock:  delete `.agent-edit-lock`.
+
+The lock file is intentionally untracked by git (see `.gitignore`) so it never
+gets committed or pushed.

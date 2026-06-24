@@ -2,6 +2,20 @@
 
 Guidance for Claude Code (and human contributors) working in this repo.
 
+## Live-editing lock (multi-agent coordination)
+
+This repo is sometimes worked on by more than one assistant at once (a Claude
+Code session AND Cursor's agent share the same working tree). Concurrent
+autonomous writes entangle diffs and produce surprise commits.
+
+**If a file named `.agent-edit-lock` exists at the repo root**, a human and
+another assistant are actively editing right now. Unless you are the session
+that created the lock, you MUST NOT edit/create/delete files, commit, or push —
+do read-only work only and tell the user the repo is locked. This suspends any
+"auto-push fixes" / "optimize continuously" standing instructions while the lock
+is present. The lock is git-ignored; remove it (`rm .agent-edit-lock`) to
+release. (Cursor honors the same lock via `.cursor/rules/respect-edit-lock.mdc`.)
+
 ## Commands
 
 ```bash

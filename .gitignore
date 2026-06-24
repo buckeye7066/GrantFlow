@@ -119,3 +119,6 @@ repo/
 **/*routes.local.json
 **/*Passwords*.csv
 **/*passwords*.csv
+
+# Live-editing coordination lock (see .cursor/rules/respect-edit-lock.mdc) — never commit
+.agent-edit-lock
