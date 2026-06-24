@@ -32,10 +32,12 @@ import {
   enforceNoDuplicateGrants,
   enforceRelevanceFloor,
   enforceProfileScopedPipeline,
+  enforceProfileIncomeReconciliation,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
   PROTECTED_PIPELINE_STATUSES,
+  __testables,
 } from '../startup/enforceInvariants.js'
 import { recordDismissal } from '../services/pipelineDismissals.js'
 
@@ -522,6 +524,187 @@ describe('enforceInvariants — profile-scoped pipeline (orphan purge)', () => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// INCOME RECONCILIATION — one canonical income per individual profile.
+// Profiles store income in profile_sections; the SAME field can land in two
+// sections ('financial' vs 'financial_information') with conflicting values
+// (a captured parent income vs the student's own). The sweep collapses them to
+// the applicant's own (need-consistent / lower) figure for INDIVIDUAL profiles,
+// never touches orgs, and FLAGS (doesn't guess) when the conflict is ambiguous.
+// ─────────────────────────────────────────────────────────────────────────────
+function makeProfileDb() {
+  const raw = new Database(':memory:')
+  raw.exec(`
+    CREATE TABLE profiles (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT,
+      primary_type TEXT,
+      applicant_type TEXT
+    );
+    CREATE TABLE profile_sections (
+      profile_id TEXT NOT NULL,
+      section_key TEXT NOT NULL,
+      data TEXT,
+      PRIMARY KEY (profile_id, section_key)
+    );
+  `)
+  return raw
+}
+
+function insertTypedProfile(db, { id, primaryType = null, applicantType = null }) {
+  db.prepare(
+    'INSERT INTO profiles (id, primary_type, applicant_type) VALUES (?, ?, ?)',
+  ).run(id, primaryType, applicantType)
+}
+
+function setSection(db, profileId, sectionKey, data) {
+  db.prepare(
+    'INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)',
+  ).run(profileId, sectionKey, JSON.stringify(data))
+}
+
+function getSection(db, profileId, sectionKey) {
+  const row = db
+    .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
+    .get(profileId, sectionKey)
+  return row ? JSON.parse(row.data) : null
+}
+
+describe('enforceProfileIncomeReconciliation', () => {
+  it('keeps the applicant-own (lower) income for an individual with need flags — the canonical bug', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'student' })
+    // Inflated parent income captured into the legacy 'financial' section.
+    setSection(db, 'p1', 'financial', { household_income: '$310,000' })
+    // Student's own income + need flags in the canonical section.
+    setSection(db, 'p1', 'financial_information', {
+      household_income: 28000,
+      low_income: true,
+      household_size: 5,
+    })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(1)
+    expect(res.flagged).toBe(0)
+    // Both sections now agree on the applicant's own (lower) income.
+    expect(getSection(db, 'p1', 'financial_information').household_income).toBe(28000)
+    expect(getSection(db, 'p1', 'financial').household_income).toBe(28000)
+    // Need flag preserved / kept truthful.
+    expect(getSection(db, 'p1', 'financial_information').low_income).toBe(true)
+    expect(getSection(db, 'p1', 'financial').low_income).toBe(true)
+    // Untouched fields survive.
+    expect(getSection(db, 'p1', 'financial_information').household_size).toBe(5)
+  })
+
+  it('reconciles when the inflated value is in the canonical section instead', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', applicantType: 'individual' })
+    setSection(db, 'p1', 'financial_information', { household_income: 310000 })
+    setSection(db, 'p1', 'financial', { household_income: 22000, low_income: true })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(1)
+    expect(getSection(db, 'p1', 'financial_information').household_income).toBe(22000)
+    expect(getSection(db, 'p1', 'financial_information').low_income).toBe(true)
+  })
+
+  it('NEVER touches an organization/business profile (high revenue is legitimate)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'org1', primaryType: 'business' })
+    setSection(db, 'org1', 'financial', { household_income: '$2,000,000' })
+    setSection(db, 'org1', 'financial_information', { household_income: 500000 })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(0)
+    expect(getSection(db, 'org1', 'financial').household_income).toBe('$2,000,000')
+    expect(getSection(db, 'org1', 'financial_information').household_income).toBe(500000)
+  })
+
+  it('FLAGS (does not change) an individual conflict with NO need signal — left for human review', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'individual' })
+    // Two comfortable incomes, nothing marks need → genuinely ambiguous.
+    setSection(db, 'p1', 'financial', { household_income: 180000 })
+    setSection(db, 'p1', 'financial_information', { household_income: 95000 })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(0)
+    expect(res.flagged).toBe(1)
+    // Data left untouched for a human.
+    expect(getSection(db, 'p1', 'financial').household_income).toBe(180000)
+    expect(getSection(db, 'p1', 'financial_information').household_income).toBe(95000)
+  })
+
+  it('is a no-op when the two sections already agree (no contradiction)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'student' })
+    setSection(db, 'p1', 'financial', { household_income: 28000 })
+    setSection(db, 'p1', 'financial_information', { household_income: 28000, low_income: true })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(0)
+    expect(res.scanned).toBe(0)
+  })
+
+  it('is a no-op when only one financial section exists', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'student' })
+    setSection(db, 'p1', 'financial_information', { household_income: 28000, low_income: true })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(0)
+    expect(res.scanned).toBe(0)
+  })
+
+  it('uses annual_income as the income figure when household_income is absent', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'student' })
+    setSection(db, 'p1', 'financial', { household_income: 200000 })
+    setSection(db, 'p1', 'financial_information', { annual_income: 18000, low_income: true })
+
+    const res = await enforceProfileIncomeReconciliation(db)
+    expect(res.repaired).toBe(1)
+    // Canonical household_income is set to the reconciled own income.
+    expect(getSection(db, 'p1', 'financial_information').household_income).toBe(18000)
+  })
+
+  it('is idempotent (a second run repairs nothing)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'student' })
+    setSection(db, 'p1', 'financial', { household_income: '$310,000' })
+    setSection(db, 'p1', 'financial_information', { household_income: 28000, low_income: true })
+
+    const first = await enforceProfileIncomeReconciliation(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforceProfileIncomeReconciliation(db)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('degrades silently when profile_sections is absent (no crash at boot)', async () => {
+    const raw = new Database(':memory:')
+    raw.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, primary_type TEXT, applicant_type TEXT);')
+    raw.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'student')
+    const res = await enforceProfileIncomeReconciliation(raw)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(0)
+  })
+
+  it('classifies and parses money correctly (unit guards)', () => {
+    expect(__testables.isIndividualProfileType('student')).toBe(true)
+    expect(__testables.isIndividualProfileType('individual')).toBe(true)
+    expect(__testables.isIndividualProfileType('veteran')).toBe(true)
+    expect(__testables.isIndividualProfileType('business')).toBe(false)
+    expect(__testables.isIndividualProfileType('nonprofit')).toBe(false)
+    expect(__testables.isIndividualProfileType('totally_unknown_type')).toBe(false)
+    expect(__testables.parseIncomeValue('$310,000')).toBe(310000)
+    expect(__testables.parseIncomeValue('28000')).toBe(28000)
+    expect(__testables.parseIncomeValue(28000)).toBe(28000)
+    expect(__testables.parseIncomeValue('')).toBe(null)
+    expect(__testables.parseIncomeValue(null)).toBe(null)
+    expect(__testables.parseIncomeValue('not money')).toBe(null)
+  })
+})
+
 describe('enforceInvariants — runner', () => {
   beforeEach(() => {
     delete process.env.ENFORCE_RELEVANCE_FLOOR
@@ -538,7 +721,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(5)
+    expect(summary.ran).toBe(6)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -546,6 +729,7 @@ describe('enforceInvariants — runner', () => {
       'profile_scoped_pipeline',
       'no_duplicate_grants',
       'relevance_floor',
+      'profile_income_reconciliation',
     ])
   })
 
