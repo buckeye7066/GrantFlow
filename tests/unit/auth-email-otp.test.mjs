@@ -196,3 +196,56 @@ test('auth: existing email user with zero linked profiles is auto-attached on ve
     await srv.stop()
   }
 })
+
+test('auth: existing user WITHOUT an email_otp credential can start email login (regression: ux_users_primary_email dup)', async () => {
+  const srv = startServer()
+  const { port } = await srv.ready
+
+  try {
+    const email = 'passwordonly@example.com'
+    const userId = '00000000-0000-0000-0000-0000000fffff'
+
+    const Database = (await import('better-sqlite3')).default
+    let db = new Database(srv.dbPath)
+    // Simulate a user created via password / OAuth / phone / import: the users
+    // row exists, but there is NO email_otp credential for this address.
+    db.exec(`
+      INSERT INTO users (id, display_name, primary_email, is_admin)
+      VALUES ('${userId}', 'passwordonly', '${email}', 0);
+    `)
+    db.close()
+
+    const start = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+    // Before the fix this 500'd on Postgres (duplicate ux_users_primary_email)
+    // and silently created a SECOND users row on sqlite.
+    assert.equal(start.status, 202, `expected 202, got ${start.status}: ${JSON.stringify(start.json)}`)
+    assert.equal(typeof start.json.previewCode, 'string')
+
+    // The existing user must be reused — no duplicate users row created.
+    db = new Database(srv.dbPath)
+    const { n } = db.prepare('SELECT COUNT(*) AS n FROM users WHERE LOWER(primary_email) = LOWER(?)').get(email)
+    const cred = db
+      .prepare("SELECT user_id FROM user_credentials WHERE type = 'email_otp' AND identifier = ?")
+      .get(email)
+    db.close()
+    assert.equal(n, 1, 'expected the existing user to be reused, not duplicated')
+    assert.equal(cred?.user_id, userId, 'expected the email_otp credential to attach to the existing user')
+
+    // And login completes end-to-end against that same user.
+    const verify = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/verify`, {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        code: start.json.previewCode,
+        verification_token: start.json.verification_token,
+      }),
+    })
+    assert.equal(verify.status, 200)
+    assert.ok(verify.json?.accessToken)
+  } finally {
+    await srv.stop()
+  }
+})
