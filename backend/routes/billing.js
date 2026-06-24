@@ -13,6 +13,7 @@ import {
   resolveEffectiveProfileType,
 } from '../services/profileHelpers.js'
 import { computeEffectiveBilling } from '../services/billingAccounts.js'
+import { computeFreeWeekStatus } from '../../shared/freeWeek.js'
 import { formatError } from '../middleware/errorHandler.js'
 import {
   ensureProfileAccess as ensureProfileAccessByEmail,
@@ -96,7 +97,9 @@ function resolveBillingProfileType(row) {
 // auth: it's marketing/pricing information, and the single source of truth lives
 // in shared/tierCatalog.js.
 router.get('/catalog', (_req, res) => {
-  res.json(fullCatalog())
+  // Attach the live Free Week promotion status so Pricing.jsx / the billing UI
+  // can show a banner and zero out displayed prices without a separate fetch.
+  res.json({ ...fullCatalog(), free_week: computeFreeWeekStatus(process.env) })
 })
 
 router.use(requireAuth)

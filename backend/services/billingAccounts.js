@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { TIERS as CATALOG_TIERS, tierById } from '../../shared/tierCatalog.js'
 import { profileTypeToClientCategory } from '../../shared/profileTypeToClientCategory.js'
+import { isFreeWeekActive } from '../../shared/freeWeek.js'
 
 /**
  * Canonical mapping from a profile's BILLING client category (the 4-code form
@@ -93,10 +94,17 @@ export async function computeEffectiveBilling(db, profileId, account) {
   if (proBono) { effective = 0; basis = 'pro_bono' }
 
   const discountPct = Math.max(0, Math.min(100, Number(account?.discount_percent) || 0))
-  const net = proBono ? 0 : Math.max(0, Math.round(effective * (1 - discountPct / 100)))
+  let net = proBono ? 0 : Math.max(0, Math.round(effective * (1 - discountPct / 100)))
+
+  // Free Week promotion: while active, the net charge is $0 for everyone. The
+  // assigned tier, capabilities, and discounts are preserved so billing snaps
+  // straight back to normal the moment the window closes.
+  const freeWeek = isFreeWeekActive(process.env)
+  if (freeWeek) { net = 0; basis = 'free_week' }
 
   return {
     basis,
+    free_week: freeWeek,
     tier_id: tierId,
     tier_basis: typeTier ? 'profile_type' : 'assigned_tier',
     base_monthly_cents: baseMonthly,

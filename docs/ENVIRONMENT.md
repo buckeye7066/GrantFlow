@@ -94,6 +94,19 @@ The architecture works as follows:
   - Used for admin notifications and admin identification defaults.
   - **Set in Railway only**
 
+### Free Week promotion (give the app away, time-boxed)
+
+A global switch that unlocks every premium capability for **all** users and
+bills **$0** while active. Self-expires — no scheduler, no cleanup. Flip these
+in the Railway dashboard to start/stop the promotion with no deploy. Source of
+truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
+`backend/services/billingAccounts.js`; status surfaced at `GET /api/billing/catalog`).
+
+- **`FREE_WEEK_ENABLED`** — set to `true` to arm the promotion (default off).
+- **`FREE_WEEK_START`** — ISO date/time the window opens (optional; if omitted, opens as soon as enabled).
+- **`FREE_WEEK_END`** — ISO date/time the window closes (optional; defaults to 7 days after start).
+- **`FREE_WEEK_LABEL`** — optional banner text shown to users while active.
+
 ### Optional integrations (feature-gated — do NOT block boot)
 
 - **OpenAI**
