@@ -1,0 +1,42 @@
+{
+  "total_results": 2,
+  "num_pages": 1,
+  "cur_page": 0,
+  "per_page": 25,
+  "page_offset": 0,
+  "search_query": "American National Red Cross",
+  "selected_state": null,
+  "selected_ntee": null,
+  "selected_code": null,
+  "organizations": [
+    {
+      "ein": 530196605,
+      "strein": "53-0196605",
+      "name": "American National Red Cross",
+      "sub_name": "",
+      "city": "Washington",
+      "state": "DC",
+      "ntee_code": "P200",
+      "raw_ntee_code": "P20",
+      "subseccd": 3,
+      "has_subseccd": true,
+      "have_filings": true,
+      "have_extracts": true,
+      "have_pdfs": true,
+      "score": 38.5
+    },
+    {
+      "ein": 911234567,
+      "strein": "91-1234567",
+      "name": "Red Cross Of Greater Somewhere",
+      "sub_name": "",
+      "city": "Seattle",
+      "state": "WA",
+      "ntee_code": "P200",
+      "subseccd": 3,
+      "score": 12.1
+    }
+  ],
+  "api_version": 2,
+  "data_source": "ProPublica Nonprofit Explorer"
+}

@@ -9,6 +9,8 @@ import { normalizeOpportunityState } from '../utils/stateNormalization.js'
 import { checkUrl as verifyUrlLiveness, recordVerificationEvent } from './linkVerificationService.js'
 import { headForVerification } from './shared/httpClient.js'
 import { assessReality } from './opportunityRealityGate.js'
+import { enrichOpportunityVerification } from './verification/index.js'
+import { normalizeOpportunity } from './opportunityNormalizer.js'
 import { createLogger } from '../utils/logger.js'
 import {
   evaluateProvenance,
@@ -468,6 +470,28 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     trust_tier: reality.trustTier,
     downgrade: reality.downgrade,
     reasons: reality.reasons,
+  }
+
+  // ── FREE, KEYLESS verification enrichment (ProPublica + US Census) ──────
+  // Best-effort, non-blocking: confirm an org sponsor's tax-exempt status and
+  // resolve the opportunity's stated geo → county/FIPS. This runs ONCE here,
+  // OUTSIDE any matcher hot loop, and is fully feature-flagged + cached. It
+  // NEVER throws and NEVER changes whether the row is inserted — it only
+  // ANNOTATES the row so the (synchronous) matcher can read `verification`
+  // later. Census-derived county also backfills the existing geo_county column
+  // when the source didn't provide one (sharper geo matching, additive only).
+  try {
+    const oppNorm = normalizeOpportunity(opportunity)
+    const verification = await enrichOpportunityVerification(opportunity, oppNorm)
+    if (verification && (verification.verified !== null || verification.geo || verification.sources.length)) {
+      opportunity.verification = verification
+      if (verification.geo?.county && !opportunity.geo_county) {
+        opportunity.geo_county = verification.geo.county
+      }
+    }
+  } catch (err) {
+    // Defensive: enrichment must never block an insert.
+    log.warn('verification.enrich_failed', { error: err?.message })
   }
 
   // Optional pre-insert URL liveness gate.
