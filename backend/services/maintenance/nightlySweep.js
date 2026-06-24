@@ -45,6 +45,27 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     log.warn('SMS consent expiry sweep failed (non-fatal)', { error: err?.message })
   }
 
+  // Run the FULL self-heal (baseline seed gating, uploads/doc repair, orphaned
+  // job recovery, ALL product-invariant enforcement, dedup) on demand inside the
+  // maintenance window — not just the lightweight runEnforceInvariants boot net.
+  // Idempotent + safe to re-run live; the on-demand path downgrades a `force`
+  // re-seed to 'auto', and the structured result is persisted (system_kv) so
+  // Sam's diagnostics + Anya's status reader can see the last heal. Best-effort:
+  // a heal failure must not abort the sweep (Sam still observes below).
+  let selfHeal = null
+  try {
+    const { runSelfHealOnDemand } = await import('../../startup/selfHeal.js')
+    selfHeal = await runSelfHealOnDemand(db)
+    log.info('nightly self-heal complete', {
+      ok: selfHeal?.ok,
+      totalRepaired: selfHeal?.totalRepaired ?? 0,
+      failures: selfHeal?.failures?.length ?? 0,
+    })
+  } catch (err) {
+    log.warn('nightly self-heal failed (non-fatal)', { error: err?.message })
+    selfHeal = { ok: false, error: err?.message }
+  }
+
   let sam = null
   let criticals = 0
   try {
@@ -87,6 +108,13 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     criticals,
     reopened: green,
     applied_fixes: sam?.appliedFixes?.length ?? sam?.fixes?.length ?? 0,
+    self_heal: selfHeal
+      ? {
+          ok: selfHeal.ok !== false && !selfHeal.error,
+          total_repaired: selfHeal.totalRepaired ?? 0,
+          failures: selfHeal.failures?.length ?? (selfHeal.error ? 1 : 0),
+        }
+      : null,
     at: now.toISOString(),
   }
 }
