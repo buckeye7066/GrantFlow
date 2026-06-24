@@ -44,6 +44,9 @@ const PROFILE_TYPE_CARDS = [
   { id: 'other',            label: 'Other',         description: 'None of these fit',               icon: Sparkles },
 ];
 
+// Set of canonical card ids for fast validation of (AI-returned) applicant_type.
+const PROFILE_TYPE_IDS = new Set(PROFILE_TYPE_CARDS.map(c => c.id));
+
 // Canonical applicant_type values that indicate a student.
 const STUDENT_APPLICANT_TYPES = ['student', 'high_school_student', 'college_student', 'graduate_student'];
 
@@ -52,6 +55,15 @@ const normalizeApplicantType = (value) => {
   if (!value || typeof value !== 'string') return value;
   if (STUDENT_APPLICANT_TYPES.includes(value)) return 'student';
   return value;
+};
+
+// Validate a normalized applicant_type against the canonical card ids, falling
+// back to 'other' when not recognized so the card UI never lands on an
+// unselectable value.
+const toValidApplicantType = (value) => {
+  const normalized = normalizeApplicantType(value);
+  if (normalized === 'student') return 'student';
+  return PROFILE_TYPE_IDS.has(normalized) ? normalized : 'other';
 };
 
 // Safe numeric parsing: returns null when the value is empty/null/undefined or
@@ -346,7 +358,7 @@ const initializeFormData = (org, contactMethods) => {
   // Normalize applicant_type to the canonical card vocabulary (e.g. legacy
   // 'high_school_student' -> 'student'), so the card UI and isStudent share one set.
   if (initialData.applicant_type) {
-    initialData.applicant_type = normalizeApplicantType(initialData.applicant_type);
+    initialData.applicant_type = toValidApplicantType(initialData.applicant_type);
   }
 
   // Convert old single student_grade_level to array if new array is empty.
@@ -401,14 +413,37 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
   const [isUploading, setIsUploading] = useState(false);
   const [aiInputText, setAiInputText] = useState("");
   const [isHarvesting, setIsHarvesting] = useState(false);
+  // Separate loading flags per AI action so overlapping requests don't clobber
+  // each other's loading state.
+  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
+  const [isSuggestingFocusAreas, setIsSuggestingFocusAreas] = useState(false);
 
-  const { data: contactMethods = [], isLoading: isLoadingContacts } = useQuery({
+  const {
+    data: contactMethods = [],
+    isLoading: isLoadingContacts,
+    isFetched: isContactsFetched,
+    isError: isContactsError,
+  } = useQuery({
     queryKey: ['contactMethods', organization?.id],
-    queryFn: () => organization?.id ? client.entities.ContactMethod.filter({ organization_id: organization.id }) : [],
+    // `enabled` already guards execution to persisted orgs, so call the API
+    // directly (return a promise) instead of a synchronous empty-array branch.
+    queryFn: () => client.entities.ContactMethod.filter({ organization_id: organization.id }),
     // Align enabled with the queryFn guard so we only fetch for persisted orgs.
     enabled: !!organization?.id,
     initialData: [], // Provide initialData to avoid undefined before fetch
   });
+
+  // Surface contact-method fetch failures to the user rather than silently
+  // leaving the form stale.
+  useEffect(() => {
+    if (isContactsError) {
+      toast({
+        title: "Could Not Load Contacts",
+        description: "There was a problem loading existing contact methods for this profile. Some email/phone data may be missing.",
+        variant: "destructive",
+      });
+    }
+  }, [isContactsError, toast]);
 
   // Initialize formData using a function for lazy state initialization
   const [formData, setFormData] = useState(() => initializeFormData(organization, contactMethods));
@@ -417,8 +452,9 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
   const prevOrgIdRef = React.useRef(organization?.id);
   const prevLoadingRef = React.useRef(isLoadingContacts);
   // Track whether contacts have been applied for the current org id, so cached
-  // (already-loaded) contacts get applied on first non-empty availability even
-  // when justFinishedLoading never fires.
+  // (already-settled) contacts get applied on first availability even when
+  // justFinishedLoading never fires, and so empty-contact orgs are also marked
+  // applied (preventing repeated re-initialization that would wipe edits).
   const contactsAppliedForOrgRef = React.useRef(null);
 
   useEffect(() => {
@@ -432,24 +468,24 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
       contactsAppliedForOrgRef.current = null;
     }
 
-    // First non-empty availability of contacts for this org that hasn't been applied yet.
-    const contactsBecameAvailable =
+    // Whether the query for this org has settled (fetched, possibly with zero
+    // contacts) and hasn't yet been applied. This covers empty-contact orgs.
+    const contactsSettled =
       !isLoadingContacts &&
-      Array.isArray(contactMethods) &&
-      contactMethods.length > 0 &&
-      contactsAppliedForOrgRef.current !== organization?.id;
+      (isContactsFetched || !organization?.id) &&
+      contactsAppliedForOrgRef.current !== (organization?.id ?? null);
 
     // Only reset the entire form when the org identity changes, contacts finish
-    // loading for the first time, or cached contacts become available without a
-    // loading transition. Do NOT reset on every contactMethods reference change
-    // to avoid overwriting in-progress edits.
-    if ((orgChanged || justFinishedLoading || contactsBecameAvailable) && !isLoadingContacts) {
+    // loading for the first time, or already-settled contacts become available
+    // without a loading transition. Do NOT reset on every contactMethods
+    // reference change to avoid overwriting in-progress edits.
+    if ((orgChanged || justFinishedLoading || contactsSettled) && !isLoadingContacts) {
       setFormData(initializeFormData(organization, contactMethods));
-      if (Array.isArray(contactMethods) && contactMethods.length > 0) {
-        contactsAppliedForOrgRef.current = organization?.id;
-      }
+      // Mark as applied based on the query having settled, regardless of whether
+      // there are any contacts, so empty-contact orgs are also tracked.
+      contactsAppliedForOrgRef.current = organization?.id ?? null;
     }
-  }, [organization, contactMethods, isLoadingContacts]);
+  }, [organization, contactMethods, isLoadingContacts, isContactsFetched]);
 
   const { data: taxonomyItems = [] } = useQuery({
     queryKey: ['taxonomy'],
@@ -486,11 +522,16 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
   // Normalize the website on blur so typing/editing mid-string isn't mangled.
   // Validate full URL shape and flag invalid input rather than only prepending.
   const handleWebsiteBlur = (e) => {
-    const value = e.target.value;
-    if (!value || !value.trim()) return;
+    const rawValue = e.target.value;
+    // Guard against non-string values and only act on non-empty input.
+    if (typeof rawValue !== 'string') return;
+    const value = rawValue.trim();
+    if (!value) return;
     const normalized = normalizeWebsite(value);
     if (normalized) {
-      if (normalized !== value) {
+      // Only update when normalization meaningfully changes the value, to avoid
+      // spurious state writes / repeated rewrites on re-blur.
+      if (normalized !== rawValue) {
         setFormData(prev => ({ ...prev, website: normalized }));
       }
     } else {
@@ -511,7 +552,8 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
   };
 
   const handleImageUpload = async (e) => {
-      const file = e.target.files[0];
+      // Guard against a missing files list (e.g. programmatic events).
+      const file = e.target.files?.[0];
       if (!file) return;
 
       // Validate file type — only accept image uploads.
@@ -531,8 +573,14 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
       setIsUploading(true);
       try {
           const result = await client.integrations.Core.UploadFile({ file });
-          // Validate the upload response shape before using it.
-          if (!result || typeof result !== 'object' || typeof result.file_url !== 'string' || !result.file_url) {
+          // Validate the upload response shape thoroughly before using it.
+          if (
+              !result ||
+              typeof result !== 'object' ||
+              Array.isArray(result) ||
+              typeof result.file_url !== 'string' ||
+              !result.file_url.trim()
+          ) {
               throw new Error("Upload did not return a valid file URL.");
           }
           const file_url = result.file_url;
@@ -546,10 +594,16 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
           });
       } finally {
           setIsUploading(false);
+          // Reset the input so selecting the same file again (after success OR
+          // failure) re-triggers onChange and allows a retry.
+          if (e && e.target) {
+              e.target.value = "";
+          }
       }
   };
 
   const handleAIHarvest = async () => {
+    if (isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas) return;
     if (!aiInputText.trim()) {
       toast({
         title: "No Text Provided",
@@ -939,7 +993,7 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
         }
       });
 
-      if (response && typeof response === 'object') {
+      if (response && typeof response === 'object' && !Array.isArray(response)) {
         // Update formData with extracted values, preserving existing values not overwritten by AI
         // Coerce numeric and array fields from LLM response before merging
         const NUMERIC_FIELDS = [
@@ -958,9 +1012,11 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
         const coercedResponse = { ...response };
 
         // applicant_type normalization already happens in initializeFormData on
-        // load; here we normalize the AI-returned value once before merge.
+        // load; here we normalize AND validate the AI-returned value once before
+        // merge, falling back to 'other' for unrecognized values so the card UI
+        // never lands on an unselectable applicant_type.
         if (coercedResponse.applicant_type) {
-          coercedResponse.applicant_type = normalizeApplicantType(coercedResponse.applicant_type);
+          coercedResponse.applicant_type = toValidApplicantType(coercedResponse.applicant_type);
         }
 
         // Track fields the AI returned as a non-empty value but which failed
@@ -1012,8 +1068,9 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
         toast({
           title: "✨ Profile Data Extracted!",
           description: droppedNumericFields.length > 0
-            ? `AI populated the form. Note: some numeric fields could not be parsed and were skipped: ${droppedNumericFields.join(', ')}.`
+            ? `AI populated the form. Note: some numeric fields could not be parsed and were skipped: ${droppedNumericFields.join(', ')}. Please enter them manually.`
             : "AI has populated the form with extracted information. Review and adjust as needed.",
+          variant: droppedNumericFields.length > 0 ? "destructive" : undefined,
         });
 
         setAiInputText(""); // Clear the input after successful harvest
@@ -1034,7 +1091,8 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
 
   // AI suggestion for keywords
   const handleSuggestKeywords = async () => {
-    setIsHarvesting(true);
+    if (isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas) return;
+    setIsSuggestingKeywords(true);
     try {
       const contextInfo = `
 Profile: ${formData.name}
@@ -1044,7 +1102,7 @@ ${formData.primary_goal ? `Goal: ${formData.primary_goal}` : ''}
 ${formData.target_population ? `Population: ${formData.target_population}` : ''}
 ${formData.nonprofit_type ? `Organization Type: ${formData.nonprofit_type}` : ''}
 ${formData.intended_major ? `Major: ${formData.intended_major}` : ''}
-${formData.assistance_categories ? `Assistance: ${formData.assistance_categories.join(', ')}` : ''}
+${Array.isArray(formData.assistance_categories) && formData.assistance_categories.length ? `Assistance: ${formData.assistance_categories.join(', ')}` : ''}
 `;
 
       const prompt = `Based on the following profile, suggest 8-12 relevant keywords that would help match this profile with funding opportunities. Return ONLY a JSON array of keyword strings.
@@ -1071,7 +1129,10 @@ Keywords should be:
       });
 
       if (response?.keywords && Array.isArray(response.keywords)) {
-        handleArrayChange('keywords', response.keywords);
+        // Merge with existing keywords and dedupe rather than overwriting.
+        const existing = Array.isArray(formData.keywords) ? formData.keywords : [];
+        const merged = Array.from(new Set([...existing, ...response.keywords].filter(Boolean)));
+        handleArrayChange('keywords', merged);
         toast({
           title: "✨ Keywords Generated!",
           description: `Added ${response.keywords.length} keywords to your profile.`,
@@ -1085,22 +1146,23 @@ Keywords should be:
         variant: "destructive",
       });
     } finally {
-      setIsHarvesting(false);
+      setIsSuggestingKeywords(false);
     }
   };
 
   // AI suggestion for focus areas
   const handleSuggestFocusAreas = async () => {
-    setIsHarvesting(true);
+    if (isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas) return;
+    setIsSuggestingFocusAreas(true);
     try {
       const contextInfo = `
 Profile: ${formData.name}
 Type: ${formData.applicant_type}
 ${formData.mission ? `Mission: ${formData.mission}` : ''}
 ${formData.primary_goal ? `Goal: ${formData.primary_goal}` : ''}
-${formData.program_areas ? `Programs: ${formData.program_areas.join(', ')}` : ''}
+${Array.isArray(formData.program_areas) && formData.program_areas.length ? `Programs: ${formData.program_areas.join(', ')}` : ''}
 ${formData.intended_major ? `Major: ${formData.intended_major}` : ''}
-${formData.keywords ? `Keywords: ${formData.keywords.join(', ')}` : ''}
+${Array.isArray(formData.keywords) && formData.keywords.length ? `Keywords: ${formData.keywords.join(', ')}` : ''}
 `;
 
       const prompt = `Based on the following profile, suggest 5-8 focus areas or interests that describe what they work on or are passionate about. Return ONLY a JSON array of focus area strings.
@@ -1126,7 +1188,10 @@ Focus areas should be:
       });
 
       if (response?.focus_areas && Array.isArray(response.focus_areas)) {
-        handleArrayChange('focus_areas', response.focus_areas);
+        // Merge with existing focus areas and dedupe rather than overwriting.
+        const existing = Array.isArray(formData.focus_areas) ? formData.focus_areas : [];
+        const merged = Array.from(new Set([...existing, ...response.focus_areas].filter(Boolean)));
+        handleArrayChange('focus_areas', merged);
         toast({
           title: "✨ Focus Areas Generated!",
           description: `Added ${response.focus_areas.length} focus areas to your profile.`,
@@ -1140,7 +1205,7 @@ Focus areas should be:
         variant: "destructive",
       });
     } finally {
-      setIsHarvesting(false);
+      setIsSuggestingFocusAreas(false);
     }
   };
 
@@ -1149,7 +1214,8 @@ Focus areas should be:
     let cleanedData = { ...formData };
 
     // Normalize website before submit (handles cases where the field was never blurred).
-    if (cleanedData.website && cleanedData.website.trim()) {
+    // Guard against non-string website values from legacy data.
+    if (typeof cleanedData.website === 'string' && cleanedData.website.trim()) {
       const normalizedWebsite = normalizeWebsite(cleanedData.website);
       if (normalizedWebsite) {
         cleanedData.website = normalizedWebsite;
@@ -1293,6 +1359,9 @@ Focus areas should be:
   const isIndividualAssistance = ['individual_need', 'medical_assistance', 'family', 'homeschool_family'].includes(formData.applicant_type);
   const isIndividual = isStudent || isIndividualAssistance || formData.applicant_type === 'other';
 
+  // Whether any AI action is currently running (shared disable state for buttons).
+  const isAnyAIBusy = isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas;
+
   // Dynamic labels based on applicant type
   const getLabel = (orgLabel, individualLabel) => isIndividual ? individualLabel : orgLabel;
   const getPlaceholder = (orgPlaceholder, individualPlaceholder) => isIndividual ? individualPlaceholder : orgPlaceholder;
@@ -1332,7 +1401,7 @@ Focus areas should be:
             <Button
               type="button"
               onClick={handleAIHarvest}
-              disabled={isHarvesting || !aiInputText.trim()}
+              disabled={isAnyAIBusy || !aiInputText.trim()}
               className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
             >
               {isHarvesting ? (
@@ -2883,10 +2952,10 @@ DRAFT for "special circumstances":`}
                 variant="ghost"
                 size="sm"
                 onClick={handleSuggestKeywords}
-                disabled={isHarvesting || isSubmitting}
+                disabled={isAnyAIBusy || isSubmitting}
                 className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
               >
-                {isHarvesting ? (
+                {isSuggestingKeywords ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Generating...
@@ -2918,10 +2987,10 @@ DRAFT for "special circumstances":`}
                 variant="ghost"
                 size="sm"
                 onClick={handleSuggestFocusAreas}
-                disabled={isHarvesting || isSubmitting}
+                disabled={isAnyAIBusy || isSubmitting}
                 className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
               >
-                {isHarvesting ? (
+                {isSuggestingFocusAreas ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Generating...
