@@ -4621,6 +4621,45 @@ registerTool({
   },
 })
 
+// ── Full self-heal (on demand) ────────────────────────────────────────────
+//
+// Runs the COMPLETE startup self-heal (baseline-seed gating, uploads/document
+// repair, orphaned crawler-job recovery, ALL product-invariant enforcement,
+// dedup) — not just the lightweight boot enforceInvariants net. Same power class
+// as owner.run_nightly_sweep (it repairs data live), so it is owner-gated. The
+// on-demand path downgrades a destructive `force` re-seed to 'auto' (boot-only
+// lever), and the structured result is persisted to system_kv for observability.
+registerTool({
+  name: 'owner.run_self_heal',
+  description: 'OWNER ONLY. Run GrantFlow\'s full self-heal now: re-assert every machine-checkable product invariant against the live DB, repair uploads/documents, recover orphaned crawler jobs, and dedupe — then return a truthful per-step summary of exactly what ran and repaired. Use when the owner says "run the self-heal" / "fix the data now". A destructive force re-seed is never triggered on demand.',
+  requiresOwner: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runSelfHealOnDemand } = await import('../startup/selfHeal.js')
+    // Returns the structured summary { ok, totalRepaired, steps[], failures[] }.
+    // Honesty rule: we return exactly what the heal reported — no synthesized
+    // "all good"; surfaced failures stay in failures[].
+    return runSelfHealOnDemand(db)
+  },
+})
+
+registerTool({
+  name: 'owner.get_self_heal_status',
+  description: 'OWNER ONLY. Show the LAST self-heal run (boot net runs enforceInvariants only; the full heal runs via the nightly sweep or owner.run_self_heal): when it ran, per-step repaired counts, and any failures — read straight from system_kv (no faked "healthy" state). Use when the owner asks "did the self-heal run?" / "what did self-heal fix?".',
+  requiresOwner: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { getLastSelfHealRun } = await import('../startup/selfHealStatus.js')
+    const last = await getLastSelfHealRun(db)
+    if (!last) return { has_run: false, message: 'No full self-heal has run yet (boot runs enforceInvariants only).' }
+    return { has_run: true, last_run: last }
+  },
+})
+
 // ── Hamilton two-way portal sync ──────────────────────────────────────────
 //
 // Gating rationale: runPortalSync reads from / writes to a user's *authenticated*

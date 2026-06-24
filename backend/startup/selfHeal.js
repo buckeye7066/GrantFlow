@@ -14,11 +14,25 @@
  * In SMOKE_MODE (fast unit/contract test boot) only lightweight fixtures are
  * created; all heavy I/O-bound tasks are skipped.
  *
- * @param {{ db, uploadsDir: string, IS_SMOKE_MODE: boolean, baseDir: string }} args
+ * ── On-demand execution (Sam / Anya) ────────────────────────────────────────
+ * runSelfHeal is invoked at boot (server.js) AND on demand by Sam's nightly
+ * maintenance sweep and Anya's `owner.run_self_heal` tool. Every step is
+ * idempotent and safe to re-run live (seeds are gated on count thresholds, the
+ * baseline upsert preserves live avatars via COALESCE, enforceInvariants is
+ * per-step guarded). The ONE step that is NOT safe to expose on demand is a
+ * `force` baseline RE-SEED (BASELINE_SEED_MODE=force re-upserts every profile/
+ * grant/document — a boot-only recovery lever). When `onDemand:true` we coerce
+ * the seed mode to 'auto' so an on-demand run can never trigger that destructive
+ * re-seed; everything else runs identically. The function returns a structured,
+ * truthful per-step summary of what actually ran/repaired.
+ *
+ * @param {{ db, uploadsDir: string, IS_SMOKE_MODE: boolean, baseDir: string, onDemand?: boolean }} args
+ * @returns {Promise<object>} structured summary { ran, onDemand, smoke, steps[], failures[], totalRepaired }
  */
 
 import fs from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import ensureDesignatedProfiles from '../utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js';
 import ensurePortalCheckResultsTable from '../utils/ensurePortalCheckResultsTable.js';
@@ -33,8 +47,33 @@ import { seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.j
 import { repairOrphanedJobProfiles } from '../utils/repairOrphanedJobProfiles.js';
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js';
 import { runEnforceInvariants, enforceNoDuplicateGrants } from './enforceInvariants.js';
+import { resolveUploadsDir } from '../utils/uploadsDir.js';
+import { recordSelfHealRun } from './selfHealStatus.js';
 
-export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
+export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir, onDemand = false }) {
+  // Structured, truthful run summary. Each step records what it actually did so
+  // Sam's diagnostics + Anya's status reader can see the last run (see
+  // recordSelfHealRun at the end). `record` only ever appends — never claims a
+  // step ran when it was skipped.
+  const startedAt = new Date().toISOString();
+  const summary = {
+    ran: true,
+    onDemand: Boolean(onDemand),
+    smoke: Boolean(IS_SMOKE_MODE),
+    dialect: db?.dialect ?? 'unknown',
+    started_at: startedAt,
+    steps: [],
+    failures: [],
+    totalRepaired: 0,
+  };
+  const record = (step, data = {}) => {
+    summary.steps.push({ step, ...data });
+    if (Number.isFinite(data.repaired)) summary.totalRepaired += Number(data.repaired) || 0;
+    if (data.ok === false || data.error) {
+      summary.failures.push({ step, error: data.error ?? 'unknown' });
+    }
+  };
+
   // ── 1. Upload-avatar repair ───────────────────────────────────────────────
   // (called later in the non-smoke path; function defined here so it's co-located)
 
@@ -50,10 +89,19 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
     await linkAllProfilesToAdmin(db);
     await ensureUserPreferencesTable(db);
     await ensurePortalCheckResultsTable(db);
+    record('smoke_fixtures', { ok: true });
   } else {
     try {
-      const mode =
+      let mode =
         String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto';
+      // GATE: a `force` baseline re-seed re-upserts every profile/grant/document
+      // and is the one boot-only recovery lever that is NOT safe to expose to an
+      // on-demand (Sam/Anya) runtime run. Coerce it to 'auto' on demand so the
+      // on-demand path can never trigger a destructive re-seed; boot keeps force.
+      if (onDemand && mode === 'force') {
+        console.info('[startup] self-heal on-demand: downgrading BASELINE_SEED_MODE=force to auto (boot-only lever)');
+        mode = 'auto';
+      }
       const result = await seedBaselineFromRepo(db, {
         mode: mode === 'force' ? 'force' : mode === 'off' ? 'off' : 'auto',
       });
@@ -67,6 +115,12 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
         after: result.after ?? null,
         decisions: result.decisions ?? null,
       });
+      record('baseline_seed', {
+        ok: result.ok !== false,
+        seed_mode: mode,
+        skipped: Boolean(result.skipped),
+        reason: result.reason ?? null,
+      });
     } catch (error) {
       // Fallback to designated profiles so the server can still boot.
       console.error(
@@ -74,6 +128,7 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
         { error: error?.message || String(error) },
       );
       await ensureDesignatedProfiles(db);
+      record('baseline_seed', { ok: false, error: error?.message || String(error) });
     }
 
     // Always ensure designated profiles exist (idempotent).
@@ -121,11 +176,13 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
           errors: result.errors,
         });
       }
+      record('repair_orphaned_jobs', { ok: true, repaired: Number(result.repaired) || 0 });
     } catch (error) {
       console.warn(
         '[startup] Failed to repair orphaned crawler_jobs profile aliases:',
         error?.message || error,
       );
+      record('repair_orphaned_jobs', { ok: false, error: error?.message || String(error) });
     }
   }
 
@@ -405,8 +462,10 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   try {
     const removed = await reconcileDismissedGrants(db);
     console.info('[startup] reconcileDismissedGrants', { removed });
+    record('reconcile_dismissed_grants', { ok: true, repaired: Number(removed) || 0 });
   } catch (error) {
     console.warn('[startup] Failed to reconcile dismissed grants:', error?.message || error);
+    record('reconcile_dismissed_grants', { ok: false, error: error?.message || String(error) });
   }
 
   // ── 9. Enforce ALL machine-checkable product invariants (rule-by-construction) ──
@@ -417,9 +476,16 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   // is idempotent. See backend/startup/enforceInvariants.js for the full list,
   // and the "INVARIANTS" section of docs/canonical_rules.md + CLAUDE.md.
   try {
-    await runEnforceInvariants(db);
+    const inv = await runEnforceInvariants(db);
+    record('enforce_invariants', {
+      ok: (inv?.failed ?? 0) === 0,
+      repaired: Number(inv?.totalRepaired) || 0,
+      steps_ran: Number(inv?.ran) || 0,
+      steps_failed: Number(inv?.failed) || 0,
+    });
   } catch (error) {
     console.warn('[startup] Failed to enforce product invariants:', error?.message || error);
+    record('enforce_invariants', { ok: false, error: error?.message || String(error) });
   }
 
   // ── 10. Final dedupe backstop (rule-by-construction) ──────────────────────
@@ -433,9 +499,19 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
       duplicatesRemoved: dup?.duplicatesRemoved ?? 0,
       profilesAffected: dup?.profilesAffected ?? 0,
     });
+    record('dedupe_grants', {
+      ok: true,
+      repaired: Number(dup?.duplicatesRemoved) || 0,
+      profiles_affected: Number(dup?.profilesAffected) || 0,
+    });
   } catch (error) {
     console.warn('[startup] Failed to dedupe grants:', error?.message || error);
+    record('dedupe_grants', { ok: false, error: error?.message || String(error) });
   }
+
+  summary.finished_at = new Date().toISOString();
+  summary.ok = summary.failures.length === 0;
+  return summary;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -542,4 +618,66 @@ function _parseBoolEnv(value) {
   if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true;
   if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false;
   return null;
+}
+
+/**
+ * On-demand entrypoint for the FULL self-heal — the single function Sam's
+ * nightly sweep and Anya's owner.run_self_heal tool both call. It:
+ *   - resolves `uploadsDir` / `baseDir` the SAME way server.js does (the
+ *     backend dir is this file's parent's parent: backend/startup -> backend),
+ *   - runs the full runSelfHeal with onDemand:true (so the destructive `force`
+ *     re-seed is downgraded to 'auto'; everything else runs identically),
+ *   - persists the structured result to system_kv for observability (Sam
+ *     diagnostics + Anya status reader read it back via getLastSelfHealRun).
+ *
+ * Always resolves; never throws (the heal's per-step guards already absorb
+ * failures, and recording is best-effort) so a caller can run it safely inside
+ * a maintenance window.
+ *
+ * @param {object} db
+ * @param {{ uploadsDir?: string, baseDir?: string }} [opts]
+ * @returns {Promise<object>} the structured self-heal summary
+ */
+export async function runSelfHealOnDemand(db, opts = {}) {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  // backend/startup -> backend (matches server.js __dirname used for selfHeal's
+  // baseDir = repo's backend/ dir, and resolveUploadsDir({ baseDir }) ).
+  const backendDir = opts.baseDir || join(__dirname, '..');
+  const uploadsDir = opts.uploadsDir || resolveUploadsDir({ baseDir: backendDir }).uploadsDir;
+
+  let summary;
+  try {
+    summary = await runSelfHeal({
+      db,
+      uploadsDir,
+      // On-demand is a real runtime run (never smoke); we want the full heal.
+      IS_SMOKE_MODE: false,
+      baseDir: backendDir,
+      onDemand: true,
+    });
+  } catch (error) {
+    // runSelfHeal is per-step guarded, but defend the wrapper too so the caller
+    // (a maintenance window) never crashes on an unexpected orchestrator throw.
+    console.warn('[startup] self-heal orchestrator threw (non-fatal):', error?.message || error);
+    summary = {
+      ran: true,
+      onDemand: true,
+      smoke: false,
+      ok: false,
+      steps: [],
+      failures: [{ step: 'orchestrator', error: error?.message || String(error) }],
+      totalRepaired: 0,
+      finished_at: new Date().toISOString(),
+    };
+  }
+
+  // Observability (Agent Observability Rule): record the last run so Sam's
+  // diagnostics + Anya's status reader can see it. Best-effort.
+  try {
+    await recordSelfHealRun(db, summary);
+  } catch (error) {
+    console.warn('[startup] failed to record self-heal run (non-fatal):', error?.message || error);
+  }
+
+  return summary;
 }

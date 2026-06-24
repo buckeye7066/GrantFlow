@@ -50,6 +50,12 @@ export async function getSystemDiagnostics(db) {
     db: await getDatabaseDiagnostics(db),
     env_flags: getEnvironmentFlags(),
     last_activity: await getLastActivity(db),
+    // Observability (Agent Observability Rule): surface the LAST full self-heal
+    // run so Sam's diagnostics show whether the on-demand heal (nightly sweep /
+    // owner.run_self_heal) ran and what it repaired. Boot only runs the
+    // lightweight enforceInvariants net; this reflects the full heal. Never
+    // throws — null when one has never run.
+    self_heal: await getSelfHealDiagnostics(db),
     errors,
     // Canonical, status-driving counts. `real_errors`/`benign_errors` make the
     // benign-vs-real split explicit so the dashboard never reds out on an
@@ -64,6 +70,31 @@ export async function getSystemDiagnostics(db) {
   };
 
   return diagnostics;
+}
+
+/**
+ * Last full self-heal run, compacted for the diagnostics rollup. Reads from the
+ * canonical system_kv-backed store (no parallel telemetry). Never throws.
+ * @param {Object} db
+ * @returns {Promise<Object>}
+ */
+async function getSelfHealDiagnostics(db) {
+  try {
+    const { getLastSelfHealRun } = await import('../startup/selfHealStatus.js');
+    const last = await getLastSelfHealRun(db);
+    if (!last) return { has_run: false };
+    return {
+      has_run: true,
+      ok: last.ok !== false,
+      at: last.finished_at ?? last.updated_at ?? last.recorded_at ?? null,
+      on_demand: Boolean(last.onDemand),
+      total_repaired: Number(last.totalRepaired) || 0,
+      failures: Array.isArray(last.failures) ? last.failures.length : 0,
+      steps: Array.isArray(last.steps) ? last.steps.length : 0,
+    };
+  } catch {
+    return { has_run: false };
+  }
 }
 
 /**
