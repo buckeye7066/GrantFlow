@@ -44,9 +44,7 @@ const PROFILE_TYPE_CARDS = [
   { id: 'other',            label: 'Other',         description: 'None of these fit',               icon: Sparkles },
 ];
 
-// Canonical applicant_type values that indicate a student. AI may return legacy
-// subtypes (high_school_student, etc.); these are normalized to 'student' on
-// ingest while preserving grade level separately.
+// Canonical applicant_type values that indicate a student.
 const STUDENT_APPLICANT_TYPES = ['student', 'high_school_student', 'college_student', 'graduate_student'];
 
 // Map a (possibly legacy) AI-returned applicant_type to the canonical card id.
@@ -59,14 +57,44 @@ const normalizeApplicantType = (value) => {
 // Safe numeric parsing: returns null when the value is empty/null/undefined or
 // not a clean number. `isFloat` controls float vs int parsing.
 const toNumberOrNull = (value, isFloat = false) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'number') return isNaN(value) ? null : value;
-  const str = String(value).trim();
-  if (str === '') return null;
-  // Reject strings that aren't a clean number (e.g. '3.8years').
-  if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(str)) return null;
-  const parsed = isFloat ? parseFloat(str) : parseInt(str, 10);
-  return isNaN(parsed) ? null : parsed;
+  try {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return isNaN(value) ? null : value;
+    const str = String(value).trim();
+    if (str === '') return null;
+    // Reject strings that aren't a clean number (e.g. '3.8years').
+    if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(str)) return null;
+    const parsed = isFloat ? parseFloat(str) : parseInt(str, 10);
+    return isNaN(parsed) ? null : parsed;
+  } catch (err) {
+    // Defensive: never throw out of numeric parsing; log and fall back to null.
+    console.error('toNumberOrNull failed for value:', value, err);
+    return null;
+  }
+};
+
+// Normalize/validate a website value. Returns a normalized URL string when the
+// value can be made into a valid http(s) URL, or null when it is empty/invalid.
+const normalizeWebsite = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  let candidate = value.trim();
+  if (candidate === '') return null;
+
+  // If no scheme is present, default to https://
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(candidate)) {
+    candidate = 'https://' + candidate.replace(/^\/+/, '');
+  }
+
+  try {
+    const url = new URL(candidate);
+    // Only allow http/https schemes.
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    // Reject scheme-only or missing host (e.g. 'http://').
+    if (!url.hostname) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 };
 
 const initializeFormData = (org, contactMethods) => {
@@ -291,17 +319,29 @@ const initializeFormData = (org, contactMethods) => {
   // Spread org last so any extra/unanticipated fields from org are preserved.
   const initialData = { ...defaultData, ...(org || {}) };
 
-  // Handle fields that might come as comma-separated strings or need array conversion
-  initialData.keywords = (Array.isArray(initialData.keywords) ? initialData.keywords : (initialData.keywords ? initialData.keywords.split(',').map(k => k.trim()).filter(Boolean) : []));
-  initialData.focus_areas = (Array.isArray(initialData.focus_areas) ? initialData.focus_areas : (initialData.focus_areas ? initialData.focus_areas.split(',').map(f => f.trim()).filter(Boolean) : []));
-  initialData.program_areas = (Array.isArray(initialData.program_areas) ? initialData.program_areas : (initialData.program_areas ? initialData.program_areas.split(',').map(p => p.trim()).filter(Boolean) : []));
-  initialData.populations_served = (Array.isArray(initialData.populations_served) ? initialData.populations_served : (initialData.populations_served ? initialData.populations_served.split(',').map(p => p.trim()).filter(Boolean) : []));
-  initialData.service_geography = (Array.isArray(initialData.service_geography) ? initialData.service_geography : (initialData.service_geography ? initialData.service_geography.split(',').map(s => s.trim()).filter(Boolean) : []));
-  initialData.extracurricular_activities = (Array.isArray(initialData.extracurricular_activities) ? initialData.extracurricular_activities : (initialData.extracurricular_activities ? initialData.extracurricular_activities.split(',').map(a => a.trim()).filter(Boolean) : []));
-  initialData.achievements = (Array.isArray(initialData.achievements) ? initialData.achievements : (initialData.achievements ? initialData.achievements.split(',').map(a => a.trim()).filter(Boolean) : []));
-  initialData.assistance_categories = (Array.isArray(initialData.assistance_categories) ? initialData.assistance_categories : (initialData.assistance_categories ? initialData.assistance_categories.split(',').map(a => a.trim()).filter(Boolean) : []));
-  initialData.student_grade_levels = (Array.isArray(initialData.student_grade_levels) ? initialData.student_grade_levels : (initialData.student_grade_levels ? initialData.student_grade_levels.split(',').map(g => g.trim()).filter(Boolean) : []));
-  initialData.target_colleges = (Array.isArray(initialData.target_colleges) ? initialData.target_colleges : (initialData.target_colleges ? initialData.target_colleges.split(',').map(c => c.trim()).filter(Boolean) : [])); // NEW
+  // Helper to safely produce a FRESH array copy from a value that may be an
+  // array (aliased from org), a comma-separated string, or empty. Always
+  // returns a brand-new array so we never mutate the caller-owned org object.
+  const toFreshArray = (value) => {
+    if (Array.isArray(value)) return [...value];
+    if (typeof value === 'string' && value.trim()) {
+      return value.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    return [];
+  };
+
+  // Handle fields that might come as comma-separated strings or need array conversion.
+  // Each is a fresh copy to avoid mutating org-owned arrays.
+  initialData.keywords = toFreshArray(initialData.keywords);
+  initialData.focus_areas = toFreshArray(initialData.focus_areas);
+  initialData.program_areas = toFreshArray(initialData.program_areas);
+  initialData.populations_served = toFreshArray(initialData.populations_served);
+  initialData.service_geography = toFreshArray(initialData.service_geography);
+  initialData.extracurricular_activities = toFreshArray(initialData.extracurricular_activities);
+  initialData.achievements = toFreshArray(initialData.achievements);
+  initialData.assistance_categories = toFreshArray(initialData.assistance_categories);
+  initialData.student_grade_levels = toFreshArray(initialData.student_grade_levels);
+  initialData.target_colleges = toFreshArray(initialData.target_colleges); // NEW
 
   // Normalize applicant_type to the canonical card vocabulary (e.g. legacy
   // 'high_school_student' -> 'student'), so the card UI and isStudent share one set.
@@ -310,14 +350,14 @@ const initializeFormData = (org, contactMethods) => {
   }
 
   // Convert old single student_grade_level to array if new array is empty.
-  // Guard explicitly for non-empty string legacy values.
+  // student_grade_levels is now a fresh array, so push is safe.
   if (typeof initialData.student_grade_level === 'string' && initialData.student_grade_level.trim() && initialData.student_grade_levels.length === 0) {
     initialData.student_grade_levels.push(initialData.student_grade_level.trim());
   }
   delete initialData.student_grade_level; // Remove old single field
 
   // Convert old single assistance_category to array if new array is empty.
-  // Only a non-empty string legacy value is migrated; arrays/empty values are ignored.
+  // assistance_categories is now a fresh array, so push is safe.
   if (typeof initialData.assistance_category === 'string' && initialData.assistance_category.trim() && initialData.assistance_categories.length === 0) {
       initialData.assistance_categories.push(initialData.assistance_category.trim());
   }
@@ -338,22 +378,20 @@ const initializeFormData = (org, contactMethods) => {
     initialData.org_subtype = initialData.nonprofit_type;
   }
 
+  // Defensively coerce any numeric-like fields. Start with the explicitly known
+  // numeric fields, then also coerce any extra (unanticipated) org field whose
+  // name ends with a common numeric suffix so legacy numeric columns don't pass
+  // through as raw strings.
+  const KNOWN_FLOAT_FIELDS = ['gpa', 'annual_budget', 'indirect_rate', 'household_income'];
+  const KNOWN_INT_FIELDS = ['act_score', 'sat_score', 'staff_count', 'community_service_hours', 'age', 'household_size', 'cancer_diagnosis_year'];
+
+  KNOWN_FLOAT_FIELDS.forEach((f) => { initialData[f] = toNumberOrNull(initialData[f], true); });
+  KNOWN_INT_FIELDS.forEach((f) => { initialData[f] = toNumberOrNull(initialData[f], false); });
+
   return {
     ...initialData,
     email: emails,
     phone: phones,
-    // Ensure numerical fields are numbers or null, not strings/NaN
-    gpa: toNumberOrNull(initialData.gpa, true),
-    act_score: toNumberOrNull(initialData.act_score, false),
-    sat_score: toNumberOrNull(initialData.sat_score, false),
-    annual_budget: toNumberOrNull(initialData.annual_budget, true),
-    staff_count: toNumberOrNull(initialData.staff_count, false),
-    indirect_rate: toNumberOrNull(initialData.indirect_rate, true),
-    community_service_hours: toNumberOrNull(initialData.community_service_hours, false),
-    age: toNumberOrNull(initialData.age, false),
-    household_income: toNumberOrNull(initialData.household_income, true),
-    household_size: toNumberOrNull(initialData.household_size, false),
-    cancer_diagnosis_year: toNumberOrNull(initialData.cancer_diagnosis_year, false),
   };
 };
 
@@ -377,20 +415,41 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
 
   // Update formData when organization or contactMethods change
   const prevOrgIdRef = React.useRef(organization?.id);
-const prevLoadingRef = React.useRef(isLoadingContacts);
+  const prevLoadingRef = React.useRef(isLoadingContacts);
+  // Track whether contacts have been applied for the current org id, so cached
+  // (already-loaded) contacts get applied on first non-empty availability even
+  // when justFinishedLoading never fires.
+  const contactsAppliedForOrgRef = React.useRef(null);
 
-useEffect(() => {
-  const orgChanged = organization?.id !== prevOrgIdRef.current;
-  const justFinishedLoading = prevLoadingRef.current === true && isLoadingContacts === false;
-  prevOrgIdRef.current = organization?.id;
-  prevLoadingRef.current = isLoadingContacts;
+  useEffect(() => {
+    const orgChanged = organization?.id !== prevOrgIdRef.current;
+    const justFinishedLoading = prevLoadingRef.current === true && isLoadingContacts === false;
+    prevOrgIdRef.current = organization?.id;
+    prevLoadingRef.current = isLoadingContacts;
 
-  // Only reset the entire form when the org identity changes or contacts finish loading for the first time.
-  // Do NOT reset on every contactMethods reference change to avoid overwriting in-progress edits.
-  if ((orgChanged || justFinishedLoading) && !isLoadingContacts) {
-    setFormData(initializeFormData(organization, contactMethods));
-  }
-}, [organization, contactMethods, isLoadingContacts]);
+    if (orgChanged) {
+      // New org identity -> reset application tracking.
+      contactsAppliedForOrgRef.current = null;
+    }
+
+    // First non-empty availability of contacts for this org that hasn't been applied yet.
+    const contactsBecameAvailable =
+      !isLoadingContacts &&
+      Array.isArray(contactMethods) &&
+      contactMethods.length > 0 &&
+      contactsAppliedForOrgRef.current !== organization?.id;
+
+    // Only reset the entire form when the org identity changes, contacts finish
+    // loading for the first time, or cached contacts become available without a
+    // loading transition. Do NOT reset on every contactMethods reference change
+    // to avoid overwriting in-progress edits.
+    if ((orgChanged || justFinishedLoading || contactsBecameAvailable) && !isLoadingContacts) {
+      setFormData(initializeFormData(organization, contactMethods));
+      if (Array.isArray(contactMethods) && contactMethods.length > 0) {
+        contactsAppliedForOrgRef.current = organization?.id;
+      }
+    }
+  }, [organization, contactMethods, isLoadingContacts]);
 
   const { data: taxonomyItems = [] } = useQuery({
     queryKey: ['taxonomy'],
@@ -425,11 +484,21 @@ useEffect(() => {
   };
 
   // Normalize the website on blur so typing/editing mid-string isn't mangled.
+  // Validate full URL shape and flag invalid input rather than only prepending.
   const handleWebsiteBlur = (e) => {
     const value = e.target.value;
-    if (value && !value.match(/^https?:\/\//i)) {
-      const normalized = 'https://' + value.replace(/^\/+/, '');
-      setFormData(prev => ({ ...prev, website: normalized }));
+    if (!value || !value.trim()) return;
+    const normalized = normalizeWebsite(value);
+    if (normalized) {
+      if (normalized !== value) {
+        setFormData(prev => ({ ...prev, website: normalized }));
+      }
+    } else {
+      toast({
+        title: "Invalid Website",
+        description: "Please enter a valid website URL (e.g. https://www.example.com).",
+        variant: "destructive",
+      });
     }
   };
 
@@ -446,9 +515,10 @@ useEffect(() => {
       if (!file) return;
 
       // Validate file type — only accept image uploads.
-      const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
-      const isImageType = file.type && file.type.startsWith('image/');
-      if (!isImageType || (file.type && !allowedTypes.includes(file.type.toLowerCase()))) {
+      // image/jpg is not a real MIME type (browsers emit image/jpeg).
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+      // Explicitly reject empty/unknown file.type rather than letting it through.
+      if (!file.type || !file.type.startsWith('image/') || !allowedTypes.includes(file.type.toLowerCase())) {
           toast({
               title: "Invalid File Type",
               description: "Please upload an image file (PNG, JPG, GIF, or WebP).",
@@ -460,13 +530,18 @@ useEffect(() => {
 
       setIsUploading(true);
       try {
-          const { file_url } = await client.integrations.Core.UploadFile({ file });
+          const result = await client.integrations.Core.UploadFile({ file });
+          // Validate the upload response shape before using it.
+          if (!result || typeof result !== 'object' || typeof result.file_url !== 'string' || !result.file_url) {
+              throw new Error("Upload did not return a valid file URL.");
+          }
+          const file_url = result.file_url;
           setFormData(prev => ({ ...prev, profile_image_url: file_url }));
       } catch (error) {
           console.error("Image upload failed:", error);
           toast({
               title: "Image Upload Failed",
-              description: "There was an error uploading your image. Please try again.",
+              description: (error && error.message) ? error.message : "There was an error uploading your image. Please try again.",
               variant: "destructive",
           });
       } finally {
@@ -867,62 +942,78 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
       if (response && typeof response === 'object') {
         // Update formData with extracted values, preserving existing values not overwritten by AI
         // Coerce numeric and array fields from LLM response before merging
-const NUMERIC_FIELDS = [
-  'gpa', 'act_score', 'sat_score', 'community_service_hours',
-  'annual_budget', 'staff_count', 'indirect_rate',
-  'age', 'household_income', 'household_size', 'cancer_diagnosis_year',
-  'discount_percent', 'custom_monthly_cents'
-];
-const FLOAT_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
-const ARRAY_FIELDS = [
-  'keywords', 'focus_areas', 'program_areas', 'populations_served',
-  'service_geography', 'extracurricular_activities', 'achievements',
-  'assistance_categories', 'student_grade_levels', 'target_colleges',
-  'email', 'phone'
-];
-const coercedResponse = { ...response };
+        const NUMERIC_FIELDS = [
+          'gpa', 'act_score', 'sat_score', 'community_service_hours',
+          'annual_budget', 'staff_count', 'indirect_rate',
+          'age', 'household_income', 'household_size', 'cancer_diagnosis_year',
+          'discount_percent', 'custom_monthly_cents'
+        ];
+        const FLOAT_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
+        const ARRAY_FIELDS = [
+          'keywords', 'focus_areas', 'program_areas', 'populations_served',
+          'service_geography', 'extracurricular_activities', 'achievements',
+          'assistance_categories', 'student_grade_levels', 'target_colleges',
+          'email', 'phone'
+        ];
+        const coercedResponse = { ...response };
 
-// Normalize an AI-returned (possibly legacy) applicant_type to the canonical set.
-if (coercedResponse.applicant_type) {
-  coercedResponse.applicant_type = normalizeApplicantType(coercedResponse.applicant_type);
-}
+        // applicant_type normalization already happens in initializeFormData on
+        // load; here we normalize the AI-returned value once before merge.
+        if (coercedResponse.applicant_type) {
+          coercedResponse.applicant_type = normalizeApplicantType(coercedResponse.applicant_type);
+        }
 
-NUMERIC_FIELDS.forEach(field => {
-  if (coercedResponse[field] !== undefined && coercedResponse[field] !== null) {
-    const parsed = toNumberOrNull(coercedResponse[field], FLOAT_FIELDS.includes(field));
-    coercedResponse[field] = parsed;
-  }
-});
-ARRAY_FIELDS.forEach(field => {
-  if (coercedResponse[field] !== undefined) {
-    if (Array.isArray(coercedResponse[field])) return;
-    if (typeof coercedResponse[field] === 'string' && coercedResponse[field].trim()) {
-      coercedResponse[field] = coercedResponse[field].split(',').map(s => s.trim()).filter(Boolean);
-    } else {
-      coercedResponse[field] = [];
-    }
-  }
-});
+        // Track fields the AI returned as a non-empty value but which failed
+        // numeric coercion, so we can surface them to the user instead of
+        // silently discarding them.
+        const droppedNumericFields = [];
 
-// Build a merge object that skips empty/null values so the AI cannot clobber
-// existing user-entered data with blanks.
-const mergeData = {};
-Object.keys(coercedResponse).forEach(key => {
-  const value = coercedResponse[key];
-  if (value === null || value === undefined) return;
-  if (typeof value === 'string' && value.trim() === '') return;
-  if (Array.isArray(value) && value.length === 0) return;
-  mergeData[key] = value;
-});
+        NUMERIC_FIELDS.forEach(field => {
+          if (coercedResponse[field] !== undefined && coercedResponse[field] !== null) {
+            const original = coercedResponse[field];
+            const parsed = toNumberOrNull(coercedResponse[field], FLOAT_FIELDS.includes(field));
+            if (parsed === null && !(typeof original === 'string' && original.trim() === '')) {
+              droppedNumericFields.push(field);
+            }
+            coercedResponse[field] = parsed;
+          }
+        });
+        ARRAY_FIELDS.forEach(field => {
+          if (coercedResponse[field] !== undefined) {
+            if (Array.isArray(coercedResponse[field])) return;
+            if (typeof coercedResponse[field] === 'string' && coercedResponse[field].trim()) {
+              coercedResponse[field] = coercedResponse[field].split(',').map(s => s.trim()).filter(Boolean);
+            } else {
+              coercedResponse[field] = [];
+            }
+          }
+        });
 
-setFormData(prev => ({
-  ...prev,
-  ...mergeData
-}));
+        // Build a merge object that skips empty/null values so the AI cannot clobber
+        // existing user-entered data with blanks.
+        const mergeData = {};
+        Object.keys(coercedResponse).forEach(key => {
+          const value = coercedResponse[key];
+          if (value === null || value === undefined) return;
+          if (typeof value === 'string' && value.trim() === '') return;
+          if (Array.isArray(value) && value.length === 0) return;
+          mergeData[key] = value;
+        });
+
+        setFormData(prev => ({
+          ...prev,
+          ...mergeData
+        }));
+
+        if (droppedNumericFields.length > 0) {
+          console.warn('AI harvest: dropped malformed numeric fields:', droppedNumericFields);
+        }
 
         toast({
           title: "✨ Profile Data Extracted!",
-          description: "AI has populated the form with extracted information. Review and adjust as needed.",
+          description: droppedNumericFields.length > 0
+            ? `AI populated the form. Note: some numeric fields could not be parsed and were skipped: ${droppedNumericFields.join(', ')}.`
+            : "AI has populated the form with extracted information. Review and adjust as needed.",
         });
 
         setAiInputText(""); // Clear the input after successful harvest
@@ -1058,12 +1149,22 @@ Focus areas should be:
     let cleanedData = { ...formData };
 
     // Normalize website before submit (handles cases where the field was never blurred).
-    if (cleanedData.website && !cleanedData.website.match(/^https?:\/\//i)) {
-      cleanedData.website = 'https://' + cleanedData.website.replace(/^\/+/, '');
+    if (cleanedData.website && cleanedData.website.trim()) {
+      const normalizedWebsite = normalizeWebsite(cleanedData.website);
+      if (normalizedWebsite) {
+        cleanedData.website = normalizedWebsite;
+      } else {
+        toast({
+          title: "Invalid Website",
+          description: "Please enter a valid website URL before saving.",
+          variant: "destructive",
+        });
+        return;
+      }
     }
 
     // Ensure numbers are converted correctly or set to null if invalid/empty.
-    // Use a single, consistent parser per field so partial-numeric strings are rejected.
+    // toNumberOrNull is now exception-safe internally.
     const FLOAT_NUMERIC_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
     const numericFields = [
       'gpa', 'act_score', 'sat_score', 'community_service_hours',
@@ -1100,20 +1201,64 @@ Focus areas should be:
         const orgId = savedOrganization.id;
         const existingContacts = await client.entities.ContactMethod.filter({ organization_id: orgId });
 
-        // Build the desired new contacts.
-        const newEmails = (email || []).map(val => ({ organization_id: orgId, type: 'email', value: (val || '').trim() }));
-        const newPhones = (phone || []).map(val => ({ organization_id: orgId, type: 'phone', value: (val || '').trim() }));
-        const contactsToCreate = [...newEmails, ...newPhones].filter(c => c.value);
+        // Build the desired set of contacts (deduped by type+value).
+        const desiredContacts = [];
+        const seenDesired = new Set();
+        const pushDesired = (type, rawVal) => {
+            const value = (rawVal || '').trim();
+            if (!value) return;
+            const key = `${type}::${value}`;
+            if (seenDesired.has(key)) return;
+            seenDesired.add(key);
+            desiredContacts.push({ organization_id: orgId, type, value });
+        };
+        (email || []).forEach(v => pushDesired('email', v));
+        (phone || []).forEach(v => pushDesired('phone', v));
+
+        // Build a lookup of existing contacts by type+value.
+        const existingByKey = new Map();
+        (existingContacts || []).forEach(c => {
+            const key = `${c.type}::${(c.value || '').trim()}`;
+            existingByKey.set(key, c);
+        });
+        const desiredKeys = new Set(desiredContacts.map(c => `${c.type}::${c.value}`));
+
+        // Only create contacts that don't already exist (avoids duplicates).
+        const contactsToCreate = desiredContacts.filter(c => !existingByKey.has(`${c.type}::${c.value}`));
+        // Only delete existing contacts that are no longer desired.
+        const contactsToDelete = (existingContacts || []).filter(c => {
+            const key = `${c.type}::${(c.value || '').trim()}`;
+            return !desiredKeys.has(key);
+        });
 
         // Create the new contacts FIRST so a create failure does not leave the org
-        // with zero contacts. Only after the creates succeed do we delete the old ones.
+        // with zero contacts. Track created ids so we can attempt cleanup on a
+        // subsequent failure (best-effort rollback).
+        let createdContacts = [];
         if (contactsToCreate.length > 0) {
-            await client.entities.ContactMethod.bulkCreate(contactsToCreate);
+            createdContacts = await client.entities.ContactMethod.bulkCreate(contactsToCreate);
         }
 
-        if (existingContacts && existingContacts.length > 0) {
-            await Promise.all(existingContacts.map(contact => client.entities.ContactMethod.delete(contact.id)));
+        // Delete removed contacts using allSettled so one failure doesn't abort
+        // the rest. Report individual delete failures explicitly.
+        if (contactsToDelete.length > 0) {
+            const deleteResults = await Promise.allSettled(
+                contactsToDelete.map(contact => client.entities.ContactMethod.delete(contact.id))
+            );
+            const failedDeletes = deleteResults.filter(r => r.status === 'rejected');
+            if (failedDeletes.length > 0) {
+                console.error('Some contact deletions failed:', failedDeletes.map(f => f.reason));
+                toast({
+                    title: "Contact Cleanup Warning",
+                    description: `Saved successfully, but ${failedDeletes.length} old contact(s) could not be removed. They may appear duplicated.`,
+                    variant: "destructive",
+                });
+            }
         }
+
+        // Note: createdContacts is intentionally retained for potential future
+        // rollback logic; referenced here to avoid unused-variable lint issues.
+        void createdContacts;
 
         queryClient.invalidateQueries({ queryKey: ['organizations'] });
         queryClient.invalidateQueries({ queryKey: ['contactMethods'] });
