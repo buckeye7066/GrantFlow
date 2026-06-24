@@ -154,6 +154,66 @@ function HelpedLabel({ htmlFor, fieldName, required, children, className }) {
   )
 }
 
+/**
+ * Renders a checkbox label with an optional FieldHelpTip, only showing
+ * the tip when a registry id actually exists for the field.
+ */
+function CheckboxLabel({ htmlFor, fieldId, children, className }) {
+  const helpId = fieldId ? FIELD_HELP_ID_FOR[fieldId] : null
+  return (
+    <Label htmlFor={htmlFor} className={className}>
+      {children}
+      {helpId ? <FieldHelpTip id={helpId} className="ml-1 align-middle" /> : null}
+    </Label>
+  )
+}
+
+/**
+ * Parse a numeric input value, preserving a legitimate zero and
+ * returning null only when the value is empty / not a number.
+ */
+function parseNumericInput(value, useInt = false) {
+  if (value === '' || value === null || value === undefined) return null;
+  const n = useInt ? parseInt(value, 10) : parseFloat(value);
+  return Number.isNaN(n) ? null : n;
+}
+
+/**
+ * Compute age from a date-of-birth string. Returns null for missing or
+ * unparseable dates so callers never get a silent NaN.
+ */
+function computeAge(dateOfBirth) {
+  if (!dateOfBirth) return null;
+  const birthDate = new Date(dateOfBirth);
+  if (Number.isNaN(birthDate.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+    age -= 1;
+  }
+  return age;
+}
+
+/**
+ * Build the final payload for submission/email, computing age only when
+ * it has not been explicitly provided (preserving an intentional 0).
+ */
+function buildFinalData(data) {
+  const computedAge = data.age == null ? computeAge(data.date_of_birth) : data.age;
+  return {
+    ...data,
+    age: computedAge,
+  };
+}
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateEmails(emails) {
+  if (!Array.isArray(emails)) return { valid: true, invalid: [] };
+  const invalid = emails.filter((e) => typeof e === 'string' && e.trim() !== '' && !EMAIL_REGEX.test(e.trim()));
+  return { valid: invalid.length === 0, invalid };
+}
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
@@ -174,6 +234,7 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
   const { grouped: profileTypeGroups } = useProfileTypes();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailConsent, setEmailConsent] = useState(false);
   const appliedInitialDataRef = useRef(false);
 
   const [formData, setFormData] = useState(() => ({
@@ -512,6 +573,14 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
   ];
 
   const visibleSteps = steps.filter(step => !step.show || step.show());
+
+  // Clamp currentStep whenever the set of visible steps shrinks (e.g. the
+  // user switches applicant_type to 'organization', removing later steps),
+  // so we never index out of bounds and dereference an undefined step.
+  useEffect(() => {
+    setCurrentStep((s) => Math.min(s, Math.max(0, visibleSteps.length - 1)));
+  }, [visibleSteps.length]);
+
   const progress = ((currentStep + 1) / visibleSteps.length) * 100;
 
   const handleChange = (field, value) => {
@@ -532,22 +601,7 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    
-    // Calculate age from date of birth if provided
-    let finalData = { ...formData };
-    if (finalData.date_of_birth && !finalData.age) {
-      const birthDate = new Date(finalData.date_of_birth);
-      const today = new Date();
-      const age = today.getFullYear() - birthDate.getFullYear();
-      const monthDiff = today.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-        finalData.age = age - 1;
-      } else {
-        finalData.age = age;
-      }
-    }
-    
-    onSubmit(finalData);
+    onSubmit(buildFinalData(formData));
   };
 
   const handlePrintPDF = () => {
@@ -564,40 +618,38 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
       return;
     }
 
+    const { valid, invalid } = validateEmails(formData.email);
+    if (!valid) {
+      toast({
+        title: "Invalid Email Address",
+        description: `Please correct these email address(es): ${invalid.join(', ')}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!emailConsent) {
+      toast({
+        title: "Consent Required",
+        description: "Please confirm you consent to transmitting your application (which may include sensitive personal and health information) before sending.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsSendingEmail(true);
     try {
-      function computeAge(dateOfBirth) {
-  if (!dateOfBirth) return null;
-  const birthDate = new Date(dateOfBirth);
-  const today = new Date();
-  const age = today.getFullYear() - birthDate.getFullYear();
-  const monthDiff = today.getMonth() - birthDate.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-    return age - 1;
-  }
-  return age;
-}
+      const finalData = buildFinalData(formData);
 
-// Inside the component, replace both duplicated blocks with:
-const buildFinalData = (data) => ({
-  ...data,
-  age: data.age ?? computeAge(data.date_of_birth),
-});
-
-// handleSubmit becomes:
-const handleSubmit = (e) => {
-  e.preventDefault();
-  onSubmit(buildFinalData(formData));
-};
-
-// handleEmailApplication uses:
-const finalData = buildFinalData(formData);
-
-      // Send via API - endpoint accepts application data without requiring profile ID
+      // Send via API - endpoint accepts application data without requiring profile ID.
+      // The server is responsible for stripping/masking sensitive PII fields
+      // (e.g. tenncare_id, health conditions) before transmission; the
+      // emailConsent flag records the user's explicit consent.
       await apiFetch('/api/profiles/send-application-email', {
         method: 'POST',
         body: JSON.stringify({
-          applicationData: finalData
+          applicationData: finalData,
+          consent: emailConsent,
         }),
       });
 
@@ -618,6 +670,7 @@ const finalData = buildFinalData(formData);
   };
 
   const currentStepData = visibleSteps[currentStep];
+  if (!currentStepData) return null;
   const CurrentIcon = currentStepData.icon;
 
   const isStudent = ['high_school_student', 'college_student', 'graduate_student'].includes(formData.applicant_type);
@@ -710,8 +763,9 @@ const finalData = buildFinalData(formData);
                   <p className="text-xs text-slate-500 mt-1">Used to determine age-based eligibility</p>
                 </div>
                 <div>
-                  <HelpedLabel fieldName="email">Email Address</HelpedLabel>
+                  <HelpedLabel htmlFor="email" fieldName="email">Email Address</HelpedLabel>
                   <MultiSelectCombobox
+                    id="email"
                     options={[]}
                     selected={formData.email}
                     onSelectedChange={(values) => handleChange('email', values)}
@@ -721,8 +775,9 @@ const finalData = buildFinalData(formData);
                 </div>
               </div>
               <div>
-                <HelpedLabel fieldName="phone">Phone Number</HelpedLabel>
+                <HelpedLabel htmlFor="phone" fieldName="phone">Phone Number</HelpedLabel>
                 <MultiSelectCombobox
+                  id="phone"
                   options={[]}
                   selected={formData.phone}
                   onSelectedChange={(values) => handleChange('phone', values)}
@@ -786,8 +841,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="annual_budget"
                     type="number"
-                    value={formData.annual_budget || ""}
-                    onChange={(e) => handleChange('annual_budget', parseFloat(e.target.value) || null)}
+                    value={formData.annual_budget ?? ""}
+                    onChange={(e) => handleChange('annual_budget', parseNumericInput(e.target.value))}
                     placeholder="500000"
                   />
                 </div>
@@ -796,8 +851,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="staff_count"
                     type="number"
-                    value={formData.staff_count || ""}
-                    onChange={(e) => handleChange('staff_count', parseInt(e.target.value) || null)}
+                    value={formData.staff_count ?? ""}
+                    onChange={(e) => handleChange('staff_count', parseNumericInput(e.target.value, true))}
                     placeholder="15"
                   />
                 </div>
@@ -838,10 +893,10 @@ const finalData = buildFinalData(formData);
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={formData[item.id]}
+                        checked={!!formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                      <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                     </div>
                   ))}
                 </div>
@@ -858,10 +913,10 @@ const finalData = buildFinalData(formData);
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={formData[item.id]}
+                        checked={!!formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                      <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                     </div>
                   ))}
                 </div>
@@ -880,10 +935,10 @@ const finalData = buildFinalData(formData);
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={formData[item.id]}
+                        checked={!!formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                      <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                     </div>
                   ))}
                 </div>
@@ -916,10 +971,10 @@ const finalData = buildFinalData(formData);
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={formData[item.id]}
+                        checked={!!formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                      <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                     </div>
                   ))}
                 </div>
@@ -985,8 +1040,8 @@ const finalData = buildFinalData(formData);
                     id="gpa"
                     type="number"
                     step="0.01"
-                    value={formData.gpa || ""}
-                    onChange={(e) => handleChange('gpa', parseFloat(e.target.value) || null)}
+                    value={formData.gpa ?? ""}
+                    onChange={(e) => handleChange('gpa', parseNumericInput(e.target.value))}
                     placeholder="3.75"
                   />
                 </div>
@@ -998,8 +1053,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="act_score"
                     type="number"
-                    value={formData.act_score || ""}
-                    onChange={(e) => handleChange('act_score', parseInt(e.target.value) || null)}
+                    value={formData.act_score ?? ""}
+                    onChange={(e) => handleChange('act_score', parseNumericInput(e.target.value, true))}
                     placeholder="32"
                   />
                 </div>
@@ -1008,8 +1063,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="sat_score"
                     type="number"
-                    value={formData.sat_score || ""}
-                    onChange={(e) => handleChange('sat_score', parseInt(e.target.value) || null)}
+                    value={formData.sat_score ?? ""}
+                    onChange={(e) => handleChange('sat_score', parseNumericInput(e.target.value, true))}
                     placeholder="1450"
                   />
                 </div>
@@ -1018,8 +1073,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="community_service_hours"
                     type="number"
-                    value={formData.community_service_hours || ""}
-                    onChange={(e) => handleChange('community_service_hours', parseInt(e.target.value) || null)}
+                    value={formData.community_service_hours ?? ""}
+                    onChange={(e) => handleChange('community_service_hours', parseNumericInput(e.target.value, true))}
                     placeholder="200"
                   />
                 </div>
@@ -1050,7 +1105,7 @@ const finalData = buildFinalData(formData);
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="first_generation"
-                  checked={formData.first_generation}
+                  checked={!!formData.first_generation}
                   onCheckedChange={(checked) => handleChange('first_generation', checked)}
                 />
                 <Label htmlFor="first_generation">I am a first-generation college student</Label>
@@ -1059,7 +1114,7 @@ const finalData = buildFinalData(formData);
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="stem_student"
-                  checked={formData.stem_student}
+                  checked={!!formData.stem_student}
                   onCheckedChange={(checked) => handleChange('stem_student', checked)}
                 />
                 <Label htmlFor="stem_student">I am in a STEM field</Label>
@@ -1077,8 +1132,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="household_income"
                     type="number"
-                    value={formData.household_income || ""}
-                    onChange={(e) => handleChange('household_income', parseFloat(e.target.value) || null)}
+                    value={formData.household_income ?? ""}
+                    onChange={(e) => handleChange('household_income', parseNumericInput(e.target.value))}
                     placeholder="50000"
                   />
                 </div>
@@ -1087,8 +1142,8 @@ const finalData = buildFinalData(formData);
                   <Input
                     id="household_size"
                     type="number"
-                    value={formData.household_size || ""}
-                    onChange={(e) => handleChange('household_size', parseInt(e.target.value) || null)}
+                    value={formData.household_size ?? ""}
+                    onChange={(e) => handleChange('household_size', parseNumericInput(e.target.value, true))}
                     placeholder="4"
                   />
                 </div>
@@ -1114,7 +1169,7 @@ const finalData = buildFinalData(formData);
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="low_income"
-                    checked={formData.low_income}
+                    checked={!!formData.low_income}
                     onCheckedChange={(checked) => handleChange('low_income', checked)}
                   />
                   <Label htmlFor="low_income">Low income</Label>
@@ -1122,7 +1177,7 @@ const finalData = buildFinalData(formData);
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="unemployed"
-                    checked={formData.unemployed}
+                    checked={!!formData.unemployed}
                     onCheckedChange={(checked) => handleChange('unemployed', checked)}
                   />
                   <Label htmlFor="unemployed">Currently unemployed</Label>
@@ -1130,7 +1185,7 @@ const finalData = buildFinalData(formData);
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="displaced_worker"
-                    checked={formData.displaced_worker}
+                    checked={!!formData.displaced_worker}
                     onCheckedChange={(checked) => handleChange('displaced_worker', checked)}
                   />
                   <Label htmlFor="displaced_worker">Displaced worker</Label>
@@ -1158,10 +1213,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1212,7 +1267,7 @@ const finalData = buildFinalData(formData);
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="cancer_survivor"
-                    checked={formData.cancer_survivor}
+                    checked={!!formData.cancer_survivor}
                     onCheckedChange={(checked) => handleChange('cancer_survivor', checked)}
                   />
                   <Label htmlFor="cancer_survivor" className="font-semibold">Cancer Survivor</Label>
@@ -1233,8 +1288,8 @@ const finalData = buildFinalData(formData);
                       <Input
                         id="cancer_diagnosis_year"
                         type="number"
-                        value={formData.cancer_diagnosis_year || ""}
-                        onChange={(e) => handleChange('cancer_diagnosis_year', parseInt(e.target.value) || null)}
+                        value={formData.cancer_diagnosis_year ?? ""}
+                        onChange={(e) => handleChange('cancer_diagnosis_year', parseNumericInput(e.target.value, true))}
                         placeholder="2020"
                       />
                     </div>
@@ -1247,7 +1302,7 @@ const finalData = buildFinalData(formData);
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="chronic_illness"
-                    checked={formData.chronic_illness}
+                    checked={!!formData.chronic_illness}
                     onCheckedChange={(checked) => handleChange('chronic_illness', checked)}
                   />
                   <Label htmlFor="chronic_illness" className="font-semibold">Chronic Illness</Label>
@@ -1283,10 +1338,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1331,10 +1386,10 @@ const finalData = buildFinalData(formData);
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={formData[item.id]}
+                        checked={!!formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                      <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                     </div>
                   ))}
                 </div>
@@ -1355,7 +1410,7 @@ const finalData = buildFinalData(formData);
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="lgbtq"
-                  checked={formData.lgbtq}
+                  checked={!!formData.lgbtq}
                   onCheckedChange={(checked) => handleChange('lgbtq', checked)}
                 />
                 <Label htmlFor="lgbtq">LGBTQ+</Label>
@@ -1387,10 +1442,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1414,10 +1469,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1450,10 +1505,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1490,10 +1545,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1518,10 +1573,10 @@ const finalData = buildFinalData(formData);
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={formData[item.id]}
+                      checked={!!formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                    <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                   </div>
                 ))}
               </div>
@@ -1611,10 +1666,10 @@ const finalData = buildFinalData(formData);
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={formData[item.id]}
+                        checked={!!formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
+                      <CheckboxLabel htmlFor={item.id} fieldId={item.id}>{item.label}</CheckboxLabel>
                     </div>
                   ))}
                 </div>
@@ -1756,12 +1811,12 @@ const finalData = buildFinalData(formData);
                 {isStudent && (
                   <div className="p-4 bg-blue-50 rounded-lg">
                     <h4 className="font-semibold mb-2">Education</h4>
-                    <p><strong>Grade Levels:</strong> {formData.student_grade_levels.join(', ') || 'Not selected'}</p>
+                    <p><strong>Grade Levels:</strong> {(formData.student_grade_levels || []).join(', ') || 'Not selected'}</p>
                     {formData.current_college && <p><strong>Current College:</strong> {formData.current_college}</p>}
-                    {formData.target_colleges.length > 0 && (
+                    {(formData.target_colleges || []).length > 0 && (
                       <p><strong>Target Colleges:</strong> {formData.target_colleges.join(', ')}</p>
                     )}
-                    {formData.gpa && <p><strong>GPA:</strong> {formData.gpa}</p>}
+                    {formData.gpa != null && <p><strong>GPA:</strong> {formData.gpa}</p>}
                   </div>
                 )}
 
@@ -1793,6 +1848,21 @@ const finalData = buildFinalData(formData);
                 {/* PDF & Email Actions */}
                 <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                   <h4 className="font-semibold mb-3 text-blue-900">Application Actions</h4>
+
+                  <div className="flex items-start gap-2 mb-3 p-3 bg-white rounded border border-blue-100">
+                    <Checkbox
+                      id="email_consent"
+                      checked={emailConsent}
+                      onCheckedChange={(checked) => setEmailConsent(!!checked)}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="email_consent" className="text-sm text-blue-900 font-normal leading-snug">
+                      I understand and consent to my application being transmitted by email. It may include
+                      sensitive personal, financial, and health information (such as date of birth, medical
+                      conditions, and benefit IDs). Only share what you are comfortable transmitting.
+                    </Label>
+                  </div>
+
                   <div className="flex flex-wrap gap-3">
                     <Button
                       type="button"
@@ -1806,7 +1876,7 @@ const finalData = buildFinalData(formData);
                     <Button
                       type="button"
                       onClick={handleEmailApplication}
-                      disabled={isSendingEmail}
+                      disabled={isSendingEmail || !emailConsent}
                       className="flex-1 min-w-[200px] bg-blue-600 hover:bg-blue-700"
                     >
                       <Mail className="w-4 h-4 mr-2" />

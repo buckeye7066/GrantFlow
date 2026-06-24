@@ -32,6 +32,55 @@ import {
   ExternalLink
 } from 'lucide-react';
 
+// Safely format a date value, returning a fallback for missing/invalid input.
+const formatDateSafe = (value, fallback = 'unknown') => {
+  if (value === null || value === undefined || value === '') return fallback;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return fallback;
+  return d.toLocaleString();
+};
+
+// Normalize a list response that may be an array or wrapped in {items}/{data}/{results}.
+const normalizeList = (resp) => {
+  if (Array.isArray(resp)) return resp;
+  if (resp && typeof resp === 'object') {
+    if (Array.isArray(resp.items)) return resp.items;
+    if (Array.isArray(resp.data)) return resp.data;
+    if (Array.isArray(resp.results)) return resp.results;
+  }
+  return [];
+};
+
+// Parse + clamp a numeric input. Returns null when invalid/empty so callers can reject.
+const parseClamp = (value, { min, max, fallback }) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  let v = n;
+  if (typeof min === 'number') v = Math.max(min, v);
+  if (typeof max === 'number') v = Math.min(max, v);
+  return v;
+};
+
+// Keys that should never be echoed back to the DOM.
+const SENSITIVE_FIELD_RE = /(api[_-]?key|secret|token|password|authorization|apikey)/i;
+
+// Recursively redact sensitive-looking fields from an object before rendering.
+const redactSensitive = (input) => {
+  if (Array.isArray(input)) return input.map((v) => redactSensitive(v));
+  if (input && typeof input === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (SENSITIVE_FIELD_RE.test(k) && typeof v === 'string' && v.length > 0) {
+        out[k] = '«redacted»';
+      } else {
+        out[k] = redactSensitive(v);
+      }
+    }
+    return out;
+  }
+  return input;
+};
+
 export default function AdminDiagnostics() {
   const navigate = useNavigate();
   const [diagnostics, setDiagnostics] = useState(null);
@@ -39,7 +88,9 @@ export default function AdminDiagnostics() {
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(null);
   const [jsonCopied, setJsonCopied] = useState(false);
+  const [jsonCopyError, setJsonCopyError] = useState(null);
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectLoading, setInspectLoading] = useState(false);
   const [inspectError, setInspectError] = useState(null);
@@ -69,9 +120,15 @@ export default function AdminDiagnostics() {
   const [fundingSources, setFundingSources] = useState([]);
   const [fundingSourcesError, setFundingSourcesError] = useState(null);
 
-  const loadDiagnostics = async () => {
+  // background=true means a non-initial reload (e.g. after applying env vars):
+  // it must not flip the full-page spinner that gates on initial load.
+  const loadDiagnostics = async ({ background = false } = {}) => {
     try {
-      setLoading(true);
+      if (background) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       setError(null);
       // Use apiFetch as required
       const data = await apiFetch('/api/admin/diagnostics');
@@ -79,7 +136,8 @@ export default function AdminDiagnostics() {
 
       try {
         const fsRes = await apiFetch('/api/admin/funding-sources');
-        setFundingSources(Array.isArray(fsRes?.sources) ? fsRes.sources : []);
+        const sources = normalizeList(fsRes?.sources ?? fsRes);
+        setFundingSources(sources);
         setFundingSourcesError(null);
       } catch (e) {
         setFundingSources([]);
@@ -87,8 +145,9 @@ export default function AdminDiagnostics() {
       }
 
       try {
-        const profiles = await apiFetch('/api/profiles?limit=200&offset=0')
-        const active = Array.isArray(profiles) ? profiles.filter((p) => (p?.status ?? 'active') === 'active') : []
+        const profilesResp = await apiFetch('/api/profiles?limit=200&offset=0')
+        const profiles = normalizeList(profilesResp)
+        const active = profiles.filter((p) => (p?.status ?? 'active') === 'active')
         setCrawlerAuditProfiles(active)
         setCrawlerAuditProfilesError(null)
       } catch (e) {
@@ -96,22 +155,33 @@ export default function AdminDiagnostics() {
         setCrawlerAuditProfilesError(e?.message || 'Failed to load profiles')
       }
     } catch (err) {
-      // Build comprehensive error information
+      // Build comprehensive error information from whatever shape apiFetch throws.
       const errorInfo = {
-        status: err.status || err.response?.status || 500,
-        message: err.message || 'Failed to load diagnostics',
-        rawResponse: err.toString()
+        status: err?.status ?? err?.response?.status ?? 500,
+        message: err?.message || 'Failed to load diagnostics',
+        rawResponse: err ? err.toString() : 'Unknown error',
       };
-      
-      // Try to get more details from response
-      if (err.response) {
+
+      // Prefer a structured error field/body if apiFetch already parsed it.
+      if (err?.data !== undefined) {
+        try {
+          errorInfo.details =
+            typeof err.data === 'string' ? err.data : JSON.stringify(err.data, null, 2);
+        } catch {
+          errorInfo.details = String(err.data);
+        }
+      } else if (err?.body !== undefined) {
+        errorInfo.details =
+          typeof err.body === 'string' ? err.body : JSON.stringify(err.body);
+      } else if (err?.response && typeof err.response.text === 'function') {
+        // Fall back to reading the raw Response only if it hasn't been consumed.
         try {
           errorInfo.details = await err.response.text();
-        } catch (e) {
+        } catch {
           errorInfo.details = 'Unable to read error response';
         }
       }
-      
+
       setError(errorInfo);
     } finally {
       setLoading(false);
@@ -121,28 +191,46 @@ export default function AdminDiagnostics() {
 
   useEffect(() => {
     loadDiagnostics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRefresh = () => {
-    setRefreshing(true);
-    loadDiagnostics();
+    loadDiagnostics({ background: true });
   };
 
-  const handleCopyError = () => {
-    if (error) {
-      const errorText = `Status: ${error.status}\nMessage: ${error.message}\nRaw Response: ${error.rawResponse}\nDetails: ${error.details || 'N/A'}`;
-      navigator.clipboard.writeText(errorText);
+  const handleCopyError = async () => {
+    if (!error) return;
+    const errorText = `Status: ${error.status}\nMessage: ${error.message}\nRaw Response: ${error.rawResponse}\nDetails: ${error.details || 'N/A'}`;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
+      }
+      await navigator.clipboard.writeText(errorText);
+      setCopyError(null);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      setCopied(false);
+      setCopyError(e?.message || 'Copy failed');
+      setTimeout(() => setCopyError(null), 3000);
     }
   };
 
-  const handleCopyDiagnostics = () => {
-    if (diagnostics) {
-      const jsonText = JSON.stringify(diagnostics, null, 2);
-      navigator.clipboard.writeText(jsonText);
+  const handleCopyDiagnostics = async () => {
+    if (!diagnostics) return;
+    const jsonText = JSON.stringify(diagnostics, null, 2);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
+      }
+      await navigator.clipboard.writeText(jsonText);
+      setJsonCopyError(null);
       setJsonCopied(true);
       setTimeout(() => setJsonCopied(false), 2000);
+    } catch (e) {
+      setJsonCopied(false);
+      setJsonCopyError(e?.message || 'Copy failed');
+      setTimeout(() => setJsonCopyError(null), 3000);
     }
   };
 
@@ -178,11 +266,27 @@ export default function AdminDiagnostics() {
       setCrawlerAuditError(null);
       setCrawlerAuditResult(null);
 
+      // Validate + clamp numeric inputs explicitly; reject blatantly invalid input.
+      if (String(crawlerAuditTimeout).trim() === '' || !Number.isFinite(Number(crawlerAuditTimeout))) {
+        throw new Error('Timeout must be a number (ms).');
+      }
+      if (String(crawlerAuditMinScore).trim() === '' || !Number.isFinite(Number(crawlerAuditMinScore))) {
+        throw new Error('Min score must be a number (0–100).');
+      }
+      if (!crawlerAuditProfileId &&
+          (String(crawlerAuditLimit).trim() === '' || !Number.isFinite(Number(crawlerAuditLimit)))) {
+        throw new Error('Limit profiles must be a number (1–200).');
+      }
+
+      const timeout = parseClamp(crawlerAuditTimeout, { min: 1000, max: 600000, fallback: 20000 });
+      const minScore = parseClamp(crawlerAuditMinScore, { min: 0, max: 100, fallback: 50 });
+      const limit = parseClamp(crawlerAuditLimit, { min: 1, max: 200, fallback: 25 });
+
       const payload = {
         profile_ids: crawlerAuditProfileId ? [crawlerAuditProfileId] : undefined,
-        limit_profiles: Number(crawlerAuditLimit) || 25,
-        timeout_ms: Number(crawlerAuditTimeout) || 20000,
-        min_match_score: Number(crawlerAuditMinScore) || 50,
+        limit_profiles: limit,
+        timeout_ms: timeout,
+        min_match_score: minScore,
         item_request: crawlerAuditItemRequest?.trim() || null,
       };
 
@@ -239,6 +343,29 @@ export default function AdminDiagnostics() {
                 <p className="mt-3 text-sm font-medium">
                   ⚠️ Authentication failed. Please sign in again.
                 </p>
+              )}
+              {error.status === 404 && (
+                <p className="mt-3 text-sm font-medium">
+                  ⚠️ The diagnostics endpoint was not found. The backend may be outdated or misconfigured.
+                </p>
+              )}
+              {error.status === 429 && (
+                <p className="mt-3 text-sm font-medium">
+                  ⚠️ Too many requests. Please wait a moment before retrying.
+                </p>
+              )}
+              {error.status >= 500 && (
+                <p className="mt-3 text-sm font-medium">
+                  ⚠️ The server encountered an internal error. Check backend logs for details.
+                </p>
+              )}
+              {![401, 403, 404, 429].includes(error.status) && error.status < 500 && (
+                <p className="mt-3 text-sm font-medium">
+                  ⚠️ An unexpected error occurred. Copy the details below and share them with an administrator.
+                </p>
+              )}
+              {copyError && (
+                <p className="mt-2 text-sm font-medium text-red-700">Copy failed: {copyError}</p>
               )}
               <div className="mt-4 flex gap-2">
                 <Button 
@@ -307,21 +434,22 @@ export default function AdminDiagnostics() {
     diagnostics.error_counts?.benign ??
     allErrors.filter((e) => e?.benign).length;
   const hasRecentErrors = realErrorCount > 0;
-  const hasEmptyOpportunities = diagnostics.db?.tables?.funding_opportunities === 0;
+
+  // Coerce count; missing key is "unknown", not empty.
+  const fundingOppRaw = diagnostics.db?.tables?.funding_opportunities;
+  const fundingOppKnown = fundingOppRaw !== undefined && fundingOppRaw !== null;
+  const hasEmptyOpportunities = fundingOppKnown && Number(fundingOppRaw) === 0;
   const dbNotOk = !diagnostics.db?.ok;
 
   // Truth rules: only show "OK" if truly ok
   let systemStatus = 'ok';
-  let statusColor = 'green';
   let StatusIcon = CheckCircle2;
   
   if (dbNotOk || hasRecentErrors) {
     systemStatus = 'error';
-    statusColor = 'red';
     StatusIcon = XCircle;
   } else if (hasEmptyOpportunities) {
     systemStatus = 'degraded';
-    statusColor = 'amber';
     StatusIcon = AlertTriangle;
   }
 
@@ -545,8 +673,11 @@ export default function AdminDiagnostics() {
           persist: Boolean(envEditPersist && ENV_SECRET_KEYS.has(key)),
         }),
       });
-      setEnvEditResult(data);
-      await loadDiagnostics();
+      // Redact in case the backend echoes the submitted value back.
+      setEnvEditResult(redactSensitive(data));
+      // Clear secret value from local state after applying.
+      setEnvEditValue('');
+      await loadDiagnostics({ background: true });
     } catch (err) {
       setEnvEditError(err?.message || 'Failed to apply env var');
     } finally {
@@ -563,7 +694,7 @@ export default function AdminDiagnostics() {
         method: 'POST',
         body: JSON.stringify({ apiKey: openaiKey }),
       });
-      setOpenaiKeyResult({ mode: 'verify', data });
+      setOpenaiKeyResult({ mode: 'verify', data: redactSensitive(data) });
     } catch (err) {
       setOpenaiKeyError(err?.message || 'Failed to verify key');
     } finally {
@@ -580,9 +711,11 @@ export default function AdminDiagnostics() {
         method: 'POST',
         body: JSON.stringify({ apiKey: openaiKey }),
       });
-      setOpenaiKeyResult({ mode: 'apply', data });
+      setOpenaiKeyResult({ mode: 'apply', data: redactSensitive(data) });
+      // Clear the key from state after applying so it does not linger in memory/DOM.
+      setOpenaiKey('');
       // Refresh diagnostics snapshot so env flags reflect the new config state.
-      await loadDiagnostics();
+      await loadDiagnostics({ background: true });
     } catch (err) {
       setOpenaiKeyError(err?.message || 'Failed to apply key');
     } finally {
@@ -599,8 +732,8 @@ export default function AdminDiagnostics() {
         method: 'POST',
         body: JSON.stringify({}),
       });
-      setOpenaiKeyResult({ mode: 'persist-current', data });
-      await loadDiagnostics();
+      setOpenaiKeyResult({ mode: 'persist-current', data: redactSensitive(data) });
+      await loadDiagnostics({ background: true });
     } catch (err) {
       setOpenaiKeyError(err?.message || 'Failed to persist key');
     } finally {
@@ -614,7 +747,7 @@ export default function AdminDiagnostics() {
         <div>
           <h2 className="text-2xl font-bold text-slate-900">System Diagnostics</h2>
           <p className="text-sm text-slate-600 mt-1">
-            Last updated: {new Date(diagnostics.timestamp).toLocaleString()}
+            Last updated: {formatDateSafe(diagnostics.timestamp)}
           </p>
         </div>
         <div className="flex gap-2">
@@ -647,6 +780,13 @@ export default function AdminDiagnostics() {
           </Button>
         </div>
       </div>
+
+      {jsonCopyError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>Copy failed: {jsonCopyError}</AlertDescription>
+        </Alert>
+      )}
 
       {/* System Status - Truth-based */}
       <Card
@@ -721,6 +861,14 @@ export default function AdminDiagnostics() {
                 </AlertDescription>
               </Alert>
             )}
+            {!fundingOppKnown && !dbNotOk && (
+              <Alert className="mt-3 border-slate-300 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
+                <AlertCircle className="h-4 w-4 text-slate-500" />
+                <AlertDescription className="text-slate-700 dark:text-slate-300">
+                  Funding opportunities count is unknown (not reported by diagnostics).
+                </AlertDescription>
+              </Alert>
+            )}
             {hasRecentErrors && (
               <Alert variant="destructive" className="mt-3">
                 <AlertCircle className="h-4 w-4" />
@@ -763,8 +911,8 @@ export default function AdminDiagnostics() {
                 aria-label="View funding opportunities"
               >
                 <p className="text-xs text-slate-600">funding_opportunities</p>
-                <p className={`text-2xl font-bold ${diagnostics.db.tables.funding_opportunities === 0 ? 'text-amber-600' : 'text-slate-900'}`}>
-                  {diagnostics.db.tables.funding_opportunities || 0}
+                <p className={`text-2xl font-bold ${Number(diagnostics.db.tables?.funding_opportunities) === 0 ? 'text-amber-600' : 'text-slate-900'}`}>
+                  {diagnostics.db.tables?.funding_opportunities ?? 0}
                 </p>
               </div>
               <div
@@ -774,7 +922,7 @@ export default function AdminDiagnostics() {
               >
                 <p className="text-xs text-slate-600">profiles</p>
                 <p className="text-2xl font-bold text-slate-900">
-                  {diagnostics.db.tables.profiles || 0}
+                  {diagnostics.db.tables?.profiles ?? 0}
                 </p>
               </div>
               <div
@@ -784,7 +932,7 @@ export default function AdminDiagnostics() {
               >
                 <p className="text-xs text-slate-600">grants</p>
                 <p className="text-2xl font-bold text-slate-900">
-                  {diagnostics.db.tables.grants || 0}
+                  {diagnostics.db.tables?.grants ?? 0}
                 </p>
               </div>
               <div
@@ -794,7 +942,7 @@ export default function AdminDiagnostics() {
               >
                 <p className="text-xs text-slate-600">crawl_logs</p>
                 <p className="text-2xl font-bold text-slate-900">
-                  {diagnostics.db.tables.crawl_logs || 0}
+                  {diagnostics.db.tables?.crawl_logs ?? 0}
                 </p>
               </div>
             </div>
@@ -1064,7 +1212,7 @@ export default function AdminDiagnostics() {
 
                 {openaiKeyResult?.data ? (
                   <pre className="mt-2 max-h-[240px] overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
-                    {JSON.stringify(openaiKeyResult, null, 2)}
+                    {JSON.stringify(redactSensitive(openaiKeyResult), null, 2)}
                   </pre>
                 ) : null}
               </form>
@@ -1077,6 +1225,7 @@ export default function AdminDiagnostics() {
                   className="flex items-center justify-between p-3 bg-slate-50 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
                   role="button"
                   tabIndex={0}
+                  title="Click to edit • Shift+Click (or Shift+Enter) to inspect"
                   onClick={(e) => {
                     if (e?.shiftKey) {
                       openInspect({
@@ -1092,6 +1241,16 @@ export default function AdminDiagnostics() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
+                      // Keyboard parity: Shift+Enter/Space opens inspect, plain opens editor.
+                      if (e.shiftKey) {
+                        openInspect({
+                          title: `Env flag: ${key}`,
+                          description:
+                            'These flags indicate whether key environment variables are configured (values are not exposed).',
+                          data: { key, value },
+                        });
+                        return;
+                      }
                       openEnvEditor(key);
                     }
                   }}
@@ -1141,7 +1300,7 @@ export default function AdminDiagnostics() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(fundingSources || []).map((src) => (
+                {(Array.isArray(fundingSources) ? fundingSources : []).map((src) => (
                   <TableRow key={src.id}>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
@@ -1181,7 +1340,7 @@ export default function AdminDiagnostics() {
                     <TableCell className="align-top">{renderFundingSetup(src)}</TableCell>
                   </TableRow>
                 ))}
-                {(!fundingSources || fundingSources.length === 0) && (
+                {(!Array.isArray(fundingSources) || fundingSources.length === 0) && (
                   <TableRow>
                     <TableCell colSpan={4} className="text-sm text-slate-600">
                       No funding providers returned.
@@ -1200,9 +1359,14 @@ export default function AdminDiagnostics() {
           <CardTitle className="flex items-center gap-2">
             <Clock className="w-5 h-5" />
             Recent Errors
-            {hasRecentErrors && (
+            {realErrorCount > 0 && (
               <Badge variant="destructive" className="ml-2">
-                {diagnostics.errors.length}
+                {realErrorCount}
+              </Badge>
+            )}
+            {benignErrorCount > 0 && (
+              <Badge variant="secondary" className="ml-1">
+                {benignErrorCount} benign
               </Badge>
             )}
           </CardTitle>
@@ -1210,14 +1374,18 @@ export default function AdminDiagnostics() {
         <CardContent>
           {diagnostics.errors && diagnostics.errors.length > 0 ? (
             <div className="space-y-3">
-              {diagnostics.errors.slice(0, 10).map((error, index) => (
+              {diagnostics.errors.slice(0, 10).map((errEntry, index) => (
                 <Alert
-                  key={index}
+                  key={
+                    errEntry?.job_id
+                      ? `${errEntry.job_id}-${errEntry.time || index}`
+                      : `${errEntry?.scope || 'err'}-${errEntry?.time || index}`
+                  }
                   variant="destructive"
-                  className={`border-l-4 ${error?.scope === 'crawler_job' && error?.job_id ? 'cursor-pointer' : ''}`}
+                  className={`border-l-4 ${errEntry?.scope === 'crawler_job' && errEntry?.job_id ? 'cursor-pointer' : ''}`}
                   onClick={() => {
-                    if (error?.scope === 'crawler_job' && error?.job_id) {
-                      handleInspectError(error);
+                    if (errEntry?.scope === 'crawler_job' && errEntry?.job_id) {
+                      handleInspectError(errEntry);
                     }
                   }}
                 >
@@ -1226,23 +1394,23 @@ export default function AdminDiagnostics() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1">
                         <p className="font-medium">
-                          {error.scope === 'crawler_job' ? `Crawler: ${error.crawler_type}` : 
-                          error.source || error.scope}
+                          {errEntry.scope === 'crawler_job' ? `Crawler: ${errEntry.crawler_type}` : 
+                          errEntry.source || errEntry.scope}
                         </p>
-                        <p className="text-sm">{error.message}</p>
+                        <p className="text-sm">{errEntry.message}</p>
                         <p className="text-xs text-slate-600">
-                          {new Date(error.time).toLocaleString()}
-                          {error.job_id ? ` • job ${String(error.job_id).slice(0, 8)}…` : ''}
+                          {formatDateSafe(errEntry.time, 'unknown time')}
+                          {errEntry.job_id ? ` • job ${String(errEntry.job_id).slice(0, 8)}…` : ''}
                         </p>
                       </div>
-                      {error.scope === 'crawler_job' && error.job_id && (
+                      {errEntry.scope === 'crawler_job' && errEntry.job_id && (
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            handleInspectError(error);
+                            handleInspectError(errEntry);
                           }}
                         >
                           Inspect
@@ -1277,7 +1445,7 @@ export default function AdminDiagnostics() {
               <div className="space-y-2">
                 {diagnostics.last_activity.last_10_crawl_logs.map((log, index) => (
                   <div
-                    key={index}
+                    key={log?.id ?? `${log?.source || 'log'}-${log?.created_at || index}`}
                     className="border-l-4 border-blue-500 pl-4 py-2 bg-slate-50 rounded cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-300"
                     role="button"
                     tabIndex={0}
@@ -1304,7 +1472,7 @@ export default function AdminDiagnostics() {
                       {getStatusBadge(log.status)}
                     </div>
                     <p className="text-xs text-slate-600">
-                      {new Date(log.created_at).toLocaleString()}
+                      {formatDateSafe(log.created_at, 'unknown time')}
                     </p>
                     <p className="text-xs text-slate-600">
                       Found: {log.records_found} | Imported: {log.records_imported}
@@ -1340,16 +1508,24 @@ export default function AdminDiagnostics() {
             </Alert>
           ) : (
             <pre className="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
-              {JSON.stringify(inspectData, null, 2)}
+              {JSON.stringify(redactSensitive(inspectData), null, 2)}
             </pre>
           )}
 
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => {
-                if (inspectData) {
-                  navigator.clipboard.writeText(JSON.stringify(inspectData, null, 2));
+              onClick={async () => {
+                if (!inspectData) return;
+                try {
+                  if (!navigator.clipboard?.writeText) {
+                    throw new Error('Clipboard API unavailable');
+                  }
+                  await navigator.clipboard.writeText(
+                    JSON.stringify(redactSensitive(inspectData), null, 2),
+                  );
+                } catch (e) {
+                  setInspectError(`Copy failed: ${e?.message || 'unknown error'}`);
                 }
               }}
               disabled={!inspectData}
@@ -1367,7 +1543,7 @@ export default function AdminDiagnostics() {
             <DialogTitle>Set environment variable (in-memory)</DialogTitle>
             <DialogDescription>
               Applies to the running backend process immediately. It will reset on restart unless persisted (secrets only).
-              Hold <strong>Shift</strong> while clicking a flag to view details instead.
+              Hold <strong>Shift</strong> while clicking (or pressing Enter on) a flag to view details instead.
             </DialogDescription>
           </DialogHeader>
 
@@ -1416,7 +1592,7 @@ export default function AdminDiagnostics() {
 
             {envEditResult ? (
               <pre className="max-h-[240px] overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
-                {JSON.stringify(envEditResult, null, 2)}
+                {JSON.stringify(redactSensitive(envEditResult), null, 2)}
               </pre>
             ) : null}
           </div>

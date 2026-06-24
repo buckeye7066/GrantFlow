@@ -60,11 +60,34 @@ const HOUSING_PREFERENCES = ["unknown", "on_campus", "off_campus", "commuter"]
 
 const CONTACT_GENDER_TARGETS = ["any", "women", "men", "coed", "unknown"]
 
+// Delimiter used to round-trip interests as text without corrupting values that
+// themselves contain commas. We display with commas but store/split on this
+// sentinel internally is not feasible for a single text field, so we validate
+// and split on commas but trim entries; interests containing commas are not
+// supported via this text input by design.
 function generateId(prefix = "item") {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
   }
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+// Lightweight URL validator suitable for react-hook-form `validate`.
+// Returns true (valid) for empty values (fields are optional) and for
+// well-formed http(s) URLs; otherwise returns an error message string.
+function isValidURL(value) {
+  if (value === undefined || value === null) return true
+  const trimmed = String(value).trim()
+  if (trimmed === "") return true
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return true
+    }
+    return "Enter a valid http(s) URL."
+  } catch {
+    return "Enter a valid http(s) URL."
+  }
 }
 
 function normaliseContacts(contacts = []) {
@@ -118,120 +141,132 @@ function normaliseMealPlans(plans = []) {
   }))
 }
 
-const defaultContacts = [
-  {
-    id: generateId("contact"),
-    label: "Admissions Office",
-    name: "",
-    title: "",
-    email: "",
-    phone: "",
-    url: "",
-  },
-  {
-    id: generateId("contact"),
-    label: "Financial Aid Office",
-    name: "",
-    title: "",
-    email: "",
-    phone: "",
-    url: "",
-  },
-]
+function buildDefaultContacts() {
+  return [
+    {
+      id: generateId("contact"),
+      label: "Admissions Office",
+      name: "",
+      title: "",
+      email: "",
+      phone: "",
+      url: "",
+    },
+    {
+      id: generateId("contact"),
+      label: "Financial Aid Office",
+      name: "",
+      title: "",
+      email: "",
+      phone: "",
+      url: "",
+    },
+  ]
+}
 
-const defaultPipeline = [
-  {
-    id: generateId("stage"),
-    label: "FAFSA Submitted",
-    status: "planned",
-    due_date: "",
-    completed_at: "",
-    notes: "",
-  },
-  {
-    id: generateId("stage"),
-    label: "School Aid Application",
-    status: "planned",
-    due_date: "",
-    completed_at: "",
-    notes: "",
-  },
-]
+function buildDefaultPipeline() {
+  return [
+    {
+      id: generateId("stage"),
+      label: "FAFSA Submitted",
+      status: "planned",
+      due_date: "",
+      completed_at: "",
+      notes: "",
+    },
+    {
+      id: generateId("stage"),
+      label: "School Aid Application",
+      status: "planned",
+      due_date: "",
+      completed_at: "",
+      notes: "",
+    },
+  ]
+}
 
-const emptyValues = {
-  id: generateId("application"),
-  name: "",
-  status: "planning",
-  application_type: "regular_decision",
-  institution_type: "public",
-  website_url: "",
-  campus_address: "",
-  city: "",
-  state: "",
-  zip: "",
-  main_phone: "",
-  main_email: "",
-  theme: {
-    primary_color: "",
-    secondary_color: "",
-    cheer_line: "",
-    cheer_enabled: true,
-  },
-  acceptance_rate: "",
-  graduation_rate: "",
-  student_teacher_ratio: "",
-  avg_class_size: "",
-  avg_gpa: "",
-  sat_range: "",
-  tuition: "",
-  fafsa_code: "",
-  application_fee: "",
-  test_optional: false,
-  essay_required: false,
-  rec_letters_required: 0,
-  application_deadline: "",
-  financial_aid_deadline: "",
-  decision_release_date: "",
-  interests_text: "",
-  portals: {
-    admissions_url: "",
-    financial_aid_url: "",
-    student_portal_url: "",
-    counseling_url: "",
-    transcripts_url: "",
-    send_scores_url: "",
-  },
-  costs: {
-    housing_preference: "unknown",
-    on_campus_total: "",
-    off_campus_total: "",
-    selected_meal_plan_id: "",
-    meal_plans: [],
-  },
-  // Optional: a per-school list of offered activities (sports/clubs/greek life/etc.)
-  // Used by the in-card "Interests" popup so the selection can be school-specific.
-  activity_catalog: [],
-  actions: {
-    apply_url: "",
-    pay_fee_url: "",
-    visit_url: "",
-  },
-  contacts: defaultContacts,
-  financial_aid_pipeline: defaultPipeline,
-  department_contacts: [],
-  notes: "",
+// Build a fresh empty value object on every call so that mutable/array fields
+// (and especially the generated id) are not shared across separate "create"
+// forms. Generating ids lazily here avoids two consecutively created
+// universities colliding on the same module-level id.
+function buildEmptyValues() {
+  return {
+    // Leave id empty for create mode; it is generated on submit if missing.
+    id: "",
+    name: "",
+    status: "planning",
+    application_type: "regular_decision",
+    institution_type: "public",
+    website_url: "",
+    campus_address: "",
+    city: "",
+    state: "",
+    zip: "",
+    main_phone: "",
+    main_email: "",
+    theme: {
+      primary_color: "",
+      secondary_color: "",
+      cheer_line: "",
+      cheer_enabled: true,
+    },
+    acceptance_rate: "",
+    graduation_rate: "",
+    student_teacher_ratio: "",
+    avg_class_size: "",
+    avg_gpa: "",
+    sat_range: "",
+    tuition: "",
+    fafsa_code: "",
+    application_fee: "",
+    test_optional: false,
+    essay_required: false,
+    rec_letters_required: 0,
+    application_deadline: "",
+    financial_aid_deadline: "",
+    decision_release_date: "",
+    interests_text: "",
+    portals: {
+      admissions_url: "",
+      financial_aid_url: "",
+      student_portal_url: "",
+      counseling_url: "",
+      transcripts_url: "",
+      send_scores_url: "",
+    },
+    costs: {
+      housing_preference: "unknown",
+      on_campus_total: "",
+      off_campus_total: "",
+      selected_meal_plan_id: "",
+      meal_plans: [],
+    },
+    // Optional: a per-school list of offered activities (sports/clubs/greek life/etc.)
+    // Used by the in-card "Interests" popup so the selection can be school-specific.
+    activity_catalog: [],
+    actions: {
+      apply_url: "",
+      pay_fee_url: "",
+      visit_url: "",
+    },
+    contacts: buildDefaultContacts(),
+    financial_aid_pipeline: buildDefaultPipeline(),
+    department_contacts: [],
+    notes: "",
+  }
 }
 
 export default function UniversityApplicationForm({
   open,
   mode = "create",
   initialValues = null,
-  onSubmit,
-  onClose,
+  onSubmit = () => {},
+  onClose = () => {},
   isSubmitting = false,
 }) {
   const defaultValues = useMemo(() => {
-    if (!initialValues) return emptyValues
+    const base = buildEmptyValues()
+    if (!initialValues) return base
 
     const contacts = normaliseContacts(initialValues.contacts)
     const pipeline = normalisePipeline(initialValues.financial_aid_pipeline)
@@ -239,23 +274,41 @@ export default function UniversityApplicationForm({
     const interests = Array.isArray(initialValues.interests) ? initialValues.interests : []
     const mealPlans = normaliseMealPlans(initialValues.costs?.meal_plans)
 
+    // Avoid leaking raw nested objects / raw interests array into form state by
+    // omitting them from the spread; we set normalised versions explicitly.
+    const {
+      interests: _rawInterests,
+      theme: _rawTheme,
+      portals: _rawPortals,
+      costs: _rawCosts,
+      contacts: _rawContacts,
+      financial_aid_pipeline: _rawPipeline,
+      department_contacts: _rawDepartments,
+      actions: _rawActions,
+      activity_catalog: _rawCatalog,
+      ...restInitial
+    } = initialValues
+
     return {
-      ...emptyValues,
-      ...initialValues,
-      contacts: contacts.length > 0 ? contacts : defaultContacts,
-      financial_aid_pipeline: pipeline.length > 0 ? pipeline : defaultPipeline,
+      ...base,
+      ...restInitial,
+      status: initialValues.status || base.status,
+      application_type: initialValues.application_type || base.application_type,
+      institution_type: initialValues.institution_type || base.institution_type,
+      contacts: contacts.length > 0 ? contacts : buildDefaultContacts(),
+      financial_aid_pipeline: pipeline.length > 0 ? pipeline : buildDefaultPipeline(),
       department_contacts: departmentContacts,
       interests_text: interests.join(", "),
       theme: {
-        ...emptyValues.theme,
+        ...base.theme,
         ...(initialValues.theme ?? {}),
       },
       portals: {
-        ...emptyValues.portals,
+        ...base.portals,
         ...(initialValues.portals ?? {}),
       },
       costs: {
-        ...emptyValues.costs,
+        ...base.costs,
         ...(initialValues.costs ?? {}),
         meal_plans: mealPlans,
       },
@@ -305,7 +358,7 @@ export default function UniversityApplicationForm({
     reset(defaultValues)
   }, [defaultValues, reset])
 
-  const submitForm = (values) => {
+  const submitForm = async (values) => {
     const interests = values.interests_text
       ? values.interests_text
           .split(",")
@@ -324,19 +377,28 @@ export default function UniversityApplicationForm({
           : acceptanceRate * 100
         : null
 
-    const normalisedGpa = values.avg_gpa ? Number.parseFloat(String(values.avg_gpa)) : null
-    const normalisedTuition = values.tuition ? Number.parseFloat(String(values.tuition)) : null
-    const normalisedFee = values.application_fee
-      ? Number.parseFloat(String(values.application_fee))
-      : 0
-    const normalisedGradRate = values.graduation_rate ? Number.parseFloat(String(values.graduation_rate)) : null
-    const normalisedRatio = values.student_teacher_ratio
-      ? Number.parseFloat(String(values.student_teacher_ratio))
-      : null
-    const normalisedClassSize = values.avg_class_size ? Number.parseFloat(String(values.avg_class_size)) : null
-    const normalisedRecs = Number.isFinite(Number(values.rec_letters_required))
-      ? Number.parseInt(String(values.rec_letters_required), 10)
-      : 0
+    const parseNumberOrNull = (raw) => {
+      if (raw === undefined || raw === null || String(raw).trim() === "") return null
+      const n = Number.parseFloat(String(raw))
+      return Number.isFinite(n) ? n : null
+    }
+
+    const normalisedGpa = parseNumberOrNull(values.avg_gpa)
+    const normalisedTuition = parseNumberOrNull(values.tuition)
+    const normalisedFee = (() => {
+      if (values.application_fee === undefined || values.application_fee === null || String(values.application_fee).trim() === "") {
+        return 0
+      }
+      const n = Number.parseFloat(String(values.application_fee))
+      return Number.isFinite(n) ? n : 0
+    })()
+    const normalisedGradRate = parseNumberOrNull(values.graduation_rate)
+    const normalisedRatio = parseNumberOrNull(values.student_teacher_ratio)
+    const normalisedClassSize = parseNumberOrNull(values.avg_class_size)
+    const normalisedRecs = (() => {
+      const n = Number.parseInt(String(values.rec_letters_required), 10)
+      return Number.isFinite(n) ? n : 0
+    })()
 
     const contacts = values.contacts.map((contact) => ({
       ...contact,
@@ -359,15 +421,14 @@ export default function UniversityApplicationForm({
       name: plan.name?.trim?.() ?? "",
     }))
 
-    const normalisedOnCampusTotal = values.costs?.on_campus_total
-      ? Number.parseFloat(String(values.costs.on_campus_total))
-      : null
-    const normalisedOffCampusTotal = values.costs?.off_campus_total
-      ? Number.parseFloat(String(values.costs.off_campus_total))
-      : null
+    const normalisedOnCampusTotal = parseNumberOrNull(values.costs?.on_campus_total)
+    const normalisedOffCampusTotal = parseNumberOrNull(values.costs?.off_campus_total)
+
+    const rawSelectedMealPlan = values.costs?.selected_meal_plan_id ?? ""
+    const selectedMealPlanId = rawSelectedMealPlan === "none" ? "" : rawSelectedMealPlan
 
     const payload = {
-      id: values.id ?? generateId("application"),
+      id: values.id || generateId("application"),
       name: values.name.trim(),
       status: values.status,
       application_type: values.application_type,
@@ -413,9 +474,9 @@ export default function UniversityApplicationForm({
         housing_preference: HOUSING_PREFERENCES.includes(values.costs?.housing_preference)
           ? values.costs.housing_preference
           : "unknown",
-        on_campus_total: Number.isFinite(normalisedOnCampusTotal) ? normalisedOnCampusTotal : null,
-        off_campus_total: Number.isFinite(normalisedOffCampusTotal) ? normalisedOffCampusTotal : null,
-        selected_meal_plan_id: values.costs?.selected_meal_plan_id ?? "",
+        on_campus_total: normalisedOnCampusTotal,
+        off_campus_total: normalisedOffCampusTotal,
+        selected_meal_plan_id: selectedMealPlanId,
         meal_plans: mealPlans,
       },
       // Preserve per-school offerings catalog when editing via the form.
@@ -433,7 +494,14 @@ export default function UniversityApplicationForm({
       notes: values.notes ?? "",
     }
 
-    onSubmit(payload)
+    try {
+      await onSubmit(payload)
+    } catch (error) {
+      // Surface the error to the console so it is not silently swallowed.
+      // The parent owns isSubmitting state and user-facing error messaging.
+      // eslint-disable-next-line no-console
+      console.error("Failed to submit university application form:", error)
+    }
   }
 
   const statusWatch = watch("status")
@@ -464,7 +532,10 @@ export default function UniversityApplicationForm({
             </div>
             <div className="space-y-2">
               <Label htmlFor="website_url">Website</Label>
-              <Input id="website_url" placeholder="https://www.example.edu" {...register("website_url")} />
+              <Input id="website_url" placeholder="https://www.example.edu" {...register("website_url", { validate: isValidURL })} />
+              {errors.website_url && (
+                <p className="text-xs text-red-600">{errors.website_url.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Status</Label>
@@ -472,7 +543,7 @@ export default function UniversityApplicationForm({
                 control={control}
                 name="status"
                 render={({ field }) => (
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value || "planning"}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select status" />
                     </SelectTrigger>
@@ -493,7 +564,7 @@ export default function UniversityApplicationForm({
                 control={control}
                 name="application_type"
                 render={({ field }) => (
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value || "regular_decision"}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select type" />
                     </SelectTrigger>
@@ -514,7 +585,7 @@ export default function UniversityApplicationForm({
                 control={control}
                 name="institution_type"
                 render={({ field }) => (
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value || "public"}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select institution type" />
                     </SelectTrigger>
@@ -648,7 +719,7 @@ export default function UniversityApplicationForm({
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">School theme</h3>
               <p className="text-xs text-muted-foreground">
-                Optional. If set, this card can render using the school’s colors and a cheer line.
+                Optional. If set, this card can render using the school\u2019s colors and a cheer line.
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
@@ -660,7 +731,12 @@ export default function UniversityApplicationForm({
                     type="color"
                     aria-label="Primary color picker"
                     className="h-10 w-12 rounded border border-slate-200 bg-white"
-                    onChange={(e) => form.setValue("theme.primary_color", e.target.value)}
+                    onChange={(e) =>
+                      form.setValue("theme.primary_color", e.target.value, {
+                        shouldDirty: true,
+                        shouldTouch: true,
+                      })
+                    }
                   />
                 </div>
               </div>
@@ -672,7 +748,12 @@ export default function UniversityApplicationForm({
                     type="color"
                     aria-label="Secondary color picker"
                     className="h-10 w-12 rounded border border-slate-200 bg-white"
-                    onChange={(e) => form.setValue("theme.secondary_color", e.target.value)}
+                    onChange={(e) =>
+                      form.setValue("theme.secondary_color", e.target.value, {
+                        shouldDirty: true,
+                        shouldTouch: true,
+                      })
+                    }
                   />
                 </div>
               </div>
@@ -706,27 +787,45 @@ export default function UniversityApplicationForm({
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="portals.admissions_url">Admissions Portal</Label>
-                <Input id="portals.admissions_url" placeholder="https://..." {...register("portals.admissions_url")} />
+                <Input id="portals.admissions_url" placeholder="https://..." {...register("portals.admissions_url", { validate: isValidURL })} />
+                {errors.portals?.admissions_url && (
+                  <p className="text-xs text-red-600">{errors.portals.admissions_url.message}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="portals.financial_aid_url">Financial Aid Portal</Label>
-                <Input id="portals.financial_aid_url" placeholder="https://..." {...register("portals.financial_aid_url")} />
+                <Input id="portals.financial_aid_url" placeholder="https://..." {...register("portals.financial_aid_url", { validate: isValidURL })} />
+                {errors.portals?.financial_aid_url && (
+                  <p className="text-xs text-red-600">{errors.portals.financial_aid_url.message}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="portals.student_portal_url">Current Student Portal</Label>
-                <Input id="portals.student_portal_url" placeholder="https://..." {...register("portals.student_portal_url")} />
+                <Input id="portals.student_portal_url" placeholder="https://..." {...register("portals.student_portal_url", { validate: isValidURL })} />
+                {errors.portals?.student_portal_url && (
+                  <p className="text-xs text-red-600">{errors.portals.student_portal_url.message}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="portals.counseling_url">Counseling / Advising</Label>
-                <Input id="portals.counseling_url" placeholder="https://..." {...register("portals.counseling_url")} />
+                <Input id="portals.counseling_url" placeholder="https://..." {...register("portals.counseling_url", { validate: isValidURL })} />
+                {errors.portals?.counseling_url && (
+                  <p className="text-xs text-red-600">{errors.portals.counseling_url.message}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="portals.transcripts_url">Transcripts Request / Send</Label>
-                <Input id="portals.transcripts_url" placeholder="https://..." {...register("portals.transcripts_url")} />
+                <Input id="portals.transcripts_url" placeholder="https://..." {...register("portals.transcripts_url", { validate: isValidURL })} />
+                {errors.portals?.transcripts_url && (
+                  <p className="text-xs text-red-600">{errors.portals.transcripts_url.message}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="portals.send_scores_url">Send Test Scores</Label>
-                <Input id="portals.send_scores_url" placeholder="https://..." {...register("portals.send_scores_url")} />
+                <Input id="portals.send_scores_url" placeholder="https://..." {...register("portals.send_scores_url", { validate: isValidURL })} />
+                {errors.portals?.send_scores_url && (
+                  <p className="text-xs text-red-600">{errors.portals.send_scores_url.message}</p>
+                )}
               </div>
             </div>
           </section>
@@ -734,15 +833,24 @@ export default function UniversityApplicationForm({
           <section className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="actions.apply_url">Apply URL</Label>
-              <Input id="actions.apply_url" placeholder="https://..." {...register("actions.apply_url")} />
+              <Input id="actions.apply_url" placeholder="https://..." {...register("actions.apply_url", { validate: isValidURL })} />
+              {errors.actions?.apply_url && (
+                <p className="text-xs text-red-600">{errors.actions.apply_url.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="actions.pay_fee_url">Pay Fee URL</Label>
-              <Input id="actions.pay_fee_url" placeholder="https://..." {...register("actions.pay_fee_url")} />
+              <Input id="actions.pay_fee_url" placeholder="https://..." {...register("actions.pay_fee_url", { validate: isValidURL })} />
+              {errors.actions?.pay_fee_url && (
+                <p className="text-xs text-red-600">{errors.actions.pay_fee_url.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="actions.visit_url">Visit URL</Label>
-              <Input id="actions.visit_url" placeholder="https://..." {...register("actions.visit_url")} />
+              <Input id="actions.visit_url" placeholder="https://..." {...register("actions.visit_url", { validate: isValidURL })} />
+              {errors.actions?.visit_url && (
+                <p className="text-xs text-red-600">{errors.actions.visit_url.message}</p>
+              )}
             </div>
           </section>
 
@@ -761,7 +869,7 @@ export default function UniversityApplicationForm({
                   control={control}
                   name="costs.housing_preference"
                   render={({ field }) => (
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value || "unknown"}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select preference" />
                       </SelectTrigger>
@@ -849,7 +957,10 @@ export default function UniversityApplicationForm({
                       control={control}
                       name="costs.selected_meal_plan_id"
                       render={({ field }) => (
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select
+                          onValueChange={field.onChange}
+                          value={field.value || "none"}
+                        >
                           <SelectTrigger>
                             <SelectValue placeholder="Select a plan (optional)" />
                           </SelectTrigger>
@@ -918,7 +1029,7 @@ export default function UniversityApplicationForm({
                       control={control}
                       name={`financial_aid_pipeline.${index}.status`}
                       render={({ field }) => (
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value || "planned"}>
                           <SelectTrigger>
                             <SelectValue placeholder="Select status" />
                           </SelectTrigger>
@@ -1034,7 +1145,10 @@ export default function UniversityApplicationForm({
                   </div>
                   <div className="md:col-span-4 space-y-2">
                     <Label>URL</Label>
-                    <Input placeholder="https://example.edu/admissions" {...register(`contacts.${index}.url`)} />
+                    <Input placeholder="https://example.edu/admissions" {...register(`contacts.${index}.url`, { validate: isValidURL })} />
+                    {errors.contacts?.[index]?.url && (
+                      <p className="text-xs text-red-600">{errors.contacts[index].url.message}</p>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1092,7 +1206,7 @@ export default function UniversityApplicationForm({
                       control={control}
                       name={`department_contacts.${index}.gender_target`}
                       render={({ field }) => (
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select onValueChange={field.onChange} value={field.value || "any"}>
                           <SelectTrigger>
                             <SelectValue placeholder="Any" />
                           </SelectTrigger>
@@ -1135,7 +1249,10 @@ export default function UniversityApplicationForm({
                   </div>
                   <div className="md:col-span-4 space-y-2">
                     <Label>URL</Label>
-                    <Input placeholder="https://example.edu/athletics" {...register(`department_contacts.${index}.url`)} />
+                    <Input placeholder="https://example.edu/athletics" {...register(`department_contacts.${index}.url`, { validate: isValidURL })} />
+                    {errors.department_contacts?.[index]?.url && (
+                      <p className="text-xs text-red-600">{errors.department_contacts[index].url.message}</p>
+                    )}
                   </div>
                   <div className="md:col-span-12 space-y-2">
                     <Label>Notes</Label>
@@ -1155,7 +1272,7 @@ export default function UniversityApplicationForm({
                 {...register("interests_text")}
               />
               <p className="text-xs text-muted-foreground">
-                Separate multiple interests with commas. These power targeted contacts and scholarships.
+                Separate multiple interests with commas. Avoid commas inside an individual interest, as they are used as separators. These power targeted contacts and scholarships.
               </p>
             </div>
             <div className="space-y-2 md:col-span-2">

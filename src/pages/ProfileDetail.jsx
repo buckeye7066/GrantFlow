@@ -51,10 +51,16 @@ import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/
 import { formatFieldLabel } from "@/utils/fieldDisplay"
 import { EDITABLE_SECTIONS } from "@/config/missingInfoTargets"
 
+// Helper: safely turn a rejected item's reason into a human-friendly string.
+function formatRejectReason(reason) {
+  return String(reason || "unsupported").replace(/_/g, " ")
+}
+
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const profileId = searchParams.get("id")
+  const rawProfileId = searchParams.get("id")
+  const profileId = rawProfileId && String(rawProfileId).trim().length > 0 ? rawProfileId : null
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
@@ -113,7 +119,7 @@ export default function ProfileDetail() {
           rejected.length > 0
             ? rejected
                 .slice(0, 3)
-                .map((item) => `Skipped ${formatFieldLabel(variables?.sectionKey, item.key)}: ${item.reason.replace(/_/g, " ")}`)
+                .map((item) => `Skipped ${formatFieldLabel(variables?.sectionKey, item.key)}: ${formatRejectReason(item.reason)}`)
                 .join("; ")
             : "Your updates are synced with the comprehensive application schema.",
       })
@@ -283,8 +289,13 @@ export default function ProfileDetail() {
 
   const renameProfileMutation = useMutation({
     mutationFn: (displayName) => updateProfile(profileId, { display_name: displayName }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+    onSuccess: (_response, displayName) => {
+      // The rename only changes the display name; rather than force a full
+      // refetch we patch the cached profile in place. We still mark the
+      // profiles list as stale so it reflects the new name on next view.
+      queryClient.setQueryData(["profile", profileId], (prev) =>
+        prev ? { ...prev, display_name: displayName } : prev,
+      )
       queryClient.invalidateQueries({ queryKey: ["profiles"] })
       toast({
         title: "Profile name updated",
@@ -340,7 +351,7 @@ export default function ProfileDetail() {
             title: "Skipped unsupported fields",
             description: guarded.rejected
               .slice(0, 3)
-              .map((item) => `Skipped ${formatFieldLabel(key, item.key)}: ${item.reason.replace(/_/g, " ")}`)
+              .map((item) => `Skipped ${formatFieldLabel(key, item.key)}: ${formatRejectReason(item.reason)}`)
               .join("; "),
           })
         }
@@ -352,7 +363,7 @@ export default function ProfileDetail() {
         setSavingSectionKey(null)
       }
     },
-    [editingSection, profile, upsertSectionMutation],
+    [editingSection, profile, upsertSectionMutation, toast],
   )
 
   const handleAskSection = React.useCallback(
@@ -361,7 +372,7 @@ export default function ProfileDetail() {
       setAiLoadingKey(sectionKey)
       try {
         const existing =
-          profile.sections?.find((section) => section.section_key === sectionKey)?.data ?? {}
+          profile?.sections?.find((section) => section.section_key === sectionKey)?.data ?? {}
         const response = await aiSuggestionMutation.mutateAsync(sectionKey)
         const suggestion =
           response?.suggestion && typeof response.suggestion === "object" ? response.suggestion : {}
@@ -416,7 +427,7 @@ export default function ProfileDetail() {
           title: "Skipped unsupported AI fields",
           description: guarded.rejected
             .slice(0, 3)
-            .map((item) => `Skipped ${formatFieldLabel(editingSection.key, item.key)}: ${item.reason.replace(/_/g, " ")}`)
+            .map((item) => `Skipped ${formatFieldLabel(editingSection.key, item.key)}: ${formatRejectReason(item.reason)}`)
             .join("; "),
         })
       }
@@ -434,7 +445,7 @@ export default function ProfileDetail() {
       if (!sectionKey || !fieldKey) return
 
       const existing =
-        profile.sections?.find((section) => section.section_key === sectionKey)?.data ?? {}
+        profile?.sections?.find((section) => section.section_key === sectionKey)?.data ?? {}
 
       const nextData = deriveEmploymentStatusForSave(sectionKey, {
         ...(existing ?? {}),
@@ -470,6 +481,9 @@ export default function ProfileDetail() {
 
   // IMPORTANT: All hooks must be called before any conditional returns (React rules of hooks).
   const [activeTab, setActiveTab] = React.useState("profile")
+  // Pending scroll target — when set, we retry scrolling to the element via
+  // requestAnimationFrame until it mounts (replaces the fragile fixed timeout).
+  const [pendingScrollTarget, setPendingScrollTarget] = React.useState(null)
   // Deep-link support: ?tab=&section=&field= (emitted by MissingInfoChecklist /
   // HamiltonTaskDrawer / Profile Action Plan) lands the user on the right tab
   // and pops the matching section editor focused on the field to fill.
@@ -487,13 +501,43 @@ export default function ProfileDetail() {
     // documents / universities we just land on the tab.
     if (sectionParam && EDITABLE_SECTIONS.has(sectionParam)) {
       const existing =
-        profile.sections?.find((section) => section.section_key === sectionParam)?.data ?? {}
+        profile?.sections?.find((section) => section.section_key === sectionParam)?.data ?? {}
       handleOpenSection(sectionParam, existing, fieldParam)
     }
   }, [profile, tabParam, sectionParam, fieldParam, handleOpenSection])
+
+  // Reliable scroll-into-view: keep retrying via rAF until the target element
+  // exists in the DOM (the tab content may not be mounted on the same frame).
+  React.useEffect(() => {
+    if (!pendingScrollTarget) return
+    let cancelled = false
+    let attempts = 0
+    const tryScroll = () => {
+      if (cancelled) return
+      const el = document.getElementById(pendingScrollTarget)
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" })
+        setPendingScrollTarget(null)
+        return
+      }
+      attempts += 1
+      if (attempts > 60) {
+        // ~1s worth of frames — give up quietly rather than spin forever.
+        setPendingScrollTarget(null)
+        return
+      }
+      window.requestAnimationFrame(tryScroll)
+    }
+    window.requestAnimationFrame(tryScroll)
+    return () => {
+      cancelled = true
+    }
+  }, [pendingScrollTarget, activeTab])
+
   const hasSyncedTargetColleges = useRef(false)
   const lastSyncedProfileId = useRef(null)
   const failedTargetCollegeSyncProfiles = useRef(new Set())
+  const targetCollegeSyncInFlight = useRef(false)
 
   // Derived state — computed here (before early returns) using optional chaining so they are
   // safe when `profile` is still undefined (loading / error states).
@@ -544,6 +588,7 @@ export default function ProfileDetail() {
     !profileTypeLabel.includes("individual")
   const profileWebsite = String(basicInfo?.website || profile?.website || "").trim()
   const hasWebsiteOnFile = profileWebsite.length > 0
+  const hasOrganizationId = Boolean(profile?.organization_id)
 
   const healthMedical =
     profile?.sections?.find((section) => section.section_key === "health_medical")?.data ?? {}
@@ -639,6 +684,34 @@ export default function ProfileDetail() {
     [aiSuggestionMutation, toast],
   )
 
+  // Toggle study consent through the same guard/derive path used by saves, and
+  // read the freshest section data from the cache so we don't clobber concurrent
+  // edits with a stale render snapshot.
+  const handleToggleStudyConsent = React.useCallback(
+    async (next) => {
+      const latest = queryClient.getQueryData(["profile", profileId])
+      const latestHealth =
+        (latest?.sections?.find((section) => section.section_key === "health_medical")?.data) ??
+        healthMedical ??
+        {}
+      const merged = { ...latestHealth, consent_for_studies: next }
+      const guarded = guardProfileSectionSuggestion(latestHealth, merged, {
+        sectionKey: "health_medical",
+        profile,
+      })
+      const guardedValues = deriveEmploymentStatusForSave("health_medical", guarded.data, profile)
+      try {
+        await upsertSectionMutation.mutateAsync({
+          sectionKey: "health_medical",
+          values: guardedValues,
+        })
+      } catch (err) {
+        // Error toast handled in mutation onError
+      }
+    },
+    [queryClient, profileId, healthMedical, profile, upsertSectionMutation],
+  )
+
   const profileCompletion = React.useMemo(() => calculateProfileCompletion(profile), [profile])
   const totalSections = profileCompletion.totalSections
   const completedSections = profileCompletion.completedSections
@@ -650,10 +723,10 @@ export default function ProfileDetail() {
   useEffect(() => {
     if (!profileId || !profile) return
     if (failedTargetCollegeSyncProfiles.current.has(profileId)) return
-    const pt = String(profile.primary_type || "").toLowerCase()
-    const bi = profile.sections?.find((s) => s.section_key === "basic_information")?.data ?? {}
+    const pt = String(profile?.primary_type || "").toLowerCase()
+    const bi = profile?.sections?.find((s) => s.section_key === "basic_information")?.data ?? {}
     const ptl = String(bi?.profile_type || "").toLowerCase()
-    const eduData = profile.sections?.find((s) => s.section_key === "education")?.data
+    const eduData = profile?.sections?.find((s) => s.section_key === "education")?.data
     const hl = String(eduData?.highest_level || "").toLowerCase()
     const tc = eduData?.target_colleges
     const hasTc = Array.isArray(tc) ? tc.length > 0 : typeof tc === "string" && tc.trim().length > 0
@@ -662,24 +735,35 @@ export default function ProfileDetail() {
       || hl.includes("student")
       || hasTc
     if (!isStudent) return
-    const usd = profile.sections?.find((s) => s.section_key === "university_applications")?.data ?? {}
+    const usd = profile?.sections?.find((s) => s.section_key === "university_applications")?.data ?? {}
     const uniApps = Array.isArray(usd?.applications) ? usd.applications : []
     if (lastSyncedProfileId.current !== profileId) {
       hasSyncedTargetColleges.current = false
       lastSyncedProfileId.current = profileId
     }
     if (hasSyncedTargetColleges.current) return
-    hasSyncedTargetColleges.current = true
-    const educationData = profile.sections?.find((s) => s.section_key === "education")?.data ?? {}
+    if (targetCollegeSyncInFlight.current) return
+    const educationData = profile?.sections?.find((s) => s.section_key === "education")?.data ?? {}
     const { applications, addedCount } = syncTargetCollegesToApplications(educationData, uniApps)
-    if (addedCount === 0) return
+    if (addedCount === 0) {
+      // Nothing to add — treat as a completed (no-op) sync for this profile.
+      hasSyncedTargetColleges.current = true
+      return
+    }
+    // Mark in-flight (NOT "synced") so a transient failure can be retried this
+    // session. The synced flag is only set after the save resolves successfully.
+    targetCollegeSyncInFlight.current = true
     upsertSectionMutation
       .mutateAsync({
         sectionKey: "university_applications",
         values: { applications },
       })
+      .then(() => {
+        hasSyncedTargetColleges.current = true
+      })
       .catch((err) => {
-        failedTargetCollegeSyncProfiles.current.add(profileId)
+        // Transient failure: do NOT permanently blacklist. We leave the synced
+        // flag false so the effect can retry on the next profile data change.
         const msg = err instanceof Error ? err.message : "Sync failed"
         console.error("[ProfileDetail] target_colleges sync save failed:", msg)
         toast({
@@ -687,6 +771,9 @@ export default function ProfileDetail() {
           title: "Target colleges sync failed",
           description: msg,
         })
+      })
+      .finally(() => {
+        targetCollegeSyncInFlight.current = false
       })
   }, [profileId, profile, upsertSectionMutation, toast])
 
@@ -715,7 +802,22 @@ export default function ProfileDetail() {
   }
 
   if (isError || !profile) {
-    const message = error instanceof Error ? error.message : "The profile could not be loaded right now."
+    let message = "The profile could not be loaded right now."
+    if (error instanceof Error) {
+      message = error.message
+    } else if (error && typeof error === "object") {
+      // Surface as much diagnostic context as we safely can without throwing.
+      message =
+        error.message ||
+        error.statusText ||
+        (typeof error.toString === "function" ? error.toString() : message)
+    } else if (typeof error === "string" && error.trim()) {
+      message = error
+    }
+    if (error) {
+      // Log the full error object for debugging; the UI shows a friendly message.
+      console.error("[ProfileDetail] failed to load profile", { profileId, error })
+    }
     return (
       <div className="p-6 md:p-8">
         <div className="max-w-4xl mx-auto space-y-4">
@@ -856,13 +958,10 @@ export default function ProfileDetail() {
               onNavigateToPortals={() => {
                 // The per-profile Portals dashboard (ProfilePortalsCard, Hamilton
                 // sign-in + autopilot) lives in the Pipeline tab under #portal-logins.
-                // Switch tabs, then scroll once the pipeline content has mounted.
+                // Switch tabs, then scroll once the pipeline content has mounted
+                // (handled by the rAF-based scroll effect keyed on activeTab).
                 setActiveTab("pipeline")
-                setTimeout(() => {
-                  document
-                    .getElementById("portal-logins")
-                    ?.scrollIntoView({ behavior: "smooth", block: "start" })
-                }, 80)
+                setPendingScrollTarget("portal-logins")
               }}
               onRenameProfile={handleRenameProfile}
               isRenamingProfile={renameProfileMutation.isPending}
@@ -948,9 +1047,16 @@ export default function ProfileDetail() {
               <p className="text-slate-600 mb-4">
                 Monitor awarded grants and compliance requirements.
               </p>
-              <Button onClick={() => navigate(createPageUrl("GrantMonitoring", { organization_id: profile.organization_id }))}>
-                Go to Grant Monitoring
-              </Button>
+              {hasOrganizationId ? (
+                <Button onClick={() => navigate(createPageUrl("GrantMonitoring", { organization_id: profile.organization_id }))}>
+                  Go to Grant Monitoring
+                </Button>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  Grant monitoring is available for organization profiles. Link this profile to an
+                  organization to track awarded grants and compliance.
+                </p>
+              )}
             </div>
           </TabsContent>
 
@@ -960,13 +1066,24 @@ export default function ProfileDetail() {
                 <h3 className="text-lg font-semibold mb-2">Proposals</h3>
                 <p className="text-slate-600 mb-4">Manage grant proposals linked to this profile's organization.</p>
                 <div className="flex flex-wrap gap-3">
-                  <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
-                    View Proposals
-                  </Button>
+                  {hasOrganizationId ? (
+                    <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
+                      View Proposals
+                    </Button>
+                  ) : (
+                    <Button disabled title="Link this profile to an organization to manage proposals.">
+                      View Proposals
+                    </Button>
+                  )}
                   <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
                     View Document Library
                   </Button>
                 </div>
+                {!hasOrganizationId && (
+                  <p className="mt-3 text-sm text-slate-500">
+                    Proposals are tied to an organization. Link this profile to an organization to manage them.
+                  </p>
+                )}
               </div>
 
               <ProfileFilesPanel
@@ -1008,9 +1125,15 @@ export default function ProfileDetail() {
                         {profile.billing.is_pro_bono ? 'Pro Bono Account' : `$${profile.billing.monthly_rate || 0}/month`}
                       </p>
                     </div>
-                    <Button onClick={() => navigate(createPageUrl("Billing", { organization_id: profile.organization_id }))}>
-                      View Full Billing
-                    </Button>
+                    {hasOrganizationId ? (
+                      <Button onClick={() => navigate(createPageUrl("Billing", { organization_id: profile.organization_id }))}>
+                        View Full Billing
+                      </Button>
+                    ) : (
+                      <Button disabled title="Link this profile to an organization to view full billing.">
+                        View Full Billing
+                      </Button>
+                    )}
                   </div>
                   {profile.billing.is_pro_bono && (
                     <Alert>
@@ -1179,12 +1302,7 @@ export default function ProfileDetail() {
                     upsertSectionMutation.isPending &&
                     upsertSectionMutation.variables?.sectionKey === "health_medical"
                   }
-                  onToggleStudyConsent={(next) =>
-                    upsertSectionMutation.mutate({
-                      sectionKey: "health_medical",
-                      values: { ...healthMedical, consent_for_studies: next },
-                    })
-                  }
+                  onToggleStudyConsent={handleToggleStudyConsent}
                 />
               </div>
             </TabsContent>

@@ -622,8 +622,10 @@ export function getHelpForField(fieldKey) {
 /**
  * Return tour steps appropriate for the user's role.
  * Steps are a subset of HELP_REGISTRY entries formatted for the tour UI.
+ * Defensive defaults are provided so that missing/undefined registry properties
+ * never produce malformed tour steps.
  * @param {'user'|'admin'} role
- * @returns {Array<{ key: string, title: string, description: string, purpose: string, navGroup: string }>}
+ * @returns {Array<{ key: string, route: string, title: string, description: string, purpose: string, navGroup: string, mainActions: string[] }>}
  */
 export function getTourStepsForRole(role) {
   const coreKeys = ['Dashboard', 'MyProfiles', 'SmartMatcher', 'Pipeline', 'GrantDeadline', 'Help']
@@ -636,36 +638,51 @@ export function getTourStepsForRole(role) {
     .filter(Boolean)
     .map((entry) => ({
       key: entry.key,
-      route: entry.route,
-      title: entry.title,
-      description: entry.description,
-      purpose: entry.purpose,
-      navGroup: entry.navGroup,
-      mainActions: entry.mainActions,
+      route: entry.route ?? '',
+      title: entry.title ?? '',
+      description: entry.description ?? '',
+      purpose: entry.purpose ?? '',
+      navGroup: entry.navGroup ?? '',
+      mainActions: Array.isArray(entry.mainActions) ? entry.mainActions : [],
     }))
 }
 
 /**
  * Full-text search across the help registry.
- * Searches title, description, purpose, mainActions, and field labels/explanations.
+ * Searches title, description, purpose, mainActions, navGroup, and field
+ * labels/explanations/whyItMatters. Each field is checked individually and the
+ * search short-circuits as soon as a match is found, avoiding building a large
+ * combined string per entry.
  * @param {string} query
  * @returns {Array<object>}
  */
 export function searchHelpRegistry(query) {
   if (!query || !query.trim()) return HELP_REGISTRY
   const q = query.trim().toLowerCase()
+
+  const matches = (value) =>
+    typeof value === 'string' && value.toLowerCase().includes(q)
+
   return HELP_REGISTRY.filter((entry) => {
-    const searchableText = [
-      entry.title,
-      entry.description,
-      entry.purpose,
-      ...(entry.mainActions ?? []),
-      entry.navGroup,
-      ...(entry.fields ?? []).flatMap((f) => [f.label, f.explanation, f.whyItMatters]),
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-    return searchableText.includes(q)
+    if (matches(entry.title)) return true
+    if (matches(entry.description)) return true
+    if (matches(entry.purpose)) return true
+    if (matches(entry.navGroup)) return true
+
+    if (Array.isArray(entry.mainActions)) {
+      for (const action of entry.mainActions) {
+        if (matches(action)) return true
+      }
+    }
+
+    if (Array.isArray(entry.fields)) {
+      for (const field of entry.fields) {
+        if (matches(field.label)) return true
+        if (matches(field.explanation)) return true
+        if (matches(field.whyItMatters)) return true
+      }
+    }
+
+    return false
   })
 }

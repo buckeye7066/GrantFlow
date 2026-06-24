@@ -75,7 +75,9 @@ const PIPELINE_STATUS_BADGES = {
   blocked: { label: "Blocked", className: "bg-rose-100 text-rose-700 border-rose-200" },
 }
 
-const PIPELINE_STATUS_SEQUENCE = ["planned", "in_progress", "completed", "planned"]
+// A clean cycle without duplicates. 'blocked' participates so a stage can be
+// toggled through every state and is never silently discarded.
+const PIPELINE_STATUS_SEQUENCE = ["planned", "in_progress", "blocked", "completed"]
 
 const DEFAULT_ACTIVITY_CATALOG = [
   // Athletics (varsity / club / intramural varies by school; this is a starter set)
@@ -134,6 +136,27 @@ function generateId(prefix = "item") {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 }
 
+// Validate that a color string is a safe, recognizable CSS color value so it
+// can be interpolated into inline styles without silently breaking the layout
+// or accepting arbitrary CSS function values.
+const NAMED_COLORS = new Set([
+  "black", "silver", "gray", "grey", "white", "maroon", "red", "purple", "fuchsia",
+  "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua", "orange",
+  "transparent", "slate", "indigo", "gold", "scarlet",
+])
+function isValidCssColor(value) {
+  const v = String(value || "").trim()
+  if (!v) return false
+  if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v)) return true
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\)$/.test(v)) return true
+  if (/^hsla?\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\)$/.test(v)) return true
+  if (/^[a-zA-Z]+$/.test(v) && NAMED_COLORS.has(v.toLowerCase())) return true
+  return false
+}
+function safeColor(value, fallback) {
+  return isValidCssColor(value) ? String(value).trim() : fallback
+}
+
 function formatCurrency(value) {
   if (value === null || value === undefined || value === "") return "—"
   const number = Number(value)
@@ -141,11 +164,14 @@ function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(number)
 }
 
+// Percentages are stored as a fraction in [0, 1] (e.g. 0.5 === 50%). Any value
+// greater than 1 is assumed to already be expressed on a 0-100 scale. This is
+// applied consistently so the same heuristic is not re-guessed per call.
 function formatPercent(value) {
   if (value === null || value === undefined || value === "") return "—"
   const number = Number(value)
   if (!Number.isFinite(number)) return "—"
-  const percent = number > 1 && number <= 100 ? number : number * 100
+  const percent = number <= 1 ? number * 100 : number
   return `${percent.toFixed(0)}%`
 }
 
@@ -240,8 +266,8 @@ function getSchoolTheme(application) {
   if (explicitPrimary || explicitSecondary || explicitCheer) {
     return {
       school: application?.name ?? "School",
-      primary: explicitPrimary || "#0f172a",
-      secondary: explicitSecondary || "#64748b",
+      primary: safeColor(explicitPrimary, "#0f172a"),
+      secondary: safeColor(explicitSecondary, "#64748b"),
       cheer: cheerEnabled ? explicitCheer : "",
     }
   }
@@ -331,6 +357,7 @@ function normaliseApplications(applications) {
   return applications.map((application) => ({
     ...application,
     id: application.id ?? generateId("application"),
+    name: application.name ?? "",
     website_url: application.website_url ?? "",
     campus_address: application.campus_address ?? "",
     city: application.city ?? "",
@@ -456,23 +483,39 @@ function mergeApplications(existing, suggested) {
       mergedCosts.meal_plans = mergeArrayById(
         safeArray(match.costs?.meal_plans),
         safeArray(incomingNormalised.costs?.meal_plans),
+        (plan) => normalizeSchoolName(plan?.name),
       )
       // If the incoming suggestion didn't specify a selection, keep the existing selected plan.
       if (!incomingNormalised.costs?.selected_meal_plan_id && match.costs?.selected_meal_plan_id) {
         mergedCosts.selected_meal_plan_id = match.costs.selected_meal_plan_id
       }
+      // Re-resolve selected_meal_plan_id: if it no longer points at a plan that
+      // exists in the merged list, try to recover it by matching the originally
+      // selected plan's name, otherwise clear it so the UI doesn't silently
+      // resolve to null.
+      const selectedId = mergedCosts.selected_meal_plan_id
+      if (selectedId && !mergedCosts.meal_plans.some((p) => String(p.id) === String(selectedId))) {
+        const originalSelected =
+          safeArray(match.costs?.meal_plans).find((p) => String(p.id) === String(selectedId)) ?? null
+        const recovered = originalSelected
+          ? mergedCosts.meal_plans.find(
+              (p) => normalizeSchoolName(p?.name) && normalizeSchoolName(p?.name) === normalizeSchoolName(originalSelected?.name),
+            )
+          : null
+        mergedCosts.selected_meal_plan_id = recovered ? recovered.id : ""
+      }
 
       const merged = {
         ...match,
         ...incomingNormalised,
-        contacts: mergeArrayById(match.contacts, incomingNormalised.contacts),
-        financial_aid_pipeline: mergeArrayById(match.financial_aid_pipeline, incomingNormalised.financial_aid_pipeline),
-        department_contacts: mergeArrayById(match.department_contacts, incomingNormalised.department_contacts),
+        contacts: mergeArrayById(match.contacts, incomingNormalised.contacts, (c) => normalizeSchoolName(c?.name) || normalizeSchoolName(c?.email)),
+        financial_aid_pipeline: mergeArrayById(match.financial_aid_pipeline, incomingNormalised.financial_aid_pipeline, (s) => normalizeSchoolName(s?.label)),
+        department_contacts: mergeArrayById(match.department_contacts, incomingNormalised.department_contacts, (d) => normalizeSchoolName(d?.area) || normalizeSchoolName(d?.email)),
         interests: mergeUniqueStrings(match.interests, incomingNormalised.interests),
         theme: mergedTheme,
         portals: mergedPortals,
         costs: mergedCosts,
-        activity_catalog: mergeArrayById(match.activity_catalog, incomingNormalised.activity_catalog),
+        activity_catalog: mergeArrayById(match.activity_catalog, incomingNormalised.activity_catalog, (a) => normalizeSchoolName(a?.label)),
       }
       existingMap.set(merged.id, merged)
     } else {
@@ -483,15 +526,64 @@ function mergeApplications(existing, suggested) {
   return [...existingMap.values()]
 }
 
-function mergeArrayById(existing = [], incoming = []) {
-  if (existing.length === 0) return incoming
-  const map = new Map(existing.map((item) => [item.id ?? generateId("item"), item]))
-  incoming.forEach((item) => {
+// Merge two arrays of objects, matching on `id` when present, otherwise on a
+// stable natural key derived from `getNaturalKey`. When no id and no natural
+// key are available we mint a deterministic-per-call id, but only as a last
+// resort. Items are always cloned and id-normalized so callers never receive
+// shared references to the input arrays.
+function mergeArrayById(existing = [], incoming = [], getNaturalKey) {
+  const cloneWithId = (item) => ({ ...item, id: item?.id ?? generateId("item") })
+
+  if (!existing || existing.length === 0) {
+    return safeArray(incoming)
+      .filter(Boolean)
+      .map(cloneWithId)
+  }
+
+  const byId = new Map()
+  const byNatural = new Map()
+  const order = []
+
+  const registerExisting = (item) => {
     if (!item) return
-    const id = item.id ?? generateId("item")
-    map.set(id, { ...map.get(id), ...item, id })
+    const cloned = cloneWithId(item)
+    byId.set(String(cloned.id), cloned)
+    if (typeof getNaturalKey === "function") {
+      const key = getNaturalKey(cloned)
+      if (key) byNatural.set(String(key), cloned)
+    }
+    order.push(cloned.id)
+  }
+
+  safeArray(existing).forEach(registerExisting)
+
+  safeArray(incoming).forEach((item) => {
+    if (!item) return
+    let target = null
+    if (item.id != null && byId.has(String(item.id))) {
+      target = byId.get(String(item.id))
+    } else if (typeof getNaturalKey === "function") {
+      const key = getNaturalKey(item)
+      if (key && byNatural.has(String(key))) {
+        target = byNatural.get(String(key))
+      }
+    }
+
+    if (target) {
+      // Merge into existing item, preserving its stable id.
+      Object.assign(target, item, { id: target.id })
+    } else {
+      const cloned = cloneWithId(item)
+      byId.set(String(cloned.id), cloned)
+      if (typeof getNaturalKey === "function") {
+        const key = getNaturalKey(cloned)
+        if (key) byNatural.set(String(key), cloned)
+      }
+      order.push(cloned.id)
+    }
   })
-  return [...map.values()]
+
+  return order.map((id) => byId.get(String(id))).filter(Boolean)
 }
 
 function mergeUniqueStrings(existing = [], incoming = []) {
@@ -606,6 +698,15 @@ export default function UniversityApplicationsSection({
   const persistApplications = useCallback(
     async (nextApplications, successMessage) => {
       if (!onSave) return
+      // Snapshot the pre-mutation state so a save failure reverts to exactly
+      // what was on screen before this optimistic change — not to a (possibly
+      // stale) prop captured in the closure, which can race with concurrent
+      // saves and clobber intermediate edits.
+      let previousSnapshot
+      setLocalApplications((current) => {
+        previousSnapshot = current
+        return current
+      })
       setIsPersisting(true)
       try {
         await onSave(nextApplications)
@@ -621,13 +722,15 @@ export default function UniversityApplicationsSection({
           description:
             error instanceof Error ? error.message : "Please try again after checking your connection.",
         })
-        // Revert optimistic changes
-        setLocalApplications(normaliseApplications(applications))
+        // Revert optimistic changes to the pre-mutation snapshot.
+        if (previousSnapshot !== undefined) {
+          setLocalApplications(previousSnapshot)
+        }
       } finally {
         setIsPersisting(false)
       }
     },
-    [applications, onSave, toast],
+    [onSave, toast],
   )
 
   const handleAddApplication = () => {
@@ -660,39 +763,50 @@ export default function UniversityApplicationsSection({
 
   const handleQuickUpdateApplication = useCallback(
     async (applicationId, patch, successMessage) => {
-      const nextApplications = localApplications.map((application) => {
-        if (application.id !== applicationId) return application
-        return { ...application, ...patch }
+      let nextApplications
+      setLocalApplications((current) => {
+        nextApplications = current.map((application) => {
+          if (application.id !== applicationId) return application
+          return { ...application, ...patch }
+        })
+        return nextApplications
       })
-      setLocalApplications(nextApplications)
       await persistApplications(nextApplications, successMessage ?? "Updated university details.")
     },
-    [localApplications, persistApplications],
+    [persistApplications],
   )
 
   const handleDeleteConfirmed = async () => {
     if (!deleteTarget) return
-    const nextApplications = localApplications.filter((application) => application.id !== deleteTarget.id)
+    const targetId = deleteTarget.id
+    const nextApplications = localApplications.filter((application) => application.id !== targetId)
     setLocalApplications(nextApplications)
     await persistApplications(nextApplications, "Application removed.")
+    // Only clear the delete target after persistence completes so the dialog
+    // remains accurate if the save fails and reverts.
     setDeleteTarget(null)
   }
 
   const handleTogglePipelineStatus = async (applicationId, stageId) => {
-    const nextApplications = localApplications.map((application) => {
-      if (application.id !== applicationId) return application
-      const updatedStages = application.financial_aid_pipeline.map((stage) => {
-        if (stage.id !== stageId) return stage
-        const currentIndex = PIPELINE_STATUS_SEQUENCE.indexOf(stage.status)
-        const nextStatus =
-          currentIndex === -1
-            ? "planned"
-            : PIPELINE_STATUS_SEQUENCE[(currentIndex + 1) % PIPELINE_STATUS_SEQUENCE.length]
-        return { ...stage, status: nextStatus }
+    let nextApplications
+    setLocalApplications((current) => {
+      nextApplications = current.map((application) => {
+        if (application.id !== applicationId) return application
+        const updatedStages = application.financial_aid_pipeline.map((stage) => {
+          if (stage.id !== stageId) return stage
+          const currentIndex = PIPELINE_STATUS_SEQUENCE.indexOf(stage.status)
+          // Out-of-sequence statuses (or unknown values) deliberately start the
+          // cycle at the beginning rather than silently reverting.
+          const nextStatus =
+            currentIndex === -1
+              ? PIPELINE_STATUS_SEQUENCE[0]
+              : PIPELINE_STATUS_SEQUENCE[(currentIndex + 1) % PIPELINE_STATUS_SEQUENCE.length]
+          return { ...stage, status: nextStatus }
+        })
+        return { ...application, financial_aid_pipeline: updatedStages }
       })
-      return { ...application, financial_aid_pipeline: updatedStages }
+      return nextApplications
     })
-    setLocalApplications(nextApplications)
     await persistApplications(nextApplications, "Updated pipeline progress.")
   }
 
@@ -702,9 +816,9 @@ export default function UniversityApplicationsSection({
     try {
       const response = await onAskAI()
       const suggestion =
-        response?.applications ??
-        response?.suggestion?.applications ??
-        response?.suggestion ??
+        (response && Array.isArray(response.applications) && response.applications) ||
+        (response && response.suggestion && Array.isArray(response.suggestion.applications) && response.suggestion.applications) ||
+        (response && Array.isArray(response.suggestion) && response.suggestion) ||
         []
       if (!Array.isArray(suggestion) || suggestion.length === 0) {
         toast({
@@ -896,7 +1010,7 @@ export default function UniversityApplicationsSection({
           </Alert>
         ) : null}
 
-        {localApplications.length === 0 ? (
+        {visibleApplications.length === 0 ? (
           <Alert>
             <AlertDescription>
               No universities have been added yet. Use <span className="font-semibold">Add University</span> to
@@ -931,7 +1045,7 @@ export default function UniversityApplicationsSection({
                 const bCommitted = isCommittedStatus(b.status)
                 if (aCommitted && !bCommitted) return -1
                 if (!aCommitted && bCommitted) return 1
-                return a.name.localeCompare(b.name)
+                return String(a.name || "").localeCompare(String(b.name || ""))
               })
               .map((application) => (
                 <ApplicationCard
@@ -1130,7 +1244,11 @@ function ApplicationCard({
     setCatalogTouched(false)
     setInterestSearch("")
     setCustomInterest("")
-  }, [interestDialogOpen, application])
+    // Only re-sync drafts when the dialog opens (or the underlying data
+    // identity changes); interest dialog is fully driven by local draft state
+    // while open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interestDialogOpen, application.interests, application.activity_catalog])
 
   const effectiveOptions = useMemo(() => {
     const base = buildEffectiveActivityOptions({ activity_catalog: draftCatalog })
@@ -1191,10 +1309,15 @@ function ApplicationCard({
   }
 
   const handleFetchLocalFunding = async () => {
-    const zip = (application.zip || application.zip_code || "").trim()
-    const m = zip.match(/\b\d{5}(?:-\d{4})?\b/)
+    const rawZip = (application.zip || application.zip_code || "").trim()
+    const m = rawZip.match(/\b\d{5}(?:-\d{4})?\b/)
     const effectiveZip = m ? m[0] : ""
     if (!effectiveZip) {
+      toast({
+        variant: "destructive",
+        title: "Valid ZIP required",
+        description: "Add a valid campus ZIP code in Edit before fetching local funding.",
+      })
       return
     }
     if (!onQuickUpdate) return
@@ -1216,7 +1339,8 @@ function ApplicationCard({
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to fetch local funding"
       toast({ variant: "destructive", title: "Local funding fetch failed", description: msg })
-      throw err
+      // Error is already surfaced via toast; no re-throw to avoid an unhandled
+      // promise rejection in the onClick handler.
     } finally {
       setLocalFundingLoading(false)
     }
@@ -1232,7 +1356,11 @@ function ApplicationCard({
     }
     if (file.size > maxFileSize) {
       setSchoolUploadFile(null)
-      alert("File must be 50MB or smaller.")
+      toast({
+        variant: "destructive",
+        title: "File too large",
+        description: "File must be 50MB or smaller.",
+      })
       return
     }
     setSchoolUploadFile(file)
@@ -1303,7 +1431,7 @@ function ApplicationCard({
         <div
           className="px-5 py-2 flex items-center justify-between gap-3"
           style={{
-            background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`,
+            background: `linear-gradient(90deg, ${safeColor(theme.primary, "#0f172a")}, ${safeColor(theme.secondary, "#64748b")})`,
           }}
         >
           <p className="text-xs font-semibold tracking-wide text-white/95">

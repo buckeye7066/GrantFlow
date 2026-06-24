@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { GraduationCap, ExternalLink, CheckCircle2, AlertTriangle, FileWarning, CalendarClock, Bot, Award, Plus, Trash2, Printer } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -25,6 +25,7 @@ import { safeHttpUrl } from '@/lib/safeUrl'
 const TERMINAL = new Set(['declined', 'denied', 'rejected', 'withdrawn', 'archived'])
 const COMMITTED = new Set(['committed', 'enrolled', 'attending', 'current', 'matriculated', 'deposited'])
 const fmt = (n) => (n === null || n === undefined ? '—' : `$${Number(n).toLocaleString()}`)
+const errMsg = (err) => err?.message || 'Something went wrong. Please try again.'
 
 function Stat({ label, value, accent }) {
   return (
@@ -64,13 +65,13 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
       toast({ title: 'Committed', description: `${res?.archived?.length || 0} other college(s) archived.` })
       invalidate()
     },
-    onError: (err) => toast({ title: 'Commit failed', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Commit failed', description: errMsg(err), variant: 'destructive' }),
   })
 
   const uncommit = useMutation({
     mutationFn: (collegeId) => uncommitCollege(profileId, collegeId),
     onSuccess: () => { toast({ title: 'Restored' }); invalidate() },
-    onError: (err) => toast({ title: 'Restore failed', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Restore failed', description: errMsg(err), variant: 'destructive' }),
   })
 
   // Housing: on/off campus + off-campus address (re-points funding crawlers).
@@ -79,7 +80,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
   const housingMut = useMutation({
     mutationFn: (payload) => setCommittedCollegeHousing(profileId, payload),
     onSuccess: () => { toast({ title: "Housing updated", description: "Funding search now follows this location." }); setAddrDirty(false); invalidate() },
-    onError: (err) => toast({ title: "Save failed", description: err?.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Save failed", description: errMsg(err), variant: "destructive" }),
   })
 
   const [coaOpen, setCoaOpen] = useState(false)
@@ -87,7 +88,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
   const coaMut = useMutation({
     mutationFn: (payload) => setCommittedCollegeCOA(profileId, payload),
     onSuccess: () => { toast({ title: 'Cost of attendance saved' }); setCoaOpen(false); invalidate() },
-    onError: (err) => toast({ title: 'Save failed', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Save failed', description: errMsg(err), variant: 'destructive' }),
   })
 
   // ── Scholarships / financial-aid pipeline ────────────────────────────────
@@ -101,34 +102,39 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
   const addAid = useMutation({
     mutationFn: (entry) => addCommittedCollegeAid(profileId, entry),
     onSuccess: () => { toast({ title: 'Scholarship added' }); resetAidForm(); invalidate() },
-    onError: (err) => toast({ title: 'Could not add', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Could not add', description: errMsg(err), variant: 'destructive' }),
   })
   const editAid = useMutation({
     mutationFn: ({ id, patch }) => updateCommittedCollegeAid(profileId, id, patch),
     onSuccess: () => { toast({ title: 'Scholarship updated' }); resetAidForm(); invalidate() },
-    onError: (err) => toast({ title: 'Could not update', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Could not update', description: errMsg(err), variant: 'destructive' }),
   })
   const deleteAid = useMutation({
     mutationFn: (id) => removeCommittedCollegeAid(profileId, id),
     onSuccess: () => { toast({ title: 'Scholarship removed' }); invalidate() },
-    onError: (err) => toast({ title: 'Could not remove', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Could not remove', description: errMsg(err), variant: 'destructive' }),
   })
 
   const openAddAid = () => { setAidForm(emptyAid); setEditingAidId(null); setAidOpen(true) }
   const openEditAid = (item) => {
     setAidForm({ name: item.name || '', amount: item.amount ?? '', status: item.status || 'awarded', source: item.source || '' })
-    setEditingAidId(item.id)
+    setEditingAidId(item.id ?? null)
     setAidOpen(true)
   }
   const submitAid = () => {
+    let amount = null
+    if (aidForm.amount !== '') {
+      amount = Number(aidForm.amount)
+      if (Number.isNaN(amount)) { toast({ title: 'Amount must be a number', variant: 'destructive' }); return }
+    }
     const entry = {
       name: aidForm.name.trim(),
-      amount: aidForm.amount === '' ? null : Number(aidForm.amount),
+      amount,
       status: aidForm.status,
       source: aidForm.source.trim() || null,
     }
     if (!entry.name) { toast({ title: 'Name is required', variant: 'destructive' }); return }
-    if (editingAidId) editAid.mutate({ id: editingAidId, patch: entry })
+    if (editingAidId != null) editAid.mutate({ id: editingAidId, patch: entry })
     else addAid.mutate(entry)
   }
   const aidBusy = addAid.isPending || editAid.isPending
@@ -144,7 +150,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
       setAutomateConsentOpen(false)
       invalidate()
     },
-    onError: (err) => toast({ title: 'Automation failed', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Automation failed', description: errMsg(err), variant: 'destructive' }),
   })
   const openCoaEditor = (coa = {}) => {
     const s = (v) => (v === null || v === undefined ? '' : String(v))
@@ -167,7 +173,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
       queryClient.invalidateQueries({ queryKey: ['fafsa-verification', profileId] })
       invalidate()
     },
-    onError: (err) => toast({ title: 'Update failed', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Update failed', description: errMsg(err), variant: 'destructive' }),
   })
 
   const inVerification = fafsaInfo?.stage === 'verification'
@@ -183,8 +189,33 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
       queryClient.invalidateQueries({ queryKey: ['fafsa-verification', profileId] })
       invalidate()
     },
-    onError: (err) => toast({ title: 'Update failed', description: err?.message, variant: 'destructive' }),
+    onError: (err) => toast({ title: 'Update failed', description: errMsg(err), variant: 'destructive' }),
   })
+
+  // Seed off-campus address form from saved address when entering off-campus mode.
+  const savedAddr = workspace?.committed ? (workspace.college?.student_address || {}) : {}
+  const housingStatus = workspace?.committed ? (workspace.college?.housing_status || null) : null
+  useEffect(() => {
+    if (housingStatus === 'off_campus' && !addrDirty) {
+      setAddrForm({
+        line1: savedAddr.line1 || '',
+        city: savedAddr.city || '',
+        state: savedAddr.state || '',
+        zip: savedAddr.zip || '',
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [housingStatus, savedAddr.line1, savedAddr.city, savedAddr.state, savedAddr.zip])
+
+  const openPrintSummary = () => {
+    try {
+      const url = new URL('/PrintAwardSummary', window.location.origin)
+      url.searchParams.set('profile_id', String(profileId))
+      window.open(url.toString(), '_blank', 'noopener,noreferrer')
+    } catch {
+      window.open(`/PrintAwardSummary?profile_id=${encodeURIComponent(String(profileId))}`, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   const cardShell = (children) => (
     <Card className="border-slate-200 shadow-sm">
@@ -232,6 +263,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
   const coa = workspace.cost_of_attendance || {}
   const fafsa = workspace.fafsa || {}
   const ham = workspace.hamilton || {}
+  const showHamilton = Boolean(ham.total || ham.in_progress || ham.completed || ham.blocked || ham.blockers?.length)
 
   return (
     <>
@@ -271,13 +303,13 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">Cost of attendance</span>
             <Button size="sm" variant="outline" onClick={() => openCoaEditor(coa)}>
-              {coa.total === null && coa.tuition === null ? 'Add COA' : 'Edit COA'}
+              {coa.total == null && coa.tuition == null ? 'Add COA' : 'Edit COA'}
             </Button>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Stat label="Tuition" value={fmt(coa.tuition)} />
             <Stat label="Housing" value={fmt(coa.housing)} />
-            <Stat label="Books / other" value={fmt((coa.books || 0) + (coa.other || 0) || null)} />
+            <Stat label="Books / other" value={fmt((Number(coa.books) || 0) + (Number(coa.other) || 0) || null)} />
             <Stat label="Cost of attendance" value={fmt(coa.total)} />
             <Stat label="Aid received" value={fmt(workspace.aid?.received_total)} accent="text-emerald-700" />
             <Stat
@@ -288,7 +320,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
             <Stat
               label="Unmet need"
               value={workspace.unmet_need === null ? '—' : fmt(workspace.unmet_need)}
-              accent={workspace.unmet_need ? 'text-amber-700' : 'text-emerald-700'}
+              accent={workspace.unmet_need > 0 ? 'text-amber-700' : 'text-emerald-700'}
             />
           </div>
 
@@ -330,10 +362,22 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
 
           {/* Housing — on/off campus + off-campus address; re-points funding crawlers */}
           {(() => {
-            const housing = c.housing_status || null
+            const housing = housingStatus
             const fl = workspace.funding_location || null
-            const savedAddr = c.student_address || {}
-            const setStatus = (status) => housingMut.mutate({ housing_status: status, address: status === "off_campus" ? (addrDirty ? addrForm : savedAddr) : null })
+            const setStatus = (status) => {
+              if (status === 'off_campus') {
+                setAddrForm({
+                  line1: savedAddr.line1 || '',
+                  city: savedAddr.city || '',
+                  state: savedAddr.state || '',
+                  zip: savedAddr.zip || '',
+                })
+                setAddrDirty(false)
+                housingMut.mutate({ housing_status: status, address: savedAddr })
+              } else {
+                housingMut.mutate({ housing_status: status, address: null })
+              }
+            }
             return (
               <div className="rounded-md border border-slate-200 p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -346,11 +390,11 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                 {housing === "off_campus" ? (
                   <div className="mt-3 space-y-2">
                     <p className="text-xs text-slate-500">Enter the student’s off-campus address — funding searches (housing, local benefits, community programs) will use this area.</p>
-                    <Input placeholder="Street address" value={addrForm.line1 || savedAddr.line1 || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, line1: e.target.value })); setAddrDirty(true) }} />
+                    <Input placeholder="Street address" value={addrForm.line1} onChange={(e) => { setAddrForm((f) => ({ ...f, line1: e.target.value })); setAddrDirty(true) }} />
                     <div className="grid grid-cols-3 gap-2">
-                      <Input placeholder="City" value={addrForm.city || savedAddr.city || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, city: e.target.value })); setAddrDirty(true) }} />
-                      <Input placeholder="State" maxLength={2} value={addrForm.state || savedAddr.state || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, state: e.target.value })); setAddrDirty(true) }} />
-                      <Input placeholder="ZIP" value={addrForm.zip || savedAddr.zip || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, zip: e.target.value })); setAddrDirty(true) }} />
+                      <Input placeholder="City" value={addrForm.city} onChange={(e) => { setAddrForm((f) => ({ ...f, city: e.target.value })); setAddrDirty(true) }} />
+                      <Input placeholder="State" maxLength={2} value={addrForm.state} onChange={(e) => { setAddrForm((f) => ({ ...f, state: e.target.value })); setAddrDirty(true) }} />
+                      <Input placeholder="ZIP" value={addrForm.zip} onChange={(e) => { setAddrForm((f) => ({ ...f, zip: e.target.value })); setAddrDirty(true) }} />
                     </div>
                     {addrDirty ? (
                       <div className="flex justify-end">
@@ -417,7 +461,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                       <Checkbox
                         checked={d.done}
                         onCheckedChange={(v) => toggleDoc.mutate({ key: d.key, done: Boolean(v) })}
-                        disabled={toggleDoc.isPending}
+                        disabled={toggleDoc.isPending && toggleDoc.variables?.key === d.key}
                         className="mt-0.5"
                       />
                       <div className="min-w-0">
@@ -442,7 +486,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
               <div className="flex gap-2">
                 <Button
                   size="sm" variant="ghost"
-                  onClick={() => window.open(`/PrintAwardSummary?profile_id=${encodeURIComponent(profileId)}`, '_blank', 'noopener')}
+                  onClick={openPrintSummary}
                 >
                   <Printer className="mr-1 h-3.5 w-3.5" /> Print summary
                 </Button>
@@ -504,7 +548,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                 <div className="mt-3 flex justify-end gap-2">
                   <Button size="sm" variant="outline" onClick={resetAidForm} disabled={aidBusy}>Cancel</Button>
                   <Button size="sm" onClick={submitAid} disabled={aidBusy}>
-                    {aidBusy ? 'Saving…' : editingAidId ? 'Save changes' : 'Add scholarship'}
+                    {aidBusy ? 'Saving…' : editingAidId != null ? 'Save changes' : 'Add scholarship'}
                   </Button>
                 </div>
               </div>
@@ -513,8 +557,8 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
             {/* Existing entries */}
             {workspace.aid?.pipeline?.length ? (
               <ul className="mt-3 space-y-2">
-                {workspace.aid.pipeline.map((item) => (
-                  <li key={item.id || item.name} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 p-2.5">
+                {workspace.aid.pipeline.map((item, idx) => (
+                  <li key={item.id != null ? item.id : `aid-${idx}`} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 p-2.5">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium text-slate-900">{item.name}</span>
@@ -539,7 +583,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                         size="sm" variant="ghost"
                         className="h-7 px-2 text-rose-600 hover:text-rose-700"
                         onClick={() => deleteAid.mutate(item.id)}
-                        disabled={deleteAid.isPending}
+                        disabled={deleteAid.isPending && deleteAid.variables === item.id}
                         aria-label={`Remove ${item.name}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -600,11 +644,11 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
           ) : null}
 
           {/* Hamilton status */}
-          {ham.total ? (
+          {showHamilton ? (
             <div className="rounded-md border border-slate-200 p-3">
               <div className="mb-1 flex items-center gap-1.5 text-sm font-medium text-slate-700"><Bot className="h-4 w-4 text-blue-600" />Hamilton automation</div>
               <div className="text-sm text-slate-600">
-                {ham.in_progress} in progress · {ham.completed} completed · {ham.blocked} blocked
+                {ham.in_progress || 0} in progress · {ham.completed || 0} completed · {ham.blocked || 0} blocked
               </div>
               {ham.blockers?.length ? (
                 <ul className="mt-1 space-y-0.5 text-xs text-amber-700">
@@ -620,7 +664,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
               <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">Archived</div>
               <div className="flex flex-wrap gap-2">
                 {workspace.archived_colleges.map((a) => (
-                  <Button key={a.id} size="sm" variant="ghost" className="h-7 text-slate-500" onClick={() => uncommit.mutate(a.id)} disabled={uncommit.isPending}>
+                  <Button key={a.id} size="sm" variant="ghost" className="h-7 text-slate-500" onClick={() => uncommit.mutate(a.id)} disabled={uncommit.isPending && uncommit.variables === a.id}>
                     {a.name || 'College'} · restore
                   </Button>
                 ))}

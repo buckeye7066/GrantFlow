@@ -10,7 +10,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
-  Unlink2,
+  Unlink,
   X,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
@@ -38,7 +38,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
 import HamiltonPortalsPanel from "@/components/hamilton/HamiltonPortalsPanel"
 
-const PORTAL_CHECK_REFRESH_DELAY_MS = 3000
+const PORTAL_CHECK_REFRESH_DELAY_MS = 10_000
 
 // TSAC retired the legacy tn.gov/collegepays.html portal; it now 302-redirects to
 // the "College for TN" (collegefortn.org) site run by THEC. Single source of truth
@@ -65,12 +65,21 @@ function normalizeState(value) {
   return v.length === 2 ? v : ""
 }
 
+function safeFormatDistanceToNow(value) {
+  if (!value) return ""
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ""
+  return formatDistanceToNow(d, { addSuffix: true })
+}
+
 function extractAwardAmount(resultsJson) {
   if (!resultsJson) return ""
   try {
     const parsed = JSON.parse(resultsJson)
     return parsed.awardAmountRaw ? ` — ${parsed.awardAmountRaw}` : ""
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("extractAwardAmount: failed to parse results_json", err)
     return ""
   }
 }
@@ -113,7 +122,8 @@ function DetectedAwardCard({
   const hasExplicitApplication = Boolean(result.application_id || result.merged_application_id)
   const needsSelection = !hasExplicitApplication && applicationOptions.length > 1
   const targetApplicationId = result.application_id || selectedApplicationId || applicationOptions[0]?.id || ""
-  const mergeDisabled = !result.merged_to_profile && applicationOptions.length === 0
+  const noApplications = !result.merged_to_profile && applicationOptions.length === 0
+  const mergeDisabled = noApplications || (needsSelection && !targetApplicationId)
   return (
     <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
       <Award className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
@@ -130,7 +140,7 @@ function DetectedAwardCard({
             Merged into {result.merged_application_name || "your profile"}.
           </p>
         ) : null}
-        {!result.merged_to_profile && applicationOptions.length === 0 ? (
+        {noApplications ? (
           <p className="text-xs text-amber-700">
             Add a university application first so this scholarship can be merged into the profile.
           </p>
@@ -139,7 +149,7 @@ function DetectedAwardCard({
           Verify the portal inside the pilot import flow below before merging it into the profile.
         </p>
         <p className="text-xs text-emerald-600">
-          {result.checked_at ? formatDistanceToNow(new Date(result.checked_at), { addSuffix: true }) : ""}
+          {safeFormatDistanceToNow(result.checked_at)}
         </p>
         {needsSelection ? (
           <div className="mt-2">
@@ -168,8 +178,8 @@ function DetectedAwardCard({
             variant="ghost"
             size="sm"
             className="h-7 px-2 text-emerald-700 hover:bg-emerald-100"
-            title="Merge award"
-            disabled={mergeDisabled || (needsSelection && !targetApplicationId)}
+            title={noApplications ? "Add a university application first" : "Merge award"}
+            disabled={mergeDisabled}
             onClick={async () => {
               const merged = await onMerge(result, targetApplicationId)
               if (merged) setDismissed(true)
@@ -241,7 +251,11 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
     staleTime: 30_000,
   })
 
-  const applications = schoolPortalWorkspace?.applications ?? (Array.isArray(profileApplications) ? profileApplications : [])
+  const applications = Array.isArray(schoolPortalWorkspace?.applications)
+    ? schoolPortalWorkspace.applications
+    : Array.isArray(profileApplications)
+      ? profileApplications
+      : []
   const connections = schoolPortalWorkspace?.connections ?? []
   const applicationOptions = useMemo(
     () =>
@@ -265,11 +279,12 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
 
   useEffect(() => {
     if (!connectOpen) return
-    if (!applicationId && applications.length === 1) {
-      setApplicationId(applications[0].id)
-      setSchoolName((current) => current || applications[0].school_name || applications[0].name || "")
+    if (!applicationId && applicationOptions.length === 1) {
+      const defaultOption = applicationOptions[0]
+      setApplicationId(defaultOption.id)
+      setSchoolName((current) => current || defaultOption.name || "")
     }
-  }, [applicationId, applications, connectOpen])
+  }, [applicationId, applicationOptions, connectOpen])
 
   const createConnectionMutation = useMutation({
     mutationFn: async () => {
@@ -384,10 +399,12 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
     portalStatus && portalStatus.length > 0
       ? new Date(
           portalStatus.reduce((latest, r) =>
-            r.checked_at > (latest?.checked_at ?? "") ? r : latest,
+            new Date(r.checked_at).getTime() > new Date(latest?.checked_at ?? 0).getTime() ? r : latest,
           ).checked_at,
         )
       : null
+
+  const lastCheckedValid = lastChecked && !Number.isNaN(lastChecked.getTime())
 
   const detectedAwards = (portalStatus ?? []).filter((r) => r.awards_detected > 0)
 
@@ -407,9 +424,6 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
       }, PORTAL_CHECK_REFRESH_DELAY_MS)
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
-      }, 10_000)
     } catch (err) {
       toast({
         title: "Portal check failed",
@@ -424,8 +438,8 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
   const handleMergeAward = async (result, targetApplicationId) => {
     try {
       assertRealProfileId(profileId, "StudentPortalsCard.handleMergeAward")
-      const applicationId = result.application_id || targetApplicationId || applicationOptions[0]?.id || null
-      if (!applicationId) {
+      const mergeApplicationId = result.application_id || targetApplicationId || applicationOptions[0]?.id || null
+      if (!mergeApplicationId) {
         toast({
           title: "Choose a school first",
           description: "Select the university that should receive this portal scholarship.",
@@ -433,13 +447,14 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
         })
         return false
       }
+      const awardName = result.award_name || result.portal_name || "Imported portal scholarship"
       await apiFetch(`/api/profiles/${profileId}/portal-awards/merge`, {
         method: "POST",
         body: JSON.stringify({
-          application_id: applicationId,
+          application_id: mergeApplicationId,
           portal_name: result.portal_name,
           portal_url: result.portal_url ?? null,
-          award_name: result.award_name ?? result.portal_name,
+          award_name: awardName,
           award_amount: result.award_amount ?? null,
           award_amount_raw: result.award_amount_raw ?? null,
           detected_at: result.detected_at ?? result.checked_at ?? new Date().toISOString(),
@@ -513,6 +528,30 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
     })
   }
 
+  const handleConnectSubmit = () => {
+    const trimmed = awardsPayload.trim()
+    if (!trimmed) return
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (!Array.isArray(parsed)) {
+        toast({
+          title: "Malformed award JSON",
+          description: "Award JSON must be an array of award objects.",
+          variant: "destructive",
+        })
+        return
+      }
+    } catch (err) {
+      toast({
+        title: "Malformed award JSON",
+        description: err?.message || "Unable to parse the pasted award JSON. Please check the format.",
+        variant: "destructive",
+      })
+      return
+    }
+    createConnectionMutation.mutate()
+  }
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -527,7 +566,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
           </div>
           {profileId ? (
             <div className="flex items-center gap-2">
-              {lastChecked && (
+              {lastCheckedValid && (
                 <span className="flex items-center gap-1 text-xs text-slate-500">
                   <Clock className="h-3.5 w-3.5" />
                   {formatDistanceToNow(lastChecked, { addSuffix: true })}
@@ -581,7 +620,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
             {connections.map((connection) => {
               const selectedForConnection = selectedAwardIds[connection.id] ?? []
               const mergeTarget =
-                mergeTargets[connection.id] ?? connection.default_application_id ?? (applications.length === 1 ? applications[0].id : "")
+                mergeTargets[connection.id] ?? connection.default_application_id ?? (applicationOptions.length === 1 ? applicationOptions[0].id : "")
               return (
                 <div key={connection.id} className="rounded-lg border border-slate-200 p-4 space-y-3">
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -592,16 +631,16 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                           {connection.connection_label ? ` — ${connection.connection_label}` : ""}
                         </p>
                         <Badge variant="outline" className="text-[11px] uppercase tracking-wide">
-                          {connection.integration_mode.replaceAll("_", " ")}
+                          {(connection.integration_mode || "").replaceAll("_", " ")}
                         </Badge>
                       </div>
                       <p className="text-xs text-slate-600">
                         {connection.school_name || "School not specified"}
                         {connection.portal_url ? ` · ${connection.portal_url}` : ""}
                       </p>
-                      {connection.last_synced_at && (
+                      {connection.last_synced_at && safeFormatDistanceToNow(connection.last_synced_at) && (
                         <p className="text-xs text-slate-500">
-                          Loaded {formatDistanceToNow(new Date(connection.last_synced_at), { addSuffix: true })}
+                          Loaded {safeFormatDistanceToNow(connection.last_synced_at)}
                         </p>
                       )}
                     </div>
@@ -612,7 +651,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                       onClick={() => disconnectMutation.mutate(connection.id)}
                       disabled={disconnectMutation.isPending}
                     >
-                      <Unlink2 className="mr-2 h-4 w-4" />
+                      <Unlink className="mr-2 h-4 w-4" />
                       Disconnect
                     </Button>
                   </div>
@@ -636,7 +675,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                           <SelectValue placeholder="Choose a school" />
                         </SelectTrigger>
                         <SelectContent>
-                          {applications.map((application) => (
+                          {applicationOptions.map((application) => (
                             <SelectItem key={application.id} value={application.id}>
                               {application.name}
                             </SelectItem>
@@ -712,8 +751,11 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
               Merged/imported scholarships
             </div>
             <div className="space-y-2">
-              {mergedAwards.map((award) => (
-                <div key={`${award.application_id}-${award.id}`} className="flex items-start gap-3 rounded-md border border-slate-200 p-3">
+              {mergedAwards.map((award, index) => (
+                <div
+                  key={award.id ?? `${award.application_id ?? "profile"}-${award.provider_name ?? "portal"}-${index}`}
+                  className="flex items-start gap-3 rounded-md border border-slate-200 p-3"
+                >
                   <Award className="mt-0.5 h-4 w-4 text-amber-500" />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -821,7 +863,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                     <SelectValue placeholder="Choose a school (optional)" />
                   </SelectTrigger>
                   <SelectContent>
-                    {applications.map((application) => (
+                    {applicationOptions.map((application) => (
                       <SelectItem key={application.id} value={application.id}>
                         {application.name}
                       </SelectItem>
@@ -882,7 +924,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
               Cancel
             </Button>
             <Button
-              onClick={() => createConnectionMutation.mutate()}
+              onClick={handleConnectSubmit}
               disabled={!awardsPayload.trim() || createConnectionMutation.isPending}
             >
               {createConnectionMutation.isPending ? (

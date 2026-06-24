@@ -31,28 +31,38 @@ export function registerQueryClient(qc) {
   registeredQueryClient = qc ?? null
 }
 
+// Profile-bound query-key prefixes. Used both to purge outright on profile
+// switch and to scope the previous-profile-id eviction so we never collide
+// with unrelated numeric query-key segments (page numbers, limits, etc.).
+const PROFILE_BOUND_PREFIXES = [
+  'discover-catalog',
+  'discover-profile',
+  'matcher-opportunities',
+  'matching-opportunities',
+  'smart-matcher',
+  'funding-results',
+  'reverse-lookup',
+  'profile-pipeline',
+]
+
 function evictProfileQueries(previousProfileId) {
   if (!registeredQueryClient) return
   try {
     if (previousProfileId) {
+      const prevId = String(previousProfileId)
+      // Scope the previous-profile-id eviction to known profile-bound prefixes
+      // so that small numeric ids ('1', '2') never collide with unrelated query
+      // keys that contain page numbers, limits, or pagination indices.
       registeredQueryClient.removeQueries({
         predicate: (q) =>
           Array.isArray(q.queryKey) &&
-          q.queryKey.some((k) => k !== null && k !== undefined && String(k) === String(previousProfileId)),
+          typeof q.queryKey[0] === 'string' &&
+          PROFILE_BOUND_PREFIXES.includes(q.queryKey[0]) &&
+          q.queryKey.some((k) => k !== null && k !== undefined && String(k) === prevId),
       })
     }
     // Always purge the profile-bound discovery / matching keys outright so a
     // hard reload after a profile switch never serves a stale cached result.
-    const PROFILE_BOUND_PREFIXES = [
-      'discover-catalog',
-      'discover-profile',
-      'matcher-opportunities',
-      'matching-opportunities',
-      'smart-matcher',
-      'funding-results',
-      'reverse-lookup',
-      'profile-pipeline',
-    ]
     registeredQueryClient.removeQueries({
       predicate: (q) =>
         Array.isArray(q.queryKey) &&
@@ -60,6 +70,9 @@ function evictProfileQueries(previousProfileId) {
         PROFILE_BOUND_PREFIXES.includes(q.queryKey[0]),
     })
   } catch (err) {
+    // Eviction is a best-effort cache-hygiene step. A failure here must not
+    // abort the calling auth flow (logout / profile switch), so we log and
+    // continue rather than re-throw.
     try { console.warn('[authStore] queryClient eviction failed:', err?.message || err) } catch { /* ignore */ }
   }
 }
@@ -69,6 +82,26 @@ const REFRESH_LEEWAY_MS = 60 * 1000
 const FALLBACK_REFRESH_LEEWAY_MS = 5 * 1000
 const MAX_TIMEOUT_MS = 2_147_000_000
 let refreshTimerId = null
+
+// Guarded localStorage helpers: private-mode / quota-exceeded environments throw
+// on setItem/removeItem; those failures must never abort an auth success path.
+function safeLocalStorageSet(key, value) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, value)
+  } catch (err) {
+    try { console.warn('[authStore] localStorage.setItem failed:', err?.message || err) } catch { /* ignore */ }
+  }
+}
+
+function safeLocalStorageRemove(key) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(key)
+  } catch (err) {
+    try { console.warn('[authStore] localStorage.removeItem failed:', err?.message || err) } catch { /* ignore */ }
+  }
+}
 
 function resolveAccessExpiryMs(meta) {
   if (!meta) return null
@@ -103,13 +136,18 @@ function resolveAccessExpiryMs(meta) {
 
 function persistAccessExpiry(expiresAtMs) {
   if (typeof window === 'undefined') return
-  if (!Number.isFinite(expiresAtMs)) return
-  window.localStorage.setItem(ACCESS_EXPIRY_STORAGE_KEY, String(Math.trunc(expiresAtMs)))
+  if (!Number.isFinite(expiresAtMs)) {
+    // Surface invalid expiry values so inconsistent session management is
+    // observable rather than silently dropped.
+    try { console.warn('[authStore] persistAccessExpiry called with non-finite expiry:', expiresAtMs) } catch { /* ignore */ }
+    return
+  }
+  safeLocalStorageSet(ACCESS_EXPIRY_STORAGE_KEY, String(Math.trunc(expiresAtMs)))
 }
 
 function clearAccessExpiry() {
   if (typeof window === 'undefined') return
-  window.localStorage.removeItem(ACCESS_EXPIRY_STORAGE_KEY)
+  safeLocalStorageRemove(ACCESS_EXPIRY_STORAGE_KEY)
 }
 
 function clearRefreshTimer() {
@@ -171,7 +209,7 @@ async function triggerAdminCrawlers() {
       description: 'A national comprehensive crawl was queued. For profile-matched results, start a crawl from the Profile page.',
     })
   } catch (error) {
-    // Log but do not re-throw â this is a non-critical background task.
+    // Log but do not re-throw — this is a non-critical background task.
     console.error('[authStore] Failed to trigger admin crawlers:', error)
   }
 }
@@ -254,6 +292,24 @@ export const useAuthStore = create((set, get) => ({
         clearAccessExpiry()
       }
     }
+    // If we have a token, validate it immediately by fetching the canonical
+    // identity rather than relying solely on a (possibly far-future) refresh
+    // timer. This guarantees user/profiles are populated even if App bootstrap
+    // never runs auth.me(), and flips isAuthenticated back to false on failure.
+    if (accessToken) {
+      Promise.resolve()
+        .then(() => client.auth?.me?.())
+        .then((me) => {
+          if (me) {
+            get().setAuthenticatedUser(me)
+          }
+        })
+        .catch((err) => {
+          try { console.warn('[authStore] hydrate identity validation failed:', err?.message || err) } catch { /* ignore */ }
+          // Token is invalid/expired — drop the tentative authenticated state.
+          get().clearState()
+        })
+    }
   },
 
   clearState: () => {
@@ -285,14 +341,17 @@ export const useAuthStore = create((set, get) => ({
     const prevCount = Array.isArray(state?.profiles) ? state.profiles.length : 0
 
     if (!state?.isAuthenticated) return []
+    // NOTE: For non-admins with an already-populated profile list we return the
+    // cached list unless force=true. Callers that need authoritative server
+    // data (after a deletion, new share, etc.) MUST pass force:true.
     if (!force && !isAdmin && prevCount > 0) return state.profiles
 
     try {
       // Admins should see all profiles; backend will scope automatically for non-admins.
       const url = isAdmin ? '/api/profiles?limit=1000' : '/api/profiles'
       const data = await apiFetch(url)
-          // Defence-in-depth: strip deleted profiles so stale cache entries are never visible.
-              const profiles = (Array.isArray(data) ? data : []).filter((p) => p?.status !== 'deleted')
+      // Defence-in-depth: strip deleted profiles so stale cache entries are never visible.
+      const profiles = (Array.isArray(data) ? data : []).filter((p) => p?.status !== 'deleted')
 
       set({ profiles })
 
@@ -337,7 +396,7 @@ export const useAuthStore = create((set, get) => ({
     // { userId, email, isAdmin, activeProfileId, accessibleProfileCount, accessibleOrgCount,
     //   hasCompletedOnboarding, onboardingCompletedAt, lastSeenManualVersion,
     //   lastCompletedTourVersion, tourDismissedAt }
-    if (payload.userId) {
+    if (payload.userId !== undefined && payload.userId !== null) {
       const isAdmin = normalizeUserAdmin({
         isAdmin: payload.isAdmin,
         is_admin: payload.isAdmin,
@@ -348,14 +407,11 @@ export const useAuthStore = create((set, get) => ({
       const activeProfileId = isAdmin ? '__admin__' : normalizeId(payload.activeProfileId ?? null)
       const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
 
-      // Use backend has_completed_onboarding as the authoritative source.
-      // Fall back to localStorage for backward-compat during rollout of migration 047.
-      // TODO: Remove localStorage fallback once all users have migrated (> 30 days post-deploy).
-      const backendCompleted = Boolean(payload.hasCompletedOnboarding)
-      const localCompleted = typeof window !== 'undefined'
-        ? localStorage.getItem('grantflow:onboarding-complete') === 'true'
-        : false
-      const hasCompletedOnboarding = backendCompleted || localCompleted
+      // Treat backend has_completed_onboarding as the SOLE authoritative source
+      // for a freshly authenticated user. We must NOT fall back to the persisted
+      // store flag here, because a different user logging in on the same browser
+      // could otherwise inherit the previous user's onboarding state.
+      const hasCompletedOnboarding = Boolean(payload.hasCompletedOnboarding)
 
       const needsProfileCreation =
         !isAdmin && accessibleProfileCount === 0 && !hasCompletedOnboarding
@@ -390,7 +446,13 @@ export const useAuthStore = create((set, get) => ({
       // Always refresh profiles after canonical auth bootstrap.
       // This keeps the sidebar selector accurate (admins should see ALL profiles).
       get()
-        .refreshProfiles({ reason: 'auth_bootstrap', force: isAdmin })
+        .refreshProfiles({ reason: 'auth_bootstrap', force: true })
+        .then((refreshedProfiles) => {
+          if (isAdmin) return
+          // Recompute needsProfileCreation from the authoritative server list.
+          const count = Array.isArray(refreshedProfiles) ? refreshedProfiles.length : 0
+          set({ needsProfileCreation: count === 0 && !hasCompletedOnboarding })
+        })
         .catch(() => {})
       return
     }
@@ -418,9 +480,9 @@ export const useAuthStore = create((set, get) => ({
           )
 
       client.setActiveProfileId?.(activeProfileId)
-      
+
       // Check if this is an admin user
-      if (normalizeUserAdmin(user)) {
+      if (isAdminUser) {
         set({
           user,
           profiles,
@@ -451,20 +513,21 @@ export const useAuthStore = create((set, get) => ({
             }
           })
           .catch(() => {})
-        
+
         // Trigger crawler jobs asynchronously (fire-and-forget)
         triggerAdminCrawlers().catch(err => {
           console.warn('Failed to trigger admin crawlers:', err)
         })
-        
+
         return
       }
-      
+
       // Regular user
-      // Use backend hasCompletedOnboarding (from payload.user if available) as authoritative source,
-      // falling back to the store's current hasSeenOnboarding flag.
-      const userCompletedOnboarding =
-        Boolean(payload.user?.has_completed_onboarding) || get().hasSeenOnboarding
+      // Use backend has_completed_onboarding (from payload.user) as the SOLE
+      // authoritative source for a freshly authenticated user. Do NOT fall back
+      // to the persisted store flag — a different user on the same browser could
+      // otherwise inherit the previous user's onboarding state.
+      const userCompletedOnboarding = Boolean(payload.user?.has_completed_onboarding)
       const needsProfileCreation = profiles.length === 0 && !userCompletedOnboarding
       set({
         user,
@@ -479,10 +542,16 @@ export const useAuthStore = create((set, get) => ({
         hasSeenOnboarding: userCompletedOnboarding,
       })
 
-      // If login payload looks sparse, refresh from server so profile dropdown matches reality.
+      // If login payload looks sparse, refresh from server so profile dropdown
+      // matches reality, then recompute needsProfileCreation from the
+      // authoritative refreshed list.
       if (profiles.length <= 1) {
         get()
-          .refreshProfiles({ reason: 'post_login_refresh', force: false })
+          .refreshProfiles({ reason: 'post_login_refresh', force: true })
+          .then((refreshedProfiles) => {
+            const count = Array.isArray(refreshedProfiles) ? refreshedProfiles.length : 0
+            set({ needsProfileCreation: count === 0 && !userCompletedOnboarding })
+          })
           .catch(() => {})
       }
       return
@@ -513,35 +582,46 @@ export const useAuthStore = create((set, get) => ({
       get()
         .refreshProfiles({ reason: 'legacy_admin_login', force: true })
         .catch(() => {})
-      
+
       // Trigger crawler jobs asynchronously (fire-and-forget)
       triggerAdminCrawlers().catch(err => {
         console.warn('Failed to trigger admin crawlers:', err)
       })
-      
+
       return
     }
 
     if (payload.role === 'user') {
+      const normalizedProfileId = normalizeId(payload.profile_id ?? null)
       const user = {
-        id: payload.profile_id ?? 'user',
+        id: normalizedProfileId ?? 'user',
         display_name: payload.full_name ?? 'GrantFlow User',
         is_admin: false,
       }
       const profiles = payload.profiles ?? []
-      const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
+      const userCompletedOnboarding = Boolean(payload.has_completed_onboarding)
+      const needsProfileCreation = profiles.length === 0 && !userCompletedOnboarding
       set({
         user,
         profiles,
-        activeProfileId: normalizeId(payload.profile_id ?? null),
+        activeProfileId: normalizedProfileId,
         isAuthenticated: true,
         error: null,
         sessionExpired: false,
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
         needsProfileCreation,
+        hasSeenOnboarding: userCompletedOnboarding,
       })
+      return
     }
+
+    // Unknown payload shape: this is NOT a successful authentication. Throw so
+    // callers (loginWithPassword etc.) do not present it as a logged-in state.
+    const unknownErr = new Error('Authentication response did not contain a recognizable identity payload')
+    unknownErr.code = 'AUTH_UNKNOWN_PAYLOAD'
+    try { console.warn('[authStore] setAuthenticatedUser received unrecognized payload shape') } catch { /* ignore */ }
+    throw unknownErr
   },
 
   scheduleSessionRefresh: (sessionMeta = {}) => {
@@ -585,6 +665,8 @@ export const useAuthStore = create((set, get) => ({
         .refreshSession()
         .catch((error) => {
           console.warn('Automatic session refresh failed:', error)
+          // Surface to the user via the session-expired flow so they get explicit
+          // re-authentication feedback rather than a silent session expiry.
           get().markSessionExpired('Your session expired. Please sign in again.')
         })
     }, refreshDelay)
@@ -650,16 +732,12 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:access-token', result.accessToken)
-        }
+        safeLocalStorageSet('grantflow:access-token', result.accessToken)
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
-        }
+        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -680,16 +758,12 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:access-token', result.accessToken)
-        }
+        safeLocalStorageSet('grantflow:access-token', result.accessToken)
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
-        }
+        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -710,16 +784,12 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:access-token', result.accessToken)
-        }
+        safeLocalStorageSet('grantflow:access-token', result.accessToken)
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
-        }
+        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -761,16 +831,12 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:access-token', result.accessToken)
-        }
+        safeLocalStorageSet('grantflow:access-token', result.accessToken)
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
-        }
+        safeLocalStorageSet('grantflow:refresh-token', result.refreshToken)
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -800,22 +866,32 @@ export const useAuthStore = create((set, get) => ({
 
       // Defer all state writes until after the full response is validated.
       if (response) {
-        if (accessToken) {
-          client.setToken(accessToken)
-          set({ accessToken })
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('grantflow:access-token', accessToken)
-          }
+        // Persist the tokens the SERVER returned (rotate-on-use), falling back to
+        // the caller-supplied tokens only when the response omits them.
+        const effectiveAccessToken = response.accessToken ?? accessToken
+        const effectiveRefreshToken = response.refreshToken ?? refreshToken
+        if (effectiveAccessToken) {
+          client.setToken(effectiveAccessToken)
+          set({ accessToken: effectiveAccessToken })
+          safeLocalStorageSet('grantflow:access-token', effectiveAccessToken)
         }
-        if (refreshToken) {
-          client.setRefreshToken?.(refreshToken)
-          set({ refreshToken })
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('grantflow:refresh-token', refreshToken)
-          }
+        if (effectiveRefreshToken) {
+          client.setRefreshToken?.(effectiveRefreshToken)
+          set({ refreshToken: effectiveRefreshToken })
+          safeLocalStorageSet('grantflow:refresh-token', effectiveRefreshToken)
         }
-        if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
-          get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
+        // Prefer server-issued expiry metadata when present.
+        const expiryMeta = {
+          expiresIn: response.expiresIn ?? expiresIn,
+          accessExpires: response.accessExpires ?? accessExpires,
+          refreshExpires: response.refreshExpires ?? refreshExpires,
+        }
+        if (
+          expiryMeta.expiresIn !== undefined ||
+          expiryMeta.accessExpires !== undefined ||
+          expiryMeta.refreshExpires !== undefined
+        ) {
+          get().scheduleSessionRefresh(expiryMeta)
         }
         get().setAuthenticatedUser(response)
         set((state) => ({
@@ -851,12 +927,30 @@ export const useAuthStore = create((set, get) => ({
       if (response?.accessToken) {
         client.setToken(response.accessToken)
         set({ accessToken: response.accessToken })
+        safeLocalStorageSet('grantflow:access-token', response.accessToken)
       }
       if (response?.refreshToken) {
         client.setRefreshToken?.(response.refreshToken)
         set({ refreshToken: response.refreshToken })
+        safeLocalStorageSet('grantflow:refresh-token', response.refreshToken)
       }
-      get().setAuthenticatedUser(response)
+      // Refresh responses typically carry only token fields. Only update user
+      // state when the response actually contains an identity payload; otherwise
+      // we'd wipe the current user. setAuthenticatedUser throws on unknown
+      // shapes, so guard before calling it.
+      const hasIdentityPayload = Boolean(
+        response &&
+          ((response.userId !== undefined && response.userId !== null) ||
+            response.user ||
+            response.role === 'admin' ||
+            response.role === 'user'),
+      )
+      if (hasIdentityPayload) {
+        get().setAuthenticatedUser(response)
+      }
+      // Always reschedule based on the new token expiry even when the response
+      // lacks user fields, so the session never silently expires without a
+      // future refresh queued.
       if (response) {
         get().scheduleSessionRefresh(response)
       }
@@ -946,9 +1040,7 @@ export const useAuthStore = create((set, get) => ({
 
   setPreferredAuthMethod: (method) => {
     if (!AUTH_METHODS.has(method)) return
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('grantflow:auth-method', method)
-    }
+    safeLocalStorageSet('grantflow:auth-method', method)
     set((state) => {
       if (state.preferredAuthMethod === method) {
         return state
@@ -961,9 +1053,7 @@ export const useAuthStore = create((set, get) => ({
   },
 
   markOnboardingComplete: () => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('grantflow:onboarding-complete', 'true')
-    }
+    safeLocalStorageSet('grantflow:onboarding-complete', 'true')
     set({ hasSeenOnboarding: true, hasCompletedOnboarding: true, onboardingCompletedAt: new Date().toISOString() })
     // Persist to backend (fire-and-forget; localStorage is still the fallback)
     apiFetch('/api/auth/onboarding-state', {

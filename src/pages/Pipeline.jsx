@@ -101,8 +101,11 @@ export default function Pipeline() {
   // SECURITY / DATA INTEGRITY:
   // If the URL/local state carries an invalid profile id (not in the accessible profile list),
   // do NOT apply it. This prevents cross-profile bleed from stale links/localStorage.
+  // Guard: only reset once profiles have actually loaded, so we don't fight the
+  // URL-init effect when a valid-but-not-yet-loaded profile id is present.
   useEffect(() => {
     if (!selectedProfileId || selectedProfileId === 'all') return
+    if (profilesQuery.isLoading) return
     if (profiles.length === 0) return
     const ok = profiles.some((p) => String(p?.id) === String(selectedProfileId))
     if (!ok) {
@@ -112,17 +115,31 @@ export default function Pipeline() {
       })
       setSelectedProfileId('all')
     }
-  }, [profiles, selectedProfileId])
+  }, [profiles, selectedProfileId, profilesQuery.isLoading])
 
   // Initialize selectedProfileId from URL.
   // Back-compat: if older links passed organization_id, try mapping it to a profile id.
+  // Validate the URL-provided profileId against loaded profiles before applying
+  // (when profiles are loaded); otherwise apply optimistically and let the
+  // validation effect above clean up once profiles arrive.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const profileId = params.get('profile_id');
     const legacyOrgId = params.get('organization_id');
 
     if (profileId) {
-      setSelectedProfileId(profileId);
+      if (!profilesQuery.isLoading && profiles.length > 0) {
+        const ok = profiles.some((p) => String(p?.id) === String(profileId))
+        if (ok) {
+          setSelectedProfileId(profileId);
+        } else {
+          console.warn('[Pipeline] URL profile_id not in accessible profiles; ignoring', { profileId })
+          setSelectedProfileId('all');
+        }
+      } else {
+        // Profiles not loaded yet: apply optimistically; validation effect reconciles.
+        setSelectedProfileId(profileId);
+      }
       return
     }
 
@@ -135,7 +152,7 @@ export default function Pipeline() {
         setSelectedProfileId(mapped.id)
       }
     }
-  }, [location.search, profiles]);
+  }, [location.search, profiles, profilesQuery.isLoading]);
 
   // Keep active profile in sync so API requests return the selected profile's pipeline.
   useEffect(() => {
@@ -152,10 +169,29 @@ export default function Pipeline() {
     queryFn: () => getCrawlerJob(processAllJobId),
     enabled: Boolean(processAllJobId),
     refetchInterval: 3000,
+    retry: 2,
   });
   const processAllJob = processAllJobQuery?.data ?? null;
   const processAllJobStatus = processAllJob?.status ?? "";
   const processAllJobMeta = processAllJob?.result_meta ?? {};
+  const processAllJobError = processAllJobQuery?.error ?? null;
+
+  // Handle a failed polling query: surface the error and stop the spinner so
+  // the user isn't left with a silently stuck "Processing…" state.
+  useEffect(() => {
+    if (!processAllJobId) return;
+    if (!processAllJobQuery.isError) return;
+
+    toast({
+      variant: "destructive",
+      title: "Process All status unavailable",
+      description:
+        processAllJobError?.message ||
+        "Unable to fetch pipeline automation job status. The job may still be running.",
+    });
+    setProcessAllJobId(null);
+    setIsProcessAllPending(false);
+  }, [processAllJobId, processAllJobQuery.isError, processAllJobError, toast]);
 
   // When Process All job completes, refresh grants and show result
   useEffect(() => {
@@ -212,7 +248,12 @@ export default function Pipeline() {
         `/api/vnext/applications?profile_id=${encodeURIComponent(String(selectedProfileId))}&limit=200`,
       ),
   })
-  const vnextApps = Array.isArray(vnextAppsQuery.data) ? vnextAppsQuery.data : []
+  // Only treat data as a usable array when the query is not loading/erroring
+  // and the payload is genuinely an array. Otherwise fall back to [].
+  const vnextApps =
+    !vnextAppsQuery.isLoading && !vnextAppsQuery.isError && Array.isArray(vnextAppsQuery.data)
+      ? vnextAppsQuery.data
+      : []
   const vnextCounts = useMemo(() => countBy(vnextApps, (a) => a?.state || "UNKNOWN"), [vnextApps])
 
   // Sync selectedProfileId to URL (canonical param: profile_id).
@@ -275,18 +316,40 @@ export default function Pipeline() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (grantIds) => {
-      // Parallelize deletions for better performance
-      await Promise.all(grantIds.map(id => client.entities.Grant.delete(id)));
+      // Use allSettled so a single failure doesn't abort the rest. Collect the
+      // succeeded/failed ids so the caller can report accurate counts.
+      const results = await Promise.allSettled(
+        grantIds.map((id) => client.entities.Grant.delete(id)),
+      );
+      const succeeded = [];
+      const failed = [];
+      results.forEach((res, idx) => {
+        if (res.status === "fulfilled") {
+          succeeded.push(grantIds[idx]);
+        } else {
+          failed.push(grantIds[idx]);
+        }
+      });
+      return { succeeded, failed };
     },
-    onSuccess: (_, grantIds) => {
+    onSuccess: ({ succeeded, failed }) => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });
       setShowBulkDeleteConfirm(false);
-      toast({
-        title: "Expired Grants Removed",
-        description: `Successfully removed ${grantIds.length} expired grant${grantIds.length > 1 ? 's' : ''}.`,
-      });
+      if (failed.length === 0) {
+        toast({
+          title: "Expired Grants Removed",
+          description: `Successfully removed ${succeeded.length} expired grant${succeeded.length === 1 ? '' : 's'}.`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Some Grants Could Not Be Removed",
+          description: `Removed ${succeeded.length}, ${failed.length} failed. Please try again for the remaining grants.`,
+        });
+      }
     },
     onError: (error) => {
+      queryClient.invalidateQueries({ queryKey: ['grants'] });
       toast({
         variant: "destructive",
         title: "Bulk Delete Failed",
@@ -372,7 +435,8 @@ export default function Pipeline() {
   };
   
   const handleDeleteGrant = () => {
-    if (grantToDelete) {
+    // Defensive null check: state may have been cleared between render and invocation.
+    if (grantToDelete && grantToDelete.id) {
       deleteGrantMutation.mutate(grantToDelete.id);
     }
   };
@@ -384,11 +448,32 @@ export default function Pipeline() {
 
   // Hamilton "keep only what I picked" flow: delete the pipeline cards the
   // user did NOT select for Hamilton. Returns a promise so the toolbar can
-  // show its own progress/confirmation.
+  // show its own progress/confirmation. Uses allSettled so a single failure
+  // doesn't abort the rest, always invalidates the cache, and reports failures.
   const handleDeleteUnselectedForHamilton = async (ids) => {
     if (!Array.isArray(ids) || ids.length === 0) return;
-    await Promise.all(ids.map((id) => client.entities.Grant.delete(id)));
-    queryClient.invalidateQueries({ queryKey: ['grants'] });
+    try {
+      const results = await Promise.allSettled(
+        ids.map((id) => client.entities.Grant.delete(id)),
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      const succeeded = results.length - failed;
+      if (failed > 0) {
+        toast({
+          variant: "destructive",
+          title: "Some Grants Could Not Be Removed",
+          description: `Removed ${succeeded}, ${failed} failed. Please try again for the remaining grants.`,
+        });
+      }
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Delete Failed",
+        description: error?.message || "There was an error removing the unselected grants.",
+      });
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['grants'] });
+    }
   };
 
   const handleProcessAll = async () => {
@@ -421,14 +506,17 @@ export default function Pipeline() {
       const jobId = job?.id ?? job?.jobId
 
       if (jobId) {
+        // Keep isProcessAllPending true while the job is queued/running; the
+        // completion (or polling-error) effect will clear it. This prevents
+        // the user from queuing duplicate jobs while one is in flight.
         setProcessAllJobId(jobId)
       } else {
         toast({
           title: 'Pipeline automation started',
           description: 'Job queued. Progress cannot be tracked.',
         })
+        setIsProcessAllPending(false)
       }
-      setIsProcessAllPending(false)
     } catch (error) {
       setIsProcessAllPending(false)
       toast({
@@ -439,14 +527,20 @@ export default function Pipeline() {
     }
   }
 
-  // Handle filter conflicts - ensure hideExpired and showOnlyExpired are mutually exclusive
+  // Handle filter conflicts - ensure hideExpired and showOnlyExpired are mutually exclusive.
+  // First resolve the case where the incoming object itself has both flags enabled
+  // (precedence: hideExpired wins), then resolve transitions against prior state.
   const handleFiltersChange = (newFilters) => {
-    if (newFilters.hideExpired && filters.showOnlyExpired) {
-      newFilters.showOnlyExpired = false;
-    } else if (newFilters.showOnlyExpired && filters.hideExpired) {
-      newFilters.hideExpired = false;
+    const next = { ...newFilters };
+    if (next.hideExpired && next.showOnlyExpired) {
+      // Both enabled in the same payload — pick a precedence and clear the other.
+      next.showOnlyExpired = false;
+    } else if (next.hideExpired && filters.showOnlyExpired) {
+      next.showOnlyExpired = false;
+    } else if (next.showOnlyExpired && filters.hideExpired) {
+      next.hideExpired = false;
     }
-    setFilters(newFilters);
+    setFilters(next);
   };
 
   const isLoading = isLoadingGrants || isLoadingOrgs;
@@ -676,8 +770,13 @@ export default function Pipeline() {
                   </>
                 )}
                 {processAllJobStatus === "failed" && `Failed: ${processAllJob?.error ?? "Unknown error"}`}
-                {!["queued", "running", "completed", "failed"].includes(processAllJobStatus) &&
-                  `Status: ${processAllJobStatus || "…"}`}
+                {!processAllJobStatus &&
+                  (processAllJobQuery.isError
+                    ? "Unable to fetch job status."
+                    : "Status: …")}
+                {processAllJobStatus &&
+                  !["queued", "running", "completed", "failed"].includes(processAllJobStatus) &&
+                  `Status: ${processAllJobStatus}`}
               </AlertDescription>
             </Alert>
           )}
@@ -689,7 +788,11 @@ export default function Pipeline() {
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">vNext Applications</h2>
                 <p className="text-sm text-slate-600">
-                  {vnextAppsQuery.isLoading ? "Loading…" : `${vnextApps.length} applications`}
+                  {vnextAppsQuery.isLoading
+                    ? "Loading…"
+                    : vnextAppsQuery.isError
+                      ? "Unable to load applications."
+                      : `${vnextApps.length} applications`}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
@@ -709,7 +812,9 @@ export default function Pipeline() {
                       <span className="font-medium">{a.state}</span>
                       <span className="text-slate-500"> — EV: </span>
                       <span className="text-slate-700">
-                        {a.expected_value !== null ? Number(a.expected_value).toFixed(2) : "—"}
+                        {Number.isFinite(Number(a.expected_value))
+                          ? Number(a.expected_value).toFixed(2)
+                          : "—"}
                       </span>
                     </div>
                     <Button
@@ -724,7 +829,9 @@ export default function Pipeline() {
               </ul>
             ) : (
               <p className="mt-3 text-sm text-slate-600">
-                Create a vNext application from Funding Opportunities (when enabled).
+                {vnextAppsQuery.isError
+                  ? "Could not load vNext applications. Please try again."
+                  : "Create a vNext application from Funding Opportunities (when enabled)."}
               </p>
             )}
           </div>

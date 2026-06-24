@@ -125,11 +125,11 @@ export default function Documents() {
   });
 
   const urlImportMutation = useMutation({
-    mutationFn: async ({ url, profileId }) => {
+    mutationFn: async ({ url, profileId, addToOpportunities: addToOpportunitiesArg, documentAI }) => {
       const trimmed = String(url || "").trim();
       if (!trimmed) throw new Error("Enter a URL");
       const fileUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-      // Validate the constructed URL before submitting â rejects inputs like
+      // Validate the constructed URL before submitting â rejects inputs like
       // 'not a url at all' that would produce a malformed https:// string.
       let parsedUrl;
       try {
@@ -147,11 +147,11 @@ export default function Documents() {
         profile_id: profileId,
         file_url: fileUrl,
         name,
-        type: canDocumentAI ? "source_material" : "profile_file",
-        skip_parsing: canDocumentAI ? false : true,
-        enable_ai: canDocumentAI ? true : false,
+        type: documentAI ? "source_material" : "profile_file",
+        skip_parsing: documentAI ? false : true,
+        enable_ai: documentAI ? true : false,
         source: "url_import",
-        add_to_opportunities: addToOpportunities,
+        add_to_opportunities: addToOpportunitiesArg,
       });
     },
     onSuccess: (_data, variables) => {
@@ -160,7 +160,7 @@ export default function Documents() {
       setUrlImportError(null);
       toast({
         title: "URL imported",
-        description: addToOpportunities
+        description: variables.addToOpportunities
           ? "We'll parse the page and add any grant info to Discover for the whole app."
           : "We'll download and parse the content for this profile.",
       });
@@ -177,15 +177,15 @@ export default function Documents() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, profileId }) => {
+    mutationFn: async ({ file, profileId, handwriting, documentAI }) => {
       const formData = new FormData();
       formData.append('profile_id', profileId);
       formData.append('document', file);
       // Baseline ingest is available to all tiers; AI parsing is gated server-side by enable_ai.
-      formData.append('enable_ai', canDocumentAI ? 'true' : 'false');
+      formData.append('enable_ai', documentAI ? 'true' : 'false');
       // Enable OCR for images (and optionally handwriting) during ingest.
       formData.append('ocr', 'true');
-      formData.append('handwriting', handwritingOcr ? 'true' : 'false');
+      formData.append('handwriting', handwriting ? 'true' : 'false');
       formData.append('ocr_language', 'eng');
       return ingestDocument(formData);
     },
@@ -198,7 +198,7 @@ export default function Documents() {
       }
       toast({
         title: "Document uploaded",
-        description: canDocumentAI
+        description: variables.documentAI
           ? "We're parsing the file and will update the profile shortly."
           : "Upload complete. AI document enrichment is disabled for your tier.",
       });
@@ -251,7 +251,9 @@ export default function Documents() {
 
   const enrichmentSections = useMemo(() => {
     if (!latestEnrichmentJob?.result_meta?.sections) return []
-    return latestEnrichmentJob.result_meta.sections.filter(Boolean)
+    return latestEnrichmentJob.result_meta.sections.filter(
+      (entry) => entry && entry.section_key
+    )
   }, [latestEnrichmentJob])
 
   const statusToBadgeClass = (status) =>
@@ -363,12 +365,6 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       return;
     }
 
-    if (file.size > 50 * 1024 * 1024) {
-      setUploadFile(null);
-      setUploadError('File must be 50MB or smaller.');
-      return;
-    }
-
     setUploadError(null);
     setUploadFile(file);
   };
@@ -389,7 +385,12 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       return;
     }
 
-    uploadMutation.mutate({ file: uploadFile, profileId: selectedProfileId });
+    uploadMutation.mutate({
+      file: uploadFile,
+      profileId: selectedProfileId,
+      handwriting: handwritingOcr,
+      documentAI: canDocumentAI,
+    });
   };
 
   const previousStatusRef = useRef(null)
@@ -404,7 +405,16 @@ const latestDuration = describeDuration(latestEnrichmentJob)
     ) {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedProfileId] })
       queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
-      useAuthStore.getState().refreshProfiles({ reason: 'enrichment-complete', force: true })
+      try {
+        const result = useAuthStore.getState().refreshProfiles({ reason: 'enrichment-complete', force: true })
+        if (result && typeof result.catch === 'function') {
+          result.catch(() => {
+            // Swallow refreshProfiles failures; profile list will refresh on next interaction.
+          })
+        }
+      } catch {
+        // Swallow synchronous refreshProfiles failures so the render does not crash.
+      }
     }
 
     previousStatusRef.current = status
@@ -428,7 +438,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
             {profiles.length > 0 && (
               <Select
                 value={selectedProfileId ?? ''}
-                onValueChange={setSelectedProfileId}
+                onValueChange={(id) => isRealProfileId(id) && setSelectedProfileId(id)}
                 disabled={!allowProfileSelection}
               >
                 <SelectTrigger className="w-72">
@@ -483,7 +493,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge className={enrichmentStatusClass}>
-                    {latestEnrichmentJob.status.replace(/_/g, " ")}
+                    {(latestEnrichmentJob.status ?? 'queued').replace(/_/g, " ")}
                   </Badge>
                   {latestDuration ? (
                     <span className="text-[11px] font-medium text-blue-700">Duration {latestDuration}</span>
@@ -498,10 +508,10 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <div className="text-xs text-blue-900 space-y-2">
                   <p className="font-medium uppercase tracking-wide text-blue-800">Updated sections</p>
                   <ul className="list-disc list-inside space-y-1">
-                    {enrichmentSections.map((entry) => (
-                      <li key={entry.section_key}>
+                    {enrichmentSections.map((entry, index) => (
+                      <li key={entry.section_key ?? `section-${index}`}>
                         <span className="font-semibold">
-                          {entry.section_key.replace(/_/g, " ")}
+                          {(entry.section_key ?? '').replace(/_/g, " ")}
                         </span>
                         {entry.updated_fields?.length
                           ? ` • ${entry.updated_fields.join(", ")}`
@@ -523,15 +533,15 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <div className="space-y-2">
                   <p className="text-xs uppercase tracking-wide text-blue-800">Recent runs</p>
                   <div className="space-y-1.5">
-                    {enrichmentHistory.slice(1).map((job) => {
+                    {enrichmentHistory.slice(1).map((job, index) => {
                       const jobDuration = describeDuration(job)
                       return (
                         <div
-                          key={job.id}
+                          key={job.id ?? `job-${index}`}
                           className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-100 bg-white/70 px-3 py-2 text-xs text-blue-900"
                         >
                           <div className="flex flex-col gap-1">
-                            <span className="font-mono text-[11px] text-blue-600">{job.id.slice(0, 8)}…</span>
+                            <span className="font-mono text-[11px] text-blue-600">{job.id?.slice(0, 8) ?? '—'}…</span>
                             <span className="text-blue-700">
                               {describeTimestamp(job.completed_at) ||
                                 describeTimestamp(job.started_at) ||
@@ -540,7 +550,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                             </span>
                           </div>
                           <div className="flex flex-col items-end gap-1 text-right">
-                            <Badge className={statusToBadgeClass(job.status)}>{job.status.replace(/_/g, " ")}</Badge>
+                            <Badge className={statusToBadgeClass(job.status)}>{(job.status ?? 'queued').replace(/_/g, " ")}</Badge>
                             {jobDuration ? (
                               <span className="text-[11px] text-blue-700">Duration {jobDuration}</span>
                             ) : null}
@@ -604,7 +614,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf,text/rtf,image/jpeg,image/png,image/heic,image/heif,image/*"
+                  accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf,text/rtf,image/jpeg,image/png,image/heic,image/heif"
                   onChange={handleFileChange}
                   disabled={!selectedProfileId || isUploading}
                   className="w-full sm:w-72 text-sm"
@@ -714,7 +724,12 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                         });
                         return;
                       }
-                      urlImportMutation.mutate({ url: urlToImport, profileId: selectedProfileId });
+                      urlImportMutation.mutate({
+                        url: urlToImport,
+                        profileId: selectedProfileId,
+                        addToOpportunities,
+                        documentAI: canDocumentAI,
+                      });
                     }}
                     disabled={!urlToImport.trim() || !selectedProfileId || urlImportMutation.isPending}
                     variant="outline"
@@ -792,7 +807,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-xs uppercase tracking-wide text-slate-500">Status</p>
-                  <Badge className={statusToBadgeClass(selectedJob.status)}>{selectedJob.status.replace(/_/g, " ")}</Badge>
+                  <Badge className={statusToBadgeClass(selectedJob.status)}>{(selectedJob.status ?? 'queued').replace(/_/g, " ")}</Badge>
                 </div>
                 <div>
                   <p className="text-xs uppercase tracking-wide text-slate-500">Created</p>
@@ -824,15 +839,15 @@ const latestDuration = describeDuration(latestEnrichmentJob)
                 <div className="space-y-2">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Updated sections</p>
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-3 space-y-2 text-xs text-slate-700">
-                    {selectedJob.result_meta.sections.map((entry) => (
-                      <div key={entry.section_key}>
-                        <p className="font-semibold">{entry.section_key.replace(/_/g, " ")}</p>
-                        {entry.updated_fields?.length ? (
+                    {selectedJob.result_meta.sections.map((entry, index) => (
+                      <div key={entry?.section_key ?? `section-${index}`}>
+                        <p className="font-semibold">{(entry?.section_key ?? '').replace(/_/g, " ")}</p>
+                        {entry?.updated_fields?.length ? (
                           <p className="text-slate-600">
                             Fields: <span className="text-slate-800">{entry.updated_fields.join(", ")}</span>
                           </p>
                         ) : null}
-                        {entry.notes ? <p className="text-slate-600">Notes: {entry.notes}</p> : null}
+                        {entry?.notes ? <p className="text-slate-600">Notes: {entry.notes}</p> : null}
                       </div>
                     ))}
                   </div>
