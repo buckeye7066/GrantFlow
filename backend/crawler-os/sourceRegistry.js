@@ -150,6 +150,41 @@ export const SOURCES = Object.freeze([
   // scholarship* endpoints 404 while occupation returns 200 with the same token.
   // Individual scholarships are sourced by the Brave+LLM scholarshipWebDiscovery
   // service instead. If DOL reinstates it, re-add a row + a thin adapter.)
+  //
+  // --- Net-new key-free federal lanes (2026-06-24) ---------------------------
+  {
+    source_id: 'federal_register',
+    name: 'Federal Register — funding notices (NOFO/NOFA)',
+    source_type: 'api',
+    trust_tier: TRUST_TIER.OFFICIAL_API,
+    base_url: 'https://www.federalregister.gov',
+    directory: false, loan_allowed: false, cost_share_allowed: true,
+    // Federal NOFOs are institutional (agencies fund orgs/govts), so this lane
+    // is gated OUT for individuals/students — the same precision as grants.gov.
+    applicant_types: ['nonprofit', 'school', 'government', 'business', 'vfd', 'farm'],
+    need_categories: ['*'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.PROGRAM],
+    crawler_method: 'api', requires_env: [], refresh_frequency_days: 1, priority_score: 80,
+  },
+  {
+    source_id: 'nih_guide',
+    name: 'NIH Guide for Grants & Contracts (funding opportunities)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml',
+    feed_url: 'https://grants.nih.gov/grants/guide/newsfeed/fundingopps.xml',
+    sponsor_name: 'U.S. National Institutes of Health',
+    directory: false, loan_allowed: false, cost_share_allowed: true,
+    applicant_types: ['nonprofit', 'school', 'government', 'business'],
+    // Research/health-leaning (NOT '*'): only profiles whose needs overlap (or
+    // have no specific needs) pull NIH notices, so a fire dept needing turnout
+    // gear isn't shown research R01s. The match engine still scores relevance.
+    need_categories: ['medical', 'programs', 'technology', 'education'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.PROGRAM],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 7, priority_score: 70,
+  },
 ]);
 
 const BY_ID = Object.freeze(Object.fromEntries(SOURCES.map((s) => [s.source_id, s])));

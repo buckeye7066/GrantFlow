@@ -122,4 +122,70 @@ export async function auditCrawlerCoverage(db, { limit = 200 } = {}) {
   return out;
 }
 
-export default { explainCrawlerPlanForProfile, auditCrawlerCoverage };
+/**
+ * getProfileCoverage — user-facing "source-lane coverage / negative evidence":
+ * which discovery sources were SEARCHED for this profile, which currently have
+ * matches, and which were checked but have NO current match. Surfacing the
+ * "checked X, Y, Z — no current match in W" lanes is the explainability/trust
+ * goal (mission goal #9) and the openprose "negative-evidence" idea applied to
+ * GrantFlow. Cheap: one pure planner call + one indexed DISTINCT query.
+ *
+ * @param {object} db
+ * @param {string} profileId
+ * @returns {Promise<{
+ *   profile_id: string,
+ *   sources_searched: Array<{source_id, name, directory}>,
+ *   sources_with_results: string[],
+ *   sources_no_current_match: Array<{source_id, name}>,
+ *   excluded_sources: Array<{source_id, name, reasons}>,
+ * }>}
+ */
+export async function getProfileCoverage(db, profileId) {
+  if (!db || !profileId) throw new Error('getProfileCoverage: db and profileId required');
+  const plan = await explainCrawlerPlanForProfile(db, profileId);
+  if (plan?.error) {
+    return {
+      profile_id: profileId,
+      error: plan.error,
+      sources_searched: [],
+      sources_with_results: [],
+      sources_no_current_match: [],
+      excluded_sources: [],
+    };
+  }
+
+  // Which sources currently have stored crawler-os matches for this profile.
+  let contributing = new Set();
+  try {
+    const rows = await db
+      .prepare(
+        `SELECT DISTINCT o.source AS source
+           FROM profile_opportunity_matches m
+           JOIN funding_opportunities o ON o.id = m.opportunity_id
+          WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+            AND o.source IS NOT NULL`,
+      )
+      .all(profileId);
+    contributing = new Set((rows || []).map((r) => r.source).filter(Boolean));
+  } catch {
+    contributing = new Set();
+  }
+
+  const searched = plan.selected_sources || [];
+  const withResults = searched
+    .filter((s) => contributing.has(s.source_id))
+    .map((s) => s.source_id);
+  const noCurrentMatch = searched
+    .filter((s) => !contributing.has(s.source_id))
+    .map((s) => ({ source_id: s.source_id, name: s.name }));
+
+  return {
+    profile_id: profileId,
+    sources_searched: searched.map((s) => ({ source_id: s.source_id, name: s.name, directory: s.directory })),
+    sources_with_results: withResults,
+    sources_no_current_match: noCurrentMatch,
+    excluded_sources: (plan.excluded_sources || []).map((s) => ({ source_id: s.source_id, name: s.name, reasons: s.reasons })),
+  };
+}
+
+export default { explainCrawlerPlanForProfile, auditCrawlerCoverage, getProfileCoverage };

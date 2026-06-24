@@ -325,6 +325,32 @@ router.get('/profile/:profileId/grants', async (req, res, next) => {
    * The fix: filter by record_origin to only return curated/verified records,
    * AND post-filter to catch any informational pages that slipped through.
    */
+// Source-lane coverage for the Discover UI: which discovery sources were
+// searched for this profile, which currently have matches, and which were
+// checked but have NO current match ("negative evidence" — mission goal #9
+// explainability). Deliberately OFF the hot opportunities path: one pure
+// planner call + one indexed DISTINCT query. Tolerant — never 500s the UI.
+router.get('/profile/:profileId/coverage', async (req, res) => {
+  const profileId = req.params.profileId
+  const auth = await requireProfileAccess(req, res, profileId)
+  if (!auth) return
+  try {
+    const { getProfileCoverage } = await import('../services/crawlerPlanService.js')
+    const coverage = await getProfileCoverage(req.db, profileId)
+    return res.json({ ok: true, ...coverage })
+  } catch (err) {
+    routeLogger.warn(`[matching] coverage unavailable for ${profileId}: ${err?.message || err}`)
+    return res.json({
+      ok: false,
+      profile_id: profileId,
+      sources_searched: [],
+      sources_with_results: [],
+      sources_no_current_match: [],
+      excluded_sources: [],
+    })
+  }
+})
+
 router.get('/profile/:profileId/opportunities', async (req, res, next) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)

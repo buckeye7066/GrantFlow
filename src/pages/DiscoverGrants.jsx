@@ -12,6 +12,7 @@ import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriang
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import SearchCoveragePanel from '@/components/discovery/SearchCoveragePanel';
+import SourceLaneCoverage from '@/components/discovery/SourceLaneCoverage';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -1676,6 +1677,13 @@ export default function DiscoverGrants() {
             sourceLabels={coverageInfo.labels}
             crawlerType={coverageInfo.crawlerType}
           />
+        ) : null}
+
+        {/* Source-lane coverage / negative evidence: which sources we searched
+            for this profile and which were checked with no current match. Only
+            renders once a search has run for a selected profile. */}
+        {hasSearched && effectiveProfileId ? (
+          <SourceLaneCoverage profileId={effectiveProfileId} refreshKey={crawlerResultMeta} />
         ) : null}
 
         {/* Live discovery progress: the profile-aware crawler fleet runs in the

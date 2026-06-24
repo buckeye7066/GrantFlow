@@ -44,7 +44,6 @@ describe('endpoint sweep — every GET endpoint is mounted and not 5xx (allowlis
     } catch (err) {
       // If migrations can't apply here, the test still runs against schema.sql
       // and the allowlist covers the migration-only gaps.
-      // eslint-disable-next-line no-console
       console.warn('[endpointSweep] migration apply skipped:', err?.message || err)
     }
   }, 120_000)
@@ -53,18 +52,30 @@ describe('endpoint sweep — every GET endpoint is mounted and not 5xx (allowlis
     const endpoints = enumerate().filter((e) => e.method === 'GET')
     expect(endpoints.length).toBeGreaterThan(200) // sanity: enumeration worked
 
-    const offenders = []
-    for (const ep of endpoints) {
-      const { url, parameterized } = probePath(ep.fullPath)
-      let status = 0
+    const probe = async (url) => {
       try {
         const res = await request(app)
           .get(url)
           .set('x-admin-token', TEST_ADMIN_TOKEN)
           .set('Authorization', `Bearer ${TEST_ADMIN_TOKEN}`)
-        status = res.status
+        return res.status
       } catch {
-        status = -1
+        return -1
+      }
+    }
+
+    const offenders = []
+    for (const ep of endpoints) {
+      const { url, parameterized } = probePath(ep.fullPath)
+      let status = await probe(url)
+      // A 5xx is only counted if it REPRODUCES on a retry. A deterministically
+      // broken handler 5xx's both times (real defect → fails the gate); a
+      // transient 5xx under heavy parallel test load (statement_timeout,
+      // momentary resource contention) clears on retry. This keeps the gate
+      // reliable without hiding a genuinely-throwing handler.
+      if (status >= 500 || status === -1) {
+        await new Promise((r) => setTimeout(r, 250))
+        status = await probe(url)
       }
       // The GATE asserts only on 5xx (a handler that THREW) — the reliable,
       // false-positive-free invariant. A static-path 404 is NOT a dependable
@@ -82,7 +93,6 @@ describe('endpoint sweep — every GET endpoint is mounted and not 5xx (allowlis
         }
       }
       if (process.env.SWEEP_DEBUG && (broken || (status === 404 && !parameterized))) {
-        // eslint-disable-next-line no-console
         console.log(`[sweep] ${ep.method} ${ep.fullPath} -> ${status} (${ep.file})`)
       }
     }

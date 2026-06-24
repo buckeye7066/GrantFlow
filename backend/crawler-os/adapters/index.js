@@ -11,6 +11,8 @@ import { createBenefitsGovAdapter } from './benefitsGovAdapter.js';
 import { createUsdaRdAdapter } from "./usdaRdAdapter.js";
 import { createFemaAfgAdapter } from "./femaAfgAdapter.js";
 import { createStudentAidGovAdapter } from "./studentAidGovAdapter.js";
+import { createFederalRegisterAdapter } from "./federalRegisterAdapter.js";
+import { createAgencyRssAdapter } from "./agencyRssAdapter.js";
 const FACTORIES = Object.freeze({
   grants_gov: createGrantsGovAdapter,
   sam_gov: createSamGovAdapter,
@@ -19,6 +21,11 @@ const FACTORIES = Object.freeze({
   usda_rd: createUsdaRdAdapter,
   fema_afg: createFemaAfgAdapter,
   studentaid_gov: createStudentAidGovAdapter,
+  // Net-new key-free federal lanes (2026-06-24): Federal Register NOFOs (JSON
+  // API) + NIH Guide funding feed (RSS). Both flow through the planner ->
+  // reality gate -> match engine unchanged and widen REAL federal coverage.
+  federal_register: createFederalRegisterAdapter,
+  nih_guide: createAgencyRssAdapter,
   // NOTE: CareerOneStop's Scholarship Web API was RETIRED (verified 2026-06-23:
   // their 21 live services include no scholarship endpoint; scholarship* paths
   // 404 while occupation returns 200). Individual scholarships are covered by
