@@ -56,6 +56,7 @@ import { createLogger } from '../utils/logger.js'
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
+import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -822,6 +823,283 @@ export async function enforceProfileDisplayNameNotDoubled(db) {
 }
 
 /**
+ * ─────────────────────────────────────────────────────────────────────────
+ * INVARIANT: ONE CANONICAL INCOME PER INDIVIDUAL PROFILE
+ * (income data-integrity — need-based eligibility matching).
+ * ─────────────────────────────────────────────────────────────────────────
+ *
+ * THE BUG THIS CLOSES
+ * -------------------
+ * A profile's data lives in `profile_sections` rows keyed by `section_key`.
+ * The SAME logical field (household_income) is, in legacy/AI-written data,
+ * present in TWO different sections that disagree:
+ *   - section_key 'financial'             → household_income "$310,000"
+ *   - section_key 'financial_information' → household_income 28000, low_income true
+ * The high figure is typically a PARENT's / whole-household income that got
+ * captured onto a dependent student's own profile (e.g. extracted from a FAFSA
+ * or university award letter), while the low figure is the STUDENT APPLICANT'S
+ * own income that is consistent with the need flags.
+ *
+ * WHY IT MATTERS
+ * --------------
+ * Need-based eligibility is decided from income. The canonical matcher signal
+ * builder (buildProfileSignals in services/profileHelpers.js) reads ONLY
+ * `sections.financial_information.household_income`, but MANY other readers fall
+ * back to the legacy `sections.financial` (e.g. needsBasedQueryExpander.js:925,
+ * benefitEligibilityService.js:83, medicalNecessity.js:77, applyEngine.js:1613,
+ * profileNormalizer.js:889 — all `financial_information || financial`). So WHICH
+ * income a code path sees depends on which section happens to be populated. An
+ * inflated parent figure silently makes a needy student look wealthy and stops
+ * them matching need-based aid. The canonical section is `financial_information`
+ * (config/profileSchema.js); `financial` is a legacy alias.
+ *
+ * THE RECONCILIATION RULE (conservative; owner directive:
+ * "count the individual's own income, not a parent's; the lower one is the
+ * student's")
+ * -------------------------------------------------------------------------
+ * For INDIVIDUAL / student / family / veteran profiles ONLY (orgs/businesses
+ * are never touched — high revenue there is legitimate), when the two sections
+ * carry CONFLICTING incomes we collapse to ONE canonical value and write it to
+ * `financial_information` (the section the matcher trusts), keeping the legacy
+ * `financial` section in agreement so no future reader can pick the wrong one:
+ *
+ *   - If the profile carries a NEED SIGNAL (low_income true, a High/Critical/
+ *     Extreme financial_need_level, below_poverty_line, OR a sub-$50k income in
+ *     either section), the canonical income is the LOWER of the two figures —
+ *     the applicant's own income, consistent with the need flags. The need
+ *     flags are preserved.
+ *   - If there is NO need signal either way (both figures look comfortable and
+ *     nothing marks need), the conflict is genuinely AMBIGUOUS — we do NOT guess
+ *     which is the applicant's own. We LOG it for human review and leave the
+ *     data untouched (prefer human review over corrupting data).
+ *
+ * We never invent income, never raise an income, never touch a profile with no
+ * contradiction, and never touch org/business/nonprofit profiles. Idempotent:
+ * once the two sections agree there is no conflict, so a re-run is a no-op.
+ *
+ * Best-effort about schema: profile_sections may be absent on a minimal/test
+ * DB; we degrade silently (zero repairs) like the other sweeps.
+ */
+
+/** Canonical financial section the matcher trusts; `financial` is the legacy alias. */
+const INCOME_CANONICAL_SECTION = 'financial_information'
+const INCOME_LEGACY_SECTION = 'financial'
+
+/**
+ * Parent categories that mean "this profile is a PERSON / household", not an
+ * organization. A profile is treated as INDIVIDUAL iff its resolved type (or any
+ * ancestor in its parent chain) is one of these AND it never rolls up to an
+ * org category. Resolved via profileTypeRegistry so it tracks new person types.
+ */
+const INDIVIDUAL_ROOT_TYPES = Object.freeze(['individual', 'family', 'student', 'veteran'])
+const ORG_ROOT_TYPES = Object.freeze([
+  'business', 'nonprofit', 'public_agency', 'local_government', 'school',
+  'school_district', 'church', 'library',
+])
+
+/**
+ * Decide whether a raw profile type string denotes an individual/household.
+ * Conservative: an UNKNOWN type returns false (we'd rather skip than risk
+ * touching an org). A type that rolls up to BOTH an individual and an org root
+ * (shouldn't happen in the registry) is treated as NOT individual.
+ */
+function isIndividualProfileType(rawType) {
+  const id = resolveProfileType(rawType)
+  if (!id) return false
+  const chain = [id, ...getParentChain(id)]
+  if (chain.some((t) => ORG_ROOT_TYPES.includes(t))) return false
+  return chain.some((t) => INDIVIDUAL_ROOT_TYPES.includes(t))
+}
+
+/**
+ * Robustly parse a stored income value into a finite number, or null.
+ * Handles plain numbers (28000), numeric strings ("28000"), and currency-
+ * formatted strings ("$310,000", "$28,000.00"). Returns null for empty/
+ * non-numeric/negative values. NOTE: the matcher's own parseNumber() does NOT
+ * strip "$"/"," so a value like "$310,000" reads as null there — another reason
+ * to normalize to a clean number here.
+ */
+function parseIncomeValue(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null
+  const cleaned = String(value).replace(/[$,\s]/g, '')
+  if (cleaned === '') return null
+  const n = Number(cleaned)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+/**
+ * Pull the income figure a section advertises: household_income first, then
+ * annual_income (the matcher's documented fallback order).
+ */
+function sectionIncome(section) {
+  if (!section || typeof section !== 'object') return null
+  return parseIncomeValue(section.household_income) ?? parseIncomeValue(section.annual_income)
+}
+
+/** True if EITHER section carries an explicit/derivable financial-need signal. */
+function hasNeedSignal(sections, incomes) {
+  const NEED_LEVELS = new Set(['high', 'critical', 'extreme'])
+  for (const s of sections) {
+    if (!s || typeof s !== 'object') continue
+    if (s.low_income === true || s.low_income === 'yes') return true
+    if (s.below_poverty_line === true || s.below_poverty_line === 'yes') return true
+    const level = String(s.financial_need_level ?? '').trim().toLowerCase()
+    if (NEED_LEVELS.has(level)) return true
+  }
+  // A sub-$50k figure (the matcher's own low-income threshold) is itself a need
+  // signal: it means at least one of the recorded incomes belongs to someone of
+  // modest means, so the LOWER value is the safe, need-consistent choice.
+  return incomes.some((n) => n !== null && n < 50000)
+}
+
+/**
+ * Return the set of column names on the `profiles` table for the active
+ * dialect. Same dialect-agnostic / defensive contract as listGrantColumns:
+ * any probe failure yields an empty set so callers degrade gracefully.
+ */
+async function listProfileColumns(db) {
+  try {
+    if ((db?.dialect || 'sqlite') === 'postgres') {
+      const rows = await db
+        .prepare(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'profiles'`,
+        )
+        .all()
+      return new Set((rows || []).map((r) => String(r.column_name)))
+    }
+    const cols = await db.prepare('PRAGMA table_info(profiles)').all()
+    return new Set((cols || []).map((c) => String(c.name)))
+  } catch {
+    return new Set()
+  }
+}
+
+export async function enforceProfileIncomeReconciliation(db) {
+  return runInvariant('profile_income_reconciliation', async () => {
+    // Load every profile's type plus both financial sections in one pass.
+    // The type columns vary by deployment: prod `profiles` has only
+    // `primary_type` (no `applicant_type`), while the matcher prefers
+    // applicant_type when present. We probe which type columns exist and build
+    // the SELECT dynamically so a MISSING column can never throw — selecting a
+    // hard-coded missing column would otherwise trip the catch below and
+    // SILENTLY DISABLE the whole invariant in prod. profile_sections may be
+    // absent on a very old/test schema → degrade to 0.
+    const profileCols = await listProfileColumns(db)
+    const typeCols = ['applicant_type', 'primary_type'].filter((c) => profileCols.has(c))
+    const selectCols = ['id', ...typeCols].join(', ')
+    let profileRows
+    try {
+      profileRows = await db.prepare(`SELECT ${selectCols} FROM profiles`).all()
+    } catch (err) {
+      const msg = String(err?.message || '')
+      if (/no such (table|column)|does not exist|relation .* does not exist/i.test(msg)) {
+        return { scanned: 0, repaired: 0, flagged: 0 }
+      }
+      throw err
+    }
+
+    let sectionRows = []
+    try {
+      sectionRows = await db
+        .prepare(
+          `SELECT profile_id, section_key, data FROM profile_sections
+           WHERE section_key IN (?, ?)`,
+        )
+        .all(INCOME_CANONICAL_SECTION, INCOME_LEGACY_SECTION)
+    } catch {
+      return { scanned: 0, repaired: 0, flagged: 0 }
+    }
+
+    // Index the two financial sections per profile.
+    const byProfile = new Map()
+    const parseData = (raw) => {
+      try {
+        return typeof raw === 'object' && raw ? raw : JSON.parse(raw || '{}')
+      } catch {
+        return null
+      }
+    }
+    for (const row of sectionRows) {
+      const data = parseData(row.data)
+      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
+      if (!byProfile.has(row.profile_id)) byProfile.set(row.profile_id, {})
+      byProfile.get(row.profile_id)[row.section_key] = data
+    }
+
+    let scanned = 0
+    let repaired = 0
+    let flagged = 0
+    for (const profile of profileRows) {
+      const pair = byProfile.get(profile.id)
+      if (!pair) continue // no financial sections at all
+      const canonical = pair[INCOME_CANONICAL_SECTION]
+      const legacy = pair[INCOME_LEGACY_SECTION]
+      // A conflict needs BOTH sections present with a parseable income each.
+      if (!canonical || !legacy) continue
+      const canonicalIncome = sectionIncome(canonical)
+      const legacyIncome = sectionIncome(legacy)
+      if (canonicalIncome === null || legacyIncome === null) continue
+      if (canonicalIncome === legacyIncome) continue // no contradiction
+      scanned += 1
+
+      // ORGS ARE OFF-LIMITS: high revenue is legitimate for a business/nonprofit.
+      const rawType = profile.applicant_type || profile.primary_type
+      if (!isIndividualProfileType(rawType)) continue
+
+      const incomes = [canonicalIncome, legacyIncome]
+      if (!hasNeedSignal([canonical, legacy], incomes)) {
+        // Genuinely ambiguous: two comfortable incomes, no need flag to say which
+        // is the applicant's own. Do NOT guess — flag for human review.
+        flagged += 1
+        log.warn('ambiguous income conflict left for human review (no need signal)', {
+          profileId: profile.id,
+          canonicalIncome,
+          legacyIncome,
+        })
+        continue
+      }
+
+      // Need-consistent reconciliation: the applicant's OWN income is the LOWER
+      // of the two (a parent/household figure is the inflated one). Write it to
+      // the canonical section the matcher trusts, and bring the legacy section
+      // into agreement so no fallback reader can resurface the inflated value.
+      const ownIncome = Math.min(canonicalIncome, legacyIncome)
+      const before = { canonicalIncome, legacyIncome }
+
+      const nextCanonical = { ...canonical, household_income: ownIncome }
+      // Keep the low-income flag truthful when the reconciled income is low.
+      if (ownIncome < 50000) nextCanonical.low_income = true
+      const nextLegacy = { ...legacy, household_income: ownIncome }
+      if (ownIncome < 50000) nextLegacy.low_income = true
+
+      await db
+        .prepare(
+          'UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?',
+        )
+        .run(JSON.stringify(nextCanonical), profile.id, INCOME_CANONICAL_SECTION)
+      await db
+        .prepare(
+          'UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?',
+        )
+        .run(JSON.stringify(nextLegacy), profile.id, INCOME_LEGACY_SECTION)
+      repaired += 1
+      log.info('reconciled conflicting profile income (kept applicant own/lower)', {
+        profileId: profile.id,
+        before,
+        after: { household_income: ownIncome },
+      })
+    }
+
+    if (repaired > 0 || flagged > 0) {
+      log.info('[income-reconciliation] summary', { scanned, repaired, flagged })
+    }
+    return { scanned, repaired, flagged }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -849,6 +1127,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Profile-level data repair (not pipeline): collapse any doubled display_name
   // (e.g. "Robert White Robert Michael White") back to a single name.
   steps.push(await enforceProfileDisplayNameNotDoubled(db))
+  // Profile-level DATA repair (not pipeline): collapse a conflicting income
+  // across the 'financial' vs 'financial_information' sections of an INDIVIDUAL
+  // profile down to the applicant's own (need-consistent / lower) figure, so
+  // need-based matching can't be poisoned by a captured parent/household income.
+  steps.push(await enforceProfileIncomeReconciliation(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -865,6 +1148,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.scanned !== undefined ? { scanned: s.scanned } : {}),
       ...(s.duplicatesRemoved !== undefined ? { duplicatesRemoved: s.duplicatesRemoved } : {}),
       ...(s.profilesAffected !== undefined ? { profilesAffected: s.profilesAffected } : {}),
+      ...(s.flagged !== undefined ? { flagged: s.flagged } : {}),
       ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
     })),
   })
@@ -887,4 +1171,7 @@ export const __testables = {
   RELEVANCE_FLOOR,
   RELEVANCE_FLOOR_FALLBACK,
   enforceProfileScopedPipeline,
+  enforceProfileIncomeReconciliation,
+  isIndividualProfileType,
+  parseIncomeValue,
 }
