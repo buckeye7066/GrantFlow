@@ -1,4 +1,4 @@
-import { defineConfig } from "vite"
+import { defineConfig, configDefaults } from "vitest/config"
 import path from "node:path"
 
 export default defineConfig({
@@ -22,6 +22,12 @@ export default defineConfig({
     //   - `tests/unit/**/*.test.js` are Vitest-native (expect/globals) and
     //     belong to Vitest only.
     include: ["src/**/*.test.{js,jsx}", "backend/tests/**/*.test.{js,mjs}", "tests/unit/**/*.test.js"],
+    // endpointSweep boots the FULL server and probes 327 live handlers, which
+    // triggers their fire-and-forget side effects (telemetry/log writes) — an
+    // integration gate, not a deterministic fast unit test. Run it via
+    // `npm run test:endpoints` (and release:gates), not the parallel `unit`
+    // lane where its post-completion async surfaced as flaky worker errors.
+    exclude: [...configDefaults.exclude, "backend/tests/endpointSweep.test.js"],
     passWithNoTests: true,
     coverage: {
       provider: "v8",

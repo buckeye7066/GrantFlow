@@ -79,6 +79,11 @@ async function main() {
   // Gate 9: Multi-profile matching — individual/student/nonprofit/business must return results
   await run('node', ['--test', 'tests/unit/multi-profile-matching.test.mjs', 'tests/unit/validation-gate.test.mjs'], { label: 'multi-profile-matching' })
 
+  // Gate 10: Endpoint sweep — every GET handler is mounted + runs without 5xx
+  // (integration gate; boots the full server, so it lives here, not in the
+  // parallel fast `unit` lane).
+  await run('npx', ['vitest', 'run', '--config', 'vitest.endpoints.config.js'], { label: 'endpoint-sweep' })
+
   console.log('[gate] all release gates passed')
 }
 
