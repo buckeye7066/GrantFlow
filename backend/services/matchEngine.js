@@ -56,6 +56,10 @@ import {
   getProfilePreferenceSignals,
   isBehaviorLearningEnabled,
 } from './behaviorLearning.js'
+import {
+  verificationMatchAdjustment,
+  opportunityTargetsOrganizations as verificationTargetsOrganizations,
+} from './verification/index.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
@@ -2892,6 +2896,16 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     signals = buildProfileSignals({ profile: effectiveProfile, sections: opts.profileSections })
   }
 
+  // Census-derived geo ENRICHMENT (deterministic county/FIPS attached during
+  // discovery as rawOpportunity.verification.geo). Strictly ADDITIVE: fill the
+  // opportunity's geo_county ONLY when it is missing — never override a value
+  // the source already provided, and never introduce a hard reject. This lets
+  // the geo component reach the county tier it otherwise could not.
+  const attachedGeo = rawOpportunity?.verification?.geo ?? null
+  if (attachedGeo && (attachedGeo.county || attachedGeo.fips) && !rawOpportunity.geo_county) {
+    rawOpportunity = { ...rawOpportunity, geo_county: attachedGeo.county ?? rawOpportunity.geo_county }
+  }
+
   // Normalize for eligibility checks — pass signals so inferred needs are merged
   const profileNorm = rawProfile?.entityType !== undefined
     ? rawProfile
@@ -3066,6 +3080,27 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (matchedNeeds.length > 0) confidence += Math.min(15, matchedNeeds.length * 5)
   confidence = Math.max(0, Math.min(100, confidence))
 
+  // ── Free, keyless verification influence (ProPublica + Census) ──
+  // Pure + synchronous: reads a `verification` signal ATTACHED EARLIER during
+  // async discovery/normalization enrichment (no network in this hot loop).
+  // Conservative + honest: a verified tax-exempt sponsor nudges confidence up;
+  // an org-targeted row the IRS registry actively said is NOT a listed
+  // tax-exempt entity is gently down-weighted — NEVER hard-rejected, and the
+  // adjustment is ZERO whenever the API did not answer (verified == null).
+  const verificationSignal = rawOpportunity?.verification ?? null
+  if (verificationSignal) {
+    const orgTargeted = verificationTargetsOrganizations(oppNorm)
+    const adj = verificationMatchAdjustment(verificationSignal, { orgTargeted })
+    if (adj.scoreDelta !== 0 && decision !== 'REJECT') {
+      finalScore = Math.round(Math.max(0, Math.min(100, finalScore + adj.scoreDelta)))
+      if (match_explain?.scoreBreakdown) match_explain.scoreBreakdown.total = finalScore
+    }
+    if (adj.confidenceDelta !== 0) {
+      confidence = Math.max(0, Math.min(100, confidence + adj.confidenceDelta))
+    }
+    if (adj.reasons.length > 0) reasons.push(...adj.reasons)
+  }
+
   const matchedProfileTraits = match_explain?.matchedSignals ?? []
   // Surface the profile fields that, if provided, would strengthen this match.
   // Previously hardcoded to [] on the ACCEPT/REVIEW path, which silently dropped
@@ -3107,6 +3142,10 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     missingEligibilityFields,
     needAlignment,
     confidence,
+    // Surface the verification signal (if any was attached during discovery)
+    // so it is OBSERVABLE downstream (Sam diagnostics / Anya tools), per the
+    // agent-observability rule.
+    verification: verificationSignal ?? null,
     matcherVersion: MATCHER_VERSION,
     evaluatedAt: new Date().toISOString(),
   }

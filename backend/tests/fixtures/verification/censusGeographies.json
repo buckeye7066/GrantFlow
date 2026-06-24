@@ -1,0 +1,35 @@
+{
+  "result": {
+    "input": {
+      "address": { "address": "4600 Silver Hill Rd, Washington, DC 20233" },
+      "benchmark": { "id": "4", "benchmarkName": "Public_AR_Current" },
+      "vintage": { "id": "4", "vintageName": "Current_Current" }
+    },
+    "addressMatches": [
+      {
+        "tigerLine": { "side": "L", "tigerLineId": "657091557" },
+        "coordinates": { "x": -76.92744, "y": 38.84601 },
+        "geographies": {
+          "States": [
+            {
+              "GEOID": "24",
+              "STATE": "24",
+              "STUSAB": "MD",
+              "NAME": "Maryland",
+              "BASENAME": "Maryland"
+            }
+          ],
+          "Counties": [
+            {
+              "GEOID": "24033",
+              "STATE": "24",
+              "COUNTY": "033",
+              "NAME": "Prince George's County",
+              "BASENAME": "Prince George's"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

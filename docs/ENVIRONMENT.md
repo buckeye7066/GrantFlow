@@ -137,6 +137,29 @@ The architecture works as follows:
   - **`HAMILTON_CLOUD_LOGIN_PUBLIC_BASE`** - For `self_hosted` on a single-port PaaS (e.g. Railway): a public base URL that reverse-proxies Chromium's devtools endpoint so a remote device (phone) can reach the interactive window. If unset on such a host, the interactive window may not be reachable remotely (session capture still works for local/self-hosted hosts and via the CLI tool); the UI surfaces this and points users to Saved Login.
   - **`HAMILTON_CLOUD_LOGIN_ENABLED`** - Back-compat kill switch: `"false"` disables cloud login regardless of provider.
 
+- **Verification layer (ProPublica + US Census — FREE, NO API KEY)**
+  - A best-effort, non-blocking enrichment layer that confirms tax-exempt orgs
+    (IRS Form 990 via ProPublica Nonprofit Explorer) and resolves a profile's /
+    opportunity's location to county + FIPS (US Census Geocoder). Both APIs are
+    public and keyless — only enablement and timeouts are configurable. Every
+    call degrades gracefully on error/timeout/rate-limit and NEVER blocks
+    discovery or hard-rejects an opportunity. See
+    `backend/services/verification/`.
+  - **`ENABLE_REGISTRY_VERIFICATION`** - `"true"` (DEFAULT) to confirm
+    organization sponsors against the IRS tax-exempt registry. `"false"` fully
+    disables the network path. A *verified* tax-exempt sponsor nudges confidence
+    up; an org-targeted row the registry actively says is NOT a listed
+    tax-exempt entity is gently down-weighted — never rejected. No adjustment is
+    made when the API does not answer.
+  - **`ENABLE_CENSUS_GEO`** - `"true"` (DEFAULT) to deterministically resolve
+    ZIP/address → county + FIPS for sharper geo matching (reduces out-of-state
+    false positives). `"false"` disables the network path; the matcher falls
+    back to its existing state logic unchanged.
+  - **`REGISTRY_VERIFICATION_TIMEOUT_MS`** - Per-request ProPublica timeout (ms). Default `4000`.
+  - **`CENSUS_GEO_TIMEOUT_MS`** - Per-request Census timeout (ms). Default `4000`.
+  - **`VERIFICATION_CACHE_TTL_MS`** - In-memory cache TTL for verification lookups (ms). Default `86400000` (24h).
+  - **`VERIFICATION_CACHE_MAX_ENTRIES`** - LRU cap on the in-memory cache. Default `5000`.
+
 ### Optional observability
 
 - `LOG_LEVEL`

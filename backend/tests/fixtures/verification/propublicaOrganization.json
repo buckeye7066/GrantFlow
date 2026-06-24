@@ -1,0 +1,42 @@
+{
+  "organization": {
+    "ein": 530196605,
+    "strein": "53-0196605",
+    "name": "American National Red Cross",
+    "sub_name": "",
+    "address": "431 18TH ST NW",
+    "city": "Washington",
+    "state": "DC",
+    "zipcode": "20006-5310",
+    "subseccd": 3,
+    "ntee_code": "P200",
+    "guidestar_url": "https://www.guidestar.org/profile/53-0196605",
+    "nccs_url": "http://nccs.urban.org/orgs/EIN-530196605",
+    "updated": "2024-08-01T00:00:00.000-04:00"
+  },
+  "filings_with_data": [
+    {
+      "ein": 530196605,
+      "tax_prd": 202206,
+      "tax_prd_yr": 2022,
+      "formtype": 0,
+      "pdf_url": "https://projects.propublica.org/nonprofits/download-filing?path=x.pdf",
+      "totrevenue": 3286000000,
+      "totfuncexpns": 3100000000,
+      "totassetsend": 4200000000,
+      "totliabend": 1900000000,
+      "updated": "2024-01-15T00:00:00.000-05:00"
+    },
+    {
+      "ein": 530196605,
+      "tax_prd": 202106,
+      "tax_prd_yr": 2021,
+      "formtype": 0,
+      "totrevenue": 3100000000,
+      "updated": "2023-01-15T00:00:00.000-05:00"
+    }
+  ],
+  "filings_without_data": [],
+  "api_version": 2,
+  "data_source": "ProPublica Nonprofit Explorer"
+}
