@@ -774,21 +774,32 @@ async function invokeJsonWithFallback({ system, prompt, maxTokens = 1500, temper
 router.get('/openai/verify', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return;
 
+  // "Not configured" is a valid verification result, not a server error. Build
+  // the client with allowMissing so a missing key returns a 200 with
+  // configured:false instead of throwing → 500 (which the endpoint sweep flags).
+  const { openai, diagnostics } = createOpenAIClient({ allowMissing: true });
+  if (!openai) {
+    return res.json({
+      ok: false,
+      configured: false,
+      diagnostics,
+      hint: 'Server-side OpenAI key is not set. Set OPENAI_API_KEY on the backend process (not the frontend) and restart the server.',
+    });
+  }
+
   try {
-    const { openai, diagnostics } = createOpenAIClient();
     // A lightweight call that should succeed with a valid key.
     const models = await openai.models.list();
     const first = Array.isArray(models?.data) ? models.data[0]?.id : null;
     res.json({
       ok: true,
+      configured: true,
       diagnostics,
       sample_model: first,
       model_count: Array.isArray(models?.data) ? models.data.length : null,
     });
   } catch (error) {
     const summary = summarizeOpenAIError(error);
-    // Always return redacted diagnostics even on failure.
-    const { diagnostics } = createOpenAIClient({ allowMissing: true });
     res.status(summary.isAuth ? 401 : 500).json({
       ok: false,
       error: summary.message,
