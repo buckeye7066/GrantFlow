@@ -460,9 +460,18 @@ router.post('/profiles/:id/portal-autopilot/unlock', async (req, res) => {
   try {
     const result = await unlockVault(req.db, { profileId, passphrase })
     if (!result.ok) {
+      // ROOT CAUSE FIX: a failed vault unlock is a DOMAIN authorization failure
+      // (wrong / unset passphrase), NOT an HTTP-session auth failure — so it must
+      // be 403, never 401. The frontend APIClient treats ANY 401 on a non-/api/auth
+      // endpoint as an expired access token: it force-refreshes, retries, gets the
+      // SAME 401 ("Still getting 401 after refresh, giving up"), then clearToken()s
+      // and marks the session expired — destroying the owner's valid login over a
+      // mistyped passphrase (and firing the unlock twice on the way). 403 surfaces
+      // cleanly to the unlock mutation's onError ("Unlock failed") and never touches
+      // the session.
       // Do NOT distinguish "wrong passphrase" from "no passphrase set" beyond the
       // boolean — avoid an oracle. (reason is coarse-grained.)
-      return res.status(401).json({ ok: false, error: 'unlock_failed', reason: result.reason || 'wrong_passphrase' })
+      return res.status(403).json({ ok: false, error: 'unlock_failed', reason: result.reason || 'wrong_passphrase' })
     }
     const status = await getMasterVaultStatus(req.db, profileId)
     return res.json({ ok: true, vault: status })
