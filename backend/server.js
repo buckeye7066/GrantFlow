@@ -899,6 +899,31 @@ if (!app.locals.db_startup_error) {
     )
   }
 
+  // DATA-repair invariants — the boot "net" documented in CLAUDE.md /
+  // canonical_rules.md (sticky deletes, no cross-profile bleed, relevance floor,
+  // profile-scoped pipeline, name-doubling, income reconciliation). Sibling to
+  // ensureSchemaInvariants above (which owns schema DDL only).
+  //
+  // BUG FIX: this net was only ever reachable from runSelfHeal(), which is defined
+  // in startup/selfHeal.js but NEVER called anywhere — so the data invariants have
+  // not actually run at boot in prod despite the docs claiming "step 9 on every
+  // boot". Wire it here directly. runEnforceInvariants is internally per-step
+  // guarded + idempotent; wrap the orchestrator too so the server still starts.
+  try {
+    const { runEnforceInvariants } = await import('./startup/enforceInvariants.js')
+    const summary = await runEnforceInvariants(db, { logger: console })
+    if (summary?.totalRepaired) {
+      console.info('[enforce-invariants] boot sweep repaired rows', {
+        ran: summary.ran, failed: summary.failed, totalRepaired: summary.totalRepaired,
+      })
+    }
+  } catch (enforceErr) {
+    console.warn(
+      '[enforce-invariants] orchestrator threw (non-fatal):',
+      enforceErr?.message || enforceErr,
+    )
+  }
+
   // Register the lead sources John drafts outreach from (johnYanaBridge now
   // aggregates over MULTIPLE sources). Yana = Client Discoverer; Robert hands
   // over the subset of contactable client prospects he encounters (never his
