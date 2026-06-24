@@ -1171,6 +1171,29 @@ router.post('/', createProfileLimiter, async (req, res) => {
   })
 
   await linkProfileToAdmin(req.db, profileId)
+
+  // Free Week promotion: a profile created while the window is open gets its OWN
+  // full free period from now (self-expiring via billing_accounts.free_until),
+  // so someone who joins on the last day of the promo still gets a complete
+  // trial after the shared window closes. Best-effort — never fail profile
+  // creation if the grant write fails.
+  try {
+    const { freeWeekSignupGrant } = await import('../../shared/freeWeek.js')
+    const signupGrant = freeWeekSignupGrant(process.env)
+    if (signupGrant) {
+      const { grantFreePeriod } = await import('../services/billing/invoiceService.js')
+      await grantFreePeriod(req.db, {
+        profileId,
+        kind: signupGrant.period,
+        reason: 'free_week_signup',
+        grantedBy: 'free_week_promo',
+        announce: false,
+      })
+    }
+  } catch (err) {
+    console.warn('[profiles] free-week signup grant failed', { profile_id: profileId, error: err?.message })
+  }
+
   const refreshed = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(profileId)
 
   // Schedule initial crawl jobs for the new profile (best-effort, non-blocking).

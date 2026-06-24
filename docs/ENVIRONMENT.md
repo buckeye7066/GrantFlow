@@ -106,6 +106,7 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
 - **`FREE_WEEK_START`** — ISO date/time the window opens (optional; if omitted, opens as soon as enabled).
 - **`FREE_WEEK_END`** — ISO date/time the window closes (optional; defaults to 7 days after start).
 - **`FREE_WEEK_LABEL`** — optional banner text shown to users while active.
+- **`FREE_WEEK_SIGNUP_PERIOD`** — `week` (default) | `month` | `none`. While the window is open, anyone who signs up gets their OWN full free period from their signup date (self-expiring via `billing_accounts.free_until`), so a last-day joiner still gets a complete trial after the shared window closes. `none` keeps the shared window but skips per-signup grants.
 
 ### Optional integrations (feature-gated — do NOT block boot)
 

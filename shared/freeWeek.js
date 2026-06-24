@@ -74,3 +74,23 @@ export function computeFreeWeekStatus(env = {}, now = Date.now()) {
 export function isFreeWeekActive(env = {}, now = Date.now()) {
   return computeFreeWeekStatus(env, now).active
 }
+
+const SIGNUP_GRANT_DAYS = Object.freeze({ week: 7, month: 30 })
+
+/**
+ * The per-signup grant. When the Free Week window is active, a user who signs
+ * up should get their OWN full free period starting now — so someone who joins
+ * on the last day of the promo still gets a complete trial instead of a few
+ * hours. Returns { period, days, until } or null when the promo is off or
+ * signup grants are disabled.
+ *
+ *   FREE_WEEK_SIGNUP_PERIOD = 'week' (default) | 'month' | 'none'
+ */
+export function freeWeekSignupGrant(env = {}, now = Date.now()) {
+  if (!isFreeWeekActive(env, now)) return null
+  const raw = String(env.FREE_WEEK_SIGNUP_PERIOD ?? 'week').trim().toLowerCase()
+  if (['none', 'off', 'false', '0', 'no'].includes(raw)) return null
+  const period = SIGNUP_GRANT_DAYS[raw] ? raw : 'week'
+  const days = SIGNUP_GRANT_DAYS[period]
+  return { period, days, until: new Date(now + days * 86400000).toISOString() }
+}

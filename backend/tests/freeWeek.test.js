@@ -7,7 +7,7 @@
  * deterministic and never touches the wall clock.
  */
 import { describe, it, expect } from 'vitest'
-import { computeFreeWeekStatus, isFreeWeekActive } from '../../shared/freeWeek.js'
+import { computeFreeWeekStatus, isFreeWeekActive, freeWeekSignupGrant } from '../../shared/freeWeek.js'
 
 const T0 = Date.parse('2026-06-24T12:00:00Z')
 
@@ -49,5 +49,38 @@ describe('freeWeek', () => {
     const env = { FREE_WEEK_ENABLED: 'true', FREE_WEEK_LABEL: 'Birthday week — free!' }
     expect(computeFreeWeekStatus(env, T0).label).toBe('Birthday week — free!')
     expect(computeFreeWeekStatus({ ...env, FREE_WEEK_END: '2026-06-01T00:00:00Z' }, T0).label).toBe(null)
+  })
+})
+
+describe('freeWeekSignupGrant (per-signup full period)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+
+  it('returns null when the promo is off', () => {
+    expect(freeWeekSignupGrant({}, T0)).toBe(null)
+  })
+
+  it('grants a full week from now by default while active', () => {
+    const g = freeWeekSignupGrant({ FREE_WEEK_ENABLED: 'true' }, T0)
+    expect(g).toMatchObject({ period: 'week', days: 7 })
+    expect(Date.parse(g.until)).toBe(T0 + 7 * DAY)
+  })
+
+  it('honors FREE_WEEK_SIGNUP_PERIOD=month', () => {
+    const g = freeWeekSignupGrant({ FREE_WEEK_ENABLED: 'true', FREE_WEEK_SIGNUP_PERIOD: 'month' }, T0)
+    expect(g).toMatchObject({ period: 'month', days: 30 })
+    expect(Date.parse(g.until)).toBe(T0 + 30 * DAY)
+  })
+
+  it('can be disabled while the window stays open (FREE_WEEK_SIGNUP_PERIOD=none)', () => {
+    expect(freeWeekSignupGrant({ FREE_WEEK_ENABLED: 'true', FREE_WEEK_SIGNUP_PERIOD: 'none' }, T0)).toBe(null)
+  })
+
+  it('falls back to a week for an unrecognized value', () => {
+    expect(freeWeekSignupGrant({ FREE_WEEK_ENABLED: 'true', FREE_WEEK_SIGNUP_PERIOD: 'decade' }, T0)).toMatchObject({ period: 'week' })
+  })
+
+  it('is null once the window has closed', () => {
+    const env = { FREE_WEEK_ENABLED: 'true', FREE_WEEK_END: '2026-06-01T00:00:00Z' }
+    expect(freeWeekSignupGrant(env, T0)).toBe(null)
   })
 })
