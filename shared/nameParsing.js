@@ -122,6 +122,110 @@ function nonEmptyStr(v) {
 }
 
 /**
+ * Collapse a DOUBLED personal display name back to a single, most-complete name.
+ *
+ * Why this exists:
+ *   The profile-merge path (services/profileDedupeService.js mergeValues) used
+ *   to JOIN two overlapping name strings when it merged two profiles'
+ *   basic_information.full_name — e.g. merging "Robert White" with
+ *   "Robert Michael White" produced "Robert White\nRobert Michael White", which
+ *   synced into profiles.display_name and rendered as
+ *   "Robert White Robert Michael White" in the profile header AND the generated
+ *   PDF title. This helper is the single, shared collapser used both by the
+ *   producer (so a name can never be doubled at write time) and by the boot
+ *   sweep (so already-doubled rows self-heal).
+ *
+ * What counts as "doubled" (CONSERVATIVE — only clear cases collapse):
+ *   1. EXACT repetition of the WHOLE string: "Jane Doe Jane Doe" -> "Jane Doe".
+ *   2. Two halves that name the SAME person: the token sequence splits into two
+ *      contiguous personal names that share the same first AND last token, where
+ *      one half is a token-subsequence of the other. We keep the LONGER (more
+ *      complete) half: "Robert White Robert Michael White"
+ *      -> "Robert Michael White".
+ *
+ * What is LEFT ALONE (returned whitespace-normalized but otherwise verbatim):
+ *   - Non-doubled personal names: "Robert White", "Mary Jane Watson",
+ *     "John Q. Public".
+ *   - Organization names (Inc/LLC/Foundation/Church/…): a repeated org token
+ *     like "Church of God of Prophecy" is legitimate, never a person-name
+ *     double — looksLikeOrganization() short-circuits the whole helper.
+ *   - Hyphenated / compound surnames and any string we cannot prove is a clean
+ *     two-half repeat sharing first+last (e.g. "Anna Maria Anna" has no shared
+ *     surname across a clean split, so it is untouched).
+ *
+ * @param {string} name
+ * @returns {string} the collapsed name, or the (whitespace-normalized) original when not doubled.
+ */
+export function dedupeProfileDisplayName(name) {
+  if (name === null || name === undefined) return name
+  const original = String(name)
+  // Collapse any internal whitespace (including the `\n` the bad merge inserted)
+  // to single spaces so token logic is uniform; this is also what the renderer
+  // does, so it matches what the user actually sees.
+  const normalized = original.replace(/\s+/g, ' ').trim()
+  if (!normalized) return normalized
+
+  // Never touch organization names — a repeated word there is legitimate.
+  if (looksLikeOrganization(normalized)) return normalized
+
+  const tokens = normalized.split(' ').filter(Boolean)
+  // A double needs at least 4 tokens ("A B" + "A B"); fewer can't be a doubled
+  // personal name. Single/compound names ("Mary Jane Watson") fall through here.
+  if (tokens.length < 4) return normalized
+
+  const lower = tokens.map((t) => t.toLowerCase())
+
+  // CASE 1: exact whole-string repetition (even token count, both halves equal).
+  if (tokens.length % 2 === 0) {
+    const half = tokens.length / 2
+    let mirror = true
+    for (let i = 0; i < half; i += 1) {
+      if (lower[i] !== lower[half + i]) { mirror = false; break }
+    }
+    if (mirror) {
+      // "Jane Doe Jane Doe" -> "Jane Doe" (keep the original casing of half 1).
+      return tokens.slice(0, half).join(' ')
+    }
+  }
+
+  // CASE 2: two contiguous personal names that share first AND last token, one a
+  // token-subsequence of the other. We only split where the SECOND half restarts
+  // the name with the SAME first token as the whole string (the repeated given
+  // name) AND both halves end on the SAME last token (the shared surname). We
+  // scan every split point and accept the first that yields two same-person halves.
+  const firstTok = lower[0]
+  const lastTok = lower[lower.length - 1]
+  for (let split = 1; split < tokens.length; split += 1) {
+    const left = lower.slice(0, split)
+    const right = lower.slice(split)
+    // Each half must be a plausible personal name (>= 2 tokens: given + surname).
+    if (left.length < 2 || right.length < 2) continue
+    // The second half must restart the name: same given name, same surname.
+    if (right[0] !== firstTok) continue
+    if (left[left.length - 1] !== lastTok || right[right.length - 1] !== lastTok) continue
+    // One half must be a token-subsequence of the other (same person, one fuller
+    // form). isTokenSubsequence keeps order, so "robert white" ⊆ "robert michael white".
+    const shortHalf = left.length <= right.length ? left : right
+    const longHalf = left.length <= right.length ? right : left
+    if (!isTokenSubsequence(shortHalf, longHalf)) continue
+    // Keep the LONGER (more complete) half, preserving its original casing.
+    const keepTokens = left.length >= right.length ? tokens.slice(0, split) : tokens.slice(split)
+    return keepTokens.join(' ')
+  }
+
+  return normalized
+}
+
+/** True when every token of `sub` appears in `sup` in order (subsequence). */
+function isTokenSubsequence(sub, sup) {
+  let i = 0
+  for (let j = 0; j < sup.length && i < sub.length; j += 1) {
+    if (sup[j] === sub[i]) i += 1
+  }
+  return i === sub.length
+}
+
+/**
  * Given a basic_information section data object, return a (possibly) augmented
  * copy with first_name / middle_name / last_name derived from full_name (or a
  * supplied fallback display name) when they are missing. Never overwrites
@@ -157,4 +261,4 @@ export function deriveNamePartsIntoBasicInfo(data, fallbackName = '') {
   return changed ? { data: next, changed: true } : { data: src, changed: false }
 }
 
-export default { parseFullName, looksLikeOrganization, deriveNamePartsIntoBasicInfo }
+export default { parseFullName, looksLikeOrganization, deriveNamePartsIntoBasicInfo, dedupeProfileDisplayName }

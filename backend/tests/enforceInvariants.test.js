@@ -32,6 +32,7 @@ import {
   enforceNoDuplicateGrants,
   enforceRelevanceFloor,
   enforceProfileScopedPipeline,
+  enforceProfileDisplayNameNotDoubled,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -538,7 +539,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(5)
+    expect(summary.ran).toBe(6)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -546,6 +547,7 @@ describe('enforceInvariants — runner', () => {
       'profile_scoped_pipeline',
       'no_duplicate_grants',
       'relevance_floor',
+      'profile_display_name_not_doubled',
     ])
   })
 
@@ -564,5 +566,87 @@ describe('enforceInvariants — runner', () => {
   it('returns empty result for a missing db handle (no crash at boot)', async () => {
     const summary = await runEnforceInvariants(null, { logger: { info() {}, warn() {} } })
     expect(summary.ran).toBe(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: profiles.display_name + basic_information.full_name are never a
+// DOUBLED personal name (the "Robert White Robert Michael White" bug).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceProfileDisplayNameNotDoubled', () => {
+  function makeProfileDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY,
+        display_name TEXT
+      );
+      CREATE TABLE profile_sections (
+        profile_id TEXT,
+        section_key TEXT,
+        data TEXT,
+        PRIMARY KEY (profile_id, section_key)
+      );
+    `)
+    return raw
+  }
+  const setName = (db, id, name) =>
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run(id, name)
+  const setBasic = (db, id, full) =>
+    db
+      .prepare("INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, 'basic_information', ?)")
+      .run(id, JSON.stringify({ full_name: full, email: 'x@y.com' }))
+  const nameOf = (db, id) => db.prepare('SELECT display_name FROM profiles WHERE id = ?').get(id)?.display_name
+  const fullOf = (db, id) =>
+    JSON.parse(
+      db.prepare("SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information'").get(id)?.data || '{}',
+    ).full_name
+
+  it('collapses the production Robert double in BOTH fields (newline-joined)', async () => {
+    const db = makeProfileDb()
+    setName(db, 'p1', 'Robert White\nRobert Michael White')
+    setBasic(db, 'p1', 'Robert White\nRobert Michael White')
+
+    const r = await enforceProfileDisplayNameNotDoubled(db)
+    expect(r.ok).toBe(true)
+    expect(r.repaired).toBe(2)
+    expect(nameOf(db, 'p1')).toBe('Robert Michael White')
+    expect(fullOf(db, 'p1')).toBe('Robert Michael White')
+  })
+
+  it('leaves legitimate names (and org names) untouched', async () => {
+    const db = makeProfileDb()
+    setName(db, 'p1', 'Robert Michael White')
+    setName(db, 'p2', 'Mary Jane Watson')
+    setName(db, 'p3', 'Church of God of Prophecy')
+    setBasic(db, 'p1', 'Robert Michael White')
+
+    const r = await enforceProfileDisplayNameNotDoubled(db)
+    expect(r.repaired).toBe(0)
+    expect(nameOf(db, 'p1')).toBe('Robert Michael White')
+    expect(nameOf(db, 'p2')).toBe('Mary Jane Watson')
+    expect(nameOf(db, 'p3')).toBe('Church of God of Prophecy')
+    expect(fullOf(db, 'p1')).toBe('Robert Michael White')
+  })
+
+  it('is idempotent — a second pass repairs nothing', async () => {
+    const db = makeProfileDb()
+    setName(db, 'p1', 'Jane Doe Jane Doe')
+    setBasic(db, 'p1', 'Jane Doe Jane Doe')
+
+    const first = await enforceProfileDisplayNameNotDoubled(db)
+    expect(first.repaired).toBe(2)
+    const second = await enforceProfileDisplayNameNotDoubled(db)
+    expect(second.repaired).toBe(0)
+    expect(nameOf(db, 'p1')).toBe('Jane Doe')
+    expect(fullOf(db, 'p1')).toBe('Jane Doe')
+  })
+
+  it('degrades safely when profiles has no display_name column (legacy schema)', async () => {
+    const raw = new Database(':memory:')
+    raw.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY)')
+    const r = await enforceProfileDisplayNameNotDoubled(raw)
+    expect(r.ok).toBe(true)
+    expect(r.repaired).toBe(0)
   })
 })
