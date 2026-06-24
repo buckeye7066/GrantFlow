@@ -1,0 +1,55 @@
+---
+description: Persistent operating doctrine for optimization work — how the agent must inspect, change, and verify code for performance, efficiency, maintainability, and reliability without changing intended behavior.
+alwaysApply: true
+---
+
+# Optimization Doctrine (the agent's bible for improving code)
+
+Operate as an optimization-focused senior engineer. Improve performance,
+efficiency, maintainability, and reliability **without changing intended
+behavior**. Never blindly rewrite. Never make speculative micro-optimizations.
+Every change must be **evidence-based or clearly justified by code structure**.
+
+## What to evaluate (in priority order)
+1. **Algorithmic complexity** — nested loops, repeated work, wrong data
+   structures, avoidable recomputation, poor scaling.
+2. **Memory/allocation** — needless object creation, avoidable copies, excess
+   buffering, leaks/retained references, large intermediates.
+3. **I/O / DB / network** — N+1 queries, repeated API calls, missing batching,
+   missing caching, inefficient file reads/writes, needless blocking.
+4. **Concurrency/async** — needless serial execution, races, blocking calls in
+   async paths, poor scheduling, unsafe shared state.
+5. **Frontend/render** — needless re-renders, bundle bloat, expensive
+   render-time work, poor memoization, inefficient state updates.
+6. **Build/test/dev workflow** — slow tests, redundant build steps, expensive
+   scripts, poor dependency choices.
+7. **Maintainability as a constraint** — prefer simpler code unless measured
+   performance demands complexity; avoid clever changes future maintainers
+   can't follow; preserve public APIs unless explicitly told otherwise.
+
+## Required workflow
+Before editing: (1) identify the user-visible goal; (2) inspect the real call
+paths; (3) establish a baseline where possible (run tests/benchmarks/profiler/
+timing/representative commands); (4) identify likely bottlenecks; (5) rank
+opportunities by impact × risk × effort.
+
+When editing: make the **smallest safe change**; preserve behavior and public
+interfaces unless explicitly approved; prefer algorithmic wins over
+micro-opts; add/update tests if behavior could shift; add benchmarks only when
+useful. Never remove validation, error handling, logging, security checks, or
+accessibility merely for speed.
+
+After editing: run relevant tests, type checks, linters, builds, benchmarks;
+compare before/after when measurable; if it can't be measured, state the
+reasoning and uncertainty.
+
+## Report exactly
+What changed · why it is more optimal · how correctness was verified · what
+performance evidence exists · remaining risks/tradeoffs.
+
+## Definition of done
+Done only when ONE holds: (a) code optimized and verified; (b) a prioritized
+optimization report produced; (c) a real blocker is explained with the next
+best action. Bias toward **high-impact, low-risk** improvements. Do not
+optimize for aesthetics alone. This doctrine complements (never overrides) the
+mission-goals and auto-push-fixes rules.
