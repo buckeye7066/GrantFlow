@@ -234,7 +234,13 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 0) {
+  // Normalize the step to a number for numeric step comparisons. The step may
+  // arrive as either a number (0-4) or, in unusual cases, a numeric string.
+  // Coercing here means a step of "0" still matches the welcome step below
+  // instead of falling through to unreachable code.
+  const numericStep = typeof step === "string" ? Number(step) : step
+
+  if (numericStep === 0) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -249,7 +255,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 1) {
+  if (numericStep === 1) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -279,7 +285,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 2) {
+  if (numericStep === 2) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -317,7 +323,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 3) {
+  if (numericStep === 3) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -345,7 +351,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 4) {
+  if (numericStep === 4) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -554,6 +560,14 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       const primaryType = PROFILE_TYPE_MAP[obProfileType] || "individual"
 
       let profileId = activeProfile?.id
+      // Guard against a truthy-but-invalid id (e.g. '__admin__' or a malformed
+      // string) being used to construct API endpoints. If we have a value that
+      // does NOT pass the real-id check, fail loudly instead of silently routing
+      // to create — except when it's falsy (no profile yet), which we handle by
+      // creating below.
+      if (profileId && !isRealProfileId(profileId)) {
+        throw new Error('[onboarding] active profile has an invalid (non-routable) id')
+      }
       if (!isRealProfileId(profileId)) {
         // No real profile yet (or admin sentinel) — create one with collected type.
         // The admin sentinel is never a routable id, so we always promote to "create".
@@ -597,9 +611,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         })
       }
 
-      // Persist life situations → relevant sections
+      // Persist life situations → relevant sections.
+      // Use Promise.allSettled so a single failing section update does not abort
+      // the others (avoids leaving the profile in a worse partial state than
+      // necessary) and lets us report exactly which sections failed.
       const patches = situationsToSectionPatches(obSituations)
-      await Promise.all(
+      const results = await Promise.allSettled(
         patches.map((p) =>
           apiFetch(`/api/profiles/${profileId}/sections/${p.section_key}`, {
             method: "PUT",
@@ -607,6 +624,20 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           })
         )
       )
+      const failedPatches = results
+        .map((r, idx) => ({ r, section: patches[idx]?.section_key }))
+        .filter(({ r }) => r.status === "rejected")
+      if (failedPatches.length > 0) {
+        const failedSections = failedPatches.map(({ section }) => section).filter(Boolean)
+        for (const { r, section } of failedPatches) {
+          log.warn(`[onboarding] section patch failed (${section}):`, r.reason?.message ?? r.reason)
+        }
+        // Surface a partial-save error so the user knows exactly what to revisit
+        // and the onboarding flag is NOT set (handled by the throw below).
+        throw new Error(
+          `[onboarding] failed to persist ${failedSections.length} section(s): ${failedSections.join(", ")}`
+        )
+      }
 
       // Write confirmed — now it is honest to mark onboarding complete.
       localStorage.setItem(ONBOARDING_LS_KEY, "1")
@@ -620,12 +651,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       // Persistence failed — surface it and leave onboarding UNmarked so the user
       // can retry rather than being told their profile was saved when it wasn't.
       // This single catch covers profile create/update, state persistence, and
-      // the life-situation Promise.all so any failure is reported to the user.
+      // the life-situation section patches so any failure is reported to the user.
       log.warn("[onboarding] Failed to persist profile data:", err.message)
       toast({
         variant: "destructive",
-        title: "Couldn't save your profile",
-        description: "Something went wrong saving your details. Please try again from your profile page.",
+        title: "Couldn't fully save your profile",
+        description: "Some of your details may not have been saved. Please review and finish from your profile page.",
       })
     }
   }, [profiles, effectiveProfileId, obProfileType, obState, obSituations, user, queryClient, log])

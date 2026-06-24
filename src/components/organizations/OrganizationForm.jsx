@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { X, Building2, GraduationCap, Heart, Sparkles, ImagePlus, Loader2, Wand2, FileText, DollarSign } from "lucide-react";
+import { X, Building2, GraduationCap, Heart, Sparkles, ImagePlus, Loader2, Wand2, FileText, DollarSign, AlertTriangle } from "lucide-react";
 import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import AIFormField from "../shared/AIFormField";
 import { useToast } from '@/components/ui/use-toast';
@@ -362,15 +362,29 @@ const initializeFormData = (org, contactMethods) => {
   }
 
   // Convert old single student_grade_level to array if new array is empty.
-  // student_grade_levels is now a fresh array, so push is safe.
-  if (typeof initialData.student_grade_level === 'string' && initialData.student_grade_level.trim() && initialData.student_grade_levels.length === 0) {
+  // Guard against null/undefined before calling string methods; only act when
+  // it is a non-empty string. student_grade_levels is now a fresh array, so
+  // push is safe.
+  if (
+    initialData.student_grade_level !== null &&
+    initialData.student_grade_level !== undefined &&
+    typeof initialData.student_grade_level === 'string' &&
+    initialData.student_grade_level.trim() &&
+    initialData.student_grade_levels.length === 0
+  ) {
     initialData.student_grade_levels.push(initialData.student_grade_level.trim());
   }
   delete initialData.student_grade_level; // Remove old single field
 
   // Convert old single assistance_category to array if new array is empty.
-  // assistance_categories is now a fresh array, so push is safe.
-  if (typeof initialData.assistance_category === 'string' && initialData.assistance_category.trim() && initialData.assistance_categories.length === 0) {
+  // Guard against null/undefined before string methods.
+  if (
+    initialData.assistance_category !== null &&
+    initialData.assistance_category !== undefined &&
+    typeof initialData.assistance_category === 'string' &&
+    initialData.assistance_category.trim() &&
+    initialData.assistance_categories.length === 0
+  ) {
       initialData.assistance_categories.push(initialData.assistance_category.trim());
   }
   delete initialData.assistance_category; // Remove old field
@@ -423,6 +437,7 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
     isLoading: isLoadingContacts,
     isFetched: isContactsFetched,
     isError: isContactsError,
+    refetch: refetchContacts,
   } = useQuery({
     queryKey: ['contactMethods', organization?.id],
     // `enabled` already guards execution to persisted orgs, so call the API
@@ -431,6 +446,9 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, onS
     // Align enabled with the queryFn guard so we only fetch for persisted orgs.
     enabled: !!organization?.id,
     initialData: [], // Provide initialData to avoid undefined before fetch
+    // Automatically retry transient fetch failures a couple of times so a
+    // momentary network blip doesn't silently leave the form stale.
+    retry: 2,
   });
 
   // Surface contact-method fetch failures to the user rather than silently
@@ -1211,6 +1229,22 @@ Focus areas should be:
 
   const handleSubmitForm = async (e) => {
     e.preventDefault();
+
+    // Block submission while contact methods failed to load for an existing
+    // profile. Submitting now risks wiping/duplicating contacts because we don't
+    // have an accurate picture of the current contact data. Offer a retry.
+    if (organization?.id && isContactsError) {
+      toast({
+        title: "Cannot Save Yet",
+        description: "Existing contact methods could not be loaded, so saving could remove or duplicate emails/phones. Please retry loading contacts before saving.",
+        variant: "destructive",
+      });
+      if (typeof refetchContacts === 'function') {
+        refetchContacts();
+      }
+      return;
+    }
+
     let cleanedData = { ...formData };
 
     // Normalize website before submit (handles cases where the field was never blurred).
@@ -1362,6 +1396,10 @@ Focus areas should be:
   // Whether any AI action is currently running (shared disable state for buttons).
   const isAnyAIBusy = isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas;
 
+  // True when we're editing an existing profile but contacts failed to load.
+  // Submission is blocked in this case to avoid clobbering contact data.
+  const contactsLoadFailedForExisting = !!organization?.id && isContactsError;
+
   // Dynamic labels based on applicant type
   const getLabel = (orgLabel, individualLabel) => isIndividual ? individualLabel : orgLabel;
   const getPlaceholder = (orgPlaceholder, individualPlaceholder) => isIndividual ? individualPlaceholder : orgPlaceholder;
@@ -1372,6 +1410,33 @@ Focus areas should be:
 
   return (
     <form onSubmit={handleSubmitForm} className="space-y-6">
+      {/* Persistent in-form warning when contact methods failed to load for an
+          existing profile. This is more durable than a dismissible toast and
+          warns the user that saving is blocked until contacts can be loaded. */}
+      {contactsLoadFailedForExisting && (
+        <div className="flex items-start gap-3 rounded-lg border-2 border-red-300 bg-red-50 p-4">
+          <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-red-900">
+              Existing contact methods could not be loaded
+            </p>
+            <p className="text-xs text-red-700 mt-1">
+              Saving is disabled to prevent removing or duplicating this profile's
+              emails and phone numbers. Please retry loading contacts before saving.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2 border-red-300 text-red-700 hover:bg-red-100"
+              onClick={() => { if (typeof refetchContacts === 'function') refetchContacts(); }}
+            >
+              Retry Loading Contacts
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* AI PROFILE BUILDER */}
       {!organization && (
         <Card className="bg-gradient-to-br from-purple-50 to-blue-50 border-purple-200">
@@ -3025,7 +3090,11 @@ DRAFT for "special circumstances":`}
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>
           Cancel
         </Button>
-        <Button type="submit" disabled={isSubmitting} className="bg-blue-600 hover:bg-blue-700">
+        <Button
+          type="submit"
+          disabled={isSubmitting || contactsLoadFailedForExisting}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
           {isSubmitting ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
