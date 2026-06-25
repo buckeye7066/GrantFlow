@@ -5,9 +5,25 @@ import { describe, expect, it } from "vitest"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { DESIGNATED_PROFILES } from "../../../backend/config/designatedProfiles.js"
 
+// A saved key is "declared" if it matches a field's canonical name OR one of
+// its legacy_aliases. Seed/DB profiles still carry pre-canonicalisation keys
+// (e.g. `unemployed` → employment_status, `immigrant_status` →
+// immigration_status) that are mapped on save; counting only canonical names
+// would false-flag them. Mirrors buildDeclaredFieldIndex() in
+// scripts/audit-section-metadata.mjs.
+function collectDeclared(sectionKey) {
+  const declared = new Set()
+  for (const field of SECTION_METADATA[sectionKey]?.fields ?? []) {
+    if (!field?.name) continue
+    declared.add(field.name)
+    for (const alias of field.legacy_aliases ?? []) declared.add(alias)
+  }
+  return declared
+}
+
 function collect(profile, failures) {
   for (const [sectionKey, data] of Object.entries(profile?.sections ?? {})) {
-    const declared = new Set((SECTION_METADATA[sectionKey]?.fields ?? []).map((field) => field.name))
+    const declared = collectDeclared(sectionKey)
     for (const key of Object.keys(data ?? {})) {
       if (!declared.has(key)) failures.push(`${sectionKey}.${key}`)
     }
