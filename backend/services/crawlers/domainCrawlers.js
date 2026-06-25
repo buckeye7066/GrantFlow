@@ -5,6 +5,8 @@
 
 import { DOMAIN_CRAWLER_REGISTRY } from './domainCrawlerRegistry.js'
 import { runDomainCrawler } from './domainCrawlerEngine.js'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainCrawlers')
 
 /**
  * Crawl using a domain crawler type.
@@ -34,7 +36,7 @@ export async function crawlDomain(profile, crawlerType, options = {}) {
       options,
     })
   } catch (error) {
-    console.error(`Domain crawler ${crawlerType} failed:`, error)
+    qualityLog.error(`Domain crawler ${crawlerType} failed:`, error)
     return []
   }
 

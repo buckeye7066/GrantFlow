@@ -138,7 +138,7 @@ export async function fetchStatePortals(stateCode, options = {}) {
       },
     };
   } catch (error) {
-    console.error(`[state-portals] Error fetching from ${portal.name}:`, error.message);
+    log.error(`[state-portals] Error fetching from ${portal.name}:`, error.message);
     return {
       opportunities: [],
       metadata: {

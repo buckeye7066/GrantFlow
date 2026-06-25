@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:universityDocumentClassifier')
 function normalizeText(value) {
   return String(value || '')
     .toLowerCase()
@@ -83,11 +85,11 @@ export async function loadUniversityApplicationsForProfile(db, profileId) {
         }))
         .filter((a) => a.id && a.name)
     } catch (error) {
-      console.error('Failed to parse university applications data:', error)
+      qualityLog.error('Failed to parse university applications data:', error)
       return []
     }
   } catch (error) {
-    console.error(
+    qualityLog.error(
       'Failed to load university applications for profile from database:',
       error,
     )

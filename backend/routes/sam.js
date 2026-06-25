@@ -21,6 +21,8 @@
  */
 
 import { Router } from 'express'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('routes:sam')
 import {
   getRun,
   getSamStatus,
@@ -83,7 +85,7 @@ router.get('/status', adminOnly, async (req, res) => {
     const status = await getSamStatus({ db: req.db })
     return res.json({ ok: true, status })
   } catch (err) {
-    console.error('[sam] /status failed:', err)
+    qualityLog.error('[sam] /status failed:', err)
     return res.status(500).json({ ok: false, error: 'sam status failed' })
   }
 })
@@ -97,7 +99,7 @@ router.get('/runs', adminOnly, async (req, res) => {
     const runs = await listRuns(req.db, { limit })
     return res.json({ ok: true, runs })
   } catch (err) {
-    console.error('[sam] /runs failed:', err)
+    qualityLog.error('[sam] /runs failed:', err)
     return res.status(500).json({ ok: false, error: 'sam runs failed' })
   }
 })
@@ -108,7 +110,7 @@ router.get('/runs/:runId', adminOnly, async (req, res) => {
     if (!run) return res.status(404).json({ ok: false, error: 'run not found' })
     return res.json({ ok: true, run })
   } catch (err) {
-    console.error('[sam] /runs/:runId failed:', err)
+    qualityLog.error('[sam] /runs/:runId failed:', err)
     return res.status(500).json({ ok: false, error: 'sam run lookup failed' })
   }
 })
@@ -205,7 +207,7 @@ router.post('/run', adminOnly, async (req, res) => {
     })
     return res.json(result)
   } catch (err) {
-    console.error('[sam] /run failed:', err)
+    qualityLog.error('[sam] /run failed:', err)
     return res.status(500).json({ ok: false, error: 'sam run failed' })
   }
 })
@@ -223,7 +225,7 @@ router.post('/diagnose', adminOnly, async (req, res) => {
     })
     return res.json(result)
   } catch (err) {
-    console.error('[sam] /diagnose failed:', err)
+    qualityLog.error('[sam] /diagnose failed:', err)
     return res.status(500).json({ ok: false, error: 'sam diagnose failed' })
   }
 })
@@ -241,7 +243,7 @@ router.post('/plan-repair', adminOnly, async (req, res) => {
     })
     return res.json(result)
   } catch (err) {
-    console.error('[sam] /plan-repair failed:', err)
+    qualityLog.error('[sam] /plan-repair failed:', err)
     return res.status(500).json({ ok: false, error: 'sam plan-repair failed' })
   }
 })
@@ -268,7 +270,7 @@ router.post('/apply-safe-fixes', adminOnly, async (req, res) => {
     })
     return res.json(result)
   } catch (err) {
-    console.error('[sam] /apply-safe-fixes failed:', err)
+    qualityLog.error('[sam] /apply-safe-fixes failed:', err)
     return res.status(500).json({ ok: false, error: 'sam apply-safe-fixes failed' })
   }
 })
@@ -285,7 +287,7 @@ router.post('/run-gates', adminOnly, async (req, res) => {
     })
     return res.json(result)
   } catch (err) {
-    console.error('[sam] /run-gates failed:', err)
+    qualityLog.error('[sam] /run-gates failed:', err)
     return res.status(500).json({ ok: false, error: 'sam run-gates failed' })
   }
 })

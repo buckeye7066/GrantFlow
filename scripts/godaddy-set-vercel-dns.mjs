@@ -92,11 +92,9 @@ async function run() {
 
   const apply = String(process.env.CONFIRM || '').trim().toUpperCase() === 'YES'
 
-  // eslint-disable-next-line no-console
   console.log(`[dns] domain=${domain} ttl=${ttl} apply=${apply}`)
 
   if (!apply) {
-    // eslint-disable-next-line no-console
     console.log('[dns] DRY RUN. Set CONFIRM=YES to apply.')
     return
   }
@@ -115,12 +113,10 @@ async function run() {
     await putRecords(domain, 'A', 'www', [{ data: wwwA, ttl }])
   }
 
-  // eslint-disable-next-line no-console
   console.log('[dns] done')
 }
 
 run().catch((e) => {
-  // eslint-disable-next-line no-console
   console.error('[dns] fatal:', e instanceof Error ? e.stack || e.message : String(e))
   process.exitCode = 1
 })

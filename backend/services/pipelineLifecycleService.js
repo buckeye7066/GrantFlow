@@ -77,7 +77,7 @@ export async function archiveExpiredGrants(db) {
     )
     expiredGrants = await stmt.all(cutoff, ...ARCHIVEABLE_STATUSES)
   } catch (err) {
-    console.error('[pipelineLifecycle] archiveExpiredGrants query failed:', err?.message || err)
+    log.error('[pipelineLifecycle] archiveExpiredGrants query failed:', err?.message || err)
     return { archived: [] }
   }
 
@@ -129,7 +129,7 @@ export async function flagStaleDiscoveries(db, staleDays = 60) {
     )
     staleGrants = await staleStmt.all(cutoff)
   } catch (err) {
-    console.error('[pipelineLifecycle] flagStaleDiscoveries query failed:', err?.message || err)
+    log.error('[pipelineLifecycle] flagStaleDiscoveries query failed:', err?.message || err)
     return { flagged: [] }
   }
 
@@ -184,7 +184,7 @@ export async function detectNewCycles(db) {
     )
     candidates = await cycleStmt.all(cycleThreshold)
   } catch (err) {
-    console.error('[pipelineLifecycle] detectNewCycles query failed:', err?.message || err)
+    log.error('[pipelineLifecycle] detectNewCycles query failed:', err?.message || err)
     return { newCycles: [] }
   }
 
@@ -320,7 +320,7 @@ if (
     const dbModule = await import('../db/database.js')
     db = dbModule.default || dbModule.db
   } catch {
-    console.error('Could not load database. Exiting.')
+    log.error('Could not load database. Exiting.')
     process.exit(1)
   }
 

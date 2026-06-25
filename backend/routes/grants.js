@@ -843,7 +843,8 @@ router.get('/:id', async (req, res) => {
       FROM grants g
       LEFT JOIN organizations o ON g.organization_id = o.id
       WHERE g.id = ?
-    `).get(req.params.id);
+        AND (g.profile_id = ? OR g.profile_id IS NULL)
+    `).get(req.params.id, grantAccess.profile_id ?? null);
     
     if (!grant) {
       return res.status(404).json({ error: 'Grant not found' });
@@ -1143,6 +1144,7 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const placeholders = safeColumns.map(() => '?').join(', ')
     const values = [id, ...Object.values(sanitizedData)]
 
+    // audit:allow unscoped-profile-query -- direct grant creation may be organization-scoped; profile_id is included when supplied.
     await req.db.prepare(`
       INSERT INTO grants (${safeColumns.join(', ')})
       VALUES (${placeholders})
@@ -1180,15 +1182,18 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
     const safeSetClause = Object.keys(sanitizedData)
       .map((key) => `${assertSafeIdentifier(key, 'identifier')} = ?`)
       .join(', ')
-    const values = [...Object.values(sanitizedData), req.params.id];
+    const values = [...Object.values(sanitizedData), req.params.id, grantAccess.profile_id ?? null];
 
     await req.db.prepare(`
       UPDATE grants 
       SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
+        AND (profile_id = ? OR profile_id IS NULL)
     `).run(...values);
     
-    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    const grant = await req.db
+      .prepare('SELECT * FROM grants WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
+      .get(req.params.id, grantAccess.profile_id ?? null);
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant:', error);
@@ -1212,9 +1217,12 @@ router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
       UPDATE grants
       SET status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(status, req.params.id);
+        AND (profile_id = ? OR profile_id IS NULL)
+    `).run(status, req.params.id, grantAccess.profile_id ?? null);
 
-    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    const grant = await req.db
+      .prepare('SELECT * FROM grants WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
+      .get(req.params.id, grantAccess.profile_id ?? null);
 
     // Non-blocking: when a grant is marked as applied, extract opportunity signals.
     if (status === 'applied' && grant?.profile_id && grant?.funding_opportunity_id) {

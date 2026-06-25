@@ -53,7 +53,7 @@ export async function bootstrapAnya(db) {
       report.startup_operations = await runStartupOperations(db)
       log.info('[AnyaBootstrap] Startup operations complete')
     } catch (err) {
-      console.error('[AnyaBootstrap] Startup operations failed:', err?.message || err)
+      log.error('[AnyaBootstrap] Startup operations failed:', err?.message || err)
       report.startup_operations = { error: err?.message || String(err) }
     }
 
@@ -64,7 +64,7 @@ export async function bootstrapAnya(db) {
         report.autonomous_startup = await runOnStartup(db)
         log.info('[AnyaBootstrap] Autonomous startup complete')
       } catch (err) {
-        console.error('[AnyaBootstrap] Autonomous startup failed:', err?.message || err)
+        log.error('[AnyaBootstrap] Autonomous startup failed:', err?.message || err)
         report.autonomous_startup = { error: err?.message || String(err) }
       }
     } else {
@@ -80,7 +80,7 @@ export async function bootstrapAnya(db) {
         report.background_code_crawl = { started: true }
         log.info('[AnyaBootstrap] Background code-crawl-and-repair started')
       } catch (err) {
-        console.error('[AnyaBootstrap] Background code-crawl-and-repair failed to start:', err?.message || err)
+        log.error('[AnyaBootstrap] Background code-crawl-and-repair failed to start:', err?.message || err)
         report.background_code_crawl = { error: err?.message || String(err) }
       }
     } else {
@@ -95,7 +95,7 @@ export async function bootstrapAnya(db) {
       report.health_service = { started: true }
       log.info('[AnyaBootstrap] Health service started')
     } catch (err) {
-      console.error('[AnyaBootstrap] Health service failed to start:', err?.message || err)
+      log.error('[AnyaBootstrap] Health service failed to start:', err?.message || err)
       report.health_service = { error: err?.message || String(err) }
     }
 
@@ -108,7 +108,7 @@ if (_scheduleIntervalId) {
 }
 _scheduleIntervalId = setInterval(() => {
         checkSchedule(db).catch(err => {
-          console.error('[AnyaBootstrap] Scheduled check failed:', err?.message || err)
+          log.error('[AnyaBootstrap] Scheduled check failed:', err?.message || err)
         })
       }, SCHEDULE_CHECK_MS)
       if (_scheduleIntervalId.unref) _scheduleIntervalId.unref()
@@ -124,7 +124,7 @@ _scheduleIntervalId = setInterval(() => {
       const SCHEDULE_CHECK_MS = 30 * 60 * 1000
       const dailyIntervalId = setInterval(() => {
         checkScheduledAutoDiscovery(db).catch((err) => {
-          console.error('[AnyaBootstrap] Scheduled auto-discovery check failed:', err?.message || err)
+          log.error('[AnyaBootstrap] Scheduled auto-discovery check failed:', err?.message || err)
         })
       }, SCHEDULE_CHECK_MS)
       if (dailyIntervalId.unref) dailyIntervalId.unref()
@@ -144,7 +144,7 @@ _scheduleIntervalId = setInterval(() => {
     })
   } catch (err) {
     // Top-level catch — never crash the server
-    console.error('[AnyaBootstrap] Unexpected error during initialization:', err?.message || err)
+    log.error('[AnyaBootstrap] Unexpected error during initialization:', err?.message || err)
     report.fatal_error = err?.message || String(err)
     report.completed_at = new Date().toISOString()
   }

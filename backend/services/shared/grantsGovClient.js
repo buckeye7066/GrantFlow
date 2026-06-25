@@ -193,9 +193,9 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
       )
       // If hitCount > 0 but oppHits is empty, there's a parsing problem
       if (typeof hitCount === 'number' && hitCount > 0) {
-        console.error(`[GrantsGovClient] PARSING BUG: hitCount=${hitCount} but extracted 0 hits!`)
+        log.error(`[GrantsGovClient] PARSING BUG: hitCount=${hitCount} but extracted 0 hits!`)
         const sample = JSON.stringify(parsed?.data ?? parsed).slice(0, 500)
-        console.error(`[GrantsGovClient] Raw data sample: ${sample}`)
+        log.error(`[GrantsGovClient] Raw data sample: ${sample}`)
       }
     } else {
       log.info(`[GrantsGovClient] Legacy "${keyword}" → ${resultRows.length} hits`)
@@ -212,7 +212,7 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
   } catch (err) {
     const code = err?.code || err?.response?.status || ''
     const msg = err?.message || String(err)
-    console.error(`[GrantsGovClient] Legacy API FAILED for "${keyword}": ${code} ${msg}`)
+    log.error(`[GrantsGovClient] Legacy API FAILED for "${keyword}": ${code} ${msg}`)
     return { ok: false, hits: [], error: `${code} ${msg}`.trim() }
   }
 }
@@ -289,7 +289,7 @@ async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
     if (code === 404 || code === 405 || code === '404' || code === '405') {
       console.warn(`[GrantsGovClient] Simpler API not available (${code}) for "${keyword}"`)
     } else {
-      console.error(`[GrantsGovClient] Simpler API FAILED for "${keyword}": ${code} ${msg}`)
+      log.error(`[GrantsGovClient] Simpler API FAILED for "${keyword}": ${code} ${msg}`)
     }
     return { ok: false, hits: [], error: `${code} ${msg}`.trim() }
   }
@@ -308,10 +308,11 @@ export async function searchGrants(keyword, opts = {}) {
   // Skip Simpler API entirely if no API key is configured (it returns 401)
   const skipSimpler = !SIMPLER_API_ENABLED || legacyOnly
 
-  const [legacyResult, simplerResult] = await Promise.allSettled([
+  const settledResults = await Promise.allSettled([
     simplerOnly ? Promise.resolve({ ok: false, hits: [], error: 'skipped' }) : queryLegacyAPI(keyword, rows),
     skipSimpler ? Promise.resolve({ ok: false, hits: [], error: 'no_api_key' }) : querySimplerAPI(keyword, rows),
-  ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : { ok: false, hits: [], error: r.reason?.message || 'unknown_error' }))
+  ])
+  const [legacyResult, simplerResult] = settledResults.map(r => r.status === 'fulfilled' ? r.value : { ok: false, hits: [], error: r.reason?.message || 'unknown_error' })
 
   diagnostics.legacy = {
     ok: legacyResult.ok, count: legacyResult.hits.length,
@@ -345,7 +346,7 @@ export async function searchGrants(keyword, opts = {}) {
 
   const anyOk = (legacyResult.ok && legacyResult.hits.length > 0) || (simplerResult.ok && simplerResult.hits.length > 0)
   if (!anyOk) {
-    console.error(`[GrantsGovClient] BOTH APIs failed for "${keyword}" | legacy: ${legacyResult.error} | simpler: ${simplerResult.error}`)
+    log.error(`[GrantsGovClient] BOTH APIs failed for "${keyword}" | legacy: ${legacyResult.error} | simpler: ${simplerResult.error}`)
   }
 
   return { ok: anyOk, opportunities: merged, diagnostics }

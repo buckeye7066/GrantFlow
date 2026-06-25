@@ -52,19 +52,19 @@ export function triggerStartupAudit(db, opts = {}) {
     try {
       results.endpoints = await testEndpoints(db, baseUrl, adminToken)
     } catch (e) {
-      console.error('[anyaStartupAudit] Endpoint test failed:', e.message)
+      log.error('[anyaStartupAudit] Endpoint test failed:', e.message)
     }
 
     try {
       results.matchQuality = await auditMatchQuality(db)
     } catch (e) {
-      console.error('[anyaStartupAudit] Match quality audit failed:', e.message)
+      log.error('[anyaStartupAudit] Match quality audit failed:', e.message)
     }
 
     try {
       results.mission = await verifyMissionGoals(db)
     } catch (e) {
-      console.error('[anyaStartupAudit] Mission verification failed:', e.message)
+      log.error('[anyaStartupAudit] Mission verification failed:', e.message)
     }
 
     try {
@@ -80,7 +80,7 @@ export function triggerStartupAudit(db, opts = {}) {
       log.info(`[anyaStartupAudit] Mission score: ${results.mission.score}% (${results.mission.pass}/${results.mission.total})`)
     }
   })().catch(e => {
-    console.error('[anyaStartupAudit] Unexpected error:', e)
+    log.error('[anyaStartupAudit] Unexpected error:', e)
   }).finally(() => {
     _auditRunning = false
   })

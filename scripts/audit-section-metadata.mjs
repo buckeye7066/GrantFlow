@@ -26,6 +26,24 @@ const SUPPORTED_FORMATS = new Set([
   'enum',
 ])
 
+function buildDeclaredFieldIndex(fields = []) {
+  const declared = new Set()
+  const formats = new Map()
+
+  for (const field of fields) {
+    if (!field?.name) continue
+    declared.add(field.name)
+    formats.set(field.name, field.format)
+
+    for (const alias of field.legacy_aliases ?? []) {
+      declared.add(alias)
+      formats.set(alias, field.format)
+    }
+  }
+
+  return { declared, formats }
+}
+
 function collectFromProfile(profile, out) {
   for (const [sectionKey, data] of Object.entries(profile?.sections ?? {})) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) continue
@@ -83,8 +101,7 @@ async function main() {
 
   for (const [sectionKey, keys] of observed) {
     const declaredFields = SECTION_METADATA[sectionKey]?.fields ?? []
-    const declared = new Set(declaredFields.map((field) => field.name))
-    const formats = new Map(declaredFields.map((field) => [field.name, field.format]))
+    const { declared, formats } = buildDeclaredFieldIndex(declaredFields)
     for (const key of keys) {
       if (!declared.has(key)) failures.push(`${sectionKey}.${key}`)
       if (formats.get(key) === 'text') {

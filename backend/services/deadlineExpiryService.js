@@ -44,7 +44,7 @@ export async function expirePassedDeadlines(db) {
     expired = Number(result?.changes ?? result?.rowCount ?? 0)
     log.info('[deadlineExpiry] Expired opportunities', { count: expired })
   } catch (error) {
-    console.error('[deadlineExpiry] Failed to expire opportunities:', error?.message || error)
+    log.error('[deadlineExpiry] Failed to expire opportunities:', error?.message || error)
     throw error
   }
 

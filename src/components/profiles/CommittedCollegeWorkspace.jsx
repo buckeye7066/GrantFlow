@@ -134,7 +134,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
       source: aidForm.source.trim() || null,
     }
     if (!entry.name) { toast({ title: 'Name is required', variant: 'destructive' }); return }
-    if (editingAidId != null) editAid.mutate({ id: editingAidId, patch: entry })
+    if (editingAidId !== null && editingAidId !== undefined) editAid.mutate({ id: editingAidId, patch: entry })
     else addAid.mutate(entry)
   }
   const aidBusy = addAid.isPending || editAid.isPending
@@ -204,7 +204,6 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
         zip: savedAddr.zip || '',
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [housingStatus, savedAddr.line1, savedAddr.city, savedAddr.state, savedAddr.zip])
 
   const openPrintSummary = () => {
@@ -303,7 +302,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">Cost of attendance</span>
             <Button size="sm" variant="outline" onClick={() => openCoaEditor(coa)}>
-              {coa.total == null && coa.tuition == null ? 'Add COA' : 'Edit COA'}
+              {(coa.total === null || coa.total === undefined) && (coa.tuition === null || coa.tuition === undefined) ? 'Add COA' : 'Edit COA'}
             </Button>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -548,7 +547,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                 <div className="mt-3 flex justify-end gap-2">
                   <Button size="sm" variant="outline" onClick={resetAidForm} disabled={aidBusy}>Cancel</Button>
                   <Button size="sm" onClick={submitAid} disabled={aidBusy}>
-                    {aidBusy ? 'Saving…' : editingAidId != null ? 'Save changes' : 'Add scholarship'}
+                    {aidBusy ? 'Saving…' : editingAidId !== null && editingAidId !== undefined ? 'Save changes' : 'Add scholarship'}
                   </Button>
                 </div>
               </div>
@@ -558,7 +557,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
             {workspace.aid?.pipeline?.length ? (
               <ul className="mt-3 space-y-2">
                 {workspace.aid.pipeline.map((item, idx) => (
-                  <li key={item.id != null ? item.id : `aid-${idx}`} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 p-2.5">
+                  <li key={item.id !== null && item.id !== undefined ? item.id : `aid-${idx}`} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 p-2.5">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium text-slate-900">{item.name}</span>

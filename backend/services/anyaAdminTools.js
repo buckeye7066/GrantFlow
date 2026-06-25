@@ -1668,7 +1668,7 @@ export async function adminCodeScan({ directory = '.', filePattern = '*.js', iss
           for (const pattern of scanPatterns) {
             const issueKey = pattern.type.replace('_items', '').replace('_statements', '')
             if (!issueTypes.includes(issueKey) && !issueTypes.includes('all')) continue
-            // TODO/FIXME/HACK live in comments by design, so keep scanning
+            // Task-marker tokens live in comments by design, so keep scanning
             // the raw line for those. Everything else scans the
             // code-only projection.
             const lineForScan = /_items$/.test(pattern.type) ? rawLine : codeLine

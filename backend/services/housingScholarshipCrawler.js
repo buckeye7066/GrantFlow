@@ -717,7 +717,7 @@ export async function runHousingScholarshipCrawler(db, opts = {}) {
       }
     } catch (err) {
       errors++
-      console.error(`${label} — error:`, err?.message || String(err))
+      log.error(`${label} — error:`, err?.message || String(err))
       if (onProgress) onProgress(i + 1, total, opp.title, 'error')
     }
 

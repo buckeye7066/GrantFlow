@@ -895,7 +895,6 @@ export default function DiscoverGrants() {
       }
       discoveringRef.current = false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProfileId, selectedProfileId, minMatchScore, debouncedMinMatchScore, categoryQuery, profileForSearch, queryClient, toast, selectedProfile])
 
   // Auto-run Discovery when arriving from onboarding with ?autorun=1.

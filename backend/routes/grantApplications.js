@@ -69,6 +69,7 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   let rows = []
   try {
+    // audit:allow unscoped-profile-query -- application_tasks is filtered by t.profile_id/user_id before joining grant display fields.
     rows = await db.prepare(
       `SELECT t.id, t.profile_id, t.user_id, t.opportunity_id, t.grant_id,
               t.status AS task_status, t.submitted_at, t.created_at, t.updated_at,

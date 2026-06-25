@@ -269,7 +269,7 @@ export async function runRegionalPurge(db, options = {}) {
       LIMIT ?
     `).all(activeVal, ...targetStates, limit)
   } catch (err) {
-    console.error('[regionalPurge] Failed to query opportunities:', err?.message)
+    log.error('[regionalPurge] Failed to query opportunities:', err?.message)
     summary.errors++
     return summary
   }
@@ -297,7 +297,7 @@ export async function runRegionalPurge(db, options = {}) {
       summary[outcome]++
       summary.perState[state][outcome]++
     } catch (err) {
-      console.error(`[regionalPurge] Error processing ${opp.id}:`, err?.message)
+      log.error(`[regionalPurge] Error processing ${opp.id}:`, err?.message)
       summary.errors++
       summary.perState[state].errors++
     }
@@ -500,7 +500,7 @@ function persistSuppressionTransition(db, {
   try {
     transaction()
   } catch (err) {
-    console.error('[regionalPurge] Failed to persist suppression transition:', err?.message)
+    log.error('[regionalPurge] Failed to persist suppression transition:', err?.message)
     throw err
   }
 }

@@ -14,6 +14,8 @@
  * touches `last_used_at` so we can spot abandoned / abused keys.
  */
 import crypto from 'node:crypto'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('middleware:schoolPortalAuth')
 
 export const SCHOOL_PORTAL_AUTH_HEADER = 'authorization'
 
@@ -122,7 +124,7 @@ export async function requireSchoolPartner(req, res, next) {
 
     return next()
   } catch (err) {
-    console.error('[schoolPortalAuth] failed:', err)
+    qualityLog.error('[schoolPortalAuth] failed:', err)
     return res.status(500).json({
       ok: false,
       error: 'School-portal authentication failed.',

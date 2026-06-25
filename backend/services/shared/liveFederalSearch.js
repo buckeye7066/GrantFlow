@@ -58,23 +58,23 @@ function withTimeout(promise, ms, fallback) {
         resolve(fallback)
       }
     }, Math.max(1, ms))
-    Promise.resolve(promise).then(
-      (v) => {
+    void (async () => {
+      try {
+        const value = await promise
         if (!settled) {
           settled = true
           clearTimeout(timer)
-          resolve(v)
+          resolve(value)
         }
-      },
-      (err) => {
+      } catch (err) {
         if (!settled) {
           settled = true
           clearTimeout(timer)
           log.warn(`[liveFederalSearch] query failed: ${err?.message ?? err}`)
           resolve(fallback)
         }
-      },
-    )
+      }
+    })()
   })
 }
 

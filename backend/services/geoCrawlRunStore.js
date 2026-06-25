@@ -1,4 +1,6 @@
 import crypto from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:geoCrawlRunStore')
 
 function nowExpr(db) {
   return db?.dialect === 'postgres' ? 'CURRENT_TIMESTAMP' : "datetime('now')"
@@ -174,7 +176,7 @@ async function ensureGeoCrawlSchema(db) {
       // Allow future calls to retry schema creation.
       if (ensurePromise === p) ensurePromise = null
       ensured = false
-      console.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
+      qualityLog.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
       throw error
     }
   })()

@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:workforceUnionEngine')
 
 const ENGINE_ID = 'workforce_union'
 
@@ -59,7 +61,7 @@ export async function runWorkforceUnionEngine(profile, options = {}) {
       workforceNeeds
     })
   } catch (error) {
-    console.error(`[${ENGINE_ID}] Engine failed â returning 0 of ${DIRECTORY_RESOURCES.length} resources. Reason:`, error?.message ?? error);
+    qualityLog.error(`[${ENGINE_ID}] Engine failed â returning 0 of ${DIRECTORY_RESOURCES.length} resources. Reason:`, error?.message ?? error);
     // Return structured failure metadata so callers can log suppression context
     // and the observability layer can record why candidates were lost (Goal 8).
     return [

@@ -10,6 +10,8 @@ import { parseContent } from './parsers.js'
 import { normalizeProgram } from './normalize.js'
 import { upsertNormalizedProgram } from './store.js'
 import { bridgeProgramToCatalog } from '../nationalPrograms/catalogBridge.js'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:nationalCrawlerV2:run')
 
 function isoDay() {
   return new Date().toISOString().slice(0, 10)
@@ -277,7 +279,7 @@ export async function runNationalCrawlerV2({
           try {
             if (url.startsWith('mock://')) {
               // Mock sources are not allowed — fabricated funding data must never reach users.
-              console.error(`[nationalCrawlerV2] Rejecting mock:// URL for source ${source.source_id}. Mock sources have been disabled.`)
+              qualityLog.error(`[nationalCrawlerV2] Rejecting mock:// URL for source ${source.source_id}. Mock sources have been disabled.`)
               continue
             } else if (url.startsWith('file://')) {
               fetchResult = await fetchFileUrl(url)

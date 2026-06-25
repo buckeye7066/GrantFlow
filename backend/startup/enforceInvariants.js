@@ -664,11 +664,11 @@ export async function enforceProfileScopedPipeline(db) {
     // Orphan = no profile AND no recorded award. amount_awarded may be absent
     // on very old schemas; tolerate that by treating a missing column as "no
     // award" via a guarded probe so this can never abort boot.
-    const where = `profile_id IS NULL AND (amount_awarded IS NULL OR amount_awarded <= 0)`
+    const safeOrphanWhereClause = `profile_id IS NULL AND (amount_awarded IS NULL OR amount_awarded <= 0)`
 
     let violators = 0
     try {
-      const row = await db.prepare(`SELECT COUNT(*) AS n FROM grants WHERE ${where}`).get()
+      const row = await db.prepare(`SELECT COUNT(*) AS n FROM grants WHERE ${safeOrphanWhereClause}`).get()
       violators = Number(row?.n ?? 0)
     } catch (err) {
       // amount_awarded column missing on a legacy DB — fall back to the
@@ -705,7 +705,7 @@ export async function enforceProfileScopedPipeline(db) {
       return { scanned: 0, repaired: 0, enforced: true }
     }
 
-    const result = await db.prepare(`DELETE FROM grants WHERE ${where}`).run()
+    const result = await db.prepare(`DELETE FROM grants WHERE ${safeOrphanWhereClause}`).run()
     const repaired = changesOf(result)
     if (repaired > 0) {
       log.info('purged orphan profile-less pipeline grants', { repaired })

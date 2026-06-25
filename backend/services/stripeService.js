@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 import Stripe from 'stripe'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:stripeService')
 
 function safeHash(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex')
@@ -37,7 +39,7 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
   try {
     row = await db.prepare('SELECT stripe_customer_id FROM stripe_customers WHERE user_id = ? LIMIT 1').get(uid)
   } catch (error) {
-    console.error('Database error checking existing stripe customer:', error)
+    qualityLog.error('Database error checking existing stripe customer:', error)
     return { ok: false, error: 'database_error' }
   }
   if (row?.stripe_customer_id) {
@@ -55,7 +57,7 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
         .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
         .run(uid, customerId)
     } catch (error) {
-      console.error('Failed to insert stripe customer:', error)
+      qualityLog.error('Failed to insert stripe customer:', error)
       return { ok: false, error: 'database_insert_failed' }
     }
     return { ok: true, stripe_customer_id: customerId, mocked: true }
@@ -69,7 +71,7 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
       metadata: { user_id: uid },
     })
   } catch (error) {
-    console.error('Stripe customer creation failed:', error.message)
+    qualityLog.error('Stripe customer creation failed:', error.message)
     return { ok: false, error: 'stripe_customer_creation_failed' }
   }
 
@@ -78,7 +80,7 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
       .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
       .run(uid, customer.id)
   } catch (error) {
-    console.error('Failed to save stripe customer to database:', error)
+    qualityLog.error('Failed to save stripe customer to database:', error)
     return { ok: false, error: 'database_save_failed' }
   }
 
@@ -161,7 +163,7 @@ export async function createCheckoutSessionForPrice({
       idem ? { idempotencyKey: idem } : undefined,
     )
   } catch (error) {
-    console.error('Stripe checkout session creation failed:', error.message)
+    qualityLog.error('Stripe checkout session creation failed:', error.message)
     throw new Error('Failed to create payment session')
   }
   return session

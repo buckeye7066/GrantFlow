@@ -212,7 +212,7 @@ export async function checkScheduledAutoDiscovery(db, options = {}) {
     )
     return result
   } catch (err) {
-    console.error('[scheduled-auto-discovery] Batch failed:', err?.message || err)
+    log.error('[scheduled-auto-discovery] Batch failed:', err?.message || err)
     throw err
   }
 }

@@ -192,7 +192,7 @@ router.post('/ingest', ingestAuth, async (req, res) => {
   }
 
   if (!db) {
-    console.error('[vehicles/ingest] Database is not available');
+    routeLogger.error('[vehicles/ingest] Database is not available');
     return res.status(500).json({ ok: false, error: 'Database unavailable' });
   }
 
@@ -282,7 +282,7 @@ router.post('/ingest', ingestAuth, async (req, res) => {
       scheduleDebouncedVehicleSync(db);
     } catch (syncErr) {
       // Log but do NOT fail the request if sync scheduling fails
-      console.error('[vehicles/ingest] Failed to schedule GitHub sync:', syncErr?.message || String(syncErr));
+      routeLogger.error('[vehicles/ingest] Failed to schedule GitHub sync:', syncErr?.message || String(syncErr));
     }
 
     return res.status(201).json({
@@ -312,7 +312,7 @@ router.post('/ingest', ingestAuth, async (req, res) => {
       });
     }
 
-    console.error('[vehicles/ingest] Insert error:', err?.message || String(err), { link: data.link });
+    routeLogger.error('[vehicles/ingest] Insert error:', err?.message || String(err), { link: data.link });
     return res.status(500).json(formatError(err));
   }
 });

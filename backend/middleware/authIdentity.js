@@ -21,6 +21,8 @@
 
 import jwt from 'jsonwebtoken'
 import { safeTokenEqual } from '../utils/safeTokenEqual.js'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('middleware:authIdentity')
 
 // better-sqlite3 is synchronous; no Promise wrapper needed.
 // If the DB handle is ever swapped for an async driver, update call sites directly.
@@ -195,7 +197,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                 console.warn('Failed to validate session:', error?.message || error)
                 if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
                   // Critical DB errors: fail auth completely and stop processing immediately.
-                  console.error('[authIdentity] Critical DB error during session validation:', error?.code, error?.message)
+                  qualityLog.error('[authIdentity] Critical DB error during session validation:', error?.code, error?.message)
                   // Preserve the JWT-derived identity that was already set before DB enrichment was
                   // attempted. Demoting to guest here discards a verified JWT claim without audit trail.
                   // Keep the user object that was set from the valid JWT (handled is already true)

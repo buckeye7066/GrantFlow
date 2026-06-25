@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:healthClinicalEngine')
 
 const ENGINE_ID = 'health_clinical'
 
@@ -55,7 +57,7 @@ export async function runHealthClinicalEngine(profile, options = {}) {
 
     return normalizeAndFilter(candidates, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
   } catch (error) {
-    console.error(`[${ENGINE_ID}] engine error: ${error.message}`)
+    qualityLog.error(`[${ENGINE_ID}] engine error: ${error.message}`)
     return []
   }
 }

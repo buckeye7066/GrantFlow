@@ -1,4 +1,6 @@
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:documentFallbackParser')
 
 function normalizeText(value) {
   return String(value || '')
@@ -104,7 +106,7 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
   try {
     parsed = JSON.parse(row.data)
   } catch (parseErr) {
-    console.error(
+    qualityLog.error(
       '[documentFallbackParser] Failed to parse university_applications JSON',
       { profileId, applicationId, error: String(parseErr) }
     )

@@ -2,6 +2,8 @@ import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
+import { createLogger } from './logger.js'
+const qualityLog = createLogger('utils:seedHousingFunding')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -44,7 +46,7 @@ export async function seedHousingFundingOpportunities(db) {
     ...(data.coa_adjustment_resources || []),
   ]
 
-  console.log(`[seedHousingFunding] Loaded ${allOpps.length} housing-related funding opportunities.`)
+  qualityLog.info(`[seedHousingFunding] Loaded ${allOpps.length} housing-related funding opportunities.`)
 
   let seeded = 0
   let errors = 0
@@ -81,7 +83,7 @@ export async function seedHousingFundingOpportunities(db) {
     }
   }
 
-  console.log(`[seedHousingFunding] Finished: ${seeded} seeded, ${errors} errors.`)
+  qualityLog.info(`[seedHousingFunding] Finished: ${seeded} seeded, ${errors} errors.`)
   return { seeded, errors, skipped: false }
 }
 

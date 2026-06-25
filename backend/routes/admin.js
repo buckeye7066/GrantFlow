@@ -1196,6 +1196,7 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
     // Trigger AI analysis if we have extracted text
     triggerKBAnalysis(req.db, docId, extractedText)
 
+    // audit:allow unscoped-profile-query -- admin knowledge-base documents are global and stored with profile_id NULL.
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
@@ -1266,6 +1267,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
     // Trigger AI analysis if we have extracted text
     triggerKBAnalysis(req.db, docId, extractedText)
 
+    // audit:allow unscoped-profile-query -- admin knowledge-base documents are global and stored with profile_id NULL.
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
@@ -1279,11 +1281,13 @@ router.delete('/knowledge/:id', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   try {
     const id = safeTrim(req.params?.id)
+    // audit:allow unscoped-profile-query -- admin knowledge-base documents are global and identified by type.
     const doc = await req.db
       .prepare(`SELECT id, file_path FROM documents WHERE id = ? AND type = ? LIMIT 1`)
       .get(id, KB_DOCUMENT_TYPE)
     if (!doc) return res.status(404).json({ ok: false, error: 'Not found' })
 
+    // audit:allow unscoped-profile-query -- admin-only delete constrained by the type-checked row loaded above.
     await req.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id)
     const deletedFile = doc.file_path ? safeDeleteFile(req, doc.file_path) : false
 
@@ -1637,6 +1641,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       }
 
       // Insert all sections
+      // audit:allow unscoped-profile-query -- INSERT includes profile_id and is scoped by values passed below.
       const insertSection = req.db.prepare(`
         INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
         VALUES (?, ?, ?, ?)
@@ -5251,7 +5256,7 @@ router.post('/backfill-matches', async (req, res) => {
 
         if (decision.decision === 'REJECT') {
           // Remove hard-ineligible entries
-          await db.prepare('DELETE FROM grants WHERE id = ?').run(row.id)
+          await db.prepare('DELETE FROM grants WHERE id = ? AND profile_id = ?').run(row.id, row.profile_id)
           rejected++
         } else {
           // Update metadata
@@ -5268,7 +5273,7 @@ router.post('/backfill-matches', async (req, res) => {
               evaluated_at = ?,
               match_confidence = ?,
               match_score = ?
-            WHERE id = ?
+            WHERE id = ? AND profile_id = ?
           `).run(
             decision.decision,
             decision.explanation,
@@ -5282,6 +5287,7 @@ router.post('/backfill-matches', async (req, res) => {
             decision.confidence,
             decision.score,
             row.id,
+            row.profile_id,
           )
           if (decision.decision === 'ACCEPT') accepted++
           else reviewed++

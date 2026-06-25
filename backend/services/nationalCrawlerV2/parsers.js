@@ -1,6 +1,8 @@
 import { parseHtmlToText } from '../nationalPrograms/parsers/html.js'
 import { parsePdfToText } from '../nationalPrograms/parsers/pdf.js'
 import { parseDocxToText } from '../nationalPrograms/parsers/docx.js'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:nationalCrawlerV2:parsers')
 
 function normalizeWhitespace(text) {
   return (text || '')
@@ -79,7 +81,7 @@ export async function parseContent({ url, contentType, buffer, sourceFamily }) {
     const defaultDoc = parseHtmlToText(defaultHtml, { url })
     return { parser_name: 'cheerio', extracted_text: defaultDoc.extractedText, doc: defaultDoc }
   } catch (error) {
-    console.error(`Content parsing failed for ${url}:`, error.message)
+    qualityLog.error(`Content parsing failed for ${url}:`, error.message)
     return { parser_name: 'error', extracted_text: '', doc: null }
   }
 }

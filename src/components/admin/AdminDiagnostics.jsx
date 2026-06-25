@@ -191,7 +191,6 @@ export default function AdminDiagnostics() {
 
   useEffect(() => {
     loadDiagnostics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRefresh = () => {

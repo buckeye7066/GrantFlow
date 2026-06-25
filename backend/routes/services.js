@@ -223,7 +223,7 @@ router.get('/purchases', ensureAuth, async (req, res) => {
         .prepare('SELECT * FROM milestone_payments WHERE purchase_id = ? ORDER BY phase ASC')
         .all(pid)
     } catch (error) {
-      console.error(`Failed to fetch milestones for purchase ${pid}:`, error)
+      routeLogger.error(`Failed to fetch milestones for purchase ${pid}:`, error)
       milestones = []
     }
 
@@ -233,7 +233,7 @@ router.get('/purchases', ensureAuth, async (req, res) => {
         .prepare('SELECT COALESCE(SUM(rounded_minutes), 0) AS total FROM hourly_time_entries WHERE purchase_id = ?')
         .get(pid)
     } catch (error) {
-      console.error(`Failed to fetch time entries for purchase ${pid}:`, error)
+      routeLogger.error(`Failed to fetch time entries for purchase ${pid}:`, error)
       time = { total: 0 }
     }
 
@@ -243,7 +243,7 @@ router.get('/purchases', ensureAuth, async (req, res) => {
         .prepare('SELECT * FROM hourly_invoices WHERE purchase_id = ? ORDER BY created_at DESC LIMIT 10')
         .all(pid)
     } catch (error) {
-      console.error(`Failed to fetch invoices for purchase ${pid}:`, error)
+      routeLogger.error(`Failed to fetch invoices for purchase ${pid}:`, error)
       invoices = []
     }
 

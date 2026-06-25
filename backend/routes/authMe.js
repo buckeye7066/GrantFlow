@@ -79,7 +79,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             )
             .get(user.userId)
         } catch (dbError) {
-          console.error('[/api/auth/me] Database error fetching user:', dbError)
+          routeLogger.error('[/api/auth/me] Database error fetching user:', dbError)
           return res.status(503).json({
             error: 'service_unavailable',
             error_type: 'database_error',
@@ -114,7 +114,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 )
                 .get(user.userId)
             } catch (repairError) {
-              console.error(
+              routeLogger.error(
                 '[/api/auth/me] Unable to self-heal missing admin user:',
                 {
                   message: repairError?.message || String(repairError),
@@ -211,7 +211,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             }
           }
         } catch (dbError) {
-          console.error('[/api/auth/me] Database error fetching profiles:', dbError)
+          routeLogger.error('[/api/auth/me] Database error fetching profiles:', dbError)
           // Return user data without profiles if profiles query fails (avoid 5xx for auth bootstrap).
           profiles = []
         }
@@ -262,7 +262,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         active_profile_id: user.profileId ?? null,
       })
     } catch (error) {
-      console.error('[/api/auth/me] Unexpected error:', error)
+      routeLogger.error('[/api/auth/me] Unexpected error:', error)
       return res.status(503).json({
         error: 'service_unavailable',
         error_type: 'internal_error',

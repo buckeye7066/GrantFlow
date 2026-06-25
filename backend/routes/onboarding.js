@@ -36,6 +36,8 @@ import {
 } from '../services/anyaInterviewEngine.js'
 import { canonicalizeProfileTypeId } from '../../shared/profileTypeOptions.js'
 import { resolveZipLocation } from '../services/geo/zipCountyResolver.js'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('routes:onboarding')
 
 const router = Router()
 
@@ -179,7 +181,7 @@ router.post('/start', async (req, res) => {
       ),
     )
   } catch (err) {
-    console.error('[onboarding/start] failed:', err)
+    qualityLog.error('[onboarding/start] failed:', err)
     return res.status(500).json({
       error: 'Could not start onboarding session.',
       detail: process.env.NODE_ENV === 'production' ? undefined : err?.message,
@@ -221,7 +223,7 @@ router.get('/sessions/:id', async (req, res) => {
         : getQuestion(session.currentQuestion)
     return res.json(formatResponse(session, question))
   } catch (err) {
-    console.error('[onboarding/sessions/:id] failed:', err)
+    qualityLog.error('[onboarding/sessions/:id] failed:', err)
     return res.status(500).json({ error: 'Could not load session.' })
   }
 })
@@ -284,7 +286,7 @@ router.post('/answer', async (req, res) => {
       }),
     )
   } catch (err) {
-    console.error('[onboarding/answer] failed:', err)
+    qualityLog.error('[onboarding/answer] failed:', err)
     return res.status(500).json({ error: 'Could not record answer.' })
   }
 })
@@ -344,7 +346,7 @@ router.post('/complete', async (req, res) => {
       typeof signOtpToken !== 'function' ||
       typeof insertVerificationCode !== 'function'
     ) {
-      console.error('[onboarding/complete] auth helpers missing exports')
+      qualityLog.error('[onboarding/complete] auth helpers missing exports')
       return res.status(500).json({ error: 'Auth subsystem unavailable.' })
     }
 
@@ -591,7 +593,7 @@ router.post('/complete', async (req, res) => {
     }
     return res.status(201).json(response)
   } catch (err) {
-    console.error('[onboarding/complete] failed:', err)
+    qualityLog.error('[onboarding/complete] failed:', err)
     return res.status(500).json({
       error: 'Could not finish onboarding.',
       detail: process.env.NODE_ENV === 'production' ? undefined : err?.message,

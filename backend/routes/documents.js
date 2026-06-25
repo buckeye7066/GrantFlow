@@ -1200,8 +1200,12 @@ router.put('/:id', async (req, res) => {
       .map((f) => `${ident(f, DOCUMENT_MUTABLE_COLUMNS)} = ?`)
       .join(', ')
     const safeValues = safeFields.map((f) => req.body[f])
-    await req.db.prepare(`UPDATE documents SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...safeValues, req.params.id);
-    res.json(await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
+    await req.db
+      .prepare(`UPDATE documents SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)`)
+      .run(...safeValues, req.params.id, existing.profile_id ?? null);
+    res.json(await req.db
+      .prepare('SELECT * FROM documents WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
+      .get(req.params.id, existing.profile_id ?? null));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1218,7 +1222,9 @@ router.delete('/:id', async (req, res) => {
     if (!(await ensureDocumentDeleteAccess(req, res, context, existing))) return
 
     await req.db.prepare('DELETE FROM profile_documents WHERE document_id = ?').run(req.params.id);
-    await req.db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
+    await req.db
+      .prepare('DELETE FROM documents WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
+      .run(req.params.id, existing.profile_id ?? null);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

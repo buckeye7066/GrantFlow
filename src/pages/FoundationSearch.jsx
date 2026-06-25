@@ -139,7 +139,7 @@ export default function FoundationSearch() {
   useEffect(() => {
     if (selectedProfileId) return
     const first = profileList[0]
-    if (first?.id != null) setSelectedProfileId(String(first.id))
+    if (first?.id !== null && first?.id !== undefined) setSelectedProfileId(String(first.id))
   }, [profileList, selectedProfileId])
 
   // ── Search state ─────────────────────────────────────────────────────────
@@ -176,7 +176,6 @@ export default function FoundationSearch() {
       .catch((err) => {
         // region is best-effort; surface for debugging only.
         if (import.meta?.env?.DEV) {
-          // eslint-disable-next-line no-console
           console.warn("getProfileRegion failed (non-fatal):", err)
         }
       })
@@ -287,7 +286,7 @@ export default function FoundationSearch() {
   const { data: detailResult, isLoading: detailLoading } = useQuery({
     queryKey: ["foundation-detail", selectedEin],
     queryFn: () => getFoundation(selectedEin),
-    enabled: selectedEin != null,
+    enabled: selectedEin !== null && selectedEin !== undefined,
     staleTime: 300_000,
   })
   const foundationDetail = detailResult?.data ?? detailResult ?? null

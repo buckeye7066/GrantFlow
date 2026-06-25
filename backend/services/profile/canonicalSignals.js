@@ -18,6 +18,8 @@
  */
 
 import { buildProfileSignals } from '../profileHelpers.js'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:profile:canonicalSignals')
 
 // ---------------------------------------------------------------------------
 // Type documentation (JSDoc)
@@ -452,7 +454,7 @@ export function buildCanonicalSignals(rawProfile, rawSections = {}) {
     const legacySignals = buildProfileSignals({ profile, sections })
     return fromLegacyHelpers(legacySignals)
   } catch (error) {
-    console.error('Failed to build canonical signals:', error)
+    qualityLog.error('Failed to build canonical signals:', error)
     return emptyCanonicalSignals()
   }
 }

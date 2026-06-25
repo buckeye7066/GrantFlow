@@ -2,6 +2,8 @@ import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { TIERS as CATALOG_TIERS, tierById } from '../../shared/tierCatalog.js'
 import { profileTypeToClientCategory } from '../../shared/profileTypeToClientCategory.js'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:billingAccounts')
 
 /**
  * Canonical mapping from a profile's BILLING client category (the 4-code form
@@ -265,7 +267,7 @@ async function syncCanonicalOrgTierPricing(db) {
         .run(t.monthly_cents, t.id)
     }
   } catch (err) {
-    console.error('[billingAccounts] syncCanonicalOrgTierPricing failed:', err?.message ?? err)
+    qualityLog.error('[billingAccounts] syncCanonicalOrgTierPricing failed:', err?.message ?? err)
   }
 }
 
@@ -430,7 +432,7 @@ async function seedBillingTiersIfMissing(db) {
     }
   } catch (err) {
     // Log the failure so operators can diagnose billing tier seed issues.
-    console.error('[billingAccounts] seedBillingTiersIfMissing: failed to insert seed tiers:', err?.message ?? err)
+    qualityLog.error('[billingAccounts] seedBillingTiersIfMissing: failed to insert seed tiers:', err?.message ?? err)
   }
 }
 

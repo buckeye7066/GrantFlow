@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
 import { ensureProfileEmailSchema } from './accessControl.js'
+import { createLogger } from './logger.js'
+const qualityLog = createLogger('utils:adminProfileLinks')
 
 function nowISOString() {
   return new Date().toISOString()
@@ -60,7 +62,7 @@ export async function linkProfileToAdmin(db, profileId) {
   try {
     await ensureProfileEmailSchema(db)
   } catch (err) {
-    console.error('[adminProfileLinks] ensureProfileEmailSchema failed in linkProfileToAdmin:', err?.message || err)
+    qualityLog.error('[adminProfileLinks] ensureProfileEmailSchema failed in linkProfileToAdmin:', err?.message || err)
     return
   }
 
@@ -98,7 +100,7 @@ export async function linkAllProfilesToAdmin(db) {
   try {
     await ensureProfileEmailSchema(db)
   } catch (err) {
-    console.error('[adminProfileLinks] ensureProfileEmailSchema failed in linkProfileToAdmin:', err?.message || err)
+    qualityLog.error('[adminProfileLinks] ensureProfileEmailSchema failed in linkProfileToAdmin:', err?.message || err)
     return
   }
 

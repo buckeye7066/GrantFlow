@@ -9,6 +9,8 @@ import { safeParseJSON } from '../utils/safeJson.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import { CANONICAL_SECTION_DEFAULTS, canonicalSectionKeys } from '../prompts/profileSections.js'
 import { COMPREHENSIVE_APPLICATION_DEFAULTS } from '../config/comprehensiveApplicationSchema.js'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:profileOrganizationSync')
 
 export function parseOrganizationRow(org) {
   if (!org) return null
@@ -420,7 +422,7 @@ export async function syncOrganizationToProfileSections(db, { organizationId, or
   try {
     await db.prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(profileId)
   } catch (error) {
-    console.error('Failed to update profile timestamp:', error)
+    qualityLog.error('Failed to update profile timestamp:', error)
     throw error
   }
 

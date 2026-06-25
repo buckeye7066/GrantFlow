@@ -283,7 +283,7 @@ export async function generateDeadlineNotifications(db) {
   try {
     await ensureNotificationsTable(db)
   } catch (error) {
-    console.error('[deadlineNotifications] Could not ensure notifications table:', error?.message || error)
+    log.error('[deadlineNotifications] Could not ensure notifications table:', error?.message || error)
     return { created: 0 }
   }
 

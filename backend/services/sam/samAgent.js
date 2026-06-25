@@ -47,6 +47,8 @@ import { gitProposeFixes } from './samGit.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:sam:samAgent')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
@@ -315,7 +317,7 @@ export async function runSam(args = {}) {
           error: String(err?.message || err),
         })
       } catch (persistErr) {
-        console.error('[sam] failed to persist crash:', persistErr?.message || persistErr)
+        qualityLog.error('[sam] failed to persist crash:', persistErr?.message || persistErr)
       }
     }
     return {

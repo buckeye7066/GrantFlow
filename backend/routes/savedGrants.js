@@ -197,11 +197,13 @@ router.post('/', async (req, res) => {
     }
 
     const id = crypto.randomUUID()
+    // audit:allow unscoped-profile-query -- INSERT includes profile_id and is scoped by activeProfileId.
     // ON CONFLICT targets the partial unique index keyed on
     // (user_id, profile_id, opportunity_id) WHERE profile_id IS NOT NULL.
     // Both Postgres (>=9.5) and SQLite (>=3.35) support this WHERE-on-conflict
     // form. Result: a re-save under the same profile updates notes, while a
     // re-save under a different profile creates a new row (no bleed).
+    // audit:allow unscoped-profile-query -- INSERT includes profile_id and is scoped by activeProfileId.
     await req.db.prepare(`
       INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id, notes)
       VALUES (?, ?, ?, ?, ?)
@@ -227,23 +229,21 @@ router.patch('/:opportunityId/notes', async (req, res) => {
     const { notes } = req.body ?? {}
     if (typeof notes !== 'string') return res.status(400).json({ error: 'notes must be a string' })
 
-    // Update either the row owned by the active profile, or a legacy NULL row
-    // that the user might have inherited from a pre-RC-14 save. Other
-    // profiles' rows are never touched.
+    // Update the row owned by the active profile, plus a legacy NULL row that
+    // the user might have inherited from a pre-RC-14 save. Other profiles' rows
+    // are never touched.
     const activeProfileId = resolveActiveProfileId(req)
-    let result
-    if (activeProfileId) {
-      result = await req.db.prepare(`
-        UPDATE saved_grants SET notes = ?
-        WHERE user_id = ? AND opportunity_id = ?
-          AND (profile_id = ? OR profile_id IS NULL)
-      `).run(notes, userId, req.params.opportunityId, activeProfileId)
-    } else {
-      result = await req.db.prepare(`
-        UPDATE saved_grants SET notes = ?
-        WHERE user_id = ? AND opportunity_id = ?
-      `).run(notes, userId, req.params.opportunityId)
+    if (!activeProfileId) {
+      return res.status(400).json({
+        error: 'profile_id required',
+        message: 'Updating saved grant notes requires an active profile.',
+      })
     }
+    const result = await req.db.prepare(`
+      UPDATE saved_grants SET notes = ?
+      WHERE user_id = ? AND opportunity_id = ?
+        AND (profile_id = ? OR profile_id IS NULL)
+    `).run(notes, userId, req.params.opportunityId, activeProfileId)
 
     if (result.changes === 0) return res.status(404).json({ error: 'Saved grant not found' })
     res.json({ updated: true })
@@ -263,21 +263,19 @@ router.delete('/:opportunityId', async (req, res) => {
 
     // Delete the active profile's row AND any legacy NULL row (which was
     // bleeding across profiles before RC-14). Other profiles' explicit saves
-    // are preserved. If the request has no active profile, fall back to the
-    // pre-RC-14 contract (delete by user+opportunity) so admin/CLI tools
-    // still work.
+    // are preserved.
     const activeProfileId = resolveActiveProfileId(req)
-    if (activeProfileId) {
-      await req.db.prepare(`
-        DELETE FROM saved_grants
-        WHERE user_id = ? AND opportunity_id = ?
-          AND (profile_id = ? OR profile_id IS NULL)
-      `).run(userId, req.params.opportunityId, activeProfileId)
-    } else {
-      await req.db.prepare(`
-        DELETE FROM saved_grants WHERE user_id = ? AND opportunity_id = ?
-      `).run(userId, req.params.opportunityId)
+    if (!activeProfileId) {
+      return res.status(400).json({
+        error: 'profile_id required',
+        message: 'Removing a saved grant requires an active profile.',
+      })
     }
+    await req.db.prepare(`
+      DELETE FROM saved_grants
+      WHERE user_id = ? AND opportunity_id = ?
+        AND (profile_id = ? OR profile_id IS NULL)
+    `).run(userId, req.params.opportunityId, activeProfileId)
 
     res.json({ removed: true })
   } catch (err) {

@@ -59,7 +59,7 @@ async function getFileSha(token, repo) {
     if (response.status === 404) return null;
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      console.error('[githubSyncVehicles] Failed to fetch file SHA', {
+      log.error('[githubSyncVehicles] Failed to fetch file SHA', {
         status: response.status,
         body,
       });
@@ -68,7 +68,7 @@ async function getFileSha(token, repo) {
     const data = await response.json();
     return data.sha || null;
   } catch (err) {
-    console.error('[githubSyncVehicles] Error fetching file SHA:', err?.message || String(err));
+    log.error('[githubSyncVehicles] Error fetching file SHA:', err?.message || String(err));
     return null;
   }
 }
@@ -84,11 +84,11 @@ export async function syncVehicleOpportunitiesToGitHub(db) {
   const repo = String(process.env.GITHUB_REPO || '').trim();
 
   if (!token) {
-    console.error('[githubSyncVehicles] GITHUB_TOKEN is not set; skipping sync.');
+    log.error('[githubSyncVehicles] GITHUB_TOKEN is not set; skipping sync.');
     return { ok: false, message: 'GITHUB_TOKEN not set' };
   }
   if (!repo) {
-    console.error('[githubSyncVehicles] GITHUB_REPO is not set; skipping sync.');
+    log.error('[githubSyncVehicles] GITHUB_REPO is not set; skipping sync.');
     return { ok: false, message: 'GITHUB_REPO not set' };
   }
 
@@ -96,7 +96,7 @@ export async function syncVehicleOpportunitiesToGitHub(db) {
   try {
     rows = await fetchVehicleOpportunities(db);
   } catch (err) {
-    console.error('[githubSyncVehicles] DB query failed:', err?.message || String(err));
+    log.error('[githubSyncVehicles] DB query failed:', err?.message || String(err));
     return { ok: false, message: `DB error: ${err?.message || String(err)}` };
   }
 
@@ -132,13 +132,13 @@ export async function syncVehicleOpportunitiesToGitHub(db) {
       body: JSON.stringify(body),
     });
   } catch (err) {
-    console.error('[githubSyncVehicles] Network error during PUT:', err?.message || String(err));
+    log.error('[githubSyncVehicles] Network error during PUT:', err?.message || String(err));
     return { ok: false, message: `Network error: ${err?.message || String(err)}` };
   }
 
   if (!response.ok) {
     const responseBody = await response.text().catch(() => '');
-    console.error('[githubSyncVehicles] GitHub PUT failed', {
+    log.error('[githubSyncVehicles] GitHub PUT failed', {
       status: response.status,
       body: responseBody,
     });
@@ -176,7 +176,7 @@ export function scheduleDebouncedVehicleSync(db) {
     try {
       await syncVehicleOpportunitiesToGitHub(db);
     } catch (err) {
-      console.error('[githubSyncVehicles] Unexpected error during debounced sync:', err?.message || String(err));
+      log.error('[githubSyncVehicles] Unexpected error during debounced sync:', err?.message || String(err));
     }
   }, delay);
 }

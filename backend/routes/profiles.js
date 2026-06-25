@@ -2772,6 +2772,7 @@ router.post('/:id/portal-awards/merge', async (req, res) => {
   }
 
   logProfileSectionRejections(id, 'university_applications', guardedPayload.rejected)
+  // audit:allow unscoped-profile-query -- INSERT includes profile_id and the route validates access to id before writing.
   await req.db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -2844,6 +2845,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     guardedData = deriveNamePartsIntoBasicInfo(guardedData, profile?.display_name).data
   }
 
+  // audit:allow unscoped-profile-query -- INSERT includes profile_id and the route validates access to id before writing.
   const upsert = req.db.prepare(
     `
     INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -3574,6 +3576,7 @@ router.post('/:id/repair', async (req, res) => {
     const existingKeys = new Set(existingSections.map(s => s.section_key))
 
     // Create missing sections (as empty JSON)
+    // audit:allow unscoped-profile-query -- INSERT includes profile_id and the route validates access to id before repairing.
     const upsert = req.db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, '{}', 'system-repair')

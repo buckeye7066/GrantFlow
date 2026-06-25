@@ -950,10 +950,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
     if (adapter) {
       if (adapter.pageType) ctx.pageType = adapter.pageType
-      // Use loose != null so undefined values are skipped (not injected as
-      // `undefined` keys) for adapters that omit these fields.
-      if (adapter.completion?.resultCount != null) ctx.resultCount = adapter.completion.resultCount
-      if (adapter.completion?.pipelineCount != null) ctx.pipelineCount = adapter.completion.pipelineCount
+      // Skip nullish values without dropping valid numeric 0.
+      if (adapter.completion?.resultCount !== null && adapter.completion?.resultCount !== undefined) ctx.resultCount = adapter.completion.resultCount
+      if (adapter.completion?.pipelineCount !== null && adapter.completion?.pipelineCount !== undefined) ctx.pipelineCount = adapter.completion.pipelineCount
       const primary = adapter.primaryEntityId ?? null
       if (primary) {
         if (adapter.pageType === 'grant_detail' || adapter.pageType === 'grant') {

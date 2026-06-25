@@ -2,6 +2,8 @@ import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
+import { createLogger } from './logger.js'
+const qualityLog = createLogger('utils:seedFaithBasedHousing')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -38,7 +40,7 @@ export async function seedFaithBasedHousing(db) {
     return { seeded: 0, skipped: true }
   }
 
-  console.log(`[seedFaithBasedHousing] Loading ${data.opportunities.length} Lorain County faith-based housing opportunities...`)
+  qualityLog.info(`[seedFaithBasedHousing] Loading ${data.opportunities.length} Lorain County faith-based housing opportunities...`)
 
   let seeded = 0
   let errors = 0
@@ -86,7 +88,7 @@ export async function seedFaithBasedHousing(db) {
   await registerCrawlerSources(db)
   await registerGeoIndexEntries(db, data.opportunities)
 
-  console.log(`[seedFaithBasedHousing] Seeded ${seeded} faith-based housing opportunities (${errors} errors)`)
+  qualityLog.info(`[seedFaithBasedHousing] Seeded ${seeded} faith-based housing opportunities (${errors} errors)`)
   return { seeded, errors, skipped: false }
 }
 
@@ -139,7 +141,7 @@ async function registerCrawlerSources(db) {
             src.source_family, src.base_url, src.seed_urls, src.enabled,
             src.tags, src.configuration
           )
-        console.log(`[seedFaithBasedHousing] Registered crawler source: ${src.source_id}`)
+        qualityLog.info(`[seedFaithBasedHousing] Registered crawler source: ${src.source_id}`)
       }
     } catch (error) {
       // crawler_sources table may not exist in all environments

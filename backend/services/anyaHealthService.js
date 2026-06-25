@@ -64,7 +64,7 @@ export async function runHealthCheck(db) {
       log.info(`[AnyaHealth] Expired ${count} stale opportunities`)
     }
   } catch (err) {
-    console.error('[AnyaHealth] expire_stale error:', err.message)
+    log.error('[AnyaHealth] expire_stale error:', err.message)
     status.errors.push({ task: 'expire_stale', error: err.message })
     status.expire_stale = { error: err.message }
   }
@@ -90,7 +90,7 @@ export async function runHealthCheck(db) {
       console.warn(`[AnyaHealth] Detected ${bleedRows.length} potential profile-bleed entries in global catalog`)
     }
   } catch (err) {
-    console.error('[AnyaHealth] profile_bleed_check error:', err.message)
+    log.error('[AnyaHealth] profile_bleed_check error:', err.message)
     status.errors.push({ task: 'profile_bleed_check', error: err.message })
     status.profile_bleed_check = { error: err.message }
   }
@@ -153,7 +153,7 @@ export async function runHealthCheck(db) {
   } catch (err) {
     // crawler_jobs table may not exist in all environments — not fatal
     if (!err.message?.includes('no such table') && !err.message?.includes('does not exist')) {
-      console.error('[AnyaHealth] orphaned_crawlers error:', err.message)
+      log.error('[AnyaHealth] orphaned_crawlers error:', err.message)
       status.errors.push({ task: 'orphaned_crawlers', error: err.message })
     }
     status.orphaned_crawlers = { error: err.message }
@@ -201,7 +201,7 @@ export async function runHealthCheck(db) {
       )
     }
   } catch (err) {
-    console.error('[AnyaHealth] profile_signal_audit error:', err.message)
+    log.error('[AnyaHealth] profile_signal_audit error:', err.message)
     status.errors.push({ task: 'profile_signal_audit', error: err.message })
     status.profile_signal_audit = { error: err.message }
   }
@@ -303,7 +303,7 @@ export async function runHealthCheck(db) {
         }
       } catch (delErr) {
         // Non-fatal: log and continue
-        console.error('[AnyaHealth] dedup delete error:', delErr.message)
+        log.error('[AnyaHealth] dedup delete error:', delErr.message)
       }
     }
 
@@ -312,7 +312,7 @@ export async function runHealthCheck(db) {
       log.info(`[AnyaHealth] Deduped ${removed} duplicate global catalog entries across ${dupGroups.length} groups`)
     }
   } catch (err) {
-    console.error('[AnyaHealth] dedup_opportunities error:', err.message)
+    log.error('[AnyaHealth] dedup_opportunities error:', err.message)
     status.errors.push({ task: 'dedup_opportunities', error: err.message })
     status.dedup_opportunities = { error: err.message }
   }
@@ -360,7 +360,7 @@ export function startHealthService(db) {
     try {
       _lastStatus = await runHealthCheck(_db)
     } catch (err) {
-      console.error('[AnyaHealth] Uncaught error in health check:', err.message)
+      log.error('[AnyaHealth] Uncaught error in health check:', err.message)
       _lastStatus = { error: err.message, completed_at: new Date().toISOString() }
     } finally {
       _running = false
