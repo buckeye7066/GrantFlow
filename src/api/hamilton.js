@@ -474,6 +474,21 @@ export function saveApplicationPacket(profileId, { source, profileName = '' } = 
   })
 }
 
+// Bulk: have Hamilton make an INDIVIDUAL packet (PDF) per selected non-portal
+// funder and save each to this profile's Documents. Idempotent per source
+// (already-saved packets are reused). Returns
+// { ok, results:[{ key, documentId, reused, mime_type, error? }], created, reused, failed }.
+export function saveApplicationPackets(profileId, { sources, profileName = '' } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return Promise.reject(new Error('sources required'))
+  }
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals/packets`, {
+    method: 'POST',
+    body: JSON.stringify({ sources, profileName }),
+  })
+}
+
 // Durable download URL for a saved packet document (serves the stored bytes so it
 // works even after Railway's filesystem is wiped).
 export function packetDownloadUrl(profileId, documentId) {

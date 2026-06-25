@@ -64,6 +64,7 @@ import {
   buildApplicationPacketHtml,
   packetDocumentName,
 } from '../../shared/applicationPacketHtml.js'
+import { renderHtmlToPdf, renderHtmlBatchToPdf } from '../services/packetPdf.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:profile-portals')
@@ -208,7 +209,67 @@ router.get('/profiles/:id/portals', async (req, res) => {
   }
 })
 
-// ── POST: render + save a packet to the profile's Documents ────────────────────
+// Persist ONE packet Document for a (profile, source). Prefers a rendered PDF
+// (pdfBuffer); falls back to the HTML bytes when PDF rendering wasn't available
+// on this host. Always keeps the HTML in extracted_text so the packet is
+// searchable / viewable even when only PDF bytes are stored. Shared by the
+// single and bulk routes so there is ONE save path.
+async function persistPacketDocument(db, { profileId, source, html, pdfBuffer }) {
+  const docId = crypto.randomUUID()
+  const name = packetDocumentName(source)
+  const isPdf = Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 0
+  const bytes = isPdf ? pdfBuffer : Buffer.from(html, 'utf-8')
+  const mimeType = isPdf ? 'application/pdf' : 'text/html'
+
+  try {
+    await db
+      .prepare(
+        `INSERT INTO documents
+           (id, profile_id, grant_id, name, type, mime_type, file_size,
+            file_bytes, extracted_text, processing_status, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        docId, profileId, source.grantId || null, name, PACKET_DOC_TYPE,
+        mimeType, bytes.length, bytes, html, 'completed',
+        'Generated application packet (mail/fax/email).',
+      )
+  } catch (err) {
+    // No file_bytes column (un-migrated/minimal schema): save HTML text only so
+    // the packet still persists (printable client-side). PDF bytes can't be
+    // stored here, so the stored type degrades to text/html.
+    if (/file_bytes|column/i.test(String(err?.message || err))) {
+      await db
+        .prepare(
+          `INSERT INTO documents
+             (id, profile_id, grant_id, name, type, mime_type, file_size,
+              extracted_text, processing_status, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          docId, profileId, source.grantId || null, name, PACKET_DOC_TYPE,
+          'text/html', Buffer.byteLength(html), html, 'completed',
+          'Generated application packet (mail/fax/email).',
+        )
+      return { documentId: docId, mime_type: 'text/html' }
+    }
+    throw err
+  }
+
+  // Link it into the profile's document set (best-effort).
+  try {
+    await db
+      .prepare(
+        `INSERT INTO profile_documents (profile_id, document_id)
+         VALUES (?, ?) ON CONFLICT DO NOTHING`,
+      )
+      .run(profileId, docId)
+  } catch { /* non-fatal */ }
+
+  return { documentId: docId, mime_type: mimeType }
+}
+
+// ── POST: render + save ONE packet (PDF, HTML fallback) to Documents ───────────
 
 router.post('/profiles/:id/portals/packet', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
@@ -233,77 +294,100 @@ router.post('/profiles/:id/portals/packet', async (req, res) => {
       return res.json({ documentId: existing.documentId, reused: true, at: existing.at })
     }
 
-    // Render from the SHARED builder (no auto-print script in the stored copy).
+    // Render from the SHARED builder (no auto-print script in the stored copy),
+    // then render to PDF (falls back to HTML bytes when chromium is unavailable).
     const html = buildApplicationPacketHtml({
       profileName,
       source,
       autoPrint: false,
       generatedAt: new Date().toISOString(),
     })
-    const bytes = Buffer.from(html, 'utf-8')
-    const docId = crypto.randomUUID()
-    const name = packetDocumentName(source)
+    const pdfBuffer = await renderHtmlToPdf(html)
+    const saved = await persistPacketDocument(req.db, { profileId, source, html, pdfBuffer })
 
-    // Insert the Document with durable bytes. Omit `status` (constrained in
-    // Postgres) and let the DB default apply; processing_status='completed'
-    // because the content is already final text.
-    try {
-      await req.db
-        .prepare(
-          `INSERT INTO documents
-             (id, profile_id, grant_id, name, type, mime_type, file_size,
-              file_bytes, extracted_text, processing_status, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          docId,
-          profileId,
-          source.grantId || null,
-          name,
-          PACKET_DOC_TYPE,
-          'text/html',
-          bytes.length,
-          bytes,
-          html,
-          'completed',
-          'Generated application packet (mail/fax/email).',
-        )
-    } catch (err) {
-      // If file_bytes truly isn't available, fall back to a text-only document so
-      // the save still succeeds (the printable view is always available client-side).
-      if (/file_bytes|column/i.test(String(err?.message || err))) {
-        await req.db
-          .prepare(
-            `INSERT INTO documents
-               (id, profile_id, grant_id, name, type, mime_type, file_size,
-                extracted_text, processing_status, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            docId, profileId, source.grantId || null, name, PACKET_DOC_TYPE,
-            'text/html', bytes.length, html, 'completed',
-            'Generated application packet (mail/fax/email).',
-          )
-      } else {
-        throw err
-      }
-    }
-
-    // Link it into the profile's document set (best-effort; table may not exist
-    // on the most minimal test schemas).
-    try {
-      await req.db
-        .prepare(
-          `INSERT INTO profile_documents (profile_id, document_id)
-           VALUES (?, ?) ON CONFLICT DO NOTHING`,
-        )
-        .run(profileId, docId)
-    } catch { /* non-fatal */ }
-
-    return res.json({ documentId: docId, reused: false, at: null })
+    return res.json({ documentId: saved.documentId, reused: false, at: null, mime_type: saved.mime_type })
   } catch (err) {
     log.error('save_packet_failed', { profileId, err: err?.message })
     return res.status(500).json({ error: 'could not save packet' })
+  }
+})
+
+// ── POST: bulk — Hamilton makes an individual packet (PDF) per selected funder ─
+// Used by the "Apply by mail or fax" select-all + "Make packets" action. One
+// Document per source, idempotent (existing packets are reused, not duplicated),
+// and a single chromium launch renders the whole batch. Never 500s on a single
+// bad source — that source is reported with an error and the rest still save.
+router.post('/profiles/:id/portals/packets', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+
+  const body = req.body || {}
+  const sources = Array.isArray(body.sources)
+    ? body.sources.filter((s) => s && typeof s === 'object')
+    : []
+  if (sources.length === 0) return res.status(400).json({ error: 'sources required' })
+  const profileName = String(body.profileName || '').trim()
+
+  // Bound the batch so one request can't tie up chromium / exceed the gateway
+  // timeout. The UI's "select all" on a profile is normally a handful of funders.
+  const MAX = 50
+  const batch = sources.slice(0, MAX)
+
+  try {
+    await ensureDocumentFileBytesColumn(req.db)
+
+    const results = []
+    const toBuild = [] // { source, html, resultIndex }
+    for (const source of batch) {
+      const key = source.grantId || source.opportunityId || source.title || packetDocumentName(source)
+      const existing = await findExistingPacket(req.db, profileId, source)
+      if (existing) {
+        results.push({ key, documentId: existing.documentId, reused: true, mime_type: null })
+        continue
+      }
+      const html = buildApplicationPacketHtml({
+        profileName,
+        source,
+        autoPrint: false,
+        generatedAt: new Date().toISOString(),
+      })
+      toBuild.push({ source, html, resultIndex: results.length })
+      results.push({ key, documentId: null, reused: false })
+    }
+
+    // One chromium launch for the whole batch (renderHtmlBatchToPdf); nulls where
+    // PDF couldn't render → persisted as HTML by persistPacketDocument.
+    const pdfs = await renderHtmlBatchToPdf(toBuild.map((t) => t.html))
+    for (let i = 0; i < toBuild.length; i += 1) {
+      const { source, html, resultIndex } = toBuild[i]
+      try {
+        const saved = await persistPacketDocument(req.db, { profileId, source, html, pdfBuffer: pdfs[i] })
+        results[resultIndex].documentId = saved.documentId
+        results[resultIndex].mime_type = saved.mime_type
+      } catch (err) {
+        results[resultIndex].error = err?.message || 'save failed'
+      }
+    }
+
+    const created = results.filter((r) => r.documentId && !r.reused).length
+    const reused = results.filter((r) => r.reused).length
+    const failed = results.filter((r) => r.error).length
+    return res.json({
+      ok: failed === 0,
+      results,
+      created,
+      reused,
+      failed,
+      truncated: sources.length > MAX,
+    })
+  } catch (err) {
+    log.error('save_packets_bulk_failed', { profileId, err: err?.message })
+    return res.status(500).json({ error: 'could not save packets' })
   }
 })
 
@@ -323,24 +407,32 @@ router.get('/profiles/:id/portals/packet/:documentId/download', async (req, res)
     // Scope to THIS profile's packet documents only (defense-in-depth: profile +
     // type both bound in SQL, not just a JS check).
     const doc = await req.db
-      .prepare('SELECT id, profile_id, name, file_bytes, extracted_text FROM documents WHERE id = ? AND profile_id = ? AND type = ?')
+      .prepare('SELECT id, profile_id, name, mime_type, file_bytes, extracted_text FROM documents WHERE id = ? AND profile_id = ? AND type = ?')
       .get(documentId, profileId, PACKET_DOC_TYPE)
     if (!doc) {
       return res.status(404).json({ error: 'not found' })
     }
+    const isPdf = String(doc.mime_type || '').toLowerCase() === 'application/pdf' && doc.file_bytes
+    const safeName = String(doc.name || 'application-packet').replace(/[\r\n"]/g, '').slice(0, 120)
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    if (isPdf) {
+      // Stored PDF bytes — serve as a real PDF the browser previews / downloads.
+      const buf = Buffer.isBuffer(doc.file_bytes) ? doc.file_bytes : Buffer.from(doc.file_bytes)
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Content-Disposition', `inline; filename="${safeName}.pdf"`)
+      return res.send(buf)
+    }
+    // HTML packet (older saves, or hosts without chromium). Serve SANDBOXED so it
+    // can never script the app origin (stored-XSS guard): the packet body is built
+    // from funder/source text. The `sandbox` CSP gives it a unique opaque origin
+    // with scripts disabled, so even if any value slipped past HTML-escaping it
+    // cannot run or touch app cookies.
     const html = doc.file_bytes
       ? (Buffer.isBuffer(doc.file_bytes) ? doc.file_bytes : Buffer.from(doc.file_bytes))
       : Buffer.from(String(doc.extracted_text || ''), 'utf-8')
-    // Strip CR/LF (header-injection) + quotes from the filename.
-    const fileName = `${String(doc.name || 'application-packet').replace(/[\r\n"]/g, '').slice(0, 120)}.html`
-    // Serve the stored HTML SANDBOXED so it can never script the app origin
-    // (stored-XSS guard): the packet body is built from funder/source text. The
-    // `sandbox` CSP gives it a unique opaque origin with scripts disabled, so even
-    // if any value slipped past HTML-escaping it cannot run or touch app cookies.
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
-    res.setHeader('X-Content-Type-Options', 'nosniff')
     res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data: https:; style-src 'unsafe-inline'")
-    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`)
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}.html"`)
     return res.send(html)
   } catch (err) {
     // Graceful degradation: a deployment missing the packet storage columns/

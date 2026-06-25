@@ -45,6 +45,7 @@ import {
   runPortalSyncRead,
   runPortalSyncWrite,
   saveApplicationPacket,
+  saveApplicationPackets,
   packetDownloadUrl,
   setPortalAutopilotPassphrase,
   unlockPortalAutopilot,
@@ -428,6 +429,65 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onError: (err) => showErrorToast(toast, "Could not save the packet", err?.message || "It still opened for printing."),
   })
 
+  // ── Bulk packets: select mail/fax funders, then Hamilton makes a packet each ──
+  // Local selection (keyed by the same stable id the rows use) so we don't need
+  // the Pipeline-only HamiltonSelectionProvider here.
+  const [selectedMailFax, setSelectedMailFax] = React.useState(() => new Set())
+  const allMailFaxKeys = React.useMemo(() => mailFaxSources.map(sourceKeyOf), [mailFaxSources])
+  const allMailFaxSelected =
+    allMailFaxKeys.length > 0 && allMailFaxKeys.every((k) => selectedMailFax.has(k))
+  const toggleMailFax = (src) =>
+    setSelectedMailFax((prev) => {
+      const next = new Set(prev)
+      const k = sourceKeyOf(src)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+  const toggleSelectAllMailFax = () =>
+    setSelectedMailFax(() => (allMailFaxSelected ? new Set() : new Set(allMailFaxKeys)))
+  // Drop selections for rows that no longer exist after a refetch.
+  React.useEffect(() => {
+    setSelectedMailFax((prev) => {
+      if (prev.size === 0) return prev
+      const valid = new Set(allMailFaxKeys)
+      const next = new Set([...prev].filter((k) => valid.has(k)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [allMailFaxKeys])
+
+  const bulkPacketMutation = useMutation({
+    mutationFn: (sources) => saveApplicationPackets(profileId, { sources, profileName }),
+    onSuccess: (res) => {
+      refetchPortals()
+      setSelectedMailFax(new Set())
+      const created = Number(res?.created || 0)
+      const reused = Number(res?.reused || 0)
+      const failed = Number(res?.failed || 0)
+      if (failed > 0) {
+        showErrorToast(
+          toast,
+          `Made ${created} packet${created === 1 ? "" : "s"}, ${failed} failed`,
+          "Saved packets are in this profile's Documents; retry the ones that failed.",
+        )
+      } else {
+        showSuccessToast(
+          toast,
+          `Made ${created + reused} packet${created + reused === 1 ? "" : "s"}`,
+          reused > 0
+            ? `${created} new, ${reused} already saved. Find them in this profile's Documents.`
+            : "Saved to this profile's Documents as PDFs.",
+        )
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Could not make packets", err?.message || "Please try again."),
+  })
+
+  const makeSelectedPackets = () => {
+    const sources = mailFaxSources.filter((s) => selectedMailFax.has(sourceKeyOf(s)))
+    if (sources.length > 0) bulkPacketMutation.mutate(sources)
+  }
+
   // ── Portal Autopilot vault controls ───────────────────────────────────────
   // The master passphrase is a PASSWORD field, consumed on submit and cleared —
   // never stored in component state beyond the moment of submission, never echoed.
@@ -729,8 +789,18 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       openApplicationPacket({ profileName, source: src })
       packetMutation.mutate(src)
     }
+    const selected = selectedMailFax.has(sourceKeyOf(src))
     return (
       <li key={key} className="flex flex-col gap-3 border-b border-current-line py-3 last:border-b-0 sm:flex-row sm:items-center">
+        <label className="flex shrink-0 cursor-pointer items-center pt-0.5 sm:pt-0" title="Select for making a packet">
+          <input
+            type="checkbox"
+            className="h-4 w-4 cursor-pointer accent-current-emerald"
+            checked={selected}
+            onChange={() => toggleMailFax(src)}
+            aria-label={`Select ${title} for a packet`}
+          />
+        </label>
         <div className="min-w-0 space-y-1">
           <div className="font-semibold text-current-ink">{title}</div>
           <div className="money text-xs text-current-ink/70">
@@ -1033,7 +1103,38 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             <p className="text-xs text-current-ink/70">
               These funders don&rsquo;t use an online login portal. Make an application packet — the
               funder&rsquo;s contact info plus clear instructions on where to mail, fax, or email the application.
+              Select the ones you want and Hamilton makes an individual PDF packet for each, saved to this
+              profile&rsquo;s Documents.
             </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-current-ink/80">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer accent-current-emerald"
+                  checked={allMailFaxSelected}
+                  onChange={toggleSelectAllMailFax}
+                  aria-label="Select all funders"
+                />
+                Select all
+              </label>
+              {selectedMailFax.size > 0 && (
+                <span className="money text-xs text-current-ink/70">{selectedMailFax.size} selected</span>
+              )}
+              <button
+                type="button"
+                className={BTN_EMERALD}
+                disabled={selectedMailFax.size === 0 || bulkPacketMutation.isPending}
+                onClick={makeSelectedPackets}
+                title="Hamilton makes an individual PDF packet for each selected funder and saves them to Documents"
+              >
+                {bulkPacketMutation.isPending
+                  ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                  : <FileText className="h-4 w-4" />}
+                {bulkPacketMutation.isPending
+                  ? "Making packets\u2026"
+                  : `Make ${selectedMailFax.size || ""} packet${selectedMailFax.size === 1 ? "" : "s"}`.replace("  ", " ")}
+              </button>
+            </div>
             <ul className="rounded-2xl border border-current-line bg-[#eef1ec] px-5 py-1">{mailFaxSources.map(renderMailFaxSource)}</ul>
           </div>
         )}
