@@ -8,7 +8,7 @@ import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle, Sparkles } from 'lucide-react';
+import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle, Sparkles, StopCircle } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import SearchCoveragePanel from '@/components/discovery/SearchCoveragePanel';
@@ -898,6 +898,22 @@ export default function DiscoverGrants() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProfileId, selectedProfileId, minMatchScore, debouncedMinMatchScore, categoryQuery, profileForSearch, queryClient, toast, selectedProfile])
 
+  // User-initiated stop. Bumps the same poll-loop cancellation token the
+  // profile-change / unmount paths use, so the in-flight loop's next
+  // isCancelled() check breaks out and its finally skips the reset. We reset
+  // the UI here for instant feedback. Crawlers already dispatched keep running
+  // server-side (this stops the client from waiting, not the backend).
+  const cancelSearch = useCallback(() => {
+    pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
+    discoveringRef.current = false
+    setIsSearching(false)
+    setDiscovery(null)
+    toast({
+      title: 'Search stopped',
+      description: 'Stopped waiting for results. Any matches already found are shown below; sources already queued keep running in the background.',
+    })
+  }, [toast])
+
   // Auto-run Discovery when arriving from onboarding with ?autorun=1.
   // handleFindFunding is memoized via useCallback so the captured profile id
   // (effectiveProfileId/selectedProfileId) is current at invocation.
@@ -1524,21 +1540,34 @@ export default function DiscoverGrants() {
                   className="mt-3 w-full"
                 />
               </div>
-              <Button
-                onClick={() => void handleFindFunding()}
-                disabled={!selectedProfile || isSearching}
-                size="lg"
-                className="min-w-[240px]"
-              >
-                {isSearching ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Searching...
-                  </>
-                ) : (
-                  'Find Funding Opportunities'
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  onClick={() => void handleFindFunding()}
+                  disabled={!selectedProfile || isSearching}
+                  size="lg"
+                  className="min-w-[240px]"
+                >
+                  {isSearching ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Searching...
+                    </>
+                  ) : (
+                    'Find Funding Opportunities'
+                  )}
+                </Button>
+                {isSearching && (
+                  <Button
+                    onClick={cancelSearch}
+                    variant="outline"
+                    size="lg"
+                    className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                  >
+                    <StopCircle className="w-4 h-4 mr-2" />
+                    Stop
+                  </Button>
                 )}
-              </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
