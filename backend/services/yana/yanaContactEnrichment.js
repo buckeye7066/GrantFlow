@@ -17,6 +17,7 @@
 
 import { createLogger } from '../../utils/logger.js'
 import { homepageNameScore, isExcludedEmail, isExcludedUrl } from './prospectExclusions.js'
+import { enrichOrgContact } from '../shared/orgContactEnrichment.js'
 
 const log = createLogger('yanaContactEnrichment')
 
@@ -134,6 +135,27 @@ export function makeContactEnricher(deps = {}) {
           excerpt = htmlToText(html)
         } catch (err) {
           log.warn(`enrich fetch failed for ${homepage}: ${err?.message || err}`)
+        }
+
+        // Most orgs (nonprofits, FQHCs, clinics) expose only a phone number and a
+        // "Contact Us" LINK on their homepage — the email lives one click deep on
+        // /contact, /about, etc. If the homepage yielded no email, probe those
+        // standard contact pages on the SAME site and scrape them too. This reuses
+        // the tested multi-page crawler (shared/orgContactEnrichment) so we stay
+        // same-domain and never grab a third party's address. Without this step the
+        // pipeline stalls at `no_contact_source` and no leads reach John.
+        if (!email) {
+          try {
+            const fetchImpl = async (url) => {
+              try { const h = await fetcher(url); return { ok: !!h, text: h || '' } }
+              catch { return { ok: false, text: '' } }
+            }
+            const deep = await enrichOrgContact({ website: homepage }, { fetchImpl, delayMs: 0 })
+            const deepEmail = deep?.email && !isExcludedEmail(deep.email) ? deep.email : null
+            if (deepEmail) email = deepEmail
+          } catch (err) {
+            log.warn(`enrich contact-page probe failed for ${homepage}: ${err?.message || err}`)
+          }
         }
       }
       return { ok: true, website_url: homepage, email, excerpt }
