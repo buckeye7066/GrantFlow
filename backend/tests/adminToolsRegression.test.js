@@ -284,7 +284,7 @@ describe('admin code and health tools', () => {
 })
 
 describe('admin brain cleanup and CodeGuard summary', () => {
-  it('supports dryRun and reports cleanup counts plus ids', () => {
+  it('supports dryRun and reports cleanup counts plus ids', async () => {
     const db = makeDb()
     const id = randomUUID()
     db.prepare('INSERT INTO anya_brain_memory (id, scope, memory_key, content, expires_at) VALUES (?, ?, ?, ?, ?)').run(
@@ -295,13 +295,13 @@ describe('admin brain cleanup and CodeGuard summary', () => {
       '2000-01-01T00:00:00.000Z',
     )
 
-    const dry = cleanupBrain(db, { dryRun: true })
+    const dry = await cleanupBrain(db, { dryRun: true })
     expect(dry.expiredMemories).toBe(1)
     expect(dry.removed_ids.expiredMemories).toContain(id)
     expect(db.prepare('SELECT COUNT(*) AS count FROM anya_brain_memory').get().count).toBe(1)
   })
 
-  it('coerces wrapped rows during brain cleanup dry runs', () => {
+  it('coerces wrapped rows during brain cleanup dry runs', async () => {
     const statements = {
       anya_brain_memory: { rows: [{ id: 'mem-1' }] },
       anya_context: { rows: [{ id: 'ctx-1' }] },
@@ -311,19 +311,19 @@ describe('admin brain cleanup and CodeGuard summary', () => {
       dialect: 'postgres',
       prepare(sql) {
         return {
-          all() {
+          async all() {
             if (sql.includes('anya_brain_memory')) return statements.anya_brain_memory
             if (sql.includes('anya_context')) return statements.anya_context
             if (sql.includes('anya_tool_usage')) return statements.anya_tool_usage
             return { rows: [] }
           },
-          run() {
+          async run() {
             throw new Error('dryRun should not delete')
           },
         }
       },
     }
-    const result = cleanupBrain(db, { dryRun: true })
+    const result = await cleanupBrain(db, { dryRun: true })
     expect(result.expiredMemories).toBe(1)
     expect(result.oldContext).toBe(1)
     expect(result.oldToolUsage).toBe(1)

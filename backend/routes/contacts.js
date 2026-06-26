@@ -18,15 +18,12 @@ async function contactsHasProfileIdColumn(db) {
   if (contactsHasProfileIdColumnCache !== null) return contactsHasProfileIdColumnCache
   try {
     if (db?.dialect === 'postgres') {
-      const result = await db.query(
-          `
-            SELECT 1 AS ok
-            FROM information_schema.columns
-            WHERE table_name = 'contacts' AND column_name = 'profile_id'
-            LIMIT 1
-          `
-        )
-      const row = result.rows?.[0]
+      const row = await db.prepare(`
+        SELECT 1 AS ok
+        FROM information_schema.columns
+        WHERE table_name = 'contacts' AND column_name = 'profile_id'
+        LIMIT 1
+      `).get()
       contactsHasProfileIdColumnCache = Boolean(row?.ok)
       return contactsHasProfileIdColumnCache
     }
@@ -338,4 +335,3 @@ router.delete('/:id', async (req, res) => {
 })
 
 export default router
-
