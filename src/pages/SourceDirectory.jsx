@@ -287,7 +287,7 @@ export default function SourceDirectory() {
 
       // Determine which source IDs to delete
       if (target?.type === 'single') {
-        sourceIdsToDelete = target.id != null ? [target.id] : [];
+        sourceIdsToDelete = target.id !== null && target.id !== undefined ? [target.id] : [];
       } else if (target?.type === 'bulk') {
         sourceIdsToDelete = Array.isArray(target.ids) ? target.ids : [];
       } else if (target?.type === 'by_source_type') {
@@ -685,7 +685,7 @@ export default function SourceDirectory() {
 
   const handleAddOpportunityToPipeline = async (opp) => {
     const oppKey = opp.id ?? opp.url;
-    if (oppKey != null && addingToPipeline.includes(oppKey)) return;
+    if (oppKey !== null && oppKey !== undefined && addingToPipeline.includes(oppKey)) return;
     setAddingToPipeline((prev) => [...prev, oppKey]);
     try {
       // Check for duplicates first
@@ -1216,7 +1216,7 @@ export default function SourceDirectory() {
                                           ? allGrants.find(g => g.url && g.url === opp.url && g.organization_id === selectedOrgId)
                                           : null;
                                         const oppKey = opp.id ?? opp.url;
-                                        const isAdding = oppKey != null && addingToPipeline.includes(oppKey);
+                                        const isAdding = oppKey !== null && oppKey !== undefined && addingToPipeline.includes(oppKey);
 
                                         return (
                                           <div

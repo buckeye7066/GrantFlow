@@ -187,28 +187,28 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
 
             const rejected = [];
 
-            if (response.email != null) {
+            if (response.email !== null && response.email !== undefined) {
                 if (isValidString(response.email) && EMAIL_RE.test(response.email.trim())) {
                     updates.funder_email = response.email.trim();
                 } else {
                     rejected.push('email');
                 }
             }
-            if (response.phone != null) {
+            if (response.phone !== null && response.phone !== undefined) {
                 if (isValidString(response.phone) && PHONE_RE.test(response.phone.trim())) {
                     updates.funder_phone = response.phone.trim();
                 } else {
                     rejected.push('phone');
                 }
             }
-            if (response.fax != null) {
+            if (response.fax !== null && response.fax !== undefined) {
                 if (isValidString(response.fax) && PHONE_RE.test(response.fax.trim())) {
                     updates.funder_fax = response.fax.trim();
                 } else {
                     rejected.push('fax');
                 }
             }
-            if (response.address != null) {
+            if (response.address !== null && response.address !== undefined) {
                 if (isValidString(response.address) && response.address.trim().length > 5) {
                     updates.funder_address = response.address.trim();
                 } else {
