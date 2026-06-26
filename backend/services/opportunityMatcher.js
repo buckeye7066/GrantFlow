@@ -27,7 +27,23 @@ import {
   GRANT_FINGERPRINT_VERSION,
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
+import { evaluateApplicantTypeEligibility } from './applicantTypeGate.js'
 import { createLogger } from '../utils/logger.js'
+
+// Directory-style / referral resources must ALWAYS survive filtering (mission
+// rule). They are a place to search, not an opportunity an applicant is "the
+// wrong type" for, so the applicant-type gate must never block them. Mirrors the
+// signals matching.js uses to detect a directory.
+export function isDirectoryLikeOpportunity(opp) {
+  if (!opp) return false
+  const k = String(opp.opportunity_kind ?? opp.kind ?? '').toUpperCase()
+  if (k === 'DIRECTORY' || k === 'PAST_AWARD_INTEL') return true
+  if (String(opp.type ?? '').toUpperCase() === 'DIRECTORY') return true
+  if (String(opp.opportunity_type ?? '').toUpperCase() === 'DIRECTORY') return true
+  const lowerType = String(opp.opportunity_type ?? opp.type ?? opp.funding_type ?? '').toLowerCase()
+  if (lowerType === 'referral' || lowerType === 'referral_service') return true
+  return Boolean(opp.is_directory_resource || opp.is_directory || opp.excluded_from_grant_scoring)
+}
 const log = createLogger('opportunityMatcher')
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
@@ -208,6 +224,44 @@ export async function saveToProfilePipeline(
         matchPercentage: decision.score ?? 0,
         threshold,
         decision: 'REJECT',
+      }
+    }
+
+    // Gate 2.5: Applicant-type eligibility (the fix for institution-only rows
+    // landing in an INDIVIDUAL's pipeline). Federal personnel-prep / institutional
+    // training grants (OSEP/OESE/OSERS, NRSA, NSF institutional programs) and any
+    // opportunity whose eligible applicants are institutions / states / nonprofits
+    // are structurally closed to an individual — they can never be the applicant.
+    // Discover (matching.js GATE 2) and POST /from-opportunity already hard-drop
+    // these via evaluateApplicantTypeEligibility; the pipeline WRITER was the one
+    // path that skipped it, so auto-add crawlers + Anya autonomous adds slipped
+    // them into individual pipelines (e.g. Anastasia, a graduate student).
+    //
+    // Rule-aligned: directories are EXEMPT (must always survive), and ONLY an
+    // EXPLICIT mismatch (institution/government/nonprofit-only eligibility, or
+    // explicit applicant_types that exclude the profile bucket) is blocked —
+    // demographic/field mismatches stay a SCORE penalty (handled by the relevance
+    // filter below), never a hard drop.
+    if (!isDirectoryLikeOpportunity(opportunity)) {
+      const basicSection = profileSections?.basic_information ?? profileSections?.basic_info ?? null
+      const profileApplicantType =
+        rawProfile?.applicant_type ||
+        rawProfile?.primary_type ||
+        rawProfile?.profile_category ||
+        basicSection?.profile_category ||
+        basicSection?.applicant_type ||
+        null
+      const applicantEval = evaluateApplicantTypeEligibility(opportunity, profileApplicantType)
+      if (applicantEval.decision === 'mismatch') {
+        log.info(`[opportunityMatcher] Gate:APPLICANT_TYPE suppressed "${opportunity.title}" — ${applicantEval.reason} (profile applicant type: ${profileApplicantType ?? 'unknown'})`)
+        return {
+          saved: false,
+          reason: `Not eligible for this applicant type (${applicantEval.reason})`,
+          gate: 'APPLICANT_TYPE',
+          matchPercentage: decision?.score ?? null,
+          threshold,
+          decision: 'REJECT',
+        }
       }
     }
 
