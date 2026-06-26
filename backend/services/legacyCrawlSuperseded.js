@@ -1,10 +1,8 @@
 // legacyCrawlSuperseded.js — the explicitly-named compatibility shim for the
 // Crawler OS cutover. The legacy bulk grant-crawl entrypoints are superseded by
 // the Crawler OS (automatic discovery via Robert + per-profile discovery via
-// runProfileDiscoveryLive). These no-op shims preserve the (admin-only) legacy
-// endpoint call sites WITHOUT importing or executing the removed legacy crawler
-// engine, so the old crawler is unreachable at runtime. Each returns a clearly
-// superseded result instead of running an old crawl.
+// runProfileDiscoveryLive). These shims preserve the legacy endpoint call sites
+// while routing user-facing profile crawls through the OS.
 const SUPERSEDED = Object.freeze({
   superseded: true,
   inserted: 0,
@@ -25,6 +23,58 @@ export async function runAllDomainEngines() { return { ...SUPERSEDED, engines: [
 export async function crawlStateWaiverBenefits() { return [] }
 export function evaluateStateWaiverEligibility() { return { eligible: false, superseded: true } }
 export async function stampLastDiscoveryAt() { /* OS persistence stamps last_discovery_at */ }
+
+function safeJsonParse(value, fallback) {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === 'object') return value
+  if (!value || typeof value !== 'string') return fallback
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
+  if (!db || !profileId) return []
+  const rows = await db.prepare(`
+    SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
+           fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max,
+           fo.state, fo.categories, fo.funding_type,
+           m.match_score, m.match_decision, m.match_explanation, m.match_reasons,
+           m.match_explain_json, m.matcher_version
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+     WHERE m.profile_id = ?
+       AND m.matcher_version IN ('crawler-os', 'web-llm')
+       AND lower(COALESCE(m.match_decision, '')) IN ('accept', 'review')
+       AND (fo.is_active IS NULL OR fo.is_active = 1)
+     ORDER BY m.match_score DESC
+     LIMIT ?
+  `).all(String(profileId), Number(limit) || 200)
+
+  return (rows || []).map((row) => {
+    const explain = safeJsonParse(row.match_explain_json, {})
+    const categories = safeJsonParse(row.categories, [])
+    return {
+      id: row.id,
+      name: row.title,
+      title: row.title,
+      description: row.description,
+      url: row.application_url || row.apply_url || row.source_url || null,
+      applicationUrl: row.application_url || row.apply_url || null,
+      sourceUrl: row.source_url || null,
+      matchScore: Number(row.match_score ?? 0),
+      matchReasons: safeJsonParse(row.match_reasons, explain?.matched_needs || []),
+      matchedCategories: categories,
+      categories,
+      type: String(row.opportunity_kind || '').toUpperCase() === 'DIRECTORY' ? 'portal' : 'program',
+      fundingType: row.funding_type || null,
+      maxAmount: row.amount_max || null,
+      minAmount: row.amount_min || null,
+      deadline: row.deadline || null,
+      stateRestriction: row.state || null,
+      recurring: !row.deadline,
+      match_explain: { ...explain, why: row.match_explanation || explain?.why, matcher_version: row.matcher_version },
+    }
+  })
+}
 
 // The legacy "trigger auto-discovery" entrypoint now drives the Crawler OS, so
 // the user-facing "discover" actions still work — via the OS, not the old crawler.
@@ -84,8 +134,31 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {})
 }
 
 // crawlerManager / itemFundingCrawler / domainCrawlerRegistry surfaces used by
-// admin audit, crawlerFramework, and Sam diagnostics — no-ops post-cutover.
-export async function runCrawler() { return { ...SUPERSEDED, results: [] } }
+// admin audit, crawlerFramework, and Sam diagnostics. Profile-facing calls now
+// delegate to the Crawler OS and return the old result shape expected by legacy
+// routes. Non-profile bulk crawler surfaces below remain explicit no-ops.
+export async function runCrawler(db, profileId, options = {}) {
+  if (!db || !profileId) return { ...SUPERSEDED, results: [] }
+  const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
+  const floor = Number.isFinite(Number(options?.minScore)) ? Number(options.minScore) : undefined
+  const maxResults = Number(options?.maxResults) || 200
+  const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: String(profileId), floor })
+  const results = await loadCrawlerOsProfileResults(db, profileId, maxResults)
+  return {
+    ...SUPERSEDED,
+    superseded: false,
+    engine: 'crawler-os',
+    crawler_type: options?.crawlerType || 'crawler-os',
+    inserted: persisted?.opportunities ?? run?.stored ?? results.length,
+    evaluated: persisted?.matches ?? results.length,
+    total: results.length,
+    results,
+    sources: run?.sources ?? [],
+    rejected: run?.rejected ?? 0,
+    pipelinePruned: persisted?.pipelinePruned ?? 0,
+    hamiltonCleaned: persisted?.hamiltonCleaned ?? 0,
+  }
+}
 export const SCHEMA = Object.freeze({})
 export async function crawlItemFunding() { return { ...SUPERSEDED, items: [] } }
 export const DOMAIN_CRAWLER_REGISTRY = Object.freeze({})
