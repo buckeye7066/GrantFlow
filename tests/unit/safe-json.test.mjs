@@ -25,6 +25,6 @@ test('safeParseJSON: invalid string falls back', () => {
 })
 
 test('safeParseJSON: double-encoded JSON string (quoted blob in TEXT)', () => {
-  const blob = JSON.stringify(JSON.stringify({ full_name: 'Melissa Justus', n: 1 }))
-  assert.deepEqual(safeParseJSON(blob, {}), { full_name: 'Melissa Justus', n: 1 })
+  const blob = JSON.stringify(JSON.stringify({ full_name: 'Demo Client', n: 1 }))
+  assert.deepEqual(safeParseJSON(blob, {}), { full_name: 'Demo Client', n: 1 })
 })

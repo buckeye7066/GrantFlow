@@ -3,7 +3,7 @@
  *
  * Regression guard for the 80%-slider fix: before this, scoreNeedComponent
  * divided matched needs by the profile's TOTAL need count, so a complete
- * profile (e.g. Robert White's 13 needs) scored every grant low and the 80%
+ * profile with many needs scored every grant low and the 80%
  * slider returned nothing. A grant that addresses a profile's core needs must
  * score the same whether the profile lists those 4 needs or those 4 + many more.
  */

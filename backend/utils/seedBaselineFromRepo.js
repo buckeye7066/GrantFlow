@@ -3,6 +3,7 @@ import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
 import { ALLOWED_RECORD_ORIGINS } from './recordOrigins.js'
+import { getDefaultSectionData, supportedSectionKeys } from '../config/profileSchema.js'
 
 function resolveBaselineSeedPath() {
   const __filename = fileURLToPath(import.meta.url)
@@ -83,6 +84,36 @@ function normalizeDocumentStatus(raw) {
   return 'draft'
 }
 
+function expandDefaultProfileSections(profiles, sections) {
+  const existing = new Map()
+  const expanded = []
+
+  for (const section of Array.isArray(sections) ? sections : []) {
+    const profileId = String(section?.profile_id || '').trim()
+    const sectionKey = String(section?.section_key || '').trim()
+    if (!profileId || !sectionKey) continue
+    existing.set(`${profileId}::${sectionKey}`, true)
+    expanded.push(section)
+  }
+
+  for (const profile of Array.isArray(profiles) ? profiles : []) {
+    const profileId = String(profile?.id || '').trim()
+    if (!profileId) continue
+    for (const sectionKey of supportedSectionKeys) {
+      const key = `${profileId}::${sectionKey}`
+      if (existing.has(key)) continue
+      expanded.push({
+        profile_id: profileId,
+        section_key: sectionKey,
+        data: getDefaultSectionData(sectionKey),
+      })
+      existing.set(key, true)
+    }
+  }
+
+  return expanded
+}
+
 export function loadBaselineSeedFromRepo() {
   const seedPath = resolveBaselineSeedPath()
   if (!fs.existsSync(seedPath)) {
@@ -92,7 +123,10 @@ export function loadBaselineSeedFromRepo() {
   }
   const payload = JSON.parse(fs.readFileSync(seedPath, 'utf8'))
   const profiles = Array.isArray(payload?.profiles) ? payload.profiles : []
-  const sections = Array.isArray(payload?.sections) ? payload.sections : []
+  const sections = expandDefaultProfileSections(
+    profiles,
+    Array.isArray(payload?.sections) ? payload.sections : [],
+  )
   const organizations = Array.isArray(payload?.organizations) ? payload.organizations : []
   const opportunities = Array.isArray(payload?.funding_opportunities) ? payload.funding_opportunities : []
   const grants = Array.isArray(payload?.grants) ? payload.grants : []
@@ -835,4 +869,3 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     counts,
   }
 }
-

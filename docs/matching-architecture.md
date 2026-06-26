@@ -315,6 +315,7 @@ used only as non-authoritative ranking helpers.
 
 | Path | Status | Notes |
 |---|---|---|
+| `backend/crawler-os/matchEngine.js` | ✅ canonical facade (v4.1.2) | Adapts Crawler OS opportunity/thesis rows into `computeMatchDecision`; contains no standalone decision weights |
 | `backend/services/opportunityMatcher.js:saveToProfilePipeline` | ✅ canonical | Production pipeline insertion — sole INSERT authority |
 | `backend/services/itemCrawler.js` | ✅ canonical (v4.1.2) | Uses `computeMatchDecision(profile, opp)` with explicit camelCase→snake_case mapping into `upsertFundingOpportunity` |
 | `backend/services/localCrawler.js` | ✅ canonical | Calls `saveToProfilePipeline` |
@@ -478,4 +479,3 @@ Or as part of the full suite:
 ```sh
 npm run unit
 ```
-

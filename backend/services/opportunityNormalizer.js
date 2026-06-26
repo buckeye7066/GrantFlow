@@ -592,7 +592,7 @@ export function normalizeOpportunity(rawOpp) {
     rawOpp.opportunity_type ?? '',
     rawOpp.type ?? '',
   ].join(' ').toLowerCase()
-  const loanAssistanceExempt = /loan\s+(forgiveness|repayment|discharge|cancellation|redemption|relief|assistance)|repay\w*\s+\w*\s*loan|pslf|income.driven repayment/i.test(loanText)
+  const loanAssistanceExempt = /loan\s+(forgiveness|repayment|discharge|cancellation|redemption|relief|assistance)|repay\w*\s+\w*\s*loan|pslf|income.driven repayment|\bloan\s+(?:and|&)\s+grant\b|\bgrants?\s+(?:and|&)\s+loans?\b/i.test(loanText)
   const mentionsLoan = /\bloans?\b/i.test(loanText) ||
     /\bmicroloans?\b/i.test(loanText) ||
     /\blending\b/i.test(loanText)

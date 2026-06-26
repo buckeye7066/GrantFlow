@@ -1,5 +1,5 @@
 /**
- * Dr. John White must return funding at 85% strict threshold on Discover.
+ * A community health advocate profile must return funding at 85% strict threshold on Discover.
  */
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getAppAndDb, resetDb } from './testServer.js'
@@ -10,16 +10,16 @@ import { canonicalizeOpportunityList } from '../services/matching/resultEnricher
 import { extractProfileData, applyRelevanceFilter } from '../services/relevanceFilter.js'
 import { computeMatchDecision } from '../services/matchDecisionEngine.js'
 
-const JOHN_WHITE = {
-  id: 'profile-john-white-discover85',
-  display_name: 'Dr. John White',
+const HEALTH_ADVOCATE = {
+  id: 'profile-health-advocate-discover85',
+  display_name: 'Demo Community Health Advocate',
   primary_type: 'individual',
   status: 'active',
   tags: ['healthcare professional', 'educator', 'food security', 'community advocate'],
   sections: {
     basic_information: {
-      full_name: 'John White',
-      address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
+      full_name: 'Demo Community Health Advocate',
+      address: '100 Example Road\nCleveland, TN 37312',
       notes: 'Molecular geneticist, registered nurse, and educator.',
     },
     location_focus: {
@@ -40,26 +40,26 @@ const JOHN_WHITE = {
   },
 }
 
-function seedJohn(db) {
+function seedHealthAdvocate(db) {
   db.prepare(`
     INSERT INTO profiles (id, display_name, primary_type, status, tags)
     VALUES (?, ?, ?, ?, ?)
   `).run(
-    JOHN_WHITE.id,
-    JOHN_WHITE.display_name,
-    JOHN_WHITE.primary_type,
-    JOHN_WHITE.status,
-    JSON.stringify(JOHN_WHITE.tags),
+    HEALTH_ADVOCATE.id,
+    HEALTH_ADVOCATE.display_name,
+    HEALTH_ADVOCATE.primary_type,
+    HEALTH_ADVOCATE.status,
+    JSON.stringify(HEALTH_ADVOCATE.tags),
   )
-  for (const [sectionKey, data] of Object.entries(JOHN_WHITE.sections)) {
+  for (const [sectionKey, data] of Object.entries(HEALTH_ADVOCATE.sections)) {
     db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data)
       VALUES (?, ?, ?)
-    `).run(JOHN_WHITE.id, sectionKey, JSON.stringify(data))
+    `).run(HEALTH_ADVOCATE.id, sectionKey, JSON.stringify(data))
   }
 }
 
-describe('Dr. John White Discover at 85%', () => {
+describe('community health advocate Discover at 85%', () => {
   let db
 
   beforeAll(async () => {
@@ -69,19 +69,19 @@ describe('Dr. John White Discover at 85%', () => {
 
   beforeEach(async () => {
     resetDb(db)
-    seedJohn(db)
+    seedHealthAdvocate(db)
     await seedNationalPrograms(db, { skipUrlVerification: true })
   })
 
   it('loads TN location signals from address', async () => {
-    const ctx = await loadProfileContext(db, JOHN_WHITE.id)
+    const ctx = await loadProfileContext(db, HEALTH_ADVOCATE.id)
     expect(ctx.signals?.location?.state).toBe('TN')
     expect(ctx.signals?.location?.zip).toBe('37312')
     expect(ctx.signals?.location?.city?.toLowerCase()).toContain('cleveland')
   })
 
   it('rejects irrelevant student scholarships and search portals', async () => {
-    const ctx = await loadProfileContext(db, JOHN_WHITE.id)
+    const ctx = await loadProfileContext(db, HEALTH_ADVOCATE.id)
     const irrelevant = [
       {
         title: 'Tennessee STEP UP Scholarship',
@@ -119,10 +119,10 @@ describe('Dr. John White Discover at 85%', () => {
   })
 
   it('returns at least one opportunity at or above 85% after comprehensive crawl', async () => {
-    const profileContext = await loadProfileContext(db, JOHN_WHITE.id)
+    const profileContext = await loadProfileContext(db, HEALTH_ADVOCATE.id)
     const profileData = extractProfileData(profileContext)
 
-    const result = await runCrawler(db, JOHN_WHITE.id, {
+    const result = await runCrawler(db, HEALTH_ADVOCATE.id, {
       minScore: 20,
       maxResults: 100,
       crawlerType: 'comprehensive',

@@ -23,11 +23,13 @@ The active crawler is **Crawler OS**:
 - `backend/crawler-os/sourceRegistry.js` - active source registry and per-source kind/trust metadata.
 - `backend/crawler-os/profileIntelligence.js` - profile thesis used for planning and matching.
 - `backend/crawler-os/pipeline.js` - fetch, parse, reality checks, per-profile matching, and source telemetry.
+- `backend/crawler-os/matchEngine.js` - Crawler OS compatibility facade; delegates every score/verdict to `backend/services/matchEngine.js`.
 - `backend/crawler-os/contract.js` - normalized opportunity kinds, reality status, and trust tiers.
+- `backend/services/matchEngine.js` - canonical ACCEPT/REVIEW/REJECT authority and match explanation builder.
 - `backend/services/crawlerOsService.js` - live app boundary used by routes, schedulers, and agents.
 - `backend/services/crawlerOsPersistence.js` - persistence into opportunities, matches, source runs, and profile discovery stamps.
 
-The matching route serves `profile_opportunity_matches` from Crawler OS by default. The old catalog matcher is retired unless the server-only emergency flag `CRAWLER_OS_ALLOW_LEGACY_MATCHING=1` is deliberately set.
+The matching route serves `profile_opportunity_matches` from Crawler OS by default. Crawler OS owns discovery, source telemetry, and profile-scoped match persistence; `backend/services/matchEngine.js` owns the decision. The old catalog matcher is retired unless the server-only emergency flag `CRAWLER_OS_ALLOW_LEGACY_MATCHING=1` is deliberately set.
 
 ---
 

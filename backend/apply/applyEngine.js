@@ -784,9 +784,10 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
             SET status = 'submitted',
                 updated_at = ${nowSqlLiteral(db)}
             WHERE id = ?
+              AND profile_id IN (SELECT profile_id FROM grants WHERE id = ?)
           `,
         )
-        .run(String(app.grant_id))
+        .run(String(app.grant_id), String(app.grant_id))
     } catch (err) {
       console.warn(
         `[applyEngine.markSubmitted] failed to mirror submitted status onto grants.id=${app.grant_id}:`,
@@ -1691,4 +1692,3 @@ function buildSectionPrompt(sectionKey, title, grantContext, profileContext, gra
       return base + `Write professional content for the "${title}" section.`
   }
 }
-

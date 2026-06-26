@@ -5,8 +5,8 @@ It enumerates environment variables referenced in code and/or present in example
 
 ## Summary
 
-- Total vars: **562**
-- Vars referenced in code: **548**
+- Total vars: **566**
+- Vars referenced in code: **552**
 - Vars present in env templates: **72**
 
 ## Inventory
@@ -191,6 +191,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `DEDUPE_BASE_URL` | Yes | No | Backend/Node |
 | `DEPLOY_ENV` | Yes | No | Backend/Node |
 | `DEPLOY_TIMESTAMP` | Yes | No | Backend/Node |
+| `DESIGNATED_PROFILES_FILE` | Yes | No | Backend/Node |
 | `DEV` | Yes | No | Frontend (Vite) |
 | `DISABLE_BACKGROUND_SERVICES` | Yes | No | Backend/Node |
 | `DISABLE_SEEDING` | Yes | No | Backend/Node |
@@ -426,6 +427,7 @@ It enumerates environment variables referenced in code and/or present in example
 | `PROD` | Yes | No | Frontend (Vite) |
 | `PROFILE_ID` | Yes | No | Backend/Node |
 | `PROFILE_SCOPE_CI_STRICT` | Yes | No | Backend/Node |
+| `PROFILE_SCOPE_MODE` | Yes | No | Backend/Node |
 | `PROFILE_SCOPE_STRICT` | Yes | No | Backend/Node |
 | `PROFILE_TAXONOMY_DEBUG` | Yes | No | Backend/Node |
 | `PUBLIC_APP_URL` | Yes | No | Backend/Node |
@@ -531,6 +533,8 @@ It enumerates environment variables referenced in code and/or present in example
 | `UPLOAD_DIR` | Yes | No | Backend/Node |
 | `URL_VERIFICATION_ENABLED` | Yes | No | Backend/Node |
 | `USERPROFILE` | Yes | No | Backend/Node |
+| `USER_PROFILE_MAPPINGS_FILE` | Yes | No | Backend/Node |
+| `USER_PROFILE_MAPPINGS_JSON` | Yes | No | Backend/Node |
 | `VEHICLES_INGEST_TOKEN` | Yes | No | Backend/Node |
 | `VERCEL` | Yes | No | Backend/Node |
 | `VERCEL_ENV` | Yes | No | Backend/Node |
@@ -587,7 +591,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `ADMIN_EMAIL`
 
 - **Templates**:
-  - `.env.example:32` = `buckeye7066@gmail.com`
+  - `.env.example:32` = `admin@example.invalid`
   - `backend/env.example:35` = `admin@grantflow.local`
 - **Code references**:
   - `backend/config/constants.js:L11` (process.env)
@@ -779,7 +783,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:92` = `sk-ant-your-anthropic-key`
 - **Code references**:
   - `backend/routes/admin.js:L578–L581` (process.env)
-  - `backend/routes/ai.js:L57–L61` (process.env)
+  - `backend/routes/ai.js:L58–L62` (process.env)
   - `backend/routes/anya.js:L130–L195` (process.env)
   - `backend/routes/nofo.js:L31–L34` (process.env)
   - `backend/routes/profiles.js:L423–L427` (process.env)
@@ -808,9 +812,9 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/routes/admin.js:L746` (process.env)
-  - `backend/routes/ai.js:L148–L531` (process.env)
+  - `backend/routes/ai.js:L149–L532` (process.env)
   - `backend/routes/nofo.js:L272` (process.env)
-  - `backend/routes/profiles.js:L3252–L3424` (process.env)
+  - `backend/routes/profiles.js:L3275–L3447` (process.env)
   - `backend/services/anyaOrchestrator.js:L74–L1490` (process.env)
   - `backend/services/documentIngestion.js:L854` (process.env)
   - `backend/services/fundingTraceService.js:L214` (process.env)
@@ -913,7 +917,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/routes/admin.js:L583` (process.env)
-  - `backend/routes/ai.js:L63` (process.env)
+  - `backend/routes/ai.js:L64` (process.env)
   - `backend/routes/anya.js:L153` (process.env)
   - `backend/routes/nofo.js:L36` (process.env)
   - `backend/routes/profiles.js:L429` (process.env)
@@ -927,7 +931,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/routes/admin.js:L582` (process.env)
-  - `backend/routes/ai.js:L62` (process.env)
+  - `backend/routes/ai.js:L63` (process.env)
   - `backend/routes/anya.js:L152` (process.env)
   - `backend/routes/nofo.js:L35` (process.env)
   - `backend/routes/profiles.js:L428` (process.env)
@@ -1212,7 +1216,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/routes/profiles.js:L3809` (process.env)
+  - `backend/routes/profiles.js:L3832` (process.env)
 
 ### `APPLY`
 
@@ -1456,13 +1460,13 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/apply/applyEngine.js:L1142` (process.env)
+  - `backend/apply/applyEngine.js:L1143` (process.env)
 
 ### `AUTO_POPULATE_TOTAL_BUDGET_MS`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/apply/applyEngine.js:L1145` (process.env)
+  - `backend/apply/applyEngine.js:L1146` (process.env)
 
 ### `AWS_ACCESS_KEY_ID`
 
@@ -1500,7 +1504,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/server.js:L1187` (process.env)
-  - `backend/startup/selfHeal.js:L96` (process.env)
+  - `backend/startup/selfHeal.js:L98` (process.env)
   - `backend/tests/selfHealObservability.test.js:L34–L39` (process.env)
 
 ### `BASE_URL`
@@ -1868,7 +1872,6 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/scripts/check-opps.mjs:L3` (process.env)
   - `backend/scripts/check-tables.mjs:L3` (process.env)
   - `backend/scripts/cleanup-funding-opportunities.mjs:L27` (process.env)
-  - `backend/scripts/create-quick-profiles.mjs:L4` (process.env)
   - `backend/scripts/db-summary.mjs:L3` (process.env)
   - `backend/scripts/migrate-sqlite-to-postgres.mjs:L314` (process.env)
   - `scripts/backfill-opportunity-fields.mjs:L53` (process.env)
@@ -1955,6 +1958,12 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/routes/health.js:L361` (process.env)
+
+### `DESIGNATED_PROFILES_FILE`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/config/designatedProfiles.js:L393` (process.env)
 
 ### `DEV`
 
@@ -2097,7 +2106,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/env.example:27` = `false`
 - **Code references**:
   - `backend/server.js:L1296` (process.env)
-  - `backend/startup/selfHeal.js:L265` (process.env)
+  - `backend/startup/selfHeal.js:L267` (process.env)
 
 ### `ENABLE_REGISTRY_VERIFICATION`
 
@@ -3072,7 +3081,7 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/server.js:L1292` (process.env)
-  - `backend/startup/selfHeal.js:L259` (process.env)
+  - `backend/startup/selfHeal.js:L261` (process.env)
   - `scripts/opportunities-national-minimum.mjs:L139` (process.env)
 
 ### `MIN_NATIONAL_VISIBLE`
@@ -3168,7 +3177,6 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `backend/config/env.js:L113–L241` (process.env)
   - `backend/db/index.js:L11–L691` (process.env)
-  - `backend/db/scopedQuery.js:L165` (process.env)
   - `backend/middleware/errorHandler.js:L13` (process.env)
   - `backend/routes/admin.js:L3611` (process.env)
   - `backend/routes/anya.js:L127–L202` (process.env)
@@ -3204,7 +3212,7 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/start.js:L28–L37` (process.env)
   - `backend/startup/backgroundServices.js:L221–L573` (process.env)
   - `backend/startup/bootstrap.js:L25–L433` (process.env)
-  - `backend/startup/selfHeal.js:L264` (process.env)
+  - `backend/startup/selfHeal.js:L266` (process.env)
   - `backend/tests/testServer.js:L11` (process.env)
   - `backend/utils/environment.js:L12–L25` (process.env)
   - `backend/utils/logger.js:L27` (process.env)
@@ -3286,13 +3294,13 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/apply/applyEngine.js:L1216` (process.env)
+  - `backend/apply/applyEngine.js:L1217` (process.env)
   - `backend/config/constants.js:L52` (process.env)
   - `backend/routes/admin.js:L55` (process.env)
   - `backend/routes/grants.js:L951` (process.env)
   - `backend/routes/legacyFunctions.js:L139` (process.env)
   - `backend/routes/nofo.js:L24` (process.env)
-  - `backend/routes/profiles.js:L3212–L3401` (process.env)
+  - `backend/routes/profiles.js:L3235–L3424` (process.env)
   - `backend/services/anyaToolRegistry.js:L3440` (process.env)
   - `backend/services/grantApplicationApproachAdvisor.js:L232` (process.env)
   - `backend/services/medicalNecessity.js:L339` (process.env)
@@ -3464,7 +3472,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `PORT`
 
 - **Templates**:
-  - `.env.example:396` = `8080`
+  - `.env.example:397` = `8080`
   - `backend/env.example:4` = `8080`
 - **Code references**:
   - `backend/routes/sam.js:L143` (process.env)
@@ -3572,6 +3580,7 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
+  - `backend/scripts/purge-ineligible-pipeline.mjs:L33` (process.env)
   - `scripts/anastasia-mtsu-finish.mjs:L58` (process.env)
   - `scripts/verify-add-to-pipeline-from-opportunity.mjs:L71` (process.env)
 
@@ -3581,12 +3590,19 @@ It enumerates environment variables referenced in code and/or present in example
 - **Code references**:
   - `scripts/codemod/no-unscoped-profile-query.mjs:L106` (process.env)
 
+### `PROFILE_SCOPE_MODE`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/db/scopedQuery.js:L164` (process.env)
+  - `tests/unit/scoped-query.test.mjs:L53–L62` (process.env)
+
 ### `PROFILE_SCOPE_STRICT`
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/db/scopedQuery.js:L166` (process.env)
-  - `tests/unit/scoped-query.test.mjs:L45–L64` (process.env)
+  - `backend/db/scopedQuery.js:L165` (process.env)
+  - `tests/unit/scoped-query.test.mjs:L67–L73` (process.env)
 
 ### `PROFILE_TAXONOMY_DEBUG`
 
@@ -3811,6 +3827,8 @@ It enumerates environment variables referenced in code and/or present in example
   - `backend/tests/hamiltonCredentialFallback.test.js:L16` (process.env)
   - `backend/tests/hamiltonPortalAutopilotIdentity.test.js:L19` (process.env)
   - `backend/tests/hamiltonPortalSignupAdapter.test.js:L17` (process.env)
+  - `backend/tests/hamiltonProfileSummary.test.js:L19–L19` (process.env)
+  - `backend/tests/pipelineEligibilitySweep.test.js:L14–L14` (process.env)
   - `backend/tests/portalAutopilotCobrowseAndMerge.test.js:L19` (process.env)
   - `backend/tests/portalAutopilotPassphraseReset.test.js:L18–L18` (process.env)
   - `backend/tests/portalCompletionAndReminder.test.js:L15` (process.env)
@@ -4151,7 +4169,7 @@ It enumerates environment variables referenced in code and/or present in example
 ### `SQLITE_DB_PATH`
 
 - **Templates**:
-  - `.env.example:491` = `backend/data/grantflow.dev.db`
+  - `.env.example:493` = `backend/data/grantflow.dev.db`
   - `backend/env.example:11` = `backend/data/grantflow.dev.db`
 - **Code references**:
   - `backend/db/index.js:L115` (process.env)
@@ -4174,14 +4192,14 @@ It enumerates environment variables referenced in code and/or present in example
 
 - **Templates**: (not present)
 - **Code references**:
-  - `backend/startup/selfHeal.js:L165` (process.env)
+  - `backend/startup/selfHeal.js:L167` (process.env)
 
 ### `STARTUP_PROFILE_ORG_LINK_LIMIT`
 
 - **Templates**: (not present)
 - **Code references**:
   - `backend/server.js:L1223` (process.env)
-  - `backend/startup/selfHeal.js:L141` (process.env)
+  - `backend/startup/selfHeal.js:L143` (process.env)
 
 ### `STARTUP_SMOKE_CRAWL_ENABLED`
 
@@ -4346,6 +4364,18 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `.cursor/skills/impeccable/scripts/hook-lib.mjs:L1238` (process.env)
+
+### `USER_PROFILE_MAPPINGS_FILE`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/config/userProfileMappings.js:L63` (process.env)
+
+### `USER_PROFILE_MAPPINGS_JSON`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/config/userProfileMappings.js:L64` (process.env)
 
 ### `VEHICLES_INGEST_TOKEN`
 

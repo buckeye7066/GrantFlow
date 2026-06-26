@@ -130,7 +130,7 @@ export default function AdminProfileDedupe() {
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
               This tool merges duplicate profiles by moving linked data (sections, documents, crawler history, Anya state) into a single “winner” profile and deleting the duplicates.
-              Use <strong>Similar names</strong> to combine profiles like “Luibov” with “Luibov S. Samoylenko”.
+              Use <strong>Similar names</strong> to combine profiles like “Lina” with “Lina S. Moreno”.
               The bulk merge button keeps the profile owned by the real (non-admin) user whose email matches the profile email when possible.
             </AlertDescription>
           </Alert>
@@ -247,4 +247,3 @@ export default function AdminProfileDedupe() {
     </div>
   )
 }
-

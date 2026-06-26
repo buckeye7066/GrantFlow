@@ -185,11 +185,10 @@ export default function InvoiceView() {
               <div className="text-right">
                 <h2 className="text-2xl font-bold text-blue-600 mb-2">GrantFlow</h2>
                 <p className="text-sm text-gray-600">Professional Grant Writing Services</p>
-                <p className="text-xs text-slate-500 mt-2">John White, Consultant</p>
-                <p className="text-xs text-slate-500">3940 Eveningside Dr. NE</p>
-                <p className="text-xs text-slate-500">Cleveland, TN 37312</p>
-                <p className="text-xs text-slate-500">Dr.JohnWhite@axiombiolabs.org</p>
-                <p className="text-xs text-slate-500">423 414 5290</p>
+                <p className="text-xs text-slate-500 mt-2">GrantFlow Consulting</p>
+                <p className="text-xs text-slate-500">Address on invoice record</p>
+                <p className="text-xs text-slate-500">billing@example.invalid</p>
+                <p className="text-xs text-slate-500">+1 555 010 1000</p>
               </div>
             </div>
 

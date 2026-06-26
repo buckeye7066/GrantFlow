@@ -187,7 +187,7 @@ export function buildOutputs() {
     if (v.startsWith('VITE_')) continue
     const val =
       v === 'ADMIN_EMAIL'
-        ? 'buckeye7066@gmail.com'
+        ? 'admin@example.invalid'
         : v === 'ADMIN_NAME'
           ? 'Admin User'
           : v === 'DB_PROVIDER'
@@ -210,7 +210,7 @@ export function buildOutputs() {
     if (v.startsWith('VITE_')) continue
     const val =
       v === 'ADMIN_EMAIL'
-        ? 'buckeye7066@gmail.com'
+        ? 'admin@example.invalid'
         : v === 'ADMIN_NAME'
           ? 'Admin User'
           : v === 'DB_PROVIDER'
@@ -241,4 +241,3 @@ const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/'
 if (isMain) {
   main()
 }
-

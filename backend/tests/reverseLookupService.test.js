@@ -7,16 +7,16 @@ import { getAppAndDb, resetDb } from './testServer.js'
 import { findSimilarOrgsFunders } from '../services/reverseLookupService.js'
 import { seedNationalPrograms } from '../services/seed/seedNationalPrograms.js'
 
-const JOHN_WHITE = {
-  id: 'profile-john-white-funders',
-  display_name: 'Dr. John White',
+const HEALTH_ADVOCATE = {
+  id: 'profile-health-advocate-funders',
+  display_name: 'Demo Community Health Advocate',
   primary_type: 'individual',
   status: 'active',
   tags: ['healthcare professional', 'educator', 'food security', 'community advocate'],
   sections: {
     basic_information: {
-      full_name: 'John White',
-      address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
+      full_name: 'Demo Community Health Advocate',
+      address: '100 Example Road\nCleveland, TN 37312',
     },
     narrative: {
       mission: 'Address food insecurity and health disparities in Bradley County.',
@@ -31,19 +31,19 @@ vi.mock('../src/integrations/propublica990.js', () => ({
   getOrganization: vi.fn(),
 }))
 
-function seedJohn(db) {
+function seedHealthAdvocate(db) {
   db.prepare(
     'INSERT INTO profiles (id, display_name, primary_type, status, tags) VALUES (?,?,?,?,?)',
   ).run(
-    JOHN_WHITE.id,
-    JOHN_WHITE.display_name,
-    JOHN_WHITE.primary_type,
-    JOHN_WHITE.status,
-    JSON.stringify(JOHN_WHITE.tags),
+    HEALTH_ADVOCATE.id,
+    HEALTH_ADVOCATE.display_name,
+    HEALTH_ADVOCATE.primary_type,
+    HEALTH_ADVOCATE.status,
+    JSON.stringify(HEALTH_ADVOCATE.tags),
   )
-  for (const [sectionKey, data] of Object.entries(JOHN_WHITE.sections)) {
+  for (const [sectionKey, data] of Object.entries(HEALTH_ADVOCATE.sections)) {
     db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?,?,?)').run(
-      JOHN_WHITE.id,
+      HEALTH_ADVOCATE.id,
       sectionKey,
       JSON.stringify(data),
     )
@@ -75,7 +75,7 @@ describe('reverseLookupService', () => {
 
   beforeEach(async () => {
     resetDb(db)
-    seedJohn(db)
+    seedHealthAdvocate(db)
     await seedNationalPrograms(db, { skipUrlVerification: true })
   })
 
@@ -83,7 +83,7 @@ describe('reverseLookupService', () => {
   // default testTimeout under full-suite load (it passes in isolation). Give it
   // an explicit generous timeout so the gate is deterministic.
   it('returns local catalog funders when ProPublica returns no rows', async () => {
-    const result = await findSimilarOrgsFunders(db, JOHN_WHITE.id, { maxResults: 10 })
+    const result = await findSimilarOrgsFunders(db, HEALTH_ADVOCATE.id, { maxResults: 10 })
     expect(result.suggested_funders.length).toBeGreaterThan(0)
     expect(result.suggested_funders.some((f) => /Community Foundation/i.test(f.name))).toBe(true)
     expect(result.ntee_codes_used.length).toBeGreaterThan(0)
