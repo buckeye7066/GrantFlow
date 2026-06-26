@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { getProfileContext } from '../db/scopedQuery.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { createLogger } from '../utils/logger.js'
@@ -389,6 +390,19 @@ function mapSession(row) {
   }
 }
 
+function resolveReadScopeProfileId(user, options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'profileId')) {
+    return coerceProfileId(options.profileId)
+  }
+  return coerceProfileId(
+    getProfileContext()?.profileId ??
+      user?.activeProfileId ??
+      user?.profile_id ??
+      user?.profileId ??
+      null,
+  )
+}
+
 function mapMessage(row) {
   if (!row) return null
   return {
@@ -556,7 +570,7 @@ export async function createSession(db, user, { profileId, title, metadata } = {
     throw new Error('Unable to create session')
   }
 
-  return await getSession(db, user, id)
+  return await getSession(db, user, id, { profileId: normalizedProfileId })
 }
 
 export async function deleteSession(db, user, sessionId) {
@@ -572,17 +586,29 @@ export async function deleteSession(db, user, sessionId) {
   return { deleted: true, id: sessionId }
 }
 
-export async function getSession(db, user, sessionId) {
+export async function getSession(db, user, sessionId, options = {}) {
   assertAuthenticated(user)
-  const row = await db
-    .prepare(
-      `
-        SELECT *
-        FROM anya_sessions
-        WHERE id = ?
-      `,
-    )
-    .get(sessionId)
+  const scopeProfileId = resolveReadScopeProfileId(user, options)
+  const row = scopeProfileId
+    ? await db
+        .prepare(
+          `
+            SELECT *
+            FROM anya_sessions
+            WHERE id = ?
+              AND profile_id = ?
+          `,
+        )
+        .get(sessionId, scopeProfileId)
+    : await db
+        .prepare(
+          `
+            SELECT *
+            FROM anya_sessions
+            WHERE id = ?
+          `,
+        )
+        .get(sessionId)
 
   assertSessionAccess(user, row)
   return mapSession(row)

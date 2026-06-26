@@ -35,12 +35,17 @@ export const PROFILE_SCOPED_TABLES = new Set([
   'profile_needs',
   'profile_sections',
   'profile_section_answers',
-  'organizations',
   'anya_sessions',
   'anya_brain_memory',
   'anya_tool_usage',
   'anya_tool_registry_snapshot',
 ])
+
+// NOTE: organizations contains tenant-sensitive applicant rows, but the current
+// schema links them through profiles.organization_id / user_organizations rather
+// than an organizations.profile_id column. Keep organization access guarded at
+// the route/service layer until a future schema migration gives this SQL guard a
+// real profile_id predicate to enforce.
 
 /** Admins can read/write across tenants; readers of this role bypass the guard. */
 const ADMIN_ROLES = new Set(['admin', 'admin_global', 'service', 'service_role', 'health_check'])
