@@ -17,6 +17,7 @@
 import { storage } from '../crawler-os/index.js';
 import { recordDismissal, reconcileDismissedGrants } from './pipelineDismissals.js';
 import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
+import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -42,7 +43,7 @@ async function prunePipelineRejects(db, memStore, idRemap) {
     const grants = await db
       .prepare('SELECT id, status FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?')
       .all(m.profile_id, oppId);
-    if (!grants || grants.length === 0) continue;            // not in any pipeline → nothing to remove
+    if (!grants || grants.length === 0) continue;            // not in any pipeline -> nothing to remove
     if (grants.some((g) => g.status && PROTECTED.has(g.status))) continue; // preserve user-progressed work
     await recordDismissal(db, {
       profileId: m.profile_id,
@@ -54,6 +55,44 @@ async function prunePipelineRejects(db, memStore, idRemap) {
   }
   if (dismissed > 0) await reconcileDismissedGrants(db);
   return dismissed;
+}
+
+async function cleanupHamiltonRejects(db, memStore, idRemap) {
+  const rejects = memStore
+    .all('profile_opportunity_matches')
+    .filter((m) => m.decision === 'reject');
+  let cleaned = 0;
+
+  for (const m of rejects) {
+    const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id;
+    let grants = [];
+    try {
+      grants = await db
+        .prepare('SELECT id FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?')
+        .all(m.profile_id, oppId);
+    } catch {
+      grants = [];
+    }
+
+    const targets = [{ opportunityId: oppId, grantId: null }];
+    for (const grant of grants || []) targets.push({ opportunityId: oppId, grantId: grant.id });
+
+    for (const target of targets) {
+      try {
+        const result = await cleanupDisallowedHamiltonTraces(db, {
+          profileId: m.profile_id,
+          opportunityId: target.opportunityId,
+          grantId: target.grantId,
+          reason: 'crawler_os_reject',
+        });
+        cleaned += Object.values(result || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      } catch {
+        // Hamilton cleanup is protective but never allowed to break crawler persistence.
+      }
+    }
+  }
+
+  return cleaned;
 }
 
 function jparse(v, fallback) {
@@ -323,10 +362,12 @@ export async function persistRun(db, memStore, run, opts = {}) {
     }
   }
 
-  // Remove bad matches (OS REJECTs) from the profile's pipelines too.
+  // Remove bad matches (OS REJECTs) from the profile's pipelines and Hamilton's
+  // active traces. Hamilton audit events remain; active tasks/docs/links/auths do not.
   const pipelinePruned = await prunePipelineRejects(db, memStore, idRemap);
+  const hamiltonCleaned = await cleanupHamiltonRejects(db, memStore, idRemap);
 
-  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned };
+  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned, hamiltonCleaned };
 }
 
 export default { profileContextToThesisInput, persistRun };
