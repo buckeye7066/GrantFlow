@@ -3,26 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import net from 'node:net'
 import path from 'node:path'
-
-async function reservePort() {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address ? address.port : null
-      server.close((error) => {
-        if (error) {
-          reject(error)
-          return
-        }
-        resolve(port)
-      })
-    })
-    server.on('error', reject)
-  })
-}
 
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-access-check-'))
@@ -32,13 +13,12 @@ function startServer(extraEnv = {}) {
   let stderr = ''
 
   const ready = (async () => {
-    const port = await reservePort()
     child = spawn(process.execPath, ['backend/server.js'], {
       cwd: path.resolve('.'),
       env: {
         ...process.env,
         NODE_ENV: 'development',
-        PORT: String(port),
+        PORT: '0',
         DB_PROVIDER: 'sqlite',
         SQLITE_DB_PATH: dbPath,
         DB_AUTO_MIGRATE: 'true',
@@ -68,6 +48,12 @@ function startServer(extraEnv = {}) {
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
         throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+      }
+      const match = stdout.match(/\[Server\] Ready on port (\d+)/)
+      const port = match ? Number(match[1]) : null
+      if (!port) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        continue
       }
       try {
         const res = await fetch(`http://127.0.0.1:${port}/healthz`)
