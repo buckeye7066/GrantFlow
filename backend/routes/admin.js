@@ -23,8 +23,7 @@ import { logAuditEvent, queryAuditLogs, getAuditSummary, cleanupAuditLogs, AUDIT
 import { initializeFeatureFlags, isFeatureEnabled, getAllFlags, updateFlag, createFlagOverride, removeFlagOverride, getFlagOverrides, cleanupExpiredOverrides } from '../services/featureFlagService.js';
 import { getRequestError } from '../services/requestIdErrorStore.js';
 import { extractTextFromFile } from '../services/documentTextExtraction.js'
-import { crawlItemFunding } from '../services/legacyCrawlSuperseded.js';
-import { runCrawler as runCuratedCrawlerForAudit } from '../services/legacyCrawlSuperseded.js';
+import { crawlItemFunding, runCrawler as runCuratedCrawlerForAudit } from '../services/crawlerOsCompatibility.js';
 import { findDuplicateProfileGroups, mergeProfiles, deduplicateProfileGroups, coerceDryRun } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'

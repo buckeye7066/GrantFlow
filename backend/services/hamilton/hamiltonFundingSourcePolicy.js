@@ -29,14 +29,20 @@ function unique(values) {
   return Array.from(new Set(values.filter(Boolean).map(String)))
 }
 
-async function loadOpportunityForPolicy(db, opportunity, grant) {
+async function loadOpportunityForPolicy(db, profileId, opportunity, grant) {
   if (opportunity?.id) return opportunity
 
   const linkedOpportunityId = grant?.funding_opportunity_id || grant?.opportunity_id || null
   if (!linkedOpportunityId) return null
 
   try {
-    return db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(linkedOpportunityId))
+    return profileId
+      ? db.prepare(
+          'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1',
+        ).get(String(linkedOpportunityId), String(profileId))
+      : db.prepare(
+          'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
+        ).get(String(linkedOpportunityId))
   } catch {
     return null
   }
@@ -51,12 +57,12 @@ async function loadProfileMatch(db, profileId, opportunityId) {
       FROM profile_opportunity_matches
       WHERE profile_id = ?
         AND opportunity_id = ?
-        AND matcher_version IN ('crawler-os', 'web-llm')
+        AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')
       ORDER BY
         CASE matcher_version
           WHEN 'crawler-os' THEN 0
-          WHEN 'web-llm' THEN 1
-          ELSE 2
+          WHEN 'crawler-os-xmatch' THEN 1
+          ELSE 3
         END,
         updated_at IS NULL,
         updated_at DESC,
@@ -93,7 +99,7 @@ function requiresProfileMatch(subject) {
 }
 
 export async function assessHamiltonFundingSource(db, { profileId, opportunity = null, grant = null } = {}) {
-  const policyOpportunity = await loadOpportunityForPolicy(db, opportunity, grant)
+  const policyOpportunity = await loadOpportunityForPolicy(db, profileId, opportunity, grant)
   const subject = policyOpportunity || grant
 
   if (!subject?.id) {

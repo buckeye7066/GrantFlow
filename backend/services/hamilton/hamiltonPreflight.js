@@ -338,15 +338,16 @@ export async function preflightSelected(db, { profile, profileId, selectedSource
   if (!Array.isArray(selectedSources)) selectedSources = []
   const out = { ok: true, results: [] }
   for (const source of selectedSources) {
+    const scopedProfileId = profileId || profile?.id || null
     const opportunity = source.opportunity_id
-      ? await loadOpportunity(db, source.opportunity_id)
+      ? await loadOpportunity(db, source.opportunity_id, scopedProfileId)
       : null
     const grant = source.grant_id
       ? await loadGrant(db, source.grant_id)
       : null
     const r = await preflightSingleSource(db, {
       profile,
-      profileId: profileId || profile?.id,
+      profileId: scopedProfileId,
       source,
       opportunity,
       grant,
@@ -357,10 +358,16 @@ export async function preflightSelected(db, { profile, profileId, selectedSource
   return out
 }
 
-async function loadOpportunity(db, id) {
+async function loadOpportunity(db, id, profileId = null) {
   if (!db || !id) return null
   try {
-    const row = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(id))
+    const row = profileId
+      ? await db.prepare(
+          'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1',
+        ).get(String(id), String(profileId))
+      : await db.prepare(
+          'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
+        ).get(String(id))
     return row || null
   } catch { return null }
 }

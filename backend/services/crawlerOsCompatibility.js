@@ -1,19 +1,20 @@
-// legacyCrawlSuperseded.js — the explicitly-named compatibility shim for the
-// Crawler OS cutover. The legacy bulk grant-crawl entrypoints are superseded by
-// the Crawler OS (automatic discovery via Robert + per-profile discovery via
-// runProfileDiscoveryLive). These shims preserve the legacy endpoint call sites
-// while routing user-facing profile crawls through the OS.
+// crawlerOsCompatibility.js — compatibility entrypoints for older HTTP routes
+// after the Crawler OS cutover. The old bulk grant-crawl engine is retired:
+// profile-facing discovery routes delegate to runProfileDiscoveryLive, and
+// non-profile bulk crawl endpoints return an explicit retired/OS response.
 const SUPERSEDED = Object.freeze({
+  retired: true,
   superseded: true,
   inserted: 0,
   evaluated: 0,
   total: 0,
   states: {},
-  message: 'Legacy bulk crawl is superseded by the Crawler OS — discovery is automatic (Robert) and per-profile (runProfileDiscoveryLive).',
+  message: 'This older crawl endpoint is retired. Crawler OS is the only grant-discovery engine; use per-profile discovery or Robert automation.',
 })
 
-// Legacy discovery-strategy / item / domain-engine / state-waiver helpers used by
-// the legacy crawl-trigger routes. No-ops now (the Crawler OS covers discovery).
+// Retired discovery-strategy / item / domain-engine / state-waiver helpers used
+// by older route contracts. They intentionally do not crawl. Profile-facing
+// routes below call Crawler OS instead.
 export function getStrategy() { return null }
 export function listStrategies() { return [] }
 export async function searchWebForItem() { return [] }
@@ -45,7 +46,7 @@ async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
       FROM profile_opportunity_matches m
       JOIN funding_opportunities fo ON fo.id = m.opportunity_id
      WHERE m.profile_id = ?
-       AND m.matcher_version IN ('crawler-os', 'web-llm')
+       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
        AND lower(COALESCE(m.match_decision, '')) IN ('accept', 'review')
        ${activeClause}
      ORDER BY m.match_score DESC
@@ -136,10 +137,9 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {})
   }
 }
 
-// crawlerManager / itemFundingCrawler / domainCrawlerRegistry surfaces used by
-// admin audit, crawlerFramework, and Sam diagnostics. Profile-facing calls now
-// delegate to the Crawler OS and return the old result shape expected by legacy
-// routes. Non-profile bulk crawler surfaces below remain explicit no-ops.
+// Older route/admin surfaces that expect runCrawler now delegate to the Crawler
+// OS and return the old result shape expected by those callers. Non-profile bulk
+// crawler surfaces below remain explicit retired no-ops.
 export async function runCrawler(db, profileId, options = {}) {
   if (!db || !profileId) return { ...SUPERSEDED, results: [] }
   const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')

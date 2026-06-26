@@ -158,12 +158,16 @@ async function loadProfile(db, profileId) {
   return { ...row, sections, ...sections }
 }
 
-async function loadOpportunity(db, { opportunityId = null, grantId = null }) {
+async function loadOpportunity(db, { profileId = null, opportunityId = null, grantId = null }) {
   if (opportunityId) {
     try {
       const row = await db
-        .prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
-        .get(String(opportunityId))
+        .prepare(
+          profileId
+            ? 'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1'
+            : 'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
+        )
+        .get(...(profileId ? [String(opportunityId), String(profileId)] : [String(opportunityId)]))
       if (row) return { kind: 'opportunity', ...row }
     } catch { /* table may not exist in tests */ }
   }
@@ -284,7 +288,7 @@ export async function startHamiltonForOpportunity(db, {
     throw err
   }
 
-  const opportunity = await loadOpportunity(db, { opportunityId, grantId })
+  const opportunity = await loadOpportunity(db, { profileId, opportunityId, grantId })
   if (!opportunity) {
     const err = new Error(`funding source not found: ${opportunityId || grantId}`)
     err.status = 404
@@ -375,6 +379,7 @@ export async function runHamiltonCycle(db, {
 
   const profile = await loadProfile(db, task.profile_id)
   const opportunity = await loadOpportunity(db, {
+    profileId: task.profile_id,
     opportunityId: task.opportunity_id,
     grantId: task.grant_id,
   })

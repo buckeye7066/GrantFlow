@@ -35,8 +35,27 @@ function makeDb() {
     CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, user_id TEXT);
     CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, profile_id TEXT, name TEXT, type TEXT);
     CREATE TABLE IF NOT EXISTS profile_documents (profile_id TEXT, document_id TEXT, PRIMARY KEY(profile_id, document_id));
+    CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      matcher_version TEXT,
+      updated_at TEXT,
+      computed_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    );
   `)
   return wrapSqlite(sqlite)
+}
+
+function seedCrawlerOsMatch(db, { profileId, opportunityId, decision = 'accept' }) {
+  db.raw.prepare(`
+    INSERT INTO profile_opportunity_matches
+      (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at)
+    VALUES (?, ?, 90, ?, 'Crawler OS approved this funding source for the profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(profileId, opportunityId, decision)
 }
 
 describe('hamiltonAuthorizationStore', () => {
@@ -106,14 +125,29 @@ describe('hamiltonPreflight', () => {
   it('passes when profile is complete and portal URL is present', async () => {
     const db = makeDb()
     db.raw.prepare('INSERT INTO profiles (id) VALUES (?)').run('p-ok')
+    seedCrawlerOsMatch(db, { profileId: 'p-ok', opportunityId: 'op-y' })
     const r = await preflightSingleSource(db, {
       profile: {
         id: 'p-ok',
         basic_information: { first_name: 'A', last_name: 'B', email: 'a@b.com' },
+        university_applications: {
+          applications: [{ name: 'Middle Tennessee State University', status: 'committed' }],
+        },
       },
       profileId: 'p-ok',
       source: { opportunity_id: 'op-y' },
-      opportunity: { id: 'op-y', application_mode: 'portal', application_url: 'https://example.com/y' },
+      opportunity: {
+        id: 'op-y',
+        title: 'MTSU Presidential Scholarship',
+        description: 'A merit scholarship for incoming undergraduates at Middle Tennessee State University.',
+        application_mode: 'portal',
+        application_url: 'https://www.mtsu.edu/financial-aid/scholarships/',
+        record_origin: 'live_crawl',
+        opportunity_kind: 'direct',
+        source_trust_tier: 'official',
+        reality_status: 'allowed',
+        reality_reasons: '[]',
+      },
       grant: null,
     })
     assert.equal(r.ok, true)

@@ -12,6 +12,27 @@ import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
  * Goal: users always see real funding sources that match their profile.
  */
 
+let currentProfileId = null
+
+function ensureCrawlerOsMatchTable(db) {
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
+      id TEXT,
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      match_reasons TEXT DEFAULT '[]',
+      match_explain_json TEXT,
+      matcher_version TEXT NOT NULL DEFAULT 'crawler-os',
+      computed_at TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    )
+  `).run()
+}
+
 function seedUser(db) {
   const userId = "u-test-" + Math.random().toString(36).slice(2, 10)
   db.prepare(`
@@ -50,6 +71,7 @@ function seedProfile(db, userId, orgId, overrides = {}) {
   if (overrides.state) {
     seedSection(db, profileId, "basic_information", { state: overrides.state })
   }
+  currentProfileId = profileId
   return profileId
 }
 
@@ -87,7 +109,29 @@ function seedOpportunity(db, overrides = {}) {
     overrides.is_national ? 1 : 0,
     overrides.source_url || "https://example-real.org/grant",
   )
+  if (overrides.os_match !== false) {
+    seedCrawlerOsMatch(db, overrides.profileId || currentProfileId, id, {
+      score: overrides.match_score ?? 72,
+      decision: overrides.match_decision || "review",
+      reasons: overrides.match_reasons || ["profile_need_match"],
+      explanation: overrides.match_explanation || "Crawler OS matched this opportunity for the profile.",
+    })
+  }
   return id
+}
+
+function seedCrawlerOsMatch(db, profileId, opportunityId, {
+  score = 72,
+  decision = "review",
+  reasons = ["profile_need_match"],
+  explanation = "Crawler OS matched this opportunity for the profile.",
+} = {}) {
+  if (!profileId || !opportunityId) return
+  db.prepare(`
+    INSERT OR REPLACE INTO profile_opportunity_matches
+      (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version, computed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(crypto.randomUUID(), profileId, opportunityId, score, decision, explanation, JSON.stringify(reasons))
 }
 
 describe("Matching Pipeline", () => {
@@ -101,6 +145,8 @@ describe("Matching Pipeline", () => {
 
   beforeEach(() => {
     resetDb(db)
+    ensureCrawlerOsMatchTable(db)
+    currentProfileId = null
   })
 
   // ─── CORE: profile with real data always gets results ────────────────
@@ -137,8 +183,8 @@ describe("Matching Pipeline", () => {
     expect(titles).toContain("Veterans Emergency Assistance")
   })
 
-  // ─── ZERO-RESULTS FALLBACK: sparse profile still gets results ────────
-  it("returns results even with empty profile via zero-results fallback", async () => {
+  // ─── SPARSE PROFILE: still surfaces profile-owned OS matches ─────────
+  it("returns results for a sparse profile when Crawler OS has a qualified match", async () => {
     const userId = seedUser(db)
     const orgId = seedOrg(db)
     const profileId = seedProfile(db, userId, orgId, { state: "TN" })
@@ -148,13 +194,12 @@ describe("Matching Pipeline", () => {
       description: "Open to all residents for emergency assistance",
       state: "TN",
       record_origin: "curated_verified",
+      match_score: 78,
     })
 
-    // NOTE: When no explicit min_score is provided, the zero-results fallback is
-    // allowed (the system progressively lowers the threshold to always show something).
-    // When min_score IS explicitly set by the user (via the slider), it is honored
-    // strictly and the fallback does NOT apply — that behavior is tested in
-    // the profileIntelligence.test.mjs threshold enforcement tests.
+    // Sparse profile fields are neutral, but results still have to be tied to a
+    // profile-owned Crawler OS match. The route no longer backfills generic
+    // catalog rows when OS matching has not produced coverage.
     const res = await request(app)
       .get(`/api/matching/profile/${profileId}/opportunities?skip_readiness_check=1`)
       .set(TEST_ADMIN_AUTH_HEADER)
@@ -178,6 +223,7 @@ describe("Matching Pipeline", () => {
       title: "Synthetic Junk",
       record_origin: "synthetic",
       state: "TN",
+      os_match: false,
     })
 
     const res = await request(app)
@@ -221,11 +267,13 @@ describe("Matching Pipeline", () => {
       title: "Diabetes Patient Assistance Program",
       description: "Financial help for patients with diabetes and chronic illness",
       state: "TN",
+      match_score: 86,
     })
     seedOpportunity(db, {
       title: "Generic Fund",
       description: "A general community resource",
       state: "TN",
+      match_score: 52,
     })
 
     const res = await request(app)
@@ -251,12 +299,14 @@ describe("Matching Pipeline", () => {
       title: "Tennessee Emergency Fund",
       description: "State emergency assistance for Tennessee residents",
       state: "TN",
+      match_score: 82,
     })
     seedOpportunity(db, {
       title: "National Emergency Fund",
       description: "National emergency assistance program",
       is_national: true,
       state: null,
+      match_score: 68,
     })
 
     const res = await request(app)
@@ -283,6 +333,7 @@ describe("Matching Pipeline", () => {
       description: "Health information about diabetes conditions",
       state: "TN",
       source_url: "https://medlineplus.gov/diabetes.html",
+      os_match: false,
     })
 
     const res = await request(app)
@@ -311,6 +362,7 @@ describe("Matching Pipeline", () => {
       title: "First Generation STEM Scholarship",
       description: "Scholarship for first generation college students in STEM fields and computer science",
       is_national: true,
+      match_score: 84,
     })
 
     const res = await request(app)
@@ -339,6 +391,7 @@ describe("Matching Pipeline", () => {
       title: "Women-Owned Small Business Grant",
       description: "Federal grants for WOSB certified women-owned small businesses and HUBZone enterprises",
       is_national: true,
+      match_score: 84,
     })
 
     const res = await request(app)
@@ -362,6 +415,8 @@ describe("Profile Signals Unit", () => {
 
   beforeEach(() => {
     resetDb(db)
+    ensureCrawlerOsMatchTable(db)
+    currentProfileId = null
   })
 
   it("loadProfileSignals returns unified signals with needs and intents", async () => {

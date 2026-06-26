@@ -97,7 +97,9 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'education', 'veterans'],
     geography: { national: true, states: [] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    // The adapter emits one DIRECTORY candidate for the benefit finder, not
+    // individual apply-now benefit rows. Keep the registry honest.
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html',
     requires_env: [],
     refresh_frequency_days: 14,
@@ -152,8 +154,7 @@ export const SOURCES = Object.freeze([
   // (CareerOneStop Scholarship Finder was removed here on 2026-06-23: DOL
   // retired the scholarship Web API — their 21 live services include none, and
   // scholarship* endpoints 404 while occupation returns 200 with the same token.
-  // Individual scholarships are sourced by the Brave+LLM scholarshipWebDiscovery
-  // service instead. If DOL reinstates it, re-add a row + a thin adapter.)
+  // If DOL reinstates it, re-add a row plus a thin adapter.)
   //
   // --- Net-new key-free federal lanes (2026-06-24) ---------------------------
   {

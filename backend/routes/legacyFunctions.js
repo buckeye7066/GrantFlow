@@ -6,7 +6,7 @@ import {
   isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
-import { crawlGrantsGov } from '../services/legacyCrawlSuperseded.js'
+import { crawlGrantsGov } from '../services/crawlerOsCompatibility.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { searchStateBenefits } from '../services/connectors/benefitsGovConnector.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
@@ -671,4 +671,3 @@ Notes:
 })
 
 export default router
-
