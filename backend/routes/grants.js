@@ -4,6 +4,7 @@ import { safeParseJSON } from '../utils/safeJson.js';
 import { validatePagination, validateRequiredFields, sanitizeColumns } from '../utils/validation.js';
 import { formatError } from '../middleware/errorHandler.js';
 import { mutationRateLimiter } from '../middleware/rateLimiting.js';
+import { withProfileScope } from '../middleware/profileContext.js'
 import { GRANT_STATUSES } from '../config/constants.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import {
@@ -41,6 +42,10 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
 
 const router = express.Router();
+
+function runLegacyProfilelessGrantQuery(fn) {
+  return withProfileScope({ bypass: true }, fn)
+}
 
 function parseOpportunityContact(opportunity) {
   let ci = {}
@@ -1990,17 +1995,21 @@ router.post('/from-opportunity', async (req, res, next) => {
         dupParams.push(oppUrl)
       }
 
-      const existingGrant = await tx
-        .prepare(
-          `
-            SELECT id, title
-            FROM grants
-            WHERE ${dupWhere.join(' AND ')}
-              AND (${dupMatch.join(' OR ')})
-            LIMIT 1
-          `,
-        )
-        .get(...dupParams)
+      const loadExistingGrant = () =>
+        tx
+          .prepare(
+            `
+              SELECT id, title
+              FROM grants
+              WHERE ${dupWhere.join(' AND ')}
+                AND (${dupMatch.join(' OR ')})
+              LIMIT 1
+            `,
+          )
+          .get(...dupParams)
+      const existingGrant = hasProfileId
+        ? await loadExistingGrant()
+        : await runLegacyProfilelessGrantQuery(loadExistingGrant)
       
       if (existingGrant) {
         return { 
@@ -2089,7 +2098,16 @@ router.post('/from-opportunity', async (req, res, next) => {
         );
       }
       
-      const grant = await tx.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+      let grant = null
+      if (hasProfileId && finalProfileId) {
+        grant = await tx.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ?').get(id, String(finalProfileId))
+      } else if (hasProfileId) {
+        grant = await tx.prepare('SELECT * FROM grants WHERE id = ?').get(id)
+      } else {
+        grant = await runLegacyProfilelessGrantQuery(() =>
+          tx.prepare('SELECT * FROM grants WHERE id = ?').get(id),
+        )
+      }
       return { ...grant, organization_id: finalOrgId };
     });
 
@@ -2301,17 +2319,21 @@ router.post('/from-opportunity', async (req, res, next) => {
           throw new Error('no_lookup_keys')
         }
 
-        const row = await req.db
-          .prepare(
-            `
-              SELECT id, title, organization_id${hasProfileId ? ', profile_id' : ''}
-              FROM grants
-              WHERE ${clauses.join(' AND ')}
-                AND (${matchClauses.join(' OR ')})
-              LIMIT 1
-            `,
-          )
-          .get(...params)
+        const loadDuplicateGrant = () =>
+          req.db
+            .prepare(
+              `
+                SELECT id, title, organization_id${hasProfileId ? ', profile_id' : ''}
+                FROM grants
+                WHERE ${clauses.join(' AND ')}
+                  AND (${matchClauses.join(' OR ')})
+                LIMIT 1
+              `,
+            )
+            .get(...params)
+        const row = hasProfileId
+          ? await loadDuplicateGrant()
+          : await runLegacyProfilelessGrantQuery(loadDuplicateGrant)
 
         if (row) {
           return res.status(200).json({
