@@ -108,6 +108,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
     .all()
 
   report.profiles_total = Array.isArray(profiles) ? profiles.length : 0
+  const runDiscovery = options.runDiscovery || triggerAutoDiscoveryCrawlers
 
   for (const profile of profiles || []) {
     try {
@@ -118,7 +119,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
         continue
       }
 
-      await triggerAutoDiscoveryCrawlers(db, profile.id, {
+      await runDiscovery(db, profile.id, {
         uploadDir: options.uploadDir,
         getOpenAI: options.getOpenAI,
         requestedBy: 'scheduled-auto-discovery',
