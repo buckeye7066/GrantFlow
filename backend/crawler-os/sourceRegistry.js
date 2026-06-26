@@ -138,11 +138,15 @@ export const SOURCES = Object.freeze([
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
     base_url: 'https://studentaid.gov',
-    directory: false, loan_allowed: false, cost_share_allowed: false,
+    // Truth-in-registry: the studentAidGov adapter is family:'directory' and
+    // emits OPPORTUNITY_KIND.DIRECTORY with apply_url:null (there is no single
+    // apply endpoint to scrape). The registry must agree so the planner counts
+    // this as a directory/locator, not a direct scholarship funder.
+    directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['student', 'family'],
     need_categories: ['education'],
     geography: { national: true, states: [] },
-    default_kinds: [OPPORTUNITY_KIND.SCHOLARSHIP],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
   },
   // (CareerOneStop Scholarship Finder was removed here on 2026-06-23: DOL

@@ -442,7 +442,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       success: true, crawler_type, profile_id, engine: 'crawler-os',
       count: results.length, total_found: results.length,
       results, opportunities: results,
-      sources: run.sources, zero_result: run.zero_result?.reason ?? null,
+      sources: run.sources, zero_result: run.zero_result?.zero_result_reason ?? null,
     })
   } catch (err) {
     routeLogger.error(`[RealCrawlers] run failed for ${profile_id}: ${err?.message || err}`)
