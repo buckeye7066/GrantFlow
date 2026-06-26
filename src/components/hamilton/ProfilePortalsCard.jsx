@@ -53,6 +53,7 @@ import {
   setPortalAutopilotIdentity,
   runPortalAutopilot,
 } from "@/api/hamilton"
+import { deleteGrant } from "@/api/grants"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
 import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
@@ -88,6 +89,7 @@ import {
   PanelsTopLeft,
   Copy,
   X,
+  Trash2,
 } from "lucide-react"
 
 // Plain, human-readable label per autopilot state for the dashboard. Co-browse /
@@ -488,6 +490,57 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     if (sources.length > 0) bulkPacketMutation.mutate(sources)
   }
 
+  // Remove "not interested" funding sources from this profile's pipeline. The
+  // backend (DELETE /api/grants/:id) authorizes the ADMIN or the PROFILE OWNER
+  // and records a sticky dismissal so the matcher/crawlers don't silently re-add
+  // them. Works one-at-a-time (per row) or in bulk (the selection checkboxes).
+  const removeMutation = useMutation({
+    mutationFn: async (grantIds) => {
+      const ids = (Array.isArray(grantIds) ? grantIds : [grantIds]).filter(Boolean)
+      const results = await Promise.allSettled(ids.map((id) => deleteGrant(id)))
+      const removed = results.filter((r) => r.status === "fulfilled").length
+      return { removed, failed: results.length - removed }
+    },
+    onSuccess: ({ removed, failed }) => {
+      refetchPortals()
+      setSelectedMailFax(new Set())
+      if (failed > 0) {
+        showErrorToast(
+          toast,
+          `Removed ${removed}, ${failed} could not be removed`,
+          "Some sources couldn't be removed. Please try again.",
+        )
+      } else {
+        showSuccessToast(
+          toast,
+          `Removed ${removed} funding source${removed === 1 ? "" : "s"}`,
+          "They won't come back unless you add them again.",
+        )
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Could not remove", err?.message || "Please try again."),
+  })
+
+  const removeOneSource = (src) => {
+    if (!src?.grantId) return
+    const ok = window.confirm(
+      `Remove "${src.title || "this funding source"}" from this profile?\n\nIt won't come back unless you add it again.`,
+    )
+    if (ok) removeMutation.mutate([src.grantId])
+  }
+
+  const removeSelectedSources = () => {
+    const ids = mailFaxSources
+      .filter((s) => selectedMailFax.has(sourceKeyOf(s)))
+      .map((s) => s.grantId)
+      .filter(Boolean)
+    if (ids.length === 0) return
+    const ok = window.confirm(
+      `Remove ${ids.length} selected funding source${ids.length === 1 ? "" : "s"} from this profile?\n\nThey won't come back unless you add them again.`,
+    )
+    if (ok) removeMutation.mutate(ids)
+  }
+
   // ── Portal Autopilot vault controls ───────────────────────────────────────
   // The master passphrase is a PASSWORD field, consumed on submit and cleared —
   // never stored in component state beyond the moment of submission, never echoed.
@@ -853,6 +906,18 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Printer className="h-4 w-4" />}
             {packetSaved ? "View / print" : "Make packet"}
           </button>
+          {src.grantId && (
+            <button
+              type="button"
+              className={`${BTN_BASE} text-rose-600 hover:bg-rose-50`}
+              disabled={removeMutation.isPending}
+              onClick={() => removeOneSource(src)}
+              title="Not interested — remove this funding source from the profile"
+            >
+              <Trash2 className="h-4 w-4" />
+              Not interested
+            </button>
+          )}
         </div>
       </li>
     )
@@ -1172,6 +1237,20 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   ? "Making packets\u2026"
                   : `Make ${selectedMailFax.size || ""} packet${selectedMailFax.size === 1 ? "" : "s"}`.replace("  ", " ")}
               </button>
+              {selectedMailFax.size > 0 && (
+                <button
+                  type="button"
+                  className={`${BTN_BASE} text-rose-600 hover:bg-rose-50`}
+                  disabled={removeMutation.isPending}
+                  onClick={removeSelectedSources}
+                  title="Remove the selected funding sources from this profile (admin or profile owner)"
+                >
+                  {removeMutation.isPending
+                    ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                    : <Trash2 className="h-4 w-4" />}
+                  Remove {selectedMailFax.size}
+                </button>
+              )}
             </div>
             <ul className="rounded-2xl border border-current-line bg-[#eef1ec] px-5 py-1">{mailFaxSources.map(renderMailFaxSource)}</ul>
           </div>
