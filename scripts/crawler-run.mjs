@@ -1,74 +1,60 @@
 #!/usr/bin/env node
 /**
  * crawler:run
- * Configurable run:
- * - SMOKE_MODE (default)
- * - STATE_MODE (requires CRAWLER_STATE=XX)
- * - NATIONAL_MODE
  *
- * Use CRAWLER_USE_LIVE_SOURCES=true for https crawling (polite, robots-aware).
+ * Crawler OS profile discovery runner.
+ *
+ * Usage:
+ *   npm run crawler:run -- <profileId> [--floor=N]
+ *   CRAWLER_PROFILE_ID=<profileId> npm run crawler:run
  */
 
-import path from 'node:path'
-import Database from 'better-sqlite3'
-import fs from 'node:fs'
+import { getDb } from '../backend/db/index.js'
+import { runProfileDiscoveryLive } from '../backend/services/crawlerOsService.js'
 
-import { runNationalCrawlerV2 } from '../backend/services/nationalCrawlerV2/run.js'
+const profileId = process.env.CRAWLER_PROFILE_ID || process.argv[2]
+const floorArg = process.argv.find((a) => String(a).startsWith('--floor='))
+const envFloor = process.env.CRAWLER_MIN_FLOOR || process.env.CRAWLER_FLOOR
+const floor = floorArg ? Number(floorArg.split('=')[1]) : envFloor ? Number(envFloor) : undefined
 
-const projectRoot = path.resolve(process.cwd())
-const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
-
-if (/^postgres(ql)?:\/\//i.test(dbPath)) {
-  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
-  console.error('Use the application API or a Postgres client instead.')
-  process.exit(1)
+if (!profileId || String(profileId).startsWith('--')) {
+  console.error('[crawler:run] usage: npm run crawler:run -- <profileId> [--floor=N]')
+  console.error('[crawler:run] National Crawler V2 is retired; Crawler OS requires an explicit profile.')
+  process.exit(2)
 }
 
-function main() {
-  const scopeMode = process.env.CRAWLER_MODE || 'SMOKE_MODE'
-  const state = process.env.CRAWLER_STATE || null
-  const useLiveSources = process.env.CRAWLER_USE_LIVE_SOURCES === 'true'
-  const maxSources = Number.parseInt(process.env.CRAWLER_MAX_SOURCES || '25', 10)
-  const maxUrlsPerSource = Number.parseInt(process.env.CRAWLER_MAX_URLS_PER_SOURCE || '12', 10)
-  const timeoutSeconds = Number.parseInt(process.env.CRAWLER_TIMEOUT_SECONDS || '25', 10)
-
-  if (!fs.existsSync(dbPath)) {
-    console.error(`[crawler:run] Database not found at ${dbPath}`)
+async function main() {
+  const db = getDb()
+  const profile = await db
+    .prepare('SELECT id, display_name, primary_type FROM profiles WHERE id = ?')
+    .get(String(profileId))
+  if (!profile) {
+    console.error(`[crawler:run] profile not found: ${profileId}`)
     process.exit(1)
   }
 
-  if (scopeMode === 'STATE_MODE' && (!state || state.length !== 2)) {
-    console.error('[crawler:run] STATE_MODE requires CRAWLER_STATE=XX')
-    process.exit(1)
-  }
-
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-
-  runNationalCrawlerV2({
+  const started = Date.now()
+  console.log(`[crawler:run] profile=${profile.display_name || profile.id} type=${profile.primary_type || 'untyped'}`)
+  const result = await runProfileDiscoveryLive({
     db,
-    scopeMode,
-    state: state ? state.toUpperCase() : null,
-    useLiveSources,
-    maxSources,
-    maxUrlsPerSource,
-    timeoutSeconds,
+    profileId: String(profileId),
+    ...(Number.isFinite(floor) ? { floor } : {}),
   })
-    .then((result) => {
-      console.log('[crawler:run] OK', {
-        crawl_run_id: result.crawl_run_id,
-        artifacts_dir: result.artifacts_dir,
-        counts: result.counts,
-      })
-      db.close()
-      process.exit(0)
-    })
-    .catch((err) => {
-      console.error('[crawler:run] FAILED', err?.message || err)
-      db.close()
-      process.exit(1)
-    })
+  const run = result?.run ?? {}
+  const persisted = result?.persisted ?? {}
+  console.log('[crawler:run] OK', {
+    engine: 'crawler-os',
+    stored: run.stored ?? 0,
+    rejected: run.rejected ?? 0,
+    recommendations: Array.isArray(run.recommendations) ? run.recommendations.length : 0,
+    zero_result: run.zero_result?.reason ?? null,
+    persisted_opportunities: persisted.opportunities ?? 0,
+    persisted_matches: persisted.matches ?? 0,
+    duration_ms: Date.now() - started,
+  })
 }
 
-main()
-
+main().catch((err) => {
+  console.error('[crawler:run] FAILED', err?.message || err)
+  process.exit(1)
+})

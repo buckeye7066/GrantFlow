@@ -1,8 +1,5 @@
 import express from 'express'
 
-import { createLogger } from '../utils/logger.js'
-const routeLogger = createLogger('route:crawlerV2')
-
 const router = express.Router()
 
 function requireAdminOrToken(req, res) {
@@ -129,32 +126,12 @@ router.get('/runs/:id', async (req, res) => {
 
 router.post('/run', async (req, res) => {
   if (!requireAdminOrToken(req, res)) return
-  try {
-    const {
-      mode = 'SMOKE_MODE',
-      state = null,
-      use_live_sources = false,
-      max_sources = 10,
-      max_urls_per_source = 8,
-      timeout_seconds = 25,
-    } = req.body ?? {}
-
-    const { runNationalCrawlerV2 } = await import('../services/nationalCrawlerV2/run.js')
-    const result = await runNationalCrawlerV2({
-      db: req.db,
-      scopeMode: mode,
-      state,
-      useLiveSources: Boolean(use_live_sources),
-      maxSources: Number(max_sources) || 10,
-      maxUrlsPerSource: Number(max_urls_per_source) || 8,
-      timeoutSeconds: Number(timeout_seconds) || 25,
-    })
-
-    res.json({ success: true, ...result })
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message })
-  }
+  return res.status(410).json({
+    success: false,
+    error: 'national_crawler_v2_retired',
+    engine: 'crawler-os',
+    message: 'National Crawler V2 has been retired. Use Crawler OS profile discovery instead.',
+  })
 })
 
 export default router
-

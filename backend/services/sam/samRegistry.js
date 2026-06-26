@@ -855,7 +855,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       ]
       let registry
       try {
-        ;({ DOMAIN_CRAWLER_REGISTRY: registry } = await import('../legacyCrawlSuperseded.js'))
+        ;({ DOMAIN_CRAWLER_REGISTRY: registry } = await import('../crawlerOsCompatibility.js'))
       } catch (err) {
         return {
           ok: false,

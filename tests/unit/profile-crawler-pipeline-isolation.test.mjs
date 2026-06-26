@@ -1,5 +1,5 @@
 // CUTOVER (Crawler OS): this file exercises the legacy crawler route/engine that
-// is now a superseded no-op shim (backend/services/legacyCrawlSuperseded.js). The
+// is now a retired OS-compatibility no-op (backend/services/crawlerOsCompatibility.js). The
 // discovery/matching invariants it checked are owned + tested by the Crawler OS
 // (backend/crawler-os/tests, 149 tests). Skipped pending a re-point to the OS pipeline.
 
@@ -229,4 +229,3 @@ test.skip('phase5: crawler runs persist pipeline per-profile and are idempotent'
     await srv.stop()
   }
 })
-

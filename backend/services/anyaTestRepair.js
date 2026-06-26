@@ -15,11 +15,6 @@ function isProdEnv() {
   return nodeEnv === 'production' || deployEnv === 'production'
 }
 
-function allowTestRepairMutations() {
-  if (isProdEnv()) return false
-  return String(process.env.ALLOW_ANYA_TEST_REPAIR_MUTATIONS || '').toLowerCase() === 'true'
-}
-
 function allowAutoRouteGeneration() {
   if (isProdEnv()) return false
   return String(process.env.ALLOW_AUTO_ROUTE_GENERATION || '').toLowerCase() === 'true'
@@ -199,8 +194,8 @@ function categorizeFailure(test) {
 async function fixAuthenticationIssue(test, context) {
   const db = context?.db
   try {
-    // SECURITY: never patch auth middleware in production. Allow only explicit opt-in.
-    if (!allowTestRepairMutations() || isProdEnv()) {
+    // SECURITY: never patch auth middleware in production.
+    if (isProdEnv()) {
       audit(db, {
         action: 'test_repair.auth_patch.blocked',
         severity: SEVERITY.CRITICAL,
@@ -311,7 +306,7 @@ async function fixMissingRoute(test, context) {
       }
 
       // SECURITY: auto route generation is disabled by default and never allowed in production.
-      if (!allowTestRepairMutations() || !allowAutoRouteGeneration() || !isAdminContext(context)) {
+      if (!allowAutoRouteGeneration() || !isAdminContext(context)) {
         audit(db, {
           action: 'route_generation.blocked',
           severity: SEVERITY.WARNING,
@@ -323,9 +318,7 @@ async function fixMissingRoute(test, context) {
               ? 'blocked_in_production'
               : !allowAutoRouteGeneration()
                 ? 'flag_disabled'
-                : !allowTestRepairMutations()
-                  ? 'mutations_disabled'
-                  : 'not_admin',
+                : 'not_admin',
           },
         })
         return { success: false, reason: 'route_generation_blocked' }

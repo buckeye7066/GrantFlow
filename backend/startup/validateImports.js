@@ -16,16 +16,6 @@ const CRITICAL_MODULES = [
     description: 'Crawler job dispatch & queue drain',
   },
   {
-    name: 'nationalZipCrawler',
-    specifier: '../services/crawlers/nationalZipCrawler.js',
-    description: 'National ZIP-code geo crawler',
-  },
-  {
-    name: 'comprehensiveCrawlerOptimized',
-    specifier: '../services/comprehensiveCrawlerOptimized.js',
-    description: 'Comprehensive crawler (optimized)',
-  },
-  {
     name: 'geoCrawlRouter',
     specifier: '../routes/geoCrawl.js',
     description: 'Geo crawl route handler',

@@ -1,73 +1,21 @@
-# National Funding & Benefits Crawler (V2) — Architecture
+# Retired National Crawler V2 Architecture
 
-This repository contains a production-oriented crawler pipeline to **discover, normalize, version, and serve** U.S. funding/benefits programs, while enforcing a **strict two-track model**:
+This document is retained for audit context only. National Crawler V2 is no longer the active discovery crawler in GrantFlow.
 
-- **TRACK_A**: client/beneficiary programs (direct-to-individual benefits/support)
-- **TRACK_B**: provider/caregiver/organization programs (reimbursement, workforce, infrastructure, etc.)
+Current crawler authority:
 
-Tracks are **never merged**; they can only be cross-linked.
+- `backend/crawler-os/`
+- `backend/services/crawlerOsService.js`
+- `backend/services/crawlerOsPersistence.js`
+- `scripts/crawler-system-verify.mjs`
 
-## High-level flow
+Operational status:
 
-1. **Source selection (scope control)**
-   - The orchestrator selects a subset of sources based on run mode:
-     - `SMOKE_MODE`: tiny curated list (offline by default)
-     - `STATE_MODE`: federal + one state
-     - `NATIONAL_MODE`: full registry (expand incrementally)
-   - Implemented in `backend/services/nationalCrawlerV2/run.js` (mode selection + filtering) and `backend/services/nationalCrawlerV2/registry.js` (registry definition).
+- `/api/crawler-v2/run` returns `410`.
+- `npm run crawler:run` requires a profile id and runs Crawler OS.
+- `npm run crawler:smoke` runs the Crawler OS deterministic doctor.
+- New source work belongs in `backend/crawler-os/sourceRegistry.js`, not in the retired V2 registry.
 
-2. **Polite fetch**
-   - Per-host rate limits, retry/backoff, and timeouts.
-   - **Robots-aware**: fetcher consults `robots.txt` (simplified allow/disallow evaluation).
-   - Implemented via:
-     - `backend/services/nationalCrawlerV2/fetchers.js` (http/file/mock fetchers)
-     - `backend/services/nationalCrawlerV2/robots.js` (robots cache)
-     - `backend/services/nationalPrograms/fetcher.js` (rate-limited HTTP fetcher)
+Historical note:
 
-3. **Parse (pluggable)**
-   - Content-type driven parsing:
-     - HTML → Cheerio text extraction
-     - PDF → `pdf-parse`
-     - DOCX → Mammoth
-     - Mock payloads for controlled tests
-   - Implemented in `backend/services/nationalCrawlerV2/parsers.js` (dispatch) and `backend/services/nationalPrograms/parsers/*`.
-
-4. **Normalize into strict schema**
-   - Produces strict normalized program records with deterministic IDs.
-   - Enforces track invariants:
-     - `TRACK_A` must never include `provider_requirements`
-   - Implemented in `backend/services/nationalCrawlerV2/normalize.js`.
-
-5. **Upsert + versioning (content-based)**
-   - Writes to **separate tables**:
-     - `nf_programs_a` (TRACK_A)
-     - `nf_programs_b` (TRACK_B)
-   - Writes a version snapshot per run in `nf_program_versions`
-   - Maintains `change_log[]` pointers on the program row
-   - Implemented in `backend/services/nationalCrawlerV2/store.js`.
-
-6. **Evidence + observability**
-   - Every run has a `crawl_run_id`, counts, and structured failures:
-     - `crawl_runs`, `crawl_events`, `parse_failures`
-   - Artifacts are written under `artifacts/crawler/YYYY-MM-DD/`:
-     - `crawl.log`, `parse.log`, `normalize.log`, `api-smoke.log`
-     - `sample_output.<crawl_run_id>.json`
-     - `failures.<crawl_run_id>.json`
-   - Implemented primarily in `backend/services/nationalCrawlerV2/run.js` and `scripts/crawler-doctor.mjs`.
-
-## Extensibility model
-
-- Add sources by extending `backend/services/nationalCrawlerV2/registry.js` (or generating `crawler_sources` rows).
-- Add new parsing logic **by source family**, not by orchestrator branching:
-  - Extend `backend/services/nationalCrawlerV2/parsers.js` and add new parser modules.
-- Add state-specific rules by enriching `normalizeProgram()` with:
-  - jurisdiction/state-specific post-processing modules
-  - confidence scoring refinements
-  - cross-linking heuristics between TRACK_A and TRACK_B
-
-## Security / PHI posture
-
-- No user identifiers, profiles, or PHI are stored by this crawler.
-- Logs are passed through a scrubbing layer: `backend/utils/piiScrubber.js`.
-- Store **hashes + URLs** as raw evidence references (`raw_source_refs[]`), not raw personal data.
-
+V2 previously normalized broad national funding/benefit sources into separate Track A and Track B tables. That design was intentionally profile-free and is therefore not the live GrantFlow discovery path under the current rules.

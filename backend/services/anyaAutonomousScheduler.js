@@ -23,10 +23,9 @@ function isProdEnv() {
 /**
  * Configuration for autonomous operations.
  *
- * SAFETY: All autonomous operations default to OFF. Operators must explicitly
- * opt in via env vars. Anya is a guide for users, not an autonomous operator;
- * giving her the ability to mutate code, run crawlers, and write to the DB
- * without explicit consent violates that contract.
+ * Automation doctrine: agents act, persist, audit, and resume. Operators still
+ * choose which scheduled loops run, but Anya code-error repair does not require
+ * a second write-permission env gate once the code crawl loop is enabled.
  */
 const AUTONOMOUS_CONFIG = {
   // Enable/disable autonomous operations (default: disabled)

@@ -55,6 +55,13 @@ describe('AUTO_REPAIR_TYPES surface', () => {
   it('exports runAutoRepair as an async function', () => {
     expect(typeof runAutoRepair).toBe('function')
   })
+
+  it('reports Anya code-error repair policy on every run', async () => {
+    const report = await runAutoRepair(null, { dryRun: true, repairTypes: ['column_typo'] })
+    expect(report.writePolicy).toBe('code_error_repair')
+    expect(report.permissionRequired).toBe(false)
+    expect(report.auditRequired).toBe(true)
+  })
 })
 
 describe('missing_db_await pattern (reproduces /api/profiles/:id/sections/:key/ai 500)', () => {

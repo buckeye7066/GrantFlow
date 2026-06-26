@@ -17,6 +17,7 @@
 import { storage } from '../crawler-os/index.js';
 import { recordDismissal, reconcileDismissedGrants } from './pipelineDismissals.js';
 import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
+import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -42,7 +43,7 @@ async function prunePipelineRejects(db, memStore, idRemap) {
     const grants = await db
       .prepare('SELECT id, status FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?')
       .all(m.profile_id, oppId);
-    if (!grants || grants.length === 0) continue;            // not in any pipeline → nothing to remove
+    if (!grants || grants.length === 0) continue;            // not in any pipeline -> nothing to remove
     if (grants.some((g) => g.status && PROTECTED.has(g.status))) continue; // preserve user-progressed work
     await recordDismissal(db, {
       profileId: m.profile_id,
@@ -54,6 +55,44 @@ async function prunePipelineRejects(db, memStore, idRemap) {
   }
   if (dismissed > 0) await reconcileDismissedGrants(db);
   return dismissed;
+}
+
+async function cleanupHamiltonRejects(db, memStore, idRemap) {
+  const rejects = memStore
+    .all('profile_opportunity_matches')
+    .filter((m) => m.decision === 'reject');
+  let cleaned = 0;
+
+  for (const m of rejects) {
+    const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id;
+    let grants = [];
+    try {
+      grants = await db
+        .prepare('SELECT id FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?')
+        .all(m.profile_id, oppId);
+    } catch {
+      grants = [];
+    }
+
+    const targets = [{ opportunityId: oppId, grantId: null }];
+    for (const grant of grants || []) targets.push({ opportunityId: oppId, grantId: grant.id });
+
+    for (const target of targets) {
+      try {
+        const result = await cleanupDisallowedHamiltonTraces(db, {
+          profileId: m.profile_id,
+          opportunityId: target.opportunityId,
+          grantId: target.grantId,
+          reason: 'crawler_os_reject',
+        });
+        cleaned += Object.values(result || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      } catch {
+        // Hamilton cleanup is protective but never allowed to break crawler persistence.
+      }
+    }
+  }
+
+  return cleaned;
 }
 
 function jparse(v, fallback) {
@@ -256,12 +295,14 @@ export async function persistRun(db, memStore, run, opts = {}) {
   // profile silently keeps obsolete, ineligible matches.
   const matchRows = memStore.all('profile_opportunity_matches');
   const profileIds = [...new Set(matchRows.map((m) => m.profile_id).filter(Boolean))];
-  // Reconcile 'crawler-os' (own-discovery) matches. With a primary set, only the
-  // primary profile's own set is rebuilt; otherwise (legacy) every profile's.
+  // Reconcile own-discovery matches and stale cross-match spillover for the
+  // active profile. The API reads this table directly, so rejects/xmatches must
+  // not remain as visible results for a profile that just ran its own crawl.
   const reconcileProfiles = primaryProfileId ? [primaryProfileId] : profileIds;
   for (const pid of reconcileProfiles) {
     await db.prepare(
-      `DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND matcher_version = 'crawler-os'`,
+      `DELETE FROM profile_opportunity_matches
+        WHERE profile_id = ? AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')`,
     ).run(pid);
   }
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP';
@@ -271,7 +312,9 @@ export async function persistRun(db, memStore, run, opts = {}) {
     const explain = jparse(m.match_explain_json, {});
     const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id; // follow cross-run dedup remap
     const isPrimary = !primaryProfileId || m.profile_id === primaryProfileId;
+    const decision = String(m.decision ?? '').toLowerCase();
     if (isPrimary) {
+      if (decision === 'reject') continue;
       await upsertRow(db, 'profile_opportunity_matches', ['profile_id', 'opportunity_id'], {
         id: `${m.profile_id}:${oppId}`, // deterministic PK (table PK is id)
         profile_id: m.profile_id, opportunity_id: oppId,
@@ -284,7 +327,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
         computed_at: nowIso(), updated_at: nowIso(), evaluated_at: nowIso(),
       });
       matches += 1;
-    } else if (String(m.decision ?? '').toLowerCase() === 'reject') {
+    } else if (decision === 'reject') {
       // A REJECT cross-match is not a match — never store it as one.
       continue;
     } else {
@@ -323,10 +366,12 @@ export async function persistRun(db, memStore, run, opts = {}) {
     }
   }
 
-  // Remove bad matches (OS REJECTs) from the profile's pipelines too.
+  // Remove bad matches (OS REJECTs) from the profile's pipelines and Hamilton's
+  // active traces. Hamilton audit events remain; active tasks/docs/links/auths do not.
   const pipelinePruned = await prunePipelineRejects(db, memStore, idRemap);
+  const hamiltonCleaned = await cleanupHamiltonRejects(db, memStore, idRemap);
 
-  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned };
+  return { opportunities, matches, sources: sourceRows.length, rejected: run?.rejected ?? 0, pipelinePruned, hamiltonCleaned };
 }
 
 export default { profileContextToThesisInput, persistRun };

@@ -41,11 +41,9 @@ test('security: diagnose-anya requires explicit admin token', async () => {
 test('security: auto-route generation is blocked in production', async () => {
   const prevNodeEnv = process.env.NODE_ENV
   const prevDeployEnv = process.env.DEPLOY_ENV
-  const prevAllowMut = process.env.ALLOW_ANYA_TEST_REPAIR_MUTATIONS
   const prevAllowRoute = process.env.ALLOW_AUTO_ROUTE_GENERATION
   process.env.NODE_ENV = 'production'
   process.env.DEPLOY_ENV = 'production'
-  process.env.ALLOW_ANYA_TEST_REPAIR_MUTATIONS = 'true'
   process.env.ALLOW_AUTO_ROUTE_GENERATION = 'true'
 
   try {
@@ -68,8 +66,6 @@ test('security: auto-route generation is blocked in production', async () => {
     else process.env.NODE_ENV = prevNodeEnv
     if (prevDeployEnv === undefined) delete process.env.DEPLOY_ENV
     else process.env.DEPLOY_ENV = prevDeployEnv
-    if (prevAllowMut === undefined) delete process.env.ALLOW_ANYA_TEST_REPAIR_MUTATIONS
-    else process.env.ALLOW_ANYA_TEST_REPAIR_MUTATIONS = prevAllowMut
     if (prevAllowRoute === undefined) delete process.env.ALLOW_AUTO_ROUTE_GENERATION
     else process.env.ALLOW_AUTO_ROUTE_GENERATION = prevAllowRoute
   }
@@ -98,4 +94,3 @@ async function demo() {
   assert.notEqual(res.code, 0)
   assert.match(res.stdout + res.stderr, /\[empty_catch\]|\[task_marker\]|\[unhandled_then\]/)
 })
-
