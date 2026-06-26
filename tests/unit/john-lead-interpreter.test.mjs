@@ -57,13 +57,15 @@ test('selectEvidenceHook prefers items with source URLs and high specificity', (
   assert.equal(r.source, 'https://x')
 })
 
-test('buildSalutation falls back to "Hi team," when name is missing or unsafe', () => {
-  assert.equal(buildSalutation(null), 'Hi team,')
-  assert.equal(buildSalutation({ name: '' }), 'Hi team,')
-  assert.equal(buildSalutation({ name: 'fire@vfd.org' }), 'Hi team,')
-  assert.equal(buildSalutation({ name: 'Chief Allen, Fire Chief' }), 'Hi team,')
-  assert.equal(buildSalutation({ name: 'Allen' }), 'Hi Allen,')
-  assert.equal(buildSalutation({ name: 'Dr. Karen Smith' }), 'Hi Karen,')
+test('buildSalutation avoids generic team greetings and uses safe person/role greetings', () => {
+  assert.equal(buildSalutation(null), 'Hello,')
+  assert.equal(buildSalutation({ name: '' }), 'Hello,')
+  assert.equal(buildSalutation({ name: 'fire@vfd.org' }), 'Hello,')
+  assert.equal(buildSalutation({ name: 'Chief Allen, Fire Chief', role: 'Fire Chief' }), 'Hello Chief Allen,')
+  assert.equal(buildSalutation({ name: 'Allen' }), 'Hello Allen,')
+  assert.equal(buildSalutation({ name: 'Dr. Karen Smith' }), 'Hello Dr. Karen Smith,')
+  assert.equal(buildSalutation({ role: 'Pastor' }), 'Hello Pastor,')
+  assert.equal(buildSalutation({ role: 'Fire Chief' }), 'Hello Chief,')
 })
 
 test('interpretLead returns ok when both contact and evidence are present', () => {
@@ -72,5 +74,5 @@ test('interpretLead returns ok when both contact and evidence are present', () =
   assert.equal(r.ok, true)
   assert.ok(r.contact.email)
   assert.ok(r.evidence.text)
-  assert.match(r.salutation, /^Hi /)
+  assert.match(r.salutation, /^Hello/)
 })
