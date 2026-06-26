@@ -857,18 +857,32 @@ async function ensureEmailCredential(db, email) {
     }
   }
 
-  const displayName = email.split('@')[0] || 'New User'
-  const userId = crypto.randomUUID()
-  await db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
-    userId, 
-    displayName, 
-    email,
-    isAdminEmail(email) ? true : false
-  )
-  
-  // Assign profile to user (designated or first available)
-  await assignProfileToUser(db, userId, email)
-  
+  // No email_otp credential yet — but a users row may already exist for this
+  // email (created via password, OAuth, phone, or import). Reuse it instead of
+  // inserting a duplicate: a blind INSERT here violates ux_users_primary_email
+  // and 500s the request, which blocks email-code login for EVERY pre-existing
+  // user (anyone who didn't first sign in via email OTP). Mirror the find-or-
+  // create pattern used by ensureUserForPasswordAuth().
+  const existingUser = await getUserByEmail(db, email)
+  let userId
+  if (existingUser) {
+    userId = existingUser.id
+    // Keep admin flag correct for the admin email.
+    await ensureAdminStatus(db, userId, email)
+  } else {
+    const displayName = email.split('@')[0] || 'New User'
+    userId = crypto.randomUUID()
+    await db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
+      userId,
+      displayName,
+      email,
+      isAdminEmail(email) ? true : false,
+    )
+
+    // Assign profile to user (designated or first available)
+    await assignProfileToUser(db, userId, email)
+  }
+
   const credentialId = crypto.randomUUID()
   await db.prepare(
     `

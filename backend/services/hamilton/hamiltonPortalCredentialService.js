@@ -347,6 +347,29 @@ export async function deleteCredential(db, id) {
   return (res?.changes ?? res?.rowCount ?? 0) > 0
 }
 
+/**
+ * Drop every MASTER-WRAPPED (auto-provisioned) credential for a profile.
+ *
+ * The wrapped_* secret is encrypted with the profile's scrypt-derived master
+ * key. When the master passphrase is RESET (a new salt+verifier, no re-wrap),
+ * those secrets become permanently unreadable — and saveAutoProvisionedCredential
+ * short-circuits on `already_existed`, so they would never regenerate either.
+ * Purging them lets autopilot recreate fresh logins under the new passphrase.
+ *
+ * Only has_master_wrap rows are removed; user-entered / server-vault-only
+ * credentials (has_master_wrap falsy) do NOT depend on the passphrase and are
+ * left untouched. The `has_master_wrap` predicate is dialect-agnostic: nonzero
+ * INTEGER (sqlite) and TRUE (postgres) both satisfy a bare truthiness check.
+ */
+export async function purgeMasterWrappedCredentials(db, profileId) {
+  if (!db || !profileId) return { deleted: 0 }
+  await ensureSchema(db)
+  const res = await db
+    .prepare('DELETE FROM hamilton_portal_credentials WHERE profile_id = ? AND has_master_wrap')
+    .run(String(profileId))
+  return { deleted: res?.changes ?? res?.rowCount ?? 0 }
+}
+
 // --- Admin vault management ----------------------------------------------
 // These power the admin's ability to move logins in/out of profiles. They all
 // operate ONLY on managed_by='admin' rows: an admin can never list, move, copy,

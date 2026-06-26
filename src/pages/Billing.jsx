@@ -26,6 +26,17 @@ const discountOptions = [
   { value: "custom", label: "Custom discount" },
 ]
 
+/** Escape a value for safe interpolation into an HTML string. */
+function escapeHtml(value) {
+  if (value === null || value === undefined) return ""
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
 function formatCurrencyFromCents(cents) {
   if (cents === null || cents === undefined) return "Not set"
   if (cents === 0) return "$0"
@@ -40,7 +51,8 @@ function freePeriodLabel(free) {
   if (!free?.active) return null
   const until = free.until ? new Date(free.until).toLocaleDateString() : null
   const kind = free.kind === 'month' ? '1 month free' : free.kind === 'week' ? '1 week free' : 'Free period'
-  return until ? `${kind} · ${free.days_remaining}d left (until ${until})` : kind
+  const hasDays = free.days_remaining !== null && free.days_remaining !== undefined
+  return until && hasDays ? `${kind} · ${free.days_remaining}d left (until ${until})` : kind
 }
 
 /** Per-account free-period (trial) controls: grant 1 week / 1 month, or end early. */
@@ -131,11 +143,16 @@ function generateInvoiceHTML(invoiceData) {
     totalDue,
   } = invoiceData
 
+  const safeDiscountType = escapeHtml(discountType)
+  const discountLabel = discountType && discountType !== 'none'
+    ? `${escapeHtml(discountType.charAt(0).toUpperCase() + discountType.slice(1))} (${escapeHtml(discountPercent)}%)`
+    : ''
+
   return `
     <!DOCTYPE html>
     <html>
       <head>
-        <title>Invoice ${invoiceNumber}</title>
+        <title>Invoice ${escapeHtml(invoiceNumber)}</title>
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -233,15 +250,15 @@ function generateInvoiceHTML(invoiceData) {
         <div class="invoice-info">
           <div>
             <div class="section-title">Invoice Number</div>
-            <div class="section-value">${invoiceNumber}</div>
+            <div class="section-value">${escapeHtml(invoiceNumber)}</div>
             <div class="section-title">Invoice Date</div>
-            <div class="section-value">${invoiceDate}</div>
+            <div class="section-value">${escapeHtml(invoiceDate)}</div>
           </div>
           <div>
             <div class="section-title">Client</div>
-            <div class="section-value">${profileName}</div>
+            <div class="section-value">${escapeHtml(profileName)}</div>
             <div class="section-title">Profile Type</div>
-            <div class="section-value">${profileType}</div>
+            <div class="section-value">${escapeHtml(profileType)}</div>
           </div>
         </div>
 
@@ -256,32 +273,32 @@ function generateInvoiceHTML(invoiceData) {
           <tbody>
             <tr>
               <td><strong>Billing Tier</strong></td>
-              <td>${tierName}</td>
-              <td style="text-align: right;">${formatCurrencyFromCents(monthly)}</td>
+              <td>${escapeHtml(tierName)}</td>
+              <td style="text-align: right;">${escapeHtml(formatCurrencyFromCents(monthly))}</td>
             </tr>
             <tr>
               <td><strong>Hourly Rate</strong></td>
               <td>Standard hourly rate for services</td>
-              <td style="text-align: right;">${formatCurrencyFromCents(hourly)}</td>
+              <td style="text-align: right;">${escapeHtml(formatCurrencyFromCents(hourly))}</td>
             </tr>
             ${discountType !== 'none' ? `
             <tr>
               <td><strong>Discount Applied</strong></td>
-              <td>${discountType.charAt(0).toUpperCase() + discountType.slice(1)} (${discountPercent}%)</td>
-              <td style="text-align: right;">-${formatCurrencyFromCents(discountAmount)}</td>
+              <td>${discountLabel}</td>
+              <td style="text-align: right;">-${escapeHtml(formatCurrencyFromCents(discountAmount))}</td>
             </tr>
             ` : ''}
             ${isProBono ? `
             <tr>
               <td colspan="3">
                 <span class="pro-bono-badge">PRO BONO SERVICE</span>
-                ${proBonoReason ? `<div style="margin-top: 8px; color: #6b7280;">${proBonoReason}</div>` : ''}
+                ${proBonoReason ? `<div style="margin-top: 8px; color: #6b7280;">${escapeHtml(proBonoReason)}</div>` : ''}
               </td>
             </tr>
             ` : ''}
             <tr class="total-row">
               <td colspan="2"><strong>Total Amount Due</strong></td>
-              <td style="text-align: right;"><strong>${formatCurrencyFromCents(totalDue)}</strong></td>
+              <td style="text-align: right;"><strong>${escapeHtml(formatCurrencyFromCents(totalDue))}</strong></td>
             </tr>
           </tbody>
         </table>
@@ -353,8 +370,9 @@ function AccountStatusControls({ account, onSuspend, onReactivate, onBan, onUnba
 }
 
 function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRevokeFree, freeBusy, onSuspend, onReactivate, onBan, onUnban, statusBusy }) {
+  const { toast } = useToast()
   const [form, setForm] = useState({
-    tier_id: account.tier_id,
+    tier_id: account.tier_id ?? "",
     discount_type: account.discount_type ?? "none",
     discount_percent: account.discount_percent ?? 0,
     is_pro_bono: account.is_pro_bono ?? false,
@@ -379,9 +397,11 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
       day: 'numeric' 
     })
 
-    // Calculate discount amount with null-safety for both monthly and discount_percent
-    const discountAmount = (monthly && form.discount_percent) ? (monthly * (form.discount_percent / 100)) : 0
-    const totalDue = form.is_pro_bono ? 0 : (monthly - discountAmount)
+    // Clamp discount percent to a safe 0..100 range to avoid negative/over-100% totals.
+    const safePercent = Math.min(100, Math.max(0, Number.parseFloat(form.discount_percent) || 0))
+    // Calculate discount amount with rounding to avoid floating-point precision errors.
+    const discountAmount = (monthly && safePercent) ? Math.round(monthly * (safePercent / 100)) : 0
+    const totalDue = form.is_pro_bono ? 0 : Math.max(0, monthly - discountAmount)
 
     const invoiceHTML = generateInvoiceHTML({
       invoiceNumber,
@@ -392,27 +412,31 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
       monthly,
       hourly,
       discountType: form.discount_type,
-      discountPercent: form.discount_percent,
+      discountPercent: safePercent,
       discountAmount,
       isProBono: form.is_pro_bono,
       proBonoReason: form.pro_bono_reason,
       totalDue,
     })
 
-    // No "noopener" — it makes window.open() return null, so document.write
-    // below never runs and the invoice tab opens blank. Same-origin content we own.
-    const invoiceWindow = window.open('', '_blank')
+    // Open with noopener to prevent tabnabbing; we then write our own escaped
+    // same-origin content into the new document.
+    const invoiceWindow = window.open('', '_blank', 'noopener')
     if (invoiceWindow) {
       invoiceWindow.document.write(invoiceHTML)
       invoiceWindow.document.close()
     } else {
-      alert('Please allow pop-ups to generate the invoice')
+      toast({
+        variant: "destructive",
+        title: "Pop-up blocked",
+        description: "Please allow pop-ups to generate the invoice.",
+      })
     }
   }
 
   useEffect(() => {
     setForm({
-      tier_id: account.tier_id,
+      tier_id: account.tier_id ?? "",
       discount_type: account.discount_type ?? "none",
       discount_percent: account.discount_percent ?? 0,
       is_pro_bono: account.is_pro_bono ?? false,
@@ -497,7 +521,7 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
                 onChange={(event) =>
                   setForm((prev) => ({
                     ...prev,
-                    discount_percent: Number.parseFloat(event.target.value) || 0,
+                    discount_percent: Math.min(100, Math.max(0, Number.parseFloat(event.target.value) || 0)),
                   }))
                 }
                 className="w-24"
@@ -565,7 +589,7 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
             className="gap-2"
             onClick={() =>
               setForm({
-                tier_id: account.tier_id,
+                tier_id: account.tier_id ?? "",
                 discount_type: account.discount_type ?? "none",
                 discount_percent: account.discount_percent ?? 0,
                 is_pro_bono: account.is_pro_bono ?? false,
@@ -690,7 +714,14 @@ export default function Billing() {
     activeProfileId: state.activeProfileId,
   }))
 
-  const isAdmin = Boolean(user?.is_admin || user?.id === "admin")
+  const isAdmin = Boolean(
+    user?.is_admin
+    || (Array.isArray(user?.roles) && user.roles.includes('admin'))
+  )
+
+  // Track per-profile in-flight save state so the spinner only appears on the
+  // card actually being saved, even during concurrent saves.
+  const [savingProfileIds, setSavingProfileIds] = useState(() => new Set())
 
   const tiersQuery = useQuery({
     queryKey: ["billing-tiers"],
@@ -719,6 +750,15 @@ export default function Billing() {
 
   const updateMutation = useMutation({
     mutationFn: ({ profileId, payload }) => updateBillingAccount(profileId, payload),
+    onMutate: (variables) => {
+      if (variables?.profileId) {
+        setSavingProfileIds((prev) => {
+          const next = new Set(prev)
+          next.add(variables.profileId)
+          return next
+        })
+      }
+    },
     onSuccess: (response, variables) => {
       toast({
         title: "Billing updated",
@@ -736,6 +776,15 @@ export default function Billing() {
         title: "Unable to update billing",
         description: error instanceof Error ? error.message : "Try again shortly.",
       })
+    },
+    onSettled: (data, error, variables) => {
+      if (variables?.profileId) {
+        setSavingProfileIds((prev) => {
+          const next = new Set(prev)
+          next.delete(variables.profileId)
+          return next
+        })
+      }
     },
   })
 
@@ -847,7 +896,7 @@ export default function Billing() {
                 account={account}
                 tiers={tiers}
                 onSave={handleSaveAccount}
-                saving={updateMutation.isPending && updateMutation.variables?.profileId === account.profile_id}
+                saving={savingProfileIds.has(account.profile_id)}
                 onGrantFree={handleGrantFree}
                 onRevokeFree={handleRevokeFree}
                 freeBusy={freeBusy}

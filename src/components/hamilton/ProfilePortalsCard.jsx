@@ -45,6 +45,7 @@ import {
   runPortalSyncRead,
   runPortalSyncWrite,
   saveApplicationPacket,
+  saveApplicationPackets,
   packetDownloadUrl,
   setPortalAutopilotPassphrase,
   unlockPortalAutopilot,
@@ -52,6 +53,7 @@ import {
   setPortalAutopilotIdentity,
   runPortalAutopilot,
 } from "@/api/hamilton"
+import { deleteGrant } from "@/api/grants"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
 import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
@@ -85,6 +87,9 @@ import {
   UserCheck,
   Wand2,
   PanelsTopLeft,
+  Copy,
+  X,
+  Trash2,
 } from "lucide-react"
 
 // Plain, human-readable label per autopilot state for the dashboard. Co-browse /
@@ -181,6 +186,12 @@ function sourceKey(src, idx) {
   return src?.grantId || src?.opportunityId || `${src?.title || "source"}-${idx}`
 }
 
+// Stable identifier for a mail/fax source row (independent of object identity).
+function sourceKeyOf(src) {
+  if (!src || typeof src !== "object") return ""
+  return src.grantId || src.opportunityId || `${src.host || ""}-${src.title || ""}`
+}
+
 const KIND_GROUPS = [
   { key: "school", title: "Schools", Icon: GraduationCap },
   { key: "process", title: "Applications & forms", Icon: ClipboardList },
@@ -196,15 +207,81 @@ const BTN_CORAL =
 const BTN_EMERALD =
   "inline-flex items-center gap-1.5 rounded-[10px] border border-transparent bg-current-emerald px-3.5 py-2 text-sm font-semibold text-white transition-transform hover:-translate-y-px disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber focus-visible:ring-offset-2 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
 
+// Dedicated one-time-password modal. The secret is shown explicitly, with a
+// copy action and a clear warning, never logged, and dismissible by the user.
+function OneTimePasswordModal({ value, onClose }) {
+  const [copied, setCopied] = React.useState(false)
+  if (!value) return null
+  const handleCopy = async () => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      }
+    } catch {
+      // Clipboard unavailable — the user can still read + copy manually.
+    }
+  }
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="One-time login password"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-current-line bg-current-card p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-display text-[18px] font-bold text-current-ink">Login provisioned</h3>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-[10px] border border-current-line bg-transparent p-1.5 text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mt-2 text-sm text-current-ink/70">
+          Hamilton created a login. This one-time password is shown <strong>only now</strong> — copy and
+          store it somewhere safe. It will not be shown again.
+        </p>
+        <div className="mt-4 flex items-center gap-2">
+          <code className="money flex-1 select-all break-all rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink">
+            {value}
+          </code>
+          <button type="button" className={BTN_BASE} onClick={handleCopy}>
+            <Copy className="h-4 w-4" />
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button type="button" className={BTN_EMERALD} onClick={onClose}>
+            I&rsquo;ve saved it
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+
+  // One-time provisioned password shown in a dedicated, dismissible modal
+  // (never via an ephemeral toast, never logged).
+  const [oneTimePassword, setOneTimePassword] = React.useState(null)
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["hamilton-profile-portals", profileId],
     queryFn: () => listProfilePortals(profileId),
     enabled: !!profileId,
-    staleTime: 30_000,
+    staleTime: 120_000,
   })
 
   const portals = Array.isArray(data?.portals) ? data.portals : []
@@ -217,6 +294,48 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
 
   const refetchPortals = () =>
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
+
+  // Track the popup-close poll so we never leak it / accumulate multiple.
+  const loginPollRef = React.useRef(null)
+  React.useEffect(() => {
+    return () => {
+      if (loginPollRef.current) {
+        clearInterval(loginPollRef.current)
+        loginPollRef.current = null
+      }
+    }
+  }, [])
+
+  // Watch the popup for close/completion and refetch ONCE when it closes — this
+  // avoids refetching on unrelated tab returns and avoids leaking/accumulating
+  // window focus listeners.
+  const watchPopupClose = (popup) => {
+    if (!popup || typeof popup.closed !== "function" && typeof popup.closed !== "boolean") {
+      // Fall back: if popup exposes no close info, refetch shortly after.
+      refetchPortals()
+      return
+    }
+    if (loginPollRef.current) {
+      clearInterval(loginPollRef.current)
+      loginPollRef.current = null
+    }
+    const isClosed = () => {
+      try {
+        if (typeof popup.isClosed === "function") return popup.isClosed()
+        if (typeof popup.closed === "function") return popup.closed()
+        return Boolean(popup.closed)
+      } catch {
+        return true
+      }
+    }
+    loginPollRef.current = setInterval(() => {
+      if (isClosed()) {
+        clearInterval(loginPollRef.current)
+        loginPollRef.current = null
+        refetchPortals()
+      }
+    }, 1000)
+  }
 
   // Click a RED tile → start a cloud login and open the prefilled secure window.
   // The popup is opened SYNCHRONOUSLY in the click handler (see startLogin) and
@@ -233,25 +352,21 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onSuccess: (res, { popup }) => {
       const url = resolveLiveLoginUrl(res)
       if (!url) {
-        popup?.fail("We couldn't open the secure login. Please try again.")
+        popup?.fail?.("We couldn't open the secure login. Please try again.")
         showErrorToast(toast, "Could not start the secure login", "No login window link was returned. Please try again.")
         return
       }
-      popup?.navigate(url)
+      popup?.navigate?.(url)
       showSuccessToast(
         toast,
         "Secure login window opened",
         "Sign in + approve 2FA in the new window, then click “Done” there. We’ll update this list automatically.",
       )
-      // Refetch when the user returns to this tab (window closed / login done).
-      const onFocus = () => {
-        refetchPortals()
-        window.removeEventListener("focus", onFocus)
-      }
-      if (typeof window !== "undefined") window.addEventListener("focus", onFocus)
+      // Refetch when the secure login window closes — not on arbitrary tab focus.
+      watchPopupClose(popup)
     },
     onError: (err, { popup }) => {
-      popup?.fail(err?.message || "Could not start the secure login. Please try again.")
+      popup?.fail?.(err?.message || "Could not start the secure login. Please try again.")
       showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again.")
     },
   })
@@ -261,7 +376,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // silently starting a session they can't see.
   const startLogin = (portal) => {
     const popup = openPendingLoginWindow()
-    if (popup.blocked) {
+    if (!popup || popup.blocked) {
       showErrorToast(
         toast,
         "Allow pop-ups to sign in",
@@ -316,10 +431,128 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onError: (err) => showErrorToast(toast, "Could not save the packet", err?.message || "It still opened for printing."),
   })
 
+  // ── Bulk packets: select mail/fax funders, then Hamilton makes a packet each ──
+  // Local selection (keyed by the same stable id the rows use) so we don't need
+  // the Pipeline-only HamiltonSelectionProvider here.
+  const [selectedMailFax, setSelectedMailFax] = React.useState(() => new Set())
+  const allMailFaxKeys = React.useMemo(() => mailFaxSources.map(sourceKeyOf), [mailFaxSources])
+  const allMailFaxSelected =
+    allMailFaxKeys.length > 0 && allMailFaxKeys.every((k) => selectedMailFax.has(k))
+  const toggleMailFax = (src) =>
+    setSelectedMailFax((prev) => {
+      const next = new Set(prev)
+      const k = sourceKeyOf(src)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+  const toggleSelectAllMailFax = () =>
+    setSelectedMailFax(() => (allMailFaxSelected ? new Set() : new Set(allMailFaxKeys)))
+  // Drop selections for rows that no longer exist after a refetch.
+  React.useEffect(() => {
+    setSelectedMailFax((prev) => {
+      if (prev.size === 0) return prev
+      const valid = new Set(allMailFaxKeys)
+      const next = new Set([...prev].filter((k) => valid.has(k)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [allMailFaxKeys])
+
+  const bulkPacketMutation = useMutation({
+    mutationFn: (sources) => saveApplicationPackets(profileId, { sources, profileName }),
+    onSuccess: (res) => {
+      refetchPortals()
+      setSelectedMailFax(new Set())
+      const created = Number(res?.created || 0)
+      const reused = Number(res?.reused || 0)
+      const failed = Number(res?.failed || 0)
+      if (failed > 0) {
+        showErrorToast(
+          toast,
+          `Made ${created} packet${created === 1 ? "" : "s"}, ${failed} failed`,
+          "Saved packets are in this profile's Documents; retry the ones that failed.",
+        )
+      } else {
+        showSuccessToast(
+          toast,
+          `Made ${created + reused} packet${created + reused === 1 ? "" : "s"}`,
+          reused > 0
+            ? `${created} new, ${reused} already saved. Find them in this profile's Documents.`
+            : "Saved to this profile's Documents as PDFs.",
+        )
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Could not make packets", err?.message || "Please try again."),
+  })
+
+  const makeSelectedPackets = () => {
+    const sources = mailFaxSources.filter((s) => selectedMailFax.has(sourceKeyOf(s)))
+    if (sources.length > 0) bulkPacketMutation.mutate(sources)
+  }
+
+  // Remove "not interested" funding sources from this profile's pipeline. The
+  // backend (DELETE /api/grants/:id) authorizes the ADMIN or the PROFILE OWNER
+  // and records a sticky dismissal so the matcher/crawlers don't silently re-add
+  // them. Works one-at-a-time (per row) or in bulk (the selection checkboxes).
+  const removeMutation = useMutation({
+    mutationFn: async (grantIds) => {
+      const ids = (Array.isArray(grantIds) ? grantIds : [grantIds]).filter(Boolean)
+      const results = await Promise.allSettled(ids.map((id) => deleteGrant(id)))
+      const removed = results.filter((r) => r.status === "fulfilled").length
+      return { removed, failed: results.length - removed }
+    },
+    onSuccess: ({ removed, failed }) => {
+      refetchPortals()
+      setSelectedMailFax(new Set())
+      if (failed > 0) {
+        showErrorToast(
+          toast,
+          `Removed ${removed}, ${failed} could not be removed`,
+          "Some sources couldn't be removed. Please try again.",
+        )
+      } else {
+        showSuccessToast(
+          toast,
+          `Removed ${removed} funding source${removed === 1 ? "" : "s"}`,
+          "They won't come back unless you add them again.",
+        )
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Could not remove", err?.message || "Please try again."),
+  })
+
+  const removeOneSource = (src) => {
+    if (!src?.grantId) return
+    const ok = window.confirm(
+      `Remove "${src.title || "this funding source"}" from this profile?\n\nIt won't come back unless you add it again.`,
+    )
+    if (ok) removeMutation.mutate([src.grantId])
+  }
+
+  const removeSelectedSources = () => {
+    const ids = mailFaxSources
+      .filter((s) => selectedMailFax.has(sourceKeyOf(s)))
+      .map((s) => s.grantId)
+      .filter(Boolean)
+    if (ids.length === 0) return
+    const ok = window.confirm(
+      `Remove ${ids.length} selected funding source${ids.length === 1 ? "" : "s"} from this profile?\n\nThey won't come back unless you add them again.`,
+    )
+    if (ok) removeMutation.mutate(ids)
+  }
+
   // ── Portal Autopilot vault controls ───────────────────────────────────────
   // The master passphrase is a PASSWORD field, consumed on submit and cleared —
   // never stored in component state beyond the moment of submission, never echoed.
   const [passInput, setPassInput] = React.useState("")
+  // RECOVERY PATH: once a passphrase is set the vault only offers "unlock". If the
+  // owner forgets it (or it can't be verified), they were permanently locked out
+  // — a dead-end failure state. `resetMode` flips the password field into
+  // "set a NEW passphrase" mode so they can recover. The backend's
+  // setMasterPassphrase already UPDATEs the salt+verifier (a true rotation), and
+  // previously auto-provisioned secrets degrade gracefully (reveal returns
+  // vault_locked rather than throwing) and are regenerated on the next run.
+  const [resetMode, setResetMode] = React.useState(false)
   const [identityInput, setIdentityInput] = React.useState(vaultStatus.identity_email || "")
   React.useEffect(() => {
     setIdentityInput(vaultStatus.identity_email || "")
@@ -330,6 +563,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       setPortalAutopilotPassphrase(profileId, { passphrase, identityEmail }),
     onSuccess: () => {
       setPassInput("")
+      setResetMode(false)
       refetchPortals()
       showSuccessToast(toast, "Master passphrase saved", "Hamilton can now provision logins under it. The passphrase is never stored or shown.")
     },
@@ -357,15 +591,20 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
 
   const identityMutation = useMutation({
     mutationFn: ({ identityEmail }) => setPortalAutopilotIdentity(profileId, { identityEmail }),
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       refetchPortals()
-      showSuccessToast(toast, "Autopilot identity saved", "Hamilton will register new portal accounts with this email.")
+      if (vars?.identityEmail) {
+        showSuccessToast(toast, "Autopilot identity saved", "Hamilton will register new portal accounts with this email.")
+      } else {
+        showSuccessToast(toast, "Identity email cleared", "Hamilton has no email on file to register new portal accounts.")
+      }
     },
     onError: (err) => showErrorToast(toast, "Could not save the identity email", err?.message || "Please try again."),
   })
 
   // Run autopilot for the whole profile, or one portal. A single-portal run may
-  // return a one-time generated password to show once; we surface it in a toast.
+  // return a one-time generated password to show once; we surface it in a
+  // dedicated dismissible modal (never a toast / log).
   const autopilotRunMutation = useMutation({
     mutationFn: ({ portalHost = null, loginUrl = null } = {}) =>
       runPortalAutopilot(profileId, { portalHost, loginUrl }),
@@ -373,7 +612,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       refetchPortals()
       const onetime = res?.result?.password_one_time_view
       if (onetime) {
-        showSuccessToast(toast, "Login provisioned", `Hamilton created a login. One-time password (save it now): ${onetime}`)
+        setOneTimePassword(onetime)
       } else if (res?.summary) {
         const provisioned = res.summary.auto_provisioned || 0
         showSuccessToast(toast, "Autopilot finished", `${provisioned} login(s) provisioned. See each tile for its state.`)
@@ -418,6 +657,10 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       !offerCobrowse &&
       portal.autopilotState !== "identity_proof_required"
 
+    // Build the served-sources text as a single, robust string (no fragile
+    // inline index/comma logic, no empty string nodes).
+    const servedText = sources.map((src) => src?.title || "Untitled").join(", ")
+
     return (
       <li
         key={tileKey}
@@ -436,12 +679,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             {sources.length > 0 && (
               <p className="text-[13px] text-current-ink/70">
                 <span className="text-current-ink/55">Serves:</span>{" "}
-                {sources.map((src, idx) => (
-                  <span key={sourceKey(src, idx)}>
-                    {idx > 0 ? ", " : ""}
-                    {src?.title || "Untitled"}
-                  </span>
-                ))}
+                {servedText}
               </p>
             )}
             {/* Honest last-sync status for ready portals. */}
@@ -602,14 +840,29 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     const packet = (src.packet && typeof src.packet === "object") ? src.packet : {}
     const packetSaved = Boolean(packet.generated && packet.documentId)
     const downloadHref = packetSaved ? packetDownloadUrl(profileId, packet.documentId) : null
-    const isSaving = packetMutation.isPending && packetMutation.variables === src
+    // Compare a STABLE identifier, not object identity, so the spinner shows on
+    // the right row even after data is re-derived on refetch.
+    const isSaving =
+      packetMutation.isPending &&
+      packetMutation.variables &&
+      sourceKeyOf(packetMutation.variables) === sourceKeyOf(src)
     // Open the printable packet AND save a durable copy to Documents in one click.
     const handlePacket = () => {
       openApplicationPacket({ profileName, source: src })
       packetMutation.mutate(src)
     }
+    const selected = selectedMailFax.has(sourceKeyOf(src))
     return (
       <li key={key} className="flex flex-col gap-3 border-b border-current-line py-3 last:border-b-0 sm:flex-row sm:items-center">
+        <label className="flex shrink-0 cursor-pointer items-center pt-0.5 sm:pt-0" title="Select for making a packet">
+          <input
+            type="checkbox"
+            className="h-4 w-4 cursor-pointer accent-current-emerald"
+            checked={selected}
+            onChange={() => toggleMailFax(src)}
+            aria-label={`Select ${title} for a packet`}
+          />
+        </label>
         <div className="min-w-0 space-y-1">
           <div className="font-semibold text-current-ink">{title}</div>
           <div className="money text-xs text-current-ink/70">
@@ -653,6 +906,18 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Printer className="h-4 w-4" />}
             {packetSaved ? "View / print" : "Make packet"}
           </button>
+          {src.grantId && (
+            <button
+              type="button"
+              className={`${BTN_BASE} text-rose-600 hover:bg-rose-50`}
+              disabled={removeMutation.isPending}
+              onClick={() => removeOneSource(src)}
+              title="Not interested — remove this funding source from the profile"
+            >
+              <Trash2 className="h-4 w-4" />
+              Not interested
+            </button>
+          )}
         </div>
       </li>
     )
@@ -671,6 +936,29 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       <ul className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">{groupPortals.map(renderTile)}</ul>
     </div>
   )
+
+  // Resolve the vault badge in ONE place so every state (incl. unexpected ones)
+  // has a defined, consistent appearance.
+  const vaultBadge = (() => {
+    if (!vaultStatus.has_passphrase) {
+      return {
+        cls: "border-[#f1cabd] bg-current-coralSoft text-[#9a3320]",
+        node: (<><AlertTriangle className="h-3 w-3" /> No passphrase</>),
+      }
+    }
+    if (vaultStatus.is_unlocked) {
+      return {
+        cls: "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]",
+        node: (<><Unlock className="h-3 w-3" /> Unlocked</>),
+      }
+    }
+    return {
+      cls: "border-current-line bg-transparent text-current-ink/70",
+      node: (<><Lock className="h-3 w-3" /> Locked</>),
+    }
+  })()
+
+  const trimmedPass = passInput.trim()
 
   return (
     <Card>
@@ -707,6 +995,9 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       </CardHeader>
 
       <CardContent className="space-y-7">
+        {/* One-time provisioned password modal (secret never goes through a toast). */}
+        <OneTimePasswordModal value={oneTimePassword} onClose={() => setOneTimePassword(null)} />
+
         {/* ── Portal Autopilot (master vault) controls ──────────────────────
             ONE master passphrase + an identity email let Hamilton self-provision
             a unique login per portal. The passphrase is a password field, sent
@@ -718,21 +1009,9 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 <KeyRound className="h-4 w-4" /> Portal Autopilot
               </span>
               <span
-                className={`money inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${
-                  !vaultStatus.has_passphrase
-                    ? "border-[#f1cabd] bg-current-coralSoft text-[#9a3320]"
-                    : vaultStatus.is_unlocked
-                      ? "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]"
-                      : "border-current-line bg-transparent text-current-ink/70"
-                }`}
+                className={`money inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${vaultBadge.cls}`}
               >
-                {!vaultStatus.has_passphrase ? (
-                  <><AlertTriangle className="h-3 w-3" /> No passphrase</>
-                ) : vaultStatus.is_unlocked ? (
-                  <><Unlock className="h-3 w-3" /> Unlocked</>
-                ) : (
-                  <><Lock className="h-3 w-3" /> Locked</>
-                )}
+                {vaultBadge.node}
               </span>
             </summary>
             <div className="space-y-4 pb-4 pt-1">
@@ -762,47 +1041,84 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   onClick={() => identityMutation.mutate({ identityEmail: identityInput.trim() || null })}
                 >
                   {identityMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <UserCheck className="h-4 w-4" />}
-                  Save identity
+                  {identityInput.trim() ? "Save identity" : "Clear identity"}
                 </button>
               </div>
 
-              {/* Master passphrase (password field). Set on first use, or unlock. */}
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <label className="flex-1 space-y-1">
-                  <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">
-                    Master passphrase {vaultStatus.has_passphrase ? "(enter to unlock)" : "(set one — 8+ chars)"}
-                  </span>
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    className="w-full rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
-                    placeholder="••••••••"
-                    value={passInput}
-                    onChange={(e) => setPassInput(e.target.value)}
-                  />
-                </label>
-                {vaultStatus.has_passphrase ? (
-                  <button
-                    type="button"
-                    className={BTN_EMERALD}
-                    disabled={unlockMutation.isPending || !passInput}
-                    onClick={() => unlockMutation.mutate({ passphrase: passInput })}
-                  >
-                    {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Unlock className="h-4 w-4" />}
-                    Unlock
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className={BTN_EMERALD}
-                    disabled={passphraseMutation.isPending || passInput.length < 8}
-                    onClick={() => passphraseMutation.mutate({ passphrase: passInput, identityEmail: identityInput.trim() || undefined })}
-                  >
-                    {passphraseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <KeyRound className="h-4 w-4" />}
-                    Set passphrase
-                  </button>
-                )}
-              </div>
+              {/* Master passphrase (password field). Set on first use, unlock when a
+                  passphrase exists, or RESET it when the owner forgot it (resetMode)
+                  so a set vault is never an unlock-only dead end. */}
+              {(() => {
+                const showSetForm = !vaultStatus.has_passphrase || resetMode
+                return (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <label className="flex-1 space-y-1">
+                        <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">
+                          Master passphrase {showSetForm
+                            ? (vaultStatus.has_passphrase ? "(set a new one — 8+ chars)" : "(set one — 8+ chars)")
+                            : "(enter to unlock)"}
+                        </span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          className="w-full rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
+                          placeholder="••••••••"
+                          value={passInput}
+                          onChange={(e) => setPassInput(e.target.value)}
+                        />
+                      </label>
+                      {showSetForm ? (
+                        <button
+                          type="button"
+                          className={BTN_EMERALD}
+                          disabled={passphraseMutation.isPending || trimmedPass.length < 8}
+                          onClick={() => {
+                            const value = passInput
+                            setPassInput("")
+                            passphraseMutation.mutate({ passphrase: value, identityEmail: identityInput.trim() || undefined })
+                          }}
+                        >
+                          {passphraseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <KeyRound className="h-4 w-4" />}
+                          {vaultStatus.has_passphrase ? "Reset passphrase" : "Set passphrase"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={BTN_EMERALD}
+                          disabled={unlockMutation.isPending || !trimmedPass}
+                          onClick={() => {
+                            const value = passInput
+                            setPassInput("")
+                            unlockMutation.mutate({ passphrase: value })
+                          }}
+                        >
+                          {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Unlock className="h-4 w-4" />}
+                          Unlock
+                        </button>
+                      )}
+                    </div>
+                    {/* Recovery affordance: a set vault must never strand the owner on
+                        unlock-only — a forgotten passphrase would otherwise be fatal. */}
+                    {vaultStatus.has_passphrase && (
+                      <button
+                        type="button"
+                        className="self-start money text-[11.5px] text-current-ink/55 underline underline-offset-2 hover:text-current-ink/80"
+                        onClick={() => { setResetMode((v) => !v); setPassInput("") }}
+                      >
+                        {resetMode ? "Cancel — I remember it (go back to unlock)" : "Forgot your passphrase? Reset it"}
+                      </button>
+                    )}
+                    {vaultStatus.has_passphrase && resetMode && (
+                      <p className="money text-[11px] text-current-amber">
+                        Resetting replaces the passphrase. Logins Hamilton already
+                        generated under the old one can't be read back and will be
+                        regenerated on the next autopilot run.
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
 
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -890,7 +1206,52 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             <p className="text-xs text-current-ink/70">
               These funders don&rsquo;t use an online login portal. Make an application packet — the
               funder&rsquo;s contact info plus clear instructions on where to mail, fax, or email the application.
+              Select the ones you want and Hamilton makes an individual PDF packet for each, saved to this
+              profile&rsquo;s Documents.
             </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-current-ink/80">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer accent-current-emerald"
+                  checked={allMailFaxSelected}
+                  onChange={toggleSelectAllMailFax}
+                  aria-label="Select all funders"
+                />
+                Select all
+              </label>
+              {selectedMailFax.size > 0 && (
+                <span className="money text-xs text-current-ink/70">{selectedMailFax.size} selected</span>
+              )}
+              <button
+                type="button"
+                className={BTN_EMERALD}
+                disabled={selectedMailFax.size === 0 || bulkPacketMutation.isPending}
+                onClick={makeSelectedPackets}
+                title="Hamilton makes an individual PDF packet for each selected funder and saves them to Documents"
+              >
+                {bulkPacketMutation.isPending
+                  ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                  : <FileText className="h-4 w-4" />}
+                {bulkPacketMutation.isPending
+                  ? "Making packets\u2026"
+                  : `Make ${selectedMailFax.size || ""} packet${selectedMailFax.size === 1 ? "" : "s"}`.replace("  ", " ")}
+              </button>
+              {selectedMailFax.size > 0 && (
+                <button
+                  type="button"
+                  className={`${BTN_BASE} text-rose-600 hover:bg-rose-50`}
+                  disabled={removeMutation.isPending}
+                  onClick={removeSelectedSources}
+                  title="Remove the selected funding sources from this profile (admin or profile owner)"
+                >
+                  {removeMutation.isPending
+                    ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                    : <Trash2 className="h-4 w-4" />}
+                  Remove {selectedMailFax.size}
+                </button>
+              )}
+            </div>
             <ul className="rounded-2xl border border-current-line bg-[#eef1ec] px-5 py-1">{mailFaxSources.map(renderMailFaxSource)}</ul>
           </div>
         )}

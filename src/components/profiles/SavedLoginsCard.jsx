@@ -109,8 +109,10 @@ export default function SavedLoginsCard({ profileId }) {
   // On open, default the username to the profile's primary email when the user
   // hasn't typed one. We reuse the suggest endpoint (username comes from the
   // profile) so we never duplicate the email-resolution logic on the client.
+  // The functional setter guard prevents clobbering anything the user has
+  // already typed, and the `active` flag avoids state updates after unmount.
   useEffect(() => {
-    if (!open || !profileId || form.username.trim()) return
+    if (!open || !profileId) return undefined
     let active = true
     suggestPortalLogin(profileId, {})
       .then((resp) => { if (active && resp?.username) setForm((s) => (s.username.trim() ? s : { ...s, username: resp.username })) })
@@ -119,7 +121,7 @@ export default function SavedLoginsCard({ profileId }) {
   }, [open, profileId])
 
   useEffect(() => {
-    if (!genOpen || !profileId || genForm.username.trim()) return
+    if (!genOpen || !profileId) return undefined
     let active = true
     suggestPortalLogin(profileId, {})
       .then((resp) => { if (active && resp?.username) setGenForm((s) => (s.username.trim() ? s : { ...s, username: resp.username })) })
@@ -182,7 +184,7 @@ export default function SavedLoginsCard({ profileId }) {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => apiFetch(`/api/hamilton/automation/credentials/${id}`, { method: "DELETE" }),
+    mutationFn: (id) => apiFetch(`/api/hamilton/automation/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }),
     onSuccess: () => {
       toast({ title: "Login removed" })
       queryClient.invalidateQueries({ queryKey: ["hamilton-credentials", profileId] })
@@ -222,6 +224,15 @@ export default function SavedLoginsCard({ profileId }) {
         setRevealAlreadyDone(false)
         setGenOpen(false)
         setGenForm({ portalHost: "", login_url: "", username: "", label: "" })
+      } else {
+        // Success response without the expected password field. Keep the dialog
+        // open and surface a clear error so the user isn't left without their
+        // one-time password and no feedback.
+        toast({
+          variant: "destructive",
+          title: "Password was not returned",
+          description: "Hamilton saved nothing to reveal. Please try generating the login again.",
+        })
       }
     },
     onError: (err) => {
@@ -234,7 +245,7 @@ export default function SavedLoginsCard({ profileId }) {
   // reveal-counter is exhausted server-side and the password becomes
   // server-only forever.
   const revealMutation = useMutation({
-    mutationFn: (id) => apiFetch(`/api/hamilton/automation/credentials/${id}/reveal-once`, { method: "POST" }),
+    mutationFn: (id) => apiFetch(`/api/hamilton/automation/credentials/${encodeURIComponent(id)}/reveal-once`, { method: "POST" }),
     onSuccess: (resp, id) => {
       const row = credentials.find((c) => c.id === id)
       if (resp?.already_revealed) {
@@ -253,6 +264,14 @@ export default function SavedLoginsCard({ profileId }) {
           credentialId: id,
         })
         setRevealAlreadyDone(false)
+      } else {
+        // Unexpected response shape — neither a password nor an
+        // already-revealed flag. Surface an error instead of failing silently.
+        toast({
+          variant: "destructive",
+          title: "Could not reveal password",
+          description: "Hamilton returned an unexpected response. Try again, or delete and regenerate the login.",
+        })
       }
       queryClient.invalidateQueries({ queryKey: ["hamilton-credentials", profileId] })
     },
@@ -265,8 +284,13 @@ export default function SavedLoginsCard({ profileId }) {
     try {
       await navigator.clipboard.writeText(text)
       toast({ title: "Copied to clipboard" })
-    } catch {
-      toast({ variant: "destructive", title: "Copy failed — please select and copy manually." })
+    } catch (err) {
+      console.error("Clipboard copy failed:", err)
+      toast({
+        variant: "destructive",
+        title: "Copy failed",
+        description: err?.message ? `Please select and copy manually. (${err.message})` : "Please select and copy manually.",
+      })
     }
   }
 
@@ -330,7 +354,9 @@ export default function SavedLoginsCard({ profileId }) {
       else setImportSource("CSV import")
     }
     reader.onerror = () => {
-      toast({ variant: "destructive", title: "Could not read file", description: "Please try again." })
+      const reason = reader.error?.message || reader.error?.name || "Unknown error"
+      console.error("CSV file read failed:", reader.error)
+      toast({ variant: "destructive", title: "Could not read file", description: `Please try again. (${reason})` })
     }
     reader.readAsText(file)
   }
@@ -348,9 +374,13 @@ export default function SavedLoginsCard({ profileId }) {
     }
     let active = true
     const tick = async () => {
+      // Capture a single timestamp before generating the code so the displayed
+      // countdown and the generated code reference the same TOTP window, even
+      // if generateTotp resolves asynchronously.
+      const now = Date.now()
       try {
         const code = await generateTotp(form.totp)
-        if (active) setTotpPreview({ code, seconds: secondsRemaining(Date.now(), form.totp) })
+        if (active) setTotpPreview({ code, seconds: secondsRemaining(now, form.totp) })
       } catch {
         if (active) setTotpPreview({ code: null, seconds: 30 })
       }
@@ -362,7 +392,14 @@ export default function SavedLoginsCard({ profileId }) {
 
   const canSave = form.username.trim() && form.password.trim() && (form.portalHost.trim() || form.login_url.trim()) && totpValid
   const canGenerate = genForm.username.trim() && (genForm.portalHost.trim() || genForm.login_url.trim())
-  const canImport = importCsvText.trim().length > 0 && /[,\t]/.test(importCsvText.split("\n")[0] || "")
+  // Relaxed header heuristic: strip CR, handle single-line files (no trailing
+  // newline), and let the server perform authoritative validation. We only
+  // block obviously empty input here.
+  const importFirstLine = (importCsvText.split(/\r?\n/)[0] || "").trim()
+  const canImport = importCsvText.trim().length > 0 && importFirstLine.length > 0
+  // Estimate the data-row count for the button label, ignoring blank/trailing
+  // lines and the header row, clamped at 0.
+  const importRowCount = Math.max(0, importCsvText.split(/\r?\n/).filter((l) => l.trim().length > 0).length - 1)
 
   return (
     <Card data-flash-id="saved-logins">
@@ -521,8 +558,7 @@ export default function SavedLoginsCard({ profileId }) {
               <textarea
                 id="csv-text"
                 className="min-h-[140px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-xs"
-                placeholder='name,url,username,password,note
-Example,https://example.com/login,user@example.com,hunter2,'
+                placeholder={'name,url,username,password,note\nExample,https://example.com/login,user@example.com,hunter2,'}
                 value={importCsvText}
                 onChange={(e) => setImportCsvText(e.target.value)}
               />
@@ -582,7 +618,7 @@ Example,https://example.com/login,user@example.com,hunter2,'
             >
               {importMutation.isPending
                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Importing…</>
-                : <>Import {importCsvText ? `${Math.max(0, importCsvText.split("\n").length - 1)} rows` : "CSV"}</>}
+                : <>Import {importCsvText ? `${importRowCount} rows` : "CSV"}</>}
             </Button>
           </DialogFooter>
         </DialogContent>

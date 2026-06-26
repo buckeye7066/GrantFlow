@@ -13,6 +13,8 @@
 
 import { isValidEmail } from './johnOutreachSafety.js'
 
+export const DEFAULT_SALUTATION = 'Hello,'
+
 const ROLE_PREFERENCE = [
   'executive director',
   'pastor',
@@ -29,6 +31,29 @@ const ROLE_PREFERENCE = [
   'secretary',
 ]
 
+const ROLE_SALUTATIONS = [
+  { pattern: /\b(?:fire\s+)?chief\b/i, salutation: 'Hello Chief,' },
+  { pattern: /\bpastor\b/i, salutation: 'Hello Pastor,' },
+  { pattern: /\bprincipal\b/i, salutation: 'Hello Principal,' },
+  { pattern: /\bsuperintendent\b/i, salutation: 'Hello Superintendent,' },
+]
+
+const PROFESSIONAL_TITLES = new Map([
+  ['dr', 'Dr.'],
+  ['doctor', 'Dr.'],
+  ['rev', 'Rev.'],
+  ['reverend', 'Rev.'],
+  ['pastor', 'Pastor'],
+  ['chief', 'Chief'],
+  ['fr', 'Fr.'],
+  ['father', 'Fr.'],
+  ['rabbi', 'Rabbi'],
+  ['principal', 'Principal'],
+])
+
+const SOCIAL_HONORIFICS = new Set(['mr', 'mrs', 'ms', 'miss'])
+const GENERIC_NAME_TOKENS = new Set(['admin', 'contact', 'hello', 'info', 'office', 'staff', 'team'])
+
 function rolePriority(role) {
   if (!role) return 99
   const lower = String(role).toLowerCase()
@@ -36,6 +61,41 @@ function rolePriority(role) {
     if (lower.includes(ROLE_PREFERENCE[i])) return i
   }
   return 50
+}
+
+function salutationFromRole(contact) {
+  const role = String(contact?.role || '').trim()
+  if (!role) return DEFAULT_SALUTATION
+  for (const { pattern, salutation } of ROLE_SALUTATIONS) {
+    if (pattern.test(role)) return salutation
+  }
+  return DEFAULT_SALUTATION
+}
+
+function cleanNameToken(token) {
+  return String(token || '').replace(/[^A-Za-z'-]/g, '')
+}
+
+function buildTitledSalutation(tokens) {
+  if (!tokens.length) return null
+  const key = cleanNameToken(tokens[0]).toLowerCase()
+
+  if (SOCIAL_HONORIFICS.has(key)) {
+    const first = cleanNameToken(tokens[1])
+    return first && first.length >= 2 ? `Hello ${first},` : null
+  }
+
+  const displayTitle = PROFESSIONAL_TITLES.get(key)
+  if (!displayTitle || tokens.length < 2) return null
+
+  const rest = tokens
+    .slice(1)
+    .map(cleanNameToken)
+    .filter(Boolean)
+    .slice(0, 3)
+
+  if (!rest.length) return null
+  return `Hello ${displayTitle} ${rest.join(' ')},`
 }
 
 /**
@@ -115,32 +175,37 @@ export function selectEvidenceHook(lead) {
 }
 
 /**
- * Returns a short salutation. Uses the contact's first name if Yana
- * provided one and it looks safe; otherwise falls back to "Hi team," to
- * avoid awkwardly including a role in the greeting.
+ * Returns a short, professional salutation. Uses a safe first name or title/name
+ * when Yana provided one; otherwise falls back to a neutral "Hello," instead of
+ * a generic team greeting. Role-based fallbacks are only used when they read
+ * naturally (for example, Pastor, Chief, Principal, Superintendent).
  */
 export function buildSalutation(contact) {
-  if (!contact || !contact.name) return 'Hi team,'
+  if (!contact || !contact.name) return salutationFromRole(contact)
+
   const trimmed = String(contact.name).trim()
-  if (!trimmed) return 'Hi team,'
-  // If the name looks like an email, role string, or list, fall back.
-  if (trimmed.includes('@') || trimmed.includes(',') || trimmed.length > 60) {
-    return 'Hi team,'
+  if (!trimmed) return salutationFromRole(contact)
+  if (trimmed.includes('@') || trimmed.length > 60) return salutationFromRole(contact)
+
+  // Keep a safe title/name before role suffixes like "Chief Allen, Fire Chief".
+  const primary = trimmed.split(',')[0].trim()
+  if (!primary || /\b(and|or)\b/i.test(primary) || /[;&/]/.test(primary)) {
+    return salutationFromRole(contact)
   }
-  // Use only the first whitespace-delimited token; strip honorifics.
-  const first = trimmed
-    .split(/\s+/)[0]
-    .replace(/[^A-Za-z'-]/g, '')
-  if (!first || first.length < 2) return 'Hi team,'
-  const HONORIFICS = ['mr', 'mrs', 'ms', 'dr', 'rev', 'pastor', 'fr', 'sr']
-  const lower = first.toLowerCase()
-  if (HONORIFICS.includes(lower)) {
-    // Use the next token if available.
-    const next = trimmed.split(/\s+/)[1]?.replace(/[^A-Za-z'-]/g, '')
-    if (next && next.length >= 2) return `Hi ${next},`
-    return 'Hi team,'
+
+  const tokens = primary.split(/\s+/).map(cleanNameToken).filter(Boolean)
+  if (!tokens.length || tokens.some((t) => t.length > 30)) return salutationFromRole(contact)
+
+  if (tokens.length === 1 && GENERIC_NAME_TOKENS.has(tokens[0].toLowerCase())) {
+    return salutationFromRole(contact)
   }
-  return `Hi ${first},`
+
+  const titled = buildTitledSalutation(tokens)
+  if (titled) return titled
+
+  const first = tokens[0]
+  if (!first || first.length < 2) return salutationFromRole(contact)
+  return `Hello ${first},`
 }
 
 /**
@@ -153,7 +218,7 @@ export function interpretLead(lead) {
     ok: contact.ok && !!evidence,
     contact,
     evidence,
-    salutation: contact.ok ? buildSalutation(contact) : 'Hi team,',
+    salutation: contact.ok ? buildSalutation(contact) : DEFAULT_SALUTATION,
     organization_name: lead?.organization_name || null,
     organization_type: lead?.organization_type || null,
     location: lead?.location || null,

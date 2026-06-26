@@ -59,6 +59,10 @@ Desktop.ini
 !.cursor/rules/*.mdc
 .cursor/*
 !.cursor/rules/
+# Keep Impeccable design skills in-repo so the tooling travels with the project
+# (installed via `impeccable skills install`). Negation must follow `.cursor/*`.
+!.cursor/skills/
+!.cursor/skills/**
 *.suo
 *.user
 

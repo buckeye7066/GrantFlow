@@ -2,24 +2,18 @@
 /**
  * Anya autonomous crawler CLI harness.
  *
- * By default this runs as a dry run — no files are modified. Two gates
- * must BOTH be lit to enable writes:
- *
- *   1. Env: ANYA_AUTONOMOUS_WRITES=1   (operator-level opt-in on the host)
- *   2. CLI: --write                    (explicit intent on this invocation)
- *
- * If either is missing, the crawler will report `dry_run_effective=true`
- * and `dry_run_forced_by_env=true` with no file modifications. This is
- * intentional — it prevents accidental or remote-triggered writes.
+ * By default this runs as a dry run, so no files are modified. Pass --write
+ * to run Anya's code-error repair mode. No separate environment permission
+ * gate is required; every applied edit is backed up and audited.
  *
  * Usage:
  *   node scripts/anya-autonomous.mjs                      # dry run (safe)
- *   ANYA_AUTONOMOUS_WRITES=1 node scripts/anya-autonomous.mjs --write
+ *   node scripts/anya-autonomous.mjs --write
  *   node scripts/anya-autonomous.mjs --directory backend --pattern '*.js'
  *   node scripts/anya-autonomous.mjs --fix-empty-catch --fix-console-log --write
  *
  * Flags:
- *   --write                      Arm the per-invocation write gate
+ *   --write                      Apply code-error repairs with backup + audit
  *   --directory <path>           Restrict crawl to a directory (default: repo root)
  *   --pattern <glob>             Restrict to files matching the glob
  *   --max-iterations <n>         Default 50
@@ -30,8 +24,6 @@
  *   --no-domain-audits           Skip domain audits
  *   --help                       Show this help
  */
-
-/* eslint-disable no-console */
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -71,7 +63,7 @@ function showHelp() {
     '',
     'Anya autonomous crawler',
     '=======================',
-    'Safe by default. Writes require BOTH ANYA_AUTONOMOUS_WRITES=1 and --write.',
+    'Safe by default. Writes require --write and are backed up + audited.',
     '',
   ].join('\n')
   console.log(banner)
@@ -89,23 +81,8 @@ async function main() {
     return
   }
 
-  const envValue = process.env.ANYA_AUTONOMOUS_WRITES ?? process.env.ANYA_AUTONOMOUS_WRITE_CHANGES ?? ''
-  const writesEnv = /^(1|true|yes|on)$/i.test(String(envValue).trim())
   const writeFlag = Boolean(args.write)
   const dryRunRequested = !writeFlag
-
-  if (writeFlag && !writesEnv) {
-    console.error(
-      '[anya-autonomous] --write was requested, but ANYA_AUTONOMOUS_WRITES is not set.\n' +
-        'Crawler will run as DRY RUN. Set ANYA_AUTONOMOUS_WRITES=1 on the host to arm writes.'
-    )
-  }
-  if (writesEnv && !writeFlag) {
-    console.log(
-      '[anya-autonomous] ANYA_AUTONOMOUS_WRITES is enabled on the host, but --write was NOT passed.\n' +
-        'Crawler will run as DRY RUN. Pass --write to enable file modifications.'
-    )
-  }
 
   const { runAutonomousCodeCrawl } = await import('../backend/services/anyaAutonomousCrawler.js')
 
@@ -128,8 +105,11 @@ async function main() {
   const summary = {
     dry_run_effective: report.dry_run_effective,
     dry_run_forced_by_env: report.dry_run_forced_by_env,
-    writes_env_enabled: report.writes_env_enabled,
+    env_write_gate_required: report.env_write_gate_required,
     write_flag_enabled: report.write_flag_enabled,
+    write_policy: report.write_policy,
+    permission_required: report.permission_required,
+    audit_required: report.audit_required,
     files_scanned: report.files_scanned,
     findings_total: report.findings_total,
     files_modified: report.files_modified,

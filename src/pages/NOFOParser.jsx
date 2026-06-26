@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -48,6 +47,19 @@ function unwrapApiPayload(response) {
 
 function isRouteNotFoundError(err) {
   return err?.status === 404 || /not found/i.test(String(err?.message || ''));
+}
+
+function isValidHttpUrl(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return false;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return Boolean(parsed.hostname) && /\./.test(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function buildGrantPayload(extractedData, { organizationId, inputMode, url }) {
@@ -102,6 +114,17 @@ export default function NOFOParser() {
     queryFn: () => client.entities.Organization.list('-created_date'),
   });
 
+  const validOrganizations = useMemo(
+    () => (Array.isArray(organizations) ? organizations.filter((org) => org && org.id) : []),
+    [organizations],
+  );
+
+  const handleInputModeChange = (value) => {
+    if (value) {
+      setInputMode(value);
+    }
+  };
+
   const handleFileChange = (e) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
@@ -145,22 +168,32 @@ export default function NOFOParser() {
         title: grantPayload.title,
       });
 
-      return client.post('/api/grants/from-opportunity', {
-        organization_id: selectedOrgId,
-        opportunity_data: {
-          title: grantPayload.title,
-          sponsor: grantPayload.funder || grantPayload.sponsor,
-          application_url: grantPayload.application_url,
-          url: grantPayload.url || grantPayload.application_url,
-          descriptionMd: grantPayload.program_description,
-          source: grantPayload.source || 'grants.gov',
-        },
-      });
+      const fallbackResponse = unwrapApiPayload(
+        await client.post('/api/grants/from-opportunity', {
+          organization_id: selectedOrgId,
+          opportunity_data: {
+            title: grantPayload.title,
+            sponsor: grantPayload.funder || grantPayload.sponsor,
+            application_url: grantPayload.application_url,
+            url: grantPayload.url || grantPayload.application_url,
+            descriptionMd: grantPayload.program_description,
+            source: grantPayload.source || 'grants.gov',
+          },
+        }),
+      );
+
+      // Normalize so callers always get a grant object with an `id`,
+      // consistent with the primary pipeline path.
+      return fallbackResponse?.grant ?? fallbackResponse;
     }
   };
 
   const saveAndAnalyzeGrant = async (grantPayload) => {
     const newGrant = await saveGrantToPipeline(grantPayload);
+
+    if (!newGrant?.id) {
+      throw new Error('Grant was saved but no valid grant id was returned.');
+    }
 
     const analysisResult = unwrapApiPayload(
       await client.functions.invoke('analyzeGrant', {
@@ -185,6 +218,7 @@ export default function NOFOParser() {
         evaluated_at: new Date().toISOString(),
       }).catch((patchErr) => {
         log.error('Failed to patch grant ai_status after analysis failure', { grantId: newGrant.id, patchErr });
+        return null;
       });
       toast({
         variant: 'destructive',
@@ -229,8 +263,8 @@ export default function NOFOParser() {
         log.debug('File uploaded', fileUrl);
       } else {
         const trimmedUrl = url.trim();
-        if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
-          throw new Error('Please enter a valid URL starting with http:// or https://');
+        if (!isValidHttpUrl(trimmedUrl)) {
+          throw new Error('Please enter a valid, fully-qualified URL starting with http:// or https:// (including a valid domain)');
         }
         log.debug('Using URL', trimmedUrl);
         fileUrl = trimmedUrl;
@@ -248,6 +282,13 @@ export default function NOFOParser() {
       log.debug('parseNOFO response received', { success: response?.success });
 
       const parsed = unwrapApiPayload(response);
+
+      if (!parsed || (!parsed.success && !parsed.output)) {
+        const errorMsg =
+          parsed?.message || parsed?.details || 'Could not extract data from document';
+        throw new Error(errorMsg);
+      }
+
       if (parsed.success && parsed.output) {
         setExtractedData(parsed.output);
         setStatus('success');
@@ -288,7 +329,8 @@ export default function NOFOParser() {
   };
 
   const handleParseDigest = () => {
-    if (!digestText.trim()) {
+    const trimmedDigest = digestText.trim();
+    if (!trimmedDigest) {
       setError('Paste Grants.gov listing text before parsing.');
       setStatus('error');
       return;
@@ -300,7 +342,7 @@ export default function NOFOParser() {
     setDigestImportSummary(null);
     setExtractedData(null);
 
-    const parsed = parseGrantsGovDigest(digestText);
+    const parsed = parseGrantsGovDigest(trimmedDigest);
     if (!parsed.opportunities.length) {
       const errorMsg = parsed.parse_errors[0] || 'No Grants.gov listings found in pasted text';
       setError(errorMsg);
@@ -323,9 +365,10 @@ export default function NOFOParser() {
   };
 
   const handleImportAllDigest = async () => {
+    const trimmedDigest = digestText.trim();
     const opportunities = parsedDigest.length
       ? parsedDigest
-      : parseGrantsGovDigest(digestText).opportunities;
+      : (trimmedDigest ? parseGrantsGovDigest(trimmedDigest).opportunities : []);
 
     if (!opportunities.length) {
       toast({ variant: 'destructive', title: 'Nothing to import', description: 'Parse listing text first.' });
@@ -372,13 +415,18 @@ export default function NOFOParser() {
         total_parsed: opportunities.length,
         saved_count: savedCount,
         results,
+        failures: results.filter((r) => !r.saved),
       };
       setDigestImportSummary(summary);
       queryClient.invalidateQueries({ queryKey: ['grants'] });
 
+      const failureCount = summary.failures.length;
       toast({
+        variant: failureCount ? 'destructive' : undefined,
         title: 'Import Complete',
-        description: `Saved ${savedCount} of ${opportunities.length} opportunities to the pipeline.`,
+        description: failureCount
+          ? `Saved ${savedCount} of ${opportunities.length}. ${failureCount} failed — see summary for details.`
+          : `Saved ${savedCount} of ${opportunities.length} opportunities to the pipeline.`,
       });
     } catch (err) {
       const errorMsg = err.message || 'Failed to import listings';
@@ -420,6 +468,15 @@ export default function NOFOParser() {
   };
 
   const handleFullParseDigestRow = async (opp) => {
+    if (!opp.application_url) {
+      toast({
+        variant: 'destructive',
+        title: 'No URL available',
+        description: 'This listing does not have a Grants.gov detail URL to parse.',
+      });
+      return;
+    }
+
     setInputMode('url');
     setUrl(opp.application_url);
     setExtractedData(null);
@@ -506,7 +563,7 @@ export default function NOFOParser() {
                   {isLoadingOrgs ? (
                     <div className="flex items-center justify-center p-4"><Loader2 className="w-5 h-5 animate-spin" /></div>
                   ) : (
-                    organizations.map(org => (
+                    validOrganizations.map(org => (
                       <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
                     ))
                   )}
@@ -516,7 +573,7 @@ export default function NOFOParser() {
 
             <div>
               <Label className="text-base font-semibold mb-3 block">Choose Input Method</Label>
-              <Tabs value={inputMode} onValueChange={setInputMode} className="w-full">
+              <Tabs value={inputMode} onValueChange={handleInputModeChange} className="w-full">
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="file" disabled={isProcessing}>
                     <Upload className="w-4 h-4 mr-2" />
@@ -676,11 +733,24 @@ export default function NOFOParser() {
                 {inputMode === 'digest' && parsedDigest.length > 0 && (
                   <CardContent className="space-y-4">
                     {digestImportSummary && (
-                      <Alert className="border-emerald-200 bg-emerald-50">
-                        <CheckCircle className="h-4 w-4 text-emerald-600" />
-                        <AlertTitle className="text-emerald-900">Import Summary</AlertTitle>
-                        <AlertDescription className="text-emerald-800">
+                      <Alert className={digestImportSummary.failures?.length ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}>
+                        <CheckCircle className={`h-4 w-4 ${digestImportSummary.failures?.length ? 'text-amber-600' : 'text-emerald-600'}`} />
+                        <AlertTitle className={digestImportSummary.failures?.length ? 'text-amber-900' : 'text-emerald-900'}>Import Summary</AlertTitle>
+                        <AlertDescription className={digestImportSummary.failures?.length ? 'text-amber-800' : 'text-emerald-800'}>
                           Saved {digestImportSummary.saved_count} of {digestImportSummary.total_parsed} opportunities to the pipeline.
+                          {digestImportSummary.failures?.length > 0 && (
+                            <div className="mt-2">
+                              <p className="font-semibold">Failed ({digestImportSummary.failures.length}):</p>
+                              <ul className="list-disc pl-5 mt-1 space-y-1">
+                                {digestImportSummary.failures.map((failure, idx) => (
+                                  <li key={`${failure.opportunity_id || 'unknown'}-${idx}`} className="text-sm">
+                                    <span className="font-medium">{failure.title || failure.opportunity_id || 'Untitled'}</span>
+                                    {failure.reason ? ` — ${failure.reason}` : ''}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </AlertDescription>
                       </Alert>
                     )}
@@ -696,22 +766,24 @@ export default function NOFOParser() {
                           </tr>
                         </thead>
                         <tbody>
-                          {parsedDigest.map((opp) => (
-                            <tr key={opp.opportunity_id} className="border-t align-top">
+                          {parsedDigest.map((opp, index) => (
+                            <tr key={`${opp.opportunity_id || 'opp'}-${index}`} className="border-t align-top">
                               <td className="px-3 py-3 whitespace-nowrap">
                                 <div className="font-medium">{opp.agency_acronym || '—'}</div>
                                 <div className="text-xs text-slate-500 max-w-[180px]">{opp.funder}</div>
                               </td>
                               <td className="px-3 py-3">
                                 <div className="font-medium text-slate-800">{opp.title}</div>
-                                <a
-                                  href={opp.application_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex items-center text-xs text-blue-600 hover:underline mt-1"
-                                >
-                                  View on Grants.gov <ExternalLink className="w-3 h-3 ml-1" />
-                                </a>
+                                {opp.application_url && (
+                                  <a
+                                    href={opp.application_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center text-xs text-blue-600 hover:underline mt-1"
+                                  >
+                                    View on Grants.gov <ExternalLink className="w-3 h-3 ml-1" />
+                                  </a>
+                                )}
                               </td>
                               <td className="px-3 py-3 whitespace-nowrap capitalize">
                                 {opp.notice_type ? `${opp.notice_type} ${opp.notice_number}` : 'Listing'}
@@ -754,7 +826,13 @@ export default function NOFOParser() {
                             <p><strong>Funder:</strong> {extractedData.funder || 'N/A'}</p>
                             {(() => {
   const dl = extractedData.deadline;
-  const isPast = dl && new Date(dl) < new Date();
+  // Parse date-only strings as end-of-day local time to avoid timezone-induced false positives.
+  let isPast = false;
+  if (dl) {
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(String(dl).trim());
+    const parsed = isDateOnly ? new Date(`${String(dl).trim()}T23:59:59`) : new Date(dl);
+    isPast = !isNaN(parsed.getTime()) && parsed < new Date();
+  }
   return (
     <p>
       <strong>Deadline:</strong>{' '}

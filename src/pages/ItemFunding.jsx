@@ -14,7 +14,7 @@ import {
   Sparkles,
   Target,
 } from "lucide-react"
-import { format, formatDistanceToNowStrict } from "date-fns"
+import { format } from "date-fns"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -55,21 +55,36 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [value]
 }
 
+function toNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
 function formatAmount(min, max) {
-  if (!min && !max) return "Varies"
-  if (min && max && min !== max) {
-    return `$${min.toLocaleString()} – $${max.toLocaleString()}`
+  const minNum = toNumberOrNull(min)
+  const maxNum = toNumberOrNull(max)
+  if (minNum === null && maxNum === null) return "Varies"
+  if (minNum !== null && maxNum !== null && minNum !== maxNum) {
+    return `$${minNum.toLocaleString()} \u2013 $${maxNum.toLocaleString()}`
   }
-  const amount = (min ?? max ?? 0).toLocaleString()
+  const amount = (minNum ?? maxNum ?? 0).toLocaleString()
   return `$${amount}`
 }
 
 function formatDeadline(deadline, type) {
   if (!deadline) return type === "rolling" ? "Rolling deadline" : "Deadline TBD"
   try {
-    return format(new Date(deadline), "PPP")
-  } catch {
-    return deadline
+    const parsed = new Date(deadline)
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error("Invalid date value")
+    }
+    return format(parsed, "PPP")
+  } catch (error) {
+    if (typeof console !== "undefined" && console.warn) {
+      console.warn("Failed to parse deadline:", deadline, error)
+    }
+    return typeof deadline === "string" ? deadline : "Deadline TBD"
   }
 }
 
@@ -234,7 +249,7 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Layers className="w-4 h-4" />
             <span>{opportunity.source || "Crawler"}</span>
-            <span className="mx-2">•</span>
+            <span className="mx-2">\u2022</span>
             <span>{opportunity.sponsor || "Sponsor pending"}</span>
           </div>
         </DialogHeader>
@@ -400,7 +415,6 @@ export default function ItemFunding() {
   const hasSelectedProfile = Boolean(filters.profileId && filters.profileId !== "all")
   const opportunitiesResponse = opportunitiesQuery.data ?? null
   const opportunities = opportunitiesResponse?.data ?? []
-  const totalResults = typeof opportunitiesResponse?.total === "number" ? opportunitiesResponse.total : opportunities.length
 
   // Live search results from specific-need endpoint
   const liveResults = liveSearchQuery.data?.opportunities ?? []
@@ -419,6 +433,8 @@ export default function ItemFunding() {
       const urlKey = (opp.url || opp.application_url || '').toLowerCase().replace(/\/$/, '')
       if (urlKey && seenUrls.has(urlKey)) continue
       if (urlKey) seenUrls.add(urlKey)
+      const isNationalValue =
+        opp.is_national === undefined || opp.is_national === null ? false : Boolean(opp.is_national)
       merged.push({
         opportunity: {
           id: opp.id,
@@ -429,12 +445,12 @@ export default function ItemFunding() {
           source: opp.source || opp.result_source || 'Live Search',
           categories: opp.categories || [],
           match_reasons: opp.need_match?.matchedTerms || opp.match_reasons || [],
-          amount_min: opp.amount_min,
-          amount_max: opp.amount_max,
+          amount_min: toNumberOrNull(opp.amount_min),
+          amount_max: toNumberOrNull(opp.amount_max),
           deadline: opp.deadline,
           deadline_type: opp.deadline_type || 'rolling',
           state: opp.state,
-          is_national: opp.is_national ?? true,
+          is_national: isNationalValue,
           opportunity_type: opp.opportunity_type || opp.type || 'program',
           sponsor: opp.sponsor || opp.source,
         },
@@ -483,6 +499,21 @@ export default function ItemFunding() {
     [scoredResults],
   )
 
+  // Look up the stored match for the selected opportunity so the detail dialog
+  // mirrors the score/reasons shown on the card (including backend live scores).
+  const selectedMatch = useMemo(() => {
+    if (!selectedOpportunity || !submittedItem) return null
+    const matchKey = (value) => (value || "").toLowerCase().replace(/\/$/, "")
+    const selUrl = matchKey(selectedOpportunity.url || selectedOpportunity.application_url || selectedOpportunity.source_url)
+    const found = scoredResults.find(({ opportunity }) => {
+      if (selectedOpportunity.id && opportunity.id && opportunity.id === selectedOpportunity.id) return true
+      const oppUrl = matchKey(opportunity.url || opportunity.application_url || opportunity.source_url)
+      return Boolean(selUrl) && oppUrl === selUrl
+    })
+    if (found) return found.match
+    return scoreItemMatch(selectedOpportunity, submittedItem, selectedProfile)
+  }, [selectedOpportunity, submittedItem, scoredResults, selectedProfile])
+
   const isLoading = (opportunitiesQuery.isLoading || liveSearchQuery.isLoading) && submittedItem
 
   const handleSearch = () => {
@@ -490,7 +521,7 @@ export default function ItemFunding() {
       toast({
         variant: "destructive",
         title: "Enter an item or equipment name",
-        description: "For example: “15 passenger van”, “industrial refrigerator”, or “STEM laptops”.",
+        description: "For example: \u201C15 passenger van\u201D, \u201Cindustrial refrigerator\u201D, or \u201CSTEM laptops\u201D.",
       })
       return
     }
@@ -509,9 +540,19 @@ export default function ItemFunding() {
       item: "",
       state: "all",
       includeNational: true,
-      profileId: "",
+      profileId: "all",
     })
     setSubmittedItem("")
+  }
+
+  // Validate the profile id before sending it to the backend. We only accept
+  // a real selected profile (not the "all" sentinel) that is a plain string.
+  const getValidatedProfileId = () => {
+    const pid = filters.profileId
+    if (typeof pid !== "string") return null
+    const trimmed = pid.trim()
+    if (!trimmed || trimmed === "all") return null
+    return trimmed
   }
 
   const handleRequestItemCrawler = async () => {
@@ -524,7 +565,8 @@ export default function ItemFunding() {
       return
     }
 
-    if (!hasSelectedProfile) {
+    const validProfileId = getValidatedProfileId()
+    if (!validProfileId) {
       toast({
         variant: "destructive",
         title: "Select a profile first",
@@ -537,7 +579,7 @@ export default function ItemFunding() {
       toast({
         variant: "destructive",
         title: "Tier upgrade required",
-        description: "Item funding is not enabled for this profile’s billing tier.",
+        description: "Item funding is not enabled for this profile\u2019s billing tier.",
       })
       return
     }
@@ -550,14 +592,14 @@ export default function ItemFunding() {
           state: filters.state !== "all" ? filters.state : null,
           includeNational: filters.includeNational,
         },
+        profile_id: validProfileId,
       }
 
-      payload.profile_id = filters.profileId
-
       const job = await createCrawlerJob(payload)
+      const idText = typeof job?.id === "string" ? `Job ${job.id.slice(0, 8)}\u2026 is running.` : ""
       toast({
         title: "Item crawler queued",
-        description: `We’ll search for ${submittedItem}. Job ${job.id.slice(0, 8)}… is running.`,
+        description: `We\u2019ll search for ${submittedItem}.${idText ? ` ${idText}` : ""}`,
       })
     } catch (error) {
       toast({
@@ -578,7 +620,8 @@ export default function ItemFunding() {
       return
     }
 
-    if (!hasSelectedProfile) {
+    const validProfileId = getValidatedProfileId()
+    if (!validProfileId) {
       toast({
         variant: "destructive",
         title: "Select a profile first",
@@ -591,7 +634,7 @@ export default function ItemFunding() {
       toast({
         variant: "destructive",
         title: "Tier upgrade required",
-        description: "Item funding is not enabled for this profile’s billing tier.",
+        description: "Item funding is not enabled for this profile\u2019s billing tier.",
       })
       return
     }
@@ -604,14 +647,14 @@ export default function ItemFunding() {
           match_threshold: 55,
           max_results: 20,
         },
+        profile_id: validProfileId,
       }
 
-      payload.profile_id = filters.profileId
-
       const job = await createCrawlerJob(payload)
+      const idText = typeof job?.id === "string" ? `Job ${job.id.slice(0, 8)}\u2026 is running.` : ""
       toast({
         title: "Donation-source crawler queued",
-        description: `We’ll find organizations that provide ${submittedItem}. Job ${job.id.slice(0, 8)}… is running.`,
+        description: `We\u2019ll find organizations that provide ${submittedItem}.${idText ? ` ${idText}` : ""}`,
       })
     } catch (error) {
       toast({
@@ -644,7 +687,7 @@ export default function ItemFunding() {
               Grant-only guardrails
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
-              <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle “Show match/loan results” to review them).</li>
+              <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle \u201CShow match/loan results\u201D to review them).</li>
               <li>Local crawler searches within 25 miles (or the student&apos;s campus ZIP) for locality-specific aid.</li>
               <li>Scholarship and Geo Crawl augment the list with verified national gift-based funding.</li>
             </ul>
@@ -714,7 +757,7 @@ export default function ItemFunding() {
                   placeholder="Select profile"
                 />
                 {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
-                  <p className="text-[11px] text-slate-400">Loading profile signals…</p>
+                  <p className="text-[11px] text-slate-400">Loading profile signals\u2026</p>
                 ) : null}
               </div>
             </div>
@@ -759,7 +802,7 @@ export default function ItemFunding() {
                     ) : null}
                     {liveSearchQuery.isLoading ? (
                       <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin" /> searching web…
+                        <Loader2 className="w-3 h-3 animate-spin" /> searching web\u2026
                       </span>
                     ) : null}
                   </p>
@@ -767,7 +810,7 @@ export default function ItemFunding() {
                     <p className="inline-flex items-center gap-1 text-slate-500">
                       <Target className="w-3 h-3 text-emerald-500" />
                       Searching as <span className="font-semibold text-slate-700">{applicantTypeLabel}</span>{" "}
-                      — funders matched to this profile
+                      \u2014 funders matched to this profile
                     </p>
                   ) : null}
                 </div>
@@ -777,7 +820,7 @@ export default function ItemFunding() {
         </Card>
       </header>
 
-      {/* AI Needs Discovery — only shows when a profile is selected */}
+      {/* AI Needs Discovery \u2014 only shows when a profile is selected */}
       {hasSelectedProfile && (
         <NeedsDiscoveryPanel
           profileId={filters.profileId}
@@ -810,9 +853,9 @@ export default function ItemFunding() {
         </div>
       ) : submittedItem && results.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {results.map(({ opportunity, match }) => (
+          {results.map(({ opportunity, match }, index) => (
             <ItemResultCard
-              key={opportunity.id}
+              key={opportunity.id || opportunity.url || opportunity.application_url || `${opportunity.title}-${index}`}
               opportunity={opportunity}
               match={match}
               onSelect={setSelectedOpportunity}
@@ -872,7 +915,7 @@ export default function ItemFunding() {
             <Sparkles className="w-12 h-12 mx-auto text-slate-300" />
             <h3 className="text-xl font-semibold text-slate-900">Search for a specific item or equipment</h3>
             <p className="text-sm text-slate-600">
-              Enter exactly what you’re looking for and we’ll surface grants, endowments, and programs that can fund it – no
+              Enter exactly what you\u2019re looking for and we\u2019ll surface grants, endowments, and programs that can fund it \u2013 no
               loans by default, and match-required programs are flagged and hidden unless you opt in.
             </p>
           </CardContent>
@@ -881,11 +924,7 @@ export default function ItemFunding() {
 
       <ItemResultDetail
         opportunity={selectedOpportunity}
-        match={
-          selectedOpportunity && submittedItem
-            ? scoreItemMatch(selectedOpportunity, submittedItem, selectedProfile)
-            : null
-        }
+        match={selectedMatch}
         open={Boolean(selectedOpportunity)}
         onClose={() => setSelectedOpportunity(null)}
       />

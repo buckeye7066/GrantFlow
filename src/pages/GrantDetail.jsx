@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { formatReasonText } from '@/utils/reasonText';
 import { Button } from '@/components/ui/button';
@@ -43,13 +43,15 @@ import { safeHttpUrl } from '@/lib/safeUrl';
 
 const toMessage = (e) => (e instanceof Error ? e.message : String(e ?? ''));
 
+const VALID_TABS = ['coach', 'workflow', 'checklist', 'budget', 'timelogs', 'compliance'];
+
 function MatchIntelligenceBanner({ grant }) {
   if (!grant) return null
 
   const matchScore = grant.match_score || grant.match || 0
   const matchReasons = Array.isArray(grant.match_reasons)
     ? grant.match_reasons
-    : (() => { try { return JSON.parse(grant.match_reasons || '[]') } catch { return [] } })()
+    : (() => { try { return JSON.parse(grant.match_reasons || '[]') } catch (error) { return [] } })()
   const linkStatus = grant.link_status ?? null
   const deadlineDate = grant.deadline ? new Date(grant.deadline) : null
   const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime())
@@ -99,7 +101,7 @@ function MatchIntelligenceBanner({ grant }) {
 
         {/* Deadline Urgency */}
         {daysUntil !== null && daysUntil <= 14 && !isPast && (
-          <HelpTip text={`Deadline: ${formatDate(deadlineDate, 'MMM d, yyyy')} — ${daysUntil} day${daysUntil !== 1 ? 's' : ''} remaining`}>
+          <HelpTip text={`Deadline: ${formatDate(deadlineDate, 'MMM d, yyyy')} \u2014 ${daysUntil} day${daysUntil !== 1 ? 's' : ''} remaining`}>
             <Badge
               variant="outline"
               className={`text-xs cursor-help ${
@@ -134,21 +136,29 @@ function MatchIntelligenceBanner({ grant }) {
 }
 
 function SimilarGrants({ grant }) {
-  // Prefer the funding_opportunities catalog id when available — that's
+  // Prefer the funding_opportunities catalog id when available \u2014 that's
   // what the /similar route indexes. Fall back to grants.id (the route now
   // accepts both transparently and resolves the FK), and finally to legacy
   // shapes like opportunity_id we have shipped in the past. This keeps the
   // sidebar working for every grant shape we have seen in production
   // without requiring the backend to crash on legacy callers.
-  const lookupId =
+  const rawLookupId =
     grant?.funding_opportunity_id ??
     grant?.opportunity_id ??
     grant?.id ??
     null
 
+  // Sanitize/validate lookupId before incorporating into a URL.
+  // Accept only safe id shapes (numbers or alphanumeric/uuid-like strings).
+  const lookupId = (() => {
+    if (rawLookupId === null || rawLookupId === undefined) return null
+    const s = String(rawLookupId)
+    return /^[A-Za-z0-9_-]+$/.test(s) ? s : null
+  })()
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['similar-grants', lookupId],
-    queryFn: () => apiFetch(`/api/opportunities/${lookupId}/similar`).then(r => r.similar ?? []),
+    queryFn: () => apiFetch(`/api/opportunities/${encodeURIComponent(lookupId)}/similar`).then(r => r.similar ?? []),
     enabled: !!lookupId,
     staleTime: 5 * 60 * 1000,
     retry: false,
@@ -158,7 +168,7 @@ function SimilarGrants({ grant }) {
 
   const fmtAmount = (min, max) => {
     const f = (n) => n >= 1000000 ? `$${(n/1000000).toFixed(1)}M` : n >= 1000 ? `$${(n/1000).toFixed(0)}K` : `$${n}`
-    if (max && min) return `${f(min)}–${f(max)}`
+    if (max && min) return `${f(min)}\u2013${f(max)}`
     if (max) return `Up to ${f(max)}`
     if (min) return `From ${f(min)}`
     return null
@@ -171,35 +181,38 @@ function SimilarGrants({ grant }) {
         Similar Opportunities
       </h3>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {data.map(opp => (
-          <Link
-            key={opp.id}
-            to={createPageUrl("GrantDetail", { id: opp.id })}
-            className="block rounded-lg border border-slate-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm transition-all"
-          >
-            <p className="font-medium text-sm text-slate-900 line-clamp-2 mb-1">{opp.title}</p>
-            {opp.sponsor && <p className="text-xs text-slate-500 mb-2">{opp.sponsor}</p>}
-            <div className="flex flex-wrap gap-1.5">
-              {fmtAmount(opp.amount_min, opp.amount_max) && (
-                <Badge variant="outline" className="text-xs">
-                  <DollarSign className="w-3 h-3 mr-0.5" />
-                  {fmtAmount(opp.amount_min, opp.amount_max)}
-                </Badge>
-              )}
-              {opp.deadline && (
-                <Badge variant="outline" className="text-xs">
-                  <Clock className="w-3 h-3 mr-0.5" />
-                  {formatDate(new Date(opp.deadline), 'MMM d')}
-                </Badge>
-              )}
-              {opp.link_status === 'broken' && (
-                <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-300">
-                  <Link2Off className="w-3 h-3 mr-0.5" /> Link Issue
-                </Badge>
-              )}
-            </div>
-          </Link>
-        ))}
+        {data.map(opp => {
+          const hasValidDeadline = opp.deadline && !isNaN(Date.parse(opp.deadline))
+          return (
+            <Link
+              key={opp.id}
+              to={createPageUrl("GrantDetail", { id: opp.id })}
+              className="block rounded-lg border border-slate-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm transition-all"
+            >
+              <p className="font-medium text-sm text-slate-900 line-clamp-2 mb-1">{opp.title}</p>
+              {opp.sponsor && <p className="text-xs text-slate-500 mb-2">{opp.sponsor}</p>}
+              <div className="flex flex-wrap gap-1.5">
+                {fmtAmount(opp.amount_min, opp.amount_max) && (
+                  <Badge variant="outline" className="text-xs">
+                    <DollarSign className="w-3 h-3 mr-0.5" />
+                    {fmtAmount(opp.amount_min, opp.amount_max)}
+                  </Badge>
+                )}
+                {hasValidDeadline && (
+                  <Badge variant="outline" className="text-xs">
+                    <Clock className="w-3 h-3 mr-0.5" />
+                    {formatDate(new Date(opp.deadline), 'MMM d')}
+                  </Badge>
+                )}
+                {opp.link_status === 'broken' && (
+                  <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-300">
+                    <Link2Off className="w-3 h-3 mr-0.5" /> Link Issue
+                  </Badge>
+                )}
+              </div>
+            </Link>
+          )
+        })}
       </div>
     </div>
   )
@@ -226,9 +239,12 @@ export default function GrantDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('GrantDetail'), []);
-  const urlParams = new URLSearchParams(window.location.search);
-  const grantId = urlParams.get('id');
-  const initialTab = urlParams.get('tab') || 'coach';
+
+  // Read query params reactively so in-place navigation updates the page.
+  const [searchParams] = useSearchParams();
+  const grantId = searchParams.get('id');
+  const rawTab = searchParams.get('tab');
+  const initialTab = VALID_TABS.includes(rawTab) ? rawTab : 'coach';
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -237,7 +253,20 @@ export default function GrantDetail() {
   const [isSubmissionAssistantOpen, setIsSubmissionAssistantOpen] = useState(false);
   const [isPrintableAppOpen, setIsPrintableAppOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(initialTab);
-  
+  // Tracks whether the polling timeout has fired for the current grant so we
+  // do not re-trigger refetch loops and we resolve isAnalyzing.
+  const [analysisTimedOut, setAnalysisTimedOut] = useState(false);
+
+  // Keep the active tab in sync with reactive URL changes.
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  // Reset timeout flag when navigating to a different grant.
+  useEffect(() => {
+    setAnalysisTimedOut(false);
+  }, [grantId]);
+
   // Install click tracer for debugging
   useEffect(() => {
     installClickTracer();
@@ -269,12 +298,15 @@ export default function GrantDetail() {
     },
     enabled: !!grantId,
     refetchInterval: (query) => {
+      if (analysisTimedOut) return false;
       const grantData = query.state?.data;
       if (grantData && ['queued', 'running'].includes(grantData.ai_status)) {
         const updatedAt = grantData.ai_updated_at ? new Date(grantData.ai_updated_at) : new Date();
         const elapsed = Date.now() - updatedAt.getTime();
         if (elapsed > 120000) {
           console.warn('[GrantDetail] Stopping refetch - timeout reached');
+          // Mark timed out so isAnalyzing resolves and we never re-enter polling.
+          setAnalysisTimedOut(true);
           return false;
         }
         return 2000;
@@ -288,6 +320,9 @@ export default function GrantDetail() {
     queryFn: () => client.entities.Organization.get(grant?.organization_id),
     enabled: !!grant?.organization_id,
   });
+
+  const hasOrganization = !!grant?.organization_id;
+  const isOrgReady = hasOrganization && !!organization && !isLoadingOrg;
   
   const { data: existingChecklistItems = [] } = useQuery({
     queryKey: ['checklistItems', grantId],
@@ -349,13 +384,28 @@ export default function GrantDetail() {
         }
         
         const enhancedError = new Error(errorMessage);
-        enhancedError.response = error.response;
+        // Preserve original context (name, stack, response) where available.
+        if (error && typeof error === 'object') {
+          if (error.name) enhancedError.name = error.name;
+          if (error.stack) enhancedError.stack = error.stack;
+          if (error.response) enhancedError.response = error.response;
+          enhancedError.cause = error;
+        }
         throw enhancedError;
       }
     },
-    onSuccess: async (data) => {
+    onSuccess: async (data, payload) => {
         log.debug('analysis mutation succeeded; persisting results');
-        
+
+        // Capture stable identifiers from the invocation payload so that a
+        // navigation to another grant while analysis is in flight does not
+        // cause us to persist against the wrong grant.
+        const capturedGrantId = payload?.grantId ?? grantId;
+        const capturedOrgId = payload?.organizationId ?? grant?.organization_id ?? null;
+
+        let analysisSaved = false;
+
+        // --- Step 1: Save the analysis result (independent try/catch) ---
         try {
             // API returns { success, analysis }; client returns parsed JSON (no .data wrapper)
             const analysis = data?.analysis ?? data?.data?.analysis;
@@ -371,64 +421,87 @@ export default function GrantDetail() {
                 ai_updated_at: new Date().toISOString(),
                 ai_error: null
             });
+            analysisSaved = true;
             
             log.debug('analysis saved to grant');
             
             // Force refetch the grant to get the updated AI summary
-            queryClient.invalidateQueries({ queryKey: ['grant', grantId] });
-            
-            // Handle checklist items
-            if (analysis.required_profile_fields?.length > 0 && organization) {
-              const newItemsToCreate = [];
-              const existingTitles = new Set(
-                existingChecklistItems.filter(item => item.type === 'question').map(item => item.title)
-              );
-              
-              for (const fieldName of analysis.required_profile_fields) {
-                const isMissing = !organization[fieldName] || 
-                  (Array.isArray(organization[fieldName]) && organization[fieldName].length === 0);
-                const friendlyName = FIELD_NAME_MAP[fieldName] || fieldName.replace(/_/g, ' ');
-                const itemTitle = `Please provide the organization's ${friendlyName}.`;
+            queryClient.invalidateQueries({ queryKey: ['grant', capturedGrantId] });
 
-                if (isMissing && !existingTitles.has(itemTitle)) {
-                  newItemsToCreate.push({
-                    grant_id: grantId,
-                    organization_id: grant.organization_id,
-                    title: itemTitle,
-                    type: 'question',
-                    status: 'open',
-                  });
-                }
-              }
-
-              if (newItemsToCreate.length > 0) {
-                 await client.entities.ChecklistItem.bulkCreate(newItemsToCreate);
-                 queryClient.invalidateQueries({ queryKey: ['checklistItems', grantId] });
-                 toast({ 
-                   title: "Checklist Updated", 
-                   description: `${newItemsToCreate.length} action item(s) added.` 
-                 });
-              }
-            }
-            
             toast({ 
               title: "Analysis Complete", 
               description: "Grant analysis saved successfully." 
             });
+
+            // --- Step 2: Checklist creation (separate try/catch so a failure
+            // here does NOT overwrite the successful ai_status='ready'). ---
+            try {
+              if (analysis.required_profile_fields?.length > 0) {
+                if (!organization || !capturedOrgId) {
+                  log.debug('Skipping checklist generation - organization not loaded');
+                  toast({
+                    title: "Checklist Skipped",
+                    description: "Organization details are still loading; action items were not generated. Refresh to retry."
+                  });
+                } else {
+                  const newItemsToCreate = [];
+                  const existingTitles = new Set(
+                    existingChecklistItems.filter(item => item.type === 'question').map(item => item.title)
+                  );
+                  
+                  for (const fieldName of analysis.required_profile_fields) {
+                    const isMissing = !organization[fieldName] || 
+                      (Array.isArray(organization[fieldName]) && organization[fieldName].length === 0);
+                    const friendlyName = FIELD_NAME_MAP[fieldName] || fieldName.replace(/_/g, ' ');
+                    const itemTitle = `Please provide the organization's ${friendlyName}.`;
+
+                    if (isMissing && !existingTitles.has(itemTitle)) {
+                      newItemsToCreate.push({
+                        grant_id: capturedGrantId,
+                        organization_id: capturedOrgId,
+                        title: itemTitle,
+                        type: 'question',
+                        status: 'open',
+                      });
+                    }
+                  }
+
+                  if (newItemsToCreate.length > 0) {
+                     await client.entities.ChecklistItem.bulkCreate(newItemsToCreate);
+                     queryClient.invalidateQueries({ queryKey: ['checklistItems', capturedGrantId] });
+                     toast({ 
+                       title: "Checklist Updated", 
+                       description: `${newItemsToCreate.length} action item(s) added.` 
+                     });
+                  }
+                }
+              }
+            } catch (checklistError) {
+              // A checklist failure should NOT mark the grant analysis as errored,
+              // since the analysis itself was saved successfully above.
+              console.error('[GrantDetail] Failed to create checklist items:', checklistError);
+              toast({
+                variant: "destructive",
+                title: "Checklist Update Failed",
+                description: "The analysis was saved, but action items could not be created."
+              });
+            }
         } catch (saveError) {
-            console.error('[GrantDetail] Failed to save analysis or update checklist:', saveError);
+            console.error('[GrantDetail] Failed to save analysis:', saveError);
             toast({ 
                 variant: "destructive", 
                 title: "Save Failed", 
                 description: saveError.message 
             });
-            // Also update grant status to error if saving failed after analysis was successful
-            await updateGrantMutation.mutateAsync({
-                ai_status: 'error',
-                ai_error: saveError.message,
-                ai_updated_at: new Date().toISOString(),
-            }).catch(e => console.error("Failed to set AI status to error after save fail:", e));
-            queryClient.invalidateQueries({ queryKey: ['grant', grantId] });
+            // Only mark error if the analysis save itself failed.
+            if (!analysisSaved) {
+              await updateGrantMutation.mutateAsync({
+                  ai_status: 'error',
+                  ai_error: saveError.message,
+                  ai_updated_at: new Date().toISOString(),
+              }).catch(e => console.error("Failed to set AI status to error after save fail:", e));
+              queryClient.invalidateQueries({ queryKey: ['grant', capturedGrantId] });
+            }
         }
     },
     onError: async (error) => {
@@ -466,11 +539,22 @@ export default function GrantDetail() {
         });
         return;
     }
+
+    // Ensure organization is loaded before analysis so checklist generation
+    // is not silently skipped when there is an organization to load.
+    if (hasOrganization && !isOrgReady) {
+        toast({
+            title: "Loading Organization",
+            description: "Please wait for organization details to finish loading before analyzing."
+        });
+        return;
+    }
     
     log.debug('starting analysis', { grantId: grant.id });
     
     const payload = {
         grantId: grant.id,
+        organizationId: grant.organization_id ?? null,
         title: grant.title,
         description: grant.program_description || '',
         eligibility: grant.eligibility_summary || '',
@@ -483,6 +567,9 @@ export default function GrantDetail() {
       descLength: payload.description?.length,
       eligLength: payload.eligibility?.length
     });
+
+    // Reset timeout flag for a fresh analysis run.
+    setAnalysisTimedOut(false);
 
     // Optimistically update AI status to running
     await updateGrantMutation.mutateAsync({ 
@@ -508,6 +595,8 @@ export default function GrantDetail() {
   if (!grant) { return <div className="p-4">Grant not found.</div>; }
   
   const handleStarToggle = () => { updateGrantMutation.mutate({ starred: !grant.starred }); };
+
+  const isPortalGrant = grant.status === 'portal' || grant.url?.toLowerCase().includes('portal');
   
   const handleApplyWithAI = () => {
     log.debug('start application clicked', { status: grant.status });
@@ -521,6 +610,16 @@ export default function GrantDetail() {
     }
     navigate(createPageUrl('Apply', { id: grantId }));
   };
+
+  // The primary header button should do what its label says: launch the portal
+  // assistant for portal grants, otherwise start the standard application flow.
+  const handlePrimaryAction = () => {
+    if (isPortalGrant) {
+      setIsPortalAssistantOpen(true);
+      return;
+    }
+    handleApplyWithAI();
+  };
   
   if (isEditing) {
     return (
@@ -529,8 +628,13 @@ export default function GrantDetail() {
         </div>
     );
   }
-  
-  const isAnalyzing = analyzeGrantMutation.isPending || ['queued', 'running'].includes(grant.ai_status);
+
+  // Derive isAnalyzing with the same elapsed-time check used for polling so a
+  // stuck 'queued'/'running' status does not disable the button forever.
+  const isStatusActive = ['queued', 'running'].includes(grant.ai_status);
+  const statusElapsed = grant.ai_updated_at ? (Date.now() - new Date(grant.ai_updated_at).getTime()) : 0;
+  const isStatusStale = isStatusActive && statusElapsed > 120000;
+  const isAnalyzing = analyzeGrantMutation.isPending || (isStatusActive && !isStatusStale && !analysisTimedOut);
   
   // Build pipeline URL with organization filter
   const pipelineUrl = grant.organization_id 
@@ -562,12 +666,12 @@ export default function GrantDetail() {
             })()}
             {['discovered', 'interested', 'drafting', 'portal', 'application_prep', 'revision'].includes(grant.status) && (
               <Button 
-                onClick={handleApplyWithAI} 
+                onClick={handlePrimaryAction} 
                 className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 gap-2 shadow-lg"
                 disabled={isAnalyzing}
               > 
                 {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} 
-                {grant.status === 'portal' || grant.url?.toLowerCase().includes('portal') ? 'Launch Portal Assistant' : 'Start Application'}
+                {isPortalGrant ? 'Launch Portal Assistant' : 'Start Application'}
               </Button> 
             )}
             <Button variant={grant.starred ? 'default' : 'outline'} onClick={handleStarToggle} className="gap-2"> 
@@ -636,7 +740,7 @@ export default function GrantDetail() {
                   opportunity={{
                     id: grant.opportunity_id || grant.id,
                     title: grant.title || grant.grant_name,
-                    sponsor: grant.funder_name || grant.sponsor,
+                    sponsor: grant.funder_name || grant.sponsor || grant.funder,
                     application_url: grant.application_url || grant.url,
                     deadline: grant.deadline,
                     kind: grant.opportunity_kind || 'direct',
@@ -700,13 +804,31 @@ export default function GrantDetail() {
         />
       )}
 
-      {isApplicationAssistantOpen && organization && (
-        <AIApplicationAssistant
-          open={isApplicationAssistantOpen}
-          onClose={() => setIsApplicationAssistantOpen(false)}
-          grant={grant}
-          organization={organization}
-        />
+      {isApplicationAssistantOpen && (
+        isOrgReady ? (
+          <AIApplicationAssistant
+            open={isApplicationAssistantOpen}
+            onClose={() => setIsApplicationAssistantOpen(false)}
+            grant={grant}
+            organization={organization}
+          />
+        ) : (
+          <AlertDialog open={isApplicationAssistantOpen} onOpenChange={setIsApplicationAssistantOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Organization Required</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {hasOrganization
+                    ? 'Organization details are still loading. Please wait a moment and try again.'
+                    : 'This grant is not linked to an organization. Add an organization to this grant before using the AI Application Assistant.'}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Close</AlertDialogCancel>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )
       )}
 
       {isSubmissionAssistantOpen && organization && (

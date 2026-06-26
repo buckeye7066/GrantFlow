@@ -11,7 +11,7 @@
  */
 
 import { fillTemplate, pickSubjectTemplate, TEMPLATES, frameForType, OPT_OUT_LINE } from './johnEmailTemplates.js'
-import { interpretLead } from './johnLeadInterpreter.js'
+import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
 import { getJohnConfig } from './johnOutreachSafety.js'
 import { aiComposerEnabled, composeEmailWithAI } from './johnEmailComposerAI.js'
 import { extractOrgSignals } from './johnEvidenceSufficiency.js'
@@ -19,9 +19,9 @@ import { extractOrgSignals } from './johnEvidenceSufficiency.js'
 /**
  * Build a clean, list-style noun phrase from Yana's focus/program areas (e.g.
  * "education and youth mentoring"). These are tag-like and read naturally
- * mid-sentence. Returns null when there are none \u2014 free-text/mission detail is
+ * mid-sentence. Returns null when there are none — free-text/mission detail is
  * carried by the attention line instead (where a colon frame keeps it
- * grammatical), so the opening never says "looking into opened a saturday\u2026".
+ * grammatical), so the opening never says "looking into opened a saturday…".
  */
 function deriveHookPhrase(signals) {
   const tags = [...(signals.focusAreas || []), ...(signals.programAreas || [])]
@@ -40,13 +40,13 @@ function deriveEvidenceTopic(signals, hookPhrase) {
   if (hookPhrase) return hookPhrase
   const text = String(signals.hookText || '').trim()
   if (!text) return null
-  const clause = text.split(/[.!?;\u2014\u2013]\s/)[0].trim()
-  return clause.length <= 60 ? clause : clause.slice(0, 60).trim() + '\u2026'
+  const clause = text.split(/[.!?;—–]\s/)[0].trim()
+  return clause.length <= 60 ? clause : clause.slice(0, 60).trim() + '…'
 }
 
 /**
  * Compose the opening line. Specific when we have clean focus/program tags;
- * warm-but-honest when we don't (instead of the old "\u2026doing meaningful work
+ * warm-but-honest when we don't (instead of the old "…doing meaningful work
  * around community-focused funding work" which collided "work" with "work").
  */
 function buildOpeningLine(orgName, hookPhrase) {
@@ -66,7 +66,7 @@ function buildAttentionLine(orgName, signals) {
   const org = orgName || 'your organization'
   const detail = String(signals.hookText || '').trim()
   if (!detail) return ''
-  const trimmed = detail.length <= 200 ? detail : detail.slice(0, 200).trim() + '\u2026'
+  const trimmed = detail.length <= 200 ? detail : detail.slice(0, 200).trim() + '…'
   const punctuated = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
   return `What stayed with me about ${org} was this: ${punctuated} `
 }
@@ -143,9 +143,10 @@ export function composeWithTemplate(lead, opts = {}) {
   const physical = String(config.physicalAddress || '').trim()
 
   const prospectLink = String(config.prospectLink || '').trim()
+  const salutation = interpretation.salutation || DEFAULT_SALUTATION
 
   const body_text = fillTemplate(TEMPLATES.default.body, {
-    SALUTATION: interpretation.salutation || 'Hi team,',
+    SALUTATION: salutation,
     ORGANIZATION_NAME: orgName,
     OPENING_LINE: openingLine,
     ATTENTION_LINE: attentionLine,
@@ -159,7 +160,7 @@ export function composeWithTemplate(lead, opts = {}) {
   const personalization = {
     template: 'default',
     subject_template: subjectTemplate,
-    salutation: interpretation.salutation,
+    salutation,
     contact_name: interpretation.contact?.name || null,
     contact_role: interpretation.contact?.role || null,
     contact_generic_address: !!interpretation.contact?.generic,

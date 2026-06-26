@@ -23,9 +23,9 @@ deleted once their tests are removed/migrated. Do **not** import them from
 - Discovery + matching: `backend/crawler-os/` (pipeline, reality gate, match
   engine, adapters), driven by **Robert** and the per-profile seam
   `backend/services/crawlerOsService.js#runProfileDiscoveryLive`.
-- Legacy crawl-trigger call sites now route through the explicitly-named
-  compatibility shim `backend/services/legacyCrawlSuperseded.js` (no-ops; the
-  user-facing "discover" trigger drives the OS).
+- Older crawl-trigger API paths now route through
+  `backend/services/crawlerOsCompatibility.js`: profile-facing paths drive the
+  OS; non-profile bulk-crawl paths return explicit retired responses.
 - Shared utilities that used to live under `services/crawlers/` were relocated to
   `backend/services/shared/` (httpClient, robotsPolicy, opportunityPolicy,
   needTaxonomy, web search, static data, grantsGovApiClient).

@@ -29,12 +29,31 @@ jobs:
           GODADDY_DOMAIN: axiombiolabs.org
           GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
           GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+          VERCEL_WWW_CNAME: cname.vercel-dns-0.com
           CONFIRM: 'YES'
+        run: node scripts/godaddy-set-vercel-dns.mjs
+
+      - name: Verify GoDaddy records now match Vercel
+        if: github.event.inputs.confirm == 'YES'
+        env:
+          GODADDY_DOMAIN: axiombiolabs.org
+          GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
+          GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+          VERCEL_WWW_CNAME: cname.vercel-dns-0.com
+          VERIFY_ONLY: 'true'
         run: node scripts/godaddy-set-vercel-dns.mjs
 
       - name: Post-apply notes
         if: github.event.inputs.confirm == 'YES'
         run: |
           echo "Propagation: minutes to 48h."
-          echo "Verify health on www and apex after TTL."
-          echo "Railway: add to CORS_ORIGIN if needed: https://www.axiombiolabs.org,https://axiombiolabs.org"
+          echo "Expected DNS after propagation:"
+          echo "- axiombiolabs.org A 76.76.21.21"
+          echo "- www.axiombiolabs.org CNAME cname.vercel-dns-0.com"
+          echo "Verify Vercel after DNS propagation:"
+          echo "- vercel domains inspect axiombiolabs.org"
+          echo "- vercel domains inspect www.axiombiolabs.org"
+          echo "Run read-only app smoke on both hosts:"
+          echo "- SMOKE_BASE_URL=https://axiombiolabs.org npm run smoke:prod"
+          echo "- SMOKE_BASE_URL=https://www.axiombiolabs.org npm run smoke:prod"
+          echo "Railway CORS only needs apex/www if VITE_FORCE_RAILWAY_API=true; otherwise the frontend uses same-origin Vercel rewrites."

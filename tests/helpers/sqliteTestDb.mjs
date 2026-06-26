@@ -27,6 +27,14 @@ export function wrapSqlite(sqlite) {
       }
     },
     exec(sql) { sqlite.exec(sql) },
+    // The production adapter exposes withTransaction(fn) where `fn` receives a
+    // tx handle that shares the same prepare()/run() surface. better-sqlite3's
+    // native transaction() cannot wrap an async callback, so for tests we run
+    // the callback against this same wrapper — matching the contract callers
+    // rely on (tx.prepare(...).run(...)) without needing real nesting.
+    async withTransaction(fn) {
+      return fn(this)
+    },
     raw: sqlite,
   }
 }

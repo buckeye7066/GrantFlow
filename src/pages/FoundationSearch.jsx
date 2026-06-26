@@ -23,6 +23,8 @@ import {
   Sparkles,
 } from "lucide-react"
 
+const PAGE_SIZE = 25
+
 const US_STATES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME",
   "MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI",
@@ -74,7 +76,9 @@ function MatchBadge({ score, loading }) {
 }
 
 /** A single org/foundation result card (shared by the Foundations + Recommended tabs). */
-function FoundationCard({ org, score, scoring, hasProfile, onOpen, AddButton, footnote }) {
+function FoundationCard({ org, score, scoring, scored, hasProfile, onOpen, AddButton, footnote }) {
+  // "not yet fetched" = no resolved entry in the score map at all.
+  const showSpinner = scoring && !scored && hasProfile
   return (
     <Card
       className="hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer"
@@ -86,7 +90,7 @@ function FoundationCard({ org, score, scoring, hasProfile, onOpen, AddButton, fo
             <div className="flex items-center gap-2 mb-1 flex-wrap">
               <h3 className="font-semibold text-slate-900">{org.name}</h3>
               {org.ntee_code && <Badge variant="outline" className="text-xs">{org.ntee_code}</Badge>}
-              <MatchBadge score={score} loading={scoring && score === undefined && hasProfile} />
+              <MatchBadge score={score} loading={showSpinner} />
             </div>
             <div className="flex flex-wrap gap-3 text-sm text-slate-600">
               {org.city && org.state && (
@@ -131,9 +135,11 @@ export default function FoundationSearch() {
   }, [profiles])
   const [selectedProfileId, setSelectedProfileId] = useState("")
 
-  // Default to the first profile once loaded.
+  // Default to the first profile once loaded (only if it has a usable id).
   useEffect(() => {
-    if (!selectedProfileId && profileList.length > 0) setSelectedProfileId(String(profileList[0].id))
+    if (selectedProfileId) return
+    const first = profileList[0]
+    if (first?.id != null) setSelectedProfileId(String(first.id))
   }, [profileList, selectedProfileId])
 
   // ── Search state ─────────────────────────────────────────────────────────
@@ -167,7 +173,13 @@ export default function FoundationSearch() {
         setFState((prev) => prev || String(st).toUpperCase())
         setNsfState((prev) => prev || String(st).toUpperCase())
       })
-      .catch(() => { /* region is best-effort */ })
+      .catch((err) => {
+        // region is best-effort; surface for debugging only.
+        if (import.meta?.env?.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn("getProfileRegion failed (non-fatal):", err)
+        }
+      })
     return () => { cancelled = true }
   }, [selectedProfileId])
 
@@ -260,6 +272,13 @@ export default function FoundationSearch() {
   })
   const recoScores = useMemo(() => buildScoreMap(recoScoreData), [recoScoreData])
 
+  // Merged foundation-scope score map for the dialog (memoized so identity is stable).
+  const dialogScores = useMemo(() => ({
+    foundation: new Map([...fScores, ...recoScores]),
+    nsf: nsfScores,
+    federal: fedScores,
+  }), [fScores, recoScores, nsfScores, fedScores])
+
   // ── Foundation detail (filings + contact) ────────────────────────────────
   // Only the live 990 lookup needs a real 9-digit EIN; catalog-only funders
   // (non-EIN ids) fall back to the data already on the card.
@@ -268,7 +287,7 @@ export default function FoundationSearch() {
   const { data: detailResult, isLoading: detailLoading } = useQuery({
     queryKey: ["foundation-detail", selectedEin],
     queryFn: () => getFoundation(selectedEin),
-    enabled: Boolean(selectedEin),
+    enabled: selectedEin != null,
     staleTime: 300_000,
   })
   const foundationDetail = detailResult?.data ?? detailResult ?? null
@@ -286,7 +305,15 @@ export default function FoundationSearch() {
       let scored = (kind === "foundation" ? fScores : kind === "nsf" ? nsfScores : fedScores).get(String(key))
       if (!scored?.opportunity) {
         const res = await scoreOpportunities({ profileId: selectedProfileId, kind, items: [item] })
-        scored = buildScoreMap(res).get(String(key)) ?? (res?.data ?? res)?.scores?.[0]
+        // Prefer a keyed match; for a single-item request the first element is
+        // the authoritative result, so fall back to it only if keys are absent.
+        const mapped = buildScoreMap(res).get(String(key))
+        const firstScore = (res?.data ?? res)?.scores?.[0]
+        scored = mapped ?? firstScore
+        // Guard against a key mismatch returning the wrong item.
+        if (mapped && firstScore && mapped.key && firstScore.key && String(mapped.key) !== String(key)) {
+          scored = firstScore
+        }
       }
       const opp = scored?.opportunity
       if (!opp) throw new Error("Could not prepare this funding source for the pipeline.")
@@ -318,7 +345,17 @@ export default function FoundationSearch() {
         }),
       })
 
-      setAddedKeys((prev) => new Set(prev).add(String(key)))
+      // Only mark as "in pipeline" once we confirm a successful, persisted result.
+      const persisted = Boolean(result?.id || result?.grant?.id || result?.already_exists)
+      if (!persisted) {
+        throw new Error("The funding source did not appear to save. Please try again.")
+      }
+
+      setAddedKeys((prev) => {
+        const next = new Set(prev)
+        next.add(String(key))
+        return next
+      })
       queryClient.invalidateQueries({ queryKey: ["grants"] })
       if (result?.already_exists) {
         toast({ title: "Already in pipeline", description: `"${opp.title}" is already in this profile's pipeline.` })
@@ -370,7 +407,7 @@ export default function FoundationSearch() {
       >
         <option value="">— Select a profile —</option>
         {profileList.map((p) => (
-          <option key={p.id} value={p.id}>{p.display_name || p.name || p.id}</option>
+          <option key={String(p.id)} value={String(p.id)}>{p.display_name || p.name || p.id}</option>
         ))}
       </select>
     </div>
@@ -464,23 +501,32 @@ export default function FoundationSearch() {
                         <ChevronLeft className="w-4 h-4" />
                       </Button>
                       <span className="text-sm text-slate-600">Page {fPage + 1}</span>
-                      <Button size="sm" variant="outline" disabled={fOrgs.length < 25} onClick={() => setFPage(p => p + 1)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={(fPage + 1) * PAGE_SIZE >= fTotal}
+                        onClick={() => setFPage(p => p + 1)}
+                      >
                         <ChevronRight className="w-4 h-4" />
                       </Button>
                     </div>
                   )}
                 </div>
-                {fOrgs.map((org) => (
-                  <FoundationCard
-                    key={org.ein || org.name}
-                    org={org}
-                    score={fScores.get(String(org.ein))?.match_score}
-                    scoring={fScoring}
-                    hasProfile={Boolean(selectedProfileId)}
-                    onOpen={setDetailTarget}
-                    AddButton={AddButton}
-                  />
-                ))}
+                {fOrgs.map((org) => {
+                  const entry = fScores.get(String(org.ein))
+                  return (
+                    <FoundationCard
+                      key={org.ein || org.name}
+                      org={org}
+                      score={entry?.match_score}
+                      scored={entry}
+                      scoring={fScoring}
+                      hasProfile={Boolean(selectedProfileId)}
+                      onOpen={setDetailTarget}
+                      AddButton={AddButton}
+                    />
+                  )
+                })}
               </div>
             )}
           </TabsContent>
@@ -533,7 +579,8 @@ export default function FoundationSearch() {
                   {nsfLoading ? "Searching NSF..." : `${nsfOpps.length} awards${submittedNSF ? ` for "${submittedNSF}"` : nsfState ? ` in ${nsfState}` : ""}`}
                 </p>
                 {nsfOpps.map((opp, i) => {
-                  const score = nsfScores.get(String(opp.source_id))?.match_score
+                  const entry = nsfScores.get(String(opp.source_id))
+                  const score = entry?.match_score
                   return (
                     <Card
                       key={opp.source_id || i}
@@ -545,7 +592,7 @@ export default function FoundationSearch() {
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
                               <h3 className="font-semibold text-slate-900">{opp.title}</h3>
-                              <MatchBadge score={score} loading={nsfScoring && score === undefined && Boolean(selectedProfileId)} />
+                              <MatchBadge score={score} loading={nsfScoring && !entry && Boolean(selectedProfileId)} />
                             </div>
                             <p className="text-sm text-slate-600 mb-2">{opp.sponsor}</p>
                             {opp.description && <p className="text-sm text-slate-500 line-clamp-2">{opp.description}</p>}
@@ -608,7 +655,8 @@ export default function FoundationSearch() {
                 {fedLoading ? "Loading federal programs..." : `${fedOpps.length} programs${submittedFed ? ` for "${submittedFed}"` : ""}`}
               </p>
               {fedOpps.map((opp, i) => {
-                const score = fedScores.get(String(opp.source_id))?.match_score
+                const entry = fedScores.get(String(opp.source_id))
+                const score = entry?.match_score
                 return (
                   <Card
                     key={opp.source_id || i}
@@ -620,7 +668,7 @@ export default function FoundationSearch() {
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <h3 className="font-semibold text-slate-900">{opp.title}</h3>
-                            <MatchBadge score={score} loading={fedScoring && score === undefined && Boolean(selectedProfileId)} />
+                            <MatchBadge score={score} loading={fedScoring && !entry && Boolean(selectedProfileId)} />
                           </div>
                           {opp.sponsor && <p className="text-sm text-slate-600 mb-1">{opp.sponsor}</p>}
                           {opp.description && <p className="text-sm text-slate-500 line-clamp-3 mb-2">{opp.description}</p>}
@@ -679,18 +727,22 @@ export default function FoundationSearch() {
                 {!recoError && (
                   <p className="text-sm text-slate-600">{recoFunders.length} recommended funder{recoFunders.length === 1 ? "" : "s"}</p>
                 )}
-                {recoFunders.map((org) => (
-                  <FoundationCard
-                    key={org.ein || org.name}
-                    org={org}
-                    score={recoScores.get(String(org.ein))?.match_score}
-                    scoring={recoScoring}
-                    hasProfile={Boolean(selectedProfileId)}
-                    onOpen={setDetailTarget}
-                    AddButton={AddButton}
-                    footnote={org.source === "local_catalog" ? "From your funding catalog" : org.already_in_catalog ? "Already in catalog" : null}
-                  />
-                ))}
+                {recoFunders.map((org) => {
+                  const entry = recoScores.get(String(org.ein))
+                  return (
+                    <FoundationCard
+                      key={org.ein || org.name}
+                      org={org}
+                      score={entry?.match_score}
+                      scored={entry}
+                      scoring={recoScoring}
+                      hasProfile={Boolean(selectedProfileId)}
+                      onOpen={setDetailTarget}
+                      AddButton={AddButton}
+                      footnote={org.source === "local_catalog" ? "From your funding catalog" : org.already_in_catalog ? "Already in catalog" : null}
+                    />
+                  )
+                })}
               </div>
             )}
           </TabsContent>
@@ -702,7 +754,7 @@ export default function FoundationSearch() {
           onClose={() => setDetailTarget(null)}
           foundationDetail={foundationDetail}
           detailLoading={detailLoading}
-          scores={{ foundation: new Map([...fScores, ...recoScores]), nsf: nsfScores, federal: fedScores }}
+          scores={dialogScores}
           AddButton={AddButton}
         />
       </div>
@@ -713,15 +765,15 @@ export default function FoundationSearch() {
 /** One dialog that renders foundation / NSF / federal detail + add-to-pipeline. */
 function DetailDialog({ target, onClose, foundationDetail, detailLoading, scores, AddButton }) {
   const kind = target?.kind
-  const item = target?.item
+  const item = target?.item ?? null
   const open = Boolean(target)
 
   let key = null
   if (item) key = String(kind === "foundation" ? item.ein : item.source_id)
-  const scored = key ? scores[kind]?.get(key) : null
+  const scored = key ? scores?.[kind]?.get(key) : null
 
   // Foundation: prefer the freshly fetched detail (has filings + address).
-  const fd = kind === "foundation" ? (foundationDetail ?? item) : null
+  const fd = kind === "foundation" ? (foundationDetail ?? item ?? null) : null
   const contact = item?.contact_info ?? scored?.opportunity?.contact_info ?? null
 
   return (

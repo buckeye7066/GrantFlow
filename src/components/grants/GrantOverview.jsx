@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -67,6 +67,13 @@ const getMatchScoreColor = (score) => {
 
 const capitalize = (s) => (s && s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')) || "";
 
+const formatAmount = (value) => {
+    if (value === null || value === undefined || value === '') return 'N/A';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 'N/A';
+    return `$${num.toLocaleString()}`;
+};
+
 export default function GrantOverview({ grant, organization, onUpdate, onOpenPrintApp }) {
     const { toast } = useToast();
     const queryClient = useQueryClient();
@@ -74,6 +81,14 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
     const [showContactNotes, setShowContactNotes] = useState(false);
     const [contactNotes, setContactNotes] = useState(grant?.contact_notes || '');
     const { profiles, activeProfileId } = useAuthStore();
+
+    // Keep local contactNotes in sync when the grant changes (navigation/refetch).
+    // useState only reads its initial argument on first mount, so without this the
+    // Textarea would keep showing stale notes for a different/updated grant.
+    useEffect(() => {
+        setContactNotes(grant?.contact_notes || '');
+        setShowContactNotes(false);
+    }, [grant?.id, grant?.contact_notes]);
 
     const activeProfile = useMemo(() => {
         const id = activeProfileId ? String(activeProfileId) : null;
@@ -114,20 +129,24 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
         setIsVerifying(true);
         
         try {
-            const prompt = `Find and verify current contact information for: "${grant.funder}"
+            // NOTE: Only the publicly available funder name and public portal URL are
+            // sent to the AI. No applicant/organization PII is included in the prompt.
+            // The AI is asked to look up publicly listed contact details for the funder.
+            const prompt = `Find and verify current PUBLICLY LISTED contact information for the following grant funder organization. Only return information that is publicly available on official sources.
 
-${grant.url ? `Their website/portal: ${grant.url}` : ''}
+Funder organization: "${grant.funder}"
+${grant.url ? `Public website/portal: ${grant.url}` : ''}
 
-Search the internet and provide verified, current contact information in JSON format:
+Search the internet and provide verified, current PUBLIC contact information in JSON format:
 {
-  "email": "their grants/contact email",
-  "phone": "their phone number", 
-  "fax": "their fax number if available",
-  "address": "their physical mailing address",
+  "email": "their public grants/contact email",
+  "phone": "their public phone number", 
+  "fax": "their public fax number if available",
+  "address": "their public physical mailing address",
   "verification_notes": "brief note about sources and confidence level"
 }
 
-Return ONLY the JSON. Use null for any information you cannot verify with confidence.`;
+Return ONLY the JSON. Use null for any information you cannot verify with confidence from public sources.`;
 
             const response = await client.integrations.Core.InvokeLLM({
                 prompt,
@@ -144,40 +163,68 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 }
             });
 
-            if (!response || typeof response !== 'object') {
+            if (!response || typeof response !== 'object' || Array.isArray(response)) {
+                console.error('[GrantOverview] Malformed AI response (not an object):', response);
                 throw new Error('AI returned an invalid response. Cannot update contact information.');
             }
 
             const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             const PHONE_RE = /^[\d\s().+-]{7,20}$/;
 
+            // Strict per-field validation. Each field must be a string of the expected
+            // shape before it is accepted; anything else is ignored and logged.
+            const isValidString = (v) => typeof v === 'string' && v.trim().length > 0;
+
+            const verificationNotes = isValidString(response.verification_notes)
+                ? response.verification_notes.trim()
+                : 'Re-verified via AI';
+
             const updates = {
-                contact_verified: true,
-                contact_verified_date: new Date().toISOString(),
-                contact_notes: (typeof response.verification_notes === 'string' && response.verification_notes.trim())
-                    ? response.verification_notes.trim()
-                    : 'Re-verified via AI'
+                // Do NOT auto-set contact_verified for AI results — explicit human
+                // confirmation is required via handleMarkAsVerified.
+                contact_notes: `AI re-verification (unconfirmed): ${verificationNotes}`
             };
 
-            if (response.email && EMAIL_RE.test(response.email)) updates.funder_email = response.email;
-            if (response.phone && PHONE_RE.test(response.phone)) updates.funder_phone = response.phone;
-            if (response.fax && PHONE_RE.test(response.fax)) updates.funder_fax = response.fax;
-            if (response.address && typeof response.address === 'string' && response.address.trim().length > 5) {
-                updates.funder_address = response.address.trim();
+            const rejected = [];
+
+            if (response.email != null) {
+                if (isValidString(response.email) && EMAIL_RE.test(response.email.trim())) {
+                    updates.funder_email = response.email.trim();
+                } else {
+                    rejected.push('email');
+                }
+            }
+            if (response.phone != null) {
+                if (isValidString(response.phone) && PHONE_RE.test(response.phone.trim())) {
+                    updates.funder_phone = response.phone.trim();
+                } else {
+                    rejected.push('phone');
+                }
+            }
+            if (response.fax != null) {
+                if (isValidString(response.fax) && PHONE_RE.test(response.fax.trim())) {
+                    updates.funder_fax = response.fax.trim();
+                } else {
+                    rejected.push('fax');
+                }
+            }
+            if (response.address != null) {
+                if (isValidString(response.address) && response.address.trim().length > 5) {
+                    updates.funder_address = response.address.trim();
+                } else {
+                    rejected.push('address');
+                }
             }
 
-            // Do NOT auto-set contact_verified:true for AI results.
-            // Remove contact_verified and contact_verified_date from auto-updates;
-            // require explicit human confirmation via handleMarkAsVerified.
-            delete updates.contact_verified;
-            delete updates.contact_verified_date;
-            updates.contact_notes = `AI re-verification (unconfirmed): ${updates.contact_notes}`;
+            if (rejected.length > 0) {
+                console.warn('[GrantOverview] AI returned malformed/invalid fields, ignored:', rejected, response);
+            }
 
             await updateGrantMutation.mutateAsync(updates);
 
             toast({
-                title: 'Contact Info Updated ✓',
-                description: 'Funder contact information has been re-verified and updated.'
+                title: 'Contact Info Fetched',
+                description: 'AI fetched updated contact information. Please review and manually confirm it before relying on it.'
             });
 
         } catch (error) {
@@ -193,18 +240,27 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
     };
 
     const handleMarkAsVerified = async () => {
-        await updateGrantMutation.mutateAsync({
-            contact_verified: true,
-            contact_verified_date: new Date().toISOString(),
-            contact_notes: contactNotes || 'Manually verified'
-        });
-        
-        toast({
-            title: 'Marked as Verified ✓',
-            description: 'Contact information marked as verified.'
-        });
-        
-        setShowContactNotes(false);
+        try {
+            await updateGrantMutation.mutateAsync({
+                contact_verified: true,
+                contact_verified_date: new Date().toISOString(),
+                contact_notes: contactNotes || 'Manually verified'
+            });
+
+            toast({
+                title: 'Marked as Verified ✓',
+                description: 'Contact information marked as verified.'
+            });
+
+            setShowContactNotes(false);
+        } catch (error) {
+            console.error('[GrantOverview] Mark as verified failed:', error);
+            toast({
+                variant: 'destructive',
+                title: 'Could Not Save',
+                description: error.message || 'Failed to mark contact information as verified. Please try again.'
+            });
+        }
     };
 
     const handleReportIssue = () => {
@@ -394,7 +450,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <StatCard 
                         label="Max Award"
-                        value={grant.amount_max ? `$${grant.amount_max.toLocaleString()}` : 'N/A'}
+                        value={formatAmount(grant.amount_max)}
                         icon={DollarSign}
                         color="text-emerald-600"
                     />

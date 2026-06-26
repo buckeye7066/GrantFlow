@@ -12,8 +12,77 @@ import { Label } from '@/components/ui/label';
 import { Mail, Phone, Globe, MapPin, CheckCircle, Briefcase, Building, Heart, Tags, Target, Edit, X, Save } from 'lucide-react';
 import EditableField from '../shared/EditableField';
 import EditableTagList from '../shared/EditableTagList';
-// removed â AIFormField is not used in this component
+// removed â AIFormField is not used in this component
 import { useToast } from '@/components/ui/use-toast';
+
+// Field sets managed by each editable section. Only these keys are diffed/persisted.
+const HEALTH_KEYS = [
+  'cancer_survivor', 'chronic_illness', 'dialysis_patient', 'organ_transplant', 'hiv_aids', 'tbi_survivor',
+  'amputee', 'neurodivergent', 'visual_impairment', 'hearing_impairment', 'wheelchair_user', 'substance_recovery',
+  'mental_health_condition', 'long_covid', 'maternal_health', 'hospice_care',
+  'cancer_type', 'cancer_diagnosis_year', 'chronic_illness_type'
+];
+
+const HEALTH_BADGE_KEYS = [
+  'cancer_survivor', 'chronic_illness', 'dialysis_patient', 'organ_transplant', 'hiv_aids', 'tbi_survivor',
+  'amputee', 'neurodivergent', 'visual_impairment', 'hearing_impairment', 'wheelchair_user', 'substance_recovery',
+  'mental_health_condition', 'long_covid', 'maternal_health', 'hospice_care'
+];
+
+const DEMOGRAPHICS_KEYS = [
+  'african_american', 'hispanic_latino', 'asian_american', 'native_american', 'lgbtq', 'new_immigrant',
+  'tribal_affiliation'
+];
+
+const DEMOGRAPHICS_BADGE_KEYS = [
+  'african_american', 'hispanic_latino', 'asian_american', 'native_american', 'lgbtq', 'new_immigrant'
+];
+
+const FAMILY_KEYS = [
+  'single_parent', 'foster_youth', 'homeless', 'low_income', 'refugee', 'formerly_incarcerated', 'returning_citizen',
+  'caregiver', 'orphan', 'adopted', 'widow_widower', 'grandparent_raising_grandchildren', 'first_time_parent',
+  'domestic_violence_survivor', 'trafficking_survivor', 'disaster_survivor', 'minor_child', 'young_adult', 'foster_parent'
+];
+
+const SECTION_FIELD_SETS = {
+  health: HEALTH_KEYS,
+  demographics: DEMOGRAPHICS_KEYS,
+  family: FAMILY_KEYS,
+};
+
+// Allow-list of fields that can ever be written from this component. Prevents arbitrary/server-managed
+// keys from being pushed back to the server.
+const EDITABLE_FIELDS = new Set([
+  'keywords', 'focus_areas', 'current_college', 'target_colleges', 'intended_major',
+  'extracurricular_activities', 'mission', 'primary_goal', 'target_population', 'geographic_focus',
+  'funding_amount_needed', 'timeline', 'past_experience', 'unique_qualities', 'collaboration_partners',
+  'sustainability_plan', 'barriers_faced', 'special_circumstances', 'program_areas',
+  ...HEALTH_KEYS, ...DEMOGRAPHICS_KEYS, ...FAMILY_KEYS
+]);
+
+// Normalize/sanitize a user-supplied URL for safe use as an href.
+function sanitizeWebsiteUrl(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'none') return null;
+  // Prepend https:// if no scheme present
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withScheme);
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.href;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function formatNumber(value) {
+  const num = Number(value);
+  if (Number.isNaN(num)) return null;
+  return num.toLocaleString();
+}
 
 export default function OrganizationProfileDetails({ organization, contactMethods = [], onUpdate, isUpdating, taxonomyItems = [] }) {
   const { toast } = useToast();
@@ -37,36 +106,50 @@ export default function OrganizationProfileDetails({ organization, contactMethod
       console.error('[OrganizationProfileDetails] onUpdate handler is missing!');
       return;
     }
-    
-    onUpdate({ 
-      id: organization.id, 
-      orgData: { [fieldName]: value } 
+
+    // Validate fieldName against an allow-list to prevent arbitrary field writes.
+    if (typeof fieldName !== 'string' || !EDITABLE_FIELDS.has(fieldName)) {
+      console.error('[OrganizationProfileDetails] Attempted to update disallowed field:', fieldName);
+      return;
+    }
+
+    onUpdate({
+      id: organization.id,
+      orgData: { [fieldName]: value }
     });
   };
 
   // Start editing a section
   const startEditing = (section) => {
     setEditingSection(section);
-    setTempData({ ...organization }); // Initialize tempData with current organization data
+    // Only copy the fields this section actually manages.
+    const fieldSet = SECTION_FIELD_SETS[section] || [];
+    const sectionData = {};
+    fieldSet.forEach(key => {
+      sectionData[key] = organization[key];
+    });
+    setTempData(sectionData);
   };
 
   // Save edits for a section
   const saveSection = () => {
+    const fieldSet = SECTION_FIELD_SETS[editingSection] || [];
     const fieldsToUpdate = {};
-    Object.keys(tempData).forEach(key => {
+    fieldSet.forEach(key => {
+      if (!EDITABLE_FIELDS.has(key)) return;
       // Only include fields that have actually changed
       if (JSON.stringify(tempData[key]) !== JSON.stringify(organization[key])) {
         fieldsToUpdate[key] = tempData[key];
       }
     });
-    
-    if (Object.keys(fieldsToUpdate).length > 0) {
+
+    if (Object.keys(fieldsToUpdate).length > 0 && onUpdate) {
       onUpdate({
         id: organization.id,
         orgData: fieldsToUpdate
       });
     }
-    
+
     setEditingSection(null);
     setTempData({});
   };
@@ -82,7 +165,8 @@ export default function OrganizationProfileDetails({ organization, contactMethod
     setTempData(prev => ({ ...prev, [field]: value }));
   };
 
-  const currentData = editingSection ? tempData : organization;
+  // When editing, currentData should reflect organization with tempData overrides for the managed fields.
+  const currentData = editingSection ? { ...organization, ...tempData } : organization;
 
   // Get organization type label from taxonomy
   const orgTypeLabel = React.useMemo(() => {
@@ -90,6 +174,8 @@ export default function OrganizationProfileDetails({ organization, contactMethod
     const item = taxonomyItems.find(t => t.group === 'organization_type' && t.slug === organization.nonprofit_type);
     return item ? item.label : organization.nonprofit_type;
   }, [organization.nonprofit_type, taxonomyItems, isOrganization]);
+
+  const websiteUrl = sanitizeWebsiteUrl(organization.website);
 
   // AI suggestion for keywords
   const handleSuggestKeywords = async () => {
@@ -129,7 +215,7 @@ Keywords should be:
         }
       });
 
-      if (response?.keywords && Array.isArray(response.keywords)) {
+      if (response && Array.isArray(response.keywords)) {
         // Sanitise: strings only, non-empty, max 60 chars, deduplicate
         const existing = organization.keywords || [];
         const sanitised = response.keywords
@@ -205,7 +291,7 @@ Focus areas should be:
         }
       });
 
-      if (response?.focus_areas && Array.isArray(response.focus_areas)) {
+      if (response && Array.isArray(response.focus_areas)) {
         const existing = organization.focus_areas || [];
         const sanitised = response.focus_areas
           .filter(f => typeof f === 'string' && f.trim().length > 0)
@@ -243,6 +329,16 @@ Focus areas should be:
       setIsGeneratingFocusAreas(false);
     }
   };
+
+  const gpaValue = organization.gpa != null ? parseFloat(organization.gpa) : NaN;
+  const annualBudgetFormatted = formatNumber(organization.annual_budget);
+  const householdIncomeFormatted = formatNumber(organization.household_income);
+
+  let dateOfBirthFormatted = null;
+  if (organization.date_of_birth) {
+    const dob = new Date(organization.date_of_birth);
+    dateOfBirthFormatted = Number.isNaN(dob.getTime()) ? null : dob.toLocaleDateString();
+  }
 
   return (
     <div className="space-y-6">
@@ -283,12 +379,12 @@ Focus areas should be:
             </div>
           )}
 
-          {organization.website && organization.website !== 'none' && (
+          {websiteUrl && (
             <div className="flex items-start gap-3">
               <Globe className="w-4 h-4 mt-1 text-slate-400" />
               <div className="flex-1">
                 <div className="text-sm font-medium text-slate-700 mb-1">Website</div>
-                <a href={organization.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                <a href={websiteUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                   {organization.website}
                 </a>
               </div>
@@ -394,10 +490,10 @@ Focus areas should be:
               </div>
             )}
 
-            {organization.gpa && (
+            {!Number.isNaN(gpaValue) && (
               <div className="mb-3">
                 <div className="text-sm font-medium text-slate-700 mb-1">GPA</div>
-                <div className="text-slate-600">{parseFloat(organization.gpa).toFixed(2)}</div>
+                <div className="text-slate-600">{gpaValue.toFixed(2)}</div>
               </div>
             )}
 
@@ -471,10 +567,10 @@ Focus areas should be:
                 <div className="text-slate-600">{orgTypeLabel}</div>
               </div>
             )}
-            {organization.annual_budget && (
+            {annualBudgetFormatted !== null && (
               <div className="grid grid-cols-2 gap-2 mb-3">
                 <div className="text-sm font-medium text-slate-700">Annual Budget</div>
-                <div className="text-slate-600">${organization.annual_budget.toLocaleString()}</div>
+                <div className="text-slate-600">${annualBudgetFormatted}</div>
               </div>
             )}
             {organization.staff_count && (
@@ -948,10 +1044,10 @@ Focus areas should be:
             <CardTitle>Personal Information</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {organization.date_of_birth && (
+            {dateOfBirthFormatted && (
               <div className="grid grid-cols-2 gap-2">
                 <div className="text-sm font-medium text-slate-700">Date of Birth</div>
-                <div className="text-slate-600">{new Date(organization.date_of_birth).toLocaleDateString()}</div>
+                <div className="text-slate-600">{dateOfBirthFormatted}</div>
               </div>
             )}
             {organization.age && (
@@ -972,10 +1068,10 @@ Focus areas should be:
                 <div className="text-slate-600">{organization.household_size} people</div>
               </div>
             )}
-            {organization.household_income && (
+            {householdIncomeFormatted !== null && (
               <div className="grid grid-cols-2 gap-2">
                 <div className="text-sm font-medium text-slate-700">Annual Household Income</div>
-                <div className="text-slate-600">${organization.household_income.toLocaleString()}</div>
+                <div className="text-slate-600">${householdIncomeFormatted}</div>
               </div>
             )}
           </CardContent>
@@ -1093,8 +1189,8 @@ Focus areas should be:
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={currentData[item.id] || false}
-                        onCheckedChange={(checked) => updateTempField(item.id, checked)}
+                        checked={currentData[item.id] === true}
+                        onCheckedChange={(checked) => updateTempField(item.id, checked === true)}
                       />
                       <Label htmlFor={item.id} className="text-sm">{item.label}</Label>
                     </div>
@@ -1118,7 +1214,15 @@ Focus areas should be:
                         id="cancer_diagnosis_year"
                         type="number"
                         value={currentData.cancer_diagnosis_year || ''}
-                        onChange={(e) => updateTempField('cancer_diagnosis_year', parseInt(e.target.value) || null)}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '' || raw == null) {
+                            updateTempField('cancer_diagnosis_year', null);
+                            return;
+                          }
+                          const parsed = /^\d+$/.test(raw.trim()) ? parseInt(raw, 10) : NaN;
+                          updateTempField('cancer_diagnosis_year', Number.isNaN(parsed) ? null : parsed);
+                        }}
                         placeholder="2020"
                         className="mt-1"
                       />
@@ -1157,11 +1261,7 @@ Focus areas should be:
                   {currentData.long_covid && <Badge className="bg-rose-100 text-rose-800">Long COVID</Badge>}
                   {currentData.maternal_health && <Badge className="bg-rose-100 text-rose-800">Maternal Health</Badge>}
                   {currentData.hospice_care && <Badge className="bg-rose-100 text-rose-800">Hospice Care</Badge>}
-                  {!Object.keys(currentData).some(key => [
-                    'cancer_survivor', 'chronic_illness', 'dialysis_patient', 'organ_transplant', 'hiv_aids', 'tbi_survivor',
-                    'amputee', 'neurodivergent', 'visual_impairment', 'hearing_impairment', 'wheelchair_user', 'substance_recovery',
-                    'mental_health_condition', 'long_covid', 'maternal_health', 'hospice_care'
-                  ].includes(key) && currentData[key]) && (
+                  {!HEALTH_BADGE_KEYS.some(k => currentData[k] === true) && (
                     <p className="text-sm text-slate-500 italic">No health conditions recorded. Click edit to add.</p>
                   )}
                 </div>
@@ -1228,8 +1328,8 @@ Focus areas should be:
                     <div key={item.id} className="flex items-center space-x-2">
                       <Checkbox
                         id={item.id}
-                        checked={currentData[item.id] || false}
-                        onCheckedChange={(checked) => updateTempField(item.id, checked)}
+                        checked={currentData[item.id] === true}
+                        onCheckedChange={(checked) => updateTempField(item.id, checked === true)}
                       />
                       <Label htmlFor={item.id} className="text-sm">{item.label}</Label>
                     </div>
@@ -1257,9 +1357,7 @@ Focus areas should be:
                   {currentData.native_american && <Badge className="bg-amber-100 text-amber-800">Native American</Badge>}
                   {currentData.lgbtq && <Badge className="bg-amber-100 text-amber-800">LGBTQ+</Badge>}
                   {currentData.new_immigrant && <Badge className="bg-amber-100 text-amber-800">New Immigrant</Badge>}
-                  {!Object.keys(currentData).some(key => [
-                    'african_american', 'hispanic_latino', 'asian_american', 'native_american', 'lgbtq', 'new_immigrant'
-                  ].includes(key) && currentData[key]) && (
+                  {!DEMOGRAPHICS_BADGE_KEYS.some(k => currentData[k] === true) && (
                     <p className="text-sm text-slate-500 italic">No demographics recorded. Click edit to add.</p>
                   )}
                 </div>
@@ -1321,12 +1419,13 @@ Focus areas should be:
                   <div key={item.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={item.id}
-                      checked={currentData[item.id] || (item.id === 'formerly_incarcerated' && currentData.returning_citizen) || false}
+                      checked={currentData[item.id] === true || (item.id === 'formerly_incarcerated' && currentData.returning_citizen === true)}
                       onCheckedChange={(checked) => {
-                        updateTempField(item.id, checked);
+                        const isChecked = checked === true;
+                        updateTempField(item.id, isChecked);
                         // Sync returning_citizen with formerly_incarcerated
                         if (item.id === 'formerly_incarcerated') {
-                          updateTempField('returning_citizen', checked);
+                          updateTempField('returning_citizen', isChecked);
                         }
                       }}
                     />
@@ -1354,7 +1453,7 @@ Focus areas should be:
                 {currentData.minor_child && <Badge className="bg-blue-100 text-blue-800">Minor Child</Badge>}
                 {currentData.young_adult && <Badge className="bg-blue-100 text-blue-800">Young Adult (18-24)</Badge>}
                 {currentData.foster_parent && <Badge className="bg-blue-100 text-blue-800">Foster Parent</Badge>}
-                {!Object.keys(currentData).some(key => ['single_parent', 'foster_youth', 'homeless', 'low_income', 'refugee', 'formerly_incarcerated', 'returning_citizen', 'caregiver', 'orphan', 'adopted', 'widow_widower', 'grandparent_raising_grandchildren', 'first_time_parent', 'domestic_violence_survivor', 'trafficking_survivor', 'disaster_survivor', 'minor_child', 'young_adult', 'foster_parent'].includes(key) && currentData[key]) && (
+                {!FAMILY_KEYS.some(k => currentData[k] === true) && (
                   <p className="text-sm text-slate-500 italic">No family/life situation recorded. Click edit to add.</p>
                 )}
               </div>

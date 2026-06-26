@@ -5,22 +5,12 @@ import Database from 'better-sqlite3'
 import matchingRouter from '../routes/matching.js'
 
 /**
- * OS recall-floor merge regression.
+ * Crawler OS matching authority regression.
  *
- * Live audit (2026-06-23): Anastasia's profile had exactly 3 crawler-os
- * matches — all DIRECTORY pointers (benefits.gov, cof_locator,
- * studentaid.gov) — while the catalog held 90k+ real rows. Because the
- * matching route returned the OS rows verbatim whenever osRows.length > 0,
- * Discover showed only those 3 directories and hid every real grant. That
- * violates the mission rules: "Avoid zero-result experiences when relevant
- * funding likely exists. Recall over suppression" and the 1:1 count rule.
- *
- * The fix: when OS qualified.length < OS_RECALL_FLOOR, fall through to the
- * legacy matcher (full catalog scan) and merge the OS rows (qualified +
- * directories) on top. These tests prove:
- *   1. A sparse, directory-only OS run still surfaces real legacy grants.
- *   2. The OS directory rows are preserved (not dropped) in the merge.
- *   3. A rich OS run (>= floor) still short-circuits to the pure OS path.
+ * Sparse OS coverage must stay honest. The old route used to fall through to a
+ * broad catalog matcher and merge generic results when OS coverage was sparse;
+ * that made different profiles see the same unrelated funding. The invariant
+ * now is simple: profile_opportunity_matches from Crawler OS are the answer.
  */
 
 function createSchema(db) {
@@ -98,8 +88,6 @@ function seedStudent(db) {
     VALUES ('student-1', 'basic_information', '{"state":"TN","zip_code":"37130","profile_category":"individual"}');
   `)
 
-  // Three DIRECTORY pointers — the only OS-stored matches (mirrors the live
-  // Anastasia bug). Scores are intentionally REVIEW-band.
   const dirs = [
     ['os-dir-benefits', 'Benefits.gov finder - education benefits', 'benefits_gov', 'DIRECTORY', 68],
     ['os-dir-cof', 'Foundation Center locator', 'cof_locator', 'DIRECTORY', 55],
@@ -116,12 +104,11 @@ function seedStudent(db) {
     ).run(id, score)
   }
 
-  // Real scholarships in the catalog that the legacy matcher SHOULD surface.
   for (let i = 1; i <= 6; i += 1) {
     db.prepare(
       `INSERT INTO funding_opportunities (id, title, sponsor, source, source_id, source_url, application_url, opportunity_kind, type, opportunity_type, is_national, is_active, categories, keywords, amount_max)
        VALUES (?, ?, 'Scholarship Fund', 'grants.gov', ?, 'https://www.grants.gov/x', 'https://www.grants.gov/x', 'SCHOLARSHIP', 'OPPORTUNITY', 'scholarship', 1, 1, '["scholarship"]', '["scholarship","tuition","student","education"]', 5000)`,
-    ).run(`real-sch-${i}`, `Real Scholarship ${i}`, `real-sch-${i}`)
+    ).run(`real-sch-${i}`, `Catalog Scholarship ${i}`, `real-sch-${i}`)
   }
 }
 
@@ -132,7 +119,6 @@ function seedRichOs(db) {
     INSERT INTO profile_sections (profile_id, section_key, data)
     VALUES ('org-1', 'basic_information', '{"state":"TN","profile_category":"organization"}');
   `)
-  // 12 real OS-qualified matches — above the recall floor (10).
   for (let i = 1; i <= 12; i += 1) {
     const id = `os-rich-${i}`
     db.prepare(
@@ -158,8 +144,8 @@ function createApp(db) {
   return app
 }
 
-describe('matching OS recall-floor merge', () => {
-  it('merges real legacy grants when OS only has directory pointers (sparse recall)', async () => {
+describe('matching Crawler OS authority', () => {
+  it('returns sparse OS rows without merging catalog-only grants', async () => {
     const db = new Database(':memory:')
     createSchema(db)
     seedStudent(db)
@@ -169,26 +155,22 @@ describe('matching OS recall-floor merge', () => {
         .query({ min_score: 0, limit: 2000, skip_readiness_check: 1 })
 
       expect(res.status).toBe(200)
+      expect(res.body.engine).toBe('crawler-os')
       const opps = res.body.opportunities
       expect(Array.isArray(opps)).toBe(true)
 
-      // Real scholarships must now appear (the whole point of the fix).
-      const realCount = opps.filter((o) => String(o.id).startsWith('real-sch-')).length
-      expect(realCount).toBeGreaterThan(0)
+      const catalogOnlyCount = opps.filter((o) => String(o.id).startsWith('real-sch-')).length
+      expect(catalogOnlyCount).toBe(0)
 
-      // The OS directory pointers must be PRESERVED, not dropped.
       const dirIds = opps.map((o) => o.id).filter((id) => String(id).startsWith('os-dir-'))
-      expect(dirIds.length).toBeGreaterThan(0)
-
-      // Engine flag reflects the merge so the UI/telemetry can explain it.
-      expect(res.body.engine).toBe('crawler-os+legacy')
-      expect(res.body.os_merged_count).toBeGreaterThan(0)
+      expect(dirIds.length).toBe(3)
+      expect(res.body.os_merged_count).toBeUndefined()
     } finally {
       db.close()
     }
   })
 
-  it('short-circuits to the pure OS path when OS recall is rich (>= floor)', async () => {
+  it('returns rich OS matches from the same OS-only path', async () => {
     const db = new Database(':memory:')
     createSchema(db)
     seedRichOs(db)
@@ -200,8 +182,24 @@ describe('matching OS recall-floor merge', () => {
       expect(res.status).toBe(200)
       expect(res.body.engine).toBe('crawler-os')
       expect(res.body.opportunities.length).toBeGreaterThanOrEqual(10)
-      // Pure OS path does not set os_merged_count.
       expect(res.body.os_merged_count).toBeUndefined()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('rejects explicit legacy matching requests', async () => {
+    const db = new Database(':memory:')
+    createSchema(db)
+    seedStudent(db)
+    try {
+      const res = await request(createApp(db))
+        .get('/api/matching/profile/student-1/opportunities')
+        .query({ legacy_matching: 1, skip_readiness_check: 1 })
+
+      expect(res.status).toBe(410)
+      expect(res.body.error).toBe('legacy_matching_retired')
+      expect(res.body.engine).toBe('crawler-os')
     } finally {
       db.close()
     }

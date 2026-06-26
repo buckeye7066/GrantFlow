@@ -1,6 +1,6 @@
 ## GrantFlow Cloud Deployment (Vercel + Railway)
 
-This playbook captures everything needed to ship GrantFlow to production at `https://www.axiombiolabs.org/grantflow`, using **Vercel** for the SPA and **Railway** for the API.
+This playbook captures everything needed to ship GrantFlow to production at `https://axiombiolabs.org/grantflow` and `https://www.axiombiolabs.org/grantflow`, using **Vercel** for the SPA and **Railway** for the API.
 
 ---
 
@@ -53,7 +53,7 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
    ```
    This ensures the SPA works from `/grantflow/*` and API calls proxy cleanly when needed.
 7. Trigger a deploy. Vercel will build and host the static bundle automatically.
-8. **Domains:** ensure **both** `app.axiombiolabs.org` and `www.axiombiolabs.org` (if you expect them to work) are attached to this Vercel project.
+8. **Domains:** ensure `axiombiolabs.org`, `www.axiombiolabs.org`, and `app.axiombiolabs.org` (if you still use it) are attached to this Vercel project.
    - If `app.*` works but `www.*` 404s on deep links, see **E-001** in `docs/ERROR_LEDGER.md`.
 
 ---
@@ -87,15 +87,21 @@ This playbook captures everything needed to ship GrantFlow to production at `htt
 1. Open a PR into `main` (recommended) once the stabilization branch is verified.
 2. Once approved, merge to `main`. Vercel/Railway will auto-build if configured.
 3. In Vercel, promote the new build to production (`Production Deployments → Promote`).
-4. DNS: ensure `www.axiombiolabs.org` points to Vercel (not GoDaddy default hosting). See E-001.
+4. DNS: ensure `axiombiolabs.org` and `www.axiombiolabs.org` point to Vercel (not GoDaddy default hosting). See E-001.
+   - Expected apex record: `axiombiolabs.org A 76.76.21.21`
+   - Expected `www` record: `www.axiombiolabs.org CNAME cname.vercel-dns-0.com`
+   - Manual GitHub path: Actions -> Apply GoDaddy DNS for Vercel -> Run workflow -> `confirm=YES`
+   - Local dry-run path: `GODADDY_DOMAIN=axiombiolabs.org npm run dns:godaddy:vercel`
+   - Local apply path requires `GODADDY_API_KEY`, `GODADDY_API_SECRET`, and `CONFIRM=YES`.
 
 ---
 
 ### 5. Post-Deployment Verification
 
-1. Run the smoke test against the production URL:
+1. Run the smoke test against both production hosts:
    ```bash
-   SMOKE_BASE_URL=https://<your-vercel-app>.vercel.app npm run smoke:login
+   SMOKE_BASE_URL=https://axiombiolabs.org npm run smoke:prod
+   SMOKE_BASE_URL=https://www.axiombiolabs.org npm run smoke:prod
    ```
 2. Visit `https://<your-vercel-app>.vercel.app/grantflow/login`, enter the admin token, and confirm the dashboard renders data.
 3. Hit the health check directly:
@@ -140,4 +146,3 @@ openssl rand -hex 32
 ```
 
 Keep this doc close when cutting releases—updating it after each deploy will keep the team aligned.
-

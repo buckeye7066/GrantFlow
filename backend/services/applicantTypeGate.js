@@ -85,6 +85,17 @@ const INSTITUTION_ONLY_PATTERNS = [
   // Specific embassy / mission programs mentioned in the bug report.
   /\bu\.?s\.?\s+mission\s+to\b/,
   /\bembassy\s+(?:program|grant|fund)\b/,
+  // High-precision FEDERAL INSTITUTIONAL mechanisms (terms of art whose applicant
+  // is always an institution / state / consortium — an individual literally
+  // cannot apply). These caught Anastasia's bad pipeline rows (OSEP personnel
+  // preparation, NRSA institutional training grants, OESE comprehensive centers,
+  // NSF Space Grant). Deliberately narrow so they never hit an individual
+  // scholarship or CE program ("training scholarship", "safety training", etc.).
+  /\bpersonnel\s+preparation\b/,
+  /\binstitutional\s+(?:research\s+)?training\s+grant\b/,
+  /\bresearch\s+training\s+grant\s*\((?:t32|nrsa)\)/,
+  /\bcomprehensive\s+centers?\s+program\b/,
+  /\bspace\s+grant\s+(?:college|consorti)/,
 ]
 
 // Opportunity-side phrases that EXCLUDE organisations (rare but real —

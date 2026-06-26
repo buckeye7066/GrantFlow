@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -74,11 +73,13 @@ export default function SourceDirectory() {
   const [searchSourceName, setSearchSourceName] = useState(''); // New state
   const [searchLocation, setSearchLocation] = useState(''); // New state
   const [editingSource, setEditingSource] = useState(null);
+  const [prefilledSource, setPrefilledSource] = useState(null); // distinct prefill (create-with-prefill) state
   const [selectedSources, setSelectedSources] = useState([]);
   const [crawlingInBackground, setCrawlingInBackground] = useState([]);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null); // { type: 'single'|'bulk'|'by_source', id?, sourceType? }
+  const [deleteTarget, setDeleteTarget] = useState(null); // { type: 'single'|'bulk'|'by_source_type', id?, ids?, sourceType? }
   const [expandedSourceId, setExpandedSourceId] = useState(null);
+  const [addingToPipeline, setAddingToPipeline] = useState([]); // per-opportunity pending ids
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('SourceDirectoryPage'), [])
@@ -88,41 +89,65 @@ export default function SourceDirectory() {
     queryKey: ['sourceDirectory'],
     queryFn: () => client.entities.SourceDirectory.list(),
     refetchInterval: crawlingInBackground.length > 0 ? 5000 : false,
+    onError: (error) => {
+      log.error('failed to load source directory', error)
+      toast({ variant: 'destructive', title: 'Failed to load sources', description: error?.message || 'Could not load source directory.' })
+    },
   });
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
     queryFn: () => client.entities.Organization.list('name'),
+    onError: (error) => {
+      log.error('failed to load organizations', error)
+      toast({ variant: 'destructive', title: 'Failed to load profiles', description: error?.message || 'Could not load profiles.' })
+    },
   });
 
   // NEW: Query for opportunities from expanded source
+  const expandedSource = useMemo(
+    () => sources.find((s) => s.id === expandedSourceId) || null,
+    [sources, expandedSourceId]
+  );
+  const expandedSourceName = expandedSource?.name || null;
+
   const { data: sourceOpportunities = [], isLoading: isLoadingOpportunities } = useQuery({
-    queryKey: ['sourceOpportunities', expandedSourceId],
+    queryKey: ['sourceOpportunities', expandedSourceId, expandedSourceName],
     queryFn: async () => {
-      if (!expandedSourceId) return [];
-      const source = sources.find(s => s.id === expandedSourceId);
-      if (!source) return [];
-      
-      // Query opportunities that match this source
-      const opportunities = await client.entities.FundingOpportunity.filter({
-        source: 'source_directory',
-        sponsor: source.name
-      });
-      
-      return opportunities;
+      if (!expandedSourceId || !expandedSourceName) return [];
+      try {
+        // Query opportunities that match this source
+        const opportunities = await client.entities.FundingOpportunity.filter({
+          source: 'source_directory',
+          sponsor: expandedSourceName
+        });
+        return Array.isArray(opportunities) ? opportunities : [];
+      } catch (error) {
+        log.error('failed to load source opportunities', error)
+        toast({ variant: 'destructive', title: 'Failed to load opportunities', description: error?.message || 'Could not load opportunities.' })
+        return [];
+      }
     },
-    enabled: !!expandedSourceId,
+    enabled: !!expandedSourceId && !!expandedSourceName,
   });
 
   // Query grants to check which opportunities are already in pipeline
   const { data: allGrants = [] } = useQuery({
     queryKey: ['grants'],
     queryFn: () => client.entities.Grant.list(),
+    onError: (error) => {
+      log.error('failed to load grants', error)
+    },
   });
 
   async function fetchSourceById(sourceId) {
-    const rows = await client.entities.SourceDirectory.filter({ id: sourceId })
-    return Array.isArray(rows) ? rows[0] : null
+    try {
+      const rows = await client.entities.SourceDirectory.filter({ id: sourceId })
+      return Array.isArray(rows) ? rows[0] : null
+    } catch (error) {
+      log.error('failed to fetch source by id', error)
+      return null
+    }
   }
 
   // Auto-select first organization if none selected
@@ -155,9 +180,11 @@ export default function SourceDirectory() {
         poll: async () => {
           const row = await fetchSourceById(sourceId)
           if (!row) return { done: false }
-          const last = row.last_crawled ? Date.parse(String(row.last_crawled)) : null
-          const base = baseline ? Date.parse(String(baseline)) : null
-          if (last && (!base || last > base) && last >= startedAt - 10_000) {
+          const lastParsed = row.last_crawled ? Date.parse(String(row.last_crawled)) : NaN
+          const baseParsed = baseline ? Date.parse(String(baseline)) : NaN
+          const last = Number.isFinite(lastParsed) ? lastParsed : null
+          const base = Number.isFinite(baseParsed) ? baseParsed : null
+          if (last !== null && (base === null || last > base) && last >= startedAt - 10_000) {
             return { done: true, status: 'completed' }
           }
           return { done: false }
@@ -165,6 +192,8 @@ export default function SourceDirectory() {
         onDone: (res) => {
           setCrawlingInBackground((prev) => prev.filter((id) => id !== sourceId))
           queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] })
+          queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] })
+          queryClient.invalidateQueries({ queryKey: ['sourceOpportunities'] })
           if (res?.status === 'failed') {
             toast({ variant: 'destructive', title: 'Crawl timed out', description: 'Check logs and try again.' })
           } else {
@@ -181,22 +210,46 @@ export default function SourceDirectory() {
 
   const bulkCrawlMutation = useMutation({
     mutationFn: async (sourceIds) => {
-      for (const sourceId of sourceIds) {
-        await client.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
-      }
-      return { sourceIds, count: sourceIds.length, startedAt: Date.now() };
+      const results = await Promise.allSettled(
+        sourceIds.map((sourceId) =>
+          client.functions.invoke('crawlSourceDirectory', { source_id: sourceId }).then(() => sourceId)
+        )
+      );
+      const started = [];
+      const failed = [];
+      results.forEach((r, idx) => {
+        if (r.status === 'fulfilled') {
+          started.push(sourceIds[idx]);
+        } else {
+          failed.push(sourceIds[idx]);
+        }
+      });
+      return { startedIds: started, failedIds: failed, count: started.length, startedAt: Date.now() };
     },
     onSuccess: (data) => {
       const startedAt = Number(data.startedAt || Date.now())
-      setCrawlingInBackground(prev => [...prev, ...data.sourceIds.map(String)]);
-      setSelectedSources([]);
-      toast({
-        title: '🚀 Bulk Crawl Started',
-        description: `${data.count} sources crawling in background. Page will auto-refresh.`,
-        duration: 4000,
-      });
+      const startedIds = Array.isArray(data.startedIds) ? data.startedIds : [];
+      const failedIds = Array.isArray(data.failedIds) ? data.failedIds : [];
 
-      for (const id of data.sourceIds) {
+      setCrawlingInBackground(prev => [...prev, ...startedIds.map(String)]);
+      setSelectedSources([]);
+
+      if (startedIds.length > 0) {
+        toast({
+          title: '🚀 Bulk Crawl Started',
+          description: `${startedIds.length} source${startedIds.length !== 1 ? 's' : ''} crawling in background. Page will auto-refresh.`,
+          duration: 4000,
+        });
+      }
+      if (failedIds.length > 0) {
+        toast({
+          variant: 'destructive',
+          title: 'Some crawls failed to start',
+          description: `${failedIds.length} source${failedIds.length !== 1 ? 's' : ''} could not be started.`,
+        });
+      }
+
+      for (const id of startedIds) {
         const sourceId = String(id)
         const baseline = sources.find((s) => String(s?.id) === sourceId)?.last_crawled ?? null
         tracker.track({
@@ -205,15 +258,19 @@ export default function SourceDirectory() {
           poll: async () => {
             const row = await fetchSourceById(sourceId)
             if (!row) return { done: false }
-            const last = row.last_crawled ? Date.parse(String(row.last_crawled)) : null
-            const base = baseline ? Date.parse(String(baseline)) : null
-            if (last && (!base || last > base) && last >= startedAt - 10_000) {
+            const lastParsed = row.last_crawled ? Date.parse(String(row.last_crawled)) : NaN
+            const baseParsed = baseline ? Date.parse(String(baseline)) : NaN
+            const last = Number.isFinite(lastParsed) ? lastParsed : null
+            const base = Number.isFinite(baseParsed) ? baseParsed : null
+            if (last !== null && (base === null || last > base) && last >= startedAt - 10_000) {
               return { done: true, status: 'completed' }
             }
             return { done: false }
           },
           onDone: () => {
             setCrawlingInBackground((prev) => prev.filter((x) => x !== sourceId))
+            queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] })
+            queryClient.invalidateQueries({ queryKey: ['sourceOpportunities'] })
           },
         })
       }
@@ -227,18 +284,23 @@ export default function SourceDirectory() {
   const deleteMutation = useMutation({
     mutationFn: async (target) => {
       let sourceIdsToDelete = [];
-      
+
       // Determine which source IDs to delete
-      if (target.type === 'single') {
-        sourceIdsToDelete = [target.id];
-      } else if (target.type === 'bulk') {
-        sourceIdsToDelete = target.ids;
-      } else if (target.type === 'by_source_type') {
+      if (target?.type === 'single') {
+        sourceIdsToDelete = target.id != null ? [target.id] : [];
+      } else if (target?.type === 'bulk') {
+        sourceIdsToDelete = Array.isArray(target.ids) ? target.ids : [];
+      } else if (target?.type === 'by_source_type') {
         const typeSources = sources.filter(s =>
           s.discovered_for_organization_id === selectedOrgId &&
           s.source_type === target.sourceType
         );
         sourceIdsToDelete = typeSources.map(s => s.id);
+      }
+
+      // Guard against firing a cascade delete with an empty list
+      if (!Array.isArray(sourceIdsToDelete) || sourceIdsToDelete.length === 0) {
+        throw new Error('No sources selected for deletion.');
       }
 
       // Call backend function to handle cascade deletion with service role
@@ -247,7 +309,7 @@ export default function SourceDirectory() {
         organization_id: selectedOrgId
       });
 
-      return response.data;
+      return response?.data;
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] });
@@ -256,26 +318,29 @@ export default function SourceDirectory() {
       setDeleteConfirmOpen(false);
       setDeleteTarget(null);
       setSelectedSources([]);
-      
+
+      const { count = 0, opportunitiesDeleted = 0, grantsDeleted = 0 } = result || {};
+
       const messageParts = [];
-      messageParts.push(`${result.count} source${result.count !== 1 ? 's' : ''} removed`);
-      if (result.opportunitiesDeleted > 0) {
-        messageParts.push(`${result.opportunitiesDeleted} opportunity${result.opportunitiesDeleted !== 1 ? 's' : ''} deleted`);
+      messageParts.push(`${count} source${count !== 1 ? 's' : ''} removed`);
+      if (opportunitiesDeleted > 0) {
+        messageParts.push(`${opportunitiesDeleted} opportunity${opportunitiesDeleted !== 1 ? 's' : ''} deleted`);
       }
-      if (result.grantsDeleted > 0) {
-        messageParts.push(`${result.grantsDeleted} grant${result.grantsDeleted !== 1 ? 's' : ''} removed from pipeline`);
+      if (grantsDeleted > 0) {
+        messageParts.push(`${grantsDeleted} grant${grantsDeleted !== 1 ? 's' : ''} removed from pipeline`);
       }
-      
+
       toast({
         title: '✅ Cascade Delete Complete',
         description: messageParts.join(', '),
       });
     },
     onError: (error) => {
+      log.error('cascade delete failed', error)
       toast({
         variant: 'destructive',
         title: 'Delete Failed',
-        description: error.message,
+        description: error?.message || 'Delete failed',
       });
     }
   });
@@ -300,12 +365,17 @@ export default function SourceDirectory() {
         key: `discover:${orgId}:${startedAt}`,
         timeoutMs: 4 * 60 * 1000,
         poll: async () => {
-          const rows = await client.entities.SourceDirectory.list()
-          const count = Array.isArray(rows)
-            ? rows.filter((s) => String(s?.discovered_for_organization_id || '') === orgId).length
-            : 0
-          if (count > baselineCount) return { done: true, status: 'completed' }
-          return { done: false }
+          try {
+            const rows = await client.entities.SourceDirectory.list()
+            const count = Array.isArray(rows)
+              ? rows.filter((s) => String(s?.discovered_for_organization_id || '') === orgId).length
+              : 0
+            if (count > baselineCount) return { done: true, status: 'completed' }
+            return { done: false }
+          } catch (error) {
+            log.error('discovery poll failed', error)
+            return { done: false }
+          }
         },
         onDone: (res) => {
           queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] })
@@ -334,32 +404,34 @@ export default function SourceDirectory() {
         location,
         organization_id
       });
-      return response.data;
+      return response?.data;
     },
     onSuccess: (data) => {
-      if (data.success && data.source) {
-        setEditingSource(data.source);
+      if (data?.success && data?.source) {
+        setPrefilledSource(data.source);
+        setEditingSource(null);
         setIsSearchOpen(false);
         setIsAddOpen(true);
         setSearchSourceName('');
         setSearchLocation('');
         toast({
           title: '✅ Source Found',
-          description: `Found ${data.source.name}. Review and save to add to directory.`,
+          description: `Found ${data.source.name || 'source'}. Review and save to add to directory.`,
         });
       } else {
         toast({
           variant: 'destructive',
           title: 'Not Found',
-          description: data.message || 'Could not find information about this source.',
+          description: data?.message || 'Could not find information about this source.',
         });
       }
     },
     onError: (error) => {
+      log.error('search for source failed', error)
       toast({
         variant: 'destructive',
         title: 'Search Failed',
-        description: error.message || 'An error occurred while searching.',
+        description: error?.message || 'An error occurred while searching.',
       });
     }
   });
@@ -463,7 +535,7 @@ export default function SourceDirectory() {
   };
 
   const handleBulkCrawl = () => {
-    if (selectedSources.length === 0) {
+    if (!Array.isArray(selectedSources) || selectedSources.length === 0) {
       toast({
         variant: 'destructive',
         title: 'No Sources Selected',
@@ -471,18 +543,35 @@ export default function SourceDirectory() {
       });
       return;
     }
-    bulkCrawlMutation.mutate(selectedSources);
+    const idsToCrawl = selectedSources.filter((id) => !crawlingInBackground.includes(id));
+    if (idsToCrawl.length === 0) {
+      toast({
+        title: 'Already Crawling',
+        description: 'All selected sources are already crawling.',
+      });
+      return;
+    }
+    bulkCrawlMutation.mutate(idsToCrawl);
   };
 
   const handleCrawlAllDue = () => {
-    if (sourcesDue.length === 0) {
+    if (!Array.isArray(sourcesDue) || sourcesDue.length === 0) {
       toast({
         title: 'No Sources Due',
         description: 'All sources are up to date!',
       });
       return;
     }
-    const dueIds = sourcesDue.map((s) => s.id);
+    const dueIds = sourcesDue
+      .map((s) => s.id)
+      .filter((id) => !crawlingInBackground.includes(id));
+    if (dueIds.length === 0) {
+      toast({
+        title: 'Already Crawling',
+        description: 'All due sources are already crawling.',
+      });
+      return;
+    }
     bulkCrawlMutation.mutate(dueIds);
   };
 
@@ -558,7 +647,18 @@ export default function SourceDirectory() {
   };
 
   const isOpportunityInPipeline = (opportunityUrl) => {
-    return allGrants.some(g => g.url === opportunityUrl && g.organization_id === selectedOrgId);
+    if (!opportunityUrl) return false;
+    return allGrants.some(g => g.url && g.url === opportunityUrl && g.organization_id === selectedOrgId);
+  };
+
+  const openWebsite = (url) => {
+    if (!url) return;
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      log.error('failed to open website', error)
+      toast({ variant: 'destructive', title: 'Could not open link', description: 'Your browser blocked opening this link.' })
+    }
   };
 
   const handleSearchForSource = () => {
@@ -571,11 +671,68 @@ export default function SourceDirectory() {
       return;
     }
 
+    const trimmedLocation = (searchLocation || '').trim();
+    const fallbackLocation = selectedOrg && (selectedOrg.city || selectedOrg.state)
+      ? [selectedOrg.city, selectedOrg.state].filter(Boolean).join(', ')
+      : '';
+
     searchSourceMutation.mutate({
-      source_name: searchSourceName,
-      location: searchLocation || (selectedOrg ? `${selectedOrg.city}, ${selectedOrg.state}` : ''),
+      source_name: searchSourceName.trim(),
+      location: trimmedLocation || fallbackLocation,
       organization_id: selectedOrgId
     });
+  };
+
+  const handleAddOpportunityToPipeline = async (opp) => {
+    const oppKey = opp.id ?? opp.url;
+    if (oppKey != null && addingToPipeline.includes(oppKey)) return;
+    setAddingToPipeline((prev) => [...prev, oppKey]);
+    try {
+      // Check for duplicates first
+      if (opp.url) {
+        const existingGrants = await client.entities.Grant.filter({
+          organization_id: selectedOrgId,
+          url: opp.url
+        });
+
+        if (Array.isArray(existingGrants) && existingGrants.length > 0) {
+          toast({
+            title: 'Already in Pipeline',
+            description: `"${opp.title}" is already in your pipeline.`,
+          });
+          queryClient.invalidateQueries({ queryKey: ['grants'] });
+          return;
+        }
+      }
+
+      const grantData = {
+        organization_id: selectedOrgId,
+        title: opp.title,
+        funder: opp.sponsor,
+        url: opp.url,
+        deadline: opp.deadlineAt,
+        amount_min: opp.awardMin,
+        amount_max: opp.awardMax,
+        eligibility_summary: opp.eligibilityBullets?.join('\n'),
+        program_description: opp.descriptionMd,
+        status: 'discovered',
+      };
+      await client.entities.Grant.create(grantData);
+      queryClient.invalidateQueries({ queryKey: ['grants'] });
+      toast({
+        title: 'Added to Pipeline',
+        description: `${opp.title} has been added to your pipeline`,
+      });
+    } catch (error) {
+      log.error('failed to add opportunity to pipeline', error)
+      toast({
+        variant: 'destructive',
+        title: 'Failed to Add',
+        description: error?.message || 'Could not add this opportunity to your pipeline.',
+      });
+    } finally {
+      setAddingToPipeline((prev) => prev.filter((k) => k !== oppKey));
+    }
   };
 
   if (isLoadingSources || isLoadingOrgs) {
@@ -603,7 +760,7 @@ export default function SourceDirectory() {
             </div>
 
             <div className="w-full md:w-80">
-              <Select value={selectedOrgId || ""} onValueChange={setSelectedOrgId}>
+              <Select value={selectedOrgId || ""} onValueChange={(v) => setSelectedOrgId(v || null)}>
                 <SelectTrigger>
                   <div className="flex items-center gap-2">
                     <Building2 className="w-4 h-4 text-slate-500" />
@@ -787,7 +944,7 @@ export default function SourceDirectory() {
                   Search for Source
                 </Button>
 
-                <Button onClick={() => setIsAddOpen(true)}>
+                <Button onClick={() => { setEditingSource(null); setPrefilledSource(null); setIsAddOpen(true); }}>
                   <Plus className="w-4 h-4 mr-2" />
                   Add Source
                 </Button>
@@ -1002,7 +1159,7 @@ export default function SourceDirectory() {
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    onClick={() => window.open(source.website_url, '_blank')}
+                                    onClick={() => openWebsite(source.website_url)}
                                     title="Visit website"
                                   >
                                     <ExternalLink className="w-4 h-4" />
@@ -1013,6 +1170,7 @@ export default function SourceDirectory() {
                                   size="icon"
                                   onClick={() => {
                                     setEditingSource(source);
+                                    setPrefilledSource(null);
                                     setIsAddOpen(true);
                                   }}
                                   title="Edit source"
@@ -1031,7 +1189,7 @@ export default function SourceDirectory() {
                               </div>
                             </TableCell>
                           </TableRow>
-                          
+
                           {/* Expanded row showing opportunities */}
                           {isExpanded && (
                             <TableRow>
@@ -1054,11 +1212,15 @@ export default function SourceDirectory() {
                                     <div className="grid gap-2">
                                       {sourceOpportunities.map((opp) => {
                                         const inPipeline = isOpportunityInPipeline(opp.url);
-                                        const grant = allGrants.find(g => g.url === opp.url && g.organization_id === selectedOrgId);
-                                        
+                                        const grant = opp.url
+                                          ? allGrants.find(g => g.url && g.url === opp.url && g.organization_id === selectedOrgId)
+                                          : null;
+                                        const oppKey = opp.id ?? opp.url;
+                                        const isAdding = oppKey != null && addingToPipeline.includes(oppKey);
+
                                         return (
                                           <div
-                                            key={opp.id}
+                                            key={opp.id ?? opp.url}
                                             className="flex items-center justify-between p-3 bg-white rounded-lg border hover:border-blue-300 transition-colors"
                                           >
                                             <div className="flex-1">
@@ -1089,7 +1251,7 @@ export default function SourceDirectory() {
                                                 <Button
                                                   variant="ghost"
                                                   size="sm"
-                                                  onClick={() => window.open(opp.url, '_blank')}
+                                                  onClick={() => openWebsite(opp.url)}
                                                 >
                                                   <ExternalLink className="w-4 h-4" />
                                                 </Button>
@@ -1104,47 +1266,21 @@ export default function SourceDirectory() {
                                               ) : (
                                                 <Button
                                                   size="sm"
-                                                  onClick={async () => {
-                                                    // Check for duplicates first
-                                                    if (opp.url) {
-                                                      const existingGrants = await client.entities.Grant.filter({
-                                                        organization_id: selectedOrgId,
-                                                        url: opp.url
-                                                      });
-                                                      
-                                                      if (existingGrants.length > 0) {
-                                                        toast({
-                                                          title: 'Already in Pipeline',
-                                                          description: `"${opp.title}" is already in your pipeline.`,
-                                                        });
-                                                        queryClient.invalidateQueries({ queryKey: ['grants'] });
-                                                        return;
-                                                      }
-                                                    }
-                                                    
-                                                    const grantData = {
-                                                      organization_id: selectedOrgId,
-                                                      title: opp.title,
-                                                      funder: opp.sponsor,
-                                                      url: opp.url,
-                                                      deadline: opp.deadlineAt,
-                                                      amount_min: opp.awardMin,
-                                                      amount_max: opp.awardMax,
-                                                      eligibility_summary: opp.eligibilityBullets?.join('\n'),
-                                                      program_description: opp.descriptionMd,
-                                                      status: 'discovered',
-                                                    };
-                                                    await client.entities.Grant.create(grantData);
-                                                    queryClient.invalidateQueries({ queryKey: ['grants'] });
-                                                    toast({
-                                                      title: 'Added to Pipeline',
-                                                      description: `${opp.title} has been added to your pipeline`,
-                                                    });
-                                                  }}
+                                                  disabled={isAdding}
+                                                  onClick={() => handleAddOpportunityToPipeline(opp)}
                                                   className="bg-blue-600 hover:bg-blue-700 text-white hover:text-white"
                                                 >
-                                                  <Plus className="w-4 h-4 mr-2" />
-                                                  Add to Pipeline
+                                                  {isAdding ? (
+                                                    <>
+                                                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                                      Adding...
+                                                    </>
+                                                  ) : (
+                                                    <>
+                                                      <Plus className="w-4 h-4 mr-2" />
+                                                      Add to Pipeline
+                                                    </>
+                                                  )}
                                                 </Button>
                                               )}
                                             </div>
@@ -1211,7 +1347,7 @@ export default function SourceDirectory() {
               </Button>
               <Button
                 onClick={() => discoverMutation.mutate(selectedOrgId)}
-                disabled={!selectedOrgId}
+                disabled={!selectedOrgId || discoverMutation.isPending}
               >
                 <Sparkles className="w-4 h-4 mr-2" />
                 Start Discovery
@@ -1277,8 +1413,8 @@ export default function SourceDirectory() {
             </div>
 
             <DialogFooter>
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => {
                   setIsSearchOpen(false);
                   setSearchSourceName('');
@@ -1315,7 +1451,10 @@ export default function SourceDirectory() {
           open={isAddOpen}
           onOpenChange={(open) => {
             setIsAddOpen(open);
-            if (!open) setEditingSource(null);
+            if (!open) {
+              setEditingSource(null);
+              setPrefilledSource(null);
+            }
           }}
         >
           <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -1331,10 +1470,12 @@ export default function SourceDirectory() {
             </DialogHeader>
             <AddSourceForm
               source={editingSource}
+              prefill={prefilledSource}
               organizationId={selectedOrgId}
               onSuccess={() => {
                 setIsAddOpen(false);
                 setEditingSource(null);
+                setPrefilledSource(null);
                 queryClient.invalidateQueries({ queryKey: ['sourceDirectory'] });
                 toast({
                   title: editingSource ? 'Source Updated' : 'Source Added',
@@ -1344,6 +1485,7 @@ export default function SourceDirectory() {
               onCancel={() => {
                 setIsAddOpen(false);
                 setEditingSource(null);
+                setPrefilledSource(null);
               }}
             />
           </DialogContent>

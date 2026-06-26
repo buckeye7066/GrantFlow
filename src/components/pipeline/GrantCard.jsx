@@ -23,23 +23,23 @@ import PortalLoginButton from '@/components/portal/PortalLoginButton';
 import { safeHttpUrl } from '@/lib/safeUrl';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
-  if (grant.id) {
+  if (grant && grant.id != null && grant.id !== '') {
     return createPageUrl("GrantDetail", { id: grant.id });
   }
 
   if (isDiscoveryResult) {
-    if (grant.title) {
+    if (grant && grant.title) {
       return createPageUrl("FundingOpportunities") + `?search=${encodeURIComponent(grant.title)}`;
     }
     return createPageUrl("FundingOpportunities");
   }
 
-  const url = grant.url || grant.application_url || grant.source_url;
+  const url = grant ? (grant.url || grant.application_url || grant.source_url) : null;
   if (isRenderableUrl(url)) {
     return url;
   }
 
-  if (grant.title) {
+  if (grant && grant.title) {
     return createPageUrl("FundingOpportunities") + `?search=${encodeURIComponent(grant.title)}`;
   }
 
@@ -68,21 +68,10 @@ export default function GrantCard({ grant, organization, organizationName, onSta
     ? hamiltonSelection.isSelected(hamiltonSelectionSource)
     : false;
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (cardRef.current && !cardRef.current.contains(event.target)) {
-        setShowMenu(false);
-      }
-    };
-    if (showMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showMenu]);
-
   const deadlineDate = grant.deadline ? new Date(grant.deadline) : null;
   const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime());
-  const isExpired = isDeadlineValid && isPast(deadlineDate) && grant.deadline.toLowerCase() !== 'rolling';
+  const isRolling = grant.deadline != null && String(grant.deadline).toLowerCase() === 'rolling';
+  const isExpired = isDeadlineValid && isPast(deadlineDate) && !isRolling;
 
   // Deadline urgency: days remaining (null when no valid deadline or already expired)
   const daysUntilDeadline = isDeadlineValid && !isExpired
@@ -101,8 +90,8 @@ export default function GrantCard({ grant, organization, organizationName, onSta
   const isDiscoveryResult = grant.descriptionMd || eligibilityBullets.length > 0;
   const hasSummary = grant.descriptionMd && grant.descriptionMd.length > 0;
 
-  // Get match score - prefer 'match' over 'match_score'
-  const matchScore = grant.match || grant.match_score || 0;
+  // Get match score - prefer 'match' over 'match_score' (preserve explicit 0)
+  const matchScore = grant.match ?? grant.match_score ?? 0;
   const hasMatchScore = matchScore > 0;
 
   // Get match score color and label
@@ -116,6 +105,21 @@ export default function GrantCard({ grant, organization, organizationName, onSta
 
   const matchColor = getMatchScoreColor(matchScore);
 
+  // Match reasons computed once per render (used in two places)
+  const matchReasons = Array.isArray(grant.match_reasons)
+    ? grant.match_reasons
+    : (Array.isArray(grant.matchReasons) ? grant.matchReasons : []);
+
+  // Normalized award amount — coerce to number and validate before formatting
+  const rawAward = grant.typical_award ?? grant.amount_max ?? grant.awardMax;
+  const awardAmount = (() => {
+    if (rawAward == null) return null;
+    if (typeof rawAward === 'number') return Number.isFinite(rawAward) ? rawAward : null;
+    const cleaned = String(rawAward).replace(/[^0-9.\-]/g, '');
+    const n = Number(cleaned);
+    return Number.isFinite(n) && cleaned !== '' ? n : null;
+  })();
+
   // Human review surface: surface when the stage itself is human-required
   // (portal / follow_up / report) OR the latest pipeline_automation event
   // for this grant said handoff_required=true. The reason string (if any)
@@ -127,6 +131,8 @@ export default function GrantCard({ grant, organization, organizationName, onSta
     latestAutomation?.handoff_reason ||
     stageHelp.nextStep ||
     'A person needs to finish this step.';
+
+  const handleStartProposal = () => navigate(createPageUrl('Apply', { id: grant.id }));
 
   return (
     <div
@@ -144,7 +150,6 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
               }`}
               onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
               title={hamiltonIsSelected ? 'Selected for Hamilton — submit or trim from the bar below' : 'Pick this funding source for Hamilton to process'}
             >
               <input
@@ -152,7 +157,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 checked={hamiltonIsSelected}
                 onClick={(e) => e.stopPropagation()}
-                onChange={(e) => { e.stopPropagation(); hamiltonSelection.toggle(hamiltonSelectionSource); }}
+                onChange={(e) => { e.stopPropagation(); hamiltonSelection?.toggle?.(hamiltonSelectionSource); }}
               />
               <Sparkles className="w-3 h-3" />
               {hamiltonIsSelected ? 'Picked' : 'Hamilton'}
@@ -178,20 +183,17 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 </Badge>
               </HelpTip>
               {/* Info toggle for match breakdown — only show when there are reasons to display */}
-              {(() => {
-                const reasons = Array.isArray(grant.match_reasons) ? grant.match_reasons : (Array.isArray(grant.matchReasons) ? grant.matchReasons : []);
-                return reasons.length > 0 ? (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMatchBreakdown(v => !v); }}
-                    className="text-slate-400 hover:text-slate-600 transition-colors"
-                    title={showMatchBreakdown ? 'Hide match details' : 'Why this matched'}
-                    aria-label="Toggle match breakdown"
-                  >
-                    <Info className="w-3.5 h-3.5" />
-                  </button>
-                ) : null;
-              })()}
+              {matchReasons.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMatchBreakdown(v => !v); }}
+                  className="text-slate-400 hover:text-slate-600 transition-colors"
+                  title={showMatchBreakdown ? 'Hide match details' : 'Why this matched'}
+                  aria-label="Toggle match breakdown"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
+              ) : null}
             </div>
             )}
           {/* In-Pipeline indicator */}
@@ -283,7 +285,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               )}
               {hamiltonSelection?.enabled && (
                 <DropdownMenuItem
-                  onSelect={() => { hamiltonSelection.toggle(hamiltonSelectionSource); setShowMenu(false); }}
+                  onSelect={() => { hamiltonSelection?.toggle?.(hamiltonSelectionSource); setShowMenu(false); }}
                 >
                   <Sparkles className="w-4 h-4 mr-2" />
                   {hamiltonIsSelected ? 'Remove from Hamilton selection' : 'Automate with Hamilton'}
@@ -295,14 +297,13 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   Resume / view Hamilton task
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onSelect={() => { navigate(createPageUrl("GrantDetail", { id: grant.id })); setShowMenu(false); }}>
+              <DropdownMenuItem onSelect={() => { navigate(getGrantDetailUrl(grant, showSummary)); setShowMenu(false); }}>
                 <Edit className="w-4 h-4 mr-2" />
                 View Details
               </DropdownMenuItem>
               {onDelete && (
                 <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
+                  onSelect={() => {
                     onDelete(grant);
                     setShowMenu(false);
                   }}
@@ -326,12 +327,10 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           <p className="text-xs text-slate-600 truncate">{grant.funder || grant.sponsor}</p>
           
           {/* Match Reasons (if available) - support both match_reasons (API) and matchReasons (legacy) */}
-          {(showSummary || showMatchBreakdown) && (() => {
-            const reasons = Array.isArray(grant.match_reasons) ? grant.match_reasons : (Array.isArray(grant.matchReasons) ? grant.matchReasons : []);
-            return reasons.length > 0 ? (
+          {(showSummary || showMatchBreakdown) && matchReasons.length > 0 && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-md p-2 space-y-1">
               <p className="text-xs font-semibold text-emerald-900">Why this matches:</p>
-              {reasons.slice(0, 5).map((reason, idx) => {
+              {matchReasons.slice(0, 5).map((reason, idx) => {
                 const text = formatReasonText(reason)
                 return text ? (
                   <p key={idx} className="text-xs text-emerald-700 leading-tight">
@@ -340,8 +339,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 ) : null
               })}
             </div>
-            ) : null;
-          })()}
+          )}
 
           {/* Warnings (if any) */}
           {showSummary && grant.matchWarnings && grant.matchWarnings.length > 0 && (
@@ -457,10 +455,10 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   </HelpTip>
             )}
 
-            {(grant.amount_max || grant.typical_award || grant.awardMax) && (
+            {awardAmount !== null && (
               <div className="flex items-center gap-1 text-xs text-slate-600">
                 <DollarSign className="w-3 h-3" />
-                <span>~${(grant.typical_award || grant.amount_max || grant.awardMax)?.toLocaleString()}</span>
+                <span>~${awardAmount.toLocaleString()}</span>
               </div>
             )}
           </div>
@@ -531,7 +529,8 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   variant="outline"
                   className="text-xs shrink-0 border-blue-300 text-blue-700 hover:bg-blue-50"
                   title="Start a proposal for this grant"
-                  onClick={() => navigate(createPageUrl('Apply', { id: grant.id }))}
+                  aria-label={`Start a proposal for ${grant.title || 'this grant'}`}
+                  onClick={handleStartProposal}
                 >
                   <FileEdit className="w-3.5 h-3.5 mr-1" />
                   Start Proposal
@@ -545,6 +544,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   variant="outline"
                   className="text-xs shrink-0"
                   title="Set a reminder for this deadline"
+                  aria-label={`Set a reminder for ${grant.title || 'this grant'} deadline`}
                   onClick={() => {
                     const msg = `Set a reminder for: ${grant.title} deadline: ${grant.deadline}`;
                     window.dispatchEvent(new CustomEvent('anya:open', { detail: { prefillMessage: msg } }));

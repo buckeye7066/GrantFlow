@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
@@ -8,7 +8,7 @@ import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle, Sparkles } from 'lucide-react';
+import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle, Sparkles, StopCircle } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import SearchCoveragePanel from '@/components/discovery/SearchCoveragePanel';
@@ -18,29 +18,44 @@ import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
-import { createLogger } from '@/utils/logger'
-import { CANONICAL_NEED_CATEGORIES, NEED_CATEGORY_GROUPS } from '@/constants/needCategories'
-import ReverseLookup from '@/components/discovery/ReverseLookup'
-import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
-import { openAnyaPanel } from '@/lib/anyaPanel'
-import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts'
+import { createLogger } from '@/utils/logger';
+import { CANONICAL_NEED_CATEGORIES, NEED_CATEGORY_GROUPS } from '@/constants/needCategories';
+import ReverseLookup from '@/components/discovery/ReverseLookup';
+import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi';
+import { openAnyaPanel } from '@/lib/anyaPanel';
+import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts';
 import {
   inferUsStateZipFromText,
   getExplicitStateZip,
   collectAddressTextForInference,
-} from '@/utils/inferLocationFromAddress'
-import { useFundingResultsStore } from '@/stores/fundingResultsStore'
-import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds'
+} from '@/utils/inferLocationFromAddress';
+import { useFundingResultsStore } from '@/stores/fundingResultsStore';
+import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
 // fleet to the background dispatcher (which runs each relevant crawler to
-// completion — no synchronous request to hit Vercel's ~30s proxy 504, and no
+// completion \u2014 no synchronous request to hit Vercel's ~30s proxy 504, and no
 // time-budget that returns partial/shortcut results), then the UI polls the
 // catalog so matches stream in as crawlers finish. Slow-but-complete by design.
 const DISCOVERY_POLL_MS = 12000         // how often to refetch catalog + status (gentle: heavy query)
 const DISCOVERY_MAX_WAIT_MS = 5 * 60 * 1000 // stop polling after 5 min (jobs keep running server-side)
 
+// Default minimum match score (owner directive 2026-06-23).
+const DEFAULT_MIN_MATCH_SCORE = 75
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Clamp a match-score value to 0\u2013100, falling back to the intended default
+ * (75) when the value is non-finite \u2014 NOT 0 (which would silently widen the
+ * search to the broadest possible floor and return thousands of low-quality
+ * matches).
+ */
+function clampMinScore(value, fallback = DEFAULT_MIN_MATCH_SCORE) {
+  const n = Number(value)
+  const base = Number.isFinite(n) ? n : fallback
+  return Math.min(100, Math.max(0, base))
+}
 
 /**
  * Fetch profile-matched catalog opportunities. Shared by the live discover
@@ -48,7 +63,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  */
 async function fetchCatalogMatches(profileId, minMatchScore) {
   if (!profileId) return { opportunities: [] }
-  const ms = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
+  const ms = clampMinScore(minMatchScore)
   const params = new URLSearchParams({
     min_score: String(ms),
     limit: '2000',
@@ -85,6 +100,24 @@ function sectionsMap(profileDetail) {
   return typeof raw === 'object' && raw !== null ? raw : {}
 }
 
+/**
+ * Normalize a profile's interests signal (which may be a Set, an array, or a
+ * plain object after JSON round-trips) into a plain array of keyword strings.
+ */
+function interestsToArray(interests) {
+  if (!interests) return []
+  if (interests instanceof Set) return Array.from(interests)
+  if (Array.isArray(interests)) return interests
+  if (typeof interests === 'object') {
+    // Plain object after JSON serialization: use its values when they look like
+    // keywords, otherwise its keys.
+    const values = Object.values(interests)
+    if (values.length > 0 && values.every((v) => typeof v === 'string')) return values
+    return Object.keys(interests)
+  }
+  return []
+}
+
 function normalizeResultMetadata(payload, results) {
   const listLength = Array.isArray(results) ? results.length : 0
   return {
@@ -108,7 +141,7 @@ function normalizeResultMetadata(payload, results) {
 }
 
 // Pull the staged-ladder diagnostics out of a results payload so the UI can
-// explain what was searched/expanded and what profile info would help — instead
+// explain what was searched/expanded and what profile info would help \u2014 instead
 // of showing a dead-end empty state. Returns null when nothing is present.
 function extractDiagnostics(payload) {
   if (!payload || typeof payload !== 'object') return null
@@ -129,14 +162,14 @@ function extractDiagnostics(payload) {
 /**
  * Color-coded, NOTCHED guidance band rendered ABOVE the match-score slider.
  * Data-driven from the matching endpoint's `score_histogram`
- * ([{ min, max, count, top_source }] across 0–80). Greener = more results in
+ * ([{ min, max, count, top_source }] across 0\u201380). Greener = more results in
  * that zone (density), fading as fewer; each notch is labeled with a friendly
  * quality label + the dominant source family. Degrades gracefully: when no
  * histogram is provided (older response) it renders nothing.
  *
  * @param {{ histogram: Array<{min:number,max:number,count:number,top_source:string|null}>, max?: number, value?: number }} props
  */
-// Fixed 0–80 guidance zones, ALWAYS rendered so the band is a visible guide
+// Fixed 0\u201380 guidance zones, ALWAYS rendered so the band is a visible guide
 // even before any results exist. Each zone is enriched with live counts + the
 // dominant source from `score_histogram` (buckets are 0-20/20-40/40-60/60-80,
 // matching these zones) when the matching response provides it.
@@ -164,20 +197,20 @@ function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
           // Without data: a static confidence gradient (higher zone = stronger
           // fit = deeper green) so the guide still reads as "right = closer fit".
           const ratio = hasData ? count / maxCount : 0
-          const staticRatio = z.min / max // 0 → 0.75
+          const staticRatio = z.min / max // 0 \u2192 0.75
           const intensity = hasData ? 0.2 + 0.65 * ratio : 0.16 + 0.5 * staticRatio
           const bg = hasData && count === 0
-            ? 'rgb(241 245 249)' // slate-100 — searched, nothing here
+            ? 'rgb(241 245 249)' // slate-100 \u2014 searched, nothing here
             : `rgba(34, 197, 94, ${intensity})`
           const sub = hasData
-            ? (count > 0 ? `${count}${topSource ? ` · ${topSource.toLowerCase()}` : ''}` : z.hint)
+            ? (count > 0 ? `${count}${topSource ? ` \u00b7 ${topSource.toLowerCase()}` : ''}` : z.hint)
             : z.hint
           return (
             <div
               key={`band-${z.min}`}
               className="flex flex-col"
               style={{ flexGrow: 1, flexBasis: 0 }}
-              title={`${z.label} (${z.min}–${z.max}%)${hasData ? ` · ${count} match${count === 1 ? '' : 'es'}` : ''}${topSource ? ` · mostly ${topSource.toLowerCase()}` : ` · ${z.hint}`}`}
+              title={`${z.label} (${z.min}\u2013${z.max}%)${hasData ? ` \u00b7 ${count} match${count === 1 ? '' : 'es'}` : ''}${topSource ? ` \u00b7 mostly ${topSource.toLowerCase()}` : ` \u00b7 ${z.hint}`}`}
             >
               <div
                 className={`h-2.5 rounded-sm ${isActiveZone ? 'ring-2 ring-emerald-600' : ''}`}
@@ -208,7 +241,7 @@ function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
  * section. Two layouts:
  *   - variant="prominent": full card for the discovery-pending empty state.
  *   - variant="banner": compact strip shown above results otherwise.
- * Never a gate — purely additive guidance.
+ * Never a gate \u2014 purely additive guidance.
  */
 function ImproveMatchesCard({ prompts, profileId, onDismiss, variant = 'banner' }) {
   if (!Array.isArray(prompts) || prompts.length === 0 || !profileId) return null
@@ -227,7 +260,7 @@ function ImproveMatchesCard({ prompts, profileId, onDismiss, variant = 'banner' 
             <div className="flex-1">
               <h3 className="text-base font-semibold text-emerald-900">Improve your matches</h3>
               <p className="text-sm text-emerald-800 mt-0.5">
-                Add a few details to your profile and we&apos;ll find more — and more relevant — funding for you.
+                Add a few details to your profile and we&apos;ll find more \u2014 and more relevant \u2014 funding for you.
               </p>
             </div>
             <button
@@ -303,14 +336,14 @@ export default function DiscoverGrants() {
   const navigate = useNavigate()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  // Owner directive (2026-06-23): default the match-score slider to 75 — the
+  // Owner directive (2026-06-23): default the match-score slider to 75 \u2014 the
   // quality bar below which a match is treated as a "bad match" for this profile
   // (kept in the master catalog, not surfaced here).
-  const [minMatchScore, setMinMatchScore] = useState(75);
+  const [minMatchScore, setMinMatchScore] = useState(DEFAULT_MIN_MATCH_SCORE);
   // Debounce the slider value used to KEY the catalog query so dragging the
   // slider through intermediate values doesn't fire a heavy 2000-row matching
-  // query per step (that thundering herd saturated the DB → 503/504 cascade).
-  const [debouncedMinMatchScore, setDebouncedMinMatchScore] = useState(75);
+  // query per step (that thundering herd saturated the DB \u2192 503/504 cascade).
+  const [debouncedMinMatchScore, setDebouncedMinMatchScore] = useState(DEFAULT_MIN_MATCH_SCORE);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedMinMatchScore(minMatchScore), 450);
     return () => clearTimeout(t);
@@ -319,6 +352,10 @@ export default function DiscoverGrants() {
   // re-dispatch the crawler fleet concurrently (each poll re-runs the heavy
   // matcher; stacking them is what overwhelmed the DB).
   const discoveringRef = React.useRef(false);
+  // Cancellation token for the poll loop: bumped whenever the profile changes
+  // or the component unmounts so any in-flight poll loop stops touching state
+  // and stops issuing stale-keyed heavy matcher queries.
+  const pollCancelRef = React.useRef({ cancelled: false, token: 0 });
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
@@ -395,7 +432,8 @@ export default function DiscoverGrants() {
     if (!selectedProfileId && !urlProfileId && profiles.length > 0) {
       try {
         const lastProfile = localStorage.getItem('grantflow:discover-last-profile');
-        if (lastProfile && profiles.some(p => p.id === lastProfile)) {
+        // Normalize comparison: stored id is a string, profile ids may be numeric.
+        if (lastProfile && profiles.some((p) => String(p?.id) === String(lastProfile))) {
           setSelectedProfileId(lastProfile);
         }
       } catch { /* ignore storage errors */ }
@@ -403,8 +441,11 @@ export default function DiscoverGrants() {
   }, [profiles, searchParams, selectedProfileId]);
 
 
-  // Clear stale results and invalidate caches whenever the effective profile changes
+  // Clear stale results and invalidate caches whenever the effective profile changes.
+  // Also bump the poll-loop cancellation token so any in-flight poll for the
+  // previous profile stops touching state / issuing stale-keyed queries.
   useEffect(() => {
+    pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
     setSearchResults([]);
     setCrawlerResultMeta(null);
     setCoverageInfo(null);
@@ -413,6 +454,13 @@ export default function DiscoverGrants() {
     queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
     queryClient.invalidateQueries({ queryKey: ['discover-profile'] });
   }, [effectiveProfileId, queryClient]);
+
+  // On unmount, cancel any in-flight poll loop.
+  useEffect(() => {
+    return () => {
+      pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
+    }
+  }, [])
 
 
   const { data: profileDetail, isPending: isProfileDetailPending } = useQuery({
@@ -438,14 +486,14 @@ export default function DiscoverGrants() {
   });
 
   const selectedProfile = useMemo(() =>
-    profiles.find(p => p.id === (effectiveProfileId || selectedProfileId)),
+    profiles.find((p) => String(p?.id) === String(effectiveProfileId || selectedProfileId)),
     [profiles, effectiveProfileId, selectedProfileId]
   );
 
   const selectedOrg = useMemo(
     () =>
       selectedProfile?.organization_id
-        ? organizations.find((o) => o.id === selectedProfile.organization_id)
+        ? organizations.find((o) => String(o?.id) === String(selectedProfile.organization_id))
         : null,
     [organizations, selectedProfile],
   );
@@ -458,7 +506,7 @@ export default function DiscoverGrants() {
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
-    // Keyed by the DEBOUNCED slider value — one query per settled value, not per
+    // Keyed by the DEBOUNCED slider value \u2014 one query per settled value, not per
     // drag step.
     queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore],
     // Catalog query honors the Discover slider as a HARD floor (strict mode).
@@ -470,7 +518,7 @@ export default function DiscoverGrants() {
     // UI never blanks (and the user isn't tempted to re-trigger).
     placeholderData: keepPreviousData,
     // A concurrent crawl can momentarily saturate the DB, so the matcher returns
-    // a retryable 503 (catalog_busy) or 504s. Retry — but SPARINGLY with long
+    // a retryable 503 (catalog_busy) or 504s. Retry \u2014 but SPARINGLY with long
     // backoff: this is a heavy query, and aggressive retries amplify the very
     // overload that caused the timeout (a thundering-herd death spiral).
     retry: (failureCount, error) => {
@@ -488,7 +536,7 @@ export default function DiscoverGrants() {
     if (!Array.isArray(rows)) return []
     // Defense in depth: if any backend path leaks results below the user's
     // slider value, the UI must still honor the slider as a hard floor.
-    const minScoreFloor = Math.min(100, Math.max(0, Number(debouncedMinMatchScore) || 0))
+    const minScoreFloor = clampMinScore(debouncedMinMatchScore)
     return rows
       .filter((opp) => {
         const score = Number(opp.match_score ?? opp.match ?? -Infinity)
@@ -522,15 +570,15 @@ export default function DiscoverGrants() {
 
   // Feature A: the matching endpoint returns discovery_pending:true when this
   // profile has never had discovery run. We then show a friendly run-discovery
-  // empty state instead of a blank/zero list — and never imply "no matches".
+  // empty state instead of a blank/zero list \u2014 and never imply "no matches".
   const discoveryPending = useMemo(() => {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
     return Boolean(payload?.discovery_pending)
   }, [catalogMatchResponse])
 
   // Feature B: data-driven guidance band. score_histogram is an array of
-  // { min, max, count, top_source } buckets across the 0–80 range. Absent on
-  // older responses — the band degrades gracefully (hidden).
+  // { min, max, count, top_source } buckets across the 0\u201380 range. Absent on
+  // older responses \u2014 the band degrades gracefully (hidden).
   const scoreHistogram = useMemo(() => {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
     const buckets = payload?.score_histogram
@@ -568,10 +616,10 @@ export default function DiscoverGrants() {
       organizationName: selectedProfile?.display_name ?? null,
       organizationId: selectedProfile?.organization_id ?? null,
       returned: merged.length,
-      totalFound: Math.max(
-        merged.length,
-        (catalogResultMeta?.totalFound ?? 0) + (crawlerResultMeta?.totalFound ?? 0),
-      ),
+      // Use the deduped merged length as the authoritative total \u2014 summing the
+      // two source totals double-counts the heavily-overlapping catalog and
+      // crawler results.
+      totalFound: merged.length,
       totalScored: catalogResultMeta?.totalScored ?? null,
       truncated: Boolean(catalogResultMeta?.truncated || crawlerResultMeta?.truncated),
       thresholdFallbackMessage: crawlerResultMeta?.thresholdFallbackMessage ?? null,
@@ -645,9 +693,9 @@ export default function DiscoverGrants() {
       inferred.state ||
       inferred.zip
     const hasEntityType = Boolean(selectedProfile.primary_type || profileForSearch?.primary_type)
-    const interests = profileForSearch?.signals?.interests
+    const interestsArr = interestsToArray(profileForSearch?.signals?.interests)
     const tags = profileForSearch?.tags
-    const hasKeywords = (interests && interests.size > 0) || (Array.isArray(tags) && tags.length > 0)
+    const hasKeywords = interestsArr.length > 0 || (Array.isArray(tags) && tags.length > 0)
     return {
       missingLocation: !hasLocation,
       missingEntityType: !hasEntityType,
@@ -655,7 +703,7 @@ export default function DiscoverGrants() {
     }
   }, [selectedProfile, profileDetailForUi, profileForSearch, selectedOrg])
 
-  const handleFindFunding = async (overrideCategoryQuery, options = {}) => {
+  const handleFindFunding = useCallback(async (overrideCategoryQuery, options = {}) => {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
     const pid = (typeof profileIdToUse === 'string' ? profileIdToUse.trim() : null) || null
     if (!pid) {
@@ -669,13 +717,13 @@ export default function DiscoverGrants() {
     }
     // Strict-by-default: callers may explicitly broaden by passing
     // { strictMinScore: false } or by lowering the slider.
-    const effectiveMinMatchScore = Math.min(
-      100,
-      Math.max(0, Number(options?.minMatchScoreOverride ?? minMatchScore) || 0),
+    const effectiveMinMatchScore = clampMinScore(
+      options?.minMatchScoreOverride ?? minMatchScore,
+      minMatchScore,
     )
     const strictMinScore = options?.strictMinScore !== false
     // If a discovery run is already in flight, don't stack another fleet +
-    // poll loop (each poll re-runs the heavy matcher — stacking them is what
+    // poll loop (each poll re-runs the heavy matcher \u2014 stacking them is what
     // overwhelmed the DB). Just refresh the current view and bail.
     if (discoveringRef.current) {
       await queryClient
@@ -684,6 +732,10 @@ export default function DiscoverGrants() {
       return
     }
     discoveringRef.current = true
+    // Establish a fresh cancellation token for this run's poll loop.
+    const runToken = pollCancelRef.current.token + 1
+    pollCancelRef.current = { cancelled: false, token: runToken }
+    const isCancelled = () => pollCancelRef.current.cancelled || pollCancelRef.current.token !== runToken
     setIsSearching(true)
     setProfileCompletionHint(null)
     setScoreHint(null)
@@ -694,15 +746,21 @@ export default function DiscoverGrants() {
       typeof rawCategory === 'string' && rawCategory.trim()
         ? rawCategory.trim()
         : null
-    const baseInterests = profileForSearch?.signals?.interests
-      ? Array.from(profileForSearch.signals.interests).slice(0, 10)
-      : Array.isArray(profileForSearch?.tags)
-        ? profileForSearch.tags.slice(0, 10)
-        : []
+    const baseInterests = (() => {
+      const arr = interestsToArray(profileForSearch?.signals?.interests)
+      if (arr.length > 0) return arr.slice(0, 10)
+      return Array.isArray(profileForSearch?.tags) ? profileForSearch.tags.slice(0, 10) : []
+    })()
     // Merge category query keywords into interests when browsing by need category
     const mergedInterests = activeCategoryQuery
       ? [...new Set([...activeCategoryQuery.split(/\s+/).filter(Boolean), ...baseInterests])].slice(0, 15)
       : baseInterests
+    const demographicsArr = (() => {
+      const d = profileForSearch?.signals?.demographics
+      if (d instanceof Set) return Array.from(d).slice(0, 10)
+      if (Array.isArray(d)) return d.slice(0, 10)
+      return []
+    })()
     const itemRequest = profileForSearch ? {
       location: {
         state: profileForSearch?.signals?.location?.state || profileForSearch?.state || null,
@@ -710,7 +768,7 @@ export default function DiscoverGrants() {
         zip: profileForSearch?.signals?.location?.zip || profileForSearch?.zip_code || null,
       },
       interests: mergedInterests,
-      demographics: profileForSearch?.signals?.demographics ? Array.from(profileForSearch.signals.demographics).slice(0, 10) : [],
+      demographics: demographicsArr,
       career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
       category_query: activeCategoryQuery ?? undefined,
     } : null
@@ -719,7 +777,7 @@ export default function DiscoverGrants() {
       // Show whatever already matches this profile immediately (instant feedback
       // from opportunities already in the catalog), then stream more in as the
       // background fleet finishes. Refetch ONLY the active (current-slider) query
-      // — never the whole ['discover-catalog'] family, which would re-run the
+      // \u2014 never the whole ['discover-catalog'] family, which would re-run the
       // heavy matcher for every cached slider value at once.
       await queryClient
         .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
@@ -729,10 +787,10 @@ export default function DiscoverGrants() {
       // dispatcher. The server-side relevance selector runs ONLY the crawlers
       // appropriate for THIS profile (local + comprehensive + government always;
       // scholarship/student only for students; health/clinical-trials only with
-      // health indicators + consent; foundation/990 for orgs — never mismatched
+      // health indicators + consent; foundation/990 for orgs \u2014 never mismatched
       // crawlers), and each runs to COMPLETION server-side. No synchronous
       // request to hit the gateway 504, and no time budget that returns partial
-      // results — slow-but-complete, using the full profile.
+      // results \u2014 slow-but-complete, using the full profile.
       const dispatch = await discoverAllForProfile({ profileId: pid }).catch((bgErr) => {
         console.warn('[DiscoverGrants] discover-all dispatch failed:', bgErr?.message || bgErr)
         return null
@@ -740,18 +798,20 @@ export default function DiscoverGrants() {
       const enqueued = Number(dispatch?.jobs_enqueued) || 0
       const crawlerTypes = Array.isArray(dispatch?.crawler_types) ? dispatch.crawler_types : []
       // synchronous=true means the OS shim ran the entire profile discovery
-      // INSIDE the request — by the time we see this response the catalog
+      // INSIDE the request \u2014 by the time we see this response the catalog
       // has already been updated and there is nothing to poll for. Polling
       // anyway just adds 12s+ of wasted spinner time before fetchCatalogMatches.
       const synchronous = Boolean(dispatch?.synchronous)
       const stored = Number(dispatch?.stored) || 0
       const matches = Number(dispatch?.matches) || 0
-      setDiscovery({ active: enqueued > 0, enqueued, running: enqueued, crawlerTypes, synchronous })
+      if (!isCancelled()) {
+        setDiscovery({ active: enqueued > 0, enqueued, running: enqueued, crawlerTypes, synchronous })
+      }
 
       if (enqueued > 0 && !synchronous) {
         toast({
           title: 'Searching funding sources matched to your profile',
-          description: `Running ${enqueued} relevant crawler${enqueued === 1 ? '' : 's'}${crawlerTypes.length ? ` (${crawlerTypes.slice(0, 6).join(', ')}${crawlerTypes.length > 6 ? '…' : ''})` : ''}. Matches appear below as each finishes — this can take a few minutes.`,
+          description: `Running ${enqueued} relevant crawler${enqueued === 1 ? '' : 's'}${crawlerTypes.length ? ` (${crawlerTypes.slice(0, 6).join(', ')}${crawlerTypes.length > 6 ? '\u2026' : ''})` : ''}. Matches appear below as each finishes \u2014 this can take a few minutes.`,
         })
         // Poll: refetch the catalog so new matches stream into the merged list,
         // and watch the job counters until this run's crawlers have drained.
@@ -759,10 +819,15 @@ export default function DiscoverGrants() {
         let sawRunning = false
         while (Date.now() - start < DISCOVERY_MAX_WAIT_MS) {
           await sleep(DISCOVERY_POLL_MS)
+          // The user may have switched profiles or unmounted while we slept;
+          // stop touching state and stop issuing stale-keyed heavy queries.
+          if (isCancelled()) break
           const status = await fetchCrawlerStatus(pid).catch(() => null)
+          if (isCancelled()) break
           await queryClient
             .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
             .catch(() => {})
+          if (isCancelled()) break
           const running = Number(status?.running) || 0
           if (running > 0) sawRunning = true
           setDiscovery((d) => (d ? { ...d, running } : d))
@@ -779,17 +844,22 @@ export default function DiscoverGrants() {
         })
       }
 
+      // If the run was cancelled (profile change / unmount), don't run the final
+      // pass against the stale-captured profile.
+      if (isCancelled()) return
+
       // Final pass: pull the complete, profile-matched catalog and hand it to the
       // existing pipeline/store logic (auto-add high-confidence matches, populate
       // the FundingResults store, final summary toast). Honors any broadened
       // slider via effectiveMinMatchScore.
       const finalPayload = await fetchCatalogMatches(pid, effectiveMinMatchScore).catch(() => null)
+      if (isCancelled()) return
       const rawOpportunities = Array.isArray(finalPayload?.opportunities)
         ? finalPayload.opportunities
         : Array.isArray(finalPayload?.data?.opportunities)
           ? finalPayload.data.opportunities
           : []
-      // Frontend hard floor (defense in depth) — honor the slider as a hard floor.
+      // Frontend hard floor (defense in depth) \u2014 honor the slider as a hard floor.
       const opportunities = strictMinScore
         ? rawOpportunities.filter((opp) => {
             const score = Number(opp.match_score ?? opp.match ?? -Infinity)
@@ -818,13 +888,35 @@ export default function DiscoverGrants() {
           : errorMessage,
       })
     } finally {
-      setIsSearching(false)
-      setDiscovery(null)
+      // Only clear UI state if this run was not superseded by a newer run/cancel.
+      if (!isCancelled()) {
+        setIsSearching(false)
+        setDiscovery(null)
+      }
       discoveringRef.current = false
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveProfileId, selectedProfileId, minMatchScore, debouncedMinMatchScore, categoryQuery, profileForSearch, queryClient, toast, selectedProfile])
 
-  // Auto-run Discovery when arriving from onboarding with ?autorun=1
+  // User-initiated stop. Bumps the same poll-loop cancellation token the
+  // profile-change / unmount paths use, so the in-flight loop's next
+  // isCancelled() check breaks out and its finally skips the reset. We reset
+  // the UI here for instant feedback. Crawlers already dispatched keep running
+  // server-side (this stops the client from waiting, not the backend).
+  const cancelSearch = useCallback(() => {
+    pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
+    discoveringRef.current = false
+    setIsSearching(false)
+    setDiscovery(null)
+    toast({
+      title: 'Search stopped',
+      description: 'Stopped waiting for results. Any matches already found are shown below; sources already queued keep running in the background.',
+    })
+  }, [toast])
+
+  // Auto-run Discovery when arriving from onboarding with ?autorun=1.
+  // handleFindFunding is memoized via useCallback so the captured profile id
+  // (effectiveProfileId/selectedProfileId) is current at invocation.
   const autorunTriggered = React.useRef(false)
   useEffect(() => {
     if (autorunTriggered.current) return
@@ -832,12 +924,12 @@ export default function DiscoverGrants() {
     if (!effectiveProfileId || isSearching || hasSearched) return
     autorunTriggered.current = true
     handleFindFunding()
-  }, [effectiveProfileId, searchParams, isSearching, hasSearched])
+  }, [effectiveProfileId, searchParams, isSearching, hasSearched, handleFindFunding])
 
   // Declared as a hoisted function declaration (not const arrow) so the
   // earlier handleFindFunding caller and other forward references stay
   // outside the temporal dead zone. Same reasoning for handleAddToPipeline
-  // below — both are used in render-time JSX above their lexical position.
+  // below \u2014 both are used in render-time JSX above their lexical position.
   async function handleCrawlerResults(opportunities, responsePayload = null) {
     log.debug('processing crawler results', { count: opportunities.length })
     const resultMeta = normalizeResultMetadata(responsePayload, opportunities)
@@ -853,7 +945,7 @@ export default function DiscoverGrants() {
       })
     }
     
-    // Auto-add high-confidence matches (≥70%).
+    // Auto-add high-confidence matches (\u226570%).
     let addedCount = 0
     let alreadyCount = 0
     let failedCount = 0
@@ -940,15 +1032,22 @@ export default function DiscoverGrants() {
           organization_id: orgId,
           url: duplicateUrl,
         });
+        // Defensive coercion: the API may return a bare array, a { data: [...] }
+        // wrapper, or null on some paths.
+        const existingList = Array.isArray(existingGrants)
+          ? existingGrants
+          : Array.isArray(existingGrants?.data)
+            ? existingGrants.data
+            : []
         
-        if (existingGrants.length > 0) {
+        if (existingList.length > 0) {
           if (!silent) {
             toast({
               title: 'Already in pipeline',
               description: `"${opportunity.title}" is already in your pipeline.`,
             })
           }
-          return { status: 'already', grant: existingGrants[0] }
+          return { status: 'already', grant: existingList[0] }
         }
       } catch (e) {
         // Ignore duplicate check errors, continue to add
@@ -1011,7 +1110,12 @@ export default function DiscoverGrants() {
       if (newGrant.organization_id && newGrant.organization_id !== orgId) {
         queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
         queryClient.invalidateQueries({ queryKey: ['organizations'] });
-        useAuthStore.getState().refreshProfiles({ reason: 'new-org-from-grant', force: true });
+        // Await + catch so a rejection never becomes an unhandled promise rejection.
+        try {
+          await useAuthStore.getState().refreshProfiles({ reason: 'new-org-from-grant', force: true });
+        } catch (refreshErr) {
+          console.warn('[DiscoverGrants] refreshProfiles failed:', refreshErr?.message || refreshErr)
+        }
       }
       
       if (!silent) {
@@ -1267,7 +1371,7 @@ export default function DiscoverGrants() {
             <div className="mb-6" ref={profileSelectorRef}>
               <Label className="text-base font-semibold mb-3 block">Select Profile</Label>
               {/* Radix Select treats `value=""` as a special "uncontrolled"
-                  sentinel and warns when the prop later becomes a real id —
+                  sentinel and warns when the prop later becomes a real id \u2014
                   pass undefined when nothing is selected so the placeholder
                   renders without flipping controlled/uncontrolled. */}
               <Select
@@ -1291,7 +1395,7 @@ export default function DiscoverGrants() {
                     profiles.map(profile => {
                       // Get org for this profile to check ECF status
                       const profileOrg = profile.organization_id 
-                        ? organizations.find(o => o.id === profile.organization_id)
+                        ? organizations.find(o => String(o?.id) === String(profile.organization_id))
                         : null;
                       const isProfileECF = profileOrg?.medicaid_enrolled && 
                                           profileOrg?.medicaid_waiver_program === 'ecf_choices';
@@ -1341,12 +1445,12 @@ export default function DiscoverGrants() {
                     <span className="ml-2">({selectedProfile.organization_name})</span>
                   )}
                   {selectedProfile.primary_type && (
-                    <span className="ml-2 text-xs text-muted-foreground">• {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">\u2022 {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
                   )}
-                  {selectedOrg?.state && <span className="ml-2">• {selectedOrg.state}</span>}
+                  {selectedOrg?.state && <span className="ml-2">\u2022 {selectedOrg.state}</span>}
                   {isECFProfile && (
                     <span className="block mt-1 font-semibold">
-                      🏥 ECF CHOICES Participant
+                      \uD83C\uDFE5 ECF CHOICES Participant
                     </span>
                   )}
                 </AlertDescription>
@@ -1400,12 +1504,12 @@ export default function DiscoverGrants() {
               </Alert>
             )}
 
-            {/* Find Funding — single comprehensive search */}
+            {/* Find Funding \u2014 single comprehensive search */}
             <div className="space-y-6" ref={searchActionsRef}>
               <div>
                 <h3 className="text-lg font-semibold text-foreground">Find Funding Opportunities</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  We'll search all available funding sources — grants, scholarships, benefits, and local programs — matched to your profile.
+                  We'll search all available funding sources \u2014 grants, scholarships, benefits, and local programs \u2014 matched to your profile.
                 </p>
               </div>
               <div className="p-4 bg-muted/20 rounded-lg border border-border">
@@ -1436,21 +1540,34 @@ export default function DiscoverGrants() {
                   className="mt-3 w-full"
                 />
               </div>
-              <Button
-                onClick={() => void handleFindFunding()}
-                disabled={!selectedProfile || isSearching}
-                size="lg"
-                className="min-w-[240px]"
-              >
-                {isSearching ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Searching...
-                  </>
-                ) : (
-                  'Find Funding Opportunities'
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  onClick={() => void handleFindFunding()}
+                  disabled={!selectedProfile || isSearching}
+                  size="lg"
+                  className="min-w-[240px]"
+                >
+                  {isSearching ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Searching...
+                    </>
+                  ) : (
+                    'Find Funding Opportunities'
+                  )}
+                </Button>
+                {isSearching && (
+                  <Button
+                    onClick={cancelSearch}
+                    variant="outline"
+                    size="lg"
+                    className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
+                  >
+                    <StopCircle className="w-4 h-4 mr-2" />
+                    Stop
+                  </Button>
                 )}
-              </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -1466,7 +1583,7 @@ export default function DiscoverGrants() {
               <div>
                 <h3 className="text-lg font-semibold text-blue-900">Run discovery to see funding matches</h3>
                 <p className="text-sm text-blue-800 mt-1">
-                  We haven&apos;t searched for funding for this profile yet. Run discovery to find grants, scholarships, benefits, and local programs matched to it.
+                  We&apos;t searched for funding for this profile yet. Run discovery to find grants, scholarships, benefits, and local programs matched to it.
                 </p>
               </div>
               <Button
@@ -1489,7 +1606,7 @@ export default function DiscoverGrants() {
         )}
 
         {/* Architecture P1: prominent "Improve your matches" prompts while
-            discovery is still pending — show the user what to complete now so
+            discovery is still pending \u2014 show the user what to complete now so
             their first discovery returns better results. */}
         {discoveryPending && !isSearching && !improvePromptsDismissed && selectedProfile?.id && (
           <ImproveMatchesCard
@@ -1507,12 +1624,12 @@ export default function DiscoverGrants() {
               <div className="flex items-start gap-3">
                 <AlertTriangle className="h-6 w-6 shrink-0 text-amber-600 mt-0.5" />
                 <div>
-                  <h3 className="text-lg font-semibold text-amber-900">No matches yet — let&apos;s fix that</h3>
+                  <h3 className="text-lg font-semibold text-amber-900">No matches yet \u2014 let&apos;s fix that</h3>
                   <p className="text-sm text-amber-800 mt-1">{buildZeroResultDescription(profileGaps)}</p>
                 </div>
               </div>
 
-              {/* Score threshold suggestion — when matches exist below the slider */}
+              {/* Score threshold suggestion \u2014 when matches exist below the slider */}
               {scoreHint && scoreHint.bestScore > 0 && (
                 <div className="flex items-center gap-3 rounded-md bg-blue-50 border border-blue-200 p-3">
                   <span className="text-blue-600 text-lg">&#x1F50D;</span>
@@ -1544,7 +1661,7 @@ export default function DiscoverGrants() {
                         >
                           Add your location (state or ZIP code)
                         </Link>
-                        <span className="text-amber-700">— unlocks local and state-level programs</span>
+                        <span className="text-amber-700">\u2014 unlocks local and state-level programs</span>
                       </li>
                     )}
                     {profileGaps.missingEntityType && (
@@ -1556,7 +1673,7 @@ export default function DiscoverGrants() {
                         >
                           Set your profile type
                         </Link>
-                        <span className="text-amber-700">— filters irrelevant programs</span>
+                        <span className="text-amber-700">\u2014 filters irrelevant programs</span>
                       </li>
                     )}
                     {profileGaps.missingKeywords && (
@@ -1568,14 +1685,14 @@ export default function DiscoverGrants() {
                         >
                           Add interests or focus areas
                         </Link>
-                        <span className="text-amber-700">— improves keyword matching</span>
+                        <span className="text-amber-700">\u2014 improves keyword matching</span>
                       </li>
                     )}
                   </ul>
                 </div>
               )}
 
-              {/* Browse by Need categories — grouped */}
+              {/* Browse by Need categories \u2014 grouped */}
               <div>
                 <p className="text-sm font-medium text-amber-900 mb-3">Not finding what you need? Browse by category:</p>
                 <div className="space-y-3">
@@ -1630,7 +1747,7 @@ export default function DiscoverGrants() {
                   {isSearching ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                      Searching…
+                      Searching\u2026
                     </>
                   ) : (
                     'Try Broader Search'
@@ -1652,7 +1769,7 @@ export default function DiscoverGrants() {
                   className="gap-2 border-purple-300 text-purple-700 hover:bg-purple-50 whitespace-nowrap"
                   onClick={() => {
                     const msg = profileGaps.missingLocation
-                      ? "Help me find grants — I haven't set my location yet"
+                      ? "Help me find grants \u2014 I haven't set my location yet"
                       : "Help me improve my profile to get better grant matches"
                     openAnyaPanel({ prefillMessage: msg })
                   }}
@@ -1665,7 +1782,7 @@ export default function DiscoverGrants() {
           </Card>
         )}
 
-        {/* Mission Goal 7 — Search coverage panel: which source families GrantFlow
+        {/* Mission Goal 7 \u2014 Search coverage panel: which source families GrantFlow
             planned, queried, and missed for this profile + strategy. Renders above
             the results so users can trust why they see what they see. */}
         {coverageInfo && (coverageInfo.plan || coverageInfo.report) ? (
@@ -1694,19 +1811,19 @@ export default function DiscoverGrants() {
             <AlertDescription className="text-blue-900">
               Searching {discovery.enqueued} funding source{discovery.enqueued === 1 ? '' : 's'} matched to your profile
               {Array.isArray(discovery.crawlerTypes) && discovery.crawlerTypes.length > 0
-                ? ` (${discovery.crawlerTypes.slice(0, 6).join(', ')}${discovery.crawlerTypes.length > 6 ? '…' : ''})`
+                ? ` (${discovery.crawlerTypes.slice(0, 6).join(', ')}${discovery.crawlerTypes.length > 6 ? '\u2026' : ''})`
                 : ''}
               {typeof discovery.running === 'number' && discovery.running > 0
-                ? ` — ${discovery.running} still running.`
-                : ' — wrapping up.'}{' '}
+                ? ` \u2014 ${discovery.running} still running.`
+                : ' \u2014 wrapping up.'}{' '}
               New matches appear below as each finishes; this can take a few minutes.{' '}
-              <strong>You can leave this page</strong> — the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
+              <strong>You can leave this page</strong> \u2014 the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
             </AlertDescription>
           </Alert>
         )}
 
         {/* Architecture P1: compact "Improve your matches" banner above results
-            (not while discovery is pending — that path shows the prominent card). */}
+            (not while discovery is pending \u2014 that path shows the prominent card). */}
         {!discoveryPending && !improvePromptsDismissed && selectedProfile?.id &&
           ((catalogOpportunities.length > 0) || searchResults.length > 0) && (
           <ImproveMatchesCard

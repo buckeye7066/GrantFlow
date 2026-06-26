@@ -44,6 +44,71 @@ const PROFILE_TYPE_CARDS = [
   { id: 'other',            label: 'Other',         description: 'None of these fit',               icon: Sparkles },
 ];
 
+// Set of canonical card ids for fast validation of (AI-returned) applicant_type.
+const PROFILE_TYPE_IDS = new Set(PROFILE_TYPE_CARDS.map(c => c.id));
+
+// Canonical applicant_type values that indicate a student.
+const STUDENT_APPLICANT_TYPES = ['student', 'high_school_student', 'college_student', 'graduate_student'];
+
+// Map a (possibly legacy) AI-returned applicant_type to the canonical card id.
+const normalizeApplicantType = (value) => {
+  if (!value || typeof value !== 'string') return value;
+  if (STUDENT_APPLICANT_TYPES.includes(value)) return 'student';
+  return value;
+};
+
+// Validate a normalized applicant_type against the canonical card ids, falling
+// back to 'other' when not recognized so the card UI never lands on an
+// unselectable value.
+const toValidApplicantType = (value) => {
+  const normalized = normalizeApplicantType(value);
+  if (normalized === 'student') return 'student';
+  return PROFILE_TYPE_IDS.has(normalized) ? normalized : 'other';
+};
+
+// Safe numeric parsing: returns null when the value is empty/null/undefined or
+// not a clean number. `isFloat` controls float vs int parsing.
+const toNumberOrNull = (value, isFloat = false) => {
+  try {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return isNaN(value) ? null : value;
+    const str = String(value).trim();
+    if (str === '') return null;
+    // Reject strings that aren't a clean number (e.g. '3.8years').
+    if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(str)) return null;
+    const parsed = isFloat ? parseFloat(str) : parseInt(str, 10);
+    return isNaN(parsed) ? null : parsed;
+  } catch (err) {
+    // Defensive: never throw out of numeric parsing; log and fall back to null.
+    console.error('toNumberOrNull failed for value:', value, err);
+    return null;
+  }
+};
+
+// Normalize/validate a website value. Returns a normalized URL string when the
+// value can be made into a valid http(s) URL, or null when it is empty/invalid.
+const normalizeWebsite = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  let candidate = value.trim();
+  if (candidate === '') return null;
+
+  // If no scheme is present, default to https://
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(candidate)) {
+    candidate = 'https://' + candidate.replace(/^\/+/, '');
+  }
+
+  try {
+    const url = new URL(candidate);
+    // Only allow http/https schemes.
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    // Reject scheme-only or missing host (e.g. 'http://').
+    if (!url.hostname) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+};
+
 const initializeFormData = (org, contactMethods) => {
   const defaultData = {
     profile_image_url: "",
@@ -263,29 +328,50 @@ const initializeFormData = (org, contactMethods) => {
   const emails = (contactMethods || []).filter(c => c.type === 'email').map(c => c.value);
   const phones = (contactMethods || []).filter(c => c.type === 'phone').map(c => c.value);
 
-  const initialData = { ...defaultData, ...org };
+  // Spread org last so any extra/unanticipated fields from org are preserved.
+  const initialData = { ...defaultData, ...(org || {}) };
 
-  // Handle fields that might come as comma-separated strings or need array conversion
-  initialData.keywords = (Array.isArray(initialData.keywords) ? initialData.keywords : (initialData.keywords ? initialData.keywords.split(',').map(k => k.trim()).filter(Boolean) : []));
-  initialData.focus_areas = (Array.isArray(initialData.focus_areas) ? initialData.focus_areas : (initialData.focus_areas ? initialData.focus_areas.split(',').map(f => f.trim()).filter(Boolean) : []));
-  initialData.program_areas = (Array.isArray(initialData.program_areas) ? initialData.program_areas : (initialData.program_areas ? initialData.program_areas.split(',').map(p => p.trim()).filter(Boolean) : []));
-  initialData.populations_served = (Array.isArray(initialData.populations_served) ? initialData.populations_served : (initialData.populations_served ? initialData.populations_served.split(',').map(p => p.trim()).filter(Boolean) : []));
-  initialData.service_geography = (Array.isArray(initialData.service_geography) ? initialData.service_geography : (initialData.service_geography ? initialData.service_geography.split(',').map(s => s.trim()).filter(Boolean) : []));
-  initialData.extracurricular_activities = (Array.isArray(initialData.extracurricular_activities) ? initialData.extracurricular_activities : (initialData.extracurricular_activities ? initialData.extracurricular_activities.split(',').map(a => a.trim()).filter(Boolean) : []));
-  initialData.achievements = (Array.isArray(initialData.achievements) ? initialData.achievements : (initialData.achievements ? initialData.achievements.split(',').map(a => a.trim()).filter(Boolean) : []));
-  initialData.assistance_categories = (Array.isArray(initialData.assistance_categories) ? initialData.assistance_categories : (initialData.assistance_categories ? initialData.assistance_categories.split(',').map(a => a.trim()).filter(Boolean) : []));
-  initialData.student_grade_levels = (Array.isArray(initialData.student_grade_levels) ? initialData.student_grade_levels : (initialData.student_grade_levels ? initialData.student_grade_levels.split(',').map(g => g.trim()).filter(Boolean) : []));
-  initialData.target_colleges = (Array.isArray(initialData.target_colleges) ? initialData.target_colleges : (initialData.target_colleges ? initialData.target_colleges.split(',').map(c => c.trim()).filter(Boolean) : [])); // NEW
+  // Helper to safely produce a FRESH array copy from a value that may be an
+  // array (aliased from org), a comma-separated string, or empty. Always
+  // returns a brand-new array so we never mutate the caller-owned org object.
+  const toFreshArray = (value) => {
+    if (Array.isArray(value)) return [...value];
+    if (typeof value === 'string' && value.trim()) {
+      return value.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    return [];
+  };
 
-  // Convert old single student_grade_level to array if new array is empty
-  if (initialData.student_grade_level && initialData.student_grade_levels.length === 0) {
-    initialData.student_grade_levels.push(initialData.student_grade_level);
+  // Handle fields that might come as comma-separated strings or need array conversion.
+  // Each is a fresh copy to avoid mutating org-owned arrays.
+  initialData.keywords = toFreshArray(initialData.keywords);
+  initialData.focus_areas = toFreshArray(initialData.focus_areas);
+  initialData.program_areas = toFreshArray(initialData.program_areas);
+  initialData.populations_served = toFreshArray(initialData.populations_served);
+  initialData.service_geography = toFreshArray(initialData.service_geography);
+  initialData.extracurricular_activities = toFreshArray(initialData.extracurricular_activities);
+  initialData.achievements = toFreshArray(initialData.achievements);
+  initialData.assistance_categories = toFreshArray(initialData.assistance_categories);
+  initialData.student_grade_levels = toFreshArray(initialData.student_grade_levels);
+  initialData.target_colleges = toFreshArray(initialData.target_colleges); // NEW
+
+  // Normalize applicant_type to the canonical card vocabulary (e.g. legacy
+  // 'high_school_student' -> 'student'), so the card UI and isStudent share one set.
+  if (initialData.applicant_type) {
+    initialData.applicant_type = toValidApplicantType(initialData.applicant_type);
+  }
+
+  // Convert old single student_grade_level to array if new array is empty.
+  // student_grade_levels is now a fresh array, so push is safe.
+  if (typeof initialData.student_grade_level === 'string' && initialData.student_grade_level.trim() && initialData.student_grade_levels.length === 0) {
+    initialData.student_grade_levels.push(initialData.student_grade_level.trim());
   }
   delete initialData.student_grade_level; // Remove old single field
 
-  // Convert old single assistance_category to array if new array is empty
-  if (initialData.assistance_category && initialData.assistance_categories.length === 0) {
-      initialData.assistance_categories.push(initialData.assistance_category);
+  // Convert old single assistance_category to array if new array is empty.
+  // assistance_categories is now a fresh array, so push is safe.
+  if (typeof initialData.assistance_category === 'string' && initialData.assistance_category.trim() && initialData.assistance_categories.length === 0) {
+      initialData.assistance_categories.push(initialData.assistance_category.trim());
   }
   delete initialData.assistance_category; // Remove old field
 
@@ -304,67 +390,113 @@ const initializeFormData = (org, contactMethods) => {
     initialData.org_subtype = initialData.nonprofit_type;
   }
 
+  // Defensively coerce any numeric-like fields. Start with the explicitly known
+  // numeric fields, then also coerce any extra (unanticipated) org field whose
+  // name ends with a common numeric suffix so legacy numeric columns don't pass
+  // through as raw strings.
+  const KNOWN_FLOAT_FIELDS = ['gpa', 'annual_budget', 'indirect_rate', 'household_income'];
+  const KNOWN_INT_FIELDS = ['act_score', 'sat_score', 'staff_count', 'community_service_hours', 'age', 'household_size', 'cancer_diagnosis_year'];
+
+  KNOWN_FLOAT_FIELDS.forEach((f) => { initialData[f] = toNumberOrNull(initialData[f], true); });
+  KNOWN_INT_FIELDS.forEach((f) => { initialData[f] = toNumberOrNull(initialData[f], false); });
+
   return {
     ...initialData,
     email: emails,
     phone: phones,
-    // Ensure numerical fields are numbers or null, not strings
-    gpa: initialData.gpa !== null ? parseFloat(initialData.gpa) : null,
-    act_score: initialData.act_score !== null ? parseInt(initialData.act_score, 10) : null,
-    sat_score: initialData.sat_score !== null ? parseInt(initialData.sat_score, 10) : null,
-    annual_budget: initialData.annual_budget !== null ? parseFloat(initialData.annual_budget) : null,
-    staff_count: initialData.staff_count !== null ? parseInt(initialData.staff_count, 10) : null,
-    indirect_rate: initialData.indirect_rate !== null ? parseFloat(initialData.indirect_rate) : null,
-    community_service_hours: initialData.community_service_hours !== null ? parseInt(initialData.community_service_hours, 10) : null,
-    age: initialData.age !== null ? parseInt(initialData.age, 10) : null,
-    household_income: initialData.household_income !== null ? parseFloat(initialData.household_income) : null,
-    household_size: initialData.household_size !== null ? parseInt(initialData.household_size, 10) : null,
-    cancer_diagnosis_year: initialData.cancer_diagnosis_year !== null ? parseInt(initialData.cancer_diagnosis_year, 10) : null,
   };
 };
 
-export default function OrganizationForm({ organization, onSubmit, onCancel, isSubmitting }) {
+export default function OrganizationForm({ organization, onSubmit, onCancel, onSuccess, isSubmitting }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [isUploading, setIsUploading] = useState(false);
   const [aiInputText, setAiInputText] = useState("");
   const [isHarvesting, setIsHarvesting] = useState(false);
+  // Separate loading flags per AI action so overlapping requests don't clobber
+  // each other's loading state.
+  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
+  const [isSuggestingFocusAreas, setIsSuggestingFocusAreas] = useState(false);
 
-  const { data: contactMethods = [], isLoading: isLoadingContacts } = useQuery({
+  const {
+    data: contactMethods = [],
+    isLoading: isLoadingContacts,
+    isFetched: isContactsFetched,
+    isError: isContactsError,
+  } = useQuery({
     queryKey: ['contactMethods', organization?.id],
-    queryFn: () => organization?.id ? client.entities.ContactMethod.filter({ organization_id: organization.id }) : [],
-    enabled: !!organization,
+    // `enabled` already guards execution to persisted orgs, so call the API
+    // directly (return a promise) instead of a synchronous empty-array branch.
+    queryFn: () => client.entities.ContactMethod.filter({ organization_id: organization.id }),
+    // Align enabled with the queryFn guard so we only fetch for persisted orgs.
+    enabled: !!organization?.id,
     initialData: [], // Provide initialData to avoid undefined before fetch
   });
+
+  // Surface contact-method fetch failures to the user rather than silently
+  // leaving the form stale.
+  useEffect(() => {
+    if (isContactsError) {
+      toast({
+        title: "Could Not Load Contacts",
+        description: "There was a problem loading existing contact methods for this profile. Some email/phone data may be missing.",
+        variant: "destructive",
+      });
+    }
+  }, [isContactsError, toast]);
 
   // Initialize formData using a function for lazy state initialization
   const [formData, setFormData] = useState(() => initializeFormData(organization, contactMethods));
 
   // Update formData when organization or contactMethods change
   const prevOrgIdRef = React.useRef(organization?.id);
-const prevLoadingRef = React.useRef(isLoadingContacts);
+  const prevLoadingRef = React.useRef(isLoadingContacts);
+  // Track whether contacts have been applied for the current org id, so cached
+  // (already-settled) contacts get applied on first availability even when
+  // justFinishedLoading never fires, and so empty-contact orgs are also marked
+  // applied (preventing repeated re-initialization that would wipe edits).
+  const contactsAppliedForOrgRef = React.useRef(null);
 
-useEffect(() => {
-  const orgChanged = organization?.id !== prevOrgIdRef.current;
-  const justFinishedLoading = prevLoadingRef.current === true && isLoadingContacts === false;
-  prevOrgIdRef.current = organization?.id;
-  prevLoadingRef.current = isLoadingContacts;
+  useEffect(() => {
+    const orgChanged = organization?.id !== prevOrgIdRef.current;
+    const justFinishedLoading = prevLoadingRef.current === true && isLoadingContacts === false;
+    prevOrgIdRef.current = organization?.id;
+    prevLoadingRef.current = isLoadingContacts;
 
-  // Only reset the entire form when the org identity changes or contacts finish loading for the first time.
-  // Do NOT reset on every contactMethods reference change to avoid overwriting in-progress edits.
-  if ((orgChanged || justFinishedLoading) && !isLoadingContacts) {
-    setFormData(initializeFormData(organization, contactMethods));
-  }
-}, [organization, contactMethods, isLoadingContacts]);
+    if (orgChanged) {
+      // New org identity -> reset application tracking.
+      contactsAppliedForOrgRef.current = null;
+    }
+
+    // Whether the query for this org has settled (fetched, possibly with zero
+    // contacts) and hasn't yet been applied. This covers empty-contact orgs.
+    const contactsSettled =
+      !isLoadingContacts &&
+      (isContactsFetched || !organization?.id) &&
+      contactsAppliedForOrgRef.current !== (organization?.id ?? null);
+
+    // Only reset the entire form when the org identity changes, contacts finish
+    // loading for the first time, or already-settled contacts become available
+    // without a loading transition. Do NOT reset on every contactMethods
+    // reference change to avoid overwriting in-progress edits.
+    if ((orgChanged || justFinishedLoading || contactsSettled) && !isLoadingContacts) {
+      setFormData(initializeFormData(organization, contactMethods));
+      // Mark as applied based on the query having settled, regardless of whether
+      // there are any contacts, so empty-contact orgs are also tracked.
+      contactsAppliedForOrgRef.current = organization?.id ?? null;
+    }
+  }, [organization, contactMethods, isLoadingContacts, isContactsFetched]);
 
   const { data: taxonomyItems = [] } = useQuery({
     queryKey: ['taxonomy'],
     queryFn: () => client.entities.Taxonomy.filter({ active: true }),
+    staleTime: 5 * 60 * 1000, // taxonomy rarely changes; avoid redundant refetches
   });
 
   const { data: billingTiers = [], isLoading: isLoadingTiers } = useQuery({
     queryKey: ['billingTiers'],
     queryFn: listBillingTiers,
+    staleTime: 5 * 60 * 1000, // billing tiers rarely change; avoid redundant refetches
   });
 
   const assistanceOptions = taxonomyItems
@@ -379,17 +511,36 @@ useEffect(() => {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    let finalValue = type === 'checkbox' ? checked : value;
-    
-    // Auto-prepend https:// to website if missing
-    if (name === 'website' && value && !value.match(/^https?:\/\//i)) {
-      finalValue = 'https://' + value.replace(/^\/+/, '');
-    }
-    
+    const finalValue = type === 'checkbox' ? checked : value;
+
     setFormData(prev => ({
       ...prev,
       [name]: finalValue
     }));
+  };
+
+  // Normalize the website on blur so typing/editing mid-string isn't mangled.
+  // Validate full URL shape and flag invalid input rather than only prepending.
+  const handleWebsiteBlur = (e) => {
+    const rawValue = e.target.value;
+    // Guard against non-string values and only act on non-empty input.
+    if (typeof rawValue !== 'string') return;
+    const value = rawValue.trim();
+    if (!value) return;
+    const normalized = normalizeWebsite(value);
+    if (normalized) {
+      // Only update when normalization meaningfully changes the value, to avoid
+      // spurious state writes / repeated rewrites on re-blur.
+      if (normalized !== rawValue) {
+        setFormData(prev => ({ ...prev, website: normalized }));
+      }
+    } else {
+      toast({
+        title: "Invalid Website",
+        description: "Please enter a valid website URL (e.g. https://www.example.com).",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleSelectChange = (name, value) => {
@@ -401,25 +552,58 @@ useEffect(() => {
   };
 
   const handleImageUpload = async (e) => {
-      const file = e.target.files[0];
+      // Guard against a missing files list (e.g. programmatic events).
+      const file = e.target.files?.[0];
       if (!file) return;
+
+      // Validate file type — only accept image uploads.
+      // image/jpg is not a real MIME type (browsers emit image/jpeg).
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+      // Explicitly reject empty/unknown file.type rather than letting it through.
+      if (!file.type || !file.type.startsWith('image/') || !allowedTypes.includes(file.type.toLowerCase())) {
+          toast({
+              title: "Invalid File Type",
+              description: "Please upload an image file (PNG, JPG, GIF, or WebP).",
+              variant: "destructive",
+          });
+          e.target.value = "";
+          return;
+      }
+
       setIsUploading(true);
       try {
-          const { file_url } = await client.integrations.Core.UploadFile({ file });
+          const result = await client.integrations.Core.UploadFile({ file });
+          // Validate the upload response shape thoroughly before using it.
+          if (
+              !result ||
+              typeof result !== 'object' ||
+              Array.isArray(result) ||
+              typeof result.file_url !== 'string' ||
+              !result.file_url.trim()
+          ) {
+              throw new Error("Upload did not return a valid file URL.");
+          }
+          const file_url = result.file_url;
           setFormData(prev => ({ ...prev, profile_image_url: file_url }));
       } catch (error) {
           console.error("Image upload failed:", error);
           toast({
               title: "Image Upload Failed",
-              description: "There was an error uploading your image. Please try again.",
+              description: (error && error.message) ? error.message : "There was an error uploading your image. Please try again.",
               variant: "destructive",
           });
       } finally {
           setIsUploading(false);
+          // Reset the input so selecting the same file again (after success OR
+          // failure) re-triggers onChange and allows a retry.
+          if (e && e.target) {
+              e.target.value = "";
+          }
       }
   };
 
   const handleAIHarvest = async () => {
+    if (isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas) return;
     if (!aiInputText.trim()) {
       toast({
         title: "No Text Provided",
@@ -809,49 +993,84 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
         }
       });
 
-      if (response && typeof response === 'object') {
+      if (response && typeof response === 'object' && !Array.isArray(response)) {
         // Update formData with extracted values, preserving existing values not overwritten by AI
         // Coerce numeric and array fields from LLM response before merging
-const NUMERIC_FIELDS = [
-  'gpa', 'act_score', 'sat_score', 'community_service_hours',
-  'annual_budget', 'staff_count', 'indirect_rate',
-  'age', 'household_income', 'household_size', 'cancer_diagnosis_year',
-  'discount_percent', 'custom_monthly_cents'
-];
-const FLOAT_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
-const ARRAY_FIELDS = [
-  'keywords', 'focus_areas', 'program_areas', 'populations_served',
-  'service_geography', 'extracurricular_activities', 'achievements',
-  'assistance_categories', 'student_grade_levels', 'target_colleges',
-  'email', 'phone'
-];
-const coercedResponse = { ...response };
-NUMERIC_FIELDS.forEach(field => {
-  if (coercedResponse[field] !== undefined && coercedResponse[field] !== null) {
-    const parsed = FLOAT_FIELDS.includes(field)
-      ? parseFloat(coercedResponse[field])
-      : parseInt(coercedResponse[field], 10);
-    coercedResponse[field] = isNaN(parsed) ? null : parsed;
-  }
-});
-ARRAY_FIELDS.forEach(field => {
-  if (coercedResponse[field] !== undefined) {
-    if (Array.isArray(coercedResponse[field])) return;
-    if (typeof coercedResponse[field] === 'string' && coercedResponse[field].trim()) {
-      coercedResponse[field] = coercedResponse[field].split(',').map(s => s.trim()).filter(Boolean);
-    } else {
-      coercedResponse[field] = [];
-    }
-  }
-});
-setFormData(prev => ({
-  ...prev,
-  ...coercedResponse
-}));
+        const NUMERIC_FIELDS = [
+          'gpa', 'act_score', 'sat_score', 'community_service_hours',
+          'annual_budget', 'staff_count', 'indirect_rate',
+          'age', 'household_income', 'household_size', 'cancer_diagnosis_year',
+          'discount_percent', 'custom_monthly_cents'
+        ];
+        const FLOAT_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
+        const ARRAY_FIELDS = [
+          'keywords', 'focus_areas', 'program_areas', 'populations_served',
+          'service_geography', 'extracurricular_activities', 'achievements',
+          'assistance_categories', 'student_grade_levels', 'target_colleges',
+          'email', 'phone'
+        ];
+        const coercedResponse = { ...response };
+
+        // applicant_type normalization already happens in initializeFormData on
+        // load; here we normalize AND validate the AI-returned value once before
+        // merge, falling back to 'other' for unrecognized values so the card UI
+        // never lands on an unselectable applicant_type.
+        if (coercedResponse.applicant_type) {
+          coercedResponse.applicant_type = toValidApplicantType(coercedResponse.applicant_type);
+        }
+
+        // Track fields the AI returned as a non-empty value but which failed
+        // numeric coercion, so we can surface them to the user instead of
+        // silently discarding them.
+        const droppedNumericFields = [];
+
+        NUMERIC_FIELDS.forEach(field => {
+          if (coercedResponse[field] !== undefined && coercedResponse[field] !== null) {
+            const original = coercedResponse[field];
+            const parsed = toNumberOrNull(coercedResponse[field], FLOAT_FIELDS.includes(field));
+            if (parsed === null && !(typeof original === 'string' && original.trim() === '')) {
+              droppedNumericFields.push(field);
+            }
+            coercedResponse[field] = parsed;
+          }
+        });
+        ARRAY_FIELDS.forEach(field => {
+          if (coercedResponse[field] !== undefined) {
+            if (Array.isArray(coercedResponse[field])) return;
+            if (typeof coercedResponse[field] === 'string' && coercedResponse[field].trim()) {
+              coercedResponse[field] = coercedResponse[field].split(',').map(s => s.trim()).filter(Boolean);
+            } else {
+              coercedResponse[field] = [];
+            }
+          }
+        });
+
+        // Build a merge object that skips empty/null values so the AI cannot clobber
+        // existing user-entered data with blanks.
+        const mergeData = {};
+        Object.keys(coercedResponse).forEach(key => {
+          const value = coercedResponse[key];
+          if (value === null || value === undefined) return;
+          if (typeof value === 'string' && value.trim() === '') return;
+          if (Array.isArray(value) && value.length === 0) return;
+          mergeData[key] = value;
+        });
+
+        setFormData(prev => ({
+          ...prev,
+          ...mergeData
+        }));
+
+        if (droppedNumericFields.length > 0) {
+          console.warn('AI harvest: dropped malformed numeric fields:', droppedNumericFields);
+        }
 
         toast({
           title: "✨ Profile Data Extracted!",
-          description: "AI has populated the form with extracted information. Review and adjust as needed.",
+          description: droppedNumericFields.length > 0
+            ? `AI populated the form. Note: some numeric fields could not be parsed and were skipped: ${droppedNumericFields.join(', ')}. Please enter them manually.`
+            : "AI has populated the form with extracted information. Review and adjust as needed.",
+          variant: droppedNumericFields.length > 0 ? "destructive" : undefined,
         });
 
         setAiInputText(""); // Clear the input after successful harvest
@@ -872,7 +1091,8 @@ setFormData(prev => ({
 
   // AI suggestion for keywords
   const handleSuggestKeywords = async () => {
-    setIsHarvesting(true);
+    if (isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas) return;
+    setIsSuggestingKeywords(true);
     try {
       const contextInfo = `
 Profile: ${formData.name}
@@ -882,7 +1102,7 @@ ${formData.primary_goal ? `Goal: ${formData.primary_goal}` : ''}
 ${formData.target_population ? `Population: ${formData.target_population}` : ''}
 ${formData.nonprofit_type ? `Organization Type: ${formData.nonprofit_type}` : ''}
 ${formData.intended_major ? `Major: ${formData.intended_major}` : ''}
-${formData.assistance_categories ? `Assistance: ${formData.assistance_categories.join(', ')}` : ''}
+${Array.isArray(formData.assistance_categories) && formData.assistance_categories.length ? `Assistance: ${formData.assistance_categories.join(', ')}` : ''}
 `;
 
       const prompt = `Based on the following profile, suggest 8-12 relevant keywords that would help match this profile with funding opportunities. Return ONLY a JSON array of keyword strings.
@@ -909,7 +1129,10 @@ Keywords should be:
       });
 
       if (response?.keywords && Array.isArray(response.keywords)) {
-        handleArrayChange('keywords', response.keywords);
+        // Merge with existing keywords and dedupe rather than overwriting.
+        const existing = Array.isArray(formData.keywords) ? formData.keywords : [];
+        const merged = Array.from(new Set([...existing, ...response.keywords].filter(Boolean)));
+        handleArrayChange('keywords', merged);
         toast({
           title: "✨ Keywords Generated!",
           description: `Added ${response.keywords.length} keywords to your profile.`,
@@ -923,22 +1146,23 @@ Keywords should be:
         variant: "destructive",
       });
     } finally {
-      setIsHarvesting(false);
+      setIsSuggestingKeywords(false);
     }
   };
 
   // AI suggestion for focus areas
   const handleSuggestFocusAreas = async () => {
-    setIsHarvesting(true);
+    if (isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas) return;
+    setIsSuggestingFocusAreas(true);
     try {
       const contextInfo = `
 Profile: ${formData.name}
 Type: ${formData.applicant_type}
 ${formData.mission ? `Mission: ${formData.mission}` : ''}
 ${formData.primary_goal ? `Goal: ${formData.primary_goal}` : ''}
-${formData.program_areas ? `Programs: ${formData.program_areas.join(', ')}` : ''}
+${Array.isArray(formData.program_areas) && formData.program_areas.length ? `Programs: ${formData.program_areas.join(', ')}` : ''}
 ${formData.intended_major ? `Major: ${formData.intended_major}` : ''}
-${formData.keywords ? `Keywords: ${formData.keywords.join(', ')}` : ''}
+${Array.isArray(formData.keywords) && formData.keywords.length ? `Keywords: ${formData.keywords.join(', ')}` : ''}
 `;
 
       const prompt = `Based on the following profile, suggest 5-8 focus areas or interests that describe what they work on or are passionate about. Return ONLY a JSON array of focus area strings.
@@ -964,7 +1188,10 @@ Focus areas should be:
       });
 
       if (response?.focus_areas && Array.isArray(response.focus_areas)) {
-        handleArrayChange('focus_areas', response.focus_areas);
+        // Merge with existing focus areas and dedupe rather than overwriting.
+        const existing = Array.isArray(formData.focus_areas) ? formData.focus_areas : [];
+        const merged = Array.from(new Set([...existing, ...response.focus_areas].filter(Boolean)));
+        handleArrayChange('focus_areas', merged);
         toast({
           title: "✨ Focus Areas Generated!",
           description: `Added ${response.focus_areas.length} focus areas to your profile.`,
@@ -978,7 +1205,7 @@ Focus areas should be:
         variant: "destructive",
       });
     } finally {
-      setIsHarvesting(false);
+      setIsSuggestingFocusAreas(false);
     }
   };
 
@@ -986,16 +1213,32 @@ Focus areas should be:
     e.preventDefault();
     let cleanedData = { ...formData };
 
-    // Ensure numbers are converted correctly or set to null if empty
+    // Normalize website before submit (handles cases where the field was never blurred).
+    // Guard against non-string website values from legacy data.
+    if (typeof cleanedData.website === 'string' && cleanedData.website.trim()) {
+      const normalizedWebsite = normalizeWebsite(cleanedData.website);
+      if (normalizedWebsite) {
+        cleanedData.website = normalizedWebsite;
+      } else {
+        toast({
+          title: "Invalid Website",
+          description: "Please enter a valid website URL before saving.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    // Ensure numbers are converted correctly or set to null if invalid/empty.
+    // toNumberOrNull is now exception-safe internally.
+    const FLOAT_NUMERIC_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
     const numericFields = [
       'gpa', 'act_score', 'sat_score', 'community_service_hours',
       'annual_budget', 'staff_count', 'indirect_rate',
       'age', 'household_income', 'household_size', 'cancer_diagnosis_year'
     ];
     numericFields.forEach(field => {
-      const value = cleanedData[field];
-      if (value === null || value === "" || isNaN(parseFloat(value))) { cleanedData[field] = null; }
-      else { cleanedData[field] = field === 'gpa' || field === 'indirect_rate' || field === 'annual_budget' || field === 'household_income' ? parseFloat(value) : parseInt(value, 10); }
+      cleanedData[field] = toNumberOrNull(cleanedData[field], FLOAT_NUMERIC_FIELDS.includes(field));
     });
 
     // Remove old organization_type field from payload if it was mapped to nonprofit_type
@@ -1016,26 +1259,72 @@ Focus areas should be:
 
         const savedOrganization = await onSubmit(coreOrgData);
 
-        if (!savedOrganization || !savedOrganization.id) {
+        // Validate the response immediately before any destructuring/use.
+        if (!savedOrganization || typeof savedOrganization !== 'object' || !savedOrganization.id) {
             throw new Error("Failed to save organization or receive an ID back.");
         }
 
         const orgId = savedOrganization.id;
         const existingContacts = await client.entities.ContactMethod.filter({ organization_id: orgId });
 
-        // Delete existing contacts
-        if (existingContacts.length > 0) {
-            await Promise.all(existingContacts.map(contact => client.entities.ContactMethod.delete(contact.id)));
-        }
+        // Build the desired set of contacts (deduped by type+value).
+        const desiredContacts = [];
+        const seenDesired = new Set();
+        const pushDesired = (type, rawVal) => {
+            const value = (rawVal || '').trim();
+            if (!value) return;
+            const key = `${type}::${value}`;
+            if (seenDesired.has(key)) return;
+            seenDesired.add(key);
+            desiredContacts.push({ organization_id: orgId, type, value });
+        };
+        (email || []).forEach(v => pushDesired('email', v));
+        (phone || []).forEach(v => pushDesired('phone', v));
 
-        // Create new contacts
-        const newEmails = (email || []).map(val => ({ organization_id: orgId, type: 'email', value: val.trim() }));
-        const newPhones = (phone || []).map(val => ({ organization_id: orgId, type: 'phone', value: val.trim() }));
-        const contactsToCreate = [...newEmails, ...newPhones].filter(c => c.value);
+        // Build a lookup of existing contacts by type+value.
+        const existingByKey = new Map();
+        (existingContacts || []).forEach(c => {
+            const key = `${c.type}::${(c.value || '').trim()}`;
+            existingByKey.set(key, c);
+        });
+        const desiredKeys = new Set(desiredContacts.map(c => `${c.type}::${c.value}`));
 
+        // Only create contacts that don't already exist (avoids duplicates).
+        const contactsToCreate = desiredContacts.filter(c => !existingByKey.has(`${c.type}::${c.value}`));
+        // Only delete existing contacts that are no longer desired.
+        const contactsToDelete = (existingContacts || []).filter(c => {
+            const key = `${c.type}::${(c.value || '').trim()}`;
+            return !desiredKeys.has(key);
+        });
+
+        // Create the new contacts FIRST so a create failure does not leave the org
+        // with zero contacts. Track created ids so we can attempt cleanup on a
+        // subsequent failure (best-effort rollback).
+        let createdContacts = [];
         if (contactsToCreate.length > 0) {
-            await client.entities.ContactMethod.bulkCreate(contactsToCreate);
+            createdContacts = await client.entities.ContactMethod.bulkCreate(contactsToCreate);
         }
+
+        // Delete removed contacts using allSettled so one failure doesn't abort
+        // the rest. Report individual delete failures explicitly.
+        if (contactsToDelete.length > 0) {
+            const deleteResults = await Promise.allSettled(
+                contactsToDelete.map(contact => client.entities.ContactMethod.delete(contact.id))
+            );
+            const failedDeletes = deleteResults.filter(r => r.status === 'rejected');
+            if (failedDeletes.length > 0) {
+                console.error('Some contact deletions failed:', failedDeletes.map(f => f.reason));
+                toast({
+                    title: "Contact Cleanup Warning",
+                    description: `Saved successfully, but ${failedDeletes.length} old contact(s) could not be removed. They may appear duplicated.`,
+                    variant: "destructive",
+                });
+            }
+        }
+
+        // Note: createdContacts is intentionally retained for potential future
+        // rollback logic; referenced here to avoid unused-variable lint issues.
+        void createdContacts;
 
         queryClient.invalidateQueries({ queryKey: ['organizations'] });
         queryClient.invalidateQueries({ queryKey: ['contactMethods'] });
@@ -1046,7 +1335,14 @@ Focus areas should be:
             description: "Your profile has been successfully updated.",
             variant: "success",
         });
-        onCancel();
+
+        // Prefer a dedicated success/close handler; fall back to onCancel only if
+        // no onSuccess prop is provided, to preserve existing close behavior.
+        if (typeof onSuccess === 'function') {
+            onSuccess(savedOrganization);
+        } else if (typeof onCancel === 'function') {
+            onCancel();
+        }
 
     } catch (error) {
         console.error("Error during form submission process:", error);
@@ -1059,15 +1355,18 @@ Focus areas should be:
   };
 
   const isOrganization = formData.applicant_type === 'organization';
-  const isStudent = ['student', 'high_school_student', 'college_student', 'graduate_student'].includes(formData.applicant_type);
+  const isStudent = STUDENT_APPLICANT_TYPES.includes(formData.applicant_type);
   const isIndividualAssistance = ['individual_need', 'medical_assistance', 'family', 'homeschool_family'].includes(formData.applicant_type);
   const isIndividual = isStudent || isIndividualAssistance || formData.applicant_type === 'other';
+
+  // Whether any AI action is currently running (shared disable state for buttons).
+  const isAnyAIBusy = isHarvesting || isSuggestingKeywords || isSuggestingFocusAreas;
 
   // Dynamic labels based on applicant type
   const getLabel = (orgLabel, individualLabel) => isIndividual ? individualLabel : orgLabel;
   const getPlaceholder = (orgPlaceholder, individualPlaceholder) => isIndividual ? individualPlaceholder : orgPlaceholder;
 
-  if (organization && isLoadingContacts) {
+  if (organization && organization.id && isLoadingContacts) {
       return <div className="flex justify-center items-center p-8"><Loader2 className="w-8 h-8 animate-spin" /></div>;
   }
 
@@ -1102,7 +1401,7 @@ Focus areas should be:
             <Button
               type="button"
               onClick={handleAIHarvest}
-              disabled={isHarvesting || !aiInputText.trim()}
+              disabled={isAnyAIBusy || !aiInputText.trim()}
               className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
             >
               {isHarvesting ? (
@@ -1376,6 +1675,7 @@ Focus areas should be:
                   type={isOrganization ? "url" : "text"}
                   value={formData.website}
                   onChange={handleChange}
+                  onBlur={handleWebsiteBlur}
                   placeholder={isOrganization ? "https://www.example.com" : "Optional - leave blank if none"}
                   required={isOrganization}
               />
@@ -1514,54 +1814,33 @@ Focus areas should be:
                   </p>
                 </div>
 
-                {/* NEW: College Information for college/graduate students */}
-                {(formData.applicant_type === 'college_student' || formData.applicant_type === 'graduate_student') && (
-                  <>
-                    <div>
-                      <Label htmlFor="current_college">Current College/University</Label>
-                      <Input
-                        id="current_college"
-                        name="current_college"
-                        value={formData.current_college || ''}
-                        onChange={handleChange}
-                        placeholder="e.g., University of Tennessee"
-                      />
-                      <p className="text-xs text-slate-500 mt-1">The college you currently attend</p>
-                    </div>
-                    
-                    <div>
-                      <Label>Interested/Target Colleges</Label>
-                      <MultiSelectCombobox
-                        options={[]}
-                        selected={formData.target_colleges || []}
-                        onSelectedChange={(values) => handleArrayChange('target_colleges', values)}
-                        placeholder="Add colleges you're interested in or applying to..."
-                        allowCustom
-                      />
-                      <p className="text-xs text-slate-500 mt-1">
-                        List all colleges/universities you're interested in, applying to, or considering. We'll search for school-specific scholarships.
-                      </p>
-                    </div>
-                  </>
-                )}
+                {/* College Information for all students */}
+                <div>
+                  <Label htmlFor="current_college">Current College/University</Label>
+                  <Input
+                    id="current_college"
+                    name="current_college"
+                    value={formData.current_college || ''}
+                    onChange={handleChange}
+                    placeholder="e.g., University of Tennessee"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">The college you currently attend (if any)</p>
+                </div>
 
-                {/* Target Colleges for high school students */}
-                {formData.applicant_type === 'high_school_student' && (
-                  <div>
-                    <Label>Interested/Target Colleges</Label>
-                    <MultiSelectCombobox
-                      options={[]}
-                      selected={formData.target_colleges || []}
-                      onSelectedChange={(values) => handleArrayChange('target_colleges', values)}
-                      placeholder="Add colleges you're interested in or applying to..."
-                      allowCustom
-                    />
-                    <p className="text-xs text-slate-500 mt-1">
-                      List colleges/universities you're considering. We'll search for school-specific scholarships.
-                    </p>
-                  </div>
-                )}
-                
+                <div>
+                  <Label>Interested/Target Colleges</Label>
+                  <MultiSelectCombobox
+                    options={[]}
+                    selected={formData.target_colleges || []}
+                    onSelectedChange={(values) => handleArrayChange('target_colleges', values)}
+                    placeholder="Add colleges you're interested in or applying to..."
+                    allowCustom
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    List all colleges/universities you're interested in, applying to, or considering. We'll search for school-specific scholarships.
+                  </p>
+                </div>
+
                 <div>
                   <Label htmlFor="intended_major">Intended Major/Field of Study</Label>
                   <Input
@@ -2673,10 +2952,10 @@ DRAFT for "special circumstances":`}
                 variant="ghost"
                 size="sm"
                 onClick={handleSuggestKeywords}
-                disabled={isHarvesting || isSubmitting}
+                disabled={isAnyAIBusy || isSubmitting}
                 className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
               >
-                {isHarvesting ? (
+                {isSuggestingKeywords ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Generating...
@@ -2708,10 +2987,10 @@ DRAFT for "special circumstances":`}
                 variant="ghost"
                 size="sm"
                 onClick={handleSuggestFocusAreas}
-                disabled={isHarvesting || isSubmitting}
+                disabled={isAnyAIBusy || isSubmitting}
                 className="text-purple-600 hover:text-purple-700 hover:bg-purple-50"
               >
-                {isHarvesting ? (
+                {isSuggestingFocusAreas ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Generating...

@@ -1,14 +1,11 @@
 import express from 'express'
-import { randomUUID } from 'crypto'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
-import { runCrawler, SCHEMA } from '../services/crawlerFramework.js'
+import { runCrawler, triggerAutoDiscoveryCrawlers, stampLastDiscoveryAt } from '../services/crawlerOsCompatibility.js'
 import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { expandNeed, scoreNeedMatch } from '../services/shared/needTaxonomy.js'
-import { getStrategy, listStrategies } from '../services/legacyCrawlSuperseded.js'
-import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../services/legacyCrawlSuperseded.js'
 import { loadProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
@@ -26,15 +23,13 @@ import { ingestOpportunities } from '../services/sources/ingestionService.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
   detectProfessionalDevelopmentIntent,
-  loadCuratedProfessionalDevelopmentPrograms,
   applyProfessionalDevelopmentQueryPolicy,
 } from '../services/matching/professionalDevelopmentPolicy.js'
-import { runAllDomainEngines } from '../services/legacyCrawlSuperseded.js'
-import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/legacyCrawlSuperseded.js'
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource, loadCrawlerSourceRuntimeStatus } from '../services/sourceRegistry.js'
+import { allSources as allCrawlerOsSources } from '../crawler-os/sourceRegistry.js'
+import { implementedAdapterIds } from '../crawler-os/adapters/index.js'
 import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
-import { triggerAutoDiscoveryCrawlers, stampLastDiscoveryAt } from '../services/legacyCrawlSuperseded.js'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import fs from 'fs'
@@ -332,6 +327,7 @@ async function excludeExistingPipeline(db, profileId, opportunities) {
 }
 
 const CRAWLER_TYPES = [
+  'crawler-os',
   'comprehensive',
   'curated_benefits',
   'local_funding',
@@ -405,9 +401,8 @@ function mapResultToFrontendShape(result) {
  * POST /api/real-crawlers/run
  */
 router.post('/run', ensureAuth, async (req, res) => {
-  // CUTOVER: discovery + matching is the Crawler OS. This endpoint now runs the
-  // OS pipeline for the profile and returns its per-profile matches (the legacy
-  // strategy/crawlerManager pipeline is superseded — see legacyCrawlSuperseded.js).
+  // CUTOVER: discovery + matching is the Crawler OS. Historical crawler_type
+  // values are accepted as aliases only; every request uses the OS pipeline.
   const { crawler_type, profile_id, min_match_score: bodyMinScore } = req.body
   let min_match_score = DEFAULT_MIN_SCORE
   if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) min_match_score = bodyMinScore
@@ -426,7 +421,7 @@ router.post('/run', ensureAuth, async (req, res) => {
               m.match_score, m.match_decision, m.match_explanation
          FROM profile_opportunity_matches m
          JOIN funding_opportunities fo ON fo.id = m.opportunity_id
-        WHERE m.profile_id = ? AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch', 'web-llm')
+        WHERE m.profile_id = ? AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
           AND (fo.is_active IS NULL OR fo.is_active = 1)
         ORDER BY m.match_score DESC`,
     ).all(String(profile_id))
@@ -442,7 +437,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       success: true, crawler_type, profile_id, engine: 'crawler-os',
       count: results.length, total_found: results.length,
       results, opportunities: results,
-      sources: run.sources, zero_result: run.zero_result?.reason ?? null,
+      sources: run.sources, zero_result: run.zero_result?.zero_result_reason ?? null,
     })
   } catch (err) {
     routeLogger.error(`[RealCrawlers] run failed for ${profile_id}: ${err?.message || err}`)
@@ -806,94 +801,19 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       }
     }
 
-    // 2. Run item-specific web search for the exact need text
-    let webSearchCount = 0
-    let detectedApplicantType = 'unknown'
+    // The old item-specific web lane was retired with the legacy crawlers. It
+    // could add broad, non-profile-specific web results. Crawler OS is the only
+    // source of returned funding rows here; the need text is used only to
+    // re-rank this profile's OS matches.
+    const webSearchCount = 0
+    let detectedApplicantType = 'crawler-os-profile'
     try {
-      // Build the requesting profile's signals ONCE so both the known-source
-      // category pick AND the live web search reflect WHO is asking (applicant
-      // type, mission, location), not just the literal need text.
-      let webProfile
-      try {
-        const ctx = await loadProfileContext(db, profile_id)
-        const enriched = buildProfileFacets(ctx)
-        webProfile = { signals: enriched.signals, profile: enriched.profile }
-      } catch {
-        webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
-      }
-
-      const parsed = parseItemRequest(need_text, webProfile.signals)
-      detectedApplicantType = parsed.applicantType || 'unknown'
-
-      // Pull matching KNOWN_ITEM_SOURCES
-      for (const category of parsed.categories) {
-        const sources = KNOWN_ITEM_SOURCES[category] || []
-        for (const src of sources) {
-          const urlKey = src.url.toLowerCase().replace(/\/$/, '')
-          if (seenUrls.has(urlKey)) continue
-          seenUrls.add(urlKey)
-          needScored.push({
-            id: `item-known-${category}-${webSearchCount}`,
-            title: src.name,
-            description: src.description,
-            url: src.url,
-            application_url: src.url,
-            match_score: 70,
-            combined_score: 70,
-            categories: [category, 'item_funding'],
-            source: 'item_known_source',
-            result_source: 'item_catalog',
-            need_match: {
-              score: 70,
-              matchedTerms: [`category:${category}`],
-              canonicalNeed: expandedNeed?.canonicalNeed || category,
-              expandedFrom: need_text,
-              matchedKey: category,
-            },
-          })
-          webSearchCount++
-        }
-      }
-
-      // Live DuckDuckGo web search — uses the same profile signals built above
-      // so queries are applicant-type / mission / location aware.
-      const webResults = await searchWebForItem(need_text, webProfile)
-      routeLogger.info(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
-
-      for (const wr of webResults) {
-        const urlKey = (wr.url || '').toLowerCase().replace(/\/$/, '')
-        if (seenUrls.has(urlKey)) continue
-        seenUrls.add(urlKey)
-
-        const needMatch = scoreNeedMatch(
-          { name: wr.title, description: wr.description, categories: expandedNeed?.programCategories || [] },
-          expandedNeed
-        )
-        const needScore = needMatch?.score || 40
-
-        needScored.push({
-          id: `web-${webSearchCount}`,
-          title: wr.title,
-          description: wr.description || `Found via web search for "${need_text}"`,
-          url: wr.url,
-          application_url: wr.url,
-          match_score: 50,
-          combined_score: Math.round(50 * 0.4 + needScore * 0.6),
-          categories: expandedNeed?.programCategories || ['general'],
-          source: 'web_search',
-          result_source: 'web_search',
-          need_match: {
-            score: needScore,
-            matchedTerms: needMatch?.matchedTerms || [`web:${need_text}`],
-            canonicalNeed: expandedNeed?.canonicalNeed || null,
-            expandedFrom: need_text,
-            matchedKey: 'web_search',
-          },
-        })
-        webSearchCount++
-      }
-    } catch (webErr) {
-      console.error('[specific-need] Web search failed (non-fatal):', webErr.message)
+      const ctx = await loadProfileContext(db, profile_id)
+      const enriched = buildProfileFacets(ctx)
+      const types = enriched?.signals?.applicantTypes
+      if (Array.isArray(types) && types.length) detectedApplicantType = types.join(',')
+    } catch {
+      detectedApplicantType = 'crawler-os-profile'
     }
 
     needScored.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
@@ -933,7 +853,24 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
  * GET /api/real-crawlers/strategies
  */
 router.get('/strategies', ensureAuth, (_req, res) => {
-  res.json({ strategies: listStrategies() })
+  const adapterIds = new Set(implementedAdapterIds())
+  const sources = allCrawlerOsSources().map((source) => ({
+    id: source.source_id,
+    name: source.name,
+    engine: 'crawler-os',
+    source_type: source.source_type,
+    directory: Boolean(source.directory),
+    adapter_present: adapterIds.has(source.source_id),
+    trust_tier: source.trust_tier,
+    applicant_types: source.applicant_types,
+    need_categories: source.need_categories,
+  }))
+  res.json({
+    engine: 'crawler-os',
+    strategies: sources,
+    sources,
+    adapters: [...adapterIds].sort(),
+  })
 })
 
 /**
@@ -966,12 +903,12 @@ router.get('/health-check', async (req, res) => {
 
   res.json({
     ok: true,
-    system: 'strategy_router_v4',
+    system: 'crawler-os',
     checks: [
       { source: 'Funding Opportunities Catalog', reachable: true, program_count: activeOpportunityCount },
       { source: 'Trusted Displayable Catalog', reachable: true, program_count: trustedOpportunityCount },
-      { source: 'Crawler Strategies', reachable: true, program_count: listStrategies().length },
-      { source: 'State Programs', reachable: true, note: 'Dynamic per-state loading' },
+      { source: 'Crawler OS Sources', reachable: true, program_count: allCrawlerOsSources().length },
+      { source: 'Crawler OS Adapters', reachable: true, program_count: implementedAdapterIds().length },
     ],
   })
 })
@@ -1054,96 +991,30 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     )
   const dispatchProfDev = intentSignalsProfDev || profileIsLicensedProfessional || profileHasProfDevNeed
 
-  // Base crawler set (existing behavior).
-  const crawlerTypes = ['local_funding', 'government_funding']
-  if (dispatchProfDev) {
-    crawlerTypes.push('license_reinstatement', 'certification_training')
-  }
-
+  let sourcesUsed = ['crawler-os']
   try {
-    routeLogger.info(`[run-smart] profile=${profile_id} crawlerTypes=${JSON.stringify(crawlerTypes)} dispatchProfDev=${dispatchProfDev} (licensed=${profileIsLicensedProfessional}, profDevNeed=${profileHasProfDevNeed}, intent=${intentSignalsProfDev})`)
-    for (const crawlerType of crawlerTypes) {
-      try {
-        const result = await runCrawler(db, profile_id, {
-          minScore: Math.max(1, Math.floor(minScore * 0.25)),
-          maxResults: 50,
-          crawlerType,
-          profileContext: smartProfileContext,
-        })
-        if (result.debug?.gated) continue
-        const mapped = result.results.map(mapResultToFrontendShape)
-        for (const opp of mapped) {
-          const key = String(opp.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-          if (key && !seenTitles.has(key)) {
-            seenTitles.add(key)
-            allOpportunities.push(opp)
-          }
-        }
-      } catch (crawlErr) {
-        console.warn(`[run-smart] ${crawlerType} failed (continuing):`, crawlErr?.message)
+    routeLogger.info(`[run-smart] profile=${profile_id} engine=crawler-os dispatchProfDev=${dispatchProfDev} (licensed=${profileIsLicensedProfessional}, profDevNeed=${profileHasProfDevNeed}, intent=${intentSignalsProfDev})`)
+    const result = await runCrawler(db, profile_id, {
+      minScore,
+      maxResults: 200,
+      crawlerType: 'crawler-os',
+      profileContext: smartProfileContext,
+    })
+    sourcesUsed = Array.isArray(result?.sources) && result.sources.length
+      ? [...new Set(result.sources.map((s) => s?.source_id || s?.id).filter(Boolean))]
+      : ['crawler-os']
+    const mapped = Array.isArray(result?.results)
+      ? result.results.map(mapResultToFrontendShape)
+      : []
+    for (const opp of mapped) {
+      const key = String(opp.url || opp.application_url || opp.title || opp.id || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9:/._-]+/g, ' ')
+        .trim()
+      if (key && !seenTitles.has(key)) {
+        seenTitles.add(key)
+        allOpportunities.push(opp)
       }
-    }
-
-    // 2) National: domain engines
-    try {
-      const profileForEngines = smartProfileContext?.profile ?? null
-      if (profileForEngines) {
-        const domainOpps = await runAllDomainEngines(profileForEngines, {})
-        for (const o of domainOpps) {
-          const urlKey = (o.url || o.application_url || o.source_url || '').toLowerCase()
-          const titleKey = String(o.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-          const dedupeKey = urlKey || titleKey
-          if (dedupeKey && !seenTitles.has(dedupeKey)) {
-            seenTitles.add(dedupeKey)
-            allOpportunities.push({
-              id: o.id || `domain-${randomUUID()}`,
-              title: o.title,
-              name: o.title,
-              description: o.description ?? null,
-              url: o.url ?? o.application_url ?? o.source_url ?? null,
-              application_url: o.application_url ?? o.url ?? null,
-              source_url: o.source_url ?? o.url ?? null,
-              match_score: o.match_score ?? 60,
-              match_reasons: o.match_reasons ?? [],
-              categories: o.categories ?? [],
-              opportunity_type: o.opportunity_type ?? 'program',
-              funding_type: o.funding_type ?? null,
-              amount_max: o.amount_max ?? null,
-              amount_description: o.amount_description ?? null,
-              sponsor: o.sponsor ?? 'National Program',
-              source: o.source ?? 'domain',
-              record_origin: o.record_origin ?? 'live_crawl',
-              is_national: o.is_national ?? true,
-              state: o.state ?? null,
-              deadline_type: o.deadline_type ?? 'rolling',
-            })
-          }
-        }
-      }
-    } catch (domainErr) {
-      console.warn('[run-smart] Domain engines failed (continuing):', domainErr?.message)
-    }
-
-    // 3) State waiver benefits if eligible
-    try {
-      const profileForWaiver = smartProfileContext?.profile ?? null
-      if (profileForWaiver) {
-        const waiverEligible = evaluateStateWaiverEligibility(profileForWaiver).eligible
-        if (waiverEligible) {
-          const waiverOpps = await crawlStateWaiverBenefits(profileForWaiver, {})
-          for (const o of waiverOpps) {
-            const urlKey = (o.url || o.application_url || o.source_url || '').toLowerCase()
-            const titleKey = String(o.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-            const dedupeKey = urlKey || titleKey
-            if (dedupeKey && !seenTitles.has(dedupeKey)) {
-              seenTitles.add(dedupeKey)
-              allOpportunities.push({ ...o, match_score: o.match_score ?? 60 })
-            }
-          }
-        }
-      }
-    } catch (waiverErr) {
-      console.warn('[run-smart] State waiver crawl failed (continuing):', waiverErr?.message)
     }
 
     // Spec §3: when professional-development intent is active, exclude
@@ -1207,17 +1078,8 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
 
     let working = filtered
     if (pdIntent.active) {
-      // Profile-aware curated injection (same global gate as routes/matching.js):
-      // only programs whose declared state/occupation/student/heritage targeting
-      // fits this profile are injected.
-      const curated = loadCuratedProfessionalDevelopmentPrograms(smartProfileContext)
-      const seen = new Set(working.map((o) => String(o.title || '').toLowerCase()))
-      for (const opp of curated) {
-        const key = String(opp.title || '').toLowerCase()
-        if (!key || seen.has(key)) continue
-        seen.add(key)
-        working.push({ ...opp, match_score: opp.match_score ?? 72, result_source: 'pd_curated' })
-      }
+      // No curated injection here: run-smart must return only profile-specific
+      // Crawler OS results. The query policy may narrow/reorder OS rows.
       working = applyProfessionalDevelopmentQueryPolicy(working, pdIntent)
         .filter((opp) => (opp.match_score ?? 0) >= minScore || opp.is_directory_resource)
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -1246,7 +1108,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       total_found: allOpportunities.length,
       min_match_score: minScore,
       opportunities: decoratedSmart,
-      sources_used: [...crawlerTypes, 'domain_engines', 'state_waiver_benefits'],
+      sources_used: sourcesUsed,
       dispatch_profile_development: dispatchProfDev,
       profile_credentials: profileSignals?.credentials instanceof Set
         ? Array.from(profileSignals.credentials)

@@ -250,7 +250,7 @@ const _STATIC_PROMPT_ADMIN_SECTION = [
   '- admin.code.crawl: Crawl a directory tree to understand project structure',
   '- admin.code.analyze: Analyze specific files for bugs, patterns, or improvement opportunities',
   '- admin.code.lint: Run linting on specific files to check for issues',
-  '- admin.code.edit: Suggest code changes (read-only analysis; not production writes)',
+  '- admin.code.edit: Apply code-error edits with automatic backup and audit log when a fix is needed',
   '- admin.code.scan: Scan for security issues, deprecated patterns, or code smells',
   '- admin.code.missionAudit: Audit code against mission goals',
   '- admin.code.autoRepair: Auto-repair common anti-patterns (admin only)',

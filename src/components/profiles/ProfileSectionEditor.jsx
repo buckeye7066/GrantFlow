@@ -29,28 +29,34 @@ function isPlainObject(value) {
   return Object.prototype.toString.call(value) === '[object Object]'
 }
 
+// Treat null/undefined/empty-string as "missing" but keep legitimate falsy values like 0 / '0'.
+function hasValue(v) {
+  return v !== null && v !== undefined && String(v).trim() !== ''
+}
+
 function formatAddressObject(address) {
   if (!isPlainObject(address)) return null
 
+  const trimToString = (v) => (hasValue(v) ? String(v).trim() : null)
+
   const parts = []
-  const line1 = address.line1 ?? address.address1 ?? address.street ?? address.street1
-  const line2 = address.line2 ?? address.address2 ?? address.street2
-  if (line1) parts.push(String(line1).trim())
-  if (line2) parts.push(String(line2).trim())
+  const line1 = trimToString(address.line1 ?? address.address1 ?? address.street ?? address.street1)
+  const line2 = trimToString(address.line2 ?? address.address2 ?? address.street2)
+  if (line1 !== null) parts.push(line1)
+  if (line2 !== null) parts.push(line2)
 
-  const city = address.city
-  const state = address.state ?? address.region
-  const postal = address.zip ?? address.postal ?? address.postal_code ?? address.zip_code
+  const city = trimToString(address.city)
+  const state = trimToString(address.state ?? address.region)
+  const postal = trimToString(address.zip ?? address.postal ?? address.postal_code ?? address.zip_code)
 
-  const cityLineParts = [city, state].filter(Boolean).map((v) => String(v).trim())
-  const cityLine = cityLineParts.join(', ')
-  const cityPostal = [cityLine, postal].filter(Boolean).join(' ')
-  if (cityPostal) parts.push(cityPostal.trim())
+  const cityLine = [city, state].filter((v) => v !== null).join(', ')
+  const cityPostal = [cityLine, postal].filter((v) => v !== null && v !== '').join(' ').trim()
+  if (cityPostal) parts.push(cityPostal)
 
-  const country = address.country
-  if (country) parts.push(String(country).trim())
+  const country = trimToString(address.country)
+  if (country !== null) parts.push(country)
 
-  return parts.filter(Boolean).join('\n').trim() || null
+  return parts.filter((v) => v !== null && v !== '').join('\n').trim() || null
 }
 
 function normalizeTextValue(fieldName, value) {
@@ -71,7 +77,21 @@ function normalizeTextValue(fieldName, value) {
         .filter(Boolean)
         .join('\n')
     }
-    return value.map((entry) => (entry === null || entry === undefined ? '' : String(entry))).filter(Boolean).join(', ')
+    return value
+      .map((entry) => {
+        if (entry === null || entry === undefined) return ''
+        // Avoid '[object Object]' corruption for arrays of objects.
+        if (typeof entry === 'object') {
+          try {
+            return JSON.stringify(entry)
+          } catch {
+            return ''
+          }
+        }
+        return String(entry)
+      })
+      .filter(Boolean)
+      .join(', ')
   }
 
   if (isPlainObject(value) && fieldName === 'address') {
@@ -82,8 +102,9 @@ function normalizeTextValue(fieldName, value) {
   if (typeof value === 'object') {
     try {
       return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
+    } catch (error) {
+      console.error('normalizeTextValue: failed to JSON.stringify value for field', fieldName, error)
+      return ''
     }
   }
 
@@ -100,6 +121,8 @@ function normalizeInitialData(config, initialData) {
   for (const field of config.fields ?? []) {
     if (!field?.name) continue
     if (field.type === 'boolean') continue
+    // Non-text field types (e.g. contacts arrays of objects) must not be flattened to text.
+    if (field.type === 'contacts') continue
 
     const current = out[field.name]
     // Inputs/Textareas should never receive an object value
@@ -132,7 +155,7 @@ const basicInfoSchema = z.object({
     name: z.string().min(1, "Contact name is required"),
     email: z.string().email("Enter a valid email address"),
     role: z.enum(["admin", "full_access", "read_only"]).default("full_access"),
-    addedDate: z.string().optional(),
+    addedDate: z.string().optional().default(() => new Date().toISOString()),
   })).optional().default([]),
 })
 const toBoolean = (value) => {
@@ -143,15 +166,28 @@ const toBoolean = (value) => {
   return ['true', 'yes', 'y', '1'].includes(normalized)
 }
 
+// Tri-state aware boolean field: leaves unset values as `undefined` so a partial
+// submit that omits the field does not overwrite a previously-stored `true` with `false`.
 const booleanField = z
   .union([z.boolean(), z.string(), z.number()])
   .optional()
-  .transform((value) => toBoolean(value))
+  .transform((value) => {
+    if (value === undefined || value === null || value === '') return undefined
+    return toBoolean(value)
+  })
 
 const toStringList = (value) => {
   if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
   if (value && typeof value === 'object') {
-    return Object.values(value)
+    // Only flatten known list-like shapes; reject arbitrary nested objects rather
+    // than silently producing a meaningless flattened string list.
+    if (!isPlainObject(value)) return []
+    const values = Object.values(value)
+    const allListFriendly = values.every(
+      (entry) => Array.isArray(entry) || typeof entry === 'string' || typeof entry === 'number',
+    )
+    if (!allListFriendly) return []
+    return values
       .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
       .map((entry) => String(entry).trim())
       .filter(Boolean)
@@ -365,7 +401,9 @@ const healthSchema = z.object({
     .union([z.array(z.string()), z.string()])
     .optional()
     .transform((value) => {
-      if (Array.isArray(value)) return value
+      if (Array.isArray(value)) {
+        return value.map((v) => String(v).trim()).filter(Boolean)
+      }
       if (typeof value === 'string' && value.trim() !== '') {
         return value.split(',').map((entry) => entry.trim()).filter(Boolean)
       }
@@ -416,7 +454,13 @@ const medicalInsuranceSchema = z.object({
 const toStringArray = (value) => {
   if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
   if (value && typeof value === "object") {
-    return Object.values(value)
+    if (!isPlainObject(value)) return []
+    const values = Object.values(value)
+    const allListFriendly = values.every(
+      (entry) => Array.isArray(entry) || typeof entry === 'string' || typeof entry === 'number',
+    )
+    if (!allListFriendly) return []
+    return values
       .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
       .map((entry) => String(entry).trim())
       .filter(Boolean)
@@ -1516,6 +1560,34 @@ export default function ProfileSectionEditor({
 
   const handleSubmit = form.handleSubmit((values) => {
     const legacyValues = dropLegacyOnSave ? {} : Object.fromEntries(legacyEntries)
+
+    // Preserve structured condition metadata (icd10/stage/diagnosed_year) when the
+    // editor only round-tripped condition names through the textarea. We merge parsed
+    // names against the original stored conditions so additional fields are not lost.
+    if (sectionKey === 'health_medical' && Array.isArray(values.conditions)) {
+      const originalConditions = Array.isArray(initialData?.conditions) ? initialData.conditions : []
+      const originalByName = new Map(
+        originalConditions
+          .filter((c) => c && typeof c === 'object' && typeof c.name === 'string')
+          .map((c) => [c.name.trim().toLowerCase(), c]),
+      )
+      values = {
+        ...values,
+        conditions: values.conditions.map((c) => {
+          const original = originalByName.get(String(c?.name || '').trim().toLowerCase())
+          if (!original) return c
+          return {
+            ...original,
+            ...c,
+            // Prefer newly parsed values when present, otherwise fall back to original metadata.
+            icd10: c.icd10 ?? original.icd10,
+            stage: c.stage ?? original.stage,
+            diagnosed_year: c.diagnosed_year ?? original.diagnosed_year,
+          }
+        }),
+      }
+    }
+
     onSave({ ...legacyValues, ...values })
   })
 
@@ -1711,9 +1783,13 @@ export default function ProfileSectionEditor({
                           }
                           
                           const updateContact = (index, updates) => {
-                            const updated = contacts.map((contact, i) => 
-                              i === index ? { ...contact, ...updates } : contact
-                            )
+                            const updated = contacts.map((contact, i) => {
+                              if (i !== index) return contact
+                              const merged = { ...contact, ...updates }
+                              // Ensure addedDate is always populated for downstream consumers.
+                              if (!merged.addedDate) merged.addedDate = new Date().toISOString()
+                              return merged
+                            })
                             controllerField.onChange(updated)
                           }
                           

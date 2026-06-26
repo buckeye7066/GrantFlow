@@ -36,7 +36,7 @@ Each agent has exactly one home adapter under
 
 | Agent | Role | Service area | Per-agent doc |
 |-------|------|--------------|---------------|
-| **Anya** | User guide & automation navigator | `backend/services/anya/` | (see Anya services) |
+| **Anya** | User guide, automation navigator, and code-error repair operator | `backend/services/anya/` | (see Anya services) |
 | **Yana** | Client discovery (lead intelligence) | `backend/services/yana/` | this charter §4 |
 | **John** | Outreach draft writer (drafts only — never sends) | `backend/services/john/` | [JOHN_OUTREACH_AGENT.md](./JOHN_OUTREACH_AGENT.md) |
 | **Sam** | Code supervisor / self-healing engineering | `backend/services/sam/` | [SAM_PRODUCTION_AGENT.md](./SAM_PRODUCTION_AGENT.md), [SAM_AGENT_AUDITOR.md](./SAM_AGENT_AUDITOR.md) |
@@ -87,6 +87,12 @@ secret handling · genuinely ambiguous decisions.
 bypass CAPTCHA · evade anti-bot systems · intercept 2FA · violate portal ToS ·
 store raw credentials or card numbers · misuse FAFSA/FSA credentials · submit
 unsafe legal attestations · expose secrets.
+
+**Anya code-error repair rule:** when a code error is detected, Anya may make
+any necessary code-error edit with full repository write access and without an
+additional permission gate. She must log what changed, why it changed, backup or
+rollback path, validation/tests attempted, and the result. This authority does
+not override the absolute safety rules above.
 
 ---
 

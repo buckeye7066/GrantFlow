@@ -52,6 +52,16 @@ export function getApplicationTask(taskId) {
   return apiFetch(`/api/application-tasks/${encodeURIComponent(taskId)}`)
 }
 
+// Profile-page "Hamilton" summary: what he is working on + everywhere the owner
+// must add information for him to finish. Read-only, profile-access scoped.
+// Returns { ok, working_on:[...], needs_you:[...], next_run_at, counts }.
+export function getHamiltonProfileSummary(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(
+    `/api/hamilton/automation/profile-summary?profileId=${encodeURIComponent(profileId)}`,
+  )
+}
+
 export function createApplicationTask({ profileId, opportunityId = null, grantId = null, portalId = null }) {
   return apiFetch(`/api/application-tasks`, {
     method: 'POST',
@@ -471,6 +481,21 @@ export function saveApplicationPacket(profileId, { source, profileName = '' } = 
   return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals/packet`, {
     method: 'POST',
     body: JSON.stringify({ source, profileName }),
+  })
+}
+
+// Bulk: have Hamilton make an INDIVIDUAL packet (PDF) per selected non-portal
+// funder and save each to this profile's Documents. Idempotent per source
+// (already-saved packets are reused). Returns
+// { ok, results:[{ key, documentId, reused, mime_type, error? }], created, reused, failed }.
+export function saveApplicationPackets(profileId, { sources, profileName = '' } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return Promise.reject(new Error('sources required'))
+  }
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals/packets`, {
+    method: 'POST',
+    body: JSON.stringify({ sources, profileName }),
   })
 }
 

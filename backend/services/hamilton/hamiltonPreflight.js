@@ -1,4 +1,4 @@
-﻿/**
+/**
  * hamiltonPreflight.js
  *
  * Pre-launch checks that run BEFORE the autopilot engine starts. The
@@ -23,6 +23,7 @@
  */
 
 import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
+import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 
@@ -184,6 +185,26 @@ export async function preflightSingleSource(db, {
   const warnings = []
   const classification = classifyFundingSource({ opportunity, grant, profile, portalLink })
 
+  const fundingPolicy = await assessHamiltonFundingSource(db, {
+    profileId: profileId || profile?.id,
+    opportunity,
+    grant,
+  })
+  if (!fundingPolicy.ok) {
+    blockers.push({
+      kind: 'funding_source_policy', key: 'crawler_profile_rules',
+      label: 'Funding source does not meet GrantFlow rules',
+      detail: fundingPolicy.message,
+      reasons: fundingPolicy.reasons || [],
+    })
+  } else if (fundingPolicy.warnings?.includes('no_profile_match')) {
+    warnings.push({
+      kind: 'funding_source_policy', key: 'no_profile_match',
+      label: 'No profile-specific crawler match found',
+      detail: 'Hamilton found no accepted profile-specific crawler match for this source; hard trust rules passed, but review before continuing.',
+    })
+  }
+
   // 1. Required identity / contact fields. A field is only "missing" if it is
   // absent at its explicit path AND nowhere else in the profile under a known
   // alias AND not already in the resolved-field cache — so Hamilton parses the
@@ -317,15 +338,16 @@ export async function preflightSelected(db, { profile, profileId, selectedSource
   if (!Array.isArray(selectedSources)) selectedSources = []
   const out = { ok: true, results: [] }
   for (const source of selectedSources) {
+    const scopedProfileId = profileId || profile?.id || null
     const opportunity = source.opportunity_id
-      ? await loadOpportunity(db, source.opportunity_id)
+      ? await loadOpportunity(db, source.opportunity_id, scopedProfileId)
       : null
     const grant = source.grant_id
       ? await loadGrant(db, source.grant_id)
       : null
     const r = await preflightSingleSource(db, {
       profile,
-      profileId: profileId || profile?.id,
+      profileId: scopedProfileId,
       source,
       opportunity,
       grant,
@@ -336,10 +358,16 @@ export async function preflightSelected(db, { profile, profileId, selectedSource
   return out
 }
 
-async function loadOpportunity(db, id) {
+async function loadOpportunity(db, id, profileId = null) {
   if (!db || !id) return null
   try {
-    const row = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(id))
+    const row = profileId
+      ? await db.prepare(
+          'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1',
+        ).get(String(id), String(profileId))
+      : await db.prepare(
+          'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
+        ).get(String(id))
     return row || null
   } catch { return null }
 }

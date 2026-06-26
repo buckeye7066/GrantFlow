@@ -5,6 +5,7 @@ import { createMemoryStore } from '../store.js';
 import { runDiscovery } from '../pipeline.js';
 import { storage } from '../index.js';
 import { buildThesis } from '../profileIntelligence.js';
+import { makeOpportunity, OPPORTUNITY_KIND, REALITY_STATUS, TRUST_TIER } from '../contract.js';
 import { makeOfflineFetcher, grantsGovBody, SAMPLE_VFD_PROFILE } from './fixtures/fakeFetch.mjs';
 
 function deps(fetchOpts = {}) {
@@ -119,4 +120,46 @@ test('the same real grant found by multiple crawlers is stored ONCE (cross-sourc
   // at least one specialized adapter reports a dedup against the catch-all
   const deduped = r.sources.reduce((n, s) => n + (s.deduped ?? 0), 0);
   assert.ok(deduped >= 1, 'specialized agency adapters dedup against the grants_gov catch-all');
+});
+
+test('existing canonical rows are still matched on a later crawl (no false zero)', async () => {
+  const d = deps({
+    grantsGov: [{
+      id: 'OPP-7777',
+      title: 'Volunteer Fire Equipment Grant',
+      agency: 'FEMA',
+      agencyCode: 'DHS-FEMA',
+      summary: 'Funding for volunteer fire department emergency equipment.',
+      closeDate: '12/31/2026',
+    }],
+    fail: new Set(['cof.org', 'benefits.gov', 'sam.gov', 'federalregister.gov', 'grants.nih.gov']),
+  });
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const canonicalId = 'seeded-canonical-fema';
+  const applyUrl = 'https://www.grants.gov/search-results-detail/OPP-7777';
+
+  storage.upsertOpportunity(d.store, makeOpportunity({
+    id: canonicalId,
+    source_id: 'seeded_catalog',
+    external_id: 'OPP-7777',
+    kind: OPPORTUNITY_KIND.DIRECT_GRANT,
+    title: 'Volunteer Fire Equipment Grant',
+    sponsor: 'FEMA',
+    summary: 'Funding for volunteer fire department emergency equipment.',
+    apply_url: applyUrl,
+    info_url: applyUrl,
+    applicant_types: ['vfd'],
+    need_categories: ['equipment', 'emergency'],
+    geography: { national: true, states: [] },
+    funding: { amount_max: 50000 },
+    reality_status: REALITY_STATUS.VERIFIED,
+    trust_tier: TRUST_TIER.OFFICIAL_API,
+  }));
+
+  const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run_existing_canonical' });
+  const matches = storage.getMatchesForProfile(d.store, thesis.profile_id);
+  assert.equal(storage.countOpportunities(d.store), 1, 'repeat crawl must not insert a duplicate catalog row');
+  assert.ok(matches.some((m) => m.opportunity_id === canonicalId), 'existing canonical row is matched for this profile');
+  assert.equal(r.zero_result, null, 'matching an existing real opportunity is not a zero-result crawl');
+  assert.ok(r.sources.some((s) => s.existing > 0), 'source telemetry records existing canonical rows');
 });

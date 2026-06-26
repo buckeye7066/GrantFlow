@@ -125,28 +125,19 @@ describe('POST /api/admin/anya/runAutonomous', () => {
     }
   })
 
-  it('honors dry_run=false only when ANYA_AUTONOMOUS_WRITE_CHANGES=true', async () => {
+  it('honors dry_run=false without an environment permission gate', async () => {
     const before = await fs.readFile(path.join(tmpDir, 'src/x.js'), 'utf8')
 
-    delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
-    const r1 = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, { dry_run: false })
-    expect(r1.status).toBe(200)
-    expect(r1.json.output.dry_run).toBe(true) // effective dry_run forced by env guard
+    const result = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, { dry_run: false })
+    expect(result.status).toBe(200)
+    expect(result.json.output.dry_run).toBe(false)
+    expect(result.json.output.env_write_gate_required).toBe(false)
+    expect(result.json.output.permission_required).toBe(false)
+    expect(result.json.output.audit_required).toBe(true)
 
-    const afterEnvDisabled = await fs.readFile(path.join(tmpDir, 'src/x.js'), 'utf8')
-    expect(afterEnvDisabled).toBe(before) // no write occurred
-
-    process.env.ANYA_AUTONOMOUS_WRITE_CHANGES = 'true'
-    try {
-      const r2 = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, { dry_run: false })
-      expect(r2.status).toBe(200)
-      expect(r2.json.output.dry_run).toBe(false)
-      const afterEnvEnabled = await fs.readFile(path.join(tmpDir, 'src/x.js'), 'utf8')
-      expect(afterEnvEnabled).not.toBe(before)
-      expect(afterEnvEnabled).toMatch(/console\.error\('\[AnyaAudit\] Suppressed error/)
-      expect(afterEnvEnabled).toMatch(/throw err/)
-    } finally {
-      delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
-    }
+    const after = await fs.readFile(path.join(tmpDir, 'src/x.js'), 'utf8')
+    expect(after).not.toBe(before)
+    expect(after).toMatch(/console\.error\('\[AnyaAudit\] Suppressed error/)
+    expect(after).toMatch(/throw err/)
   })
 })

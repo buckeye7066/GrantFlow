@@ -183,38 +183,25 @@ router.post('/check', async (req, res) => {
 
     const now = new Date()
 
-    const insert = req.db.prepare(
-      `
-        INSERT INTO grant_monitoring_logs (
-          id, organization_id, grant_id, event_type, severity, event_data, acknowledged, acknowledged_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL)
-      `,
-    )
-
     // Avoid spamming duplicate events: if the same (grant_id,event_type) exists in last 24h, skip.
     const since1dPredicate =
       req.db?.dialect === 'postgres'
         ? "created_date >= (NOW() - INTERVAL '1 day')"
         : "datetime(created_date) >= datetime('now', '-1 day')"
 
-    const seenRecent = req.db.prepare(
-      `
-        SELECT 1
-        FROM grant_monitoring_logs
-        WHERE grant_id = ? AND event_type = ?
-          AND ${since1dPredicate}
-        LIMIT 1
-      `,
-    )
-
     let eventsLogged = 0
 
     await req.db.withTransaction(async (tx) => {
+      // Omit acknowledged / acknowledged_at so the DB defaults apply
+      // (acknowledged=FALSE, acknowledged_at=NULL). Inserting a literal `0` for
+      // the BOOLEAN `acknowledged` column 500s on Postgres ("column is of type
+      // boolean but expression is of type integer") while SQLite silently
+      // accepts it — that mismatch was the production /check 500.
       const insertTx = tx.prepare(
         `
           INSERT INTO grant_monitoring_logs (
-            id, organization_id, grant_id, event_type, severity, event_data, acknowledged, acknowledged_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL)
+            id, organization_id, grant_id, event_type, severity, event_data
+          ) VALUES (?, ?, ?, ?, ?, ?)
         `,
       )
       const seenRecentTx = tx.prepare(

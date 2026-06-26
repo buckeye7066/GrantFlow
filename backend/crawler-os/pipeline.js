@@ -63,6 +63,20 @@ export async function runDiscovery(deps, opts = {}) {
   const storedRealKeys = new Map(); // real-world opportunity identity -> canonical stored id (cross-source dedup)
   let totalRejected = 0;
 
+  function matchCanonicalOpportunity(opp, canonicalId) {
+    const canonicalOpp = canonicalId && canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
+    storedOppIds.add(canonicalOpp.id);
+    for (const mp of matchProfiles) {
+      const decision = computeMatchDecision(canonicalOpp, mp, { floor: opts.floor });
+      upsertMatch(store, decision);
+      const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
+      if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
+        recommendationKeys.add(recommendationKey);
+        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, match_score: decision.match_score, decision: decision.decision });
+      }
+    }
+  }
+
   if (thePlan.selected_source_ids.length === 0) {
     return finalize({
       store, runId, thesis, thePlan, startedAt, clock,
@@ -77,7 +91,7 @@ export async function runDiscovery(deps, opts = {}) {
     upsertSource(store, source); // keep the funding_sources catalog current
 
     const srStartedAt = new Date(clock()).toISOString();
-    const sr = { source_id: sourceId, fetched: 0, parsed_candidates: 0, rejected: 0, stored: 0, deduped: 0, queries: [], started_at: srStartedAt };
+    const sr = { source_id: sourceId, fetched: 0, parsed_candidates: 0, rejected: 0, stored: 0, existing: 0, deduped: 0, queries: [], started_at: srStartedAt };
 
     const adapter = getAdapter(sourceId);
     if (!adapter) {
@@ -151,8 +165,13 @@ export async function runDiscovery(deps, opts = {}) {
         if (res.deduped) {
           // Durable cross-run dedup: the store already holds this real-world
           // opportunity under a different source-folded id. Provenance recorded;
-          // do not inflate the catalog or recommendation list.
+          // match the existing canonical row for this profile, but do not
+          // inflate the catalog or recommendation list.
           storedRealKeys.set(realKey, res.canonical_id);
+          if (res.canonical_id) {
+            sr.existing += 1;
+            matchCanonicalOpportunity(opp, res.canonical_id);
+          }
           sr.deduped += 1;
           continue;
         }
@@ -167,21 +186,14 @@ export async function runDiscovery(deps, opts = {}) {
         storedRealKeys.set(realKey, opp.id);
 
         // Per-profile matching. The decision comes ONLY from the canonical engine.
-        for (const mp of matchProfiles) {
-          const decision = computeMatchDecision(opp, mp, { floor: opts.floor });
-          upsertMatch(store, decision);
-          const recommendationKey = `${mp.profile_id}:${opp.id}`;
-          if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
-            recommendationKeys.add(recommendationKey);
-            recommendations.push({ opportunity_id: opp.id, title: opp.title, sponsor: opp.sponsor, match_score: decision.match_score, decision: decision.decision });
-          }
-        }
+        matchCanonicalOpportunity(opp, opp.id);
       }
     }
 
-    const outcome = sr.stored > 0 ? CRAWLER_OUTCOME.OK
+    const foundForProfile = sr.stored + sr.existing;
+    const outcome = foundForProfile > 0 ? CRAWLER_OUTCOME.OK
       : (sawParseError ? CRAWLER_OUTCOME.PARSE_ERROR : sawFetchError ? CRAWLER_OUTCOME.FETCH_ERROR : CRAWLER_OUTCOME.EMPTY);
-    const reason = sr.stored > 0 ? null
+    const reason = foundForProfile > 0 ? null
       : (sawParseError ? 'parse_error'
         : (sr.deduped > 0 ? 'all_candidates_deduped' : 'no_candidates_stored'));
     finishSource(store, runId, sr, outcome, reason, clock, sourceSummaries);
@@ -203,7 +215,7 @@ export async function runDiscovery(deps, opts = {}) {
 function finishSource(store, runId, sr, outcome, reason, clock, summaries) {
   sr.outcome = outcome; sr.reason = reason; sr.finished_at = new Date(clock()).toISOString();
   recordSourceRun(store, runId, sr);
-  summaries.push({ source_id: sr.source_id, outcome, reason, fetched: sr.fetched, parsed: sr.parsed_candidates, rejected: sr.rejected, stored: sr.stored, deduped: sr.deduped ?? 0, queries: sr.queries ?? [] });
+  summaries.push({ source_id: sr.source_id, outcome, reason, fetched: sr.fetched, parsed: sr.parsed_candidates, rejected: sr.rejected, stored: sr.stored, existing: sr.existing ?? 0, deduped: sr.deduped ?? 0, queries: sr.queries ?? [] });
 }
 
 function diagnoseZeroResult(summaries, totalRejected) {

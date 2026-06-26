@@ -114,7 +114,7 @@ function formatSourceLabel(source) {
 }
 
 function truncateLabel(s, max = 52) {
-  const t = typeof s === 'string' ? s.trim() : ''
+  const t = (s === null || s === undefined) ? '' : String(s).trim()
   if (!t) return ''
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`
 }
@@ -236,6 +236,30 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     [results]
   );
 
+  // Keys that correspond to the currently displayed results. When the housing
+  // filter changes, the index-based keys shift, so selection state must be
+  // reconciled against displayResults to avoid stale/incorrect selections.
+  const displayKeys = React.useMemo(
+    () => displayResults.map((opp, idx) => getOpportunityKey(opp, idx)),
+    [displayResults]
+  );
+
+  // Reconcile selection whenever the displayed set changes (e.g. filter toggle).
+  // Drop any selected keys that no longer correspond to a displayed result.
+  React.useEffect(() => {
+    setSelectedOpportunities((prev) => {
+      if (prev.size === 0) return prev;
+      const validKeys = new Set(displayKeys);
+      let changed = false;
+      const next = new Set();
+      prev.forEach((k) => {
+        if (validKeys.has(k)) next.add(k);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [displayKeys]);
+
   /** Distinct crawler / catalog pipeline keys (often one per run, e.g. "national" or a directory name). */
   const uniqueSources = React.useMemo(() => {
     if (!results || results.length === 0) return [];
@@ -287,7 +311,9 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   };
 
   const handleBulkAdd = async () => {
-    const selectedOpps = results.filter((opp, idx) => selectedOpportunities.has(getOpportunityKey(opp, idx)));
+    // Use displayResults so the index used to compute keys matches the index
+    // used when keys were created (handleSelectAll / render iterate displayResults).
+    const selectedOpps = displayResults.filter((opp, idx) => selectedOpportunities.has(getOpportunityKey(opp, idx)));
     
     if (selectedOpps.length === 0) return;
 
@@ -310,17 +336,20 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     let successCount = 0;
     let failCount = 0;
     let duplicateCount = 0;
+    let skippedCount = 0;
 
     const failedTitles = [];
     for (let i = 0; i < selectedOpps.length; i++) {
       const opp = selectedOpps[i];
       try {
-        const result = await onAddToPipeline(opp, { silent: false });
+        // Silent per-item adds: only the summary toast below should be shown.
+        const result = await onAddToPipeline(opp, { silent: true });
         if (result?.status === 'already') duplicateCount++;
         else if (result?.status === 'added') successCount++;
         else if (['filtered', 'rejected', 'ineligible', 'skipped'].includes(result?.status)) {
           // Valid non-error outcomes: not added but not a pipeline error.
-          duplicateCount++;
+          // These are distinct from duplicates — count them separately.
+          skippedCount++;
         } else {
           failCount++;
           failedTitles.push(opp?.title || 'Unknown');
@@ -344,6 +373,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     const messageParts = [];
     if (successCount > 0) messageParts.push(`${successCount} added`);
     if (duplicateCount > 0) messageParts.push(`${duplicateCount} already in pipeline`);
+    if (skippedCount > 0) messageParts.push(`${skippedCount} skipped`);
     if (failCount > 0) messageParts.push(`${failCount} failed`);
     
     toast({
@@ -360,10 +390,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     // searched/expanded and which profile fields to fill in next.
     const profileGaps = Array.isArray(diagnostics?.profileGaps) ? diagnostics.profileGaps : [];
     const tierExplanation = diagnostics?.tierExplanation || null;
+    const tierAttempts = Number(diagnostics?.tierAttempts);
     const expansions = [
       diagnostics?.geoExpanded ? 'expanded the search radius' : null,
       diagnostics?.directoryOnly ? 'included funding directories' : null,
-      Number(diagnostics?.tierAttempts) > 1 ? `relaxed the match threshold across ${diagnostics.tierAttempts} tiers` : null,
+      tierAttempts > 1 ? `relaxed the match threshold across ${tierAttempts} tiers` : null,
     ].filter(Boolean);
     return (
       <div className="rounded-xl border bg-white p-12 text-center space-y-4">
@@ -382,11 +413,22 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
           <p className="text-sm font-medium text-slate-800 mb-1">Next steps to surface real matches:</p>
           {profileGaps.length > 0 ? (
             <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
-              {profileGaps.slice(0, 6).map((gap) => (
-                <li key={typeof gap === 'string' ? gap : gap?.field || JSON.stringify(gap)}>
-                  {typeof gap === 'string' ? gap : (gap?.label || gap?.message || gap?.field)}
-                </li>
-              ))}
+              {profileGaps.slice(0, 6).map((gap, gapIdx) => {
+                let key;
+                let text;
+                if (typeof gap === 'string') {
+                  key = `gap-${gapIdx}-${gap}`;
+                  text = gap;
+                } else if (gap && typeof gap === 'object') {
+                  const idPart = gap.field || gap.id || gap.key || '';
+                  key = `gap-${gapIdx}-${String(idPart)}`;
+                  text = gap.label || gap.message || gap.field || JSON.stringify(gap);
+                } else {
+                  key = `gap-${gapIdx}`;
+                  text = String(gap);
+                }
+                return <li key={key}>{text}</li>;
+              })}
             </ul>
           ) : (
             <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
@@ -400,7 +442,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     );
   }
 
-  const allSelected = selectedOpportunities.size === displayResults.length && displayResults.length > 0;
+  // Compute how many of the currently displayed results are selected, so the
+  // "select all" checkbox reflects the displayed subset rather than stale keys.
+  const selectedDisplayCount = displayKeys.reduce(
+    (acc, key) => (selectedOpportunities.has(key) ? acc + 1 : acc),
+    0
+  );
+  const allSelected = displayResults.length > 0 && selectedDisplayCount === displayResults.length;
 
   return (
     <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
@@ -454,7 +502,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
               </p>
             </div>
             <Progress 
-              value={(processingProgress.current / processingProgress.total) * 100} 
+              value={processingProgress.total > 0 ? (processingProgress.current / processingProgress.total) * 100 : 0} 
               className="w-32"
             />
           </div>
@@ -510,20 +558,20 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 id="select-all"
               />
               <label htmlFor="select-all" className="font-medium cursor-pointer">
-                {selectedOpportunities.size > 0 
-                  ? `${selectedOpportunities.size} selected`
+                {selectedDisplayCount > 0 
+                  ? `${selectedDisplayCount} selected`
                   : 'Select all'
                 }
               </label>
             </div>
-            {selectedOpportunities.size > 0 && (
+            {selectedDisplayCount > 0 && (
               <Button 
                 onClick={handleBulkAdd}
                 disabled={isProcessing}
                 className="bg-blue-600 hover:bg-blue-700 text-white hover:text-white"
               >
                 <Plus className="w-4 h-4 mr-2" />
-                Add {selectedOpportunities.size} to Pipeline
+                Add {selectedDisplayCount} to Pipeline
               </Button>
             )}
           </div>
@@ -534,6 +582,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
         {displayResults.map((opp, idx) => {
           const oppKey = getOpportunityKey(opp, idx);
           const isSelected = selectedOpportunities.has(oppKey);
+          const savedId = opp.id ?? opp.source_id;
           
           return (
             <div 
@@ -555,17 +604,17 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   Select
                 </label>
                 {/* Save / star bookmark */}
-                {(opp.id || opp.source_id) && (
+                {savedId !== null && savedId !== undefined && (
                   <button
                     type="button"
-                    title={isSaved(opp.id ?? opp.source_id) ? 'Remove from saved' : 'Save this grant'}
-                    onClick={() => toggleGrant(opp.id ?? opp.source_id)}
+                    title={isSaved(savedId) ? 'Remove from saved' : 'Save this grant'}
+                    onClick={() => toggleGrant(savedId)}
                     className="shrink-0 text-slate-400 hover:text-yellow-500 transition-colors"
                   >
                     <Star
                       className="w-4 h-4"
-                      fill={isSaved(opp.id ?? opp.source_id) ? 'currentColor' : 'none'}
-                      style={isSaved(opp.id ?? opp.source_id) ? { color: '#f59e0b' } : {}}
+                      fill={isSaved(savedId) ? 'currentColor' : 'none'}
+                      style={isSaved(savedId) ? { color: '#f59e0b' } : {}}
                     />
                   </button>
                 )}
@@ -653,7 +702,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 <FundingResultCard
                   result={toCanonicalResult(opp)}
                   className="border-0 shadow-none"
-                  onSecondaryAction={(opp.id || opp.source_id) ? () => toggleGrant(opp.id ?? opp.source_id) : undefined}
+                  onSecondaryAction={(savedId !== null && savedId !== undefined) ? () => toggleGrant(savedId) : undefined}
                 />
               </div>
               <div className="p-4 bg-slate-50 border-t">

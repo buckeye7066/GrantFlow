@@ -398,6 +398,45 @@ describe('POST /api/profiles/:id/portals/packet → Documents + status shape', (
     expect(res2.body.reused).toBe(true)
   })
 
+  it('bulk: makes one packet per selected source, idempotent on re-run', async () => {
+    const db = makePacketDb()
+    const app = makePacketApp(db)
+    const sources = [
+      source,
+      { title: 'Doe Trust', grantId: 'g2', host: 'doetrust.org', url: 'https://doetrust.org', applicationMethod: 'fax', contact: { fax: '555-0100' } },
+    ]
+    const res = await request(app)
+      .post('/api/profiles/p1/portals/packets')
+      .send({ sources, profileName: 'Test Profile' })
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.created).toBe(2)
+    expect(res.body.reused).toBe(0)
+    expect(res.body.failed).toBe(0)
+    expect(res.body.results).toHaveLength(2)
+    // One application_packet Document per source, linked to the profile.
+    const docs = db.prepare("SELECT * FROM documents WHERE type = 'application_packet' ORDER BY name").all()
+    expect(docs).toHaveLength(2)
+    expect(docs.map((d) => d.name)).toEqual(['Doe Trust application packet', 'Smith Family Foundation application packet'])
+    const links = db.prepare('SELECT COUNT(*) AS n FROM profile_documents WHERE profile_id = ?').get('p1')
+    expect(Number(links.n)).toBe(2)
+
+    // Re-running reuses both — no duplicate documents.
+    const res2 = await request(app)
+      .post('/api/profiles/p1/portals/packets')
+      .send({ sources, profileName: 'Test Profile' })
+    expect(res2.body.created).toBe(0)
+    expect(res2.body.reused).toBe(2)
+    expect(db.prepare("SELECT COUNT(*) AS n FROM documents WHERE type = 'application_packet'").get().n).toBe(2)
+  })
+
+  it('bulk: rejects an empty source list', async () => {
+    const db = makePacketDb()
+    const app = makePacketApp(db)
+    const res = await request(app).post('/api/profiles/p1/portals/packets').send({ sources: [] })
+    expect(res.status).toBe(400)
+  })
+
   it('GET portals annotates each mailFaxSource with a packet status shape', async () => {
     const db = makePacketDb()
     const app = makePacketApp(db)

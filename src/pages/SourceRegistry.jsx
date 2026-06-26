@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -9,37 +8,98 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Plus, Edit, Trash2, Play, CheckCircle, XCircle, Activity, Sparkles, Wand2, ExternalLink } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
+import { Loader2, Plus, Edit, Trash2, Play, CheckCircle, XCircle, Activity, Sparkles, Wand2, ExternalLink, Clock, HelpCircle } from 'lucide-react';
+import { formatDistanceToNow, isValid } from 'date-fns';
 import { useToast } from "@/components/ui/use-toast";
+
+// Safely normalize a URL, preferring https. Returns '' on failure.
+const normalizeUrl = (rawUrl) => {
+  try {
+    if (!rawUrl) return '';
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === 'https:') return parsed.href;
+    if (parsed.protocol === 'http:') {
+      // Prefer https; upgrade http to https when possible.
+      parsed.protocol = 'https:';
+      return parsed.href;
+    }
+    return '';
+  } catch (err) {
+    console.warn('normalizeUrl: failed to parse URL', rawUrl, err);
+    return '';
+  }
+};
+
+const isValidEmail = (email) => !!email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+// Safely format a date value, returning a fallback when invalid.
+const safeDistanceToNow = (value, fallback = 'Unknown') => {
+  if (!value) return fallback;
+  const d = new Date(value);
+  if (!isValid(d)) return fallback;
+  try {
+    return `${formatDistanceToNow(d)} ago`;
+  } catch (err) {
+    console.warn('safeDistanceToNow: failed to format date', value, err);
+    return fallback;
+  }
+};
+
+const normalizeName = (name) => (name || '').trim().toLowerCase();
 
 const PartnerForm = ({ partner, onSave, onCancel }) => {
   const [formData, setFormData] = useState({
-    name: '',
-    api_base_url: '',
-    auth_secret_name: '',
-    contact_email: '',
-    ...(partner || {}),
+    name: partner?.name ?? '',
+    api_base_url: partner?.api_base_url ?? '',
+    auth_secret_name: partner?.auth_secret_name ?? '',
+    contact_email: partner?.contact_email ?? '',
+    id: partner?.id,
     // Ensure Select-bound fields are always strings, never null/undefined from DB
     org_type: partner?.org_type ?? 'foundation',
     auth_type: partner?.auth_type ?? 'none',
     status: partner?.status ?? 'inactive',
   });
+  const [errors, setErrors] = useState({});
 
   const handleChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    setErrors(prev => ({ ...prev, [field]: undefined }));
+  };
+
+  const validate = () => {
+    const newErrors = {};
+    if (!formData.name || !formData.name.trim()) {
+      newErrors.name = 'Partner name is required.';
+    }
+    if (formData.contact_email && !isValidEmail(formData.contact_email)) {
+      newErrors.contact_email = 'Please enter a valid email address.';
+    }
+    if (formData.api_base_url) {
+      try {
+        const parsed = new URL(formData.api_base_url);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          newErrors.api_base_url = 'Please enter a valid http(s) URL.';
+        }
+      } catch (_) {
+        newErrors.api_base_url = 'Please enter a valid URL.';
+      }
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
   const handleSubmit = () => {
+    if (!validate()) return;
     // Ensure the partner ID is included when saving.
-    onSave({ ...formData, id: partner?.id });
+    onSave({ ...formData, name: formData.name.trim(), id: partner?.id });
   };
 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="name">Partner Name</Label>
-        <Input id="name" value={formData.name} onChange={(e) => handleChange('name', e.target.value)} />
+        <Input id="name" value={formData.name ?? ''} onChange={(e) => handleChange('name', e.target.value)} />
+        {errors.name && <p className="text-sm text-red-500">{errors.name}</p>}
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
@@ -69,11 +129,13 @@ const PartnerForm = ({ partner, onSave, onCancel }) => {
       </div>
       <div className="space-y-2">
         <Label htmlFor="api_base_url">API Base URL</Label>
-        <Input id="api_base_url" value={formData.api_base_url} onChange={(e) => handleChange('api_base_url', e.target.value)} placeholder="https://api.partner.com" />
+        <Input id="api_base_url" value={formData.api_base_url ?? ''} onChange={(e) => handleChange('api_base_url', e.target.value)} placeholder="https://api.partner.com" />
+        {errors.api_base_url && <p className="text-sm text-red-500">{errors.api_base_url}</p>}
       </div>
       <div className="space-y-2">
         <Label htmlFor="contact_email">Contact Email</Label>
-        <Input id="contact_email" type="email" value={formData.contact_email} onChange={(e) => handleChange('contact_email', e.target.value)} placeholder="contact@partner.com" />
+        <Input id="contact_email" type="email" value={formData.contact_email ?? ''} onChange={(e) => handleChange('contact_email', e.target.value)} placeholder="contact@partner.com" />
+        {errors.contact_email && <p className="text-sm text-red-500">{errors.contact_email}</p>}
       </div>
       <div className="grid grid-cols-2 gap-4">
          <div className="space-y-2">
@@ -90,7 +152,7 @@ const PartnerForm = ({ partner, onSave, onCancel }) => {
         </div>
         <div className="space-y-2">
           <Label htmlFor="auth_secret_name">Auth Secret Name</Label>
-          <Input id="auth_secret_name" value={formData.auth_secret_name} onChange={(e) => handleChange('auth_secret_name', e.target.value)} placeholder="PARTNER_API_KEY" />
+          <Input id="auth_secret_name" value={formData.auth_secret_name ?? ''} onChange={(e) => handleChange('auth_secret_name', e.target.value)} placeholder="PARTNER_API_KEY" />
         </div>
       </div>
       <DialogFooter>
@@ -122,16 +184,8 @@ const AIAddPartnerDialog = ({ open, onOpenChange, onFound }) => {
             const newPartnerData = {
                 name: partnerName,
                 org_type: data.org_type || 'other',
-                api_base_url: (() => {
-  try {
-    if (!data.api_base_url) return '';
-    const parsed = new URL(data.api_base_url);
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : '';
-  } catch (_) {
-    return '';
-  }
-})(),
-                contact_email: (data.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contact_email)) ? data.contact_email : '',
+                api_base_url: normalizeUrl(data.api_base_url),
+                contact_email: isValidEmail(data.contact_email) ? data.contact_email : '',
                 auth_type: 'none',
                 status: 'inactive',
             };
@@ -147,6 +201,13 @@ const AIAddPartnerDialog = ({ open, onOpenChange, onFound }) => {
             });
         }
     });
+
+    // Reset local state when the dialog visibility changes (in sync with UI).
+    useEffect(() => {
+        if (!open) {
+            setPartnerName('');
+        }
+    }, [open]);
 
     const handleFind = () => {
         if (!partnerName) return;
@@ -200,6 +261,24 @@ const HealthStatusBadge = ({ status }) => {
   return <span className={`px-2 py-1 text-xs font-medium rounded-full ${styles[status] || styles.inactive}`}>{status}</span>;
 };
 
+const CrawlStatusIcon = ({ status }) => {
+  switch (status) {
+    case 'completed':
+    case 'success':
+      return <CheckCircle className="w-5 h-5 text-emerald-500" />;
+    case 'failed':
+    case 'error':
+      return <XCircle className="w-5 h-5 text-red-500" />;
+    case 'running':
+      return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />;
+    case 'pending':
+    case 'queued':
+      return <Clock className="w-5 h-5 text-amber-500" />;
+    default:
+      return <HelpCircle className="w-5 h-5 text-slate-400" />;
+  }
+};
+
 export default function SourceRegistry() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -225,15 +304,17 @@ export default function SourceRegistry() {
   const mutation = useMutation({
     mutationFn: (partnerData) => {
       const { id, ...data } = partnerData;
-      return id ? client.entities.PartnerSource.update(id, data) : client.entities.PartnerSource.create(data);
+      const isUpdate = !!id;
+      const promise = id ? client.entities.PartnerSource.update(id, data) : client.entities.PartnerSource.create(data);
+      return Promise.resolve(promise).then((result) => ({ result, isUpdate }));
     },
-    onSuccess: () => {
+    onSuccess: ({ isUpdate }) => {
       queryClient.invalidateQueries({ queryKey: ['partnerSources'] });
       setIsFormOpen(false);
       setSelectedPartner(null);
       toast({
         title: "Partner saved successfully",
-        description: selectedPartner ? "Partner updated." : "New partner added.",
+        description: isUpdate ? "Partner updated." : "New partner added.",
       });
     },
     onError: (error) => {
@@ -312,7 +393,17 @@ export default function SourceRegistry() {
         });
     },
     onSuccess: (data) => {
-        setAiSuggestions(data.suggestions || []);
+        const existingNames = new Set(partners.map(p => normalizeName(p.name)));
+        const seen = new Set();
+        const filtered = (data.suggestions || []).filter(s => {
+            const key = normalizeName(s?.name);
+            if (!key) return false;
+            if (existingNames.has(key)) return false; // Filter out existing partners
+            if (seen.has(key)) return false; // Dedupe within suggestions
+            seen.add(key);
+            return true;
+        });
+        setAiSuggestions(filtered);
     },
     onError: (error) => {
         toast({
@@ -327,21 +418,25 @@ export default function SourceRegistry() {
   const addMultipleSuggestionsMutation = useMutation({
     mutationFn: async (suggestions) => {
       const results = [];
+      const existingNames = new Set(partners.map(p => normalizeName(p.name)));
+      const processedNames = new Set();
       for (const suggestion of suggestions) {
+        const key = normalizeName(suggestion.name);
+        if (!key) {
+          results.push({ success: false, name: suggestion.name, error: 'Invalid name' });
+          continue;
+        }
+        if (existingNames.has(key) || processedNames.has(key)) {
+          results.push({ success: false, name: suggestion.name, error: 'Duplicate (already exists)' });
+          continue;
+        }
+        processedNames.add(key);
         try {
           const newPartner = await client.entities.PartnerSource.create({
             name: suggestion.name,
             org_type: suggestion.org_type || 'other',
-            api_base_url: (() => {
-  try {
-    if (!suggestion.api_base_url) return '';
-    const parsed = new URL(suggestion.api_base_url);
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : '';
-  } catch (_) {
-    return '';
-  }
-})(),
-            contact_email: (suggestion.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suggestion.contact_email)) ? suggestion.contact_email : '',
+            api_base_url: normalizeUrl(suggestion.api_base_url),
+            contact_email: isValidEmail(suggestion.contact_email) ? suggestion.contact_email : '',
             auth_type: 'none',
             auth_secret_name: '',
             status: 'inactive',
@@ -361,7 +456,7 @@ export default function SourceRegistry() {
       if (successCount > 0) {
         toast({
           title: `Added ${successCount} Partner${successCount > 1 ? 's' : ''}`,
-          description: failCount > 0 ? `${failCount} failed to add` : undefined,
+          description: failCount > 0 ? `${failCount} skipped or failed` : undefined,
         });
       }
       
@@ -369,7 +464,7 @@ export default function SourceRegistry() {
         const failedNames = results.filter(r => !r.success).map(r => r.name).join(', ');
         toast({
           variant: "destructive",
-          title: `Failed to Add ${failCount} Partner${failCount > 1 ? 's' : ''}`,
+          title: `Could not add ${failCount} Partner${failCount > 1 ? 's' : ''}`,
           description: failedNames,
         });
       }
@@ -380,17 +475,17 @@ export default function SourceRegistry() {
   });
 
   const aiGetSuggestionsMutate = aiGetSuggestionsMutation.mutate;
-const aiGetSuggestionsMutationReset = aiGetSuggestionsMutation.reset;
+  const aiGetSuggestionsMutationReset = aiGetSuggestionsMutation.reset;
 
-useEffect(() => {
-  if (aiSuggestionsModalOpen) {
-    aiGetSuggestionsMutate();
-  } else {
-    aiGetSuggestionsMutationReset();
-    setAiSuggestions([]);
-    setSelectedSuggestions([]);
-  }
-}, [aiSuggestionsModalOpen, aiGetSuggestionsMutate, aiGetSuggestionsMutationReset]);
+  useEffect(() => {
+    if (aiSuggestionsModalOpen) {
+      aiGetSuggestionsMutate();
+    } else {
+      aiGetSuggestionsMutationReset();
+      setAiSuggestions([]);
+      setSelectedSuggestions([]);
+    }
+  }, [aiSuggestionsModalOpen, aiGetSuggestionsMutate, aiGetSuggestionsMutationReset]);
 
   const handleSave = (data) => {
     mutation.mutate(data);
@@ -467,7 +562,7 @@ useEffect(() => {
                     <TableCell className="font-medium">{p.name}</TableCell>
                     <TableCell>{p.org_type}</TableCell>
                     <TableCell><HealthStatusBadge status={p.status} /></TableCell>
-                    <TableCell>{p.last_success_at ? `${formatDistanceToNow(new Date(p.last_success_at))} ago` : 'Never'}</TableCell>
+                    <TableCell>{p.last_success_at ? safeDistanceToNow(p.last_success_at, 'Unknown') : 'Never'}</TableCell>
                     <TableCell className="flex gap-1">
                       <Button 
                         variant="ghost" 
@@ -507,10 +602,10 @@ useEffect(() => {
                   <TableRow key={log.id}>
                     <TableCell className="font-medium">{log.source}</TableCell>
                     <TableCell>
-                      {log.status === 'completed' ? <CheckCircle className="w-5 h-5 text-emerald-500" /> : <XCircle className="w-5 h-5 text-red-500" />}
+                      <CrawlStatusIcon status={log.status} />
                     </TableCell>
-                    <TableCell>{log.recordsFound}</TableCell>
-                    <TableCell>{formatDistanceToNow(new Date(log.created_date))} ago</TableCell>
+                    <TableCell>{log.records_found ?? log.recordsFound ?? 0}</TableCell>
+                    <TableCell>{safeDistanceToNow(log.created_date, 'Unknown')}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -582,16 +677,16 @@ useEffect(() => {
                                             <div className="flex-1">
                                                 <div className="font-semibold text-slate-900">{suggestion.name}</div>
                                                 <p className="text-sm text-slate-600 mt-1">{suggestion.reason || ''}</p> 
-                                                {suggestion.api_base_url && (
+                                                {normalizeUrl(suggestion.api_base_url) && (
                                                     <a
-                                                        href={suggestion.api_base_url}
+                                                        href={normalizeUrl(suggestion.api_base_url)}
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         className="text-xs text-blue-600 hover:underline mt-2 inline-flex items-center gap-1"
                                                         onClick={(e) => e.stopPropagation()}
                                                     >
                                                         <ExternalLink className="w-3 h-3" />
-                                                        {suggestion.api_base_url}
+                                                        {normalizeUrl(suggestion.api_base_url)}
                                                     </a>
                                                 )}
                                             </div>
