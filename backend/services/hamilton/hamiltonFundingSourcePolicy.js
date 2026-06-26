@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assessOpportunityTrust } from '../opportunityTrust.js'
 
 const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
+const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
 const TERMINAL_TASK_STATUSES = new Set(['submitted', 'completed', 'cancelled'])
 const TRUST_BLOCK_FLAGS = new Set([
   'loan',
@@ -86,6 +87,11 @@ function buildPolicyMessage(reasons) {
   return `Funding source does not meet GrantFlow crawler/profile rules: ${reasons.join(', ')}.`
 }
 
+function requiresProfileMatch(subject) {
+  const origin = asLower(subject?.record_origin)
+  return PROFILE_MATCH_REQUIRED_ORIGINS.has(origin)
+}
+
 export async function assessHamiltonFundingSource(db, { profileId, opportunity = null, grant = null } = {}) {
   const policyOpportunity = await loadOpportunityForPolicy(db, opportunity, grant)
   const subject = policyOpportunity || grant
@@ -131,6 +137,17 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     return {
       ok: false,
       code: 'funding_source_profile_not_accepted',
+      reasons,
+      trust,
+      match,
+      message: buildPolicyMessage(reasons),
+    }
+  }
+  if (!match && profileId && opportunityId && requiresProfileMatch(subject)) {
+    const reasons = ['missing_profile_crawler_match']
+    return {
+      ok: false,
+      code: 'funding_source_missing_profile_match',
       reasons,
       trust,
       match,
