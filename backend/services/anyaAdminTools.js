@@ -2,8 +2,10 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { getRecentLogs } from '../utils/logger.js'
+import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { ANYA_CODE_REPAIR_POLICY } from '../config/missionGoals.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -23,6 +25,10 @@ function safeJson(value, fallback = {}) {
   } catch {
     return fallback
   }
+}
+
+function sha1(input) {
+  return createHash('sha1').update(String(input ?? '')).digest('hex')
 }
 
 /**
@@ -825,32 +831,18 @@ export async function adminCodeEdit({ filePath, changes, save = false, dryRun = 
     throw new Error('changes array is required')
   }
 
-  if (save) {
-    const allowEdits =
-      String(process.env.ANYA_ALLOW_CODE_EDIT || '').trim().toLowerCase() === 'true' &&
-      String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
-    if (!allowEdits) {
-      const error = new Error('Code edits are disabled. Use code.suggestPatch to generate a diff instead.')
-      error.status = 403
-      throw error
-    }
+  const resolvedPath = path.resolve(REPO_ROOT, filePath)
+  const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep
+  if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
+    throw new Error('Path outside repository root not allowed')
   }
-
-  const resolvedPath = path.resolve(REPO_ROOT, filePath);
-const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep;
-if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
-  throw new Error('Path outside repository root not allowed');
-}
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
-  // Ensure file is within allowed directories for safety
-  const allowedDirs = ['backend', 'src', 'scripts']
-  const isInAllowedDir = allowedDirs.some(dir => 
-    relativePath.startsWith(dir + path.sep) || relativePath.startsWith(dir)
-  )
-  
-  if (save && !isInAllowedDir) {
-    throw new Error(`File ${relativePath} is outside allowed directories for editing`)
+  if (save) {
+    const pathSegments = relativePath.split(path.sep)
+    if (pathSegments.includes('.git') || pathSegments.includes('node_modules')) {
+      throw new Error(`File ${relativePath} is outside code-error repair boundaries`)
+    }
   }
 
   try {
@@ -932,12 +924,48 @@ if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
       const newContent = modifiedLines.join('\n')
       try { await fs.writeFile(resolvedPath, newContent, 'utf8') } catch (err) { throw new Error(`File write failed: ${err.message}`) }
 
+      const auditDetails = {
+        file: relativePath,
+        reason: 'admin.code.edit saved code-error repair',
+        changes: proposedChanges
+          .filter(c => c.status === 'applied')
+          .map(c => ({
+            line: c.line,
+            old_sha1: sha1(c.old),
+            new_sha1: sha1(c.new),
+            old_length: String(c.old ?? '').length,
+            new_length: String(c.new ?? '').length,
+          })),
+        backup_or_rollback: path.relative(REPO_ROOT, backupPath),
+        validation: 'line-level oldText validation before write',
+        result: 'saved',
+        writePolicy: ANYA_CODE_REPAIR_POLICY.scope,
+        permissionRequired: ANYA_CODE_REPAIR_POLICY.permission_required,
+        auditRequired: ANYA_CODE_REPAIR_POLICY.audit_required,
+        before_sha1: sha1(content),
+        after_sha1: sha1(newContent),
+      }
+      await logAuditEvent(context?.db, {
+        category: AUDIT_CATEGORIES.ANYA,
+        action: 'admin_code_edit_saved',
+        severity: SEVERITY.INFO,
+        userId: context?.user?.userId ?? context?.user?.id ?? null,
+        resourceType: 'code_file',
+        resourceId: relativePath,
+        details: auditDetails,
+      })
+
       return {
         file: relativePath,
         changes_applied: proposedChanges.filter(c => c.status === 'applied').length,
         changes: proposedChanges,
         backup_created: path.relative(REPO_ROOT, backupPath),
         saved: true,
+        writePolicy: ANYA_CODE_REPAIR_POLICY.scope,
+        permissionRequired: ANYA_CODE_REPAIR_POLICY.permission_required,
+        auditRequired: ANYA_CODE_REPAIR_POLICY.audit_required,
+        before_sha1: auditDetails.before_sha1,
+        after_sha1: auditDetails.after_sha1,
       }
     }
 

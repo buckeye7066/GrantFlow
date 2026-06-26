@@ -2014,7 +2014,7 @@ registerTool({
 
 registerTool({
   name: 'admin.code.edit',
-  description: 'Propose or apply edits to a specific file. Set save=true to apply changes with automatic backup. Admin only.',
+  description: 'Propose or apply code-error edits to any repository file. Set save=true to apply changes with automatic backup and audit log. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -2846,7 +2846,7 @@ registerTool({
       pattern: { type: 'string', description: 'Optional regex pattern to search for' },
       maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 2000)', minimum: 1, maximum: 5000 },
       maxFileChanges: { type: 'integer', description: 'Maximum number of files to modify (default: 20)', minimum: 1, maximum: 100 },
-      dryRun: { type: 'boolean', description: 'If true, dont save changes (default: false)' },
+      dryRun: { type: 'boolean', description: 'If true, dont save changes (default: true when omitted)' },
       fixConsoleLog: { type: 'boolean', description: 'Fix debug console.log statements (default: true)' },
       fixEmptyCatch: { type: 'boolean', description: 'Fix empty catch blocks (default: false)' },
       fixTodos: { type: 'boolean', description: 'Convert TODO comments to tracked issues (default: false)' },
@@ -3802,7 +3802,7 @@ registerTool({
     const repairTypes = params?.repairTypes
     const report = await runAutoRepair(db, { dryRun, repairTypes })
     const totalFindings = Object.entries(report.findings)
-      .filter(([k]) => k !== 'repairs' && k !== '_repairs')
+      .filter(([k]) => k !== 'repairs')
       .reduce((sum, [, list]) => sum + (Array.isArray(list) ? list.length : 0), 0)
     const totalRepaired = Object.values(report.repaired || {}).reduce(
       (sum, n) => sum + (Number(n) || 0),

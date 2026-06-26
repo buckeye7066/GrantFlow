@@ -5560,8 +5560,8 @@ router.post('/crawler-jobs/resolve-failures', async (req, res) => {
  *   { directory, pattern, dry_run, max_iterations, max_file_changes,
  *     fixConsoleLog, fixEmptyCatch, fixTodos }
  *
- * Writes require BOTH dry_run === false AND env ANYA_AUTONOMOUS_WRITE_CHANGES
- * === 'true' (enforced inside runAutonomousCodeCrawl).
+ * Writes require dry_run === false. Anya code-error repair no longer requires
+ * a separate environment permission gate; each write is backed up and audited.
  */
 router.post('/anya/runAutonomous', async (req, res) => {
   const {
@@ -5579,7 +5579,7 @@ router.post('/anya/runAutonomous', async (req, res) => {
     directory,
     pattern,
     dryRun: Boolean(dry_run),
-    // dry_run=false in HTTP is the per-invocation --write signal; env gate still enforced.
+    // dry_run=false in HTTP is the per-invocation write signal.
     writeFlag: dry_run === false,
     maxIterations: Number.isFinite(Number(max_iterations)) ? Number(max_iterations) : undefined,
     maxFileChanges: Number.isFinite(Number(max_file_changes)) ? Number(max_file_changes) : undefined,

@@ -121,7 +121,34 @@ export const ANYA_GOALS = [
     short: 'Improve confidence',
     rule: 'Act as an in-app guide that improves confidence, clarity, and usability. Users should feel more capable after interacting with Anya, not more confused.',
   },
+  {
+    id: 9,
+    short: 'Autonomous code repair',
+    rule: 'When a code error is detected, Anya may make any necessary code-error edit with full repository write access and without asking for additional permission. She must log what changed, why it changed, the backup or rollback path, validation/tests attempted, and the final result. This authority is limited to code-error repair and never authorizes secret exposure, invented facts, destructive data changes, portal/2FA/CAPTCHA bypasses, or unsafe legal actions.',
+  },
 ]
+
+export const ANYA_CODE_REPAIR_POLICY = Object.freeze({
+  scope: 'code_error_repair',
+  full_repository_write_access: true,
+  permission_required: false,
+  audit_required: true,
+  required_log_fields: Object.freeze([
+    'file',
+    'reason',
+    'changes',
+    'backup_or_rollback',
+    'validation',
+    'result',
+  ]),
+  absolute_boundaries: Object.freeze([
+    'no secret exposure',
+    'no invented facts',
+    'no destructive data changes',
+    'no portal, captcha, or 2fa bypass',
+    'no unsafe legal action',
+  ]),
+})
 
 // ─── Derived constants for use by CodeGuard, matching engine, and prompts ────
 
@@ -137,7 +164,7 @@ export const GRANTFLOW_MISSION_SUMMARY =
   "GrantFlow should understand the profile, search intelligently, find real relevant funding sources, and help the user pursue them."
 
 export const ANYA_MISSION_SUMMARY =
-  "Anya's goal is to help people understand GrantFlow, use it wisely, and know what to do next."
+  "Anya's goal is to help people understand GrantFlow, use it wisely, know what to do next, and repair code errors autonomously with a logged audit trail."
 
 // Legacy alias for backward compatibility with codeGuardService.js
 export const MISSION_GOALS = GRANTFLOW_GOALS
