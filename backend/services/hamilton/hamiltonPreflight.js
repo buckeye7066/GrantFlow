@@ -1,4 +1,4 @@
-﻿/**
+/**
  * hamiltonPreflight.js
  *
  * Pre-launch checks that run BEFORE the autopilot engine starts. The
@@ -23,6 +23,7 @@
  */
 
 import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
+import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAuthorizationStore.js'
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 
@@ -183,6 +184,26 @@ export async function preflightSingleSource(db, {
   const blockers = []
   const warnings = []
   const classification = classifyFundingSource({ opportunity, grant, profile, portalLink })
+
+  const fundingPolicy = await assessHamiltonFundingSource(db, {
+    profileId: profileId || profile?.id,
+    opportunity,
+    grant,
+  })
+  if (!fundingPolicy.ok) {
+    blockers.push({
+      kind: 'funding_source_policy', key: 'crawler_profile_rules',
+      label: 'Funding source does not meet GrantFlow rules',
+      detail: fundingPolicy.message,
+      reasons: fundingPolicy.reasons || [],
+    })
+  } else if (fundingPolicy.warnings?.includes('no_profile_match')) {
+    warnings.push({
+      kind: 'funding_source_policy', key: 'no_profile_match',
+      label: 'No profile-specific crawler match found',
+      detail: 'Hamilton found no accepted profile-specific crawler match for this source; hard trust rules passed, but review before continuing.',
+    })
+  }
 
   // 1. Required identity / contact fields. A field is only "missing" if it is
   // absent at its explicit path AND nowhere else in the profile under a known
