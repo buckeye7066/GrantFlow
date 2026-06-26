@@ -1,11 +1,11 @@
 // crawler-os/tests/legacy-crawler-ban.test.mjs
 //
-// Cutover guard (Requirement A — old-system removal). The Crawler OS is the ONE
-// discovery/matching authority; it must never depend on any legacy crawler
-// module. This test fails if:
+// Cutover guard (Requirement A: old-system removal). The Crawler OS is the ONE
+// discovery/matching authority; it must never depend on legacy crawler modules
+// and may only share explicit canonical contracts. This test fails if:
 //
 //   (1) any file under backend/crawler-os/ imports a path that escapes
-//       backend/crawler-os/ (self-containment — the new OS is an island), or
+//       backend/crawler-os/ without being allowlisted as a shared contract, or
 //   (2) the public service seam backend/services/crawlerOsService.js imports a
 //       known legacy crawler module (it may only reach ../crawler-os/, ../db/,
 //       and node: builtins).
@@ -47,6 +47,10 @@ const LEGACY_DENYLIST = [
   'config/relevanceFloor',
 ];
 
+const ALLOWED_SHARED_IMPORTS = new Set([
+  'shared/pipelineStages.js',
+]);
+
 function listFiles(dir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -68,7 +72,7 @@ function specifiersOf(file) {
   return [...specs];
 }
 
-test('every file under backend/crawler-os/ is self-contained (no import escapes the OS)', () => {
+test('every file under backend/crawler-os/ uses only the OS or approved shared contracts', () => {
   const escapes = [];
   for (const file of listFiles(osRoot)) {
     for (const spec of specifiersOf(file)) {
@@ -76,12 +80,14 @@ test('every file under backend/crawler-os/ is self-contained (no import escapes 
       if (!spec.startsWith('.')) continue; // bare npm packages are fine
       const resolved = path.resolve(path.dirname(file), spec);
       const rel = path.relative(osRoot, resolved).replace(/\\/g, '/');
+      const repoRel = path.relative(path.resolve(backendRoot, '..'), resolved).replace(/\\/g, '/');
+      if (ALLOWED_SHARED_IMPORTS.has(repoRel)) continue;
       if (rel.startsWith('..')) {
         escapes.push(`${path.relative(osRoot, file)} -> ${spec}`);
       }
     }
   }
-  assert.deepEqual(escapes, [], `Crawler OS must be self-contained; offending imports:\n${escapes.join('\n')}`);
+  assert.deepEqual(escapes, [], `Crawler OS imports must stay inside the OS or approved shared contracts; offending imports:\n${escapes.join('\n')}`);
 });
 
 test('crawlerOsService.js (the seam) imports no legacy crawler module', () => {

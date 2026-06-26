@@ -895,7 +895,7 @@ export default function DiscoverGrants() {
       }
       discoveringRef.current = false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [effectiveProfileId, selectedProfileId, minMatchScore, debouncedMinMatchScore, categoryQuery, profileForSearch, queryClient, toast, selectedProfile])
 
   // User-initiated stop. Bumps the same poll-loop cancellation token the

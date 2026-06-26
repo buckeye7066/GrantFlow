@@ -346,7 +346,7 @@ export default function SmartMatcher() {
         // checked-state map key and the React render key. Falls back to a
         // name+index-namespaced id when the backend omits one.
         return suggestions.map((s, idx) => {
-            const stableId = s?.id != null ? String(s.id) : `need_inferred_${idx}_${s?.name ?? ""}`
+            const stableId = s?.id !== null && s?.id !== undefined ? String(s.id) : `need_inferred_${idx}_${s?.name ?? ""}`
             return { ...s, _key: stableId }
         })
   }, [suggestionsResponse])

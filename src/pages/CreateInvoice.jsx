@@ -179,10 +179,10 @@ export default function CreateInvoice() {
     if (['individual_need', 'medical_assistance', 'family', 'high_school_student', 'college_student', 'graduate_student'].includes(selectedOrg.applicant_type)) {
       result.category = 'individual_household';
       result.baseRate = settings.hourly_rates?.individual_household || 85;
-    } else if (selectedOrg.annual_budget != null && selectedOrg.annual_budget < 250000) {
+    } else if (selectedOrg.annual_budget !== null && selectedOrg.annual_budget !== undefined && selectedOrg.annual_budget < 250000) {
       result.category = 'small_ministry_nonprofit';
       result.baseRate = settings.hourly_rates?.small_ministry_nonprofit || 85;
-    } else if (selectedOrg.annual_budget != null && selectedOrg.annual_budget <= 2000000) {
+    } else if (selectedOrg.annual_budget !== null && selectedOrg.annual_budget !== undefined && selectedOrg.annual_budget <= 2000000) {
       result.category = 'midsize_org';
       result.baseRate = settings.hourly_rates?.midsize_org || 115;
     }
@@ -207,7 +207,7 @@ export default function CreateInvoice() {
     // Check ministry discount (consistent < 250000 boundary)
     result.qualifiesForMinistryDiscount = 
       (selectedOrg.faith_based || selectedOrg.clergy || selectedOrg.missionary) && 
-      (selectedOrg.annual_budget == null || selectedOrg.annual_budget < 250000);
+      (selectedOrg.annual_budget === null || selectedOrg.annual_budget === undefined || selectedOrg.annual_budget < 250000);
 
     // Calculate fee based on service type
     const serviceType = formData.service_type;
@@ -283,7 +283,7 @@ export default function CreateInvoice() {
       
       switch (serviceType) {
         case 'quick_scan':
-          if (caps.quick_scan_max != null && result.calculatedFee > caps.quick_scan_max) {
+          if (caps.quick_scan_max !== null && caps.quick_scan_max !== undefined && result.calculatedFee > caps.quick_scan_max) {
             result.discountAmount = roundCurrency(result.calculatedFee - caps.quick_scan_max);
             result.calculatedFee = caps.quick_scan_max;
             result.discountDescription = 'Hardship Cap Applied';
@@ -291,7 +291,7 @@ export default function CreateInvoice() {
           break;
         
         case 'comprehensive_dossier':
-          if (caps.dossier_max != null && result.calculatedFee > caps.dossier_max) {
+          if (caps.dossier_max !== null && caps.dossier_max !== undefined && result.calculatedFee > caps.dossier_max) {
             result.discountAmount = roundCurrency(result.calculatedFee - caps.dossier_max);
             result.calculatedFee = caps.dossier_max;
             result.discountDescription = 'Hardship Cap Applied';
@@ -299,7 +299,7 @@ export default function CreateInvoice() {
           break;
         
         case 'micro_grant':
-          if (caps.micro_grant_max != null && result.calculatedFee > caps.micro_grant_max) {
+          if (caps.micro_grant_max !== null && caps.micro_grant_max !== undefined && result.calculatedFee > caps.micro_grant_max) {
             result.discountAmount = roundCurrency(result.calculatedFee - caps.micro_grant_max);
             result.calculatedFee = caps.micro_grant_max;
             result.discountDescription = 'Hardship Cap Applied';
@@ -307,7 +307,7 @@ export default function CreateInvoice() {
           break;
         
         case 'scholarship_pack':
-          if (caps.scholarship_pack_max != null && result.calculatedFee > caps.scholarship_pack_max) {
+          if (caps.scholarship_pack_max !== null && caps.scholarship_pack_max !== undefined && result.calculatedFee > caps.scholarship_pack_max) {
             result.discountAmount = roundCurrency(result.calculatedFee - caps.scholarship_pack_max);
             result.calculatedFee = caps.scholarship_pack_max;
             result.discountDescription = 'Hardship Cap Applied';
@@ -418,7 +418,7 @@ export default function CreateInvoice() {
     }
 
     // Validate payment terms
-    if (PAYMENT_TERMS_DAYS[formData.payment_terms] == null) {
+    if (PAYMENT_TERMS_DAYS[formData.payment_terms] === null || PAYMENT_TERMS_DAYS[formData.payment_terms] === undefined) {
       toast({
         variant: "destructive",
         title: "Invalid Payment Terms",

@@ -200,7 +200,7 @@ function computeAge(dateOfBirth) {
  * it has not been explicitly provided (preserving an intentional 0).
  */
 function buildFinalData(data) {
-  const computedAge = data.age == null ? computeAge(data.date_of_birth) : data.age;
+  const computedAge = data.age === null || data.age === undefined ? computeAge(data.date_of_birth) : data.age;
   return {
     ...data,
     age: computedAge,
@@ -1816,7 +1816,7 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                     {(formData.target_colleges || []).length > 0 && (
                       <p><strong>Target Colleges:</strong> {formData.target_colleges.join(', ')}</p>
                     )}
-                    {formData.gpa != null && <p><strong>GPA:</strong> {formData.gpa}</p>}
+                    {formData.gpa !== null && formData.gpa !== undefined && <p><strong>GPA:</strong> {formData.gpa}</p>}
                   </div>
                 )}
 

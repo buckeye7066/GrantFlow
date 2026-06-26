@@ -330,7 +330,7 @@ Focus areas should be:
     }
   };
 
-  const gpaValue = organization.gpa != null ? parseFloat(organization.gpa) : NaN;
+  const gpaValue = organization.gpa !== null && organization.gpa !== undefined ? parseFloat(organization.gpa) : NaN;
   const annualBudgetFormatted = formatNumber(organization.annual_budget);
   const householdIncomeFormatted = formatNumber(organization.household_income);
 
@@ -1216,7 +1216,7 @@ Focus areas should be:
                         value={currentData.cancer_diagnosis_year || ''}
                         onChange={(e) => {
                           const raw = e.target.value;
-                          if (raw === '' || raw == null) {
+                          if (raw === '' || raw === null || raw === undefined) {
                             updateTempField('cancer_diagnosis_year', null);
                             return;
                           }

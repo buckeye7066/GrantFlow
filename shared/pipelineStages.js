@@ -37,6 +37,26 @@ export const PIPELINE_STAGES = Object.freeze([
   'archived',
 ])
 
+export const PIPELINE_STAGE = Object.freeze({
+  DISCOVERED: 'discovered',
+  SAVED: 'saved',
+  INTERESTED: 'interested',
+  GATHERING_DOCUMENTS: 'gathering_documents',
+  DRAFTING: 'drafting',
+  READY_TO_SUBMIT: 'ready_to_submit',
+  SUBMITTED: 'submitted',
+  FOLLOW_UP: 'follow_up',
+  AWARDED: 'awarded',
+  DECLINED: 'declined',
+  ARCHIVED: 'archived',
+})
+
+export const TERMINAL_STAGES = Object.freeze([
+  PIPELINE_STAGE.AWARDED,
+  PIPELINE_STAGE.DECLINED,
+  PIPELINE_STAGE.ARCHIVED,
+])
+
 // Legacy stage name → canonical stage. Used by readers (UI bucketing, Anya
 // summaries, pipeline-totals tools) so historical rows render correctly even
 // before any backfill.
@@ -80,6 +100,15 @@ export const PIPELINE_STAGE_ALL = Object.freeze([
 const CANONICAL_SET = new Set(PIPELINE_STAGES)
 const LEGACY_MAP = PIPELINE_STAGE_ALIASES
 
+export function isCanonicalStage(stage) {
+  if (stage === null || stage === undefined) return false
+  return CANONICAL_SET.has(String(stage).toLowerCase().trim())
+}
+
+export function isValidStage(stage) {
+  return isCanonicalStage(stage)
+}
+
 /**
  * Resolve a raw stage value to its canonical name.
  * - Returns the value itself if it's already canonical.
@@ -115,6 +144,46 @@ export function stageOrder(stage) {
   const c = canonicalStage(stage)
   if (!c) return -1
   return PIPELINE_STAGES.indexOf(c)
+}
+
+/**
+ * Legal transitions between canonical pipeline stages.
+ *
+ * Legacy status strings are intentionally not accepted here; callers that read
+ * old data should normalize with canonicalStage() first. This keeps writes and
+ * agent workflow moves on the 11-stage mission lifecycle.
+ */
+export function canTransition(from, to) {
+  if (!isCanonicalStage(from) || !isCanonicalStage(to)) return false
+  if (from === to) return true
+  if (to === PIPELINE_STAGE.ARCHIVED) return true
+
+  const active = PIPELINE_STAGES.slice(0, PIPELINE_STAGES.indexOf(PIPELINE_STAGE.SUBMITTED) + 1)
+  const fromIdx = PIPELINE_STAGES.indexOf(from)
+  const toIdx = PIPELINE_STAGES.indexOf(to)
+
+  if (TERMINAL_STAGES.includes(from)) return false
+
+  if (from === PIPELINE_STAGE.SUBMITTED) {
+    return [PIPELINE_STAGE.FOLLOW_UP, PIPELINE_STAGE.AWARDED, PIPELINE_STAGE.DECLINED].includes(to)
+  }
+  if (from === PIPELINE_STAGE.FOLLOW_UP) {
+    return [PIPELINE_STAGE.AWARDED, PIPELINE_STAGE.DECLINED].includes(to)
+  }
+
+  if (active.includes(from)) {
+    if (toIdx > fromIdx) return true
+    if (toIdx === fromIdx - 1) return true
+    return false
+  }
+  return false
+}
+
+export function assertTransition(from, to) {
+  if (!canTransition(from, to)) {
+    throw new Error(`illegal pipeline transition: ${from} -> ${to}`)
+  }
+  return to
 }
 
 // ── Application tracker ↔ pipeline reconciliation ─────────────────────────

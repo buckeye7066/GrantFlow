@@ -23,7 +23,7 @@ import PortalLoginButton from '@/components/portal/PortalLoginButton';
 import { safeHttpUrl } from '@/lib/safeUrl';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
-  if (grant && grant.id != null && grant.id !== '') {
+  if (grant && grant.id !== null && grant.id !== undefined && grant.id !== '') {
     return createPageUrl("GrantDetail", { id: grant.id });
   }
 
@@ -70,7 +70,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
 
   const deadlineDate = grant.deadline ? new Date(grant.deadline) : null;
   const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime());
-  const isRolling = grant.deadline != null && String(grant.deadline).toLowerCase() === 'rolling';
+  const isRolling = grant.deadline !== null && grant.deadline !== undefined && String(grant.deadline).toLowerCase() === 'rolling';
   const isExpired = isDeadlineValid && isPast(deadlineDate) && !isRolling;
 
   // Deadline urgency: days remaining (null when no valid deadline or already expired)
@@ -113,9 +113,9 @@ export default function GrantCard({ grant, organization, organizationName, onSta
   // Normalized award amount — coerce to number and validate before formatting
   const rawAward = grant.typical_award ?? grant.amount_max ?? grant.awardMax;
   const awardAmount = (() => {
-    if (rawAward == null) return null;
+    if (rawAward === null || rawAward === undefined) return null;
     if (typeof rawAward === 'number') return Number.isFinite(rawAward) ? rawAward : null;
-    const cleaned = String(rawAward).replace(/[^0-9.\-]/g, '');
+    const cleaned = String(rawAward).replace(/[^0-9.-]/g, '');
     const n = Number(cleaned);
     return Number.isFinite(n) && cleaned !== '' ? n : null;
   })();

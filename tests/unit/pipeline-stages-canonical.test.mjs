@@ -20,18 +20,24 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 import {
+  PIPELINE_STAGE,
   PIPELINE_STAGES,
+  TERMINAL_STAGES,
   PIPELINE_STAGE_ALIASES,
   PIPELINE_STAGE_ALL,
   PIPELINE_STAGE_LEGACY,
   canonicalStage,
   isAcceptedStage,
+  isValidStage,
+  canTransition,
+  assertTransition,
   stageOrder,
   applicationStatusToStage,
   APPLICATION_STATUS_TO_STAGE,
 } from '../../shared/pipelineStages.js'
 import { GRANT_STATUSES, GRANT_STATUSES_CANONICAL } from '../../backend/config/constants.js'
 import { APPLICATION_STATES } from '../../backend/services/applicationWorkflow.js'
+import * as crawlerOsStages from '../../backend/crawler-os/stages.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..')
@@ -50,6 +56,15 @@ test('canonical pipeline = mission spec (11 stages, exact order)', () => {
     'declined',
     'archived',
   ])
+})
+
+test('crawler-os stages facade reuses the shared pipeline authority', () => {
+  assert.equal(crawlerOsStages.PIPELINE_STAGE, PIPELINE_STAGE)
+  assert.equal(crawlerOsStages.PIPELINE_STAGES, PIPELINE_STAGES)
+  assert.equal(crawlerOsStages.TERMINAL_STAGES, TERMINAL_STAGES)
+  assert.equal(crawlerOsStages.isValidStage, isValidStage)
+  assert.equal(crawlerOsStages.canTransition, canTransition)
+  assert.equal(crawlerOsStages.assertTransition, assertTransition)
 })
 
 test('GRANT_STATUSES is canonical ∪ legacy and accepts every alias key', () => {

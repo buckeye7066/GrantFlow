@@ -560,7 +560,7 @@ function mergeArrayById(existing = [], incoming = [], getNaturalKey) {
   safeArray(incoming).forEach((item) => {
     if (!item) return
     let target = null
-    if (item.id != null && byId.has(String(item.id))) {
+    if (item.id !== null && item.id !== undefined && byId.has(String(item.id))) {
       target = byId.get(String(item.id))
     } else if (typeof getNaturalKey === "function") {
       const key = getNaturalKey(item)
@@ -1247,7 +1247,7 @@ function ApplicationCard({
     // Only re-sync drafts when the dialog opens (or the underlying data
     // identity changes); interest dialog is fully driven by local draft state
     // while open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [interestDialogOpen, application.interests, application.activity_catalog])
 
   const effectiveOptions = useMemo(() => {

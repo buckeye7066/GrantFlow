@@ -148,8 +148,8 @@ function formatDeadline(deadline, deadlineType) {
 }
 
 function formatAmount(min, max) {
-  const hasMin = min != null
-  const hasMax = max != null
+  const hasMin = min !== null && min !== undefined
+  const hasMax = max !== null && max !== undefined
   if (!hasMin && !hasMax) return "Varies"
   if (hasMin && hasMax && min !== max) {
     return `$${min.toLocaleString()} – $${max.toLocaleString()}`
