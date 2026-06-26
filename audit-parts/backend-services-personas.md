@@ -369,7 +369,7 @@ Note: no SQL injection — dynamic SQL uses parameterized `?`/`$n`; interpolated
 ---
 
 ## hamilton/
-Note: Hamilton handles student funding portals, credentials, and payments — tenant isolation is critical. The dominant theme is **profile scoping enforced by convention (`WHERE id = ?` + a "callers must verify ownership" comment) rather than in-function guards**. TOTP crypto (`hamiltonTotp.js`) is standard RFC 6238 and correct; e-signature and resolved-field stores are clean.
+Note: Hamilton handles student funding portals, credentials, and payments — tenant isolation is critical. The dominant theme is **profile scoping enforced by convention (`WHERE id = ?` + a "callers must verify ownership" comment) rather than in-function guards**. Live TOTP/MFA automation is disabled by policy; saved post-2FA browser sessions are the supported path. E-signature and resolved-field stores are clean.
 
 ### backend/services/hamilton/applicationTaskStore.js
 - **[important]** `backend/services/hamilton/applicationTaskStore.js:789-808` — `cancelApplicationTask` takes no `profileId`; UPDATE is `WHERE id = ?` only, so a forwarded attacker-controlled `taskId` can cancel another tenant's task.
@@ -474,8 +474,8 @@ Note: Hamilton handles student funding portals, credentials, and payments — te
 ### backend/services/hamilton/hamiltonResolvedFieldStore.js
 - No issues found.
 
-### backend/services/hamilton/hamiltonTotp.js
-- **[nit]** `backend/services/hamilton/hamiltonTotp.js:64-80` — `parseTotpInput` accepts unbounded `digits`/`period` from the `otpauth://` URI (`Number(params.get('digits')) || defaults.digits`); `digits=9` flows into `10 ** digits`/`padStart(digits)` with no upper bound. Not exploitable (user's own seed). The TOTP crypto itself is correct RFC 6238.
+### Hamilton live TOTP/MFA automation
+- Removed. Hamilton no longer stores or derives live TOTP/MFA codes; users clear 2FA themselves and save a trusted browser session when a portal supports it.
 
 ### backend/services/hamilton/studentFundingPortalLinker.js
 - **[important]** `backend/services/hamilton/studentFundingPortalLinker.js:527` / `:648-670` — `linkOpportunityToPortal` wraps its writes in `withProfileScope({ bypass: true })`, disabling the DB-layer tenant guard, while read helpers query with a bare `WHERE profile_id = ?` and no `withProfileScope`. Correctness depends entirely on `effectiveProfileId` being trustworthy; an unvalidated `profileId` from a route can write a link into any profile.
