@@ -38,6 +38,7 @@ import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
 import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
 import PortalSyncCard from "@/components/hamilton/PortalSyncCard.jsx"
 import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard.jsx"
+import HamiltonWorkPanel from "@/components/hamilton/HamiltonWorkPanel.jsx"
 import ProfileFundingSourcesCard from "@/components/funding/ProfileFundingSourcesCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
 import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
@@ -534,6 +535,28 @@ export default function ProfileDetail() {
     }
   }, [pendingScrollTarget, activeTab])
 
+  // Deep-link a "Hamilton needs you" item to where the owner fixes it. `where`
+  // is a coarse tab hint from the profile-summary endpoint; portals + vault land
+  // on the Pipeline tab and scroll to the Portals dashboard anchor.
+  const handleHamiltonNavigate = React.useCallback((where) => {
+    switch (where) {
+      case "pipeline":
+        setActiveTab("pipeline")
+        setPendingScrollTarget("portal-logins")
+        break
+      case "documents":
+        setActiveTab("documents")
+        break
+      case "action-plan":
+        setActiveTab("action-plan")
+        break
+      case "profile":
+      default:
+        setActiveTab("profile")
+        break
+    }
+  }, [])
+
   const hasSyncedTargetColleges = useRef(false)
   const lastSyncedProfileId = useRef(null)
   const failedTargetCollegeSyncProfiles = useRef(new Set())
@@ -848,6 +871,10 @@ export default function ProfileDetail() {
             <Button variant="outline" onClick={() => navigate(createPageUrl("MyProfiles"))}>
               ← Back to Profiles
             </Button>
+            {/* What is Hamilton working on for this profile + everywhere the
+                owner must add info for him to finish. The panel deep-links each
+                "needs you" item back to the right tab/anchor via onNavigate. */}
+            <HamiltonWorkPanel profileId={profileId} onNavigate={handleHamiltonNavigate} />
             <Button variant="outline" onClick={() => setAppearanceOpen(true)}>
               <Palette className="w-4 h-4 mr-2" />
               Appearance
