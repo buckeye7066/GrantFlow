@@ -1,4 +1,4 @@
-﻿/**
+/**
  * hamiltonApplicationAgent.js
  *
  * Hamilton — application-completion agent. Given a profile + funding
@@ -44,6 +44,10 @@ import {
 import { getFundingPortalLinkForOpportunity, linkOpportunityToPortal } from './hamilton/studentFundingPortalLinker.js'
 import { getStudentPortal } from './hamilton/studentPortalStore.js'
 import { emitHamiltonNotificationToProfileAndAdmins } from './hamilton/hamiltonNotifications.js'
+import {
+  assertHamiltonFundingSourceAllowed,
+  cleanupDisallowedHamiltonTraces,
+} from './hamilton/hamiltonFundingSourcePolicy.js'
 import { withProfileScope } from '../middleware/profileContext.js'
 import { prepareApplication, autoPopulate, validateApplication, markSubmitted } from '../apply/applyEngine.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
@@ -172,6 +176,30 @@ async function loadOpportunity(db, { opportunityId = null, grantId = null }) {
   return null
 }
 
+function splitFundingSource(source) {
+  if (source?.kind === 'grant') return { opportunity: null, grant: source }
+  return { opportunity: source || null, grant: null }
+}
+
+async function enforceFundingSourcePolicy(db, { profileId, opportunityId = null, grantId = null, source = null }) {
+  const split = splitFundingSource(source)
+  try {
+    return await assertHamiltonFundingSourceAllowed(db, {
+      profileId,
+      opportunity: split.opportunity,
+      grant: split.grant,
+    })
+  } catch (err) {
+    await cleanupDisallowedHamiltonTraces(db, {
+      profileId,
+      opportunityId,
+      grantId,
+      reason: err?.code || 'funding_source_policy',
+    }).catch(() => null)
+    throw err
+  }
+}
+
 async function loadDocuments(db, profileId) {
   if (!db || !profileId) return []
   try {
@@ -249,22 +277,34 @@ export async function startHamiltonForOpportunity(db, {
   if (!profileId) throw new Error('profileId required')
   if (!opportunityId && !grantId) throw new Error('opportunityId or grantId required')
 
+  const profile = await loadProfile(db, profileId)
+  if (!profile) {
+    const err = new Error(`profile not found: ${profileId}`)
+    err.status = 404
+    throw err
+  }
+
+  const opportunity = await loadOpportunity(db, { opportunityId, grantId })
+  if (!opportunity) {
+    const err = new Error(`funding source not found: ${opportunityId || grantId}`)
+    err.status = 404
+    throw err
+  }
+
+  await enforceFundingSourcePolicy(db, { profileId, opportunityId, grantId, source: opportunity })
+
   // Resolve / create the portal link first so the task knows which portal
   // it's targeting.
   let link = await getFundingPortalLinkForOpportunity(db, profileId, { opportunityId, grantId })
   if (!link) {
-    const profile = await loadProfile(db, profileId)
-    const opportunity = await loadOpportunity(db, { opportunityId, grantId })
-    if (profile && opportunity) {
-      link = await linkOpportunityToPortal(db, {
-        db,
-        profile,
-        profileId,
-        opportunity: { ...opportunity, id: opportunity.id || opportunityId, grant_id: grantId },
-        grantId,
-        userId,
-      })
-    }
+    link = await linkOpportunityToPortal(db, {
+      db,
+      profile,
+      profileId,
+      opportunity: { ...opportunity, id: opportunity.id || opportunityId, grant_id: grantId },
+      grantId,
+      userId,
+    })
   }
 
   const task = await ensureApplicationTask(db, {
@@ -356,6 +396,28 @@ export async function runHamiltonCycle(db, {
     })
     await updateApplicationTask(db, taskId, { status: 'failed', lastAgentMessage: 'Profile not found' })
     return { ok: false, task: await getApplicationTask(db, taskId), error: 'profile_not_found' }
+  }
+
+  try {
+    await enforceFundingSourcePolicy(db, {
+      profileId: task.profile_id,
+      opportunityId: task.opportunity_id,
+      grantId: task.grant_id,
+      source: opportunity,
+    })
+  } catch (err) {
+    await recordHamiltonRun(db, {
+      taskId, profileId: task.profile_id, userId, mode, trigger,
+      error: err?.message || String(err),
+      blocked_safety: 1,
+      duration_ms: Date.now() - startedAt,
+    })
+    return {
+      ok: false,
+      task: await getApplicationTask(db, taskId),
+      error: err?.code || 'funding_source_disallowed',
+      message: err?.message || 'Funding source does not meet GrantFlow rules.',
+    }
   }
 
   const adapter = resolveAdapter(link, opportunity, profile)
