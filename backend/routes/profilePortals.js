@@ -54,7 +54,9 @@ import {
   setAutopilotIdentity,
   unlockVault,
   lockVault,
+  hasPassphrase,
 } from '../services/hamilton/hamiltonPortalMasterVault.js'
+import { purgeMasterWrappedCredentials } from '../services/hamilton/hamiltonPortalCredentialService.js'
 import {
   describeAutopilotStateForPortal,
   runAutopilotIdentityForPortal,
@@ -526,12 +528,25 @@ router.post('/profiles/:id/portal-autopilot/passphrase', async (req, res) => {
   const passphrase = String(req.body?.passphrase || '')
   if (!passphrase) return res.status(400).json({ error: 'passphrase required' })
   try {
+    // RESET vs first-time SET: this route never re-wraps with an old passphrase,
+    // so when a passphrase already exists, setting a new one is a reset that
+    // makes every existing master-wrapped (auto-provisioned) secret permanently
+    // unreadable. Purge those rows so autopilot regenerates fresh logins under
+    // the new passphrase instead of being stuck on undecryptable `already_existed`
+    // records. User-entered / server-vault-only logins are untouched.
+    const wasReset = await hasPassphrase(req.db, profileId).catch(() => false)
     const identityEmail = req.body?.identityEmail ?? req.body?.identity_email
     const { status } = await setMasterPassphrase(req.db, {
       profileId, passphrase,
       identityEmail: identityEmail === undefined ? undefined : identityEmail,
     })
-    return res.json({ ok: true, vault: status })
+    let purged = 0
+    if (wasReset) {
+      const { deleted } = await purgeMasterWrappedCredentials(req.db, profileId).catch(() => ({ deleted: 0 }))
+      purged = deleted
+      if (purged > 0) log.info('portal_autopilot_passphrase_reset_purge', { profileId, purged })
+    }
+    return res.json({ ok: true, vault: status, reset: wasReset, purged_logins: purged })
   } catch (err) {
     return res.status(400).json({ error: 'set_passphrase_failed', detail: err?.message })
   }

@@ -492,6 +492,14 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // The master passphrase is a PASSWORD field, consumed on submit and cleared —
   // never stored in component state beyond the moment of submission, never echoed.
   const [passInput, setPassInput] = React.useState("")
+  // RECOVERY PATH: once a passphrase is set the vault only offers "unlock". If the
+  // owner forgets it (or it can't be verified), they were permanently locked out
+  // — a dead-end failure state. `resetMode` flips the password field into
+  // "set a NEW passphrase" mode so they can recover. The backend's
+  // setMasterPassphrase already UPDATEs the salt+verifier (a true rotation), and
+  // previously auto-provisioned secrets degrade gracefully (reveal returns
+  // vault_locked rather than throwing) and are regenerated on the next run.
+  const [resetMode, setResetMode] = React.useState(false)
   const [identityInput, setIdentityInput] = React.useState(vaultStatus.identity_email || "")
   React.useEffect(() => {
     setIdentityInput(vaultStatus.identity_email || "")
@@ -502,6 +510,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       setPortalAutopilotPassphrase(profileId, { passphrase, identityEmail }),
     onSuccess: () => {
       setPassInput("")
+      setResetMode(false)
       refetchPortals()
       showSuccessToast(toast, "Master passphrase saved", "Hamilton can now provision logins under it. The passphrase is never stored or shown.")
     },
@@ -971,51 +980,80 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 </button>
               </div>
 
-              {/* Master passphrase (password field). Set on first use, or unlock. */}
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <label className="flex-1 space-y-1">
-                  <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">
-                    Master passphrase {vaultStatus.has_passphrase ? "(enter to unlock)" : "(set one — 8+ chars)"}
-                  </span>
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    className="w-full rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
-                    placeholder="••••••••"
-                    value={passInput}
-                    onChange={(e) => setPassInput(e.target.value)}
-                  />
-                </label>
-                {vaultStatus.has_passphrase ? (
-                  <button
-                    type="button"
-                    className={BTN_EMERALD}
-                    disabled={unlockMutation.isPending || !trimmedPass}
-                    onClick={() => {
-                      const value = passInput
-                      setPassInput("")
-                      unlockMutation.mutate({ passphrase: value })
-                    }}
-                  >
-                    {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Unlock className="h-4 w-4" />}
-                    Unlock
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className={BTN_EMERALD}
-                    disabled={passphraseMutation.isPending || trimmedPass.length < 8}
-                    onClick={() => {
-                      const value = passInput
-                      setPassInput("")
-                      passphraseMutation.mutate({ passphrase: value, identityEmail: identityInput.trim() || undefined })
-                    }}
-                  >
-                    {passphraseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <KeyRound className="h-4 w-4" />}
-                    Set passphrase
-                  </button>
-                )}
-              </div>
+              {/* Master passphrase (password field). Set on first use, unlock when a
+                  passphrase exists, or RESET it when the owner forgot it (resetMode)
+                  so a set vault is never an unlock-only dead end. */}
+              {(() => {
+                const showSetForm = !vaultStatus.has_passphrase || resetMode
+                return (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <label className="flex-1 space-y-1">
+                        <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">
+                          Master passphrase {showSetForm
+                            ? (vaultStatus.has_passphrase ? "(set a new one — 8+ chars)" : "(set one — 8+ chars)")
+                            : "(enter to unlock)"}
+                        </span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          className="w-full rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
+                          placeholder="••••••••"
+                          value={passInput}
+                          onChange={(e) => setPassInput(e.target.value)}
+                        />
+                      </label>
+                      {showSetForm ? (
+                        <button
+                          type="button"
+                          className={BTN_EMERALD}
+                          disabled={passphraseMutation.isPending || trimmedPass.length < 8}
+                          onClick={() => {
+                            const value = passInput
+                            setPassInput("")
+                            passphraseMutation.mutate({ passphrase: value, identityEmail: identityInput.trim() || undefined })
+                          }}
+                        >
+                          {passphraseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <KeyRound className="h-4 w-4" />}
+                          {vaultStatus.has_passphrase ? "Reset passphrase" : "Set passphrase"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={BTN_EMERALD}
+                          disabled={unlockMutation.isPending || !trimmedPass}
+                          onClick={() => {
+                            const value = passInput
+                            setPassInput("")
+                            unlockMutation.mutate({ passphrase: value })
+                          }}
+                        >
+                          {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Unlock className="h-4 w-4" />}
+                          Unlock
+                        </button>
+                      )}
+                    </div>
+                    {/* Recovery affordance: a set vault must never strand the owner on
+                        unlock-only — a forgotten passphrase would otherwise be fatal. */}
+                    {vaultStatus.has_passphrase && (
+                      <button
+                        type="button"
+                        className="self-start money text-[11.5px] text-current-ink/55 underline underline-offset-2 hover:text-current-ink/80"
+                        onClick={() => { setResetMode((v) => !v); setPassInput("") }}
+                      >
+                        {resetMode ? "Cancel — I remember it (go back to unlock)" : "Forgot your passphrase? Reset it"}
+                      </button>
+                    )}
+                    {vaultStatus.has_passphrase && resetMode && (
+                      <p className="money text-[11px] text-current-amber">
+                        Resetting replaces the passphrase. Logins Hamilton already
+                        generated under the old one can't be read back and will be
+                        regenerated on the next autopilot run.
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
 
               <div className="flex flex-wrap items-center gap-2">
                 <button
