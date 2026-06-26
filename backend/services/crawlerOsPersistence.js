@@ -295,12 +295,14 @@ export async function persistRun(db, memStore, run, opts = {}) {
   // profile silently keeps obsolete, ineligible matches.
   const matchRows = memStore.all('profile_opportunity_matches');
   const profileIds = [...new Set(matchRows.map((m) => m.profile_id).filter(Boolean))];
-  // Reconcile 'crawler-os' (own-discovery) matches. With a primary set, only the
-  // primary profile's own set is rebuilt; otherwise (legacy) every profile's.
+  // Reconcile own-discovery matches and stale cross-match spillover for the
+  // active profile. The API reads this table directly, so rejects/xmatches must
+  // not remain as visible results for a profile that just ran its own crawl.
   const reconcileProfiles = primaryProfileId ? [primaryProfileId] : profileIds;
   for (const pid of reconcileProfiles) {
     await db.prepare(
-      `DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND matcher_version = 'crawler-os'`,
+      `DELETE FROM profile_opportunity_matches
+        WHERE profile_id = ? AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')`,
     ).run(pid);
   }
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP';
@@ -310,7 +312,9 @@ export async function persistRun(db, memStore, run, opts = {}) {
     const explain = jparse(m.match_explain_json, {});
     const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id; // follow cross-run dedup remap
     const isPrimary = !primaryProfileId || m.profile_id === primaryProfileId;
+    const decision = String(m.decision ?? '').toLowerCase();
     if (isPrimary) {
+      if (decision === 'reject') continue;
       await upsertRow(db, 'profile_opportunity_matches', ['profile_id', 'opportunity_id'], {
         id: `${m.profile_id}:${oppId}`, // deterministic PK (table PK is id)
         profile_id: m.profile_id, opportunity_id: oppId,
@@ -323,7 +327,7 @@ export async function persistRun(db, memStore, run, opts = {}) {
         computed_at: nowIso(), updated_at: nowIso(), evaluated_at: nowIso(),
       });
       matches += 1;
-    } else if (String(m.decision ?? '').toLowerCase() === 'reject') {
+    } else if (decision === 'reject') {
       // A REJECT cross-match is not a match — never store it as one.
       continue;
     } else {
