@@ -33,6 +33,9 @@ function safeJsonParse(value, fallback) {
 
 async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
   if (!db || !profileId) return []
+  const activeClause = db?.dialect === 'postgres'
+    ? 'AND (fo.is_active IS NULL OR fo.is_active = TRUE)'
+    : 'AND (fo.is_active IS NULL OR fo.is_active = 1)'
   const rows = await db.prepare(`
     SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
            fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max,
@@ -44,7 +47,7 @@ async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
      WHERE m.profile_id = ?
        AND m.matcher_version IN ('crawler-os', 'web-llm')
        AND lower(COALESCE(m.match_decision, '')) IN ('accept', 'review')
-       AND (fo.is_active IS NULL OR fo.is_active = 1)
+       ${activeClause}
      ORDER BY m.match_score DESC
      LIMIT ?
   `).all(String(profileId), Number(limit) || 200)
