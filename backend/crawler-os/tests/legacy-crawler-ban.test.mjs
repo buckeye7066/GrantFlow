@@ -1,8 +1,9 @@
 // crawler-os/tests/legacy-crawler-ban.test.mjs
 //
 // Cutover guard (Requirement A: old-system removal). The Crawler OS is the ONE
-// discovery/matching authority; it must never depend on legacy crawler modules
-// and may only share explicit canonical contracts. This test fails if:
+// discovery spine; matching decisions must delegate to the shared canonical
+// matcher and the OS must never depend on legacy crawler modules. This test
+// fails if:
 //
 //   (1) any file under backend/crawler-os/ imports a path that escapes
 //       backend/crawler-os/ without being allowlisted as a shared contract, or
@@ -28,9 +29,10 @@ const serviceSeam = path.join(backendRoot, 'services', 'crawlerOsService.js');
 const IMPORT_RE = /(?:^|\s|;|\()\s*(?:import|export)\s+(?:[\s\S]*?\bfrom\s+)?['"]([^'"]+)['"]/g;
 const DYNAMIC_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
-// Legacy crawler/matching modules the new system must never import.
+// Legacy crawler modules the new system must never import. The canonical
+// services/matchEngine.js is deliberately not on this list: doctrine requires
+// every runtime, including Crawler OS, to use it as the sole decision authority.
 const LEGACY_DENYLIST = [
-  'services/matchEngine',
   'services/opportunityMatcher',
   'services/opportunityNormalizer',
   'services/comprehensiveCrawler',
@@ -49,6 +51,7 @@ const LEGACY_DENYLIST = [
 
 const ALLOWED_SHARED_IMPORTS = new Set([
   'shared/pipelineStages.js',
+  'backend/services/matchEngine.js',
 ]);
 
 function listFiles(dir) {

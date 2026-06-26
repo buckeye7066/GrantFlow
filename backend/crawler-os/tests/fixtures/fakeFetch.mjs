@@ -54,8 +54,18 @@ function futureDate(daysAhead) {
  */
 export function makeFakeFetch(options = {}) {
   const grants = options.grantsGov ?? [
-    { title: 'Rural Community Facilities Grant', agency: 'USDA', closeDate: futureDate(90) },
-    { title: 'Volunteer Fire Equipment Grant', agency: 'FEMA', closeDate: futureDate(60) },
+    {
+      title: 'Rural Community Facilities Grant',
+      agency: 'USDA',
+      summary: 'Funding for rural emergency services facilities, equipment, and community infrastructure.',
+      closeDate: futureDate(90),
+    },
+    {
+      title: 'Volunteer Fire Equipment Grant',
+      agency: 'FEMA',
+      summary: 'Funding for volunteer fire department emergency equipment and firefighter response gear.',
+      closeDate: futureDate(60),
+    },
   ];
   const extraRoutes = options.routes ?? {};
   const fail = options.fail ?? new Set();

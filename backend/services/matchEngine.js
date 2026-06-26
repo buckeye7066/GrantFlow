@@ -403,8 +403,16 @@ export function evaluateEligibility(profileNorm, oppNorm) {
       missingFields.push('ethnicity')
     }
   }
-  if (oppNorm.requiresNonprofit && !profileNorm.isNonprofit) ineligibilityReasons.push('Requires 501(c)(3) or nonprofit status')
-  if (oppNorm.requiresBusiness && !profileNorm.isBusiness) ineligibilityReasons.push('Requires business or self-employment')
+  const profileEntityType = String(profileNorm.entityType ?? '').toLowerCase()
+  const profileEntityIsMissingOrGeneric = !profileEntityType || profileEntityType === 'organization'
+  if (oppNorm.requiresNonprofit && !profileNorm.isNonprofit) {
+    if (profileEntityIsMissingOrGeneric) missingFields.push('nonprofit_status')
+    else ineligibilityReasons.push('Requires 501(c)(3) or nonprofit status')
+  }
+  if (oppNorm.requiresBusiness && !profileNorm.isBusiness) {
+    if (profileEntityIsMissingOrGeneric) missingFields.push('business_or_self_employment')
+    else ineligibilityReasons.push('Requires business or self-employment')
+  }
 
   if (oppNorm.isInstitutionalOnly || oppNorm.isResearchOnly) {
     const isOrdinaryIndividual = !profileNorm.isNonprofit && !profileNorm.isBusiness &&
@@ -2698,7 +2706,14 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   const profNeeds = np?.needCategories ?? safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
 
   // Hard REJECT conditions — explicit boolean flags take priority over regex
-  if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || opp.is_loan || /\bloan\b/.test(oppText)) {
+  const mixedLoanGrantProgram =
+    /\bloan\s+(?:and|&)\s+grant\b/i.test(oppText) ||
+    /\bgrants?\s+(?:and|&)\s+loans?\b/i.test(oppText)
+  if (
+    ['loan', 'loan_program', 'microloan'].includes(opportunityType) ||
+    opp.is_loan ||
+    (!mixedLoanGrantProgram && /\bloan\b/.test(oppText))
+  ) {
     reasons.push('Loan program — not a grant')
     return { decision: 'REJECT', explanation: 'Opportunity is a loan program, not a grant.', reasons }
   }
@@ -2734,13 +2749,30 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity is for women/female applicants only.', reasons }
   }
 
+  const profileTypeIsMissingOrGeneric = !profileType || profileType === 'organization'
   if ((opp.requires_nonprofit || RE_NONPROFIT_REQUIRED.test(oppText)) && !isNonprofit) {
+    if (profileTypeIsMissingOrGeneric) {
+      reasons.push('Nonprofit-only program; nonprofit status unconfirmed - review (missing: nonprofit_status)')
+      return {
+        decision: 'REVIEW',
+        explanation: 'Opportunity appears limited to nonprofits, but the profile nonprofit status is unconfirmed. Confirm eligibility.',
+        reasons,
+      }
+    }
     reasons.push('Nonprofit-only program; profile is not a nonprofit')
     return { decision: 'REJECT', explanation: 'Opportunity is for nonprofits only.', reasons }
   }
 
   const RE_BUSINESS_EXCLUSIVE = /\b(exclusively\s+for\s+(?:small\s+)?business|(?:small\s+)?business\s+owners?\s+only|for\s+(?:small\s+)?business\s+owners?\s+and\s+entrepreneurs)\b/i
   if ((opp.requires_business || RE_BUSINESS_EXCLUSIVE.test(oppText)) && !isBusiness) {
+    if (profileTypeIsMissingOrGeneric) {
+      reasons.push('Business-only program; business status unconfirmed - review (missing: business_or_self_employment)')
+      return {
+        decision: 'REVIEW',
+        explanation: 'Opportunity appears limited to business owners, but the profile business status is unconfirmed. Confirm eligibility.',
+        reasons,
+      }
+    }
     reasons.push('Business-only program; profile is not a business')
     return { decision: 'REJECT', explanation: 'Opportunity requires business ownership.', reasons }
   }
@@ -2861,6 +2893,24 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
 // computeMatchDecision — combined (backward-compat with matchDecisionEngine.js)
 // ---------------------------------------------------------------------------
 
+function buildMatchedProfileFacts(profileNorm, matchedNeeds = [], matchedSignals = []) {
+  const facts = []
+  if (Array.isArray(matchedNeeds)) {
+    for (const need of matchedNeeds) {
+      if (need) facts.push(`Need: ${need}`)
+    }
+  }
+  if (Array.isArray(matchedSignals)) {
+    for (const sig of matchedSignals) {
+      if (sig) facts.push(`Profile signal: ${sig}`)
+    }
+  }
+  if (profileNorm?.state) facts.push(`Profile state: ${profileNorm.state}`)
+  if (profileNorm?.zip) facts.push(`Profile ZIP: ${profileNorm.zip}`)
+  if (profileNorm?.entityType) facts.push(`Applicant type: ${profileNorm.entityType}`)
+  return facts
+}
+
 /**
  * Compute combined score + eligibility decision for a profile/opportunity pair.
  * Backward-compatible replacement for matchDecisionEngine.computeMatchDecision().
@@ -2941,7 +2991,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
       ineligibilityReasons: hardEligibilityReasons,
       matchedNeeds: [],
       matchedProfileTraits: [],
-      matched_profile_facts: [],
+      matched_profile_facts: buildMatchedProfileFacts(profileNorm),
       missingEligibilityFields: eligibilityEval.missingFields ?? [],
       needAlignment: 0,
       confidence: 95,
@@ -3062,6 +3112,12 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     explanation = 'Downgraded from ACCEPT — no profile data to align with.'
     decisionReasons = [...decisionReasons, 'Zero need alignment with blank profile']
   }
+  if (decision === 'ACCEPT' && eligibilityEval.eligible === 'maybe') {
+    decision = 'REVIEW'
+    explanation = 'Downgraded from ACCEPT - eligibility is incomplete and needs review.'
+    const missing = (eligibilityEval.missingFields ?? []).join(', ') || 'eligibility details'
+    decisionReasons = [...decisionReasons, `Incomplete eligibility: ${missing}`]
+  }
 
   // Eligibility
   let eligible = 'maybe'
@@ -3116,20 +3172,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // card, and the parity test as the canonical "why this matched" payload.
   // Mission rule: "every displayed match should be able to answer 'what facts
   // from my profile caused this to appear?'".
-  const matchedProfileFacts = []
-  if (Array.isArray(matchedNeeds)) {
-    for (const need of matchedNeeds) {
-      if (need) matchedProfileFacts.push(`Need: ${need}`)
-    }
-  }
-  if (Array.isArray(matchedProfileTraits)) {
-    for (const sig of matchedProfileTraits) {
-      if (sig) matchedProfileFacts.push(`Profile signal: ${sig}`)
-    }
-  }
-  if (profileNorm?.state) matchedProfileFacts.push(`Profile state: ${profileNorm.state}`)
-  if (profileNorm?.zip) matchedProfileFacts.push(`Profile ZIP: ${profileNorm.zip}`)
-  if (profileNorm?.entityType) matchedProfileFacts.push(`Applicant type: ${profileNorm.entityType}`)
+  const matchedProfileFacts = buildMatchedProfileFacts(profileNorm, matchedNeeds, matchedProfileTraits)
 
   return {
     score: finalScore,

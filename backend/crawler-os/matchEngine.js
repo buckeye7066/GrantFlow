@@ -1,232 +1,254 @@
 // crawler-os/matchEngine.js
 //
-// THE canonical match authority. computeMatchDecision is the ONLY function in the
-// system permitted to produce an ACCEPT / REVIEW / REJECT decision (doctrine #6,
-// #7). Every agent, route, UI card, and crawler that needs a decision calls this.
-// The score is ALWAYS per (opportunity, profile); it is never a property of the
-// opportunity alone.
+// Compatibility facade for Crawler OS callers.
 //
-// Weight budget (sums to 100):
-//   need 25 · applicant 20 · geo 15 · eligibility 15 · funding 10 · urgency 5
-//   · amount 5 · trust 5
-//
-// Pure, no I/O.
+// Doctrine rule: backend/services/matchEngine.js is the only place allowed to
+// make ACCEPT / REVIEW / REJECT decisions. Crawler OS still persists its own
+// profile_opportunity_matches rows and uses lower-case OS decision tokens, so
+// this module adapts the OS thesis/opportunity shapes into the canonical engine
+// and maps the canonical output back to the OS storage contract.
 
 import {
-  MATCH_DECISION, TRUST_TIER_WEIGHT, OPPORTUNITY_KIND, APPLICABLE_KINDS,
-} from './contract.js';
+  computeMatchDecision as computeCanonicalMatchDecision,
+  MATCHER_VERSION,
+} from '../services/matchEngine.js';
+import { MATCH_DECISION, OPPORTUNITY_KIND } from './contract.js';
+
+export { MATCHER_VERSION };
 
 export const WEIGHTS = Object.freeze({
-  need: 25, applicant: 20, geo: 15, eligibility: 15,
-  funding: 10, urgency: 5, amount: 5, trust: 5,
+  canonical_match_engine: 100,
 });
 
-// "Generic" needs describe HOW funds are used (operating support), not WHAT the
-// grant is topically about. Matching only these is not real topical relevance:
-// e.g. a "U.S. Mission to Morocco Tech Lab" mentions "program", so it matches
-// the catch-all 'programs' need for a church food pantry — but it is not a
-// fundable fit. An apply-now ACCEPT requires at least one SPECIFIC need overlap.
-const GENERIC_NEEDS = new Set(['programs', 'operations']);
+const APPLICANT_TYPE_TO_PROFILE_TYPE = Object.freeze({
+  vfd: 'volunteer_fire_department',
+  church: 'church',
+  ministry: 'ministry',
+  nonprofit: 'nonprofit',
+  school: 'school',
+  government: 'government',
+  business: 'business',
+  farm: 'business',
+  student: 'student',
+  veteran: 'veteran',
+  family: 'family',
+  individual: 'individual',
+});
 
-// Topical-relevance ceiling. An opportunity that overlaps NONE of a profile's
-// SPECIFIC needs is not a quality match for THAT profile — however eligible,
-// national, and trustworthy it is. Without this, any real nonprofit-eligible
-// national federal grant scored ~80-85 for ANY nonprofit (wildcard need = 15/25,
-// national geo = 15/15, eligibility 15, funding 10, amount 5, trust 5), so a
-// Vermilion church matched "Coral Reef Conservation" / "Moonshot: Artemis" at
-// 85. We cap the PER-PROFILE score below the surfacing bar (75) so the match
-// stays in the master catalog + REVIEW but does not clutter the pipeline. This
-// is the score-side companion to the decision-side topical-relevance gate.
-const WEAK_RELEVANCE_CEILING = 60;
-
-// Need-alignment full-credit target. A profile that lists MANY needs must not be
-// penalized for a grant that addresses only a few of them: a funder realistically
-// covers one or two of a person/org's needs, and matching that strongly IS a
-// complete need fit. Without this, need = matched/total, so a church that needs
-// [capital, operations, programs, education] matching a real Capital grant scored
-// 1/4 = 6/25 and the genuinely-relevant grant was REJECTED (false negative). Full
-// credit at this many SPECIFIC hits (mirrors legacy matchThresholds.NEED_FULL_CREDIT_HITS).
-const NEED_FULL_CREDIT_HITS = 2;
+const APPLICANT_TYPE_TO_CANONICAL_ALLOWED = Object.freeze({
+  vfd: ['nonprofit', 'organization'],
+  church: ['nonprofit', 'organization'],
+  ministry: ['nonprofit', 'organization'],
+  nonprofit: ['nonprofit', 'organization'],
+  school: ['organization'],
+  government: ['organization'],
+  business: ['business'],
+  farm: ['business'],
+  student: ['student', 'individual'],
+  veteran: ['veteran', 'individual'],
+  family: ['individual'],
+  individual: ['individual'],
+});
 
 /**
- * computeMatchDecision — score one opportunity against one profile thesis and
- * return a fully-explained decision.
+ * Score an OS-normalized opportunity against one OS thesis using the canonical
+ * GrantFlow matcher.
  *
- * @param {object} opportunity canonical Opportunity
+ * @param {object} opportunity Crawler OS canonical Opportunity
  * @param {object} thesis      profileIntelligence.buildThesis output
- * @param {{ floor?:number }} [opts]
+ * @param {object} [opts]
  * @returns {{ profile_id:string|null, opportunity_id:string, match_score:number,
  *   decision:string, match_explain:object }}
  */
-export function computeMatchDecision(opportunity, thesis, opts = {}) {
-  const warnings = [];
-  const breakdown = {};
+export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
+  const profile = thesisToCanonicalProfile(thesis, opts);
+  const opp = opportunityToCanonicalOpportunity(opportunity);
+  const canonical = computeCanonicalMatchDecision(profile, opp, {
+    profileSections: opts.profileSections ?? opts.sections ?? null,
+    signals: opts.signals ?? null,
+    preferenceSignals: opts.preferenceSignals,
+  });
 
-  // need (25). Concrete inferred categories outrank a broad wildcard. A row
-  // such as ['equipment', '*'] should score on the concrete equipment match, not
-  // fall back to the generic wildcard band.
-  const oppNeeds = stripWildcard(opportunity.need_categories);
-  const matchedNeeds = intersect(oppNeeds.length ? oppNeeds : opportunity.need_categories, thesis.needs);
-  const needWild = opportunity.need_categories.includes('*') && oppNeeds.length === 0;
-  // Full credit at NEED_FULL_CREDIT_HITS specific overlaps, not matched/total —
-  // so a multi-need profile is not penalized for a focused grant (see constant).
-  const needTarget = Math.min(Math.max(1, thesis.needs.length), NEED_FULL_CREDIT_HITS);
-  breakdown.need = needWild
-    ? WEIGHTS.need * 0.6
-    : ratioScore(matchedNeeds.length, needTarget, WEIGHTS.need);
-  if (!needWild && matchedNeeds.length === 0 && thesis.needs.length > 0) warnings.push('no need-category overlap');
-  // Topical-relevance gate: if the profile has specific (non-generic) needs but
-  // the opportunity overlaps NONE of them (matched only catch-all needs, or
-  // nothing), it is not a fundable apply-now fit — flag it so decide() caps it at
-  // REVIEW instead of ACCEPT. Explicit-wildcard opportunities are exempt.
-  // The gate applies to wildcard-need opportunities too: a grant that declares
-  // no specific topical focus ('*') provides no evidence it fits this profile's
-  // specific needs, so it is REVIEW, not an apply-now ACCEPT. (Federal search
-  // APIs like grants.gov often return only a title, so most rows fall here —
-  // which is correct: surface them to review, do not auto-recommend them.)
-  const specificThesisNeeds = thesis.needs.filter((n) => !GENERIC_NEEDS.has(n));
-  const specificMatched = matchedNeeds.filter((n) => !GENERIC_NEEDS.has(n));
-  if (specificThesisNeeds.length > 0 && specificMatched.length === 0) {
-    warnings.push('weak topical relevance: no specific need overlap');
-  }
-
-  // applicant (20). Treat '*' as broad only when there is no concrete applicant
-  // signal. If concrete applicant types exist, they control the match.
-  const oppApplicants = stripWildcard(opportunity.applicant_types);
-  const applicantWild = opportunity.applicant_types.includes('*') && oppApplicants.length === 0;
-  const applicantFit = opportunity.applicant_types.length === 0
-    ? 0.5
-    : applicantWild ? 0.5 : (intersect(oppApplicants, thesis.applicant_types).length > 0 ? 1 : 0);
-  breakdown.applicant = applicantFit * WEIGHTS.applicant;
-  if (applicantFit === 0) warnings.push('applicant type not served by opportunity');
-
-  // geo (15)
-  const geo = scoreGeography(opportunity.geography, thesis.location);
-  breakdown.geo = geo.score * WEIGHTS.geo;
-  if (geo.score === 0) warnings.push('geography mismatch');
-
-  // eligibility (15)
-  const elig = scoreEligibility(opportunity);
-  breakdown.eligibility = elig.score * WEIGHTS.eligibility;
-  warnings.push(...elig.warnings);
-
-  // funding mechanism acceptable? (10)
-  let fundingScore = 1;
-  if (opportunity.funding.is_loan && !thesis.loan_allowed) { fundingScore = 0; warnings.push('loan product, profile disallows loans'); }
-  else if (opportunity.funding.requires_cost_share && !thesis.cost_share_allowed) { fundingScore = 0.3; warnings.push('requires cost-share, profile disallows'); }
-  breakdown.funding = fundingScore * WEIGHTS.funding;
-
-  // urgency (5)
-  breakdown.urgency = scoreUrgency(opportunity) * WEIGHTS.urgency;
-
-  // amount (5)
-  const hasAmount = Number.isFinite(opportunity.funding.amount_max) || Number.isFinite(opportunity.funding.amount_min);
-  breakdown.amount = (APPLICABLE_KINDS.includes(opportunity.kind) && hasAmount ? 1 : 0) * WEIGHTS.amount;
-
-  // trust (5)
-  breakdown.trust = (TRUST_TIER_WEIGHT[opportunity.trust_tier] ?? 0.25) * WEIGHTS.trust;
-
-  const raw = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  let matchScore = Math.round(clamp(raw, 0, 100));
-
-  // Topical-relevance ceiling: if the profile declares SPECIFIC needs but the
-  // opportunity overlaps none of them, cap the per-profile score below the
-  // surfacing bar so it stays in the master catalog + REVIEW (queryable) but is
-  // not surfaced as a high match for this profile. Keeps "bad matches" out of
-  // the pipeline without deleting the opportunity. The decision-side gate
-  // (below) independently downgrades it out of ACCEPT.
-  const topicallyWeak = specificThesisNeeds.length > 0 && specificMatched.length === 0;
-  if (topicallyWeak && matchScore > WEAK_RELEVANCE_CEILING) {
-    breakdown._topical_cap = WEAK_RELEVANCE_CEILING - matchScore; // negative adj, for explainability
-    matchScore = WEAK_RELEVANCE_CEILING;
-  }
-
-  const floor = Number.isFinite(opts.floor) ? opts.floor : (thesis.min_match_score ?? 55);
-  const decision = decide(matchScore, floor, opportunity, warnings);
+  const score = Number.isFinite(Number(canonical?.score)) ? Math.round(Number(canonical.score)) : 0;
+  const decision = toCrawlerDecision(canonical?.decision);
 
   return {
-    profile_id: thesis.profile_id ?? null,
-    opportunity_id: opportunity.id,
-    match_score: matchScore,
+    profile_id: thesis?.profile_id ?? profile?.id ?? null,
+    opportunity_id: opportunity?.id ?? opp?.id ?? null,
+    match_score: score,
     decision,
     match_explain: {
-      matched_profile_type: applicantFit > 0,
-      matched_needs: matchedNeeds,
-      matched_location: geo.label,
-      eligibility_fit: elig.label,
-      why: buildWhy(matchScore, matchedNeeds, geo, applicantFit, opportunity),
-      warnings,
-      score_breakdown: roundBreakdown(breakdown),
-      floor,
+      matched_profile_type: Boolean(canonical?.match_explain?.matchedSignals?.includes?.('applicant_type')),
+      matched_location: describeLocationMatch(canonical),
+      eligibility_fit: canonical?.eligible ?? 'maybe',
+      why: canonical?.explanation ?? `Canonical ${MATCHER_VERSION} decision: ${String(canonical?.decision ?? 'REVIEW')}`,
+      warnings: collectWarnings(canonical),
+      matched_needs: canonical?.matchedNeeds ?? [],
+      matched_profile_facts: canonical?.matched_profile_facts ?? [],
+      missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
+      score_breakdown: canonical?.match_explain?.scoreBreakdown ?? canonical?.match_explain?.score_breakdown ?? {},
+      canonical_decision: canonical?.decision ?? 'REVIEW',
+      canonical_score: score,
+      matcher_version: canonical?.matcherVersion ?? MATCHER_VERSION,
+      evaluated_at: canonical?.evaluatedAt ?? null,
     },
   };
 }
 
-function decide(score, floor, opportunity, warnings) {
-  // Directories and intel are never an ACCEPT ("apply now"): they go to REVIEW.
-  if (opportunity.kind === OPPORTUNITY_KIND.DIRECTORY || opportunity.kind === OPPORTUNITY_KIND.PAST_AWARD_INTEL) {
-    return MATCH_DECISION.REVIEW;
+function thesisToCanonicalProfile(thesis = {}, opts = {}) {
+  const applicantTypes = stripWildcard(uniqueStrings(thesis.applicant_types));
+  const primary = choosePrimaryApplicantType(applicantTypes);
+  const profileType = primary ? (APPLICANT_TYPE_TO_PROFILE_TYPE[primary] ?? primary) : null;
+  const canonicalApplicantTypes = expandAllowedEntityTypes([profileType, ...applicantTypes]);
+  const location = thesis.location ?? {};
+
+  return {
+    id: thesis.profile_id ?? null,
+    name: thesis.name ?? thesis.display_name ?? null,
+    applicant_type: profileType,
+    primary_type: profileType,
+    profile_type: profileType,
+    type: profileType,
+    applicant_types: applicantTypes,
+    applicantTypes: new Set(uniqueStrings([profileType, ...applicantTypes, ...canonicalApplicantTypes])),
+    needs: uniqueStrings(thesis.needs),
+    need_categories: uniqueStrings(thesis.needs),
+    state: location.state ?? thesis.state ?? null,
+    county: location.county ?? thesis.county ?? null,
+    city: location.city ?? thesis.city ?? null,
+    zip: location.zip ?? thesis.zip ?? null,
+    location,
+    school: thesis.school ?? null,
+    allow_loans: Boolean(thesis.loan_allowed),
+    allow_cost_share: Boolean(thesis.cost_share_allowed),
+    tags: uniqueStrings([...(thesis.keywords ?? []), ...(thesis.needs ?? []), ...applicantTypes]),
+    sections: opts.sections ?? null,
+  };
+}
+
+function opportunityToCanonicalOpportunity(opportunity = {}) {
+  const applicantTypes = stripWildcard(uniqueStrings(opportunity.applicant_types));
+  const allowedTypes = expandAllowedEntityTypes(applicantTypes);
+  const needs = uniqueStrings(opportunity.need_categories);
+  const geography = opportunity.geography ?? {};
+  const states = uniqueStrings(geography.states);
+  const isNational = Boolean(geography.national) || states.some((s) => /^national|nationwide$/i.test(s));
+  const description = [
+    opportunity.summary,
+    applicantTypes.filter((x) => x !== '*').length
+      ? `Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`
+      : '',
+    needs.length ? `Funding needs: ${needs.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+  const url = opportunity.apply_url ?? opportunity.info_url ?? opportunity.evidence?.url ?? null;
+  const kind = String(opportunity.kind ?? '').toUpperCase();
+  const isDirectory = kind === OPPORTUNITY_KIND.DIRECTORY || kind === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
+
+  return {
+    id: opportunity.id ?? null,
+    title: opportunity.title ?? null,
+    sponsor: opportunity.sponsor ?? null,
+    funder: opportunity.sponsor ?? null,
+    description,
+    summary: opportunity.summary ?? null,
+    entity_types_allowed: allowedTypes,
+    need_types_supported: needs,
+    categories: uniqueStrings([...needs, ...allowedTypes, ...applicantTypes]),
+    eligibility_bullets: applicantTypes.length
+      ? [`Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`]
+      : [],
+    keywords: uniqueStrings([
+      ...needs,
+      ...applicantTypes,
+      ...allowedTypes,
+      opportunity.source_id,
+      opportunity.kind,
+      opportunity.sponsor,
+    ]),
+    state: isNational ? 'nationwide' : (states[0] ?? null),
+    is_national: isNational,
+    geo_county: uniqueStrings(geography.counties)[0] ?? null,
+    geo_zip: uniqueStrings(geography.zips)[0] ?? null,
+    amount_min: opportunity.funding?.amount_min ?? null,
+    amount_max: opportunity.funding?.amount_max ?? null,
+    is_loan: Boolean(opportunity.funding?.is_loan),
+    requires_match: Boolean(opportunity.funding?.requires_cost_share),
+    deadline: opportunity.deadline ?? null,
+    deadline_type: opportunity.is_rolling ? 'rolling' : null,
+    application_url: opportunity.apply_url ?? null,
+    apply_url: opportunity.apply_url ?? null,
+    source_url: url,
+    url,
+    type: isDirectory ? 'DIRECTORY' : (opportunity.kind ?? null),
+    opportunity_type: isDirectory ? 'directory' : 'grant',
+    source: opportunity.source_id ?? null,
+    record_origin: 'crawler_os',
+    trust_tier: opportunity.trust_tier ?? null,
+    reality_status: opportunity.reality_status ?? null,
+    verification: opportunity.verification ?? null,
+  };
+}
+
+function choosePrimaryApplicantType(applicantTypes) {
+  const priority = [
+    'vfd', 'church', 'ministry', 'nonprofit', 'school', 'government',
+    'business', 'farm', 'student', 'veteran', 'family', 'individual',
+  ];
+  return priority.find((t) => applicantTypes.includes(t)) ?? applicantTypes[0] ?? null;
+}
+
+function expandAllowedEntityTypes(applicantTypes) {
+  const expanded = [];
+  for (const type of applicantTypes) {
+    if (type === '*') continue;
+    expanded.push(...(APPLICANT_TYPE_TO_CANONICAL_ALLOWED[type] ?? [type]));
   }
-  if (score < floor) return MATCH_DECISION.REJECT;
-  const hardWarn = warnings.some((w) => /disallows|not served|no apply URL|weak topical relevance/i.test(w));
-  if (hardWarn) return MATCH_DECISION.REVIEW;
-  if (score >= Math.max(floor, 70)) return MATCH_DECISION.ACCEPT;
+  return uniqueStrings(expanded);
+}
+
+function toCrawlerDecision(decision) {
+  const upper = String(decision ?? '').toUpperCase();
+  if (upper === 'ACCEPT') return MATCH_DECISION.ACCEPT;
+  if (upper === 'REJECT') return MATCH_DECISION.REJECT;
   return MATCH_DECISION.REVIEW;
 }
 
-function scoreGeography(geo, location) {
-  if (!geo) return { score: 0, label: 'unknown' };
-  if (geo.national) return { score: 1, label: 'national' };
-  const state = location?.state;
-  if (state && geo.states?.includes(state)) {
-    if (location.county && geo.counties?.includes(location.county)) return { score: 1, label: `county:${location.county}` };
-    if (location.zip && geo.zips?.includes(location.zip)) return { score: 1, label: `zip:${location.zip}` };
-    return { score: 0.85, label: `state:${state}` };
+function collectWarnings(canonical) {
+  const out = [];
+  for (const value of [
+    ...(canonical?.reasons ?? []),
+    ...(canonical?.ineligibilityReasons ?? []),
+    ...(canonical?.match_explain?.scoreCaps ?? []),
+  ]) {
+    const s = String(value ?? '').trim();
+    if (s && !out.includes(s)) out.push(s);
   }
-  if (!state && (geo.states?.length || geo.counties?.length)) return { score: 0.4, label: 'profile-location-unknown' };
-  return { score: 0, label: 'mismatch' };
-}
-
-function scoreEligibility(opportunity) {
-  const warnings = [];
-  if (!APPLICABLE_KINDS.includes(opportunity.kind)) {
-    return { score: 0.2, label: `${opportunity.kind.toLowerCase()} (not directly applicable)`, warnings };
+  if (out.some((s) => /^Opportunity is for .* but profile is /i.test(s))) {
+    out.push('Applicant type mismatch');
   }
-  if (!opportunity.apply_url) {
-    warnings.push('no apply URL present');
-    return { score: 0.5, label: 'applicable but no apply URL', warnings };
+  return out;
+}
+
+function describeLocationMatch(canonical) {
+  const signals = canonical?.match_explain?.matchedSignals ?? [];
+  const geo = signals.find((sig) => String(sig).startsWith('geo:'));
+  if (geo) return String(geo).slice(4);
+  const breakdownGeo = canonical?.match_explain?.scoreBreakdown?.geo;
+  if (Number.isFinite(Number(breakdownGeo)) && Number(breakdownGeo) > 0) return 'partial';
+  return 'unknown';
+}
+
+function uniqueStrings(values = []) {
+  const out = [];
+  for (const value of Array.isArray(values) ? values : [values]) {
+    const s = String(value ?? '').trim().toLowerCase();
+    if (s && !out.includes(s)) out.push(s);
   }
-  return { score: 1, label: 'eligible', warnings };
+  return out;
 }
 
-function scoreUrgency(opportunity) {
-  if (opportunity.is_rolling || opportunity.reality_status === 'rolling') return 0.6;
-  const ts = Date.parse(opportunity.deadline ?? '');
-  if (!Number.isFinite(ts)) return 0.4;
-  const days = (ts - Date.now()) / (24 * 3600 * 1000);
-  if (days < 0) return 0;
-  if (days <= 30) return 1;
-  if (days <= 90) return 0.7;
-  return 0.5;
+function stripWildcard(values = []) {
+  return values.filter((value) => value !== '*');
 }
 
-function buildWhy(score, matchedNeeds, geo, applicantFit, opportunity) {
-  const bits = [`score ${score}/100`];
-  if (matchedNeeds.length) bits.push(`needs: ${matchedNeeds.join(', ')}`);
-  bits.push(`geo: ${geo.label}`);
-  bits.push(applicantFit > 0 ? 'applicant type served' : 'applicant type not served');
-  bits.push(`kind: ${opportunity.kind}`);
-  return bits.join('; ');
-}
-
-// ---- helpers --------------------------------------------------------------
-function stripWildcard(values = []) { return (values ?? []).filter((x) => String(x).toLowerCase() !== '*'); }
-function intersect(a = [], b = []) {
-  const setB = new Set((b ?? []).map((x) => String(x).toLowerCase()));
-  return [...new Set((a ?? []).map((x) => String(x).toLowerCase()))].filter((x) => setB.has(x));
-}
-function ratioScore(matched, total, weight) { if (total <= 0) return 0; return clamp(matched / total, 0, 1) * weight; }
-function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
-function roundBreakdown(b) { const o = {}; for (const [k, v] of Object.entries(b)) o[k] = Math.round(v * 100) / 100; return o; }
-
-export default { computeMatchDecision, WEIGHTS };
+export default { computeMatchDecision, WEIGHTS, MATCHER_VERSION };
