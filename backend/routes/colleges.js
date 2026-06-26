@@ -64,23 +64,21 @@ router.get('/local-funding', async (req, res) => {
 
     const db = req.db
     const isPostgres = db?.dialect === 'postgres'
-    const activeVal = isPostgres ? 'TRUE' : '1'
     let rows = []
 
     if (state) {
       if (isPostgres) {
-        const result = await db.query(`
+        rows = await db.prepare(`
           SELECT title, source_url, application_url, sponsor, source, state
           FROM funding_opportunities
-          WHERE is_active = $1
-            AND (state = $2 OR state = 'nationwide' OR is_national = $1)
+          WHERE is_active = ?
+            AND (state = ? OR state = 'nationwide' OR is_national = ?)
             AND (application_url IS NOT NULL OR source_url IS NOT NULL)
             AND ${trustedOriginClause()}
             AND ${trustedSourceClause()}
           ORDER BY updated_at DESC
           LIMIT 50
-        `, [true, state]);
-        rows = result.rows;
+        `).all(true, state, true);
       } else {
         rows = await db.prepare(`
           SELECT title, source_url, application_url, sponsor, source, state
@@ -96,18 +94,17 @@ router.get('/local-funding', async (req, res) => {
       }
     } else {
       if (isPostgres) {
-        const result = await db.query(`
+        rows = await db.prepare(`
           SELECT title, source_url, application_url, sponsor, source, state
           FROM funding_opportunities
-          WHERE is_active = $1
-            AND (is_national = $1 OR state = 'nationwide')
+          WHERE is_active = ?
+            AND (is_national = ? OR state = 'nationwide')
             AND (application_url IS NOT NULL OR source_url IS NOT NULL)
             AND ${trustedOriginClause()}
             AND ${trustedSourceClause()}
           ORDER BY updated_at DESC
           LIMIT 50
-        `, [true]);
-        rows = result.rows;
+        `).all(true, true);
       } else {
         rows = await db.prepare(`
           SELECT title, source_url, application_url, sponsor, source, state

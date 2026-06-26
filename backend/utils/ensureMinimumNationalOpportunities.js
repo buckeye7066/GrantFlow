@@ -21,27 +21,27 @@ function stableIdFromUrl(url) {
   return crypto.createHash('sha256').update(String(url)).digest('hex')
 }
 
-function hasColumn(db, tableName, columnName) {
+async function hasColumn(db, tableName, columnName) {
   try {
     if (db?.dialect === 'postgres') {
-      const row = db.prepare(`
+      const row = await db.prepare(`
         SELECT 1 FROM information_schema.columns
         WHERE table_name = ? AND column_name = ?
         LIMIT 1
       `).get(tableName, columnName.toLowerCase())
       return Boolean(row)
     }
-    const cols = db.prepare(`PRAGMA table_info(${tableName})`).all()
+    const cols = await db.prepare(`PRAGMA table_info(${tableName})`).all()
     return cols.some((c) => String(c.name).toLowerCase() === String(columnName).toLowerCase())
   } catch {
     return false
   }
 }
 
-function ensureRecordOriginColumn(db) {
-  if (hasColumn(db, 'funding_opportunities', 'record_origin')) return { ok: true, added: false }
+async function ensureRecordOriginColumn(db) {
+  if (await hasColumn(db, 'funding_opportunities', 'record_origin')) return { ok: true, added: false }
   try {
-    db.prepare(
+    await db.prepare(
       `ALTER TABLE funding_opportunities ADD COLUMN record_origin TEXT DEFAULT 'live_crawl'`,
     ).run()
     return { ok: true, added: true }
@@ -50,10 +50,10 @@ function ensureRecordOriginColumn(db) {
   }
 }
 
-function countRealNational(db) {
+async function countRealNational(db) {
   const isPg = db?.dialect === 'postgres'
   const activeVal = isPg ? 'TRUE' : '1'
-  const hasOrigin = hasColumn(db, 'funding_opportunities', 'record_origin')
+  const hasOrigin = await hasColumn(db, 'funding_opportunities', 'record_origin')
   const sql = hasOrigin
     ? `
         SELECT COUNT(*) AS count
@@ -73,25 +73,25 @@ function countRealNational(db) {
           AND source_url IS NOT NULL
           AND source_url != ''
       `
-  const row = db.prepare(sql).get()
+  const row = await db.prepare(sql).get()
   return Number(row?.count ?? 0)
 }
 
 export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
   if (!db) throw new Error('db required')
   const min = Number.isFinite(minimum) ? minimum : 3
-  if (min <= 0) return { ok: true, minimum: min, ensured: 0, total: countRealNational(db) }
+  if (min <= 0) return { ok: true, minimum: min, ensured: 0, total: await countRealNational(db) }
 
   const events = []
 
-  const originColumn = ensureRecordOriginColumn(db)
+  const originColumn = await ensureRecordOriginColumn(db)
   if (originColumn.added) {
     events.push({ type: 'schema_backfill', detail: 'added_record_origin_column' })
   }
 
   // Backfill missing source_url from application_url for older inserted rows.
   try {
-    db.prepare(
+    await db.prepare(
       `
         UPDATE funding_opportunities
         SET source_url = COALESCE(source_url, application_url)
@@ -107,7 +107,7 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
   // Backfill record_origin for older rows (positive classification)
   try {
     // Prefer curated_verified for known curated sources
-    db.prepare(
+    await db.prepare(
       `
         UPDATE funding_opportunities
         SET record_origin = 'curated_verified'
@@ -116,7 +116,7 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
       `,
     ).run()
     // Default everything else to live_crawl unless explicitly set
-    db.prepare(
+    await db.prepare(
       `
         UPDATE funding_opportunities
         SET record_origin = 'live_crawl'
@@ -127,7 +127,7 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
     // best-effort
   }
 
-  const before = countRealNational(db)
+  const before = await countRealNational(db)
   if (before >= min) {
     return { ok: true, minimum: min, ensured: 0, total: before, events }
   }
@@ -140,7 +140,7 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
     // best-effort
   }
 
-  let current = countRealNational(db)
+  let current = await countRealNational(db)
   if (current >= min) {
     return { ok: true, minimum: min, ensured: current - before, total: current, events }
   }
@@ -192,14 +192,14 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
       const result = await upsertFundingOpportunity(db, opportunity)
       if (result?.inserted) {
         ensured += 1
-        current = countRealNational(db)
+        current = await countRealNational(db)
       }
     } catch {
       // ignore per-item failures
     }
   }
 
-  const after = countRealNational(db)
+  const after = await countRealNational(db)
   if (ensured > 0) {
     events.push({ type: 'backfill', source: 'fallback_json', inserted: ensured })
   }
@@ -208,4 +208,3 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
 }
 
 export default ensureMinimumNationalOpportunities
-

@@ -326,7 +326,7 @@ export function recordToolFeedback(db, { toolUsageId, rating, feedback }) {
 /**
  * Cleanup expired memories and old context
  */
-export function cleanupBrain(db, { dryRun = false } = {}) {
+export async function cleanupBrain(db, { dryRun = false } = {}) {
   const rowsFromResult = (result) => Array.isArray(result) ? result : (result?.rows ?? [])
   const results = {
     dryRun: Boolean(dryRun),
@@ -341,14 +341,14 @@ export function cleanupBrain(db, { dryRun = false } = {}) {
   }
   
   // Delete expired memories
-  const expiredMemoryRows = rowsFromResult(db.prepare(`
+  const expiredMemoryRows = rowsFromResult(await db.prepare(`
     SELECT id FROM anya_brain_memory
     WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
   `).all())
   results.expiredMemories = expiredMemoryRows.length
   results.removed_ids.expiredMemories = expiredMemoryRows.map((row) => row.id)
   if (!dryRun && expiredMemoryRows.length > 0) {
-    db.prepare(`
+    await db.prepare(`
       DELETE FROM anya_brain_memory
       WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
     `).run()
@@ -359,28 +359,28 @@ export function cleanupBrain(db, { dryRun = false } = {}) {
   const since30d = isPg ? "(NOW() - INTERVAL '30 days')" : "datetime('now', '-30 days')"
   const since90d = isPg ? "(NOW() - INTERVAL '90 days')" : "datetime('now', '-90 days')"
 
-  const oldContextRows = rowsFromResult(db.prepare(`
+  const oldContextRows = rowsFromResult(await db.prepare(`
     SELECT id FROM anya_context
     WHERE created_at < ${since30d}
   `).all())
   results.oldContext = oldContextRows.length
   results.removed_ids.oldContext = oldContextRows.map((row) => row.id)
   if (!dryRun && oldContextRows.length > 0) {
-    db.prepare(`
+    await db.prepare(`
       DELETE FROM anya_context
       WHERE created_at < ${since30d}
     `).run()
   }
 
   // Delete old tool usage (older than 90 days)
-  const oldToolRows = rowsFromResult(db.prepare(`
+  const oldToolRows = rowsFromResult(await db.prepare(`
     SELECT id FROM anya_tool_usage
     WHERE created_at < ${since90d}
   `).all())
   results.oldToolUsage = oldToolRows.length
   results.removed_ids.oldToolUsage = oldToolRows.map((row) => row.id)
   if (!dryRun && oldToolRows.length > 0) {
-    db.prepare(`
+    await db.prepare(`
       DELETE FROM anya_tool_usage
       WHERE created_at < ${since90d}
     `).run()
