@@ -1624,7 +1624,7 @@ function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets,
     if (needHits > 0) {
       // Reward matching the profile's needs WITHOUT diluting by how MANY needs
       // the profile lists. Dividing by the full needTotal meant a complete
-      // profile (e.g. Robert White's 13 needs) capped every grant low — a grant
+      // profile (e.g. a broad student profile's 13 needs) capped every grant low — a grant
       // matching 7/13 strong needs only earned 54% of the need slice, so the
       // 80% slider returned nothing. A funder realistically addresses a few of a
       // person's needs; matching ~4 strongly is full need-alignment credit.

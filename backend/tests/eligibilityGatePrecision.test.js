@@ -2,7 +2,7 @@
  * eligibilityGatePrecision.test.js
  *
  * Regression coverage for the discovery/matching precision failures observed in
- * two real production pipelines (Robert White — a TN community-college student;
+ * two representative production-style pipelines (a TN community-college student
  * and a small Ohio church). The matcher was producing massive false positives:
  *
  *   (a) Already-awarded NSF AwardSearch research grants (named Awardee + PI,
@@ -28,7 +28,7 @@ import { deduplicateOpportunities } from '../services/opportunityMatcher.js'
 
 // ── Profiles ────────────────────────────────────────────────────────────────
 
-// Robert White: a 20-year-old TN community-college student in Cleveland /
+// Synthetic TN student: a 20-year-old community-college student in Cleveland /
 // Bradley County, TN. Low income. Individual (NOT an org / researcher).
 const TN_STUDENT = {
   profile: {

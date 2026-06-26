@@ -7,19 +7,19 @@ import {
 } from '../../backend/services/profileDedupeService.js'
 
 test('tokenizeProfileDisplayName normalizes punctuation and case', () => {
-  assert.deepEqual(tokenizeProfileDisplayName('Luibov S. Samoylenko'), ['luibov', 's', 'samoylenko'])
-  assert.deepEqual(tokenizeProfileDisplayName('  Luibov  '), ['luibov'])
+  assert.deepEqual(tokenizeProfileDisplayName('Maria L. Sample'), ['maria', 'l', 'sample'])
+  assert.deepEqual(tokenizeProfileDisplayName('  Maria  '), ['maria'])
 })
 
 test('profilesHaveSimilarNames groups short and full person names', () => {
-  assert.equal(profilesHaveSimilarNames('Luibov', 'Luibov S. Samoylenko'), true)
-  assert.equal(profilesHaveSimilarNames('Luibov S Samoylenko', 'Luibov Samoylenko'), true)
+  assert.equal(profilesHaveSimilarNames('Maria', 'Maria L. Sample'), true)
+  assert.equal(profilesHaveSimilarNames('Maria L Sample', 'Maria Sample'), true)
   assert.equal(profilesHaveSimilarNames('John', 'John Smith'), true)
 })
 
 test('profilesHaveSimilarNames rejects unrelated names', () => {
   assert.equal(profilesHaveSimilarNames('John Smith', 'John Jones'), false)
-  assert.equal(profilesHaveSimilarNames('Samoylenko', 'Luibov S Samoylenko'), false)
+  assert.equal(profilesHaveSimilarNames('Sample', 'Maria L Sample'), false)
   assert.equal(profilesHaveSimilarNames('Cleveland Blue Raiders', 'William'), false)
 })
 
@@ -63,13 +63,13 @@ test('findDuplicateProfileGroups similar_name strategy groups partial names', as
   db.exec(`
     INSERT INTO profiles (id, display_name, status, created_at, updated_at)
     VALUES
-      ('${shortId}', 'Luibov', 'active', '2026-01-01', '2026-01-01'),
-      ('${fullId}', 'Luibov S. Samoylenko', 'active', '2026-01-02', '2026-01-02'),
+      ('${shortId}', 'Maria', 'active', '2026-01-01', '2026-01-01'),
+      ('${fullId}', 'Maria L. Sample', 'active', '2026-01-02', '2026-01-02'),
       ('${otherId}', 'William', 'active', '2026-01-01', '2026-01-01');
 
     INSERT INTO profile_sections (id, profile_id, section_key, data)
     VALUES
-      ('00000000-0000-0000-0000-00000000a201', '${fullId}', 'basic_information', '{"email":"luibov@example.com","state":"OH"}');
+      ('00000000-0000-0000-0000-00000000a201', '${fullId}', 'basic_information', '{"email":"maria.sample@example.invalid","state":"OH"}');
   `)
 
   const sqliteDb = {

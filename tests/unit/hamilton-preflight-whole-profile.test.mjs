@@ -34,12 +34,12 @@ describe('preflight parses the whole profile', () => {
   it('does not flag first/last/email present in nested sections', async () => {
     const profile = {
       id: 'p1',
-      display_name: 'Anastasia Nicole White',
+      display_name: 'Demo Tennessee STEM Student',
       basic_information: {
-        first_name: 'Anastasia',
-        last_name: 'White',
-        email: 'tishka1201@icloud.com',
-        phone: '4234752124',
+        first_name: 'Demo',
+        last_name: 'Student',
+        email: 'demo.student@example.invalid',
+        phone: '5550101234',
       },
     }
     const report = await preflightSingleSource(stubDb, {
@@ -55,7 +55,7 @@ describe('preflight parses the whole profile', () => {
     const profile = {
       id: 'p1',
       basic_information: {
-        first_name: 'Anastasia', last_name: 'White', email: 'a@b.com',
+        first_name: 'Demo', last_name: 'Student', email: 'demo.student@example.invalid',
         academic_status: { current_institution: 'Cleveland State Community College' },
       },
     }
@@ -66,16 +66,16 @@ describe('preflight parses the whole profile', () => {
   })
 
   it('counts a value supplied to the resolved-field cache as present', async () => {
-    const profile = { id: 'p1', basic_information: { last_name: 'White', email: 'a@b.com' } }
+    const profile = { id: 'p1', basic_information: { last_name: 'Student', email: 'demo.student@example.invalid' } }
     const report = await preflightSingleSource(stubDb, {
       profile, profileId: 'p1', source: { opportunity_id: 'opp_1' }, opportunity: scholarshipOpp,
-      resolvedFields: { first_name: 'Anastasia' },
+      resolvedFields: { first_name: 'Demo' },
     })
     assert.ok(!missingKeys(report).includes('first_name'), 'cached first_name should satisfy the check')
   })
 
   it('still flags a genuinely absent field', async () => {
-    const profile = { id: 'p1', basic_information: { first_name: 'Anastasia' } }
+    const profile = { id: 'p1', basic_information: { first_name: 'Demo' } }
     const report = await preflightSingleSource(stubDb, {
       profile, profileId: 'p1', source: { opportunity_id: 'opp_1' }, opportunity: scholarshipOpp,
     })

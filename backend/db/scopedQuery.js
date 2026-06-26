@@ -5,8 +5,8 @@
 // Any query that touches a profile-scoped table (allowlist below) MUST filter
 // by profile_id. When a profile context is active in AsyncLocalStorage and a
 // scoped query is issued without a profile_id predicate, we throw
-// ProfileScopeError in strict/test mode, or log a `profile_bleed` warning in
-// production (with auto-injection when possible).
+// ProfileScopeError. Production may temporarily opt back into warn-only mode
+// with PROFILE_SCOPE_MODE=warn while a legacy query is being retired.
 //
 // This module exposes two surfaces:
 //   * runProfileContext(ctx, fn)              — set context for a request/tool
@@ -138,9 +138,9 @@ export function analyzeProfileScope(sql) {
  *   - No active profile context → pass (system/boot/admin CLIs unaffected).
  *   - Admin role → pass (admins legitimately span tenants).
  *   - Scoped table + missing predicate:
- *       * NODE_ENV=test or PROFILE_SCOPE_STRICT=1 → throw ProfileScopeError.
- *       * Otherwise → emit a `profile_bleed` warning + count on the context
- *         so the caller can aggregate drift signals for admin diagnostics.
+ *       * default → throw ProfileScopeError.
+ *       * PROFILE_SCOPE_MODE=warn → emit a `profile_bleed` warning + count on
+ *         the context so the caller can aggregate drift signals for admin diagnostics.
  *
  * Returns the (possibly unchanged) SQL; callers never need to branch on result.
  */
@@ -157,13 +157,14 @@ export function assertProfileScopedSql(sql, opts = {}) {
   if (!analysis.isScoped) return sql
   if (analysis.hasProfilePredicate) return sql
 
-  // Strict mode only fires when a profile is actually claimed. Otherwise the
-  // request is a system/boot/admin path and should be logged (not blocked).
+  // Strict mode fires when a profile is actually claimed. Otherwise the request
+  // is a system/boot/admin path and should be logged (not blocked). Warn-only
+  // mode exists as a short-lived deployment escape hatch, not the default.
   const hasClaim = Boolean(ctx.profileId)
-  const strict =
-    hasClaim &&
-    (String(process.env.NODE_ENV || '').toLowerCase() === 'test' ||
-      String(process.env.PROFILE_SCOPE_STRICT || '').toLowerCase() === '1')
+  const mode = String(process.env.PROFILE_SCOPE_MODE || '').trim().toLowerCase()
+  const legacyStrict = String(process.env.PROFILE_SCOPE_STRICT || '').trim().toLowerCase()
+  const warnOnly = mode === 'warn' || mode === 'warning' || legacyStrict === '0' || legacyStrict === 'false'
+  const strict = hasClaim && !warnOnly
 
   const detail = {
     tables: analysis.tables,

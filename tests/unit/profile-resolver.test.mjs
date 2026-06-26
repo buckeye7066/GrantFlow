@@ -108,7 +108,7 @@ describe('resolveProfileForId — designated slug → live UUID self-heal', () =
       `INSERT INTO profiles (id, display_name, primary_type, status) VALUES (?, ?, ?, 'active')`,
     ).run(
       'c4a92724-9cee-416f-ba30-e91b9b5cd885',
-      'Anastasia Nicole White',
+      'Demo Tennessee STEM Student',
       'high_school_student',
     )
 
@@ -130,7 +130,7 @@ describe('resolveProfileForId — designated slug → live UUID self-heal', () =
       `INSERT INTO profiles (id, display_name, primary_type, status) VALUES (?, ?, ?, 'deleted')`,
     ).run(
       'c4a92724-9cee-416f-ba30-e91b9b5cd885',
-      'Anastasia Nicole White',
+      'Demo Tennessee STEM Student',
       'high_school_student',
     )
 
@@ -149,7 +149,7 @@ describe('resolveProfileForId — designated slug → live UUID self-heal', () =
     })
 
     assert.ok(result, 'expected reseed to materialize the profile')
-    assert.equal(result.profile.display_name, 'Anastasia Nicole White')
+    assert.equal(result.profile.display_name, 'Demo Tennessee STEM Student')
     // Strategy can be 'reseed' (slug seeded back) or 'designated_display_name'
     // if the seed routed through display_name during the second pass.
     assert.match(result.strategy, /^(reseed|designated_display_name)$/)

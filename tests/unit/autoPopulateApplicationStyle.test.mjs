@@ -198,7 +198,7 @@ test('FAFSA-style auto-populate produces grounded, deterministic text without ev
     deadline: '2026-06-30',
   }
   const profile = {
-    display_name: 'Anastasia Nicole White',
+    display_name: 'Demo Tennessee STEM Student',
     state: 'TN',
     sections: { financial_information: { household_size: 7, annual_income: 56000 } },
   }

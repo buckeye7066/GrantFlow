@@ -38,7 +38,7 @@ function seedProfileWithSections(overrides = {}) {
   ).run(
     profileId,
     userId,
-    overrides.display_name || 'Robert White',
+    overrides.display_name || 'Demo Student',
     overrides.primary_type || 'student',
   )
 

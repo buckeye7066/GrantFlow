@@ -17,7 +17,7 @@ import { GOLDEN_SCORING_PROFILES, OPP } from './fixtures/goldenProfileScoring.js
  * (backend/services/matchEngine.js → `scoreOpportunity`) for the five core
  * profile TYPES the product serves:
  *
- *   1. Student            (Robert White archetype: paramedic-track HS student,
+ *   1. Student            (synthetic paramedic-track HS student,
  *                          Cleveland TN / Bradley County, financial need,
  *                          STEM / EMS interests)
  *   2. Individual/family  (low-income, housing/food/medical/utility needs)

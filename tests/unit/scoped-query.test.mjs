@@ -41,16 +41,25 @@ test('analyzeProfileScope: INSERT into scoped table with profile_id column passe
   assert.equal(r.hasProfilePredicate, true)
 })
 
-test('assertProfileScopedSql: throws under strict when profile claim is active', () => {
-  process.env.PROFILE_SCOPE_STRICT = '1'
+test('assertProfileScopedSql: throws by default when profile claim is active', () => {
+  const bad = () =>
+    runProfileContext({ profileId: 'p1', actorRole: 'user' }, () =>
+      assertProfileScopedSql('SELECT * FROM grants WHERE id = ?'),
+    )
+  assert.throws(bad, ProfileScopeError)
+})
+
+test('assertProfileScopedSql: warn-only deployment mode does not throw', () => {
+  process.env.PROFILE_SCOPE_MODE = 'warn'
+  const originalWarn = console.warn
+  console.warn = () => {}
   try {
-    const bad = () =>
-      runProfileContext({ profileId: 'p1', actorRole: 'user' }, () =>
-        assertProfileScopedSql('SELECT * FROM grants WHERE id = ?'),
-      )
-    assert.throws(bad, ProfileScopeError)
+    runProfileContext({ profileId: 'p1', actorRole: 'user' }, () => {
+      assertProfileScopedSql('SELECT * FROM grants WHERE id = ?')
+    })
   } finally {
-    delete process.env.PROFILE_SCOPE_STRICT
+    console.warn = originalWarn
+    delete process.env.PROFILE_SCOPE_MODE
   }
 })
 

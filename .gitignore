@@ -121,6 +121,8 @@ repo/
 # Never commit real credential routing maps or password exports (secrets)
 **/hamilton-routes.local.json
 **/*routes.local.json
+backend/config/userProfileMappings.local.json
+backend/config/designatedProfiles.local.json
 **/*Passwords*.csv
 **/*passwords*.csv
 

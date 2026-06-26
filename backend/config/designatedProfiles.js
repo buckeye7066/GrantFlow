@@ -1,560 +1,271 @@
-export const DESIGNATED_PROFILES = [
-  // Required roster (release-hardening checklist):
-  // John Doe (demo), Axiom BioLabs, Olivia, Avanell, Gilbert (Allen), Hollie, Brian,
-  // Focus Forward, John White, Paul Jason Dasher, Angelika, Rachel, Anastasia,
-  // Kathy, Kimberly, Luibov, Robert White, Josh, Melissa Justus, William.
-  //
-  // Demo/test fixture profile for onboarding + smoke checks:
-  // John Doe should always exist so admins can validate flows quickly.
-  {
-    id: 'profile-john-doe',
-    display_name: 'John Doe',
-    primary_type: 'individual',
+import fs from 'fs'
+import path from 'path'
+
+function profile({
+  id,
+  display_name,
+  primary_type,
+  tags = [],
+  cityState = '',
+  goal = 'Find aligned funding without storing private client details in source control.',
+  sections = {},
+  owner_email = null,
+}) {
+  return {
+    id,
+    display_name,
+    primary_type,
     status: 'active',
-    tags: ['individual', 'demo'],
+    tags: ['designated', 'source-safe', ...tags],
+    ...(owner_email ? { owner_email } : {}),
     sections: {
       basic_information: {
-        full_name: 'John Doe',
-        email: 'john.doe@example.com',
+        full_name: display_name,
+        email: '',
         phone: '',
         website: '',
-        address: '123 Main Street\nNashville, TN 37209',
-      },
-      financial_information: {
-        financial_need_level: 'Unknown',
-        notes: 'Demo profile for validating intake, documents, and crawlers.',
+        address: cityState,
+        notes: 'Source-safe synthetic seed. Real client details must live in a private store, not the public repo.',
       },
       location_focus: {
-        geographic_focus: 'Nashville, Tennessee',
-        notes: 'Demo profile – update as needed.',
+        geographic_focus: cityState || 'United States',
+        notes: 'Synthetic location signal for crawler and matcher coverage.',
       },
       narrative: {
-        mission: 'Demo profile for testing GrantFlow end-to-end.',
-        primary_goal: 'Validate crawl + application + document ingestion flows.',
+        mission: goal,
+        primary_goal: goal,
+        funding_amount_needed: '',
+      },
+      ...sections,
+    },
+  }
+}
+
+function loadPrivateDesignatedProfiles(filePath) {
+  if (!filePath) return null
+  try {
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath)
+    if (!fs.existsSync(resolved)) return null
+    const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8'))
+    if (Array.isArray(parsed)) return parsed
+    if (Array.isArray(parsed?.profiles)) return parsed.profiles
+  } catch (error) {
+    console.warn('[designatedProfiles] Ignoring private designated profile file:', error?.message || error)
+  }
+  return null
+}
+
+const PUBLIC_FIXTURE_PROFILES = [
+  profile({
+    id: 'profile-john-doe',
+    display_name: 'Demo Individual',
+    primary_type: 'individual',
+    tags: ['individual', 'demo'],
+    cityState: 'Nashville, Tennessee',
+    goal: 'Validate GrantFlow intake, crawler, document, and application flows with non-real demo data.',
+    sections: {
+      financial_information: {
+        financial_need_level: 'unknown',
+        notes: 'Demo-only financial signal.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-axiom-biolabs-2',
+    display_name: 'Demo Research Organization',
+    primary_type: 'organization',
+    tags: ['organization', 'research'],
+    cityState: 'Tennessee',
+    goal: 'Find research, workforce, and community-health funding aligned with a small science organization.',
+    sections: {
+      organization_details: {
+        organization_type: 'Biotechnology / research organization',
+        mission: 'Advance applied science and community health through research, education, and service.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-olivia-beltran',
+    display_name: 'Demo Wellness Business',
+    primary_type: 'small_business',
+    tags: ['wellness', 'small_business'],
+    cityState: 'Pennsylvania',
+    goal: 'Expand a wellness practice with equipment, facility improvements, and community health programming.',
+    sections: {
+      organization_details: {
+        organization_type: 'Holistic wellness collective',
+        mission: 'Provide accessible wellness and trauma-informed services.',
+      },
+      financial_information: {
+        financial_need_level: 'moderate',
+        notes: 'Synthetic small-business expansion need.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-avanell-leamon',
+    display_name: 'Designated Family Support Profile',
+    primary_type: 'family',
+    tags: ['family_assistance', 'caregiver', 'appalachian'],
+    cityState: 'Cleveland, Tennessee',
+    goal: 'Find family-support, caregiver, utility, food, and housing stability resources.',
+    sections: {
+      family_life: { caregiver: true },
+      financial_information: {
+        financial_need_level: 'high',
+        notes: 'Synthetic household-stability need.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-gilbert-mccosh',
+    display_name: 'Designated Disability Support Profile',
+    primary_type: 'individual',
+    tags: ['disability', 'assistive_technology', 'appalachian'],
+    cityState: 'Cleveland, Tennessee',
+    goal: 'Find assistive technology, accessibility, transportation, and health-support funding.',
+    sections: {
+      demographics: { disability_status: 'Has disability' },
+      health_medical: {
+        disability_type: ['Mobility support need'],
+        support_needs_level: 'moderate',
+        notes: 'Synthetic disability-support profile. No real diagnosis is stored here.',
+      },
+      government_assistance: {
+        other_programs: 'Synthetic public-benefit signal.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-hollie-knox',
+    display_name: 'Designated Caregiver Household Profile',
+    primary_type: 'family',
+    tags: ['caregiver', 'family_assistance'],
+    cityState: 'Ohio',
+    goal: 'Find family stabilization, childcare, transportation, and emergency-assistance resources.',
+    sections: {
+      financial_information: {
+        financial_need_level: 'high',
+        notes: 'Synthetic caregiver household need.',
+      },
+      family_life: { caregiver: true, first_time_parent: false },
+    },
+  }),
+  profile({
+    id: 'profile-brian-client',
+    display_name: 'Designated Veteran Community Profile',
+    primary_type: 'individual',
+    tags: ['veteran', 'community_service'],
+    cityState: 'Tennessee',
+    goal: 'Find veteran, family, debt-relief, housing, and community-service funding.',
+    sections: {
+      occupation: { public_servant: true },
+      demographics: { veteran_status: true },
+      health_medical: {
+        support_needs_level: 'moderate',
+        notes: 'Synthetic veteran-support profile.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-focus-forward-ministries',
+    display_name: 'Demo Faith-Based Nonprofit',
+    primary_type: 'nonprofit',
+    tags: ['faith_based', 'human_services', 'food_security'],
+    cityState: 'Tennessee',
+    goal: 'Find nonprofit, ministry, food-security, mentoring, and community-service funding.',
+    sections: {
+      organization_details: {
+        organization_type: 'Faith-based nonprofit',
+        mission: 'Serve families through food, mentoring, counseling, and community support.',
+      },
+    },
+  }),
+  profile({
+    id: 'profile-john-white',
+    display_name: 'Demo Health Education Profile',
+    primary_type: 'individual',
+    tags: ['health_education', 'food_security', 'community_health'],
+    cityState: 'Tennessee',
+    goal: 'Find health education, nutrition, workforce training, and community-service funding.',
+    sections: {
+      occupation: { healthcare_worker: true, educator: true },
+      narrative: {
+        mission: 'Use health education and science communication to improve community outcomes.',
+        primary_goal: 'Build health education and food-security programs with accountable funding.',
         funding_amount_needed: '',
       },
     },
-  },
-  {
-    id: 'profile-axiom-biolabs-2',
-    display_name: 'Axiom BioLabs',
-    primary_type: 'organization',
-    status: 'active',
-    tags: ['organization'],
+  }),
+  profile({
+    id: 'profile-paul-jason-dasher',
+    display_name: 'Designated Workforce Profile',
+    primary_type: 'individual',
+    tags: ['workforce', 'training'],
+    cityState: 'United States',
+    goal: 'Find workforce training, emergency assistance, and credential-support funding.',
+  }),
+  profile({
+    id: 'profile-angelika-ptak',
+    display_name: 'Designated Healthcare Workforce Profile',
+    primary_type: 'individual',
+    tags: ['healthcare_worker', 'training'],
+    cityState: 'United States',
+    goal: 'Find healthcare workforce, licensing, continuing education, and professional-development funding.',
+    sections: {
+      occupation: { healthcare_worker: true },
+    },
+  }),
+  profile({
+    id: 'profile-rachel-miller',
+    display_name: 'Designated Education Support Profile',
+    primary_type: 'individual',
+    tags: ['education', 'career_training'],
+    cityState: 'United States',
+    goal: 'Find education, career training, and household-stability resources.',
+  }),
+  profile({
+    id: 'profile-anastasia-white',
+    display_name: 'Demo Tennessee STEM Student',
+    primary_type: 'high_school_student',
+    tags: ['student', 'student_aid', 'stem', 'forensic_science', 'appalachian'],
+    cityState: 'Cleveland, Tennessee',
+    goal: 'Find college, scholarship, cost-of-attendance, and off-campus living support for a Tennessee STEM student.',
     sections: {
       basic_information: {
-        full_name: 'Axiom BioLabs',
+        full_name: 'Demo Tennessee STEM Student',
         email: '',
         phone: '',
-        website: 'https://www.axiombiolabs.org',
-        address: '',
-      },
-      organization_details: {
-        organization_type: 'Biotechnology / research organization',
-        mission: '',
-      },
-    },
-  },
-  {
-    id: 'profile-olivia-beltran',
-    display_name: 'Olivia Beltran / Hybrid Healing',
-    primary_type: 'small_business',
-    status: 'active',
-    tags: ['wellness', 'holistic', 'small business'],
-    sections: {
-      basic_information: {
-        full_name: 'Hybrid Healing Wellness Collective',
-        email: 'Oliviadbeltran@gmail.com',
-        phone: '7245449650',
-        website: 'https://mysite.vagaro.com/hybridhealingllc/',
-        address: '196 James Street\nBeaver Falls, PA 15010',
-      },
-      organization_details: {
-        organization_type: 'Holistic wellness collective',
-        ein: '88-4291655',
-        mission:
-          'Provide integrative wellness services led by a nurse practitioner and trauma-informed massage therapist.',
-      },
-      financial_information: {
-        financial_need_level: 'High',
-        household_income: 36000,
-        household_size: 6,
-        notes:
-          'Seeking $50,000 to expand services, purchase equipment, and complete facility build-out.',
+        website: '',
+        address: 'Cleveland, Tennessee',
+        notes: 'Synthetic high school senior taking college-level classes.',
       },
       demographics: {
-        hispanic_latino: true,
-        white_caucasian: true,
-      },
-      family_life: {
-        family_caregiver: true,
-        first_time_parent: true,
-      },
-      location_focus: {
-        appalachian_region: true,
-        geographic_focus: 'Beaver County, Pennsylvania',
-      },
-      narrative: {
-        primary_goal:
-          'Expand Hybrid Healing wellness services, upgrade facilities, and stabilize operations.',
-        funding_amount_needed: '$50,000 for equipment, renovations, staffing, and marketing.',
-        mission:
-          'Create a holistic sanctuary that integrates nursing care, trauma-informed bodywork, and community wellness.',
-      },
-    },
-  },
-  {
-    id: 'profile-avanell-leamon',
-    display_name: 'Avanell Lea Leamon',
-    primary_type: 'family',
-    status: 'active',
-    tags: ['family assistance', 'caregiver', 'appalachian'],
-    sections: {
-      basic_information: {
-        full_name: 'Avanell Lea Leamon',
-        email: '',
-        phone: '',
-        address: '915 Linda Drive SE\nCleveland, TN 37323',
-        notes: 'Imported from Base44 profile export (Avanell profile.pdf) on 2026-01-03.',
+        gender: 'Female',
+        ethnicity: 'Polish heritage',
+        immigrant_status: 'second-generation',
+        notes: 'Synthetic profile signal: Polish heritage; multilingual English/Russian household support.',
       },
       location_focus: {
         rural_resident: true,
         appalachian_region: true,
-        geographic_focus: 'Cleveland, Tennessee and surrounding Appalachian communities.',
-        notes: '',
+        geographic_focus: 'Cleveland, Tennessee',
+        notes: 'Synthetic rural/Appalachian student-aid signal.',
       },
       financial_information: {
-        household_size: 2,
-        notes:
-          'Household of two with caregiving responsibilities; prioritize grants serving low-income Appalachian families and caregivers.',
+        household_income: 56000,
+        household_size: 7,
+        financial_need_level: 'moderate',
+        low_income: false,
+        notes: 'Synthetic moderate-need student aid profile.',
+      },
+      government_assistance: {
+        ssdi_recipient: true,
+        other_programs: 'Synthetic dependent-benefit signal for student-aid matching.',
       },
       family_life: {
         caregiver: true,
-        notes: '',
-      },
-      demographics: {
-        ethnicity: 'White/Caucasian',
-        age_group: 'Senior 62+',
-        disability_status: 'Has disability',
-        citizenship: 'US Citizen',
-      },
-      narrative: {
-        mission: '',
-        primary_goal: '',
-        target_population: '',
-        funding_amount_needed: '',
-        timeline: '',
-        past_experience: '',
-        unique_qualities: '',
-        collaboration_partners: '',
-        sustainability_plan: '',
-        barriers_faced: '',
-        special_circumstances:
-          'Profile generated from Base44 export. Narrative details still need to be collected from the applicant.',
-      },
-    },
-  },
-  {
-    id: 'profile-gilbert-mccosh',
-    display_name: 'Gilbert Allen McCosh',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['epilepsy', 'disability advocacy', 'appalachian', 'low income'],
-    sections: {
-      basic_information: {
-        full_name: 'Gilbert Allen McCosh',
-        email: '',
-        phone: '4235047778',
-        address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
-        notes:
-          'Date of birth: 08/19/1952. Profile imported from Base44 export (Allen profile.pdf) on 2026-01-03.',
-      },
-      financial_information: {
-        financial_need_level: 'High',
-        low_income: true,
-        unemployed: true,
-        notes:
-          'Seeking ~$4,500 combined funding for a customized wheelchair and adaptive technology; lives in a CLS-FM home and relies on public assistance.',
-      },
-      government_assistance: {
-        medicaid_enrolled: true,
-        ssi_recipient: true,
-        ssdi_recipient: true,
-        snap_recipient: true,
-        other_programs: 'Medicaid Waiver Program (ECF CHOICES - TN). Medicaid number: ZECM15043724.',
-      },
-      health_medical: {
-        chronic_illness: true,
-        chronic_illness_type: 'Epilepsy',
-        disability_type: [
-          'Retina detachment (left eye)',
-          'Epilepsy',
-          'Anoxic brain injury',
-          'Cognitive disability (F70)',
-          'Clawing effect in hands',
-        ],
-        support_needs_level: 'Substantial',
-        neurodivergent: true,
-        mental_health_condition: true,
-        notes:
-          'Primary diagnosis codes include D07.4, F32.9, F70, G40.9, M62.830, and 311. Advocates for neurodiversity and needs mobility aids and assistive technology.',
-      },
-      location_focus: {
-        rural_resident: false,
-        appalachian_region: true,
-        geographic_focus: 'Cleveland, Tennessee (Bradley County) with emphasis on Appalachian disability services.',
-        notes: '',
-      },
-      narrative: {
-        mission:
-          'Advocate for neurodiversity and disability rights while securing support that improves daily living for people navigating epilepsy and brain injuries.',
-        primary_goal:
-          'Secure at least three chronic illness grants within the next year to fund a customized wheelchair and assistive technology.',
-        target_population:
-          'Individuals living with epilepsy, anoxic brain injuries, and related disabilities in Appalachian communities needing accessible healthcare and adaptive supports.',
-        funding_amount_needed:
-          '$3,000 for a customized wheelchair and $1,500 for adaptive assistive technology (communication and daily task supports).',
-        timeline:
-          'Research grants by December 15, 2023; identify top opportunities by January 10, 2024; submit applications by February 10, 2024; follow up by February 15, 2024; ongoing advocacy outreach through the end of 2024.',
-        past_experience:
-          'Years of independent living in group home settings culminating in advocacy for epilepsy and brain injury support programs.',
-        unique_qualities:
-          'Lived experience with chronic illness, brain injury, and disability advocacy; committed to empowering peers through storytelling.',
-        collaboration_partners:
-          'Plans to connect with at least five Cleveland, TN community organizations, disability support groups, and healthcare providers.',
-        sustainability_plan:
-          'Leverage acquired mobility aids and technology to maintain independence; sustain advocacy via workshops, speaking engagements, and community partnerships.',
-        barriers_faced:
-          'Limited mobility due to clawing effect in hands, financial constraints, and need for accessible healthcare and rehabilitation resources.',
-        special_circumstances:
-          'Living with epilepsy since age two; complications from a neck surgery caused lasting mobility challenges requiring specialized equipment.',
-        personal_statement:
-          'My name is Gilbert Allen McCosh, and I have been navigating life with epilepsy since I was just 2 years old. Living with an anoxic brain injury has shaped my journey in profound ways, particularly after a botched neck surgery left me with a clawing effect in my hands. I spent many years in a group home, allowing me to develop my independence and resilience. Currently, I reside in a CLS-FM home, where I continue to advocate for better epilepsy support and brain injury assistance. My experiences have underscored the importance of accessing healthcare resources, mental health services, and rehabilitation programs. I am passionate about neurodiversity advocacy and am committed to ensuring that individuals like myself receive the disability funding and assistive technology needed to thrive. I believe in the power of community and seek to connect with others who face similar challenges, all while promoting disability rights and accessibility. My goal is to secure chronic illness grants that can help me acquire mobility aids and enhance my daily living skills. Through sharing my story, I hope to inspire others to embrace their uniqueness and strive for inclusion in every facet of life.',
-      },
-      demographics: {
-        ethnicity: 'White/Caucasian',
-        disability_status: 'Has disability',
-        notes: 'White / Caucasian; details captured from Base44 export.',
-      },
-    },
-  },
-  {
-    id: 'profile-hollie-knox',
-    display_name: 'Hollie Machelle Knox',
-    primary_type: 'family',
-    status: 'active',
-    tags: ['family', 'single parent', 'domestic violence survivor'],
-    sections: {
-      basic_information: {
-        full_name: 'Hollie Machelle Knox',
-        email: 'HollieT52@gmail.com',
-        phone: '4403965688',
-        address: '120 Middle St\nWellington, OH 44090',
-      },
-      financial_information: {
-        financial_need_level: 'High',
-        household_income: 30000,
-        household_size: 3,
-        low_income: true,
-        notes: 'Seeking $5,000 for housing costs and initial business inventory.',
-      },
-      government_assistance: {
-        medicaid_enrolled: true,
-      },
-      health_medical: {
-        chronic_illness: true,
-        neurodivergent: true,
-      },
-      demographics: {
-        white_caucasian: true,
-        us_citizen: true,
-        ethnicity: 'White/Caucasian',
-      },
-      family_life: {
-        single_parent: true,
-        family_caregiver: true,
-        domestic_violence_survivor: true,
-      },
-      narrative: {
-        primary_goal:
-          'Provide a stable home for her children and launch an apothecary business for generational wealth.',
-        mission:
-          'Overcome financial hardships and build a safe, loving family environment with sustainable income.',
-        funding_amount_needed: '$5,000 for housing costs and business startup supplies.',
-        barriers_faced:
-          'Survived childhood poverty, homelessness, teen pregnancy, abusive relationships, and a traumatic divorce.',
-        special_circumstances:
-          'Documented chronic illness and neurodivergence. Needs rapid financial relief for housing stability and seed capital.',
-        unique_qualities:
-          'Experienced horse trainer with a vision for an apothecary business that serves her local community.',
-      },
-    },
-  },
-  {
-    id: 'profile-brian-client',
-    display_name: 'Brian Nicholas Newman',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['veteran', 'disabled veteran', 'single parent', 'public servant', 'ministry'],
-    sections: {
-      basic_information: {
-        full_name: 'Brian Nicholas Newman',
-        email: 'isawstars08@yahoo.com',
-        phone: '4232700231',
-        website: 'https://www.psalm16ministry.com',
-        address: '3925 Adkisson Drive\nCleveland, TN 37312',
-        notes:
-          'DOB 08/24/1980. Sensitive identifiers stored in secure document (Brian.pdf) dated 12/05/2025.',
-      },
-      financial_information: {
-        household_income: 75000,
-        household_size: 4,
-        financial_need_level: 'High debt burden',
-        notes:
-          'Seeking $50,000–$100,000 to retire student loans, resolve custody-related legal debt, secure housing, and seed a ministry-oriented small business.',
-      },
-      health_medical: {
-        chronic_illness: true,
-        chronic_illness_type: 'Diabetes, chronic kidney disease, sleep apnea',
-        mental_health_condition: true,
-        disability_type: [
-          'Visual impairment',
-          'PTSD',
-          'Chronic kidney disease',
-          'Hypertension',
-        ],
-        notes:
-          'Documented high blood pressure, chronic kidney disease, sleep apnea, PTSD, and visual impairment contributing to 90% VA disability rating.',
-      },
-      demographics: {
-        us_citizen: true,
-        white_caucasian: true,
-        ethnicity: 'White/Caucasian',
-        religious_affiliation: 'Anglican',
-        veteran_status: 'Veteran',
-        disability_status: 'Has disability',
-        notes: 'Grew up in poverty; first-generation service member and college graduate.',
-      },
-      family_life: {
-        single_parent: true,
-      },
-      military_service: {
-        veteran: true,
-        disabled_veteran: true,
-        notes: 'United States Air Force veteran with 90% VA disability rating.',
-      },
-      occupation: {
-        public_servant: true,
-        nonprofit_employee: false,
-        small_business_owner: false,
-        notes: 'Human services professional and ordained minister; operates Psalm 16 Ministry.',
-      },
-      narrative: {
-        mission:
-          'Serve vulnerable families through ministry and human services while achieving personal financial stability.',
-        primary_goal:
-          'Eliminate high-interest student and legal debt, secure safe housing, and relaunch ministry and small business initiatives.',
-        funding_amount_needed:
-          '$50,000–$100,000 for debt payoff, down payment on a home, and ministry/small business start-up costs.',
-        target_population:
-          'Low-income families and individuals seeking faith-based counseling, veteran support, and human services resources.',
-        timeline:
-          'Debt relief and housing stabilization targeted within the next 12 months; ministry relaunch immediately afterward.',
-        barriers_faced:
-          'Extreme poverty in childhood, loss of parents and grandparents by college graduation, parental alienation, and multi-generational trauma.',
-        supports:
-          'Active in local church communities; strong network of ministers and peer support specialists.',
-        special_circumstances:
-          'Balancing single parenthood, chronic health conditions, and ministry obligations while servicing substantial debt.',
-        unique_qualities:
-          'Award-winning Air Force veteran, author, and certified peer recovery specialist with extensive training credentials.',
-      },
-    },
-  },
-  {
-    id: 'profile-focus-forward-ministries',
-    display_name: 'Focus Forward Ministries',
-    primary_type: 'organization',
-    status: 'active',
-    tags: ['faith-based', 'indigenous outreach', 'poverty alleviation', 'missions'],
-    sections: {
-      basic_information: {
-        full_name: 'Focus Forward Ministries',
-        website: 'https://www.focusforwardministries.com',
-        address: '796 Mount Vernon Drive Northwest\nCleveland, TN 37311',
-        notes: 'Profile imported from Focus Forward Ministries Profile.pdf (Base44 export).',
-        contacts: [
-          { name: "Suzane Burns", email: "Sburns1109@yahoo.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "Virginia Howard", email: "vhoward1949@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "John Gann", email: "4johngann@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "Laurie Pavlou", email: "LAPAVLOU@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "Norman Wojcik", email: "normjudywojcik@att.net", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "Phillip Maddux", email: "volsdrummer@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "Vernon Van Deventer", email: "vjvandev@charter.net", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "Nance Glover", email: "naglover2@gmail.com", role: "full_access", addedDate: "2026-02-16T00:00:00.000Z" },
-          { name: "John White", email: "dr.johnwhite@axiombiolabs.org", role: "admin", addedDate: "2026-02-16T00:00:00.000Z" },
-        ],
-      },
-      organization_details: {
-        organization_type: 'Faith-based nonprofit ministry',
-        annual_budget: 25000,
-        staff_count: 5,
-        mission:
-          'Bring the love of Christ to underserved communities through compassionate service, discipleship, and sustainable outreach.',
-      },
-      financial_information: {
-        financial_need_level: 'Growth capital',
-        notes:
-          'Needs $15,000–$250,000 to expand work on the Pine Ridge Indian Reservation and strengthen infrastructure for ongoing outreach.',
-      },
-      location_focus: {
-        geographic_focus: 'Pine Ridge Indian Reservation (Sioux Nation), South Dakota',
-        notes:
-          'Focus on rural, indigenous communities experiencing systemic poverty and limited access to services.',
-      },
-      narrative: {
-        mission:
-          'Restore hope, strengthen families, and empower Sioux communities through holistic ministry and practical support.',
-        primary_goal:
-          'Deliver building supplies, spiritual guidance, and sustainable support structures for Pine Ridge families by January 2026.',
-        target_population:
-          'Sioux Indian families living in poverty on the Pine Ridge Indian Reservation.',
-        funding_amount_needed: '$15,000–$250,000 for outreach logistics, materials, and staffing.',
-        timeline: 'Critical funding goal of January 2026 to align with next outreach deployment.',
-        past_experience:
-          'Completed repairs on two reservation buildings, supplied vital equipment, and led ongoing discipleship and outreach initiatives.',
-        unique_qualities:
-          'Team includes Indigenous leaders with deep cultural insight, ensuring trusted, culturally responsive service delivery.',
-        collaboration_partners:
-          'Local businesses, faith-based groups, community leaders, indigenous rights organizations, and sustainable development partners.',
-        sustainability_plan:
-          'Empower community leadership through training, resource-sharing networks, and diversified funding via grants, donations, and fundraisers.',
-        barriers_faced:
-          'Systemic poverty, limited infrastructure, cultural isolation, and historic distrust complicate outreach execution.',
-        personal_statement:
-          'Focus Forward Ministries exists to bring the love of Christ to underserved communities through compassionate service, discipleship, and sustainable outreach. We seek to restore hope, strengthen families, and empower individuals by meeting both spiritual and practical needs. Through partnership, prayer, and presence, we aim to move lives forward—one relationship, one act of faith, and one community at a time.',
-      },
-      demographics: {
-        disability_status: 'Has disability',
-      },
-    },
-  },
-  {
-    id: 'profile-john-white',
-    display_name: 'Dr. John White',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['healthcare professional', 'educator', 'food security', 'community advocate'],
-    sections: {
-      basic_information: {
-        full_name: 'John White',
-        email: '',
-        phone: '',
-        address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
-        notes:
-          'Profile imported from John Profile.pdf. Molecular geneticist, registered nurse, and educator committed to community wellness.',
-      },
-      location_focus: {
-        geographic_focus: 'Bradley County, Tennessee, with outreach to regional food security programs.',
-        notes:
-          'Actively coordinates with regional nonprofits such as Good Shepherd Center, Hands of Mercy, and Cleveland Family YMCA.',
-      },
-      financial_information: {
-        notes:
-          'Funding priorities include community nutrition initiatives, workforce development for healthcare trainees, and support for local food assistance networks.',
-      },
-      narrative: {
-        mission:
-          'Mobilize scientific expertise, nursing practice, and faith-informed service to address food insecurity and health disparities.',
-        primary_goal:
-          'Secure multi-year funding to expand community health education, nutrition assistance, and youth mentorship programs.',
-        target_population:
-          'Underserved families in Bradley County needing access to healthy food, healthcare navigation, and STEM education pathways.',
-        funding_amount_needed:
-          'Seeking catalytic grants (mid five figures) to underwrite program coordination, volunteer training, and curriculum development.',
-        past_experience:
-          'Extensive background in molecular genetics, nursing, and academic instruction; active collaborations with regional food assistance organizations.',
-        unique_qualities:
-          'Bridges advanced scientific training with pastoral care and community organizing to design holistic support models.',
-        barriers_faced:
-          'Sustaining volunteer-driven programs while balancing clinical, educational, and community leadership responsibilities.',
-        collaboration_partners:
-          'Food pantries, faith-based coalitions, healthcare providers, and educational institutions across East Tennessee.',
-        special_circumstances:
-          'Documented in Base44 export; requires sensitive handling of personal credentials and licensure data.',
-        personal_statement:
-          'I am Dr. John White, a molecular geneticist, registered nurse, and devoted educator. My journey has always been about serving others and bridging the gap between scientific knowledge and community needs. With a PhD in Molecular Genetics and extensive experience as a cardiac nurse and biology instructor, I take pride in translating complex medical concepts into practical solutions that empower vulnerable communities. This commitment to service is reflected in my family, as my wife Anya and our children, Robert and Anastasia, embody the same spirit of helping others. As a cancer survivor, I live with the daily challenges of chronic chemotherapy-induced peripheral neuropathy, which has deepened my understanding and empathy for individuals facing health challenges. My experiences fuel my dedication to supporting those who often go unseen, particularly through my work with the Church of God of Prophecy and Focus Forward Ministries, where I focus on developing programs that uplift underserved populations. I am passionate about promoting health equity, mental health awareness, and educational access, striving to create initiatives that inspire hope and improve outcomes. My life, skills, and testimony are dedicated to fostering community engagement and sustainable development—helping to build a brighter future for all.',
-      },
-      demographics: {
-        ethnicity: 'White/Caucasian',
-        disability_status: 'Has disability',
-      },
-    },
-  },
-  {
-    id: 'profile-paul-jason-dasher',
-    display_name: 'Paul Jason Dasher',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated'],
-    sections: {
-      basic_information: {
-        full_name: 'Paul Jason Dasher',
-        email: 'Pjandcrdasher@att.net',
-        phone: '',
-        address: '',
-      },
-    },
-  },
-  {
-    id: 'profile-angelika-ptak',
-    display_name: 'Angelika Ptak',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated'],
-    sections: {
-      basic_information: {
-        full_name: 'Angelika Ptak',
-        email: 'angelikaps.rn@gmail.com',
-        phone: '',
-        address: '',
-      },
-    },
-  },
-  {
-    id: 'profile-rachel-miller',
-    display_name: 'Rachel Miller',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated'],
-    sections: {
-      basic_information: {
-        full_name: 'Rachel Miller',
-        email: 'rdashermiller@gmail.com',
-        phone: '',
-        address: '',
-      },
-    },
-  },
-  {
-    id: 'profile-anastasia-white',
-    display_name: 'Anastasia Nicole White',
-    primary_type: 'high_school_student',
-    status: 'active',
-    tags: ['baseline', 'designated', 'student', 'forensic science', 'STEM'],
-    sections: {
-      basic_information: {
-        full_name: 'Anastasia Nicole White',
-        email: 'Tishka1201@icloud.com',
-        phone: '',
-        address: 'Cleveland, Tennessee (Bradley County)',
-        notes:
-          'High school student taking college-level classes at Cleveland State Community College.',
-      },
-      demographics: {
-        immigrant_status: 'Second-generation immigrant',
-        notes:
-          'White / Caucasian; Polish heritage. Languages: English, Russian. Gender: Female.',
+        notes: 'Synthetic family translation/caregiver responsibility signal.',
       },
       education: {
         highest_level: 'High School Senior (with college courses)',
@@ -562,380 +273,121 @@ export const DESIGNATED_PROFILES = [
         gpa: '3.84',
         act_score: '28',
         intended_major: 'Forensic Science',
-        target_colleges: [
-          'Middle Tennessee State University',
-          'University of Central Florida',
-          'University of New Haven',
-          'Penn State University',
-          'Trevecca Nazarene University',
-          'Austin Peay State University',
-          'Carson-Newman',
-          'Centre College',
-          'Christian Brothers University',
-          'Oberlin College',
-          'Seton Hall University',
-          'Ohio State University',
-          'University of Alabama',
-          'University of Tennessee Chattanooga',
-          'University of Tennessee Knoxville',
-          'University of Michigan',
-          'Florida International University',
-          'Harvard University',
-          'Lee University',
+        interests: ['Forensic Science', 'Criminal Justice', 'STEM', 'DNA Analysis', 'Crime Scene Investigation'],
+        target_colleges: ['Middle Tennessee State University'],
+      },
+      university_applications: {
+        applications: [
+          { name: 'Middle Tennessee State University', status: 'planning' },
+          { name: 'University of Tennessee Chattanooga', status: 'planning' },
+          { name: 'University of Tennessee Knoxville', status: 'planning' },
         ],
-        interests: [
-          'Forensic Science',
-          'Criminal Justice',
-          'STEM',
-          'DNA Analysis',
-          'Crime Scene Investigation',
-        ],
-      },
-      location_focus: {
-        rural_resident: true,
-        appalachian_region: true,
-        geographic_focus: 'Cleveland, Tennessee (Bradley County)',
-        notes: 'Rural/Appalachian qualifiers noted in intake.',
-      },
-      financial_information: {
-        household_income: 56000,
-        household_size: 7,
-        financial_need_level: 'moderate',
-        notes: 'Receives SSDI as the minor child of a parent who gets SSDI.',
-      },
-      government_assistance: {
-        ssdi_recipient: true,
-        other_programs: 'SSDI (dependent child of SSDI recipient)',
-      },
-      family_life: {
-        caregiver: true,
-        notes:
-          'Lives with grandparents who do not speak English; acts as translator and advocate.',
       },
       narrative: {
-        mission:
-          'Pursue forensic science while advocating for educational equity for second-generation immigrants and underserved students in STEM.',
-        primary_goal:
-          'Secure financial assistance for higher education and complete a college path toward forensic science.',
-        target_population:
-          'Second-generation immigrant and multilingual students pursuing STEM and forensic science pathways.',
+        mission: 'Pursue forensic science while advocating for educational access for multilingual and rural students in STEM.',
+        primary_goal: 'Secure financial assistance for higher education, including cost-of-attendance and student living expenses.',
+        target_population: 'Rural, multilingual, and first-generation-adjacent students pursuing STEM pathways.',
         funding_amount_needed: '',
-        timeline:
-          'Apply to colleges and scholarships during senior year; begin undergraduate studies after graduation.',
-        past_experience:
-          'Balancing rigorous high school coursework with college-level classes at Cleveland State Community College.',
-        unique_qualities:
-          'Multilingual (English/Russian) and serves as translator/advocate for family while maintaining academic excellence (3.84 GPA, 28 ACT).',
-        barriers_faced:
-          'Time constraints from rigorous coursework and family translation responsibilities; language barriers in household.',
-        special_circumstances: 'Large household; SSDI dependent.',
+        timeline: 'Apply to colleges and scholarships during senior year; begin undergraduate studies after graduation.',
+        past_experience: 'Balancing rigorous high school coursework with college-level classes.',
+        unique_qualities: 'Multilingual student with strong academic performance and family-support responsibilities.',
+        collaboration_partners: '',
+        sustainability_plan: 'Maintain strong academic performance and build mentorship/community support networks during college.',
+        barriers_faced: 'Cost of attendance, housing, transportation, and family-support responsibilities.',
+        special_circumstances: 'Large household and dependent-benefit context are synthetic test signals.',
       },
     },
-  },
-  {
+  }),
+  profile({
     id: 'profile-kathy-daniel',
-    display_name: 'Kathy Marie Daniel',
+    display_name: 'Designated Basic Needs Profile',
     primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated'],
-    sections: {
-      basic_information: {
-        full_name: 'Kathy Marie Daniel',
-        email: 'kathydaniel1975@gmail.com',
-        phone: '4236611020',
-        address: '',
-      },
-    },
-  },
-  {
+    tags: ['basic_needs', 'emergency_assistance'],
+    cityState: 'Tennessee',
+    goal: 'Find emergency assistance, health support, and household-stability resources.',
+  }),
+  profile({
     id: 'profile-kimberly-botts',
-    display_name: 'Kimberly Botts',
+    display_name: 'Designated HCBS Support Profile',
     primary_type: 'individual',
-    status: 'active',
-    // Tags reflect Kimberly's actual situation (Goal 3: use the full
-    // profile, Goal 4: support all user types). She is NOT an
-    // entrepreneur — earlier seed data carried a fictional
-    // "small business owner / nonprofit founder" persona that the
-    // matcher then chased entrepreneurship grants for. Real Kimberly
-    // is disabled, enrolled in TN's ECF CHOICES Medicaid waiver, and
-    // unable to work.
-    tags: ['baseline', 'designated', 'disability', 'ecf_choices', 'hcbs_waiver'],
+    tags: ['disability', 'hcbs_waiver', 'medical_assistance'],
+    cityState: 'Tennessee',
+    goal: 'Find disability, HCBS, dental, assistive technology, and community-engagement resources.',
     sections: {
-      basic_information: {
-        full_name: 'Kimberly Botts',
-        email: '',
-        phone: '4235047778',
-        address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
-        notes: 'Date of birth: 10/11/1964. Profile imported from Base44 export (Kim profile.pdf).',
-      },
       demographics: {
-        white_caucasian: true,
         disability_status: true,
-        notes: 'White / Caucasian. Religious affiliation: Southern Baptist. Adult with intellectual / developmental disability.',
+        notes: 'Synthetic adult disability-support profile.',
       },
       government_assistance: {
-        medicaid_enrolled: true,
         ssi_recipient_self: true,
-        other_programs: 'Medicaid Waiver Program, ECF CHOICES (TN) - Employment & Community First.',
+        other_programs: 'Synthetic HCBS waiver signal.',
       },
       health_medical: {
-        chronic_illness: true,
-        disability_type: ['Mentally challenged', 'Diabetic'],
-        support_needs_level: 'Substantial',
-        notes:
-          'Dental need, assistive tech need, HCBS waiver eligible, clinical trial ready, telehealth capable.',
-      },
-      location_focus: {
-        geographic_focus: 'Cleveland, Tennessee',
-      },
-      // Explicit occupation section so document-ingestion / AI fillers
-      // never re-invent the "nonprofit employee and small business
-      // owner" prose the user previously could not delete. All
-      // occupational identity flags are FALSE — Kimberly is unable to
-      // work and receives Medicaid + ECF CHOICES support.
-      occupation: {
-        healthcare_worker: false,
-        ems_worker: false,
-        educator: false,
-        firefighter: false,
-        public_servant: false,
-        clergy: false,
-        missionary: false,
-        nonprofit_employee: false,
-        small_business_owner: false,
-        union_member: false,
-        farmer: false,
-        notes:
-          'Disabled and unable to work. Receives Medicaid and is enrolled in TN ECF CHOICES (Employment & Community First Medicaid waiver). Not a business owner, not a nonprofit employee.',
+        disability_type: ['Developmental disability support need'],
+        notes: 'Synthetic health-support need. No real diagnosis is stored here.',
       },
       employment: {
         current_status: 'unable_to_work',
-        notes:
-          'Unable to work due to disability. Receives SSI and HCBS waiver supports through ECF CHOICES.',
-      },
-      family_life: {
-        household_size: 1,
-      },
-      narrative: {
-        mission:
-          'Live independently in Cleveland, TN with the supports of TN ECF CHOICES (HCBS Medicaid waiver) and remain connected to her Southern Baptist faith community.',
-        primary_goal:
-          'Maintain stable housing, dental and medical care, assistive technology, and day / community-engagement supports through ECF CHOICES and complementary disability programs.',
-        target_population:
-          'Adults with intellectual / developmental disabilities in rural East Tennessee who rely on Medicaid waivers, SSI, and faith-community supports.',
-        funding_amount_needed:
-          'Disability-related expenses not fully covered by Medicaid: dental work, assistive technology, accessible transportation, and respite care.',
-        timeline:
-          'Ongoing support needs — annual ECF CHOICES recertification, recurring dental and medical appointments, assistive-tech upgrades as approved by her ECF CHOICES support coordinator.',
-        unique_qualities:
-          'Engaged in her local faith community; clinical-trial ready; telehealth capable; working with an ECF CHOICES support coordinator on person-centered planning.',
-        barriers_faced:
-          'Disability-related limits on employment and self-advocacy; rural East Tennessee location with limited specialty providers; reliance on Medicaid which does not cover all dental and assistive-tech needs.',
-        special_circumstances:
-          'Adult enrolled in TN Employment & Community First (ECF) CHOICES — Tennessee\'s 1115 HCBS Medicaid waiver for people with intellectual / developmental disabilities. Eligible for HCBS-waiver services including community engagement, employment supports, and respite.',
       },
     },
-  },
-  {
+  }),
+  profile({
     id: 'profile-luibov-samoylenko',
-    display_name: 'Luibov S Samoylenko',
+    display_name: 'Designated Senior Medical Profile',
     primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated', 'medical assistance', 'senior'],
+    tags: ['senior', 'medical_assistance'],
+    cityState: 'Tennessee',
+    goal: 'Find senior medical, transportation, rehabilitation, and household support resources.',
     sections: {
-      basic_information: {
-        full_name: 'Luibov S Samoylenko',
-        email: '',
-        phone: '',
-        address: '3531 Buchanan Rd.\nCleveland, TN 37323',
-        notes:
-          'Date of birth: 08/29/1952. Profile imported from Base44 export (Luba profile.pdf). Profile type: Medical Assistance.',
-      },
-      demographics: {
-        immigration_status: 'Permanent resident',
-        notes: 'Senior citizen.',
-      },
-      financial_information: {
-        financial_need_level: 'High',
-        low_income: true,
-        unemployed: true,
-        notes:
-          'Living on a fixed income without medical insurance. Has medical debt. Seeking $25,000 for critical hip replacement surgery and rehabilitation.',
-      },
-      government_assistance: {
-        snap_recipient: true,
-      },
+      demographics: { age_group: 'Senior 62+' },
       health_medical: {
-        chronic_illness: true,
-        chronic_illness_type: 'Hip replacement needed',
-        notes:
-          'Critical need for hip replacement surgery. Limited mobility restricts daily activities and access to services.',
-      },
-      family_life: {
-        widow_widower: true,
-        household_size: 1,
-        notes: 'Senior citizen living alone in rural area.',
-      },
-      location_focus: {
-        rural_resident: true,
-        appalachian_region: true,
-        geographic_focus: 'Cleveland, Tennessee',
-        notes:
-          'Rural Appalachian community with limited access to healthcare resources for seniors.',
-      },
-      narrative: {
-        mission:
-          'Restore mobility and independence through critical hip replacement surgery, and advocate for healthcare access for senior citizens in rural Tennessee.',
-        primary_goal:
-          'Secure $25,000 funding for hip replacement surgery and rehabilitation to regain mobility and independence.',
-        target_population:
-          'Senior citizens in rural Tennessee without adequate medical insurance who face barriers to healthcare access.',
-        funding_amount_needed: '$25,000 for hip replacement surgery and rehabilitation.',
-        timeline:
-          'Urgent need — surgery required as soon as possible to prevent further complications and longer recovery.',
-        past_experience:
-          'Active community engagement; volunteered at local organizations assisting fellow seniors navigating challenges of aging.',
-        unique_qualities:
-          'Resilient senior citizen with deep community connections; determined to reclaim independence and advocate for improved healthcare access for peers.',
-        collaboration_partners:
-          'Friends and neighbors in Cleveland, TN; trusted mentors; local community support networks.',
-        sustainability_plan: '',
-        barriers_faced:
-          'Financial hardship on fixed income, lack of medical insurance, limited mobility, inability to drive, restricted access to medical appointments and essential services, isolation.',
-        special_circumstances:
-          'Senior citizen living alone in a rural area with limited mobility; hip replacement is medically necessary for independence; no medical insurance and living on a fixed income.',
+        support_needs_level: 'high',
+        notes: 'Synthetic senior medical-support profile.',
       },
     },
-  },
-  {
+  }),
+  profile({
     id: 'profile-robert-white',
-    display_name: 'Robert White',
+    display_name: 'Demo Tennessee College Student',
     primary_type: 'college_student',
-    status: 'active',
-    tags: ['baseline', 'designated', 'student', 'paramedic', 'multilingual'],
+    tags: ['student', 'ems', 'healthcare_training'],
+    cityState: 'Tennessee',
+    goal: 'Find paramedicine, EMS, textbook, equipment, and workforce-training funding.',
     sections: {
-      basic_information: {
-        full_name: 'Robert White',
-        email: '',
-        phone: '',
-        address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
-        notes: 'Date of birth: 12/27/2001. Profile imported from Base44 export (Robert-White-Profile-R1.pdf).',
-      },
-      demographics: {
-        white_caucasian: true,
-        us_citizen: true,
-        notes: 'Trilingual: English, Spanish, and a third language.',
-      },
       education: {
-        highest_level: 'College Student - Currently in undergraduate program',
-        current_institution: 'Cleveland State Community College',
-        gpa: '3.75',
-        high_school_gpa: '4.0',
-        valedictorian: true,
-        intended_major: 'Paramedic',
-        community_service_hours: '400+',
-        target_colleges: [
-          'Cleveland State Community College',
-          'Chattanooga State Community College',
-          'Northeast State Community College',
-          'Roane State Community College',
-          'Volunteer State Community College',
-          'Columbia State Community College',
-          'Motlow State Community College',
-          'Lee University',
-        ],
-        leadership_roles: ['Spanish Club', 'Chess Club'],
+        highest_level: 'College Student',
+        intended_major: 'Paramedicine',
+        target_colleges: ['Cleveland State Community College'],
       },
-      financial_information: {
-        household_income: 310000,
-        notes:
-          'Household income $310,000, but education costs and family obligations limit available resources for paramedicine training. Seeking $50,000 per year for textbooks, equipment, training materials, and summer internship.',
-      },
-      location_focus: {
-        geographic_focus: 'Cleveland, TN and Chattanooga, TN',
-        notes:
-          'Focus on multilingual immigrant communities in Cleveland and Chattanooga.',
-      },
-      narrative: {
-        mission:
-          'Bridge the gap between healthcare and multilingual immigrant communities by becoming a fully qualified Paramedic and implementing outreach initiatives for non-native English speakers.',
-        primary_goal:
-          'Become a fully qualified Paramedic; implement outreach initiatives for multilingual immigrant communities; partner with local healthcare providers for cultural competence training.',
-        target_population:
-          'Multilingual immigrant communities in Cleveland and Chattanooga, TN.',
-        funding_amount_needed: '$50,000 per year for paramedicine education, textbooks, equipment, training materials, and internship.',
-        past_experience:
-          'Over 400 hours in skilled nursing facilities focused on delivering care while overcoming language barriers; Valedictorian with 4.0 GPA.',
-        unique_qualities:
-          'Trilingual, Valedictorian with 4.0 GPA, 400+ hours community service in skilled nursing facilities, leadership in Spanish Club and Chess Club.',
-        barriers_faced:
-          'Financial constraints for paramedicine education; language barriers in healthcare delivery for immigrant communities.',
-        special_circumstances:
-          'Dedicated to improving healthcare accessibility for multilingual communities through EMS career.',
-      },
+      occupation: { ems_worker: true, healthcare_worker: true },
     },
-  },
-  {
+  }),
+  profile({
     id: 'profile-josh-dasher',
-    display_name: 'Josh Dasher',
+    display_name: 'Designated Career Support Profile',
     primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated'],
-    sections: {
-      basic_information: {
-        full_name: 'Josh Dasher',
-        email: 'joshua.dasher@gmail.com',
-        phone: '',
-        address: '',
-      },
-    },
-  },
-  {
+    tags: ['career_training', 'basic_needs'],
+    cityState: 'United States',
+    goal: 'Find career training, household-stability, and emergency-assistance resources.',
+  }),
+  profile({
     id: 'profile-melissa-justus',
-    display_name: 'Melissa Justus',
+    display_name: 'Designated General Support Profile',
     primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated', 'individual'],
-    owner_email: 'melissa.justus@example.com',
-    sections: {
-      basic_information: {
-        full_name: 'Melissa Justus',
-        email: 'melissa.justus@example.com',
-        phone: '555-1234',
-        address: '123 Main St, Anytown USA 12345',
-        notes:
-          'Designated roster profile. Owner login maps via userProfileMappings.js and owner_email; replace example.com with the real owner email before production.',
-      },
-      organization_details: {
-        organization_type: 'Individual consultant',
-        ein: '',
-        uei: 'N/A',
-        cage_code: 'N/A',
-        annual_budget: 50000,
-        staff_count: 1,
-        mission: '',
-        notes:
-          'Individual sole proprietor. EIN not applicable for this application; use SSN for identification if a tax ID is required.',
-        sam_gov_registered: false,
-        grants_gov_account: false,
-      },
-    },
-  },
-  {
+    tags: ['general_support'],
+    cityState: 'United States',
+    owner_email: 'client.melissa@example.invalid',
+    goal: 'Find eligible benefits, grants, and community programs without exposing private details in source.',
+  }),
+  profile({
     id: 'profile-william',
-    display_name: 'William',
+    display_name: 'Designated General Funding Profile',
     primary_type: 'individual',
-    status: 'active',
-    tags: ['baseline', 'designated', 'individual'],
-    sections: {
-      basic_information: {
-        full_name: 'William',
-        email: '',
-        phone: '',
-        address: '',
-        notes:
-          'Designated roster profile. Add the owner login email here and in userProfileMappings.js when known.',
-      },
-    },
-  },
+    tags: ['general_support'],
+    cityState: 'United States',
+    goal: 'Find aligned grants, benefits, scholarships, and services after private intake is completed.',
+  }),
 ]
+
+export const DESIGNATED_PROFILES =
+  loadPrivateDesignatedProfiles(process.env.DESIGNATED_PROFILES_FILE) || PUBLIC_FIXTURE_PROFILES

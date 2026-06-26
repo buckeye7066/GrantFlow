@@ -122,7 +122,7 @@ describe('repairOrphanedJobProfiles', () => {
       .prepare(
         `INSERT INTO profiles (id, display_name, primary_type, status) VALUES (?, ?, ?, 'active')`,
       )
-      .run('uuid-anastasia', 'Anastasia Nicole White', 'high_school_student')
+      .run('uuid-student', 'Demo Tennessee STEM Student', 'high_school_student')
 
     insertJob(db, {
       id: 'b71c0528-test',
@@ -139,7 +139,7 @@ describe('repairOrphanedJobProfiles', () => {
 
     const repaired = db.raw.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get('b71c0528-test')
     assert.equal(repaired.status, 'queued')
-    assert.equal(repaired.profile_id, 'uuid-anastasia')
+    assert.equal(repaired.profile_id, 'uuid-student')
     assert.equal(repaired.error, null)
     assert.equal(repaired.completed_at, null)
     assert.equal(repaired.started_at, null)
@@ -148,7 +148,7 @@ describe('repairOrphanedJobProfiles', () => {
     const meta = JSON.parse(repaired.result_meta)
     assert.equal(meta.non_retryable, false)
     assert.equal(meta.repaired_from_profile_id, 'profile-anastasia-white')
-    assert.equal(meta.repaired_to_profile_id, 'uuid-anastasia')
+    assert.equal(meta.repaired_to_profile_id, 'uuid-student')
     assert.ok(meta.repaired_at)
     assert.match(meta.repair_strategy, /designated_display_name|reseed/)
     assert.match(repaired.idempotency_key, /^repaired_/)
@@ -180,7 +180,7 @@ describe('repairOrphanedJobProfiles', () => {
       .prepare(
         `INSERT INTO profiles (id, display_name, primary_type, status) VALUES (?, ?, ?, 'active')`,
       )
-      .run('uuid-avanell', 'Avanell Lea Leamon', 'family')
+      .run('uuid-family', 'Designated Family Support Profile', 'family')
 
     insertJob(db, {
       id: 'e16c4731-test',

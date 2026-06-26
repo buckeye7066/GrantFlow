@@ -755,7 +755,7 @@ describe('enforceInvariants — runner', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INVARIANT: profiles.display_name + basic_information.full_name are never a
-// DOUBLED personal name (the "Robert White Robert Michael White" bug).
+// DOUBLED personal name (the "Jordan Lane Jordan Michael Lane" bug).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('enforceProfileDisplayNameNotDoubled', () => {
   function makeProfileDb() {
@@ -786,31 +786,31 @@ describe('enforceProfileDisplayNameNotDoubled', () => {
       db.prepare("SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information'").get(id)?.data || '{}',
     ).full_name
 
-  it('collapses the production Robert double in BOTH fields (newline-joined)', async () => {
+  it('collapses a production-style double in both fields (newline-joined)', async () => {
     const db = makeProfileDb()
-    setName(db, 'p1', 'Robert White\nRobert Michael White')
-    setBasic(db, 'p1', 'Robert White\nRobert Michael White')
+    setName(db, 'p1', 'Jordan Lane\nJordan Michael Lane')
+    setBasic(db, 'p1', 'Jordan Lane\nJordan Michael Lane')
 
     const r = await enforceProfileDisplayNameNotDoubled(db)
     expect(r.ok).toBe(true)
     expect(r.repaired).toBe(2)
-    expect(nameOf(db, 'p1')).toBe('Robert Michael White')
-    expect(fullOf(db, 'p1')).toBe('Robert Michael White')
+    expect(nameOf(db, 'p1')).toBe('Jordan Michael Lane')
+    expect(fullOf(db, 'p1')).toBe('Jordan Michael Lane')
   })
 
   it('leaves legitimate names (and org names) untouched', async () => {
     const db = makeProfileDb()
-    setName(db, 'p1', 'Robert Michael White')
+    setName(db, 'p1', 'Jordan Michael Lane')
     setName(db, 'p2', 'Mary Jane Watson')
     setName(db, 'p3', 'Church of God of Prophecy')
-    setBasic(db, 'p1', 'Robert Michael White')
+    setBasic(db, 'p1', 'Jordan Michael Lane')
 
     const r = await enforceProfileDisplayNameNotDoubled(db)
     expect(r.repaired).toBe(0)
-    expect(nameOf(db, 'p1')).toBe('Robert Michael White')
+    expect(nameOf(db, 'p1')).toBe('Jordan Michael Lane')
     expect(nameOf(db, 'p2')).toBe('Mary Jane Watson')
     expect(nameOf(db, 'p3')).toBe('Church of God of Prophecy')
-    expect(fullOf(db, 'p1')).toBe('Robert Michael White')
+    expect(fullOf(db, 'p1')).toBe('Jordan Michael Lane')
   })
 
   it('is idempotent — a second pass repairs nothing', async () => {
