@@ -2,7 +2,21 @@ import React, { useRef, useEffect } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
-import { AlertCircle, Loader2, Palette, Printer } from "lucide-react"
+import {
+  AlertCircle,
+  ArrowRight,
+  ClipboardList,
+  FileSearch,
+  GraduationCap,
+  HeartPulse,
+  KeyRound,
+  Loader2,
+  Palette,
+  Printer,
+  Search,
+  Sparkles,
+  UserCheck,
+} from "lucide-react"
 import {
   getProfile,
   requestProfileSectionAI,
@@ -16,6 +30,7 @@ import ProfileOverview from "@/components/profiles/ProfileOverview"
 import ProfileSectionEditor from "@/components/profiles/ProfileSectionEditor"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useToast } from "@/components/ui/use-toast"
 import { createPageUrl } from "@/utils"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -54,6 +69,140 @@ import { EDITABLE_SECTIONS } from "@/config/missingInfoTargets"
 // Helper: safely turn a rejected item's reason into a human-friendly string.
 function formatRejectReason(reason) {
   return String(reason || "unsupported").replace(/_/g, " ")
+}
+
+function FlowStepButton({ icon: Icon, title, detail, tooltip, onClick, active = false }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          className={`group flex min-h-[7rem] w-full flex-col justify-between rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
+            active
+              ? "border-blue-300 bg-blue-50 text-blue-950"
+              : "border-slate-200 bg-white text-slate-900 hover:border-blue-200"
+          }`}
+          aria-label={title}
+        >
+          <span className="flex items-center justify-between gap-3">
+            <span
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+                active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700"
+              }`}
+            >
+              <Icon className="h-5 w-5" />
+            </span>
+            <ArrowRight className={`h-4 w-4 shrink-0 ${active ? "text-blue-700" : "text-slate-400"}`} />
+          </span>
+          <span className="mt-4 block min-w-0">
+            <span className="block text-sm font-semibold leading-snug">{title}</span>
+            <span className="mt-1 block text-xs leading-relaxed text-slate-600">{detail}</span>
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ProfileFlowGuide({
+  completionPct,
+  nextEmptySectionTitle,
+  onCompleteProfile,
+  onOpenDocuments,
+  onOpenActionPlan,
+  onFindFunding,
+  onOpenPortals,
+  onOpenUniversities,
+  onOpenHealth,
+  isStudentProfile,
+  isHealthProfile,
+}) {
+  const specialty = isStudentProfile
+    ? {
+        icon: GraduationCap,
+        title: "Student portals",
+        detail: "School aid, scholarships, work-study, and award details.",
+        tooltip: "Open the student workspace for school-specific portals, applications, financial aid, scholarships, and work-study items.",
+        onClick: onOpenUniversities,
+      }
+    : isHealthProfile
+      ? {
+          icon: HeartPulse,
+          title: "Health options",
+          detail: "Benefits, assistance, and opt-in studies when relevant.",
+          tooltip: "Open health support. Studies remain opt-in and should only appear when they match the profile.",
+          onClick: onOpenHealth,
+        }
+      : {
+          icon: KeyRound,
+          title: "Portal setup",
+          detail: "Add logins Hamilton can use when an application needs them.",
+          tooltip: "Open the portal area for saved logins, portal status, and Hamilton access windows.",
+          onClick: onOpenPortals,
+        }
+
+  const factsDetail = nextEmptySectionTitle ? `Next: ${nextEmptySectionTitle}` : "Profile facts look ready."
+  const flowState = completionPct >= 80 ? "Ready for deeper search" : "Build the profile signal"
+
+  const steps = [
+    {
+      icon: UserCheck,
+      title: completionPct >= 100 ? "Review profile facts" : "Complete profile facts",
+      detail: factsDetail,
+      tooltip: "Open the next profile section GrantFlow needs. Empty fields are not punished, but known facts help the crawler search like it knows this person or organization.",
+      onClick: onCompleteProfile,
+      active: completionPct < 80,
+    },
+    {
+      icon: FileSearch,
+      title: "Add documents",
+      detail: "PDFs, screenshots, letters, transcripts, bills, and notes.",
+      tooltip: "Open the document area so uploaded files can be parsed into the profile before searching and planning.",
+      onClick: onOpenDocuments,
+    },
+    {
+      icon: Sparkles,
+      title: "Ask Anya",
+      detail: "A short interview turns the profile into exact needs.",
+      tooltip: "Open the action plan where Anya asks only the missing practical questions and Hamilton can save the checklist.",
+      onClick: onOpenActionPlan,
+      active: completionPct >= 80,
+    },
+    {
+      icon: Search,
+      title: "Find funding",
+      detail: "Run a profile-specific search with the current facts.",
+      tooltip: "Start discovery for this profile so GrantFlow searches by mission, location, needs, eligibility, and profile type.",
+      onClick: onFindFunding,
+    },
+    specialty,
+  ]
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Profile flow</p>
+          <h2 className="text-lg font-semibold text-slate-900">A cleaner path from facts to funding</h2>
+        </div>
+        <span className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+          <ClipboardList className="h-3.5 w-3.5 text-blue-600" />
+          {flowState}
+        </span>
+      </div>
+      <TooltipProvider delayDuration={150}>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {steps.map((step) => (
+            <FlowStepButton key={step.title} {...step} />
+          ))}
+        </div>
+      </TooltipProvider>
+    </section>
+  )
 }
 
 export default function ProfileDetail() {
@@ -170,7 +319,7 @@ export default function ProfileDetail() {
     onSuccess: () => {
       toast({
         title: "Document uploaded",
-        description: "We'll parse the contents and sync matches shortly.",
+        description: "We'll parse the contents and sync profile-specific results shortly.",
       })
       queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
     },
@@ -911,10 +1060,33 @@ export default function ProfileDetail() {
               >
                 {nextEmptySectionTitle}
               </button>{' '}
-              to unlock more matches.
+              to sharpen profile-specific searching.
             </p>
           )}
         </div>
+
+        <ProfileFlowGuide
+          completionPct={completionPct}
+          nextEmptySectionTitle={nextEmptySectionTitle}
+          isStudentProfile={isStudentProfile}
+          isHealthProfile={isHealthProfile}
+          onCompleteProfile={() => {
+            if (nextEmptySection) {
+              handleOpenSection(nextEmptySection)
+              return
+            }
+            setActiveTab("profile")
+          }}
+          onOpenDocuments={() => setActiveTab("documents")}
+          onOpenActionPlan={() => setActiveTab("action-plan")}
+          onFindFunding={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
+          onOpenPortals={() => {
+            setActiveTab("pipeline")
+            setPendingScrollTarget("portal-logins")
+          }}
+          onOpenUniversities={() => setActiveTab("universities")}
+          onOpenHealth={() => setActiveTab("health")}
+        />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList

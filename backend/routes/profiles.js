@@ -128,6 +128,7 @@ function canAccessProfileIdFromCtx(ctx, profileId) {
   if (ctx?.isAdmin === true) return true
   if (ctx?.accessibleProfileIds === null) return true // admin sentinel (all)
   if (ctx?.accessibleProfileIds instanceof Set && ctx.accessibleProfileIds.has(id)) return true
+  if (ctx?.activeProfileId && String(ctx.activeProfileId) === id) return true
   return false
 }
 
@@ -792,12 +793,7 @@ router.get('/:id/school-link', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canRead =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canRead) return res.status(403).json({ error: 'Not authorized' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized' })
 
     let link = null
     try {
@@ -839,12 +835,7 @@ router.post('/:id/school-link/revoke', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) return res.status(403).json({ error: 'Not authorized' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized' })
 
     let result
     try {
@@ -877,12 +868,7 @@ router.get('/:id/emails', async (req, res) => {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) {
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
@@ -904,12 +890,7 @@ router.post('/:id/emails', async (req, res) => {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) {
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
@@ -967,12 +948,7 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) {
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
@@ -1018,14 +994,9 @@ router.get('/:id/portal-access-schedule', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    // Authorization: same gate as the PUT — only an admin, the profile owner, or
-    // the active profile may read the schedule (it's profile-scoped data).
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canView =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    // Profile-scoped schedule: reuse the central profile access decision so
+    // email-shared owners can use the same tools as account owners.
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to view this profile' })
     const prefs = await loadAutomationPreferences(req.db, profileId)
     res.json({ schedule: normalizeSchedule(prefs) })
   } catch (error) {
@@ -1037,12 +1008,7 @@ router.put('/:id/portal-access-schedule', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to manage this profile' })
 
     // Validate by normalizing — bad windows are dropped; an empty/disabled
     // schedule means "any time" (the prior always-on behavior).
@@ -1079,12 +1045,7 @@ router.get('/:id/automation-preferences', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canView =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to view this profile' })
     const prefs = await loadAutomationPreferences(req.db, profileId)
     res.json({
       automations: normalizeAutomationToggles(prefs?.automations),
@@ -1099,12 +1060,7 @@ router.put('/:id/automation-preferences', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to manage this profile' })
 
     // Accept either { automations: {...} } or a bare {...} of toggle keys.
     // normalizeAutomationToggles drops unknown keys and coerces to booleans, so
@@ -1133,11 +1089,7 @@ router.get('/:id/award-summary', async (req, res) => {
     const profileId = String(req.params.id)
     const profileRow = await req.db.prepare('SELECT id, display_name, user_id FROM profiles WHERE id = ?').get(profileId)
     if (!profileRow) return res.status(404).json({ error: 'Profile not found' })
-    const canView =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    if (!canAccessProfileRowFromCtx(req.ctx, profileRow)) return res.status(403).json({ error: 'Not authorized to view this profile' })
 
     // Committed-college scholarships (financial_aid_pipeline on the committed app).
     let aidEntries = []
