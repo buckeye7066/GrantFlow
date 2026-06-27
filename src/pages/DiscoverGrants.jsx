@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
+import { listProfileFundingSources } from '@/api/matching';
 import client, { apiFetch } from '@/api/client';
 import { discoverAllForProfile, fetchCrawlerStatus } from '@/api/crawlers';
 import { createPageUrl } from '@/utils';
@@ -76,16 +77,27 @@ async function fetchCatalogMatches(profileId, minMatchScore) {
 }
 
 /**
- * Resolve profile_id: 1) explicit UI selection, 2) URL ?profile_id=, 3) null.
+ * Resolve profile_id: 1) explicit UI selection, 2) URL ?profile_id=,
+ * 3) app active profile when it is a real profile, 4) null.
  * Does NOT auto-select first profile (product blocks add-to-pipeline without explicit choice).
  */
-function resolveSelectedProfileId(selectedProfileId, searchParams, profiles) {
+function resolveSelectedProfileId(selectedProfileId, searchParams, profiles, activeProfileId) {
   const fromUi = typeof selectedProfileId === 'string' ? selectedProfileId.trim() : null
   if (fromUi) return fromUi
   const fromUrl = searchParams?.get?.('profile_id') ?? null
-  if (!fromUrl) return null
-  const valid = Array.isArray(profiles) && profiles.some((p) => String(p?.id) === String(fromUrl))
-  return valid ? fromUrl : null
+  const validProfiles = Array.isArray(profiles) ? profiles : []
+  if (fromUrl) {
+    const valid = validProfiles.some((p) => String(p?.id) === String(fromUrl))
+    return valid ? fromUrl : null
+  }
+  const fromActive =
+    typeof activeProfileId === 'string' && activeProfileId && activeProfileId !== '__admin__'
+      ? activeProfileId
+      : null
+  if (fromActive && validProfiles.some((p) => String(p?.id) === String(fromActive))) {
+    return fromActive
+  }
+  return null
 }
 
 /** Profile API returns sections as [{ section_key, data }, ...]. Normalize to { section_key: data } for reads. */
@@ -116,6 +128,41 @@ function interestsToArray(interests) {
     return Object.keys(interests)
   }
   return []
+}
+
+const SEARCH_SIGNAL_KEY_RX =
+  /(need|goal|interest|focus|mission|program|service|condition|diagnos|school|college|university|student|education|academic|degree|major|career|project|business|farm|church|veteran|military|disability|medical|health|housing|food|utility|rent|transport|equipment|startup|essay|narrative|description|challenge|barrier|eligibility|scholarship|benefit|assistance)/i
+
+function hasUsefulSearchSignal(value, inheritedKey = '', depth = 0) {
+  if (value === null || value === undefined || depth > 5) return false
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return false
+    return SEARCH_SIGNAL_KEY_RX.test(inheritedKey) && text.length >= 2
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return SEARCH_SIGNAL_KEY_RX.test(inheritedKey)
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => hasUsefulSearchSignal(item, inheritedKey, depth + 1))
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value).some(([key, child]) =>
+      hasUsefulSearchSignal(child, `${inheritedKey}.${key}`, depth + 1),
+    )
+  }
+  return false
+}
+
+function profileHasSearchSignal(profileDetail, profileForSearch, selectedProfile) {
+  const interests = interestsToArray(profileForSearch?.signals?.interests)
+  if (interests.length > 0) return true
+  if (Array.isArray(profileForSearch?.tags) && profileForSearch.tags.length > 0) return true
+  if (hasUsefulSearchSignal(sectionsMap(profileDetail))) return true
+  return hasUsefulSearchSignal({
+    primary_type: selectedProfile?.primary_type || profileForSearch?.primary_type,
+    display_name: selectedProfile?.display_name || profileForSearch?.display_name,
+  })
 }
 
 function normalizeResultMetadata(payload, results) {
@@ -382,10 +429,11 @@ export default function DiscoverGrants() {
   const queryClient = useQueryClient();
   const log = React.useMemo(() => createLogger('DiscoverGrantsPage'), [])
   const setFundingResults = useFundingResultsStore((s) => s.setResults)
-  const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((state) => ({
+  const { isAuthenticated, accessToken, sessionExpired, activeProfileId } = useAuthStore((state) => ({
     isAuthenticated: state.isAuthenticated,
     accessToken: state.accessToken,
     sessionExpired: state.sessionExpired,
+    activeProfileId: state.activeProfileId,
   }));
 
   const tokenAvailable = useMemo(() => {
@@ -406,8 +454,8 @@ export default function DiscoverGrants() {
   });
 
   const effectiveProfileId = useMemo(
-    () => resolveSelectedProfileId(selectedProfileId, searchParams, profiles),
-    [selectedProfileId, searchParams, profiles]
+    () => resolveSelectedProfileId(selectedProfileId, searchParams, profiles, activeProfileId),
+    [selectedProfileId, searchParams, profiles, activeProfileId]
   );
 
   useEffect(() => {
@@ -418,6 +466,11 @@ export default function DiscoverGrants() {
       setSelectedProfileId(urlProfileId)
     }
   }, [searchParams, profiles, selectedProfileId])
+
+  useEffect(() => {
+    if (selectedProfileId || searchParams.get('profile_id') || !effectiveProfileId) return
+    setSelectedProfileId(effectiveProfileId)
+  }, [effectiveProfileId, searchParams, selectedProfileId])
 
   // Persist last selected profile for session continuity
   useEffect(() => {
@@ -431,7 +484,9 @@ export default function DiscoverGrants() {
     const urlProfileId = searchParams.get('profile_id')
     if (!selectedProfileId && !urlProfileId && profiles.length > 0) {
       try {
-        const lastProfile = localStorage.getItem('grantflow:discover-last-profile');
+        const lastProfile =
+          localStorage.getItem('grantflow:discover-last-profile') ||
+          localStorage.getItem('grantflow:last-profile-detail-id');
         // Normalize comparison: stored id is a string, profile ids may be numeric.
         if (lastProfile && profiles.some((p) => String(p?.id) === String(lastProfile))) {
           setSelectedProfileId(lastProfile);
@@ -594,6 +649,18 @@ export default function DiscoverGrants() {
     return Array.isArray(prompts) ? prompts : []
   }, [catalogMatchResponse])
 
+  const { data: profileFundingSources } = useQuery({
+    queryKey: ['discover-profile-funding-sources', effectiveProfileId],
+    queryFn: () => listProfileFundingSources(effectiveProfileId, { minScore: 0 }),
+    enabled: authReady && Boolean(effectiveProfileId),
+    staleTime: 30_000,
+  })
+
+  const profileFundingSourceCount = useMemo(() => {
+    const n = Number(profileFundingSources?.total)
+    return Number.isFinite(n) ? n : 0
+  }, [profileFundingSources])
+
   // Keep FundingResults store in sync with the combined view so /FundingResults
   // always displays whatever the user last saw on DiscoverGrants.
   useEffect(() => {
@@ -695,7 +762,10 @@ export default function DiscoverGrants() {
     const hasEntityType = Boolean(selectedProfile.primary_type || profileForSearch?.primary_type)
     const interestsArr = interestsToArray(profileForSearch?.signals?.interests)
     const tags = profileForSearch?.tags
-    const hasKeywords = interestsArr.length > 0 || (Array.isArray(tags) && tags.length > 0)
+    const hasKeywords =
+      interestsArr.length > 0 ||
+      (Array.isArray(tags) && tags.length > 0) ||
+      profileHasSearchSignal(profileDetailForUi, profileForSearch, selectedProfile)
     return {
       missingLocation: !hasLocation,
       missingEntityType: !hasEntityType,
@@ -1594,10 +1664,34 @@ export default function DiscoverGrants() {
               <div className="flex items-start gap-3">
                 <AlertTriangle className="h-6 w-6 shrink-0 text-amber-600 mt-0.5" />
                 <div>
-                  <h3 className="text-lg font-semibold text-amber-900">No matches yet \u2014 let&apos;s fix that</h3>
-                  <p className="text-sm text-amber-800 mt-1">{buildZeroResultDescription(profileGaps)}</p>
+                  <h3 className="text-lg font-semibold text-amber-900">
+                    {profileFundingSourceCount > 0
+                      ? `${profileFundingSourceCount} profile funding source${profileFundingSourceCount === 1 ? '' : 's'} already found`
+                      : "No visible matches here yet - let's keep going"}
+                  </h3>
+                  <p className="text-sm text-amber-800 mt-1">
+                    {profileFundingSourceCount > 0
+                      ? 'Discover did not show direct results at this threshold, but Crawler OS already has profile-matched sources saved on the profile. Open those first, then rerun discovery if you need more.'
+                      : buildZeroResultDescription(profileGaps)}
+                  </p>
                 </div>
               </div>
+
+              {profileFundingSourceCount > 0 && selectedProfile?.id && (
+                <div className="flex flex-col gap-3 rounded-md border border-blue-200 bg-blue-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm text-blue-900">
+                    <strong>Crawler OS has matches for this profile.</strong>{' '}
+                    They may be directories or profile-specific starting points rather than direct apply-now grants.
+                  </div>
+                  <Button
+                    size="sm"
+                    className="shrink-0 bg-blue-600 text-white hover:bg-blue-700"
+                    onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id, tab: 'pipeline', focus: 'profile-funding-sources' }))}
+                  >
+                    Open profile funding sources
+                  </Button>
+                </div>
+              )}
 
               {/* Score threshold suggestion \u2014 when matches exist below the slider */}
               {scoreHint && scoreHint.bestScore > 0 && (
@@ -1731,6 +1825,16 @@ export default function DiscoverGrants() {
                     onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }))}
                   >
                     Update Profile
+                  </Button>
+                )}
+                {selectedProfile?.id && profileFundingSourceCount > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-blue-300 text-blue-800 hover:bg-blue-50 whitespace-nowrap"
+                    onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id, tab: 'pipeline', focus: 'profile-funding-sources' }))}
+                  >
+                    View saved sources
                   </Button>
                 )}
                 <Button

@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Bell } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
+import { createPageUrl } from '@/utils'
+import { buildProfileSectionLink } from '@/config/missingInfoTargets'
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
@@ -19,12 +22,44 @@ function formatRelativeTime(dateStr) {
   return `${diffDays}d ago`
 }
 
+function resolveNotificationTarget(notification) {
+  const data = notification?.data || {}
+  const type = String(notification?.type || '')
+  const explicitRoute = data.route_to_resolve || data.add_credential_link || data.route_to_admin_task
+  if (typeof explicitRoute === 'string' && explicitRoute.startsWith('/')) {
+    return explicitRoute
+  }
+  const profileId = data.profile_id || data.profileId || notification?.profile_id || null
+  if (!profileId) return null
+
+  if (/login_required|2fa_required|captcha_required|portal_blocked/.test(type)) {
+    return createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline', focus: 'portal-logins' })
+  }
+
+  if (/missing_info/.test(type)) {
+    const key = data.field || data.missing_info_key || data.key || data.missing_field || data.blocker_key
+    const link = key ? buildProfileSectionLink(profileId, key) : null
+    return link || createPageUrl('ProfileDetail', { id: profileId, tab: 'profile' })
+  }
+
+  if (/document_required/.test(type)) {
+    return createPageUrl('ProfileDetail', { id: profileId, tab: 'documents' })
+  }
+
+  if (/hamilton_/.test(type)) {
+    return createPageUrl('Pipeline', { profile_id: profileId })
+  }
+
+  return null
+}
+
 export default function NotificationBell() {
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const dropdownRef = useRef(null)
+  const navigate = useNavigate()
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
 
   const fetchNotifications = useCallback(async () => {
@@ -94,6 +129,21 @@ export default function NotificationBell() {
       setLoading(false)
     }
   }, [])
+
+  const handleNotificationOpen = useCallback(
+    async (notification) => {
+      if (!notification) return
+      const target = resolveNotificationTarget(notification)
+      if (!notification.read) {
+        await handleMarkRead(notification.id)
+      }
+      if (target) {
+        setOpen(false)
+        navigate(target)
+      }
+    },
+    [handleMarkRead, navigate],
+  )
 
   // Anya Match Scout actions on a notification of type 'anya_high_match'.
   // The notification's `data.suggestion_id` points at the row in
@@ -167,7 +217,7 @@ export default function NotificationBell() {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute right-0 mt-2 w-80 bg-background border border-border rounded-xl shadow-lg z-50 overflow-hidden">
+        <div className="absolute right-0 mt-2 w-[min(92vw,26rem)] bg-background border border-border rounded-xl shadow-lg z-50 overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <h3 className="font-semibold text-sm text-foreground">Notifications</h3>
@@ -248,21 +298,25 @@ export default function NotificationBell() {
                   <button
                     key={n.id}
                     type="button"
-                    onClick={() => !n.read && handleMarkRead(n.id)}
-                    disabled={loading || n.read}
+                    onClick={() => handleNotificationOpen(n)}
+                    disabled={loading}
                     className={baseClass}
+                    title={resolveNotificationTarget(n) ? "Open the work item" : "Mark as read"}
                   >
                     <div className="flex items-start gap-2">
                       {!n.read && (
                         <span className="mt-1.5 w-2 h-2 rounded-full bg-blue-500 shrink-0" />
                       )}
-                      <div className={n.read ? 'pl-4' : ''}>
-                        <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
+                      <div className={`${n.read ? 'pl-4' : ''} min-w-0`}>
+                        <p className="break-words text-sm font-medium text-foreground leading-snug">
                           {n.title}
                         </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
+                        <p className="mt-0.5 break-words text-xs text-muted-foreground">
                           {n.message}
                         </p>
+                        {resolveNotificationTarget(n) ? (
+                          <p className="mt-1 text-xs font-medium text-blue-600">Open work item</p>
+                        ) : null}
                         <p className="mt-1 text-[10px] text-muted-foreground">
                           {formatRelativeTime(n.createdAt)}
                         </p>

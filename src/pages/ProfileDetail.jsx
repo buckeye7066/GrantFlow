@@ -821,12 +821,14 @@ export default function ProfileDetail() {
   const tabParam = searchParams.get("tab")
   const sectionParam = searchParams.get("section")
   const fieldParam = searchParams.get("field")
+  const focusParam = searchParams.get("focus")
   React.useEffect(() => {
     if (!profile) return
-    const token = `${tabParam || ""}|${sectionParam || ""}|${fieldParam || ""}`
-    if (token === "|" || deepLinkHandled.current === token) return
+    const token = `${tabParam || ""}|${sectionParam || ""}|${fieldParam || ""}|${focusParam || ""}`
+    if (token === "|||" || deepLinkHandled.current === token) return
     deepLinkHandled.current = token
     if (tabParam) setActiveTab(tabParam)
+    if (focusParam) setPendingScrollTarget(focusParam)
     // Only pop the section editor for sections that actually have one — for
     // documents / universities we just land on the tab.
     if (sectionParam && EDITABLE_SECTIONS.has(sectionParam)) {
@@ -834,7 +836,17 @@ export default function ProfileDetail() {
         profile?.sections?.find((section) => section.section_key === sectionParam)?.data ?? {}
       handleOpenSection(sectionParam, existing, fieldParam)
     }
-  }, [profile, tabParam, sectionParam, fieldParam, handleOpenSection])
+  }, [profile, tabParam, sectionParam, fieldParam, focusParam, handleOpenSection])
+
+  React.useEffect(() => {
+    if (!profileId) return
+    try {
+      window.localStorage.setItem("grantflow:last-profile-detail-id", String(profileId))
+      window.localStorage.setItem("grantflow:discover-last-profile", String(profileId))
+    } catch {
+      // Best-effort profile memory; URL profile_id remains canonical.
+    }
+  }, [profileId])
 
   // Reliable scroll-into-view: keep retrying via rAF until the target element
   // exists in the DOM (the tab content may not be mounted on the same frame).
