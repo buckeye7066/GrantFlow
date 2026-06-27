@@ -1,127 +1,152 @@
-import React, { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import React from "react"
+import { Link } from "react-router-dom"
 import {
-  Play,
-  PlayCircle,
-  RefreshCcw,
-  ShieldCheck,
+  ArrowRight,
+  FileSearch,
+  Kanban,
+  Search,
   Sparkles,
-  CircleCheck,
-  Loader2,
+  UserCheck,
 } from "lucide-react"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { useToast } from "@/components/ui/use-toast"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { createPageUrl } from "@/utils"
 
-const ACTIONS = [
-  {
-    key: "process_next",
-    label: "Process next grant",
-    description: "Review the highest-priority opportunity in your pipeline.",
-    icon: PlayCircle,
-  },
-  {
-    key: "process_all",
-    label: "Process all queued",
-    description: "Run matching, checklist generation, and AI prep for all pending grants.",
-    icon: RefreshCcw,
-  },
-  {
-    key: "auto_monitor",
-    label: "Enable auto-monitoring",
-    description: "Continuously monitor deadlines, portal updates, and compliance tasks.",
-    icon: ShieldCheck,
-  },
-]
+function profileRoute(activeProfileId, tab = null) {
+  if (!activeProfileId) return createPageUrl("MyProfiles")
+  return createPageUrl("ProfileDetail", {
+    id: activeProfileId,
+    ...(tab ? { tab } : {}),
+  })
+}
 
-export default function PipelineActionsCard() {
-  const { toast } = useToast()
-  const [pendingAction, setPendingAction] = useState(null)
-  const navigate = useNavigate()
+function profileScopedRoute(page, activeProfileId, params = {}) {
+  if (!activeProfileId) return createPageUrl("MyProfiles")
+  return createPageUrl(page, {
+    profile_id: activeProfileId,
+    ...params,
+  })
+}
 
-  const handleAction = async (actionKey) => {
-    setPendingAction(actionKey)
+function WorkflowButton({ icon: Icon, title, detail, to, tooltip, primary = false }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          asChild
+          variant={primary ? "default" : "outline"}
+          className={`h-auto w-full justify-start gap-3 whitespace-normal rounded-lg px-4 py-3 text-left ${
+            primary
+              ? "shadow-md shadow-blue-200"
+              : "border-slate-200 bg-white text-slate-900 hover:border-blue-200 hover:bg-blue-50 hover:text-slate-950"
+          }`}
+        >
+          <Link to={to}>
+            <span
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${
+                primary ? "bg-white text-primary" : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              <Icon className="h-5 w-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold leading-tight">{title}</span>
+              <span className={`mt-1 block text-xs leading-relaxed ${primary ? "text-primary-foreground" : "text-slate-600"}`}>
+                {detail}
+              </span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0" />
+          </Link>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
-    toast({
-      title: "Command queued",
-      description: "We’re preparing the workflow run. This will take just a moment.",
-    })
-
-    // Placeholder async flow – replace with real API or workflow trigger
-    await new Promise((resolve) => setTimeout(resolve, 1200))
-
-    setPendingAction(null)
-    toast({
-      title: "Workflow dispatched",
-      description: "A background job has been kicked off. Monitor progress from the Pipeline page.",
-      action: {
-        label: "View pipeline",
-        onClick: () => {
-          navigate(createPageUrl("Pipeline"))
+export default function PipelineActionsCard({ activeProfileId = null }) {
+  const hasProfile = Boolean(activeProfileId)
+  const actions = hasProfile
+    ? [
+        {
+          key: "facts",
+          title: "Profile facts",
+          detail: "Review what GrantFlow knows.",
+          tooltip: "Open the selected profile. These facts feed matching, Anya, Hamilton, documents, and crawler searches.",
+          icon: UserCheck,
+          to: profileRoute(activeProfileId),
+          primary: true,
         },
-      },
-    })
-  }
+        {
+          key: "documents",
+          title: "Documents",
+          detail: "Upload evidence and forms.",
+          tooltip: "Open the document workspace for this profile so PDFs, screenshots, letters, and forms can be parsed and used.",
+          icon: FileSearch,
+          to: profileRoute(activeProfileId, "documents"),
+        },
+        {
+          key: "anya",
+          title: "Anya plan",
+          detail: "Turn needs into a checklist.",
+          tooltip: "Open the profile action plan. Anya can ask profile-specific questions and Hamilton can help with checklist items.",
+          icon: Sparkles,
+          to: profileRoute(activeProfileId, "action-plan"),
+        },
+        {
+          key: "discover",
+          title: "Find funding",
+          detail: "Run a profile-specific search.",
+          tooltip: "Open discovery with this profile selected. GrantFlow searches by profile facts, needs, location, and eligibility.",
+          icon: Search,
+          to: profileScopedRoute("DiscoverGrants", activeProfileId, { autorun: 1 }),
+        },
+        {
+          key: "pipeline",
+          title: "Pipeline",
+          detail: "Track applications and portals.",
+          tooltip: "Open the real pipeline board for this profile, including portal setup and automation status.",
+          icon: Kanban,
+          to: profileScopedRoute("Pipeline", activeProfileId),
+        },
+      ]
+    : [
+        {
+          key: "profile",
+          title: "Create or choose a profile",
+          detail: "Funding starts with who we are helping.",
+          tooltip: "GrantFlow needs a profile before it can search, plan, parse documents, or track applications correctly.",
+          icon: UserCheck,
+          to: createPageUrl("MyProfiles"),
+          primary: true,
+        },
+      ]
 
   return (
-    <Card className="border border-border/70 shadow-none bg-card text-card-foreground">
-      <CardHeader className="pb-0">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <div className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 text-primary px-3 py-1 text-xs font-semibold uppercase">
-              <Sparkles className="w-3 h-3 mr-1" />
-              AI Orchestrations
-            </div>
-            <h2 className="text-lg font-semibold text-card-foreground">Pipeline Command Center</h2>
-            <p className="text-sm text-foreground max-w-md">
-              Kick off automations that run behind the scenes. These flows coordinate AI
-              matching, checklist generation, reminders, and deadline monitoring.
-            </p>
+    <Card className="border border-border/70 bg-card text-card-foreground shadow-none">
+      <CardHeader>
+        <div className="space-y-1">
+          <div className="inline-flex w-fit items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase text-primary">
+            <Sparkles className="mr-1 h-3 w-3" />
+            Guided workflow
           </div>
-          <CircleCheck className="w-8 h-8 text-primary hidden md:block" />
+          <CardTitle className="text-lg">Work in the right order</CardTitle>
+          <CardDescription>
+            These shortcuts open real GrantFlow workspaces. They do not start hidden background work.
+          </CardDescription>
         </div>
       </CardHeader>
-      <CardContent className="pt-4 space-y-3">
-        {ACTIONS.map((action) => (
-          <div
-            key={action.key}
-            className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 rounded-xl border border-border bg-background/60 px-4 py-3"
-          >
-            <div className="flex items-start gap-3">
-              <span className="p-2 rounded-lg bg-primary/15 text-primary">
-                <action.icon className="w-4 h-4" />
-              </span>
-              <div>
-                  <p className="text-sm font-semibold text-card-foreground">{action.label}</p>
-                  <p className="text-xs text-foreground">{action.description}</p>
-              </div>
-            </div>
-            <Button
-              size="sm"
-              className="whitespace-nowrap"
-              onClick={() => handleAction(action.key)}
-              disabled={pendingAction !== null}
-            >
-              {pendingAction === action.key ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                  Working…
-                </>
-              ) : pendingAction ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                  Queued
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 mr-2" />
-                  Run
-                </>
-              )}
-            </Button>
+      <CardContent>
+        <TooltipProvider delayDuration={150}>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            {actions.map((action) => (
+              <WorkflowButton key={action.key} {...action} />
+            ))}
           </div>
-        ))}
+        </TooltipProvider>
       </CardContent>
     </Card>
   )

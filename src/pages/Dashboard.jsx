@@ -576,7 +576,7 @@ export default function Dashboard() {
               isLoading={isLoadingPipeline}
               hasError={Boolean(pipelineError)}
             />
-            <PipelineActionsCard />
+            <PipelineActionsCard activeProfileId={activeProfileId} />
           </div>
 
           <div className="space-y-6">
