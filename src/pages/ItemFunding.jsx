@@ -39,6 +39,9 @@ import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import { formatReasonText } from "@/utils/reasonText"
+import { createPageUrl } from "@/utils"
+import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
+import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 
 // Human-readable labels for the applicant type the backend detected from the
 // selected profile. This is what makes the search visibly profile-aware: the
@@ -233,7 +236,7 @@ function ItemResultCard({ opportunity, match, onSelect }) {
   )
 }
 
-function ItemResultDetail({ opportunity, match, open, onClose }) {
+function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
   if (!opportunity) return null
   const detailReasons =
     match?.reasons?.length > 0
@@ -273,6 +276,12 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
               </p>
             </div>
           </section>
+
+          <OpportunitySourceTrace
+            opportunity={opportunity}
+            match={match}
+            profileName={profileName}
+          />
 
           {match ? (
             <section className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 space-y-2">
@@ -864,49 +873,56 @@ export default function ItemFunding() {
         </div>
       ) : submittedItem ? (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
-          <CardContent className="p-12 text-center space-y-4">
-            <ShoppingCart className="w-12 h-12 mx-auto text-slate-300" />
-            <h3 className="text-xl font-semibold text-slate-900">No results with the current filters</h3>
-            <div className="space-y-2 text-sm text-slate-600">
-              {!hasSelectedProfile ? (
-                <p>
-                  <span className="font-semibold text-blue-600">Select a profile above</span> to unlock live web search.
-                  {" "}We will search the internet in real time for programs, donations, and grants that fund{" "}
-                  <span className="font-semibold text-slate-800">{submittedItem}</span>.
-                </p>
-              ) : liveSearchQuery.isLoading ? (
-                <p className="flex items-center justify-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                  Searching the web for <span className="font-semibold text-slate-800">{submittedItem}</span>...
-                </p>
-              ) : (
-                <>
-                  <p>
-                    We searched curated databases and the open web for{" "}
-                    <span className="font-semibold text-slate-800">{submittedItem}</span>, but nothing met the current filters.
-                  </p>
-                  {disqualifiedCount > 0 ? (
-                    <p>
-                      <span className="font-semibold text-slate-800">{disqualifiedCount}</span> were excluded because they require
-                      matching funds or repayment. Toggle <span className="font-semibold">Show match/loan results</span> to
-                      review them.
-                    </p>
-                  ) : (
-                    <p>Try different keywords (e.g., van grant nonprofit, equipment funding, vehicle donation).</p>
-                  )}
-                </>
-              )}
-            </div>
-            {hasSelectedProfile && !liveSearchQuery.isLoading && (
-              <div className="flex flex-col sm:flex-row gap-2 justify-center">
-                <Button variant="outline" onClick={handleRequestItemCrawler}>
-                  Queue deeper crawler sweep
-                </Button>
-                <Button variant="outline" onClick={handleRequestItemGiftCrawler}>
-                  Find donation / gift programs
-                </Button>
-              </div>
-            )}
+          <CardContent className="p-6 sm:p-10">
+            <ZeroResultGuidance
+              title={`No clean item funding found for "${submittedItem}"`}
+              description={
+                !hasSelectedProfile
+                  ? "Select a profile to unlock profile-aware live web search and item-specific crawler jobs."
+                  : "GrantFlow searched the stored catalog and live item sources, but nothing met the current rules and filters."
+              }
+              facts={[
+                { label: "Profile", value: hasSelectedProfile ? selectedProfile?.display_name || "Selected" : "Not selected" },
+                { label: "Excluded review rows", value: String(disqualifiedCount) },
+                { label: "Live web rows", value: String(liveWebCount || 0) },
+              ]}
+              actions={[
+                {
+                  kind: "profile",
+                  label: hasSelectedProfile ? "Review profile details" : "Select a profile",
+                  description: "Item funding works best when GrantFlow knows who needs the item and where.",
+                  href: createPageUrl("MyProfiles"),
+                },
+                {
+                  kind: "review",
+                  label: "Show match/loan results",
+                  description: "Review excluded rows without treating them as compliant funding.",
+                  onClick: () => setIncludeDisqualified(true),
+                  disabled: includeDisqualified || disqualifiedCount === 0,
+                },
+                {
+                  kind: "crawler",
+                  label: "Queue deeper crawler sweep",
+                  description: "Search more sources for this exact item and selected profile.",
+                  onClick: handleRequestItemCrawler,
+                  disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
+                  variant: hasSelectedProfile ? "default" : "outline",
+                },
+                {
+                  kind: "crawler",
+                  label: "Find donation or gift programs",
+                  description: "Look for organizations that provide the item directly.",
+                  onClick: handleRequestItemGiftCrawler,
+                  disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
+                },
+                {
+                  kind: "reset",
+                  label: "Try broader words",
+                  description: "Clear the search so you can try equipment, vehicle, tuition, supplies, or assistance.",
+                  onClick: handleReset,
+                },
+              ]}
+            />
           </CardContent>
         </Card>
       ) : (
@@ -927,6 +943,7 @@ export default function ItemFunding() {
         match={selectedMatch}
         open={Boolean(selectedOpportunity)}
         onClose={() => setSelectedOpportunity(null)}
+        profileName={selectedProfile?.display_name}
       />
     </div>
   )
