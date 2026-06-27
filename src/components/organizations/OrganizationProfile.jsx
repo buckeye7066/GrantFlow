@@ -6,7 +6,7 @@ import { createPageUrl } from '@/utils';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, ArrowRightSquare, AlertCircle } from "lucide-react";
+import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, ArrowRightSquare, AlertCircle, FileSearch } from "lucide-react";
 import OrganizationProfileDetails from './OrganizationProfileDetails';
 import ProfileFilesPanel from '@/components/profiles/ProfileFilesPanel.jsx';
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
@@ -40,6 +40,95 @@ const isSafeHttpUrl = (url) => {
     return false;
   }
 };
+
+function OrganizationWorkspaceTrigger({ icon: Icon, title, detail, value, count, active = false }) {
+  return (
+    <TabsTrigger
+      value={value}
+      title={detail}
+      className={`group h-auto w-full items-start justify-start gap-3 whitespace-normal rounded-lg border px-4 py-3 text-left shadow-none transition hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950 focus-visible:ring-blue-500 data-[state=active]:border-blue-300 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-950 data-[state=active]:shadow-none ${
+        active
+          ? 'border-blue-300 bg-blue-50 text-blue-950'
+          : 'border-slate-200 bg-white text-slate-800'
+      }`}
+    >
+      <span
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${
+          active ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700'
+        }`}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold leading-tight">
+          {title}
+          {count > 0 ? <span className="ml-1 text-xs font-medium text-blue-700">({count})</span> : null}
+        </span>
+        <span className="mt-1 block text-xs leading-relaxed text-slate-600">{detail}</span>
+      </span>
+    </TabsTrigger>
+  );
+}
+
+function OrganizationWorkspaceNav({ activeTab, fundingCount, matchedCount }) {
+  const tabs = [
+    {
+      value: 'details',
+      icon: Building,
+      title: 'Profile details',
+      detail: 'Identity, contacts, services, and story.',
+    },
+    {
+      value: 'sources',
+      icon: DatabaseZap,
+      title: 'Funding sources',
+      detail: 'Funders discovered for this profile.',
+      count: fundingCount,
+    },
+    {
+      value: 'matches',
+      icon: Target,
+      title: 'Opportunities',
+      detail: 'Funding matched to profile facts.',
+      count: matchedCount,
+    },
+    {
+      value: 'pipeline',
+      icon: Kanban,
+      title: 'Pipeline',
+      detail: 'Applications, stages, and automation.',
+    },
+    {
+      value: 'documents',
+      icon: FileSearch,
+      title: 'Documents',
+      detail: 'Uploads, parsing, and evidence.',
+    },
+  ];
+
+  return (
+    <section className="printable-hidden rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workspace</p>
+          <h2 className="text-lg font-semibold text-slate-900">Move from profile to funding</h2>
+        </div>
+      </div>
+      <TabsList
+        aria-label="Organization profile workflow"
+        className="grid h-auto w-full grid-cols-1 items-stretch gap-3 bg-transparent p-0 md:grid-cols-2 xl:grid-cols-5"
+      >
+        {tabs.map((tab) => (
+          <OrganizationWorkspaceTrigger
+            key={tab.value}
+            {...tab}
+            active={activeTab === tab.value}
+          />
+        ))}
+      </TabsList>
+    </section>
+  );
+}
 
 // REBUILT: This component is now a "dumb" component. It receives all data as props
 // and passes all update events up to the parent. It no longer fetches its own data.
@@ -608,19 +697,11 @@ export default function OrganizationProfile({
 
       <main className="flex-1 bg-slate-50 printable-profile-container">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="p-4 printable-section">
-            <TabsList className="printable-hidden">
-              <TabsTrigger value="details">Details</TabsTrigger>
-              <TabsTrigger value="sources">
-                Funding Sources {fundingSources.length > 0 && `(${fundingSources.length})`}
-              </TabsTrigger>
-              <TabsTrigger value="matches">
-                Opportunities {matchedOpportunities.length > 0 && `(${matchedOpportunities.length})`}
-              </TabsTrigger>
-              <TabsTrigger value="pipeline">
-                Pipeline View
-              </TabsTrigger>
-              <TabsTrigger value="documents">Documents</TabsTrigger>
-            </TabsList>
+            <OrganizationWorkspaceNav
+              activeTab={activeTab}
+              fundingCount={fundingSources.length}
+              matchedCount={matchedOpportunities.length}
+            />
             <TabsContent value="details" className="mt-4 print:mt-0">
               <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 printable-hidden">
                 This tab shows a quick summary. Click <strong>Edit Profile</strong> to open every comprehensive application section

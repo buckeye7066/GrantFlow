@@ -5,8 +5,11 @@ import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
 import {
   AlertCircle,
   ArrowRight,
+  Calendar,
   ClipboardList,
+  CreditCard,
   FileSearch,
+  FolderOpen,
   GraduationCap,
   HeartPulse,
   KeyRound,
@@ -14,6 +17,7 @@ import {
   Palette,
   Printer,
   Search,
+  Settings2,
   Sparkles,
   UserCheck,
 } from "lucide-react"
@@ -199,6 +203,181 @@ function ProfileFlowGuide({
           {steps.map((step) => (
             <FlowStepButton key={step.title} {...step} />
           ))}
+        </div>
+      </TooltipProvider>
+    </section>
+  )
+}
+
+function WorkspaceTabTrigger({ icon: Icon, title, detail, tooltip, value, active = false, compact = false }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <TabsTrigger
+          value={value}
+          className={`group h-auto w-full whitespace-normal rounded-lg border text-left shadow-none transition hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950 focus-visible:ring-blue-500 data-[state=active]:border-blue-300 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-950 data-[state=active]:shadow-none ${
+            compact ? "items-start justify-start gap-2 px-3 py-2.5" : "items-start justify-start gap-3 px-4 py-3.5"
+          } ${
+            active
+              ? "border-blue-300 bg-blue-50 text-blue-950"
+              : "border-slate-200 bg-white text-slate-800"
+          }`}
+        >
+          <span
+            className={`flex shrink-0 items-center justify-center rounded-md ${
+              compact ? "h-8 w-8" : "h-10 w-10"
+            } ${
+              active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700"
+            }`}
+          >
+            <Icon className={compact ? "h-4 w-4" : "h-5 w-5"} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className={compact ? "block text-xs font-semibold leading-tight" : "block text-sm font-semibold leading-tight"}>
+              {title}
+            </span>
+            <span className={compact ? "mt-0.5 block text-[11px] leading-snug text-slate-600" : "mt-1 block text-xs leading-relaxed text-slate-600"}>
+              {detail}
+            </span>
+          </span>
+        </TabsTrigger>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
+  const primaryTabs = [
+    {
+      value: "profile",
+      icon: UserCheck,
+      title: "Profile facts",
+      detail: "Identity, needs, eligibility, and location.",
+      tooltip: "Review or edit the facts GrantFlow uses to search. Empty fields are allowed; known facts make searches more precise.",
+    },
+    {
+      value: "documents",
+      icon: FileSearch,
+      title: "Documents",
+      detail: "Uploads, parsed evidence, forms, and printouts.",
+      tooltip: "Open documents so PDFs, screenshots, letters, bills, transcripts, and other files can support the profile.",
+    },
+    {
+      value: "action-plan",
+      icon: Sparkles,
+      title: "Anya plan",
+      detail: "Interview, checklist, and next practical steps.",
+      tooltip: "Open the action plan Anya and Hamilton use to turn the profile into an exact project checklist.",
+    },
+    {
+      value: "pipeline",
+      icon: KeyRound,
+      title: "Portals & pipeline",
+      detail: "Logins, funding sources, and applications.",
+      tooltip: "Open the profile's portal and pipeline workspace, including Hamilton login help and saved funding sources.",
+    },
+  ]
+
+  const supportingTabs = [
+    {
+      value: "item-funding",
+      icon: Search,
+      title: "Item funding",
+      detail: "Specific needs and purchases.",
+      tooltip: "Search for funding tied to a specific item, tool, bill, program cost, or startup need.",
+    },
+    {
+      value: "deadlines",
+      icon: Calendar,
+      title: "Deadlines",
+      detail: "Dates to watch.",
+      tooltip: "Open grant and application deadlines for this profile.",
+    },
+    {
+      value: "monitoring",
+      icon: ClipboardList,
+      title: "Monitoring",
+      detail: "Awards and compliance.",
+      tooltip: "Track awarded grants, reporting, and compliance when this profile is linked to an organization.",
+    },
+    {
+      value: "proposals",
+      icon: FolderOpen,
+      title: "Proposals & files",
+      detail: "Drafts and source files.",
+      tooltip: "Open proposals and the profile's working files.",
+    },
+    {
+      value: "billing",
+      icon: CreditCard,
+      title: "Billing/access",
+      detail: "Members and account status.",
+      tooltip: "Open billing, members, and access details for this profile.",
+    },
+    {
+      value: "personalization",
+      icon: Settings2,
+      title: "Comfort",
+      detail: "Theme and readability.",
+      tooltip: "Adjust color, contrast, text size, and motion preferences while working in this profile.",
+    },
+    isStudentProfile
+      ? {
+          value: "universities",
+          icon: GraduationCap,
+          title: "Student portals",
+          detail: "Aid, awards, and work-study.",
+          tooltip: "Open college portals, applications, financial aid, scholarship, and work-study support.",
+        }
+      : null,
+    isHealthProfile
+      ? {
+          value: "health",
+          icon: HeartPulse,
+          title: "Health",
+          detail: "Support and opt-in studies.",
+          tooltip: "Open health and disability support. Studies remain opt-in and profile-relevant.",
+        }
+      : null,
+  ].filter(Boolean)
+
+  const activeOption = [...primaryTabs, ...supportingTabs].find((tab) => tab.value === activeTab) ?? primaryTabs[0]
+  const ActiveIcon = activeOption.icon
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workspace</p>
+          <h2 className="text-lg font-semibold text-slate-900">Work the profile in order</h2>
+        </div>
+        <span className="inline-flex w-fit items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
+          <ActiveIcon className="h-3.5 w-3.5" />
+          {activeOption.title}
+        </span>
+      </div>
+      <TooltipProvider delayDuration={150}>
+        <TabsList
+          aria-label="Main profile workflow"
+          className="grid h-auto w-full grid-cols-1 items-stretch gap-3 bg-transparent p-0 md:grid-cols-2 xl:grid-cols-4"
+        >
+          {primaryTabs.map((tab) => (
+            <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} />
+          ))}
+        </TabsList>
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">More profile tools</p>
+          <TabsList
+            aria-label="Additional profile tools"
+            className="grid h-auto w-full grid-cols-1 items-stretch gap-2 bg-transparent p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+          >
+            {supportingTabs.map((tab) => (
+              <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} compact />
+            ))}
+          </TabsList>
         </div>
       </TooltipProvider>
     </section>
@@ -1089,23 +1268,11 @@ export default function ProfileDetail() {
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList
-            // Responsive tabs: NEVER overlap. Scroll horizontally on narrow widths.
-            className="w-full justify-start gap-2 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="profile">Profile Information</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="pipeline">Pipeline</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="item-funding">Item Funding</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="deadlines">Grant Deadline</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="monitoring">Grant Monitoring</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="proposals">Proposals & Files</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="documents">Documents</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="action-plan">Action Plan</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="billing">Billing</TabsTrigger>
-            <TabsTrigger className="shrink-0 min-w-max px-3" value="personalization">Personalization</TabsTrigger>
-            {isStudentProfile ? <TabsTrigger className="shrink-0 min-w-max px-3" value="universities">Universities</TabsTrigger> : null}
-            {isHealthProfile ? <TabsTrigger className="shrink-0 min-w-max px-3" value="health">Health</TabsTrigger> : null}
-          </TabsList>
+          <ProfileWorkspaceNav
+            activeTab={activeTab}
+            isStudentProfile={isStudentProfile}
+            isHealthProfile={isHealthProfile}
+          />
 
           <TabsContent value="profile" className="mt-6 space-y-6">
             <SchoolPortalLinkPanel profileId={profileId} />
