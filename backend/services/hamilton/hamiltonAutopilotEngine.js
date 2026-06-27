@@ -28,10 +28,9 @@
  *
  * Hamilton NEVER:
  *   - solves CAPTCHA or signs anything.
- *   - completes a 2FA challenge UNLESS the user saved an authenticator-app
- *     (TOTP) seed for that portal and authorized saved-credential use — in
- *     which case she derives the current code from the seed and types it. Any
- *     other 2FA factor (push, SMS, hardware key) remains a hard blocker.
+ *   - completes a 2FA challenge. The user may clear 2FA themselves and save
+ *     the resulting trusted browser session, but Hamilton never derives, types,
+ *     intercepts, or replays a live MFA code.
  *   - clicks a legal-attestation checkbox unless `use_standing_attestation`
  *     is authorized AND the checkbox is in the recognised attestation
  *     allow-list (financial-aid eligibility self-certification, etc.).
@@ -44,7 +43,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
-import { generateTotp } from './hamiltonTotp.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -353,61 +351,6 @@ async function attemptLogin(page, credential) {
   }
 }
 
-// One-time-code field selectors — kept in sync with detectGate's 2FA heuristic.
-const OTP_FIELD_SELECTOR = 'input[autocomplete*="one-time-code"]:not([disabled]), input[name*="otp" i]:not([disabled]), input[name*="2fa" i]:not([disabled])'
-
-/**
- * Best-effort authenticator-app (TOTP) sign-in. When a saved credential carries
- * a TOTP seed, derive the live 6-digit code and type it into the portal's OTP
- * field(s), then submit. Returns true when the OTP field is gone afterward
- * (heuristic for a cleared 2FA gate). Same origin-safety guard as attemptLogin:
- * the code is only ever typed into a page whose host shares the credential's
- * registrable domain. The seed/code are never logged.
- */
-async function attempt2fa(page, credential) {
-  try {
-    const secret = credential?.totp_secret
-    if (!secret) return false
-    const allowedDomain = registrableDomain(credential?.portal_host)
-    let currentDomain = null
-    try { currentDomain = registrableDomain(new URL(page.url()).hostname) } catch { return false }
-    if (!allowedDomain || currentDomain !== allowedDomain) return false
-
-    let code
-    try { code = generateTotp(secret) } catch { return false }
-
-    // Some portals split the code across N single-digit boxes; others use one
-    // input. Distribute one char per field when there are multiple, else fill
-    // the whole code into the single field.
-    const fields = await page.$$(OTP_FIELD_SELECTOR).catch(() => [])
-    if (!fields.length) return false
-    if (fields.length >= code.length) {
-      for (let i = 0; i < code.length; i += 1) {
-        await fields[i].fill(code[i], { timeout: 5000 }).catch(() => {})
-      }
-    } else {
-      await fields[0].fill(code, { timeout: 5000 }).catch(() => {})
-    }
-
-    let clicked = false
-    for (const sel of ['button[type="submit"]:not([disabled])', 'input[type="submit"]:not([disabled])']) {
-      const b = await page.$(sel).catch(() => null)
-      if (b) { await b.click({ timeout: 5000 }).catch(() => {}); clicked = true; break }
-    }
-    if (!clicked) {
-      const b = await page.$('button:has-text("Verify"), button:has-text("Submit"), button:has-text("Continue"), button:has-text("Confirm")').catch(() => null)
-      if (b) { await b.click({ timeout: 5000 }).catch(() => {}); clicked = true }
-    }
-    if (!clicked) await fields[fields.length - 1].press('Enter').catch(() => {})
-
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
-    const stillOtp = await page.$(OTP_FIELD_SELECTOR).catch(() => null)
-    return !stillOtp
-  } catch {
-    return false
-  }
-}
-
 async function detectGate(page) {
   // Login: a visible password field, OR a URL containing /login|/signin.
   //
@@ -554,7 +497,6 @@ export async function runAutopilot({
   const filled = []
   let loggedIn = false
   let loginAttempted = false
-  let twoFaAttempted = false
 
   let chromium
   try {
@@ -605,20 +547,6 @@ export async function runAutopilot({
           // Login fill failed (couldn't find/submit form) — fall through to the
           // normal hard-stop so the user is told login is required.
           return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
-        }
-        // Authenticator-app (TOTP) path: when Hamilton hits a 2FA gate and the
-        // user saved a TOTP seed for this portal, derive the live code and type
-        // it — instead of hard-stopping. Tried at most once; any other 2FA
-        // factor (no seed) still hard-stops below.
-        if (gate.kind === '2fa' && loginCredential?.totp_secret && !twoFaAttempted) {
-          twoFaAttempted = true
-          trace.push({ step: '2fa_attempt', detail: { method: 'totp' } })
-          const ok = await attempt2fa(page, loginCredential)
-          trace.push({ step: '2fa_result', detail: { ok } })
-          if (ok) { loggedIn = true; continue }
-          // Code rejected or field not found — fall through to the normal
-          // hard-stop so the user is asked to complete 2FA.
-          return { status: 'blocked', blocker_kind: '2fa', blocker_detail: 'Saved authenticator code could not complete 2FA automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
         }
         trace.push({ step: 'gate', detail: gate })
         return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
@@ -792,5 +720,5 @@ export const _internal = {
   FIELD_RULES, STANDING_ATTESTATION_PATTERNS, HARD_ATTESTATION_PATTERNS,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues,
-  detectGate, attemptLogin, attempt2fa, OTP_FIELD_SELECTOR,
+  detectGate, attemptLogin,
 }

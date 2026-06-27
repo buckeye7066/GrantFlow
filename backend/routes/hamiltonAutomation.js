@@ -1242,8 +1242,8 @@ router.post('/credentials', async (req, res) => {
       label: req.body?.label || null,
       loginUrl: req.body?.login_url || req.body?.loginUrl || null,
       managedBy: actorManagedBy(req),
-      // Optional authenticator-app seed (base32 or otpauth:// URI) so Hamilton
-      // can clear a 2FA gate unattended. Never echoed back — only has_totp is.
+      // TOTP seed storage is disabled by Hamilton policy. Passing this field
+      // now produces a clear validation error from the credential service.
       totpSecret: req.body?.totp_secret || req.body?.totpSecret || null,
     })
     return res.json({ ok: true, credential })
