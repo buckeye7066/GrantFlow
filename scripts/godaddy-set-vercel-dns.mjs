@@ -145,7 +145,11 @@ async function verifyRecords(domain, desiredRecords, cleanupRecords = []) {
 }
 
 async function run() {
-  const domain = reqEnv('GODADDY_DOMAIN')
+  // Normalize the zone name: GoDaddy treats it case-insensitively and without a
+  // trailing dot, so normalizing here means the lab-apex guard below cannot be
+  // bypassed with a case- or trailing-dot variant (e.g. "Axiombiolabs.ORG" or
+  // "axiombiolabs.org.") that would still resolve to the same zone.
+  const domain = reqEnv('GODADDY_DOMAIN').toLowerCase().replace(/\s+/g, '').replace(/\.+$/, '')
   const ttl = Number(env('GODADDY_TTL', '600'))
   if (!Number.isInteger(ttl) || ttl < 600) {
     throw new Error('GODADDY_TTL must be an integer >= 600')

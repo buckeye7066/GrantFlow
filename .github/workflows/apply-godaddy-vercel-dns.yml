@@ -34,13 +34,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Guard - refuse to break the lab website
+        # Inputs are passed via env (NOT interpolated into the script body) so a
+        # crafted value cannot inject shell. DOMAIN is normalized (lowercase,
+        # whitespace and trailing dots stripped) before comparison so case- or
+        # trailing-dot variants of the lab apex (e.g. "Axiombiolabs.ORG",
+        # "axiombiolabs.org.") cannot slip past the guard while still resolving
+        # to the same GoDaddy zone.
+        env:
+          DOMAIN_RAW: ${{ github.event.inputs.domain }}
+          ACK: ${{ github.event.inputs.i_understand_this_breaks_the_lab_site }}
         run: |
-          DOMAIN='${{ github.event.inputs.domain }}'
-          ACK='${{ github.event.inputs.i_understand_this_breaks_the_lab_site }}'
-          if [ -z "$DOMAIN" ]; then
+          domain="$(printf '%s' "$DOMAIN_RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | sed 's/\.*$//')"
+          if [ -z "$domain" ]; then
             echo "Aborted: no domain provided."; exit 1
           fi
-          if [ "$DOMAIN" = "axiombiolabs.org" ] && [ "$ACK" != "I_UNDERSTAND" ]; then
+          if [ "$domain" = "axiombiolabs.org" ] && [ "$ACK" != "I_UNDERSTAND" ]; then
             echo "BLOCKED: axiombiolabs.org serves the Axiom Biolabs lab website via GoDaddy"
             echo "Websites + Marketing. Pointing its apex at Vercel takes that site offline."
             echo "Put GrantFlow on a subdomain (CNAME grantflow -> cname.vercel-dns-0.com) instead."
