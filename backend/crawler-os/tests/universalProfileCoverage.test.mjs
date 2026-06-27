@@ -214,6 +214,117 @@ const CASES = [
     selectedSources: ['mycaa', 'military_onesource'],
     notApplicantTypes: ['veteran', 'active_duty'],
   },
+  {
+    name: 'sparse nonprofit animal shelter',
+    profile: {
+      id: 'animal-shelter',
+      profile_type: 'animal_shelter',
+      location: { state: 'OH' },
+    },
+    applicantTypes: ['nonprofit'],
+    needs: ['animal_welfare', 'capacity_building', 'equipment'],
+    selectedSources: ['petsmart_charities_grants', 'petco_love_grants', 'aspca_grants', 'cof_locator'],
+  },
+  {
+    name: 'sparse special education school program',
+    profile: {
+      id: 'special-ed',
+      profile_type: 'special_education_program',
+      location: { state: 'MO' },
+    },
+    applicantTypes: ['school'],
+    needs: ['special_education', 'disability', 'education', 'classroom_supplies'],
+    selectedSources: ['us_dept_of_ed', 'grants_gov'],
+  },
+  {
+    name: 'municipality with water broadband and infrastructure needs',
+    profile: {
+      id: 'city-infra',
+      profile_type: 'municipality',
+      location: { state: 'ND' },
+      needs: ['water system upgrades', 'broadband access', 'public works infrastructure'],
+    },
+    applicantTypes: ['government'],
+    needs: ['water_sewer', 'broadband', 'infrastructure', 'technology', 'capital'],
+    selectedSources: ['epa_water_infrastructure', 'broadband_grants', 'cdbg_state_local', 'eda_economic_development'],
+  },
+  {
+    name: 'domestic violence shelter with sparse fields',
+    profile: {
+      id: 'dv-shelter',
+      profile_type: 'dv_shelter',
+      location: { state: 'AZ' },
+    },
+    applicantTypes: ['nonprofit'],
+    needs: ['domestic_violence', 'housing', 'mental_health', 'public_safety'],
+    selectedSources: ['ovw_grants', 'hud_homeless_assistance', 'doj_grants'],
+  },
+  {
+    name: 'substance recovery nonprofit with sparse fields',
+    profile: {
+      id: 'recovery-program',
+      profile_type: 'recovery_program',
+      location: { state: 'KY' },
+    },
+    applicantTypes: ['nonprofit'],
+    needs: ['substance_recovery', 'mental_health', 'medical'],
+    selectedSources: ['samhsa_grants', 'cdc_grants', 'cof_locator'],
+  },
+  {
+    name: 'county public health department',
+    profile: {
+      id: 'county-health',
+      profile_type: 'county_health_department',
+      location: { state: 'ME' },
+    },
+    applicantTypes: ['government'],
+    needs: ['medical', 'mental_health', 'substance_recovery', 'public_safety'],
+    selectedSources: ['cdc_grants', 'samhsa_grants', 'grants_gov'],
+  },
+  {
+    name: 'sparse family needing ordinary household assistance',
+    profile: {
+      id: 'family-sparse',
+      profile_type: 'family',
+      location: { state: 'IA' },
+    },
+    applicantTypes: ['family', 'individual'],
+    needs: ['food', 'energy', 'housing', 'childcare', 'medical'],
+    selectedSources: ['benefits_gov', 'community_action', 'feeding_america', 'liheap', 'snap', 'medicaid'],
+  },
+  {
+    name: 'sparse adult with disability',
+    profile: {
+      id: 'disabled-adult',
+      profile_type: 'adult_with_disability',
+      location: { state: 'OR' },
+    },
+    applicantTypes: ['individual'],
+    needs: ['disability', 'medical', 'housing', 'transportation', 'employment'],
+    selectedSources: ['benefits_gov', 'community_action', 'hrsa_health_centers', 'medicaid'],
+  },
+  {
+    name: 'sparse college student',
+    profile: {
+      id: 'college-student',
+      profile_type: 'college_student',
+      location: { state: 'OH' },
+    },
+    applicantTypes: ['student', 'individual'],
+    needs: ['scholarship', 'tuition', 'housing', 'textbooks', 'fafsa', 'pell', 'education'],
+    selectedSources: ['pell_grant', 'studentaid_gov', 'benefits_gov'],
+  },
+  {
+    name: 'public library',
+    profile: {
+      id: 'public-library',
+      profile_type: 'public_library',
+      location: { state: 'SD' },
+    },
+    applicantTypes: ['nonprofit', 'government'],
+    needs: ['library_media', 'education', 'technology', 'community_facilities'],
+    selectedSources: ['imls_library_museum', 'broadband_grants', 'grants_gov'],
+  },
 ];
 
 for (const c of CASES) {

@@ -59,6 +59,9 @@ test('when every source yields nothing, a zero-result ladder explains why and wh
     'benefits.gov',
     'api.grants.gov',
     'api.sam.gov',
+    'federalregister.gov',
+    'fema.gov',
+    'rd.usda.gov',
     'dhs.gov',
     'cops.usdoj.gov',
   ]) });
