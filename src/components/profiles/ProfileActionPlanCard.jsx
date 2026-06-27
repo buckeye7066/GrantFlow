@@ -41,6 +41,7 @@ function buildAnyaPrefill(plan, profileName) {
     `Anya, please start the project-readiness interview for ${profileName || "this profile"}.`,
     `Open warmly with: "Good job! Now that you've gotten this far, I have a few questions to narrow down your needs."`,
     "Use the profile fields and uploaded document text GrantFlow already has. Do not ask for facts already marked known. Ask one practical question at a time. If a PDF, DOCX, screenshot, or note already answers something, use it as evidence and ask only for confirmation.",
+    "For official IDs, tax identifiers, SSNs, EINs, license numbers, military IDs, account numbers, or medical/benefit proof, ask the user to upload the official document to the profile instead of typing sensitive numbers into chat. Keep the request practical, explain that the upload creates the profile audit trail, and never quote full sensitive identifiers back to the user.",
     `Plan: ${plan?.title ?? "Project readiness plan"} (${plan?.plan_id ?? "general"}).`,
     `Checklist:\n${checklist || "- No checklist items were generated yet."}`,
     `Questions:\n${questions || "- No required questions right now."}`,
@@ -147,7 +148,8 @@ export default function ProfileActionPlanCard({ profileId, profileName }) {
               </div>
               <p className="max-w-3xl text-sm leading-relaxed text-slate-600">
                 Good job. Now that you have gotten this far, Anya can ask only the missing questions,
-                then Hamilton can save a checklist and how-to packet from the profile and uploaded files.
+                including official documents to upload when they are needed, then Hamilton can save a
+                checklist and how-to packet from the profile and uploaded files.
               </p>
               <div className="flex flex-wrap gap-2 text-xs">
                 <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
@@ -178,7 +180,7 @@ export default function ProfileActionPlanCard({ profileId, profileName }) {
                 Start Anya interview
               </Button>
             </ActionTooltip>
-            <ActionTooltip label="Queue PDFs, Word files, screenshots, and notes for profile parsing before the plan is refreshed.">
+            <ActionTooltip label="Queue PDFs, Word files, screenshots, official forms, IDs, and notes for profile parsing before the plan is refreshed.">
               <Button
                 type="button"
                 variant="outline"

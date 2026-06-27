@@ -91,6 +91,28 @@ function documentEvidence(profile) {
     }));
 }
 
+function uploadedDocumentBlob(profile) {
+  const docs = Array.isArray(profile?.documents) ? profile.documents : [];
+  return docs
+    .map((doc) => cleanText([
+      doc?.name,
+      doc?.type,
+      doc?.mime_type,
+      doc?.processing_status,
+      doc?.extracted_text,
+      doc?.ai_summary,
+      doc?.summary,
+      doc?.notes,
+      doc?.extracted_structured,
+    ]))
+    .join(' ')
+    .toLowerCase();
+}
+
+function uploadedDocumentEvidence(profile, entries) {
+  return textEvidence(uploadedDocumentBlob(profile), entries);
+}
+
 function detectMilitaryStatus(profile, sections, blob) {
   const explicit = lc(firstValue(profile, sections, [
     'military_service.status',
@@ -147,6 +169,174 @@ function textEvidence(blob, entries) {
     if (pattern.test(blob)) hits.push(label);
   }
   return hits.length ? hits.join(', ') : null;
+}
+
+function hasApplicant(thesis, applicants) {
+  const set = new Set(thesis?.applicant_types ?? []);
+  return applicants.some((type) => set.has(type));
+}
+
+function hasNeed(thesis, needs) {
+  const set = new Set(thesis?.needs ?? []);
+  return needs.some((need) => set.has(need));
+}
+
+function officialDocumentItems(profile, sections, thesis, archetype, militaryStatuses) {
+  const applicantNeedsTaxId = hasApplicant(thesis, [
+    'business',
+    'farm',
+    'nonprofit',
+    'church',
+    'ministry',
+    'school',
+    'vfd',
+    'law_enforcement',
+    'government',
+    'tribal',
+    'candidate',
+  ]);
+  const needsIncomeProof = hasNeed(thesis, [
+    'housing',
+    'food',
+    'energy',
+    'medical',
+    'medical_bills',
+    'disability',
+    'caregiving',
+    'survivor_benefits',
+    'cancer_support',
+    'dementia_support',
+    'black_lung_benefits',
+  ]);
+  const isStudent = archetype === 'student_portal_plan' || hasApplicant(thesis, ['student']);
+  const isBusinessStartup =
+    ['food_truck_startup', 'small_business_startup'].includes(archetype) ||
+    hasApplicant(thesis, ['business', 'farm']);
+  const hasMilitaryContext = militaryStatuses.length > 0 || hasApplicant(thesis, [
+    'veteran',
+    'active_duty',
+    'guard_reserve',
+    'transitioning_service_member',
+    'military_spouse',
+  ]);
+  const isOrgLike = applicantNeedsTaxId;
+
+  const items = [
+    item({
+      id: 'official_identity_upload',
+      title: 'Official photo ID upload',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(driver'?s?\s+license|driving\s+license|state\s+id|photo\s+id|passport|government\s+id|\bdl\b)\b/, 'official photo ID uploaded'],
+      ]),
+      question: 'If a portal or application may require identity verification, please upload a current driver license, state ID, passport, or other official photo ID instead of typing the number here.',
+      why: 'Many applications require identity verification, and uploading the document keeps the proof with the profile audit trail.',
+      howTo: 'Use the profile document upload area. Do not paste driver license, passport, SSN, or taxpayer ID numbers into chat.',
+      hamilton: 'Use the uploaded document only when a task requires identity proof; stop before any signature, attestation, or submission.',
+      source_fields: ['documents.official_id', 'profile.documents'],
+    }),
+  ];
+
+  if (applicantNeedsTaxId) {
+    items.push(item({
+      id: 'tax_identifier_document_upload',
+      title: 'Tax ID or registration document upload',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(ein|tax\s+id|taxpayer\s+id|irs\s+(confirmation|letter)|cp\s?575|147c|w-?9|501\(c\)\(3\)|501c3|tax[-\s]?exempt|determination\s+letter)\b/, 'tax/registration proof uploaded'],
+      ]),
+      question: 'Please upload the official EIN/IRS letter, W-9, tax-exempt determination, campaign registration, or agency registration document if this profile has one.',
+      why: 'Funders and portals often require tax/registration proof before they will accept an application or payment setup.',
+      howTo: 'Upload the document to the profile. If the number itself is needed later, Hamilton should read it from the uploaded document, not from chat.',
+      hamilton: 'Attach the tax/registration proof to the application packet and leave a profile document trail.',
+      source_fields: ['organization_details.ein', 'small_business_details.ein', 'documents.tax_identifier'],
+    }));
+  }
+
+  if (isBusinessStartup) {
+    items.push(item({
+      id: 'business_formation_documents_upload',
+      title: 'Business formation, license, and quote uploads',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(articles\s+of\s+organization|business\s+registration|business\s+license|vendor\s+permit|health\s+permit|food\s+handler|insurance|equipment\s+quote|invoice|estimate)\b/, 'business/license/quote document uploaded'],
+      ]),
+      question: 'Please upload any business registration, license, permit, insurance certificate, equipment quote, invoice, or estimate you already have.',
+      why: 'Startup funding requests need proof of legal setup and real costs, especially for equipment, permits, and insurance.',
+      howTo: 'Upload each official form or vendor quote separately so Hamilton can build the checklist and budget from real documents.',
+      hamilton: 'Use these uploads to prepare the business packet, permit tracker, and itemized funding list.',
+      source_fields: ['small_business_details.licenses', 'small_business_details.permits', 'documents.business_forms'],
+    }));
+  }
+
+  if (isStudent) {
+    items.push(item({
+      id: 'student_official_records_upload',
+      title: 'Student aid and school record uploads',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(transcript|fafsa|student\s+aid\s+report|\bsar\b|financial\s+aid\s+award|tuition\s+bill|student\s+account|acceptance\s+letter|class\s+schedule)\b/, 'student aid/school record uploaded'],
+      ]),
+      question: 'Please upload any transcript, FAFSA confirmation/SAR, aid award letter, tuition bill, student account statement, acceptance letter, or class schedule that applies.',
+      why: 'Scholarships, school portals, work-study, and emergency aid often require official school or aid records.',
+      howTo: 'Upload school records directly to the profile; Anya should only ask follow-up questions for details not visible in the documents.',
+      hamilton: 'Use the official records to build the student portal checklist and scholarship packet.',
+      source_fields: ['education', 'financial_aid', 'documents.student_records'],
+    }));
+  }
+
+  if (hasMilitaryContext) {
+    const isActiveDuty = militaryStatuses.includes('active_duty') || militaryStatuses.includes('guard_reserve');
+    items.push(item({
+      id: 'military_verification_upload',
+      title: 'Military status verification upload',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(dd[-\s]?214|va\s+benefit|va\s+award|disability\s+rating|orders|les|military\s+id|dependent\s+id|spouse\s+verification|tap\s+document)\b/, 'military verification uploaded'],
+      ]),
+      question: isActiveDuty
+        ? 'Please upload non-sensitive proof of active duty, Guard/Reserve, or spouse/dependent status if a program requires it, such as orders, LES, TAP paperwork, or spouse verification.'
+        : 'Please upload DD-214, VA benefit/award letter, disability rating letter, spouse verification, or other military-status proof if a program requires it.',
+      why: 'Active duty, veteran, spouse, Guard/Reserve, and transition programs use different evidence and eligibility language.',
+      howTo: 'Upload the official document. Do not type SSN, DoD ID, or full service-number details into chat.',
+      hamilton: 'Route the packet to the right military program type and stop before any official submission.',
+      source_fields: ['military_service.status', 'military_service.documents', 'documents.military'],
+    }));
+  }
+
+  if (needsIncomeProof) {
+    items.push(item({
+      id: 'income_benefit_proof_upload',
+      title: 'Income, benefit, bill, and need proof uploads',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(pay\s+stub|tax\s+return|w-?2|1099|benefit\s+letter|award\s+letter|utility\s+bill|rent\s+notice|lease|medical\s+bill|diagnosis|prescription|care\s+plan|death\s+certificate|black\s+lung)\b/, 'need/income proof uploaded'],
+      ]),
+      question: 'Please upload income proof, benefit letters, rent or utility bills, medical bills, diagnosis/care letters, survivor documents, or other proof tied to the help being requested.',
+      why: 'Need-based programs usually require documentation of income, expenses, eligibility, or the urgent bill.',
+      howTo: 'Upload documents to the profile and redact unrelated account details when possible. Do not paste SSNs or account numbers into chat.',
+      hamilton: 'Use the documents to prepare benefit/application packets and keep proof attached to the profile.',
+      source_fields: ['financial_information', 'health_medical', 'documents.need_proof'],
+    }));
+  }
+
+  if (isOrgLike) {
+    items.push(item({
+      id: 'organization_governance_upload',
+      title: 'Organization governance and authorization uploads',
+      category: 'document',
+      value: uploadedDocumentEvidence(profile, [
+        [/\b(board\s+resolution|bylaws|articles\s+of\s+incorporation|authorization\s+letter|budget|audit|financial\s+statement|sam\.gov|uei)\b/, 'governance/authorization document uploaded'],
+      ]),
+      question: 'Please upload bylaws, articles, board authorization, budget, financial statement, audit, UEI/SAM proof, or other governance documents if this profile is applying as an organization.',
+      why: 'Funders often require proof that the organization exists, is authorized to apply, and can steward funds.',
+      howTo: 'Upload current official documents. Hamilton can then attach them to packets without inventing missing governance facts.',
+      hamilton: 'Prepare the organizational document packet and flag missing authorization before submission.',
+      source_fields: ['organization_details', 'documents.governance'],
+    }));
+  }
+
+  return items;
 }
 
 function foodTruckItems(profile, sections, militaryStatuses, blob = '') {
@@ -368,13 +558,17 @@ export function buildProjectReadinessPlan(profile = {}) {
   const documents = documentEvidence(profile);
   const archetype = detectArchetype(profile, thesis, sections, blob);
   const military_statuses = detectMilitaryStatus(profile, sections, blob);
-  const checklist = archetype === 'food_truck_startup'
+  const coreChecklist = archetype === 'food_truck_startup'
     ? foodTruckItems(profile, sections, military_statuses, blob)
     : archetype === 'student_portal_plan'
       ? studentItems(profile, sections, blob)
       : archetype === 'small_business_startup'
         ? foodTruckItems(profile, sections, military_statuses, blob).filter((x) => x.id !== 'menu_operations')
         : generalItems(profile, sections);
+  const checklist = [
+    ...coreChecklist,
+    ...officialDocumentItems(profile, sections, thesis, archetype, military_statuses),
+  ];
 
   const missing = checklist.filter((x) => x.status === 'ask_anya');
   const interview_questions = [
@@ -402,6 +596,7 @@ export function buildProjectReadinessPlan(profile = {}) {
     hamilton_next_actions: [
       'Save the checklist and how-to packet to the profile documents.',
       'Prepare application/portal worksheets for checklist items with enough known data.',
+      'When official ID, tax, eligibility, or need proof is required, use uploaded profile documents rather than asking the user to type sensitive numbers into chat.',
       'Stop and ask the user before login, signature, payment, attestation, federal form submission, or loan acceptance.',
     ],
   };

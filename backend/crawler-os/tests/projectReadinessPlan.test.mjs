@@ -30,6 +30,43 @@ test('food truck plan uses parsed profile documents without assuming veteran sta
   assert.ok(plan.interview_questions.some((q) => q.id === 'business_identity'), 'missing legal structure should still be asked');
 });
 
+test('business plan asks for official uploads instead of typed sensitive identifiers', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'food-truck-docs',
+    profile_type: 'business',
+    display_name: 'River Road Tacos LLC',
+    description: 'Launching a food truck and applying for startup funding.',
+    sections: [
+      {
+        section_key: 'small_business_details',
+        data: {
+          business_name: 'River Road Tacos LLC',
+          legal_structure: 'LLC',
+          equipment_needed: 'truck, refrigeration, generator',
+        },
+      },
+    ],
+    documents: [
+      {
+        id: 'doc-license',
+        name: 'business-license.pdf',
+        mime_type: 'application/pdf',
+        processing_status: 'completed',
+        extracted_text: 'Business license and vendor permit for River Road Tacos LLC.',
+      },
+    ],
+  });
+
+  const taxDoc = plan.checklist.find((item) => item.id === 'tax_identifier_document_upload');
+  const businessDocs = plan.checklist.find((item) => item.id === 'business_formation_documents_upload');
+
+  assert.ok(taxDoc, 'business/startup plans should request tax or registration proof uploads');
+  assert.match(taxDoc.question, /upload/i);
+  assert.doesNotMatch(taxDoc.question, /type .*tax|enter .*tax|paste .*tax/i);
+  assert.ok(businessDocs, 'business/startup plans should request formation/license/quote uploads');
+  assert.equal(businessDocs.status, 'known');
+});
+
 test('student plan includes work-study and campus job portal readiness', () => {
   const plan = buildProjectReadinessPlan({
     id: 'student-osu',
@@ -46,6 +83,7 @@ test('student plan includes work-study and campus job portal readiness', () => {
   assert.equal(workStudy.status, 'known');
   assert.match(workStudy.question, /campus job portal/i);
   assert.ok(plan.checklist.some((item) => item.id === 'school_portals'));
+  assert.ok(plan.checklist.some((item) => item.id === 'student_official_records_upload'));
 });
 
 test('empty profile becomes an Anya interview, not a penalty or crash', () => {
