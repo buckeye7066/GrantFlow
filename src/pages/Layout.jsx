@@ -217,7 +217,7 @@ export default function Layout({ children, currentPageName }) {
   const { anyaCopilotEnabled: copilotEnabled } = useFeatureFlags()
   const content = (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-gradient-to-br from-background via-background to-muted text-foreground">
+      <div className="flex min-h-screen min-h-dvh w-full overflow-x-hidden bg-gradient-to-br from-background via-background to-muted text-foreground">
         <Sidebar className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
           <SidebarHeader className="border-b border-sidebar-border p-6">
             <Link to={createPageUrl("Dashboard")} className="flex items-center gap-3">
@@ -313,7 +313,7 @@ export default function Layout({ children, currentPageName }) {
           </SidebarFooter>
         </Sidebar>
 
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="min-w-0 flex-1 flex flex-col overflow-hidden">
           <header className="bg-background/80 backdrop-blur border-b border-border px-4 md:px-6 py-3 flex flex-col gap-2 sticky top-0 z-20">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3 md:gap-4">
@@ -362,7 +362,7 @@ export default function Layout({ children, currentPageName }) {
             </div>
           </header>
 
-          <div className="flex-1 overflow-auto bg-background text-foreground">
+          <div className="flex-1 overflow-auto overscroll-contain bg-background text-foreground">
             <div className="min-h-full">
               <AutoTimeTracker />
               <MaintenanceGate />

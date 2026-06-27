@@ -44,7 +44,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
   return (
     <>
       {/* Floating Action Button with tooltip container */}
-      <div className={cn("fixed bottom-6 right-6 z-50 group", className)}>
+      <div className={cn("safe-floating-action fixed z-50 group", className)}>
         <Button
           onClick={handleClick}
           className={cn(
@@ -89,7 +89,10 @@ export default function AnyaFloatingButton({ profileId, className }) {
 
       {/* Slide-out Sheet Panel */}
       <Sheet open={isOpen} onOpenChange={setIsOpen}>
-        <SheetContent side="right" className="w-full sm:w-[540px] md:w-[600px] p-0 flex flex-col">
+        <SheetContent
+          side="right"
+          className="h-[100dvh] max-h-[100dvh] w-full sm:w-[540px] md:w-[600px] p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col"
+        >
           <SheetHeader className="px-6 py-4 border-b border-slate-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">

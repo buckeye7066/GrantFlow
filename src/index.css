@@ -2,9 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
-/* User preference-driven base font size (set by settingsStore.applyTheme) */
+/* User preference-driven base font size (set by settingsStore.applyTheme). */
 html {
   font-size: var(--base-font-size, 16px);
+  min-width: 320px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  isolation: isolate;
+}
+
+.safe-floating-action {
+  right: calc(env(safe-area-inset-right, 0px) + 1rem);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+}
+
+.safe-sheet-close {
+  right: calc(env(safe-area-inset-right, 0px) + 1rem);
+  top: calc(env(safe-area-inset-top, 0px) + 1rem);
+}
+
+@media (min-width: 768px) {
+  .safe-floating-action {
+    right: calc(env(safe-area-inset-right, 0px) + 1.5rem);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 1.5rem);
+  }
+}
+
+@media (pointer: coarse) {
+  button,
+  [role="button"] {
+    min-width: 44px;
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  a,
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
 }
 
 /* Flash-highlight: draws the eye to the element a clickable toast / notification
@@ -229,7 +286,14 @@ button:focus-visible {
     color: rgb(51 65 85) !important; /* slate-700 */
   }
 
-  :root:not(.dark) :is(.placeholder\\:text-slate-400, .placeholder\\:text-slate-500, .placeholder\\:text-slate-600, .placeholder\\:text-gray-400, .placeholder\\:text-gray-500, .placeholder\\:text-gray-600) {
+  :root:not(.dark) :is(
+    .placeholder\:text-slate-400::placeholder,
+    .placeholder\:text-slate-500::placeholder,
+    .placeholder\:text-slate-600::placeholder,
+    .placeholder\:text-gray-400::placeholder,
+    .placeholder\:text-gray-500::placeholder,
+    .placeholder\:text-gray-600::placeholder
+  ) {
     --tw-placeholder-opacity: 1 !important;
     color: rgb(71 85 105) !important; /* slate-600 */
   }
@@ -238,7 +302,14 @@ button:focus-visible {
     color: hsl(var(--foreground)) !important;
   }
 
-  .high-contrast :is(.placeholder\\:text-slate-400, .placeholder\\:text-slate-500, .placeholder\\:text-slate-600, .placeholder\\:text-gray-400, .placeholder\\:text-gray-500, .placeholder\\:text-gray-600) {
+  .high-contrast :is(
+    .placeholder\:text-slate-400::placeholder,
+    .placeholder\:text-slate-500::placeholder,
+    .placeholder\:text-slate-600::placeholder,
+    .placeholder\:text-gray-400::placeholder,
+    .placeholder\:text-gray-500::placeholder,
+    .placeholder\:text-gray-600::placeholder
+  ) {
     --tw-placeholder-opacity: 1 !important;
     color: hsl(var(--foreground)) !important;
   }
