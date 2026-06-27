@@ -86,6 +86,76 @@ test('student plan includes work-study and campus job portal readiness', () => {
   assert.ok(plan.checklist.some((item) => item.id === 'student_official_records_upload'));
 });
 
+test('professional practice startup does not inherit food-truck language', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'attorney-nd',
+    profile_type: 'attorney_practice',
+    display_name: 'Prairie Counsel',
+    description: 'Attorney opening a solo legal practice in North Dakota and needing startup support.',
+    sections: [
+      {
+        section_key: 'professional_details',
+        data: { practice_area: 'estate planning and small business counsel', license_status: 'licensed in ND' },
+      },
+      {
+        section_key: 'financial_information',
+        data: { funding_needed: '$18,000 for software, insurance, filing, and office setup' },
+      },
+    ],
+  });
+
+  assert.equal(plan.plan_id, 'professional_practice_startup');
+  assert.ok(plan.checklist.some((item) => item.id === 'practice_identity'));
+  const rendered = renderProjectPlanDocument(plan).toLowerCase();
+  assert.doesNotMatch(rendered, /food truck|mobile food|commissary|food handler/);
+});
+
+test('farmer plan asks agriculture-specific questions without penalizing missing FSA fields', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'farmer-ia',
+    profile_type: 'farmer',
+    display_name: 'Iowa Beginning Farmer',
+    description: 'Beginning farmer seeking equipment and conservation support.',
+    sections: [
+      { section_key: 'farm_details', data: { operation_type: 'specialty crop', equipment_needed: 'high tunnel and irrigation' } },
+    ],
+  });
+
+  assert.equal(plan.plan_id, 'farm_operation_plan');
+  assert.ok(plan.checklist.some((item) => item.id === 'usda_fsa_status'));
+  assert.ok(plan.interview_questions.some((q) => q.id === 'usda_fsa_status'));
+  assert.equal(plan.checklist.find((item) => item.id === 'farm_equipment_inputs')?.status, 'known');
+});
+
+test('health support plan keeps clinical studies relevant and opt-in', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'patient-sc',
+    profile_type: 'breast_cancer_patient',
+    display_name: 'South Carolina patient',
+    description: 'Stage 4 breast cancer patient needing help with medical bills, prescriptions, rent, and transportation.',
+  });
+
+  assert.equal(plan.plan_id, 'benefits_and_care_plan');
+  const studies = plan.checklist.find((item) => item.id === 'research_studies_preference');
+  assert.ok(studies, 'health/cancer profiles should ask whether studies are wanted');
+  assert.match(studies.question, /optional lane/i);
+  assert.match(studies.hamilton_action, /Do not enroll/i);
+});
+
+test('campaign profile is routed to compliance resources, not ordinary grant language', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'candidate-pa',
+    profile_type: 'politician',
+    display_name: 'Local council campaign',
+    description: 'Candidate in Pennsylvania running for a local election.',
+  });
+
+  assert.equal(plan.plan_id, 'campaign_compliance_plan');
+  assert.ok(plan.checklist.some((item) => item.id === 'campaign_committee'));
+  const rendered = renderProjectPlanDocument(plan).toLowerCase();
+  assert.match(rendered, /do not treat campaign contributions as grants/);
+});
+
 test('empty profile becomes an Anya interview, not a penalty or crash', () => {
   const plan = buildProjectReadinessPlan({ id: 'empty-profile' });
 
