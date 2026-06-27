@@ -11,14 +11,16 @@
 
 const APPLICANT_TYPE_SYNONYMS = {
   individual: ['individual', 'person', 'resident'],
-  family: ['family', 'household', 'parent', 'parents', 'caregiver'],
+  family: ['family', 'household', 'parent', 'parents', 'caregiver', 'widow', 'widower', 'surviving spouse'],
   student: ['student', 'scholar', 'undergraduate', 'graduate', 'pupil'],
+  teacher: ['teacher', 'educator', 'classroom teacher'],
   nonprofit: ['nonprofit', 'non-profit', '501c3', '501(c)(3)', 'charity', 'ngo'],
   church: ['church', 'congregation', 'parish'],
-  ministry: ['ministry', 'faith-based', 'religious'],
+  ministry: ['ministry', 'minister', 'pastor', 'clergy', 'faith-based', 'religious'],
   school: ['school', 'district', 'k-12', 'education', 'university', 'college'],
   vfd: ['volunteer fire', 'fire department', 'vfd', 'first responder', 'ems'],
-  business: ['business', 'company', 'llc', 'startup', 'small business', 'employer'],
+  law_enforcement: ['law enforcement', 'police', 'sheriff', 'border patrol', 'public safety'],
+  business: ['business', 'company', 'llc', 'startup', 'small business', 'employer', 'entrepreneur', 'food truck', 'restaurant', 'food service'],
   // NOTE: applicant-type synonyms must be IDENTITY words, not theme words.
   // 'rural'/'community'/'city'/'county' are themes that appear in almost any
   // mission statement — a rural church is not a "farm" applicant and a community
@@ -26,23 +28,36 @@ const APPLICANT_TYPE_SYNONYMS = {
   // grants into every org's results, so they are excluded here (they remain
   // useful as NEED/geo signals elsewhere).
   farm: ['farm', 'farmer', 'agriculture', 'ranch'],
-  government: ['government', 'municipal', 'tribal', 'municipality'],
+  government: ['government', 'municipal', 'municipality', 'county', 'parks department', 'federal agency'],
+  tribal: ['tribal', 'tribe', 'indian tribe', 'native nation', 'reservation'],
+  candidate: ['candidate', 'politician', 'campaign', 'local election'],
   veteran: ['veteran', 'military', 'service member'],
 };
 
 const NEED_KEYWORDS = {
   housing: ['housing', 'rent', 'mortgage', 'homeless', 'shelter', 'utilities'],
-  food: ['food', 'nutrition', 'meals', 'snap', 'pantry'],
+  food: ['food assistance', 'food support', 'groceries', 'nutrition', 'meals', 'snap', 'pantry'],
   medical: ['medical', 'health', 'disability', 'treatment', 'prescription', 'mental health'],
-  education: ['education', 'tuition', 'scholarship', 'school', 'books', 'training'],
+  education: ['education', 'tuition', 'scholarship', 'school', 'books', 'training', 'classroom', 'teacher supplies'],
   emergency: ['emergency', 'disaster', 'fire', 'flood', 'crisis', 'relief'],
   equipment: ['equipment', 'apparatus', 'gear', 'vehicle', 'truck', 'tools'],
   operations: ['operations', 'operating', 'general support', 'capacity', 'payroll'],
   capital: ['capital', 'building', 'construction', 'renovation', 'facility'],
   programs: ['program', 'programming', 'services', 'outreach', 'project'],
   technology: ['technology', 'computers', 'software', 'internet', 'broadband'],
-  veterans: ['veteran', 'military', 'va benefits'],
-  energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar'],
+  veterans: ['veteran', 'va benefits'],
+  energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar', 'utility', 'utilities', 'electric bill', 'gas bill'],
+  agriculture: ['agriculture', 'farm', 'farmer', 'ranch', 'livestock', 'crop', 'usda'],
+  public_safety: ['public safety', 'law enforcement', 'police', 'sheriff', 'border patrol', 'security'],
+  recreation: ['parks', 'recreation', 'baseball', 'sports', 'summer program', 'athletics', 'youth sports'],
+  legal: ['legal', 'attorney', 'lawyer', 'law firm', 'law practice', 'legal aid'],
+  campaign: ['campaign', 'campaign finance', 'election', 'candidate filing', 'political committee'],
+  caregiving: ['caregiver', 'caregiving', 'respite', 'memory care', 'long term care', 'home care', 'dementia care', 'elder care', 'aging services'],
+  survivor_benefits: ['survivor benefits', 'surviving spouse', 'widow benefits', 'widower benefits', 'death benefit'],
+  cancer_support: ['cancer', 'oncology', 'chemotherapy', 'breast cancer', 'stage 4', 'metastatic'],
+  dementia_support: ['dementia', 'alzheimers', 'alzheimer', 'memory care'],
+  black_lung_benefits: ['black lung', 'coal miner widow', 'coal miner survivor', 'miner survivor', 'coal miner benefits'],
+  startup: ['startup', 'start a business', 'starting a business', 'small business startup', 'entrepreneur', 'food truck', 'restaurant startup', 'mobile food', 'working capital'],
 };
 
 // HIGH-PRECISION phrase → applicant-bucket safety net. Unlike the broad
@@ -114,8 +129,8 @@ function gatherText(profile) {
 }
 
 // Applicant types that describe an ORGANIZATION (vs. a person/household).
-const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'business', 'farm', 'government']);
-const INDIVIDUAL_APPLICANT_TYPES = new Set(['individual', 'family', 'student', 'veteran']);
+const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal']);
+const INDIVIDUAL_APPLICANT_TYPES = new Set(['individual', 'family', 'student', 'teacher', 'candidate', 'veteran', 'widow', 'widower', 'surviving_spouse', 'patient', 'dementia_patient']);
 
 // AUTHORITATIVE primary_type -> applicant-bucket map. The substring-synonym
 // scan below cannot recognize multi-word canonical types whose stored
@@ -133,14 +148,32 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   // get benefit directories + foundation locator + scholarship web discovery).
   individual: ['individual'],
   medical_need: ['individual'],
+  cancer_patient: ['individual'],
+  breast_cancer_patient: ['individual'],
+  patient: ['individual'],
   senior: ['individual'],
   veteran: ['veteran', 'individual'],
   disabled_adult: ['individual'],
-  teacher: ['individual'],
-  classroom_teacher: ['individual'],
-  educator: ['individual'],
+  widow: ['family', 'individual'],
+  widower: ['family', 'individual'],
+  surviving_spouse: ['family', 'individual'],
+  coal_miner_widow: ['family', 'individual'],
+  miner_widow: ['family', 'individual'],
+  dementia_patient: ['family', 'individual'],
+  teacher: ['teacher', 'individual'],
+  classroom_teacher: ['teacher', 'individual'],
+  educator: ['teacher', 'individual'],
   family: ['family', 'individual'],
+  single_parent: ['family', 'individual'],
+  single_mom: ['family', 'individual'],
   homeschool_family: ['family', 'individual'],
+  // Public office / campaign profiles: funding is mostly campaign-finance
+  // guidance and compliance resources, not grants. Keep it a distinct bucket.
+  candidate: ['candidate', 'individual'],
+  political_candidate: ['candidate', 'individual'],
+  local_candidate: ['candidate', 'individual'],
+  politician: ['candidate', 'individual'],
+  campaign_committee: ['candidate'],
   // Students
   student: ['student', 'individual'],
   high_school_student: ['student', 'individual'],
@@ -171,8 +204,16 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   // Faith-based (also nonprofit-eligible for federal/foundation funding)
   church: ['church', 'nonprofit'],
   ministry: ['ministry', 'nonprofit'],
+  minister: ['church', 'ministry', 'nonprofit'],
+  pastor: ['church', 'ministry', 'nonprofit'],
+  clergy: ['church', 'ministry', 'nonprofit'],
   // Emergency services
   volunteer_fire_department: ['vfd', 'government'],
+  police_department: ['law_enforcement', 'government'],
+  sheriff_department: ['law_enforcement', 'government'],
+  law_enforcement_agency: ['law_enforcement', 'government'],
+  border_patrol: ['law_enforcement', 'government'],
+  federal_agency: ['government'],
   // Government / public agencies
   county_government: ['government'],
   local_government: ['government'],
@@ -180,13 +221,30 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   public_agency: ['government'],
   local_housing_authority: ['government'],
   parks_department: ['government'],
+  parks_recreation: ['government'],
+  county_parks_recreation: ['government'],
+  public_recreation_program: ['government'],
+  youth_sports_program: ['government', 'nonprofit'],
   regional_planning_agency: ['government'],
   economic_development_agency: ['government'],
-  tribal_government: ['government'],
+  tribal_government: ['tribal', 'government'],
+  indian_tribe: ['tribal', 'government'],
+  native_nation: ['tribal', 'government'],
+  reservation: ['tribal', 'government'],
   public_health_department: ['government'],
   // Business
   business: ['business'],
   small_business: ['business'], // legacy seed string
+  entrepreneur: ['business'],
+  veteran_entrepreneur: ['veteran', 'business', 'individual'],
+  food_truck: ['business'],
+  food_truck_startup: ['business'],
+  restaurant_startup: ['business'],
+  attorney: ['business'],
+  lawyer: ['business'],
+  law_firm: ['business'],
+  legal_practice: ['business'],
+  attorney_practice: ['business'],
   minority_owned_business: ['business'],
   women_owned_business: ['business'],
 });
@@ -238,7 +296,7 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   const primaryIsIndividual =
     INDIVIDUAL_APPLICANT_TYPES.has(primaryRaw) ||
     primaryRaw.includes('student') ||
-    /\b(individual|person|resident|family|household|parent|parents|caregiver|scholar|undergraduate|graduate|pupil|veteran)\b/.test(primaryRaw);
+    /\b(individual|person|resident|family|household|parent|parents|caregiver|widow|widower|surviving spouse|surviving_spouse|patient|scholar|undergraduate|graduate|pupil|teacher|educator|candidate|politician|veteran)\b/.test(primaryRaw);
   if (primaryIsIndividual) {
     for (const t of [...found]) if (ORG_APPLICANT_TYPES.has(t)) found.delete(t);
     // A person applicant is an INDIVIDUAL applicant — ensure individual-eligible
@@ -297,6 +355,19 @@ function deriveNeeds(profile, blob) {
   for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
     if (kws.some((k) => blob.includes(k))) found.add(canon);
   }
+  if (found.has('cancer_support')) found.add('medical');
+  if (found.has('dementia_support')) {
+    found.add('medical');
+    found.add('caregiving');
+  }
+  if (found.has('black_lung_benefits')) {
+    found.add('medical');
+    found.add('survivor_benefits');
+  }
+  if ((found.has('veterans') || /\b(veteran|military|service member|service-member|armed forces|service-disabled)\b/i.test(blob)) &&
+      (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
+    found.add('veteran_startup');
+  }
   return [...found];
 }
 
@@ -338,7 +409,7 @@ export function buildThesis(profile = {}) {
 
   const isStudent = applicant_types.includes('student') || Boolean(profile?.school);
   const isOrg = applicant_types.some((t) =>
-    ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'business', 'farm', 'government'].includes(t));
+    ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal'].includes(t));
 
   return {
     profile_id: profile?.id ?? profile?.profile_id ?? null,

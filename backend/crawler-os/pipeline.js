@@ -24,6 +24,7 @@ import { parse } from './parsers.js';
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
 import { computeMatchDecision } from './matchEngine.js';
+import { buildEvolutionSignals } from './profileEvolution.js';
 import { CRAWLER_OUTCOME, MATCH_DECISION, REASON, canonicalOpportunityKey } from './contract.js';
 import {
   upsertSource, upsertOpportunity, upsertMatch,
@@ -265,11 +266,12 @@ function buildLadder(thesis, thePlan, summaries, zeroReason) {
 function finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSummaries, storedOppIds, recommendations, totalRejected, zeroReason }) {
   const finishedAt = new Date(clock()).toISOString();
   const ladder = zeroReason ? buildLadder(thesis, thePlan, sourceSummaries, zeroReason) : null;
+  const profileEvolution = buildEvolutionSignals({ thesis, plan: thePlan, summaries: sourceSummaries, zeroReason });
   recordRun(store, {
     run_id: runId, profile_id: thesis.profile_id ?? null, started_at: startedAt, finished_at: finishedAt,
     planned: thePlan.selected_source_ids.length, found: storedOppIds.size, stored: storedOppIds.size, rejected: totalRejected,
     zero_result_reason: zeroReason,
-    telemetry: { source_decisions: thePlan.source_decisions, sources: sourceSummaries, zero_result: ladder },
+    telemetry: { source_decisions: thePlan.source_decisions, sources: sourceSummaries, zero_result: ladder, profile_evolution: profileEvolution },
   });
   return {
     run_id: runId,
@@ -280,6 +282,7 @@ function finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSumma
     sources: sourceSummaries,
     recommendations: recommendations.sort((a, b) => b.match_score - a.match_score),
     zero_result: ladder,
+    profile_evolution: profileEvolution,
     started_at: startedAt,
     finished_at: finishedAt,
   };
