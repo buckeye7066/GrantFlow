@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * Live deployment proof.
+ * Release/deployment status proof.
  *
  * This script intentionally checks only public/status-style signals and never
- * reads environment variables or secret config. It proves the current GitHub,
- * Vercel, and Railway surfaces are reachable and green for release readiness.
+ * reads environment variables or secret config. It proves the local branch is
+ * clean/pushed and the current production surfaces are green. It does NOT prove
+ * the current branch commit is already live unless the deployment provider later
+ * exposes and verifies that exact commit SHA.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -71,6 +73,10 @@ function firstArrayItem(value) {
   return Array.isArray(value) && value.length ? value[0] : null
 }
 
+function firstLine(value) {
+  return String(value || '').split(/\r?\n/)[0] ?? ''
+}
+
 async function writeReport(report) {
   const outDir = path.resolve('docs/_readiness_logs')
   await mkdir(outDir, { recursive: true })
@@ -86,8 +92,20 @@ async function main() {
   const gitClean = gitBranch.ok && !gitBranch.stdout.split(/\r?\n/).slice(1).some(Boolean)
   add(checks, REQUIRE_CLEAN ? 'local worktree clean' : 'local worktree status recorded', gitBranch, gitBranch.ok && (!REQUIRE_CLEAN || gitClean), {
     clean: gitClean,
-    branch: gitBranch.stdout.split(/\r?\n/)[0] ?? null,
+    branch: firstLine(gitBranch.stdout) || null,
     required: REQUIRE_CLEAN,
+  })
+
+  const localHead = run('git', ['rev-parse', 'HEAD'])
+  const branchName = run('git', ['branch', '--show-current'])
+  const currentBranch = firstLine(branchName.stdout).trim()
+  const remoteHead = currentBranch
+    ? run('git', ['rev-parse', '--verify', `origin/${currentBranch}`], { optional: true })
+    : { ok: false, stdout: '', stderr: 'no current branch' }
+  add(checks, 'current branch pushed to origin', remoteHead, localHead.ok && remoteHead.ok && firstLine(localHead.stdout) === firstLine(remoteHead.stdout), {
+    branch: currentBranch || null,
+    local_head: firstLine(localHead.stdout) || null,
+    origin_head: firstLine(remoteHead.stdout) || null,
   })
 
   const openPrs = run('gh', ['pr', 'list', '--state', 'open', '--json', 'number,title,headRefName,url'], { json: true })
@@ -120,13 +138,13 @@ async function main() {
   const vercel = run('vercel', ['ls', '--yes'])
   const vercelText = `${vercel.stdout}\n${vercel.stderr}`
   const vercelProductionReady = vercel.ok && /\bReady\b.*\bProduction\b/i.test(vercelText)
-  add(checks, 'Vercel production deployment ready', vercel, vercelProductionReady, {
+  add(checks, 'current Vercel production deployment ready', vercel, vercelProductionReady, {
     production_ready_line: vercelText.split(/\r?\n/).find((line) => /\bReady\b.*\bProduction\b/i.test(line)) ?? null,
   })
 
   const railwayStatus = run('railway', ['service', 'status'])
   const railwayServiceGreen = railwayStatus.ok && /Status:\s+SUCCESS/i.test(railwayStatus.stdout)
-  add(checks, 'Railway service deployment successful', railwayStatus, railwayServiceGreen, {
+  add(checks, 'current Railway service deployment successful', railwayStatus, railwayServiceGreen, {
     status_line: railwayStatus.stdout.split(/\r?\n/).find((line) => /Status:/i.test(line)) ?? null,
   })
 
@@ -135,7 +153,7 @@ async function main() {
     .split(/\r?\n/)
     .find((line) => /^\s*[0-9a-f-]{20,}\s+\|/i.test(line))
   const latestRailwaySuccess = railwayDeployments.ok && /\|\s*SUCCESS\s*\|/i.test(firstDeploymentLine ?? '')
-  add(checks, 'Railway latest deployment successful', railwayDeployments, latestRailwaySuccess, {
+  add(checks, 'current Railway latest deployment successful', railwayDeployments, latestRailwaySuccess, {
     latest_deployment_line: firstDeploymentLine ?? null,
   })
 
@@ -143,12 +161,12 @@ async function main() {
   const report = {
     ok: failures.length === 0,
     generated_at: new Date().toISOString(),
-    mode: 'live status check; no env vars or secrets read',
+    mode: 'release-readiness status check; verifies clean local tree/current branch pushed plus current production health; no env vars or secrets read',
     checks,
     failures,
   }
 
-  console.log('GrantFlow live deployment proof')
+  console.log('GrantFlow release/deployment status proof')
   console.log(report.mode)
   for (const check of checks) {
     const suffix = check.name === 'local worktree status recorded'
@@ -159,7 +177,7 @@ async function main() {
 
   if (WRITE_REPORT) await writeReport(report)
   if (failures.length) {
-    console.error('\nLive deployment proof failed:')
+    console.error('\nRelease/deployment status proof failed:')
     for (const failure of failures) console.error(`- ${failure.name}`)
     process.exit(1)
   }

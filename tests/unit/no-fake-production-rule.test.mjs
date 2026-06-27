@@ -12,6 +12,7 @@ test('canonical rules forbid fake production data, fake proof, and bypassed guar
   assert.match(doc, /Truthful data, truthful proof, no fake shortcuts/)
   assert.match(doc, /Do not fake funding/)
   assert.match(doc, /Do not fake production proof/)
+  assert.match(doc, /Do not blur release states/)
   assert.match(doc, /Do not bypass guardrails/)
   assert.match(doc, /Missing evidence is a gap, not a license to invent/)
 })
@@ -21,4 +22,12 @@ test('offline crawler routing proof labels itself honestly', () => {
   assert.match(script, /NOT a live web-crawl proof/)
   assert.match(script, /deterministic\/offline code-path proof/)
   assert.doesNotMatch(script, /live crawl proof/i)
+})
+
+test('deployment proof distinguishes branch readiness from live production status', () => {
+  const script = readRepoFile('scripts/production-deployment-proof.mjs')
+  assert.match(script, /current branch pushed/)
+  assert.match(script, /current production surfaces are green/)
+  assert.match(script, /does NOT prove[\s\S]*branch commit is already live/i)
+  assert.doesNotMatch(script, /proves the current branch commit is already live/i)
 })
