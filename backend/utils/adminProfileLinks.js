@@ -15,7 +15,7 @@ export async function ensureAdminUser(db) {
       `
         SELECT *
         FROM users
-        WHERE LOWER(primary_email) = ?
+        WHERE LOWER(TRIM(primary_email)) = ?
       `,
     )
     .get(normalizedEmail)

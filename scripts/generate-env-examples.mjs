@@ -29,6 +29,7 @@ function extractEnvVars(source) {
     /process\.env\.([A-Z0-9_]+)/g,
     /process\.env\[['"]([A-Z0-9_]+)['"]\]/g,
     /import\.meta\.env\.([A-Z0-9_]+)/g,
+    /readEnv(?:Bool|Int|String)\(\s*['"]([A-Z0-9_]+)['"]/g,
   ]
   for (const re of patterns) {
     let m
@@ -90,6 +91,10 @@ function placeholderFor(name) {
 
   // TTLs (seconds)
   if (upper.endsWith('_TTL')) return '600'
+
+  if (upper === 'JOHN_PRIMARY_MAILBOX') return 'dr.johnwhite@axiombiolabs.org'
+  if (upper === 'JOHN_FROM_ALIAS' || upper === 'JOHN_REPLY_TO') return 'Ellie@axiombiolabs.org'
+  if (upper === 'JOHN_DISPLAY_NAME') return 'Ellie | GrantFlow'
 
   return ''
 }
@@ -233,4 +238,3 @@ const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/'
 if (isMain) {
   main()
 }
-

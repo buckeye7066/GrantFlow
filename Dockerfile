@@ -71,6 +71,11 @@ COPY --from=builder /app/src/config ./src/config
 # Copy seed data needed for admin maintenance operations (e.g., baseline profile seeding)
 COPY seed ./seed
 
+# Copy the pricing/service-catalog extract required by
+# seedServiceCatalogFromExtract(). The Docker context intentionally excludes the
+# rest of docs; this single file is runtime data, not documentation decoration.
+COPY --from=builder /app/docs/Payment_sheet_Grantflow_2026-06-15_EXTRACT.md ./docs/Payment_sheet_Grantflow_2026-06-15_EXTRACT.md
+
 # Copy built frontend assets from builder stage
 COPY --from=builder /app/dist ./dist
 

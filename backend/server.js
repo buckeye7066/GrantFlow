@@ -1655,6 +1655,7 @@ app.use(async (req, _res, next) => {
   if (!user || user.role !== 'admin' || !user.userId) return next()
 
   try {
+    const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
     const existing = await db
       .prepare(
         `
@@ -1667,6 +1668,33 @@ app.use(async (req, _res, next) => {
       .get(user.userId)
 
     if (!existing?.id) {
+      const existingByEmail = adminEmail
+        ? await db
+            .prepare(
+              `
+                SELECT id
+                FROM users
+                WHERE LOWER(TRIM(primary_email)) = ?
+                LIMIT 1
+              `,
+            )
+            .get(adminEmail)
+        : null
+
+      if (existingByEmail?.id) {
+        await db
+          .prepare(
+            `
+              UPDATE users
+              SET is_admin = TRUE
+              WHERE id = ?
+            `,
+          )
+          .run(existingByEmail.id)
+        req.user.userId = existingByEmail.id
+        return next()
+      }
+
       await db
         .prepare(
           `
@@ -1677,7 +1705,7 @@ app.use(async (req, _res, next) => {
         .run(
           user.userId,
           user.full_name || ADMIN_NAME || 'Admin User',
-          user.email || ADMIN_EMAIL || null,
+          adminEmail,
           true,
         )
     }
@@ -1796,19 +1824,46 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
         // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
         if (user.role === 'admin' || user.is_admin === true) {
           try {
-            db.prepare(
-              `
-                INSERT INTO users (id, display_name, primary_email, is_admin)
-                VALUES (?, ?, ?, ?)
-              `,
-            ).run(
-              user.userId,
-              user.full_name || ADMIN_NAME || 'Admin User',
-              user.email || ADMIN_EMAIL || null,
-              true,
-            )
+            const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
+            const existingByEmail = adminEmail
+              ? await req.db
+                  .prepare(
+                    `
+                      SELECT *
+                      FROM users
+                      WHERE LOWER(TRIM(primary_email)) = ?
+                      LIMIT 1
+                    `,
+                  )
+                  .get(adminEmail)
+              : null
 
-            dbUser = db
+            if (existingByEmail?.id) {
+              await req.db
+                .prepare(
+                  `
+                    UPDATE users
+                    SET is_admin = TRUE
+                    WHERE id = ?
+                  `,
+                )
+                .run(existingByEmail.id)
+              user.userId = existingByEmail.id
+            } else {
+              await req.db.prepare(
+                `
+                  INSERT INTO users (id, display_name, primary_email, is_admin)
+                  VALUES (?, ?, ?, ?)
+                `,
+              ).run(
+                user.userId,
+                user.full_name || ADMIN_NAME || 'Admin User',
+                adminEmail,
+                true,
+              )
+            }
+
+            dbUser = req.db
               .prepare(
                 `
                   SELECT *
