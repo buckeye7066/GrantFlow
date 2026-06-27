@@ -1024,8 +1024,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
     { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },
-    { type: "navigate", label: "Run Discover Grants", payload: { path: createPageUrl("DiscoverGrants") } },
-    { type: "navigate", label: "Add a grant to Pipeline", payload: { path: createPageUrl("Pipeline") } },
+    { type: "navigate", label: "Open Discover Grants", payload: { path: createPageUrl("DiscoverGrants") } },
+    { type: "navigate", label: "Open Pipeline", payload: { path: createPageUrl("Pipeline") } },
   ], [])
   const nextStepActions = useMemo(() => {
     if (!copilotEnabled) return []

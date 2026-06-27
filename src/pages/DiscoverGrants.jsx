@@ -1553,7 +1553,7 @@ export default function DiscoverGrants() {
               <div>
                 <h3 className="text-lg font-semibold text-blue-900">Run discovery to see funding matches</h3>
                 <p className="text-sm text-blue-800 mt-1">
-                  We&apos;t searched for funding for this profile yet. Run discovery to find grants, scholarships, benefits, and local programs matched to it.
+                  We haven&apos;t searched for funding for this profile yet. Run discovery to find grants, scholarships, benefits, and local programs matched to it.
                 </p>
               </div>
               <Button

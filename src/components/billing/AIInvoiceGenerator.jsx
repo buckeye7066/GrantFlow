@@ -15,8 +15,7 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
   const { data: activities } = useQuery({
     queryKey: ['activitiesForBilling', organizationId, projectId],
     queryFn: async () => {
-      // In a real scenario, this would be a more complex query fetching various user activities.
-      // For now, we'll simulate by fetching recent entities.
+      // Pull recent real project activity, then let the LLM draft invoice lines from it.
       const grants = await client.entities.Grant.list(`-updated_date`, 10, { organization_id: organizationId });
       const docs = await client.entities.Document.list(`-updated_date`, 10, { organization_id: organizationId });
       return { grants, docs };

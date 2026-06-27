@@ -4,6 +4,8 @@ import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, PlusCircle, FileText } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
 import AddExpenseForm from '../budgets/AddExpenseForm'; // Assuming this exists for logging spend
 
 const defaultPolicy = {
@@ -159,10 +161,30 @@ const budgetRemaining = awardAmount - totalSpent;
               <CardDescription>Generate and track financial and performance reports.</CardDescription>
           </CardHeader>
           <CardContent>
-              {/* Placeholder for report list and generation button */}
-              <div className="text-center text-slate-500 py-6">
-                <FileText className="mx-auto w-8 h-8 mb-2"/>
-                <p>Report generation coming soon.</p>
+              <div className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <FileText className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+                  <div>
+                    <p className="font-medium text-slate-900">Reports are managed in Reports & Analytics.</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Open the working report workspace to schedule, draft, and review compliance reports for this awarded grant.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Link to={createPageUrl("Reports", { organization_id: grant.organization_id, grant_id: grant.id, schedule: "1" })}>
+                    <Button className="w-full sm:w-auto">
+                      <PlusCircle className="mr-2 h-4 w-4" />
+                      Schedule Report
+                    </Button>
+                  </Link>
+                  <Link to={createPageUrl("Reports", { organization_id: grant.organization_id })}>
+                    <Button variant="outline" className="w-full sm:w-auto">
+                      <FileText className="mr-2 h-4 w-4" />
+                      Open Reports
+                    </Button>
+                  </Link>
+                </div>
               </div>
           </CardContent>
       </Card>

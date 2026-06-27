@@ -422,7 +422,7 @@ function OpportunityCard({
         </div>
 
         {/* Synopsis / Description */}
-        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "Summary coming soon."}</p>
+        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "No summary available yet."}</p>
 
         {/* Contact Info - Application URL */}
         {opportunity.application_url && (
@@ -837,7 +837,7 @@ function OpportunityDetail({
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Opportunity Overview</h3>
             <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">
-              {opportunity.description || "Summary coming soon."}
+              {opportunity.description || "No summary available yet."}
             </p>
           </section>
 

@@ -277,13 +277,6 @@ const matchesSearch =
     }
   }
 
-  const showComingSoon = (message) => {
-    toast({
-      title: "Coming soon",
-      description: message,
-    })
-  }
-
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">

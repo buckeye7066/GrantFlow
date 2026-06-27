@@ -206,7 +206,7 @@ function ItemResultCard({ opportunity, match, onSelect }) {
             <span>{formatDeadline(opportunity.deadline, opportunity.deadline_type)}</span>
           </div>
         </div>
-        <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "Summary coming soon."}</p>
+        <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "No summary available yet."}</p>
         {match ? (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-500">
@@ -302,7 +302,7 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
           <section className="space-y-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">Overview</h3>
             <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
-              {opportunity.description || "Summary coming soon."}
+              {opportunity.description || "No summary available yet."}
             </p>
           </section>
 
