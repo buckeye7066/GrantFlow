@@ -14,6 +14,25 @@ function formatWhen(iso) {
   }
 }
 
+function eventTimeMs(row) {
+  const ms = Date.parse(String(row?.at || ''))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+function mergeNewestById(incoming, previous, limit) {
+  const byId = new Map()
+  const combined = [
+    ...(Array.isArray(incoming) ? incoming : []),
+    ...(Array.isArray(previous) ? previous : []),
+  ]
+  combined.forEach((event) => {
+    if (event?.id && !byId.has(event.id)) byId.set(event.id, event)
+  })
+  return Array.from(byId.values())
+    .sort((a, b) => eventTimeMs(b) - eventTimeMs(a))
+    .slice(0, limit)
+}
+
 export default function AdminLoginNotifications() {
   const { toast } = useToast()
   const [events, setEvents] = useState([])
@@ -56,12 +75,7 @@ export default function AdminLoginNotifications() {
 
         // Keep latest first, de-dupe by id.
         setEvents((prev) => {
-          const next = [...incoming, ...prev]
-          const byId = new Map()
-          next.forEach((e) => {
-            if (e?.id && !byId.has(e.id)) byId.set(e.id, e)
-          })
-          return Array.from(byId.values()).slice(0, 50)
+          return mergeNewestById(incoming, prev, 50)
         })
 
         // Notify the admin (toast) for each new login.
@@ -101,12 +115,7 @@ export default function AdminLoginNotifications() {
       lastSeenViewsMsRef.current = maxMs
 
       setPageViews((prev) => {
-        const next = [...incoming, ...prev]
-        const byId = new Map()
-        next.forEach((e) => {
-          if (e?.id && !byId.has(e.id)) byId.set(e.id, e)
-        })
-        return Array.from(byId.values()).slice(0, 200)
+        return mergeNewestById(incoming, prev, 200)
       })
     } catch (err) {
       // Do not block the login list if page views fail.
@@ -124,8 +133,8 @@ export default function AdminLoginNotifications() {
     return () => clearInterval(id)
   }, [])
 
-  const rows = useMemo(() => (Array.isArray(events) ? events : []), [events])
-  const viewRows = useMemo(() => (Array.isArray(pageViews) ? pageViews : []), [pageViews])
+  const rows = useMemo(() => [...(Array.isArray(events) ? events : [])].sort((a, b) => eventTimeMs(b) - eventTimeMs(a)), [events])
+  const viewRows = useMemo(() => [...(Array.isArray(pageViews) ? pageViews : [])].sort((a, b) => eventTimeMs(b) - eventTimeMs(a)), [pageViews])
 
   return (
     <div className="space-y-6">
@@ -242,4 +251,3 @@ export default function AdminLoginNotifications() {
     </div>
   )
 }
-

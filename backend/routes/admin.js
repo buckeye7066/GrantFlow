@@ -1841,6 +1841,23 @@ router.get('/diagnostics', async (req, res) => {
   }
 });
 
+function loginEventTimeMs(event) {
+  const ms = Date.parse(String(event?.at || ''))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+function normalizeLoginEvents(events, limit) {
+  const byId = new Map()
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!event) continue
+    const id = event.id ? String(event.id) : `event:${loginEventTimeMs(event)}:${event.identifier || ''}:${event.method || ''}`
+    if (!byId.has(id)) byId.set(id, { ...event, id })
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => loginEventTimeMs(b) - loginEventTimeMs(a))
+    .slice(0, limit)
+}
+
 // GET /api/admin/login-events - Recent client logins (admin only)
 // Preferred: DB-backed audit logs + session backfill. Falls back to in-memory ring buffer.
 router.get('/login-events', async (req, res) => {
@@ -1888,70 +1905,74 @@ router.get('/login-events', async (req, res) => {
     }
 
     // 2) Backfill: sessions table (helps recover events from before audit logging existed)
+    // Query independently from audit_logs, then merge/sort below. The old
+    // "only if audit rows are under the limit" behavior could hide newer
+    // session rows behind older durable audit rows.
     try {
-      if (events.length < limit) {
-        const remaining = limit - events.length
-        const rows = startDateIso
-          ? await req.db
-              .prepare(
-                `
-                  SELECT
-                    s.id,
-                    COALESCE(s.issued_at, s.created_at) AS at,
-                    s.user_id,
-                    s.profile_id,
-                    s.ip_address,
-                    s.user_agent,
-                    u.primary_email,
-                    u.is_admin
-                  FROM user_sessions s
-                  LEFT JOIN users u ON u.id = s.user_id
-                  WHERE COALESCE(s.issued_at, s.created_at) > ?
-                  ORDER BY COALESCE(s.issued_at, s.created_at) DESC
-                  LIMIT ?
-                `,
-              )
-              .all(startDateIso, remaining)
-          : await req.db
-              .prepare(
-                `
-                  SELECT
-                    s.id,
-                    COALESCE(s.issued_at, s.created_at) AS at,
-                    s.user_id,
-                    s.profile_id,
-                    s.ip_address,
-                    s.user_agent,
-                    u.primary_email,
-                    u.is_admin
-                  FROM user_sessions s
-                  LEFT JOIN users u ON u.id = s.user_id
-                  ORDER BY COALESCE(s.issued_at, s.created_at) DESC
-                  LIMIT ?
-                `,
-              )
-              .all(remaining)
+      const sessionLimit = Math.max(1, Math.min(200, limit))
+      const rows = startDateIso
+        ? await req.db
+            .prepare(
+              `
+                SELECT
+                  s.id,
+                  COALESCE(s.issued_at, s.created_at) AS at,
+                  s.user_id,
+                  s.profile_id,
+                  s.ip_address,
+                  s.user_agent,
+                  u.primary_email,
+                  u.is_admin
+                FROM user_sessions s
+                LEFT JOIN users u ON u.id = s.user_id
+                WHERE COALESCE(s.issued_at, s.created_at) > ?
+                ORDER BY COALESCE(s.issued_at, s.created_at) DESC
+                LIMIT ?
+              `,
+            )
+            .all(startDateIso, sessionLimit)
+        : await req.db
+            .prepare(
+              `
+                SELECT
+                  s.id,
+                  COALESCE(s.issued_at, s.created_at) AS at,
+                  s.user_id,
+                  s.profile_id,
+                  s.ip_address,
+                  s.user_agent,
+                  u.primary_email,
+                  u.is_admin
+                FROM user_sessions s
+                LEFT JOIN users u ON u.id = s.user_id
+                ORDER BY COALESCE(s.issued_at, s.created_at) DESC
+                LIMIT ?
+              `,
+            )
+            .all(sessionLimit)
 
-        for (const r of rows || []) {
-          events.push({
-            id: `session:${r.id}`,
-            type: 'client_sign_in',
-            at: r.at,
-            identifier: r.primary_email ?? null,
-            method: 'session',
-            user_id: r.user_id ?? null,
-            profile_id: r.profile_id ?? null,
-            ip: r.ip_address ?? null,
-            user_agent: r.user_agent ?? null,
-          })
-        }
+      for (const r of rows || []) {
+        events.push({
+          id: `session:${r.id}`,
+          type: 'client_sign_in',
+          at: r.at,
+          identifier: r.primary_email ?? null,
+          method: 'session',
+          user_id: r.user_id ?? null,
+          profile_id: r.profile_id ?? null,
+          ip: r.ip_address ?? null,
+          user_agent: r.user_agent ?? null,
+        })
       }
     } catch (sessionErr) {
       console.warn('[admin/login-events] session backfill failed:', sessionErr?.message || sessionErr)
     }
 
     // 3) Final fallback: in-memory ring buffer (dev only / best-effort)
-    const finalEvents = events.length > 0 ? events.slice(0, limit) : listClientSignInEvents({ since, limit })
+    const finalEvents = normalizeLoginEvents(
+      events.length > 0 ? events : listClientSignInEvents({ since, limit }),
+      limit,
+    )
 
     return res.json({
       ok: true,
