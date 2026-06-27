@@ -16,6 +16,9 @@
  *   VERCEL_WWW_CNAME       (optional) default cname.vercel-dns-0.com
  *   VERCEL_WWW_A           (optional) default 76.76.21.21
  *   VERIFY_ONLY            (optional) true/false. verify current GoDaddy records without changing them
+ *   ALLOW_LAB_APEX_TAKEOVER (optional) set to I_UNDERSTAND to override the guard
+ *                          that blocks pointing axiombiolabs.org's apex at Vercel
+ *                          (doing so takes the lab website offline)
  *   CONFIRM                set to YES to apply
  */
 
@@ -156,6 +159,19 @@ async function run() {
 
   const apply = String(process.env.CONFIRM || '').trim().toUpperCase() === 'YES'
   const verifyOnly = envBool('VERIFY_ONLY', false)
+
+  // Guard: axiombiolabs.org serves the Axiom Biolabs lab website via GoDaddy
+  // Websites + Marketing. Pointing its apex at Vercel overwrites those records
+  // and takes the lab site offline (this already happened once). GrantFlow
+  // belongs on a subdomain (CNAME grantflow -> cname.vercel-dns-0.com), not the
+  // apex. Block destructive applies against the lab apex unless explicitly
+  // overridden. (Read-only VERIFY_ONLY runs are still allowed.)
+  if (apply && !verifyOnly && domain === 'axiombiolabs.org' && env('ALLOW_LAB_APEX_TAKEOVER', '') !== 'I_UNDERSTAND') {
+    throw new Error(
+      'Refusing to point axiombiolabs.org apex at Vercel: that takes the lab website offline. ' +
+        'Put GrantFlow on a subdomain, or set ALLOW_LAB_APEX_TAKEOVER=I_UNDERSTAND to override.',
+    )
+  }
 
   const desiredRecords = [
     { type: 'A', name: '@', records: [{ data: apexIp, ttl }] },
