@@ -38,7 +38,7 @@ export async function stampLastDiscoveryAt() { /* OS persistence stamps last_dis
 // produced rows. We now ALWAYS report the OS run as one synchronous "fleet"
 // (jobs_enqueued = 1) plus the per-source counts, AND set synchronous:true so
 // the client knows discovery is already complete by the time we return.
-export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {}) {
+export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) {
   if (!db || !profileId) {
     return {
       ...SUPERSEDED,
@@ -51,7 +51,12 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, _options = {})
   }
   const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
   try {
-    const { run, persisted } = await runProfileDiscoveryLive({ db, profileId })
+    const { run, persisted } = await runProfileDiscoveryLive({
+      db,
+      profileId,
+      fetcher: options.fetcher,
+      floor: options.floor,
+    })
     const sourceTypes = Array.isArray(run?.sources)
       ? [...new Set(run.sources.map((s) => s?.source_id || s?.id).filter(Boolean))]
       : []

@@ -500,10 +500,6 @@ app.use('/api/sms', lazyRouter('./routes/smsInbound.js'));
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
-// Wrap every request in an AsyncLocalStorage profile context so the SQL
-// layer (backend/db/scopedQuery.js) can enforce tenant isolation automatically.
-app.use(profileContextMiddleware());
-
 // Mount health check routes EARLY to ensure they're always available
 // req.db is already attached above.
 app.use(healthRouter);
@@ -1695,6 +1691,10 @@ app.use(async (req, _res, next) => {
 // Attach canonical request context (MUST run after auth middleware)
 // This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
 app.use(attachRequestContext())
+
+// Wrap route handlers in an AsyncLocalStorage profile context after auth and
+// request context are known, so SQL tenant guards see the real user/profile.
+app.use(profileContextMiddleware());
 
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)

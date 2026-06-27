@@ -53,8 +53,13 @@ export function makeJohnDb() {
  * Set JOHN_* env vars for a test, returning a restore function.
  */
 export function applyEnv(patch) {
+  const envPatch = {
+    GRANTFLOW_TEST_RUNNER: '1',
+    JOHN_AI_DRAFTING: 'off',
+    ...patch,
+  }
   const previous = {}
-  for (const [k, v] of Object.entries(patch || {})) {
+  for (const [k, v] of Object.entries(envPatch)) {
     previous[k] = process.env[k]
     if (v == null) delete process.env[k]
     else process.env[k] = String(v)

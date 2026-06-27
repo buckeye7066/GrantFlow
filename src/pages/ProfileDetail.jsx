@@ -362,7 +362,7 @@ function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
       <TooltipProvider delayDuration={150}>
         <TabsList
           aria-label="Main profile workflow"
-          className="grid h-auto w-full grid-cols-1 items-stretch gap-3 bg-transparent p-0 md:grid-cols-2 xl:grid-cols-4"
+          className="flex h-auto w-full max-w-full justify-start gap-3 overflow-x-auto overflow-y-hidden whitespace-nowrap bg-transparent p-0 pb-2 [scrollbar-width:thin] [&>button]:min-w-[17rem] [&>button]:shrink-0 sm:[&>button]:flex-1"
         >
           {primaryTabs.map((tab) => (
             <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} />
@@ -372,7 +372,7 @@ function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">More profile tools</p>
           <TabsList
             aria-label="Additional profile tools"
-            className="grid h-auto w-full grid-cols-1 items-stretch gap-2 bg-transparent p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+            className="flex h-auto w-full max-w-full justify-start gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap bg-transparent p-0 pb-2 [scrollbar-width:thin] [&>button]:min-w-[13.5rem] [&>button]:shrink-0 md:[&>button]:flex-1"
           >
             {supportingTabs.map((tab) => (
               <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} compact />

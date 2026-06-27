@@ -282,6 +282,24 @@ export function normalizeProfileSectionData(sectionKey, data) {
   return out
 }
 
+async function loadLinkedOrganizationForProfile(db, profileId, organizationId) {
+  if (!profileId || !organizationId) return null
+  return db
+    .prepare(
+      `
+      WITH scope AS (SELECT ? AS profile_id)
+      SELECT o.*
+      FROM scope s
+      JOIN profiles p ON p.id = s.profile_id
+      JOIN organizations o ON o.id = p.organization_id
+      WHERE s.profile_id = ?
+        AND o.id = ?
+      LIMIT 1
+      `,
+    )
+    .get(profileId, profileId, organizationId)
+}
+
 export async function loadProfileContext(db, profileId) {
   const profile = await db
     .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
@@ -315,9 +333,7 @@ export async function loadProfileContext(db, profileId) {
   let organization = null
   if (profile.organization_id) {
     try {
-      organization = await db
-        .prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1')
-        .get(profile.organization_id)
+      organization = await loadLinkedOrganizationForProfile(db, profileId, profile.organization_id)
     } catch (err) {
       // Surface org-load failure so matching doesn't silently lose org-level
       // signals (state/city/zip/mission). Matching continues without the org.
@@ -561,9 +577,7 @@ export async function buildProfileContext(db, profileId, options = {}) {
   let organization = null
   if (profile.organization_id) {
     try {
-      organization = await db
-        .prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1')
-        .get(profile.organization_id)
+      organization = await loadLinkedOrganizationForProfile(db, profileId, profile.organization_id)
     } catch (error) {
       console.warn('[buildProfileContext] Failed to load organization:', error?.message)
       organization = null

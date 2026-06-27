@@ -38,6 +38,15 @@ export const ADDABILITY_DEFAULTS = Object.freeze({
   maxAgeYears: Number(process.env.FUNDING_TRACE_MAX_AGE_YEARS) || 5,
 })
 
+export const FUNDING_TRACE_ENTITY_TYPES = Object.freeze([
+  'company',
+  'nonprofit',
+  'foundation',
+  'grantmaker',
+  'public_entity',
+  'individual',
+])
+
 /**
  * Decide whether a traced source is worth offering for one-click add.
  *

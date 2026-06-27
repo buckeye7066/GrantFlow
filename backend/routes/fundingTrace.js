@@ -9,7 +9,7 @@
 
 import express from 'express'
 import crypto from 'crypto'
-import { traceFunding, traceSourceToOpportunity } from '../services/fundingTraceService.js'
+import { FUNDING_TRACE_ENTITY_TYPES, traceFunding, traceSourceToOpportunity } from '../services/fundingTraceService.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -20,7 +20,7 @@ const router = express.Router()
 router.use(ensureAuth)
 router.use(ensureAdmin)
 
-const VALID_ENTITY_TYPES = new Set(['company', 'public_entity', 'individual'])
+const VALID_ENTITY_TYPES = new Set(FUNDING_TRACE_ENTITY_TYPES)
 
 router.post('/', async (req, res) => {
   const { entity, entity_type: entityType = 'company', use_ai: useAi = true } = req.body || {}

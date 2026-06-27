@@ -10,6 +10,7 @@ import {
   runScheduledAutoDiscovery,
   resetScheduledAutoDiscoveryStateForTests,
 } from '../services/scheduledAutoDiscovery.js'
+import { makeOfflineFetcher } from '../crawler-os/tests/fixtures/fakeFetch.mjs'
 import { randomUUID } from 'crypto'
 
 function seedUser(db) {
@@ -111,7 +112,10 @@ describe('scheduledAutoDiscovery', () => {
     const userId = seedUser(db)
     const profileId = seedProfile(db, userId)
 
-    const report = await runScheduledAutoDiscovery(db, { forceEnabled: true })
+    const report = await runScheduledAutoDiscovery(db, {
+      forceEnabled: true,
+      fetcher: makeOfflineFetcher(),
+    })
     expect(report.profiles_queued).toBe(1)
 
     const count = db

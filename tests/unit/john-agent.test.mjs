@@ -47,9 +47,9 @@ test('runJohn in draft mode caps drafts at maxDrafts and respects the rolling 24
     JOHN_ENABLED: 'true',
     JOHN_DRAFT_ONLY: 'true',
     JOHN_ALLOW_SEND: 'false',
-    JOHN_MAX_DRAFTS_PER_24H: '50',
-    JOHN_MAX_DRAFTS_PER_RUN: '50',
-    JOHN_MAX_DRAFTS_PER_HOUR: '50',
+    JOHN_MAX_DRAFTS_PER_24H: '5',
+    JOHN_MAX_DRAFTS_PER_RUN: '5',
+    JOHN_MAX_DRAFTS_PER_HOUR: '5',
     JOHN_MIN_LEAD_SCORE: '70',
     JOHN_REQUIRE_YANA_QUALIFIED: 'true',
     JOHN_REQUIRE_PUBLIC_EVIDENCE: 'true',
@@ -62,7 +62,7 @@ test('runJohn in draft mode caps drafts at maxDrafts and respects the rolling 24
   const db = makeJohnDb()
   try {
     const leads = []
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 8; i++) {
       leads.push(makeQualifiedLead({
         lead_id: `lead-${i}`,
         organization_name: `Org ${i}`,
@@ -75,19 +75,19 @@ test('runJohn in draft mode caps drafts at maxDrafts and respects the rolling 24
       mode: JOHN_MODES.DRAFT,
       provider,
       leadSource: makeSource(leads),
-      maxDrafts: 50,
+      maxDrafts: 5,
     })
     assert.equal(r.status, RUN_STATUS.COMPLETED)
-    assert.equal(r.drafts_created, 50)
+    assert.equal(r.drafts_created, 5)
     const drafts = await listDrafts(db, { limit: 100 })
-    assert.equal(drafts.length, 50)
+    assert.equal(drafts.length, 5)
     // A second run on the same day must produce 0 more drafts.
     const r2 = await runJohn({
       db,
       mode: JOHN_MODES.DRAFT,
       provider,
       leadSource: makeSource(leads),
-      maxDrafts: 50,
+      maxDrafts: 5,
     })
     assert.equal(r2.status, RUN_STATUS.DAILY_LIMIT_REACHED)
     assert.equal(r2.drafts_created, 0)

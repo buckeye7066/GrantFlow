@@ -39,7 +39,10 @@ async function main() {
 
   const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`, ...testFiles], {
     stdio: 'inherit',
-    env: process.env,
+    env: {
+      ...process.env,
+      GRANTFLOW_TEST_RUNNER: process.env.GRANTFLOW_TEST_RUNNER || '1',
+    },
   })
 
   let exited = false
@@ -49,9 +52,11 @@ async function main() {
   })
 
   // Test-spawned server processes may keep open handles that prevent
-  // node --test from exiting. Hard-kill after a generous timeout so the
-  // CI pipeline can proceed to vitest and build steps.
-  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 5 * 60 * 1000
+  // node --test from exiting. Keep a deadman switch, but size it for the
+  // current suite: many tests intentionally boot the backend, exercise auth,
+  // parse documents, and run Hamilton/agent flows. This is not a performance
+  // SLA; CI/local callers can still lower or raise it with UNIT_TEST_HARD_TIMEOUT_MS.
+  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 12 * 60 * 1000
   setTimeout(() => {
     if (!exited) {
       console.error(`[unit] Hard timeout (${HARD_TIMEOUT_MS / 1000}s) reached — killing test runner`)
@@ -65,4 +70,3 @@ main().catch((error) => {
   console.error('[unit] Failed to run unit tests:', error?.message || error)
   process.exitCode = 1
 })
-

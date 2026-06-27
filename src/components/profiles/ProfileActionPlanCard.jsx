@@ -48,6 +48,18 @@ function buildAnyaPrefill(plan, profileName) {
   ].join("\n\n")
 }
 
+function buildAnyaSessionMetadata(plan, profileId) {
+  return {
+    source: "profile_action_plan",
+    intent: "project_readiness_interview",
+    profile_id: profileId,
+    plan_id: plan?.plan_id ?? null,
+    checklist_count: plan?.checklist?.length ?? 0,
+    interview_question_count: plan?.interview_questions?.length ?? 0,
+    parsed_document_count: plan?.document_evidence?.length ?? 0,
+  }
+}
+
 function ActionTooltip({ label, children }) {
   return (
     <Tooltip>
@@ -123,7 +135,12 @@ export default function ProfileActionPlanCard({ profileId, profileName }) {
       toast({ title: "Still building the plan", description: "Give Anya one moment to read the profile." })
       return
     }
-    openAnyaPanel({ prefillMessage: buildAnyaPrefill(plan, profileName) })
+    openAnyaPanel({
+      profileId,
+      title: `${plan?.title ?? "Project readiness"} interview`,
+      metadata: buildAnyaSessionMetadata(plan, profileId),
+      prefillMessage: buildAnyaPrefill(plan, profileName),
+    })
   }
 
   const isLoading = planQuery.isLoading

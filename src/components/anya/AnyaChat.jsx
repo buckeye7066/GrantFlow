@@ -442,7 +442,7 @@ function resolvePageName(pathname) {
   return null
 }
 
-export default function AnyaChat({ profileId, currentPage: currentPageProp, prefillMessage, onPrefillConsumed }) {
+export default function AnyaChat({ profileId, currentPage: currentPageProp, initialSessionOptions, prefillMessage, onPrefillConsumed }) {
   const user = useAuthStore((state) => state.user)
   const profiles = useAuthStore((state) => state.profiles)
   // Accept every admin shape the auth store normalizes (is_admin snake_case,
@@ -857,6 +857,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         // (./anyaSession.js).
         const { session: activeSession } = await bootstrapAnyaSession({
           profileId: effectiveProfileId ?? null,
+          title: initialSessionOptions?.title ?? undefined,
+          metadata: initialSessionOptions?.metadata ?? undefined,
           createSession: createAnyaSession,
         })
         if (!isMounted) return
@@ -907,7 +909,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     // → creates another session → `isLoading` stays true → the Admin Tools
     // button stays disabled forever (Anya goals 4, 6, 8). Bootstrap only needs
     // to run when the profile identity or admin-ness changes.
-  }, [effectiveProfileId, isAdmin])
+  }, [effectiveProfileId, isAdmin, initialSessionOptions?.metadata, initialSessionOptions?.title])
 
   useEffect(() => {
     let isMounted = true

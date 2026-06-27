@@ -126,6 +126,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
       await triggerAutoDiscoveryCrawlers(db, profile.id, {
         uploadDir: options.uploadDir,
         getOpenAI: options.getOpenAI,
+        fetcher: options.fetcher,
         requestedBy: 'scheduled-auto-discovery',
         profileDigest: decision.digest,
         trigger: 'scheduled_daily',

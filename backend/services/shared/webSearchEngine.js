@@ -40,6 +40,12 @@ const SKIP_SUBSTRINGS = [
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+function isLiveSearchDisabledInTests() {
+  const explicitAllow = String(process.env.GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS || '').toLowerCase() === 'true'
+  if (explicitAllow) return false
+  return process.env.GRANTFLOW_TEST_RUNNER === '1'
+}
+
 // Providers are created once (each throws without its config). Cache the attempt
 // so we don't re-check the env / re-construct on every query.
 let _searxng = null
@@ -160,6 +166,10 @@ async function duckDuckGoSearch(query, count, timeoutMs) {
 export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   const q = String(query || '').trim()
   if (!q) return []
+
+  if (isLiveSearchDisabledInTests()) {
+    return []
+  }
 
   // 1. SearXNG (self-hosted, primary): keyless, unlimited, datacenter-reliable.
   const searxng = getSearxngProvider()

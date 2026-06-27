@@ -10,6 +10,8 @@ import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore"
 export default function AnyaFloatingButton({ profileId, className }) {
   const [isOpen, setIsOpen] = useState(false)
   const [prefillMessage, setPrefillMessage] = useState(null)
+  const [sessionOptions, setSessionOptions] = useState({})
+  const [chatKey, setChatKey] = useState(0)
   // Use the canonical admin normalizer so we accept every shape the auth
   // store may carry (`is_admin` snake_case from the canonical /api/auth/me
   // bootstrap, `isAdmin` camelCase from JWT payloads, `role === 'admin'`,
@@ -22,14 +24,22 @@ export default function AnyaFloatingButton({ profileId, className }) {
   // Treat the synthetic admin sentinel as "no real profile" — the AnyaChat
   // child filters it out anyway, but recognising it here prevents a
   // misleading targetProfileId from leaking into bug reports.
-  const realProfileId = profileId && profileId !== '__admin__' ? profileId : null
+  const eventProfileId = sessionOptions?.profileId && sessionOptions.profileId !== '__admin__' ? sessionOptions.profileId : null
+  const realProfileId = eventProfileId ?? (profileId && profileId !== '__admin__' ? profileId : null)
   const canOpen = isAdmin || Boolean(realProfileId)
   const targetProfileId = realProfileId ?? (isAdmin ? null : undefined)
 
   useEffect(() => {
     function handleOpen(event) {
-      const msg = event?.detail?.prefillMessage ?? null
+      const detail = event?.detail ?? {}
+      const msg = detail?.prefillMessage ?? null
       setPrefillMessage(msg)
+      setSessionOptions({
+        profileId: detail?.profileId ?? null,
+        title: detail?.title ?? null,
+        metadata: detail?.metadata ?? null,
+      })
+      setChatKey((key) => key + 1)
       setIsOpen(true)
     }
     window.addEventListener("anya:open", handleOpen)
@@ -38,6 +48,8 @@ export default function AnyaFloatingButton({ profileId, className }) {
 
   const handleClick = () => {
     setPrefillMessage(null)
+    setSessionOptions({})
+    setChatKey((key) => key + 1)
     setIsOpen(true)
   }
 
@@ -121,7 +133,13 @@ export default function AnyaFloatingButton({ profileId, className }) {
           </SheetHeader>
           <div className="flex-1 overflow-hidden">
           {canOpen ? (
-            <AnyaChat profileId={targetProfileId ?? undefined} prefillMessage={prefillMessage} onPrefillConsumed={() => setPrefillMessage(null)} />
+            <AnyaChat
+              key={`${targetProfileId ?? 'admin'}:${chatKey}`}
+              profileId={targetProfileId ?? undefined}
+              initialSessionOptions={sessionOptions}
+              prefillMessage={prefillMessage}
+              onPrefillConsumed={() => setPrefillMessage(null)}
+            />
             ) : (
               <div className="p-6 flex items-center justify-center h-full">
                 <Alert className="max-w-md">

@@ -38,6 +38,23 @@ describe("bootstrapAnyaSession", () => {
     expect(result.profileId).toBe("profile-B")
   })
 
+  it("passes safe session title and metadata into the fresh session", async () => {
+    const createSession = vi.fn().mockResolvedValue({ id: "session-plan" })
+
+    await bootstrapAnyaSession({
+      profileId: "profile-plan",
+      title: "Food truck launch action plan interview",
+      metadata: { source: "profile_action_plan", plan_id: "food_truck_startup" },
+      createSession,
+    })
+
+    expect(createSession).toHaveBeenCalledWith({
+      profileId: "profile-plan",
+      title: "Food truck launch action plan interview",
+      metadata: { source: "profile_action_plan", plan_id: "food_truck_startup" },
+    })
+  })
+
   it("opens a profile-less session for a null profile (admin/no-profile context)", async () => {
     const createSession = vi.fn().mockResolvedValue({ id: "session-admin" })
 

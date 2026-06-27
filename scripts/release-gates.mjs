@@ -48,6 +48,11 @@ async function main() {
   // crashes on boot with ERR_MODULE_NOT_FOUND, so prod silently keeps serving the
   // previous deployment" failure mode that masked profile section AI fixes for days.
   await run('node', ['scripts/check-runtime-imports.mjs'], { label: 'runtime-imports' })
+  await run(npmBin(), ['run', 'profile-scope:check'], { label: 'profile-scope' })
+  await run(npmBin(), ['run', 'safe-sql:check'], { label: 'safe-sql' })
+  await run('node', ['--test', 'tests/unit/no-fake-production-rule.test.mjs'], { label: 'no-fake-rule' })
+  await run('node', ['--test', 'tests/unit/profile-context-middleware.test.mjs'], { label: 'profile-context' })
+  await run('node', ['scripts/crawler-profile-routing-proof.mjs'], { label: 'crawler-profile-routing' })
 
   // Gate 1: baseline quality + build
   await run(npmBin(), ['test'], { label: 'quality+build' })
@@ -55,8 +60,10 @@ async function main() {
   // Gate 2: contrast
   await run('node', ['--test', 'tests/unit/ui-dashboard-contrast.test.mjs'], { label: 'ui-contrast-dashboard' })
   await run('node', ['--test', 'tests/unit/ui-geo-crawl-contrast.test.mjs'], { label: 'ui-contrast-geo' })
+  await run('node', ['--test', 'tests/unit/profile-flow-mobile-static.test.mjs'], { label: 'profile-mobile-static' })
 
   // Gate 3: auth/downloads
+  await run('node', ['--test', 'tests/unit/ui-honesty-guard.test.mjs'], { label: 'ui-honesty' })
   await run('node', ['--test', 'tests/unit/avatar-download-auth.test.mjs'], { label: 'auth-avatar-download' })
   await run('node', ['--test', 'tests/unit/documents-download-auth.test.mjs'], { label: 'auth-doc-download' })
 
@@ -75,6 +82,7 @@ async function main() {
 
   // Gate 8: Validation layer — URL format, required fields, duplicate detection
   await run('node', ['--test', 'tests/unit/opportunity-validation-layer.test.mjs'], { label: 'validation-layer' })
+  await run('node', ['--test', 'tests/unit/funding-trace-consolidation.test.mjs'], { label: 'funding-trace' })
 
   // Gate 9: Multi-profile matching — individual/student/nonprofit/business must return results
   await run('node', ['--test', 'tests/unit/multi-profile-matching.test.mjs', 'tests/unit/validation-gate.test.mjs'], { label: 'multi-profile-matching' })
@@ -91,4 +99,3 @@ main().catch((err) => {
   console.error('[gate] release gates failed:', err?.message || err)
   process.exitCode = 1
 })
-

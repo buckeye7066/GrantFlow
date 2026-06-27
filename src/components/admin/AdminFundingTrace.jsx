@@ -9,7 +9,9 @@ import { traceFunding, addTracedSource } from '@/api/fundingTrace'
 import { useToast } from '@/components/ui/use-toast'
 
 const ENTITY_TYPES = [
-  { value: 'company', label: 'Company / Corporation' },
+  { value: 'company', label: 'Company / Business' },
+  { value: 'nonprofit', label: 'Nonprofit' },
+  { value: 'foundation', label: 'Foundation / Grantmaker' },
   { value: 'public_entity', label: 'Public Entity' },
   { value: 'individual', label: 'Individual' },
 ]
@@ -75,14 +77,15 @@ export default function AdminFundingTrace() {
             Funding Trace
           </CardTitle>
           <CardDescription>
-            Enter a company, public entity, or individual to see where they get their funding — sourced from
-            federal award data (USASpending.gov), IRS 990 filings, and AI analysis. Add any source to the GrantFlow catalog.
+            Enter a company, nonprofit, foundation, public entity, or individual to trace public funding evidence:
+            federal awards received, IRS 990 context, and clearly labeled AI synthesis when enabled. Add verified sources
+            to the GrantFlow catalog.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-3">
             <Input
-              placeholder="e.g. Lockheed Martin, City of Columbus, Jane Smith"
+              placeholder="e.g. Ford Foundation, City of Columbus, Lockheed Martin"
               value={entity}
               onChange={(e) => setEntity(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') runTrace() }}
@@ -120,6 +123,10 @@ export default function AdminFundingTrace() {
               )}
             </CardDescription>
           </CardHeader>
+          <div className="mx-6 mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+            Funding Trace shows evidence GrantFlow can trace. Foundation outgoing-recipient lists only appear when
+            public 990/source data exposes them; otherwise GrantFlow marks the gap instead of guessing.
+          </div>
           <CardContent className="space-y-2">
             {sources.map((source) => {
               const origin = ORIGIN_META[source.origin] || ORIGIN_META.usaspending

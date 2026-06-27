@@ -147,14 +147,15 @@ function detectArchetype(profile, thesis, sections, blob) {
   if (isStudent) return 'student_portal_plan';
   if (isFoodTruck) return 'food_truck_startup';
   if (isLegalPractice) return 'professional_practice_startup';
-  if (applicantHas(['farm']) || needHas(['agriculture'])) return 'farm_operation_plan';
   if (applicantHas(['tribal'])) return 'tribal_government_plan';
+  if (applicantHas(['farm']) || needHas(['agriculture'])) return 'farm_operation_plan';
   if (applicantHas(['vfd', 'law_enforcement', 'government']) || needHas(['public_safety', 'infrastructure', 'recreation'])) return 'public_agency_project_plan';
   if (applicantHas(['teacher'])) return 'classroom_project_plan';
   if (applicantHas(['nonprofit', 'church', 'ministry', 'school']) || needHas(['animal_welfare', 'capacity_building', 'programs'])) return 'nonprofit_program_plan';
   if (isStartup || thesis.applicant_types?.includes('business')) return 'small_business_startup';
   if (thesis.needs?.includes('caregiving') || thesis.needs?.includes('dementia_support')) return 'benefits_and_care_plan';
   if (needHas(['medical', 'medical_bills', 'disability', 'cancer_support', 'black_lung_benefits', 'survivor_benefits'])) return 'benefits_and_care_plan';
+  if (applicantHas(['family', 'individual']) && needHas(['housing', 'food', 'energy', 'childcare', 'transportation'])) return 'benefits_and_care_plan';
   return 'general_funding_readiness';
 }
 
@@ -196,6 +197,10 @@ function hasNeed(thesis, needs) {
 }
 
 function officialDocumentItems(profile, sections, thesis, archetype, militaryStatuses) {
+  const isStudent = archetype === 'student_portal_plan' || hasApplicant(thesis, ['student']);
+  const isBusinessStartup =
+    ['food_truck_startup', 'small_business_startup', 'professional_practice_startup', 'farm_operation_plan'].includes(archetype) ||
+    hasApplicant(thesis, ['business', 'farm']);
   const applicantNeedsTaxId = hasApplicant(thesis, [
     'business',
     'farm',
@@ -208,7 +213,7 @@ function officialDocumentItems(profile, sections, thesis, archetype, militarySta
     'government',
     'tribal',
     'candidate',
-  ]);
+  ]) || isBusinessStartup;
   const needsIncomeProof = hasNeed(thesis, [
     'housing',
     'food',
@@ -222,10 +227,6 @@ function officialDocumentItems(profile, sections, thesis, archetype, militarySta
     'dementia_support',
     'black_lung_benefits',
   ]);
-  const isStudent = archetype === 'student_portal_plan' || hasApplicant(thesis, ['student']);
-  const isBusinessStartup =
-    ['food_truck_startup', 'small_business_startup'].includes(archetype) ||
-    hasApplicant(thesis, ['business', 'farm']);
   const hasMilitaryContext = militaryStatuses.length > 0 || hasApplicant(thesis, [
     'veteran',
     'active_duty',
