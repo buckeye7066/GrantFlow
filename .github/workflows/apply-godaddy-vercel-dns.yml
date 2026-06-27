@@ -1,14 +1,30 @@
-# Point axiombiolabs.org apex + www at Vercel (fixes E-001 when DNS was still on GoDaddy).
-# Repo secrets required: GODADDY_API_KEY, GODADDY_API_SECRET
-# Actions → Apply GoDaddy DNS for Vercel → confirm = YES
-name: Apply GoDaddy DNS for Vercel
+# DISABLED-BY-DEFAULT / GUARDED.
+#
+# WARNING: Running this against axiombiolabs.org points the domain APEX + www at
+# Vercel, which OVERWRITES the GoDaddy "Websites + Marketing" DNS records that
+# serve the Axiom Biolabs lab website. A prior run of this workflow took that
+# website offline (the apex started serving the GrantFlow app instead).
+#
+# The lab website must own the apex (axiombiolabs.org / www). GrantFlow should
+# live on its own subdomain (e.g. grantflow.axiombiolabs.org via a CNAME), which
+# this apex-takeover script is the WRONG tool for. This workflow now refuses to
+# touch the lab apex unless an operator explicitly acknowledges the consequence.
+name: Apply GoDaddy DNS for Vercel (GUARDED)
 
 on:
   workflow_dispatch:
     inputs:
+      domain:
+        description: 'Domain to repoint at Vercel (do NOT use the lab apex axiombiolabs.org)'
+        required: true
+        default: ''
       confirm:
         description: 'Type YES to apply DNS changes'
         required: true
+        default: 'NO'
+      i_understand_this_breaks_the_lab_site:
+        description: 'ONLY if domain is axiombiolabs.org: type I_UNDERSTAND to override the lab-site guard'
+        required: false
         default: 'NO'
 
 jobs:
@@ -16,6 +32,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Guard - refuse to break the lab website
+        run: |
+          DOMAIN='${{ github.event.inputs.domain }}'
+          ACK='${{ github.event.inputs.i_understand_this_breaks_the_lab_site }}'
+          if [ -z "$DOMAIN" ]; then
+            echo "Aborted: no domain provided."; exit 1
+          fi
+          if [ "$DOMAIN" = "axiombiolabs.org" ] && [ "$ACK" != "I_UNDERSTAND" ]; then
+            echo "BLOCKED: axiombiolabs.org serves the Axiom Biolabs lab website via GoDaddy"
+            echo "Websites + Marketing. Pointing its apex at Vercel takes that site offline."
+            echo "Put GrantFlow on a subdomain (CNAME grantflow -> cname.vercel-dns-0.com) instead."
+            echo "If you REALLY mean to take the lab site offline, re-run with"
+            echo "i_understand_this_breaks_the_lab_site = I_UNDERSTAND."
+            exit 1
+          fi
 
       - name: Validate confirmation
         if: github.event.inputs.confirm != 'YES'
@@ -26,7 +58,7 @@ jobs:
       - name: Apply DNS via GoDaddy API
         if: github.event.inputs.confirm == 'YES'
         env:
-          GODADDY_DOMAIN: axiombiolabs.org
+          GODADDY_DOMAIN: ${{ github.event.inputs.domain }}
           GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
           GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
           VERCEL_WWW_CNAME: cname.vercel-dns-0.com
@@ -36,7 +68,7 @@ jobs:
       - name: Verify GoDaddy records now match Vercel
         if: github.event.inputs.confirm == 'YES'
         env:
-          GODADDY_DOMAIN: axiombiolabs.org
+          GODADDY_DOMAIN: ${{ github.event.inputs.domain }}
           GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
           GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
           VERCEL_WWW_CNAME: cname.vercel-dns-0.com
@@ -47,13 +79,4 @@ jobs:
         if: github.event.inputs.confirm == 'YES'
         run: |
           echo "Propagation: minutes to 48h."
-          echo "Expected DNS after propagation:"
-          echo "- axiombiolabs.org A 76.76.21.21"
-          echo "- www.axiombiolabs.org CNAME cname.vercel-dns-0.com"
-          echo "Verify Vercel after DNS propagation:"
-          echo "- vercel domains inspect axiombiolabs.org"
-          echo "- vercel domains inspect www.axiombiolabs.org"
-          echo "Run read-only app smoke on both hosts:"
-          echo "- SMOKE_BASE_URL=https://axiombiolabs.org npm run smoke:prod"
-          echo "- SMOKE_BASE_URL=https://www.axiombiolabs.org npm run smoke:prod"
-          echo "Railway CORS only needs apex/www if VITE_FORCE_RAILWAY_API=true; otherwise the frontend uses same-origin Vercel rewrites."
+          echo "Verify the intended domain serves the intended app after propagation."
