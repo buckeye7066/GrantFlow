@@ -9,6 +9,7 @@
 
 import { PIPELINE_STAGES, PIPELINE_STAGE } from '../stages.js';
 import { getMatchesForProfile, getPipeline, getDocuments } from '../storage.js';
+import { buildProjectReadinessPlan } from '../projectReadinessPlan.js';
 
 const AGENT_ID = 'anya';
 
@@ -99,6 +100,21 @@ export function createAnya(deps = {}) {
       const pipeline = getPipeline(store, profileId);
       const docs = getDocuments(store, profileId);
       return `You have ${accepts} strong match(es), ${pipeline.length} opportunit(ies) in your pipeline, and ${docs.length} document(s) on file.`;
+    },
+
+    /** Build a profile-aware interview that starts from known profile fields. */
+    buildProjectInterview(profile = {}) {
+      const plan = buildProjectReadinessPlan(profile);
+      const questions = plan.interview_questions ?? [];
+      const intro = questions.length
+        ? `Good job. Now that you have gotten this far, I have a few questions to narrow down what you actually need. I will keep this practical: answer what you know, skip what you do not, and I will turn it into a working checklist.`
+        : `Good job. You have enough detail for a first action plan, so I can start building the checklist and tighten the next round as we learn more.`;
+      return {
+        intro,
+        plan,
+        first_question: questions[0] ?? null,
+        questions,
+      };
     },
   };
 }

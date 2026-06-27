@@ -51,6 +51,7 @@ import {
   mergeSchoolPortalAwards,
   removeMergedSchoolPortalAward,
 } from '../services/schoolPortalImportService.js'
+import { buildProjectReadinessPlan, renderProjectPlanDocument } from '../crawler-os/projectReadinessPlan.js'
 
 /**
  * Mission goal #4/#5: every saved profile must carry a profile-type
@@ -326,6 +327,97 @@ function mapProfile(row) {
         ? `/api/profiles/${String(row.id)}/avatar/download${avatarVersion ? `?v=${encodeURIComponent(avatarVersion)}` : ''}`
         : null,
     profile_image_url: rawAvatar ?? null,
+  }
+}
+
+async function loadProfileForProjectPlan(req, id) {
+  const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!row) return null
+  const profile = mapProfile(row)
+  const sectionRows = coerceDbRows(await req.db.prepare(
+    `SELECT section_key, data, updated_at, updated_by
+       FROM profile_sections
+      WHERE profile_id = ?
+      ORDER BY section_key`,
+  ).all(id))
+  profile.sections = sectionRows.map((section) => ({
+    section_key: section.section_key,
+    data: normalizeProfileSectionData(section.section_key, safeParseJSON(section.data, {})),
+    updated_at: section.updated_at,
+    updated_by: section.updated_by,
+  }))
+  const docs = await optionalRows(
+    req.db,
+    'project-plan documents',
+    `SELECT DISTINCT d.id, d.name, d.type, d.mime_type, d.extracted_text,
+            d.extracted_structured, d.ai_summary, d.notes, d.processing_status
+       FROM documents d
+       LEFT JOIN profile_documents pd ON pd.document_id = d.id
+      WHERE d.profile_id = ? OR pd.profile_id = ?
+      ORDER BY d.created_at DESC
+      LIMIT 100`,
+    [id, id],
+  )
+  profile.documents = docs.map((doc) => ({
+    ...doc,
+    extracted_structured: safeParseJSON(doc.extracted_structured, null),
+  }))
+  return profile
+}
+
+async function saveProjectPlanDocument(req, profileId, plan) {
+  const documentId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex')
+  const content = renderProjectPlanDocument(plan)
+  const now = new Date().toISOString()
+  const contentHash = crypto.createHash('sha256').update(content).digest('hex')
+  const notes = JSON.stringify({ generated_by: 'hamilton', plan_id: plan.plan_id })
+  const fullInsertSql = `INSERT INTO documents (
+        id, profile_id, name, type, mime_type, extracted_text, ai_summary,
+        processing_status, status, notes, content_hash, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', 'draft', ?, ?, ?, ?)`
+  try {
+    await req.db.prepare(fullInsertSql).run(
+      documentId,
+      profileId,
+      `${plan.title}.md`,
+      'project_action_plan',
+      'text/markdown',
+      content,
+      plan.summary,
+      notes,
+      contentHash,
+      now,
+      now,
+    )
+  } catch (error) {
+    const msg = String(error?.message || error).toLowerCase()
+    if (!msg.includes('no such column')) throw error
+    await req.db.prepare(
+      `INSERT INTO documents (
+          id, profile_id, name, type, mime_type, extracted_text, ai_summary,
+          processing_status, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?)`,
+    ).run(
+      documentId,
+      profileId,
+      `${plan.title}.md`,
+      'project_action_plan',
+      'text/markdown',
+      content,
+      plan.summary,
+      notes,
+    )
+  }
+  await req.db.prepare(
+    `INSERT INTO profile_documents (profile_id, document_id)
+     VALUES (?, ?)
+     ON CONFLICT DO NOTHING`,
+  ).run(profileId, documentId)
+  return {
+    id: documentId,
+    name: `${plan.title}.md`,
+    type: 'project_action_plan',
+    processing_status: 'completed',
   }
 }
 
@@ -2635,6 +2727,50 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
 // A dedicated tiny GET/PUT keeps the contract simple and avoids coupling the
 // language choice to the section-payload guard. English is the default.
 // ---------------------------------------------------------------------------
+// Project readiness plan - Anya asks for missing facts; Hamilton saves the
+// checklist/how-to packet. Parsed profile documents are evidence, not penalties.
+router.get('/:id/project-readiness-plan', async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    const profile = await loadProfileForProjectPlan(req, id)
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+      return denyAuth(req, res)
+    }
+
+    const plan = buildProjectReadinessPlan(profile)
+    return res.json({ ok: true, plan })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/:id/project-readiness-plan/prepare', async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    const profile = await loadProfileForProjectPlan(req, id)
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+      return denyAuth(req, res)
+    }
+
+    const plan = buildProjectReadinessPlan(profile)
+    const document = await saveProjectPlanDocument(req, id, plan)
+    return res.json({ ok: true, outcome: 'project_plan_ready', plan, document })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Preferred language - the first thing Anya asks during onboarding.
 router.get('/:id/preferred-language', async (req, res) => {
   const { id } = req.params
 

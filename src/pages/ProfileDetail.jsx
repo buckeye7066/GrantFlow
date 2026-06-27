@@ -146,6 +146,8 @@ export default function ProfileDetail() {
         description: "The avatar has been uploaded successfully.",
       })
       queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile-project-readiness-plan", profileId] })
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : "We couldn't upload that photo."

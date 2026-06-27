@@ -31,7 +31,11 @@ const APPLICANT_TYPE_SYNONYMS = {
   government: ['government', 'municipal', 'municipality', 'county', 'parks department', 'federal agency'],
   tribal: ['tribal', 'tribe', 'indian tribe', 'native nation', 'reservation'],
   candidate: ['candidate', 'politician', 'campaign', 'local election'],
-  veteran: ['veteran', 'military', 'service member'],
+  veteran: ['veteran', 'former service member', 'prior service', 'ex military'],
+  active_duty: ['active duty', 'currently serving', 'service member', 'servicemember', 'military member'],
+  guard_reserve: ['national guard', 'reserve', 'reservist', 'guard member'],
+  transitioning_service_member: ['transitioning service member', 'separating service member', 'retiring service member', 'transitioning out', 'ets'],
+  military_spouse: ['military spouse', 'service member spouse', 'spouse of service member'],
 };
 
 const NEED_KEYWORDS = {
@@ -46,6 +50,10 @@ const NEED_KEYWORDS = {
   programs: ['program', 'programming', 'services', 'outreach', 'project'],
   technology: ['technology', 'computers', 'software', 'internet', 'broadband'],
   veterans: ['veteran', 'va benefits'],
+  active_duty_support: ['active duty', 'currently serving', 'servicemember', 'service member support', 'military onesource'],
+  military_transition: ['transition assistance', 'tap', 'transitioning service member', 'separating from service', 'separation from service', 'retiring from service', 'ets'],
+  military_spouse_support: ['military spouse', 'spouse education', 'spouse career', 'mycaa'],
+  employment: ['employment', 'job', 'jobs', 'career', 'workforce', 'work study', 'work-study', 'campus job'],
   energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar', 'utility', 'utilities', 'electric bill', 'gas bill'],
   agriculture: ['agriculture', 'farm', 'farmer', 'ranch', 'livestock', 'crop', 'usda'],
   public_safety: ['public safety', 'law enforcement', 'police', 'sheriff', 'border patrol', 'security'],
@@ -121,16 +129,48 @@ function gatherText(profile) {
   push(profile?.type); push(profile?.profile_type); push(profile?.name);
   push(profile?.description); push(profile?.summary); push(profile?.mission);
   push(profile?.needs); push(profile?.need_categories); push(profile?.tags);
-  for (const s of profile?.sections ?? []) { push(s?.title); push(s?.body); push(s?.value); }
+  for (const s of profile?.sections ?? []) { push(s?.title); push(s?.body); push(s?.value); push(s?.data); }
   for (const o of profile?.organizations ?? []) { push(o?.name); push(o?.type); push(o?.mission); }
   for (const d of profile?.documents ?? []) { push(d?.name); push(d?.extracted_text); push(d?.summary); }
   if (profile?.school) { push(profile.school.name); push(profile.school.type); }
   return parts.join(' \n ').toLowerCase();
 }
 
+function gatherStructuredApplicantHints(profile) {
+  const hints = [];
+  const push = (v) => { if (v !== null && v !== undefined && v !== '') hints.push(lc(v)); };
+  push(profile?.military_status);
+  push(profile?.service_status);
+  push(profile?.military_service_status);
+  for (const section of profile?.sections ?? []) {
+    const sectionKey = lc(section?.section_key ?? section?.key ?? section?.title);
+    const isMilitarySection =
+      sectionKey.includes('military') ||
+      sectionKey.includes('service') ||
+      sectionKey.includes('veteran') ||
+      sectionKey === 'demographics';
+    if (!isMilitarySection) continue;
+    const data = section?.data ?? {};
+    push(data?.military_status);
+    push(data?.service_status);
+    push(data?.status);
+    push(data?.relationship_to_service_member);
+    if (data?.is_veteran === true || data?.veteran === true) push('veteran');
+    if (data?.is_active_duty === true || data?.active_duty === true) push('active duty');
+    if (data?.is_guard_reserve === true || data?.guard_reserve === true || data?.is_reservist === true) push('guard reserve');
+    if (data?.is_transitioning_service_member === true || data?.transitioning_service_member === true) push('transitioning service member');
+    if (data?.is_military_spouse === true || data?.military_spouse === true) push('military spouse');
+  }
+  return hints;
+}
+
 // Applicant types that describe an ORGANIZATION (vs. a person/household).
 const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal']);
-const INDIVIDUAL_APPLICANT_TYPES = new Set(['individual', 'family', 'student', 'teacher', 'candidate', 'veteran', 'widow', 'widower', 'surviving_spouse', 'patient', 'dementia_patient']);
+const INDIVIDUAL_APPLICANT_TYPES = new Set([
+  'individual', 'family', 'student', 'teacher', 'candidate', 'veteran', 'active_duty',
+  'guard_reserve', 'transitioning_service_member', 'military_spouse',
+  'widow', 'widower', 'surviving_spouse', 'patient', 'dementia_patient',
+]);
 
 // AUTHORITATIVE primary_type -> applicant-bucket map. The substring-synonym
 // scan below cannot recognize multi-word canonical types whose stored
@@ -153,6 +193,16 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   patient: ['individual'],
   senior: ['individual'],
   veteran: ['veteran', 'individual'],
+  active_duty: ['active_duty', 'individual'],
+  active_duty_service_member: ['active_duty', 'individual'],
+  servicemember: ['active_duty', 'individual'],
+  service_member: ['active_duty', 'individual'],
+  guard_reserve: ['guard_reserve', 'individual'],
+  national_guard: ['guard_reserve', 'individual'],
+  reservist: ['guard_reserve', 'individual'],
+  transitioning_service_member: ['transitioning_service_member', 'active_duty', 'individual'],
+  separating_service_member: ['transitioning_service_member', 'active_duty', 'individual'],
+  military_spouse: ['military_spouse', 'family', 'individual'],
   disabled_adult: ['individual'],
   widow: ['family', 'individual'],
   widower: ['family', 'individual'],
@@ -237,6 +287,10 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   small_business: ['business'], // legacy seed string
   entrepreneur: ['business'],
   veteran_entrepreneur: ['veteran', 'business', 'individual'],
+  active_duty_entrepreneur: ['active_duty', 'business', 'individual'],
+  military_spouse_entrepreneur: ['military_spouse', 'business', 'individual'],
+  guard_reserve_entrepreneur: ['guard_reserve', 'business', 'individual'],
+  transitioning_service_member_entrepreneur: ['transitioning_service_member', 'active_duty', 'business', 'individual'],
   food_truck: ['business'],
   food_truck_startup: ['business'],
   restaurant_startup: ['business'],
@@ -254,6 +308,7 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
     .concat(profile?.applicant_types ?? [])
     .concat(profile?.type ?? [])
     .concat(profile?.profile_type ?? [])
+    .concat(gatherStructuredApplicantHints(profile))
     .map(lc)
     .filter(Boolean);
   const found = new Set();
@@ -296,7 +351,7 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   const primaryIsIndividual =
     INDIVIDUAL_APPLICANT_TYPES.has(primaryRaw) ||
     primaryRaw.includes('student') ||
-    /\b(individual|person|resident|family|household|parent|parents|caregiver|widow|widower|surviving spouse|surviving_spouse|patient|scholar|undergraduate|graduate|pupil|teacher|educator|candidate|politician|veteran)\b/.test(primaryRaw);
+    /\b(individual|person|resident|family|household|parent|parents|caregiver|widow|widower|surviving spouse|surviving_spouse|patient|scholar|undergraduate|graduate|pupil|teacher|educator|candidate|politician|veteran|active duty|active_duty|servicemember|service member|national guard|guard_reserve|reservist|military spouse|transitioning service member)\b/.test(primaryRaw);
   if (primaryIsIndividual) {
     for (const t of [...found]) if (ORG_APPLICANT_TYPES.has(t)) found.delete(t);
     // A person applicant is an INDIVIDUAL applicant — ensure individual-eligible
@@ -364,9 +419,14 @@ function deriveNeeds(profile, blob) {
     found.add('medical');
     found.add('survivor_benefits');
   }
-  if ((found.has('veterans') || /\b(veteran|military|service member|service-member|armed forces|service-disabled)\b/i.test(blob)) &&
+  if ((found.has('veterans') || /\b(veteran|former service member|prior service|ex[-\s]?military|service-disabled)\b/i.test(blob)) &&
       (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
     found.add('veteran_startup');
+  }
+  if ((found.has('active_duty_support') || found.has('military_transition') || found.has('military_spouse_support') ||
+      /\b(active duty|currently serving|servicemember|service member|national guard|reservist|military spouse|military background|transitioning out|separating from service|ets)\b/i.test(blob)) &&
+      (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
+    found.add('military_startup');
   }
   return [...found];
 }

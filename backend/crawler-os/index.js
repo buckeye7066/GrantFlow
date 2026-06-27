@@ -27,6 +27,7 @@ export { enforceReality } from './realityGate.js';
 export { normalize } from './normalizer.js';
 export { computeMatchDecision, WEIGHTS } from './matchEngine.js';
 export { matchOpportunity } from './matcher.js';
+export { buildProjectReadinessPlan, renderProjectPlanDocument } from './projectReadinessPlan.js';
 
 // storage
 export { createMemoryStore, createSqlStore } from './store.js';

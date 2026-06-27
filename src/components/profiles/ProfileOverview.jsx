@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import PipelinePotentialBreakdown from "@/components/profiles/PipelinePotentialBreakdown"
 import ProfileAutomationsCard from "@/components/profiles/ProfileAutomationsCard"
+import ProfileActionPlanCard from "@/components/profiles/ProfileActionPlanCard"
 import {
   ArrowRight,
   CalendarClock,
@@ -1265,7 +1266,7 @@ export default function ProfileOverview({
                 <input
                   ref={documentInputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx,.txt,.rtf"
+                  accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/rtf,text/rtf,image/jpeg,image/png,image/webp,image/gif,image/bmp,image/tiff,image/heic,image/heif"
                   className="hidden"
                   onChange={handleDocumentFileChange}
                 />
@@ -1427,6 +1428,13 @@ export default function ProfileOverview({
             <ArrowRight className="w-5 h-5 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-blue-600" />
           </button>
         </section>
+      ) : null}
+
+      {isRealProfileId(profile.id) ? (
+        <ProfileActionPlanCard
+          profileId={profile.id}
+          profileName={profile.display_name || profile.organization_name || ""}
+        />
       ) : null}
 
       {isRealProfileId(profile.id) ? (

@@ -163,10 +163,56 @@ const CASES = [
       needs: ['food truck startup', 'kitchen equipment', 'working capital'],
     },
     applicantTypes: ['individual'],
-    needs: ['startup', 'equipment', 'capital', 'veteran_startup'],
-    selectedSources: ['sba_veteran_business', 'sba_vboc', 'wv_sbdc_funding', 'wv_business_funding_resources'],
-    notNeeds: ['food', 'veterans'],
+    needs: ['startup', 'equipment', 'capital', 'military_startup'],
+    selectedSources: ['sba_veteran_business', 'sba_vboc', 'sba_boots_to_business', 'wv_sbdc_funding', 'wv_business_funding_resources'],
+    notNeeds: ['food', 'veterans', 'veteran_startup'],
+    notApplicantTypes: ['veteran', 'active_duty'],
     notSelectedSources: ['benefits_gov', 'united_way_211'],
+  },
+  {
+    name: 'active duty service member starting a food truck in West Virginia',
+    profile: {
+      id: 'active-duty-food-truck-wv',
+      profile_type: 'individual',
+      location: { state: 'WV' },
+      description: 'Active duty service member wants to start a food truck in West Virginia.',
+      needs: ['food truck startup', 'kitchen equipment', 'working capital'],
+      sections: [{ section_key: 'military_service', data: { status: 'active duty', branch: 'Army' } }],
+    },
+    applicantTypes: ['active_duty', 'individual'],
+    notApplicantTypes: ['veteran'],
+    needs: ['startup', 'equipment', 'capital', 'military_startup', 'active_duty_support'],
+    notNeeds: ['veteran_startup'],
+    selectedSources: ['military_onesource', 'sba_boots_to_business', 'sba_veteran_business', 'sba_vboc', 'wv_sbdc_funding'],
+    notSelectedSources: ['united_way_211'],
+  },
+  {
+    name: 'veteran entrepreneur starting a food truck in West Virginia',
+    profile: {
+      id: 'veteran-food-truck-wv',
+      profile_type: 'veteran_entrepreneur',
+      location: { state: 'WV' },
+      description: 'Prior service veteran wants to start a food truck in West Virginia.',
+      needs: ['food truck startup', 'kitchen equipment', 'working capital'],
+    },
+    applicantTypes: ['veteran', 'business', 'individual'],
+    notApplicantTypes: ['active_duty'],
+    needs: ['startup', 'equipment', 'capital', 'veteran_startup'],
+    selectedSources: ['sba_boots_to_business', 'sba_veteran_business', 'sba_vboc', 'wv_sbdc_funding'],
+  },
+  {
+    name: 'military spouse career training',
+    profile: {
+      id: 'military-spouse-training',
+      profile_type: 'military_spouse',
+      location: { state: 'NC' },
+      needs: ['spouse career training', 'certificate program', 'employment'],
+      sections: [{ section_key: 'military_service', data: { relationship_to_service_member: 'military spouse' } }],
+    },
+    applicantTypes: ['military_spouse', 'family', 'individual'],
+    needs: ['military_spouse_support', 'education', 'employment'],
+    selectedSources: ['mycaa', 'military_onesource'],
+    notApplicantTypes: ['veteran', 'active_duty'],
   },
 ];
 
@@ -179,6 +225,13 @@ for (const c of CASES) {
       assert.ok(
         thesis.applicant_types.includes(applicantType),
         `${c.name} should include applicant type ${applicantType}; got ${thesis.applicant_types.join(', ')}`,
+      );
+    }
+
+    for (const applicantType of c.notApplicantTypes ?? []) {
+      assert.ok(
+        !thesis.applicant_types.includes(applicantType),
+        `${c.name} should not include applicant type ${applicantType}; got ${thesis.applicant_types.join(', ')}`,
       );
     }
 
