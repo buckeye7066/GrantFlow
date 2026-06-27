@@ -160,9 +160,9 @@ JOHN_SCHEDULE=30 9 * * *
 JOHN_MODE=observe                   # default observe
 
 JOHN_PRIMARY_MAILBOX=dr.johnwhite@axiombiolabs.org
-JOHN_FROM_ALIAS=GrantFlow@axiombiolabs.org
-JOHN_REPLY_TO=GrantFlow@axiombiolabs.org
-JOHN_DISPLAY_NAME=Dr. John White | GrantFlow
+JOHN_FROM_ALIAS=Ellie@axiombiolabs.org
+JOHN_REPLY_TO=Ellie@axiombiolabs.org
+JOHN_DISPLAY_NAME=Ellie | GrantFlow
 
 JOHN_DRAFT_ONLY=true                # runtime-guarded; never set false
 JOHN_ALLOW_SEND=false               # ignored when JOHN_DRAFT_ONLY=true

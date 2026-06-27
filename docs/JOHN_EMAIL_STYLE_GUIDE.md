@@ -45,7 +45,7 @@ Every John email contains, in order:
 6. **No-promise disclaimer** — "I'm not writing to promise funding…".
 7. **Soft CTA** — "Would it be worth sending you a short example…".
 8. **Signature** — `Dr. John White / GrantFlow / Axiom BioLabs /
-   GrantFlow@axiombiolabs.org`.
+   Ellie@axiombiolabs.org`.
 9. **Opt-out line** — `If this is not relevant, you can reply "no thanks"
    and I will not follow up.`.
 10. **Physical address** — the configured `JOHN_PHYSICAL_ADDRESS`.
@@ -132,7 +132,7 @@ appropriate evidence.
 >
 > Dr. John White
 > GrantFlow / Axiom BioLabs
-> GrantFlow@axiombiolabs.org
+> Ellie@axiombiolabs.org
 >
 > If this is not relevant, you can reply "no thanks" and I will not follow up.
 >

@@ -107,7 +107,7 @@ function buildFooter(config, organizationName) {
     '',
     'Dr. John White',
     'GrantFlow / Axiom BioLabs',
-    String(config.replyTo || 'GrantFlow@axiombiolabs.org'),
+    String(config.replyTo || 'Ellie@axiombiolabs.org'),
     '',
     'If this is not relevant, you can reply "no thanks" and I will not follow up.',
     ...(physical ? ['', physical] : []),

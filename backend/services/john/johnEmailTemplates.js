@@ -56,7 +56,7 @@ const DEFAULT_BODY_TEMPLATE = [
   '',
   'Dr. John White',
   'Founder, GrantFlow / Axiom BioLabs',
-  'GrantFlow@axiombiolabs.org',
+  'Ellie@axiombiolabs.org',
   '',
   '{{OPT_OUT_LINE}}',
   '',
