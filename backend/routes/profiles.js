@@ -351,7 +351,8 @@ async function loadProfileForProjectPlan(req, id) {
     req.db,
     'project-plan documents',
     `SELECT DISTINCT d.id, d.name, d.type, d.mime_type, d.extracted_text,
-            d.extracted_structured, d.ai_summary, d.notes, d.processing_status
+            d.extracted_structured, d.ai_summary, d.notes, d.processing_status,
+            d.created_at
        FROM documents d
        LEFT JOIN profile_documents pd ON pd.document_id = d.id
       WHERE d.profile_id = ? OR pd.profile_id = ?

@@ -1927,7 +1927,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
             profiles = await req.db
               .prepare(
                 `
-                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
+                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status, p.created_at
                   FROM profiles p
                   LEFT JOIN profile_emails pe ON pe.profile_id = p.id
                   WHERE p.user_id = ?

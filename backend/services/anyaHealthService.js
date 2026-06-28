@@ -162,11 +162,24 @@ export async function runHealthCheck(db) {
   // 4. Audit profile signals — find profiles missing key section data
   try {
     // Query actual schema: profiles table + profile_sections for depth data
-    const profiles = await db
-      .prepare(
-        "SELECT id, display_name, primary_type FROM profiles WHERE deleted_at IS NULL",
-      )
-      .all()
+    let profiles
+    try {
+      profiles = await db
+        .prepare(
+          "SELECT id, display_name, primary_type FROM profiles WHERE deleted_at IS NULL",
+        )
+        .all()
+    } catch (profileErr) {
+      const msg = String(profileErr?.message || '').toLowerCase()
+      if (!msg.includes('deleted_at') && !msg.includes('no such column') && !msg.includes('does not exist')) {
+        throw profileErr
+      }
+      profiles = await db
+        .prepare(
+          "SELECT id, display_name, primary_type FROM profiles WHERE status IS NULL OR status <> 'deleted'",
+        )
+        .all()
+    }
     const sectionCounts = await db
       .prepare(
         "SELECT profile_id, section_key FROM profile_sections",

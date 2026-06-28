@@ -42,6 +42,29 @@ const routeLogger = createLogger('route:grants')
 
 const router = express.Router();
 
+function isUniqueGrantConflict(error) {
+  const msg = String(error?.message || '')
+  return (
+    error?.code === '23505' ||
+    error?.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+    (error?.code === 'SQLITE_CONSTRAINT' && /unique/i.test(msg)) ||
+    /duplicate key value|unique constraint failed|ux_grants_profile_opportunity/i.test(msg)
+  )
+}
+
+async function findExistingGrantByProfileOpportunity(db, profileId, opportunityId) {
+  if (!profileId || !opportunityId) return null
+  return db
+    .prepare(
+      `SELECT *
+         FROM grants
+        WHERE profile_id = ?
+          AND funding_opportunity_id = ?
+        LIMIT 1`,
+    )
+    .get(String(profileId), String(opportunityId))
+}
+
 function parseOpportunityContact(opportunity) {
   let ci = {}
   try {
@@ -1153,6 +1176,29 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
     res.status(201).json(grant);
   } catch (error) {
+    if (isUniqueGrantConflict(error)) {
+      try {
+        const body = normalizeGrantFields(req.body || {})
+        const existingGrant = await findExistingGrantByProfileOpportunity(
+          req.db,
+          body.profile_id,
+          body.funding_opportunity_id,
+        )
+        if (existingGrant) {
+          routeLogger.info('[grants/create] duplicate suppressed after unique conflict', {
+            profile_id: existingGrant.profile_id || null,
+            grant_id: existingGrant.id,
+          })
+          return res.status(200).json({
+            ...existingGrant,
+            already_exists: true,
+            message: 'Grant already in pipeline',
+          })
+        }
+      } catch (lookupErr) {
+        routeLogger.warn('[grants/create] duplicate lookup failed', { error: lookupErr?.message || String(lookupErr) })
+      }
+    }
     console.error('Error creating grant:', error);
     res.status(500).json(formatError(error));
   }
@@ -2047,30 +2093,45 @@ router.post('/from-opportunity', async (req, res, next) => {
       
       const contactInfo = parseOpportunityContact(opportunity)
       if (hasProfileId) {
-        await tx.prepare(`
-          INSERT INTO grants (
-            id, organization_id, profile_id, funding_opportunity_id, title, funder, 
-            deadline, status, match_score, match_reasons, application_url,
-            amount_requested, notes,
-            contact_name, contact_email, contact_phone, funder_fax, funder_address, application_method
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          id, 
-          finalOrgId,
-          finalProfileId ? String(finalProfileId) : null,
-          resolvedOpportunityId || null,
-          opportunity.title,
-          opportunity.sponsor,
-          insertDeadline,
-          insertMatchScore,
-          insertMatchReasons,
-          opportunity.application_url,
-          amountRequested,
-          notes,
-          contactInfo.name, contactInfo.email, contactInfo.phone,
-          contactInfo.fax, contactInfo.address, contactInfo.method
-        );
+        try {
+          await tx.prepare(`
+            INSERT INTO grants (
+              id, organization_id, profile_id, funding_opportunity_id, title, funder,
+              deadline, status, match_score, match_reasons, application_url,
+              amount_requested, notes,
+              contact_name, contact_email, contact_phone, funder_fax, funder_address, application_method
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            id,
+            finalOrgId,
+            finalProfileId ? String(finalProfileId) : null,
+            resolvedOpportunityId || null,
+            opportunity.title,
+            opportunity.sponsor,
+            insertDeadline,
+            insertMatchScore,
+            insertMatchReasons,
+            opportunity.application_url,
+            amountRequested,
+            notes,
+            contactInfo.name, contactInfo.email, contactInfo.phone,
+            contactInfo.fax, contactInfo.address, contactInfo.method
+          );
+        } catch (insertErr) {
+          if (isUniqueGrantConflict(insertErr) && finalProfileId && resolvedOpportunityId) {
+            const existingDuplicate = await findExistingGrantByProfileOpportunity(tx, finalProfileId, resolvedOpportunityId)
+            if (existingDuplicate) {
+              return {
+                ...existingDuplicate,
+                organization_id: finalOrgId,
+                already_exists: true,
+                message: 'Grant already in pipeline',
+              }
+            }
+          }
+          throw insertErr
+        }
       } else {
         await tx.prepare(`
           INSERT INTO grants (

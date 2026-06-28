@@ -766,7 +766,7 @@ export default function ItemFunding() {
                   placeholder="Select profile"
                 />
                 {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
-                  <p className="text-[11px] text-slate-400">Loading profile signals\u2026</p>
+                  <p className="text-[11px] text-slate-400">Loading profile signals...</p>
                 ) : null}
               </div>
             </div>
@@ -811,7 +811,7 @@ export default function ItemFunding() {
                     ) : null}
                     {liveSearchQuery.isLoading ? (
                       <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin" /> searching web\u2026
+                        <Loader2 className="w-3 h-3 animate-spin" /> searching web...
                       </span>
                     ) : null}
                   </p>
@@ -819,7 +819,7 @@ export default function ItemFunding() {
                     <p className="inline-flex items-center gap-1 text-slate-500">
                       <Target className="w-3 h-3 text-emerald-500" />
                       Searching as <span className="font-semibold text-slate-700">{applicantTypeLabel}</span>{" "}
-                      \u2014 funders matched to this profile
+                      - funders matched to this profile
                     </p>
                   ) : null}
                 </div>

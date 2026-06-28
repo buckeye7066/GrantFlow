@@ -307,7 +307,7 @@ function ImproveMatchesCard({ prompts, profileId, onDismiss, variant = 'banner' 
             <div className="flex-1">
               <h3 className="text-base font-semibold text-emerald-900">Improve your matches</h3>
               <p className="text-sm text-emerald-800 mt-0.5">
-                Add a few details to your profile and we&apos;ll find more \u2014 and more relevant \u2014 funding for you.
+                Add a few details to your profile and we&apos;ll find more - and more relevant - funding for you.
               </p>
             </div>
             <button
@@ -1562,7 +1562,7 @@ export default function DiscoverGrants() {
               <div>
                 <h3 className="text-lg font-semibold text-foreground">Find Funding Opportunities</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  We'll search all available funding sources \u2014 grants, scholarships, benefits, and local programs \u2014 matched to your profile.
+                  We'll search all available funding sources - grants, scholarships, benefits, and local programs - matched to your profile.
                 </p>
               </div>
               <div className="p-4 bg-muted/20 rounded-lg border border-border">
@@ -1725,7 +1725,7 @@ export default function DiscoverGrants() {
                         >
                           Add your location (state or ZIP code)
                         </Link>
-                        <span className="text-amber-700">\u2014 unlocks local and state-level programs</span>
+                        <span className="text-amber-700">- unlocks local and state-level programs</span>
                       </li>
                     )}
                     {profileGaps.missingEntityType && (
@@ -1737,7 +1737,7 @@ export default function DiscoverGrants() {
                         >
                           Set your profile type
                         </Link>
-                        <span className="text-amber-700">\u2014 filters irrelevant programs</span>
+                        <span className="text-amber-700">- filters irrelevant programs</span>
                       </li>
                     )}
                     {profileGaps.missingKeywords && (
@@ -1749,7 +1749,7 @@ export default function DiscoverGrants() {
                         >
                           Add interests or focus areas
                         </Link>
-                        <span className="text-amber-700">\u2014 improves keyword matching</span>
+                        <span className="text-amber-700">- improves keyword matching</span>
                       </li>
                     )}
                   </ul>
@@ -1811,7 +1811,7 @@ export default function DiscoverGrants() {
                   {isSearching ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                      Searching\u2026
+                      Searching...
                     </>
                   ) : (
                     'Try Broader Search'
@@ -1891,7 +1891,7 @@ export default function DiscoverGrants() {
                 ? ` \u2014 ${discovery.running} still running.`
                 : ' \u2014 wrapping up.'}{' '}
               New matches appear below as each finishes; this can take a few minutes.{' '}
-              <strong>You can leave this page</strong> \u2014 the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
+              <strong>You can leave this page</strong> - the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
             </AlertDescription>
           </Alert>
         )}
