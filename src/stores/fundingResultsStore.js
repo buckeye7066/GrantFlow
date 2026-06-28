@@ -160,12 +160,14 @@ export const useFundingResultsStore = create(
                 diagnostics: null,
               })
             } catch { /* ignore */ }
-            try {
+            if (import.meta.env?.DEV) {
+              try {
               console.info('[fundingResultsStore] evicted stored results — profile mismatch on rehydrate', {
                 stored_profile_id: stored,
                 active_profile_id: activeId,
               })
-            } catch { /* ignore */ }
+              } catch { /* ignore */ }
+            }
           }
         } catch { /* ignore */ }
       },

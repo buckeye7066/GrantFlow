@@ -122,7 +122,8 @@ export function clearAllProfileScopedStorage() {
 /**
  * Bootstrap migration: drop legacy unscoped versions of keys that should now
  * be profile-scoped. Idempotent — safe to run on every app boot from
- * src/App.jsx. Logs to console for observability.
+ * src/App.jsx. Development logs only; production should not show routine
+ * one-time cleanup as a user-facing console issue.
  */
 export function migrateLegacyProfileScopedKeys() {
   if (typeof window === 'undefined') return 0
@@ -134,7 +135,7 @@ export function migrateLegacyProfileScopedKeys() {
       }
     }
   }
-  if (removed > 0) {
+  if (removed > 0 && import.meta.env?.DEV) {
     try { console.info(`[profileScopedStorage] migrated ${removed} legacy unscoped keys`) } catch { /* ignore */ }
   }
   return removed
