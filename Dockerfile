@@ -87,6 +87,7 @@ COPY --from=builder /app/package-lock.json ./package-lock.json
 # booting the server so a compromised request handler does not own the image.
 RUN mkdir -p /app/data /app/uploads \
   && chown -R node:node /app/data /app/uploads
+ENV UPLOADS_DIR=/app/uploads
 USER node
 
 # Expose port (Railway will set PORT env var)

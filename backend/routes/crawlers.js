@@ -17,6 +17,7 @@ import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/en
 import { getPortalCheckStatus } from '../services/portalCheckService.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { assessReality } from '../services/opportunityRealityGate.js'
+import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import {
   classifyProfileChange,
   decideRevalAction,
@@ -81,10 +82,10 @@ const TYPES_REQUIRING_PROFILE = new Set([
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const uploadDir = join(__dirname, '..', 'uploads')
+const { uploadsDir: defaultUploadDir } = resolveUploadsDir({ baseDir: __dirname })
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true })
+function getUploadDir(req) {
+  return req?.uploadsDir || req?.app?.locals?.uploads?.uploadsDir || defaultUploadDir
 }
 
 function getOpenAI() {
@@ -1206,7 +1207,7 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
       dispatchCrawlerJob({
         db: req.db,
         jobId: jobRow.id,
-        uploadDir,
+        uploadDir: getUploadDir(req),
         getOpenAI,
       }).catch((dispatchError) => {
         console.error('[crawlers/jobs] dispatch failed (job still queued)', {
@@ -1381,7 +1382,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
     dispatchCrawlerJob({
       db: req.db,
       jobId: newJob.id,
-      uploadDir,
+      uploadDir: getUploadDir(req),
       getOpenAI,
     })
 
@@ -2573,7 +2574,7 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
       dispatchCrawlerJob({
         db: req.db,
         jobId: job.id,
-        uploadDir,
+        uploadDir: getUploadDir(req),
         getOpenAI
       })
     })
@@ -2624,7 +2625,7 @@ router.post('/foundation-990/batch', async (req, res) => {
       dispatchCrawlerJob({
         db: req.db,
         jobId: job.id,
-        uploadDir,
+        uploadDir: getUploadDir(req),
         getOpenAI,
       })
     })

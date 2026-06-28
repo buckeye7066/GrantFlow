@@ -35,9 +35,9 @@ import { allSources as allCrawlerOsSources } from '../crawler-os/sourceRegistry.
 import { implementedAdapterIds } from '../crawler-os/adapters/index.js'
 import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
+import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
-import fs from 'fs'
+import { dirname } from 'path'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -69,10 +69,7 @@ async function runProfileCrawlerOs(db, profileId, options = {}) {
 // auto-discovery paths use to triggerAutoDiscoveryCrawlers.
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const discoverAllUploadDir = join(__dirname, '..', 'uploads')
-try {
-  if (!fs.existsSync(discoverAllUploadDir)) fs.mkdirSync(discoverAllUploadDir, { recursive: true })
-} catch { /* best-effort; dispatcher tolerates a missing uploadDir */ }
+const { uploadsDir: discoverAllUploadDir } = resolveUploadsDir({ baseDir: __dirname })
 function getDiscoverAllOpenAI() {
   try {
     const { openai } = createOpenAIClient({ allowMissing: true })
