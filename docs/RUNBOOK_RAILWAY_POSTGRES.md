@@ -39,14 +39,15 @@ Expected: migration runner reports `Dialect: postgres` and completes with `✓ A
 
 ### 2) Sanity check
 
-Call the backend health endpoint:
+Call the backend readiness endpoint:
 
 ```bash
-curl -sS https://<your-railway-backend>/api/health
+curl -sS https://<your-railway-backend>/readyz
 ```
 
 Expected:
-- **HTTP 200** (or 500 only if DB is unreachable)
+- **HTTP 200** (or 503 if DB/schema/secrets/uploads are not ready)
+- JSON includes **`status: "ready"`**
 - JSON includes **`dialect: "postgres"`**
 
 ---
@@ -124,4 +125,3 @@ Notes:
 
 - Postgres migrations are **strict**: any error must be fixed (no “record as applied” behavior).
 - OpenAI outages should no longer break the API: AI routes fall back or return 503 with `request_id` for correlation.
-

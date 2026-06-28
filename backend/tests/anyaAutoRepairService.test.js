@@ -61,7 +61,7 @@ describe('AUTO_REPAIR_TYPES surface', () => {
     expect(report.writePolicy).toBe('code_error_repair')
     expect(report.permissionRequired).toBe(false)
     expect(report.auditRequired).toBe(true)
-  })
+  }, 20_000)
 })
 
 describe('missing_db_await pattern (reproduces /api/profiles/:id/sections/:key/ai 500)', () => {

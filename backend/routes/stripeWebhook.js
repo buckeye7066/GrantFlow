@@ -219,7 +219,7 @@ router.post('/', async (req, res) => {
       }
     }
   } catch (error) {
-    console.error('Stripe webhook processing failed:', {
+    routeLogger.error('Stripe webhook processing failed:', {
       eventType: event?.type,
       eventId: event?.id,
       error: error.message,

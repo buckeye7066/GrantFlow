@@ -15,6 +15,7 @@ import { createOpenAIClient } from '../utils/openaiClient.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
+import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -477,6 +478,12 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           engine: 'crawler-os',
         }
       })
+
+      const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+        preserveDirectories: true,
+        rejectHardIneligible: true,
+      })
+      mapped = canonical.kept
 
       const deduped = dedupeOpportunityList(mapped)
       mapped = deduped.results

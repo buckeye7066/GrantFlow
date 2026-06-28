@@ -71,6 +71,8 @@ import {
 import { getAdapter } from './agentAdapters/agentAdapterRegistry.js'
 import { makeSignal } from './agentAdapters/baseAgentAdapter.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:agentControl:agentControlOrchestrator')
 
 /**
  * Count the real, persisted units of work an agent reported in its step
@@ -312,7 +314,7 @@ export async function startRun(db, {
     // Fire-and-forget execution. The run keeps going after the HTTP
     // response returns.
     executeRun({ db, runId }).catch((err) => {
-      console.error('[agent-control] executeRun crashed:', err?.message || err)
+      qualityLog.error('[agent-control] executeRun crashed:', err?.message || err)
     })
 
     const steps = await listSteps(db, runId)
@@ -380,7 +382,7 @@ export async function resumeRun(db, runId, { user = null } = {}) {
   // Re-kick the executor — it idempotently picks up the next queued
   // step. (Already-completed / running steps are not re-run.)
   executeRun({ db, runId }).catch((err) => {
-    console.error('[agent-control] executeRun (resume) crashed:', err?.message || err)
+    qualityLog.error('[agent-control] executeRun (resume) crashed:', err?.message || err)
   })
 
   return run
@@ -864,7 +866,7 @@ export async function executeRun({ db, runId } = {}) {
     // lock: drive the run to `failed` (unless a stop/cancel command already
     // moved it terminal) and release. The TTL would eventually reclaim it,
     // but releasing now lets the next run for this agent start immediately.
-    console.error('[agent-control] executeRun fatal:', runtimeErr?.message || runtimeErr)
+    qualityLog.error('[agent-control] executeRun fatal:', runtimeErr?.message || runtimeErr)
     try {
       const cur = await getRun(db, runId)
       const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])

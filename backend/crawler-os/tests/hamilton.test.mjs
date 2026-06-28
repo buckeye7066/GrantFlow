@@ -133,3 +133,33 @@ test('Hamilton never invents financial amounts in the budget', async () => {
   assert.match(budget.content, /to complete/i);
   assert.match(budget.content, /does not invent financial amounts/i);
 });
+
+test('Hamilton saves a profile-aware project action plan without portal claims', async () => {
+  const store = createMemoryStore();
+  const hamilton = createHamilton({ store });
+  const res = await hamilton.prepareProjectPlan({
+    profileId: 'food-truck-wv',
+    profile: {
+      id: 'food-truck-wv',
+      profile_type: 'individual',
+      location: { city: 'Charleston', state: 'WV' },
+      documents: [
+        {
+          name: 'startup-screenshot.png',
+          mime_type: 'image/png',
+          extracted_text: 'Food truck startup, active duty service member, health permit, generator, refrigeration.',
+          processing_status: 'completed',
+        },
+      ],
+    },
+  });
+
+  assert.equal(res.outcome, 'project_plan_ready');
+  assert.equal(res.document.kind, 'project_action_plan');
+  assert.equal(res.hard_stops.length, 0);
+  assert.equal(res.plan.plan_id, 'food_truck_startup');
+  const saved = storage.getDocuments(store, 'food-truck-wv').find((d) => d.kind === 'project_action_plan');
+  assert.ok(saved);
+  assert.match(saved.content, /Food truck launch action plan/);
+  assert.match(saved.content, /Document evidence used/);
+});

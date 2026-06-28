@@ -36,7 +36,7 @@ const CONTEXT_TYPES = {
 /**
  * Store a memory in Anya's brain
  */
-export function storeMemory(db, {
+export async function storeMemory(db, {
   scope = SCOPES.GLOBAL,
   scopeId = null,
   memoryType = MEMORY_TYPES.FACT,
@@ -66,7 +66,7 @@ export function storeMemory(db, {
   `)
   
   const id = randomUUID()
-  stmt.run(id, scope, scopeId, memoryType, memoryKey, contentJson, confidence, expiresAt, source)
+  await stmt.run(id, scope, scopeId, memoryType, memoryKey, contentJson, confidence, expiresAt, source)
   
   return { id, scope, scopeId, memoryKey, stored: true }
 }
@@ -74,10 +74,10 @@ export function storeMemory(db, {
 /**
  * Retrieve a specific memory by key
  */
-export function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey }) {
+export async function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey }) {
   let row
   try {
-    row = db.prepare(`
+    row = await db.prepare(`
       SELECT *
       FROM anya_brain_memory
       WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
@@ -87,7 +87,7 @@ export function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey
     `).get(scope, scopeId, scopeId, memoryKey)
   } catch (error) {
     if (!/no such column: (updated_at|created_at)/i.test(error?.message || '')) throw error
-    row = db.prepare(`
+    row = await db.prepare(`
       SELECT *
       FROM anya_brain_memory
       WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
@@ -99,7 +99,7 @@ export function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey
   if (!row) return null
   
   // Update access count
-  db.prepare(`
+  await db.prepare(`
     UPDATE anya_brain_memory
     SET access_count = access_count + 1, last_accessed_at = CURRENT_TIMESTAMP
     WHERE id = ?
@@ -142,8 +142,8 @@ export async function getMemories(db, { scope = SCOPES.GLOBAL, scopeId = null, m
 /**
  * Delete a memory
  */
-export function deleteMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey }) {
-  const result = db.prepare(`
+export async function deleteMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey }) {
+  const result = await db.prepare(`
     DELETE FROM anya_brain_memory
     WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
   `).run(scope, scopeId, scopeId, memoryKey)
@@ -154,7 +154,7 @@ export function deleteMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memory
 /**
  * Store context for a session
  */
-export function storeContext(db, { sessionId, contextType, contextValue, turnNumber = 0 }) {
+export async function storeContext(db, { sessionId, contextType, contextValue, turnNumber = 0 }) {
   if (!sessionId || !contextValue) {
     throw new Error('Session ID and context value are required')
   }
@@ -165,7 +165,7 @@ export function storeContext(db, { sessionId, contextType, contextValue, turnNum
     VALUES (?, ?, ?, ?, ?)
   `)
   
-  stmt.run(id, sessionId, contextType, contextValue, turnNumber)
+  await stmt.run(id, sessionId, contextType, contextValue, turnNumber)
   
   return { id, stored: true }
 }
@@ -173,8 +173,8 @@ export function storeContext(db, { sessionId, contextType, contextValue, turnNum
 /**
  * Get session context (most relevant items)
  */
-export function getSessionContext(db, sessionId, { limit = 10 } = {}) {
-  const rows = db.prepare(`
+export async function getSessionContext(db, sessionId, { limit = 10 } = {}) {
+  const rows = await db.prepare(`
     SELECT *
     FROM anya_context
     WHERE session_id = ?
@@ -188,8 +188,8 @@ export function getSessionContext(db, sessionId, { limit = 10 } = {}) {
 /**
  * Decay context relevance for older items
  */
-export function decayContextRelevance(db, sessionId, decayFactor = 0.9) {
-  db.prepare(`
+export async function decayContextRelevance(db, sessionId, decayFactor = 0.9) {
+  await db.prepare(`
     UPDATE anya_context
     SET relevance = relevance * ?
     WHERE session_id = ?
@@ -199,7 +199,7 @@ export function decayContextRelevance(db, sessionId, decayFactor = 0.9) {
 /**
  * Track tool usage for learning
  */
-export function trackToolUsage(db, {
+export async function trackToolUsage(db, {
   toolName,
   sessionId = null,
   userId = null,
@@ -218,7 +218,7 @@ export function trackToolUsage(db, {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   
-  stmt.run(id, toolName, sessionId, userId, profileId, paramsJson, success ? 1 : 0, errorMessage, executionTimeMs)
+  await stmt.run(id, toolName, sessionId, userId, profileId, paramsJson, success ? 1 : 0, errorMessage, executionTimeMs)
   
   return { id, tracked: true }
 }
@@ -226,7 +226,7 @@ export function trackToolUsage(db, {
 /**
  * Get tool usage statistics for learning optimal tool selection
  */
-export function getToolUsageStats(db, { toolName = null, userId = null, limit = 100 } = {}) {
+export async function getToolUsageStats(db, { toolName = null, userId = null, limit = 100 } = {}) {
   let query = `
     SELECT 
       tool_name,
@@ -252,13 +252,13 @@ export function getToolUsageStats(db, { toolName = null, userId = null, limit = 
   query += ` GROUP BY tool_name ORDER BY total_uses DESC LIMIT ?`
   params.push(limit)
   
-  return db.prepare(query).all(...params)
+  return await db.prepare(query).all(...params)
 }
 
 /**
  * Get Anya's brain summary for a user/profile
  */
-export function getBrainSummary(db, { userId = null, profileId = null } = {}) {
+export async function getBrainSummary(db, { userId = null, profileId = null } = {}) {
   const summary = {
     globalMemories: 0,
     userMemories: 0,
@@ -269,29 +269,29 @@ export function getBrainSummary(db, { userId = null, profileId = null } = {}) {
   }
   
   // Count memories by scope
-  summary.globalMemories = db.prepare(`
+  summary.globalMemories = (await db.prepare(`
     SELECT COUNT(*) as count FROM anya_brain_memory WHERE scope = 'global'
-  `).get()?.count || 0
+  `).get())?.count || 0
   
   if (userId) {
-    summary.userMemories = db.prepare(`
+    summary.userMemories = (await db.prepare(`
       SELECT COUNT(*) as count FROM anya_brain_memory WHERE scope = 'user' AND scope_id = ?
-    `).get(userId)?.count || 0
+    `).get(userId))?.count || 0
   }
   
   if (profileId) {
-    summary.profileMemories = db.prepare(`
+    summary.profileMemories = (await db.prepare(`
       SELECT COUNT(*) as count FROM anya_brain_memory WHERE scope = 'profile' AND scope_id = ?
-    `).get(profileId)?.count || 0
+    `).get(profileId))?.count || 0
   }
   
   // Get tool usage stats
-  summary.totalToolUsage = db.prepare(`
+  summary.totalToolUsage = (await db.prepare(`
     SELECT COUNT(*) as count FROM anya_tool_usage
-  `).get()?.count || 0
+  `).get())?.count || 0
   
   // Get recent tool usage
-  summary.recentToolUsage = db.prepare(`
+  summary.recentToolUsage = await db.prepare(`
     SELECT tool_name, success, created_at
     FROM anya_tool_usage
     ORDER BY created_at DESC
@@ -299,7 +299,7 @@ export function getBrainSummary(db, { userId = null, profileId = null } = {}) {
   `).all()
   
   // Get top memories
-  summary.topMemories = db.prepare(`
+  summary.topMemories = await db.prepare(`
     SELECT memory_key, memory_type, access_count, updated_at
     FROM anya_brain_memory
     WHERE expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP
@@ -313,8 +313,8 @@ export function getBrainSummary(db, { userId = null, profileId = null } = {}) {
 /**
  * Learn from user feedback on tool results
  */
-export function recordToolFeedback(db, { toolUsageId, rating, feedback }) {
-  const result = db.prepare(`
+export async function recordToolFeedback(db, { toolUsageId, rating, feedback }) {
+  const result = await db.prepare(`
     UPDATE anya_tool_usage
     SET user_rating = ?, user_feedback = ?
     WHERE id = ?

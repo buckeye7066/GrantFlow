@@ -878,7 +878,7 @@ function Start-TestAndFix{
     @{m='GET';p='/api/colleges/local-funding?zip=37311';a=$false;n='College funding TN'}
     @{m='GET';p='/api/anya/health';a=$true;n='Anya health'}
     @{m='GET';p='/api/admin/diagnostics';a=$true;n='Admin diagnostics'}
-    @{m='GET';p='/api/admin/pipeline-health';a=$false;n='Pipeline health'}
+    @{m='GET';p='/api/admin/pipeline-health';a=$true;n='Pipeline health'}
     @{m='GET';p='/api/source-directory?limit=3';a=$false;n='Source directory'}
     @{m='GET';p='/api/crawl-logs?limit=3';a=$false;n='Crawl logs'}
   )

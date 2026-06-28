@@ -273,9 +273,10 @@ export async function emitHamiltonNotificationToProfileAndAdmins(db, {
   }
   for (const a of admins) recipients.add(String(a))
 
+  const payloadData = profileId ? { ...data, profile_id: String(profileId) } : data
   const ids = []
   for (const userId of recipients) {
-    const id = await emitHamiltonNotification(db, { userId, type, title, message, data, severity, expiresInDays })
+    const id = await emitHamiltonNotification(db, { userId, type, title, message, data: payloadData, severity, expiresInDays })
     if (id) ids.push(id)
   }
   return ids

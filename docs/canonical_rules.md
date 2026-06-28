@@ -1,6 +1,6 @@
 # GrantFlow Canonical Rules & Goals
 
-_Last updated: 2026-01-28_
+_Last updated: 2026-06-27_
 
 This document is the **single source of truth** for GrantFlow’s product rules, correctness invariants, and acceptance criteria.
 
@@ -31,6 +31,17 @@ Sources:
 - `docs/BASE44_GAP_ANALYSIS.md`
 - `OPS_AUTOFIX.md`
 - Current implementation in `backend/services/*.js` and `src/pages/*.jsx`
+
+### G0. Truthful data, truthful proof, no fake shortcuts
+
+Hard rules:
+- **Do not fake funding.** User-facing catalogs, profile pipelines, crawler results, award histories, foundation traces, and application packets must never contain fabricated, placeholder, lorem, demo, dummy, or AI-invented funding sources presented as real.
+- **Do not fake production proof.** A deterministic test, fixture, or offline routing check may prove code behavior, but it must be labeled as such. It must not be described as a live crawl, live award lookup, deployed health check, or production data verification unless it actually used that live path.
+- **Do not blur release states.** A clean local tree, a pushed branch, green CI, current production health, and proof that a specific commit is deployed are separate claims. GrantFlow must label each one separately and must not imply a branch commit is live unless the deployment system verifies that exact commit.
+- **Do not bypass guardrails to make a result look green.** Auth, admin checks, tenant/profile scoping, the reality gate, the canonical matcher, source verification, Hamilton hard stops, and release gates must not be skipped, weakened, or hidden to pass a demo or deadline.
+- **Missing evidence is a gap, not a license to invent.** If a source, foundation grant list, portal, award amount, document field, profile answer, or live endpoint cannot be verified, GrantFlow must say so and either ask Anya/Hamilton/the admin for the missing proof or mark the item as unverified.
+- **Mocks, fakes, and fixtures are allowed only inside tests and clearly labeled tooling.** They must never seed production, masquerade as crawler output, or be used as the sole basis for declaring a live workflow production-ready.
+- **AI may summarize, classify, and draft from supplied facts; it may not invent facts, relationships, amounts, eligibility, deadlines, portal access, funder history, or prior contact.**
 
 ### G1. Non-fragile, observable, and testable
 

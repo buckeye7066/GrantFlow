@@ -101,18 +101,39 @@ router.post('/', async (req, res) => {
     }
 
     const id = crypto.randomUUID()
-    await req.db
+    const insertResult = await req.db
       .prepare(
         `
           INSERT INTO user_preferences (
             id, user_id, custom_preferences
           ) VALUES (?, ?, ?)
+          ON CONFLICT(user_id) DO NOTHING
         `,
       )
       .run(id, String(userId), nextCustomJson)
+    const inserted = Number(insertResult?.changes ?? 0) > 0
+
+    if (!inserted) {
+      const latest = await loadUserPreferencesRow(req.db, userId)
+      const latestCustom = safeJsonParse(latest?.custom_preferences, {})
+      const mergedCustom = {
+        ...(latestCustom && typeof latestCustom === 'object' ? latestCustom : {}),
+        billing_settings: incoming,
+      }
+      await req.db
+        .prepare(
+          `
+            UPDATE user_preferences
+            SET updated_at = CURRENT_TIMESTAMP,
+                custom_preferences = ?
+            WHERE user_id = ?
+          `,
+        )
+        .run(safeJsonStringify(mergedCustom), String(userId))
+    }
 
     const row = await loadUserPreferencesRow(req.db, userId)
-    return res.status(201).json(mapRow(row))
+    return res.status(inserted ? 201 : 200).json(mapRow(row))
   } catch (error) {
     routeLogger.error('[billing-settings] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
@@ -156,4 +177,3 @@ router.put('/:id', async (req, res) => {
 })
 
 export default router
-

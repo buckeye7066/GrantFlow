@@ -433,18 +433,43 @@ function summarisePageState(page, fields, buttons) {
   }
 }
 
+function normalizeConfirmationCandidate(value) {
+  return String(value || '').trim().replace(/^[#:\s.-]+/, '').replace(/[.,;:)]+$/, '')
+}
+
+function isPlausibleConfirmationReference(value, { explicit = false } = {}) {
+  const candidate = normalizeConfirmationCandidate(value)
+  if (!candidate || candidate.length < 6 || candidate.length > 80) return false
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(candidate)) return false
+  if (/^[a-z]+$/.test(candidate)) return false
+  if (/\b(designed|through|submit|submitted|application|confirmation|reference|number|thanks)\b/i.test(candidate)) return false
+  if (explicit) return true
+  return /\d/.test(candidate)
+}
+
+function extractConfirmationReference(text) {
+  const haystack = String(text || '').replace(/\s+/g, ' ')
+  const explicit = haystack.match(/\b(?:confirmation|reference|application)\s*(?:number|no\.?|#|id|code)\s*[:#.-]?\s*([A-Za-z0-9][A-Za-z0-9-]{5,})\b/i)
+  if (explicit && isPlausibleConfirmationReference(explicit[1], { explicit: true })) {
+    return normalizeConfirmationCandidate(explicit[1])
+  }
+  const generic = haystack.match(/\b(?:confirmation|reference|application)\b[\s#:.]*([A-Za-z0-9][A-Za-z0-9-]{5,})\b/i)
+  if (generic && isPlausibleConfirmationReference(generic[1], { explicit: false })) {
+    return normalizeConfirmationCandidate(generic[1])
+  }
+  return null
+}
+
 async function captureConfirmation(page, screenshotsDir) {
   const url = (() => { try { return page.url() } catch { return null } })()
+  const bodyText = await page.locator('body').innerText({ timeout: 2500 }).catch(() => '')
   const html = await page.content().catch(() => '')
   // Extract a confirmation reference if any looks like one. The label match is
-  // case-insensitive, but a real confirmation/reference CODE is alphanumeric and
-  // contains at least one digit — so we reject prose captured by the old
-  // case-insensitive `[A-Z0-9-]{6,}` (it matched plain words like "designed" /
-  // "through" off "Application designed to…", recording meaningless references
-  // on auto-submitted runs and making "submitted" untrustworthy).
-  let reference = null
-  const m = html.match(/(?:Confirmation|Reference|Application)(?:\s*(?:number|no\.?|#|id|code))?[\s#:.]*([A-Za-z0-9][A-Za-z0-9-]{5,})/i)
-  if (m && /\d/.test(m[1]) && !/^[a-z]+$/.test(m[1])) reference = m[1]
+  // case-insensitive, but we only accept explicit labelled codes or generic
+  // references with digits. That avoids old false positives like "Application
+  // designed..." while still accepting real all-letter IDs when the page says
+  // "Confirmation #:" or "Reference code:".
+  const reference = extractConfirmationReference(bodyText) || extractConfirmationReference(html)
   let screenshotPath = null
   try {
     if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true })
@@ -721,4 +746,5 @@ export const _internal = {
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues,
   detectGate, attemptLogin,
+  extractConfirmationReference,
 }

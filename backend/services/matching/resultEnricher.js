@@ -7,8 +7,22 @@ import {
   deriveMatchReasonCodes,
   MATCH_REASON_CODES,
 } from './reasons.js'
+import { evaluateProfileSpecificGate } from './profileSpecificGate.js'
 
 export function isDirectoryRecord(opp) {
+  const text = [
+    opp?.title,
+    opp?.name,
+    opp?.description,
+    opp?.summary,
+    opp?.eligibility,
+    opp?.opportunity_type,
+    opp?.type,
+    opp?.funding_type,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
   return Boolean(
     opp?.is_directory_resource ||
       String(opp?.source || '').startsWith('directory') ||
@@ -16,7 +30,8 @@ export function isDirectoryRecord(opp) {
       String(opp?.record_origin || '').startsWith('directory') ||
       String(opp?.type || '').toUpperCase() === 'DIRECTORY' ||
       String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY' ||
-      String(opp?.opportunity_kind || '').toLowerCase() === 'directory',
+      String(opp?.opportunity_kind || '').toLowerCase() === 'directory' ||
+      /\b(boots to business|veterans business outreach centers?|veteran-owned business resources|military onesource|transition assistance program)\b/.test(text),
   )
 }
 
@@ -79,6 +94,21 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
   const profileSections = profileContext?.sections ?? null
   const signals = profileContext?.signals ?? null
   const directory = isDirectoryRecord(opportunity)
+
+  const profileGate = evaluateProfileSpecificGate(profileContext, opportunity, {
+    mode: opts.profileGateMode || 'display',
+    allowUnmatchedDirectoryFallback: opts.allowUnmatchedDirectoryFallback === true,
+  })
+  if (!profileGate.pass) {
+    return {
+      display: false,
+      dropReason: profileGate.ruleId || 'profile_specific_gate',
+      opportunity,
+      decision: null,
+      trust: null,
+      profileGate,
+    }
+  }
 
   const trust = assessOpportunityTrust(opportunity, {
     allowDirectory: true,
@@ -151,6 +181,7 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
       ? decision.matchedNeeds
       : [],
     matched_profile_facts: matchedFacts,
+    profile_gate_reasons: profileGate.matchedRules || [],
     ineligibility_reasons: Array.isArray(decision?.ineligibilityReasons)
       ? decision.ineligibilityReasons
       : [],

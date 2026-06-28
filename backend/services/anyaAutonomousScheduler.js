@@ -227,26 +227,33 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
       log.info('[Anya Scheduler] Phase 3: Running crawlers...')
       try {
         const crawlerProfileId = context?.profileId ?? context?.profile_id ?? null
-const crawlerLocation = context?.profile?.location ?? null
-const crawlerNeeds = context?.profile?.needs ?? null
-const crawlerApplicantType = context?.profile?.primary_type ?? null
+        const contextProfileIds = Array.isArray(context?.profileIds)
+          ? context.profileIds.filter(Boolean).map(String)
+          : []
+        const crawlerProfileIds = contextProfileIds.length > 0
+          ? contextProfileIds
+          : crawlerProfileId
+            ? [String(crawlerProfileId)]
+            : null
 
-if (!crawlerProfileId || !crawlerLocation) {
-  console.warn(
-    '[Anya Scheduler] Phase 3: crawler context is missing profileId or location â ' +
-    'results will not be profile-scoped (Goals 11, 5). profileId=' + crawlerProfileId +
-    ' location=' + String(crawlerLocation)
-  )
-}
+        if (crawlerProfileIds) {
+          log.info(`[Anya Scheduler] Phase 3: Crawler OS scoped to ${crawlerProfileIds.length} profile${crawlerProfileIds.length === 1 ? '' : 's'}`)
+        } else {
+          log.info('[Anya Scheduler] Phase 3: Crawler OS will process active profiles one profile at a time')
+        }
 
-const crawlerParams = {
-  ...AUTONOMOUS_CONFIG.params.crawlers,
-  profileId: crawlerProfileId,
-  location: crawlerLocation,
-  needs: crawlerNeeds,
-  applicantType: crawlerApplicantType,
-}
-const result = await runAutonomousCrawlers(crawlerParams, context)
+        if (process.env.ANYA_LEGACY_CRAWLER_CONTEXT_WARNING === '1') {
+          console.warn(
+            '[Anya Scheduler] Phase 3 legacy warning requested; Crawler OS scope=' +
+              (crawlerProfileIds ? crawlerProfileIds.join(',') : 'all_active_profiles'),
+          )
+        }
+
+        const crawlerParams = {
+          ...AUTONOMOUS_CONFIG.params.crawlers,
+          profileIds: crawlerProfileIds,
+        }
+        const result = await runAutonomousCrawlers(crawlerParams, context)
         report.operations.crawlers = {
           status: 'completed',
           profiles_processed: result.profiles_processed,

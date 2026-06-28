@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:serviceCatalogExtractParser')
 
 function repoRootFromHere() {
   const __filename = fileURLToPath(import.meta.url)
@@ -215,7 +217,7 @@ export function parsePaymentSheetExtract(markdown) {
 export function loadPaymentSheetExtractFromDisk() {
   const p = getCanonicalServiceCatalogExtractPath()
   if (!fs.existsSync(p)) {
-    console.error(`Service catalog extract not found: ${p}`)
+    qualityLog.error(`Service catalog extract not found: ${p}`)
     throw new Error(`extract_not_found:${p}`)
   }
   return fs.readFileSync(p, 'utf8')

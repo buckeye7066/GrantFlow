@@ -53,8 +53,13 @@ export function makeJohnDb() {
  * Set JOHN_* env vars for a test, returning a restore function.
  */
 export function applyEnv(patch) {
+  const envPatch = {
+    GRANTFLOW_TEST_RUNNER: '1',
+    JOHN_AI_DRAFTING: 'off',
+    ...patch,
+  }
   const previous = {}
-  for (const [k, v] of Object.entries(patch || {})) {
+  for (const [k, v] of Object.entries(envPatch)) {
     previous[k] = process.env[k]
     if (v == null) delete process.env[k]
     else process.env[k] = String(v)
@@ -94,9 +99,9 @@ export function applyDefaultJohnEnv() {
     JOHN_AI_DRAFTING: 'off',
     JOHN_PROSPECT_LINK: 'https://www.axiombiolabs.org/grantflow',
     JOHN_PRIMARY_MAILBOX: 'dr.johnwhite@axiombiolabs.org',
-    JOHN_FROM_ALIAS: 'GrantFlow@axiombiolabs.org',
-    JOHN_REPLY_TO: 'GrantFlow@axiombiolabs.org',
-    JOHN_DISPLAY_NAME: 'Dr. John White | GrantFlow',
+    JOHN_FROM_ALIAS: 'Ellie@axiombiolabs.org',
+    JOHN_REPLY_TO: 'Ellie@axiombiolabs.org',
+    JOHN_DISPLAY_NAME: 'Ellie | GrantFlow',
     JOHN_TEST_RECIPIENT: 'dr.johnwhite@axiombiolabs.org',
     JOHN_ALLOW_PRIMARY_MAILBOX_FALLBACK_DRAFTS: 'true',
     JOHN_REQUIRE_ALIAS_REVIEW_IF_FALLBACK: 'true',

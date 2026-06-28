@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, Funnel, FunnelChart, LabelList } from 'recharts';
 import { Loader2, Filter, TrendingUp, Target, Award, Banknote, Percent, FileText, Plus, Calendar, Clock, AlertTriangle } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { groupBy, countBy, sumBy } from "lodash";
 import { format, subMonths, isPast, differenceInDays } from 'date-fns';
@@ -54,7 +54,16 @@ const StatCard = ({ title, value, icon: Icon, color, subtitle }) => (
 );
 
 export default function Reports() {
-  const [selectedOrgId, setSelectedOrgId] = useState("all");
+  const location = useLocation();
+  const urlIntent = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return {
+      organizationId: params.get('organization_id') || 'all',
+      grantId: params.get('grant_id') || '',
+      schedule: params.get('schedule') === '1',
+    };
+  }, [location.search]);
+  const [selectedOrgId, setSelectedOrgId] = useState(urlIntent.organizationId);
   const [showCreateReport, setShowCreateReport] = useState(false);
   const [newReportData, setNewReportData] = useState({
     grant_id: '',
@@ -63,6 +72,7 @@ export default function Reports() {
     report_period_end: '',
     due_date: '',
   });
+  const appliedUrlIntentRef = useRef(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -90,6 +100,23 @@ export default function Reports() {
     queryKey: ['expenses'],
     queryFn: () => client.entities.Expense.list(),
   });
+
+  useEffect(() => {
+    setSelectedOrgId(urlIntent.organizationId || "all");
+  }, [urlIntent.organizationId]);
+
+  useEffect(() => {
+    if (appliedUrlIntentRef.current || !urlIntent.grantId || grants.length === 0) return;
+    const grant = grants.find(g => g.id === urlIntent.grantId);
+    if (!grant) return;
+    appliedUrlIntentRef.current = true;
+    setSelectedOrgId(grant.organization_id || urlIntent.organizationId || "all");
+    setNewReportData((prev) => ({
+      ...prev,
+      grant_id: grant.id,
+    }));
+    if (urlIntent.schedule) setShowCreateReport(true);
+  }, [grants, urlIntent.grantId, urlIntent.organizationId, urlIntent.schedule]);
 
   const createReportMutation = useMutation({
     mutationFn: (data) => client.entities.ComplianceReport.create(data),

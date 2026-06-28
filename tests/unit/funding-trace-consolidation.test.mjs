@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  FUNDING_TRACE_ENTITY_TYPES,
   consolidateFundingSources,
   isSourceAddable,
   traceSourceToOpportunity,
@@ -72,6 +73,16 @@ describe('consolidateFundingSources', () => {
       { 'Awarding Agency': '', 'Awarding Sub Agency': '', 'Award Amount': '5000' },
     ])
     assert.equal(out.length, 0)
+  })
+})
+
+describe('FUNDING_TRACE_ENTITY_TYPES', () => {
+  it('accepts foundations and nonprofits as first-class lookup targets', () => {
+    assert.ok(FUNDING_TRACE_ENTITY_TYPES.includes('foundation'))
+    assert.ok(FUNDING_TRACE_ENTITY_TYPES.includes('grantmaker'))
+    assert.ok(FUNDING_TRACE_ENTITY_TYPES.includes('nonprofit'))
+    assert.ok(FUNDING_TRACE_ENTITY_TYPES.includes('company'))
+    assert.ok(FUNDING_TRACE_ENTITY_TYPES.includes('public_entity'))
   })
 })
 

@@ -261,7 +261,10 @@ function getSchoolTheme(application) {
   const explicitPrimary = explicit?.primary_color ? String(explicit.primary_color).trim() : ""
   const explicitSecondary = explicit?.secondary_color ? String(explicit.secondary_color).trim() : ""
   const explicitCheer = explicit?.cheer_line ? String(explicit.cheer_line).trim() : ""
-  const cheerEnabled = explicit?.cheer_enabled !== false
+  // Only treat cheer as enabled when explicitly set to something other than
+  // false (and present). An undefined `cheer_enabled` should not force the
+  // cheer line to show.
+  const cheerEnabled = explicit?.cheer_enabled !== false && explicit?.cheer_enabled !== undefined
 
   if (explicitPrimary || explicitSecondary || explicitCheer) {
     return {
@@ -354,91 +357,106 @@ function matchesAnyInterest(contact, interests) {
 
 function normaliseApplications(applications) {
   if (!Array.isArray(applications)) return []
-  return applications.map((application) => ({
-    ...application,
-    id: application.id ?? generateId("application"),
-    name: application.name ?? "",
-    website_url: application.website_url ?? "",
-    campus_address: application.campus_address ?? "",
-    city: application.city ?? "",
-    state: application.state ?? "",
-    zip: application.zip ?? "",
-    main_phone: application.main_phone ?? "",
-    main_email: application.main_email ?? "",
-    theme: {
-      primary_color: application.theme?.primary_color ?? "",
-      secondary_color: application.theme?.secondary_color ?? "",
-      cheer_line: application.theme?.cheer_line ?? "",
-      cheer_enabled: application.theme?.cheer_enabled ?? true,
-      // Mascot is a free-form string ("Lightning the Blue Raider"). Used by
-      // the AI-assist auto-fill and by school-themed UI flourishes.
-      mascot: application.theme?.mascot ?? "",
-    },
-    graduation_rate: application.graduation_rate ?? null,
-    student_teacher_ratio: application.student_teacher_ratio ?? null,
-    avg_class_size: application.avg_class_size ?? null,
-    portals: {
-      admissions_url: application.portals?.admissions_url ?? "",
-      financial_aid_url: application.portals?.financial_aid_url ?? "",
-      // AI-assist now also fills these. Adding canonical defaults here keeps
-      // the UI buttons stable even before the AI populates them.
-      scholarship_url: application.portals?.scholarship_url ?? "",
-      housing_url: application.portals?.housing_url ?? "",
-      student_portal_url: application.portals?.student_portal_url ?? "",
-      counseling_url: application.portals?.counseling_url ?? "",
-      transcripts_url: application.portals?.transcripts_url ?? "",
-      send_scores_url: application.portals?.send_scores_url ?? "",
-    },
-    costs: {
-      housing_preference: application.costs?.housing_preference ?? "unknown",
-      on_campus_total: application.costs?.on_campus_total ?? null,
-      off_campus_total: application.costs?.off_campus_total ?? null,
-      selected_meal_plan_id: application.costs?.selected_meal_plan_id ?? "",
-      meal_plans: safeArray(application.costs?.meal_plans).map((plan) => ({
-        id: plan.id ?? generateId("mealplan"),
-        name: plan.name ?? "",
-        cost_per_semester: plan.cost_per_semester ?? "",
-        notes: plan.notes ?? "",
+  return applications.map((application) => {
+    // Guard against an undefined/null application object so we never attempt
+    // to read keys from a missing record.
+    const safeApp = application && typeof application === "object" ? application : {}
+    // Ensure theme is always treated as an object with default values, even
+    // when the source record omits it entirely or supplies a non-object.
+    const sourceTheme =
+      safeApp.theme && typeof safeApp.theme === "object" ? safeApp.theme : {}
+    const sourcePortals =
+      safeApp.portals && typeof safeApp.portals === "object" ? safeApp.portals : {}
+    const sourceCosts =
+      safeApp.costs && typeof safeApp.costs === "object" ? safeApp.costs : {}
+    const sourceActions =
+      safeApp.actions && typeof safeApp.actions === "object" ? safeApp.actions : {}
+    return {
+      ...safeApp,
+      id: safeApp.id ?? generateId("application"),
+      name: safeApp.name ?? "",
+      website_url: safeApp.website_url ?? "",
+      campus_address: safeApp.campus_address ?? "",
+      city: safeApp.city ?? "",
+      state: safeApp.state ?? "",
+      zip: safeApp.zip ?? "",
+      main_phone: safeApp.main_phone ?? "",
+      main_email: safeApp.main_email ?? "",
+      theme: {
+        primary_color: sourceTheme.primary_color ?? "",
+        secondary_color: sourceTheme.secondary_color ?? "",
+        cheer_line: sourceTheme.cheer_line ?? "",
+        cheer_enabled: sourceTheme.cheer_enabled ?? true,
+        // Mascot is a free-form string ("Lightning the Blue Raider"). Used by
+        // the AI-assist auto-fill and by school-themed UI flourishes.
+        mascot: sourceTheme.mascot ?? "",
+      },
+      graduation_rate: safeApp.graduation_rate ?? null,
+      student_teacher_ratio: safeApp.student_teacher_ratio ?? null,
+      avg_class_size: safeApp.avg_class_size ?? null,
+      portals: {
+        admissions_url: sourcePortals.admissions_url ?? "",
+        financial_aid_url: sourcePortals.financial_aid_url ?? "",
+        // AI-assist now also fills these. Adding canonical defaults here keeps
+        // the UI buttons stable even before the AI populates them.
+        scholarship_url: sourcePortals.scholarship_url ?? "",
+        housing_url: sourcePortals.housing_url ?? "",
+        student_portal_url: sourcePortals.student_portal_url ?? "",
+        counseling_url: sourcePortals.counseling_url ?? "",
+        transcripts_url: sourcePortals.transcripts_url ?? "",
+        send_scores_url: sourcePortals.send_scores_url ?? "",
+      },
+      costs: {
+        housing_preference: sourceCosts.housing_preference ?? "unknown",
+        on_campus_total: sourceCosts.on_campus_total ?? null,
+        off_campus_total: sourceCosts.off_campus_total ?? null,
+        selected_meal_plan_id: sourceCosts.selected_meal_plan_id ?? "",
+        meal_plans: safeArray(sourceCosts.meal_plans).map((plan) => ({
+          id: plan.id ?? generateId("mealplan"),
+          name: plan.name ?? "",
+          cost_per_semester: plan.cost_per_semester ?? "",
+          notes: plan.notes ?? "",
+        })),
+      },
+      contacts: safeArray(safeApp.contacts).map((contact) => ({
+        id: contact.id ?? generateId("contact"),
+        label: contact.label ?? "Contact",
+        name: contact.name ?? "",
+        title: contact.title ?? "",
+        email: contact.email ?? "",
+        phone: contact.phone ?? "",
+        url: contact.url ?? "",
       })),
-    },
-    contacts: safeArray(application.contacts).map((contact) => ({
-      id: contact.id ?? generateId("contact"),
-      label: contact.label ?? "Contact",
-      name: contact.name ?? "",
-      title: contact.title ?? "",
-      email: contact.email ?? "",
-      phone: contact.phone ?? "",
-      url: contact.url ?? "",
-    })),
-    financial_aid_pipeline: safeArray(application.financial_aid_pipeline).map((stage) => ({
-      id: stage.id ?? generateId("stage"),
-      label: stage.label ?? "",
-      status: stage.status ?? "planned",
-      due_date: stage.due_date ?? "",
-      completed_at: stage.completed_at ?? "",
-      notes: stage.notes ?? "",
-    })),
-    department_contacts: safeArray(application.department_contacts).map((entry) => ({
-      id: entry.id ?? generateId("department"),
-      area: entry.area ?? "",
-      category: entry.category ?? "",
-      gender_target: entry.gender_target ?? "any",
-      name: entry.name ?? "",
-      title: entry.title ?? "",
-      email: entry.email ?? "",
-      phone: entry.phone ?? "",
-      url: entry.url ?? "",
-      notes: entry.notes ?? "",
-    })),
-    interests: safeArray(application.interests),
-    activity_catalog: normalizeActivityCatalog(application.activity_catalog),
-    local_funding: safeArray(application.local_funding),
-    actions: {
-      apply_url: application.actions?.apply_url ?? "",
-      pay_fee_url: application.actions?.pay_fee_url ?? "",
-      visit_url: application.actions?.visit_url ?? "",
-    },
-  }))
+      financial_aid_pipeline: safeArray(safeApp.financial_aid_pipeline).map((stage) => ({
+        id: stage.id ?? generateId("stage"),
+        label: stage.label ?? "",
+        status: stage.status ?? "planned",
+        due_date: stage.due_date ?? "",
+        completed_at: stage.completed_at ?? "",
+        notes: stage.notes ?? "",
+      })),
+      department_contacts: safeArray(safeApp.department_contacts).map((entry) => ({
+        id: entry.id ?? generateId("department"),
+        area: entry.area ?? "",
+        category: entry.category ?? "",
+        gender_target: entry.gender_target ?? "any",
+        name: entry.name ?? "",
+        title: entry.title ?? "",
+        email: entry.email ?? "",
+        phone: entry.phone ?? "",
+        url: entry.url ?? "",
+        notes: entry.notes ?? "",
+      })),
+      interests: safeArray(safeApp.interests),
+      activity_catalog: normalizeActivityCatalog(safeApp.activity_catalog),
+      local_funding: safeArray(safeApp.local_funding),
+      actions: {
+        apply_url: sourceActions.apply_url ?? "",
+        pay_fee_url: sourceActions.pay_fee_url ?? "",
+        visit_url: sourceActions.visit_url ?? "",
+      },
+    }
+  })
 }
 
 function mergeApplications(existing, suggested) {
@@ -746,14 +764,16 @@ export default function UniversityApplicationsSection({
   }
 
   const handleFormSubmit = async (applicationData) => {
-    const nextApplications =
-      formMode === "edit"
-        ? localApplications.map((application) =>
-            application.id === applicationData.id ? applicationData : application,
-          )
-        : [...localApplications, applicationData]
-
-    setLocalApplications(nextApplications)
+    let nextApplications
+    setLocalApplications((current) => {
+      nextApplications =
+        formMode === "edit"
+          ? current.map((application) =>
+              application.id === applicationData.id ? applicationData : application,
+            )
+          : [...current, applicationData]
+      return nextApplications
+    })
     await persistApplications(
       nextApplications,
       formMode === "edit" ? "Application details updated." : "Application added to the profile.",
@@ -779,8 +799,11 @@ export default function UniversityApplicationsSection({
   const handleDeleteConfirmed = async () => {
     if (!deleteTarget) return
     const targetId = deleteTarget.id
-    const nextApplications = localApplications.filter((application) => application.id !== targetId)
-    setLocalApplications(nextApplications)
+    let nextApplications
+    setLocalApplications((current) => {
+      nextApplications = current.filter((application) => application.id !== targetId)
+      return nextApplications
+    })
     await persistApplications(nextApplications, "Application removed.")
     // Only clear the delete target after persistence completes so the dialog
     // remains accurate if the save fails and reverts.
@@ -827,8 +850,11 @@ export default function UniversityApplicationsSection({
         })
         return
       }
-      const merged = mergeApplications(localApplications, suggestion)
-      setLocalApplications(merged)
+      let merged
+      setLocalApplications((current) => {
+        merged = mergeApplications(current, suggestion)
+        return merged
+      })
       await persistApplications(merged, "AI suggestions merged into your university list.")
     } catch (error) {
       console.error("AI enrichment failed", error)
@@ -890,9 +916,29 @@ export default function UniversityApplicationsSection({
   // or 'accepted' at other schools — the user can still browse those for
   // reference. We mark 'planning' / 'interested' / 'in_progress' as
   // 'deferred' so the dashboard makes the chosen-vs-not-chosen state clear.
+  //
+  // Note: localApplications is intentionally NOT in the dependency array.
+  // The current state is captured inside the functional setState updater so
+  // the callback identity stays stable across renders and we never operate
+  // on a stale snapshot.
   const handleCommitToSchool = useCallback(
     async (applicationId) => {
-      const target = localApplications.find((a) => a.id === applicationId)
+      const STILL_ACTIVE = new Set([
+        "planning",
+        "interested",
+        "in_progress",
+        "submitted",
+        "accepted",
+        "waitlisted",
+      ])
+      // Capture the current state synchronously without committing a change
+      // so we can find the target and ask for confirmation.
+      let current = []
+      setLocalApplications((c) => {
+        current = c
+        return c
+      })
+      const target = current.find((a) => a.id === applicationId)
       if (!target) return
       const proceed = window.confirm(
         `Commit to ${target.name}?\n\n` +
@@ -903,33 +949,37 @@ export default function UniversityApplicationsSection({
       )
       if (!proceed) return
 
-      const STILL_ACTIVE = new Set([
-        "planning",
-        "interested",
-        "in_progress",
-        "submitted",
-        "accepted",
-        "waitlisted",
-      ])
-      const nextApplications = localApplications.map((app) => {
-        if (app.id === applicationId) return { ...app, status: "committed" }
-        if (STILL_ACTIVE.has(String(app.status || "").toLowerCase())) {
-          return { ...app, status: "deferred" }
-        }
-        return app
+      // Re-derive the next state from the latest local state at apply time so
+      // we don't clobber intermediate edits made while the confirm dialog was
+      // open.
+      let nextApplications
+      setLocalApplications((c) => {
+        nextApplications = c.map((app) => {
+          if (app.id === applicationId) return { ...app, status: "committed" }
+          if (STILL_ACTIVE.has(String(app.status || "").toLowerCase())) {
+            return { ...app, status: "deferred" }
+          }
+          return app
+        })
+        return nextApplications
       })
-      setLocalApplications(nextApplications)
       await persistApplications(
         nextApplications,
         `Committed to ${target.name}. Other schools' funding cards will fall off.`,
       )
     },
-    [localApplications, persistApplications],
+    [persistApplications],
   )
 
   const handleUncommitSchool = useCallback(
     async (applicationId) => {
-      const target = localApplications.find((a) => a.id === applicationId)
+      // Capture the current state synchronously without committing a change.
+      let current = []
+      setLocalApplications((c) => {
+        current = c
+        return c
+      })
+      const target = current.find((a) => a.id === applicationId)
       if (!target) return
       const proceed = window.confirm(
         `Uncommit from ${target.name}?\n\n` +
@@ -938,13 +988,16 @@ export default function UniversityApplicationsSection({
         "funding feed for this profile.",
       )
       if (!proceed) return
-      const nextApplications = localApplications.map((app) =>
-        app.id === applicationId ? { ...app, status: "planning" } : app,
-      )
-      setLocalApplications(nextApplications)
+      let nextApplications
+      setLocalApplications((c) => {
+        nextApplications = c.map((app) =>
+          app.id === applicationId ? { ...app, status: "planning" } : app,
+        )
+        return nextApplications
+      })
       await persistApplications(nextApplications, `Uncommitted from ${target.name}.`)
     },
-    [localApplications, persistApplications],
+    [persistApplications],
   )
 
   return (

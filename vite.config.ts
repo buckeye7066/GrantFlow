@@ -28,8 +28,8 @@ export default defineConfig(({ mode }) => {
       extensions: ['.mjs', '.js', '.jsx', '.ts', '.tsx', '.json'],
     },
     optimizeDeps: {
-      esbuildOptions: {
-        loader: {
+      rolldownOptions: {
+        moduleTypes: {
           '.js': 'jsx',
         },
       },

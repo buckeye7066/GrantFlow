@@ -131,11 +131,11 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
         crawlerJobId: jobId,
       })
     } catch (err) {
-      console.error('[adminGeoCrawlOnLogin] createGeoCrawlRun failed, backfill:', err?.message || err)
+      log.error('[adminGeoCrawlOnLogin] createGeoCrawlRun failed, backfill:', err?.message || err)
       try {
         await backfillGeoCrawlRunFromJob(db, geoRunId, job)
       } catch (e2) {
-        console.error('[adminGeoCrawlOnLogin] backfillGeoCrawlRunFromJob failed:', e2?.message || e2)
+        log.error('[adminGeoCrawlOnLogin] backfillGeoCrawlRunFromJob failed:', e2?.message || e2)
       }
     }
 
@@ -156,7 +156,7 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
     log.info(`[adminGeoCrawlOnLogin] Scheduled nationwide geo sweep job=${jobId} run=${geoRunId}`)
     return { scheduled: true, job_id: jobId, run_id: geoRunId }
   } catch (error) {
-    console.error('[adminGeoCrawlOnLogin] Failed:', error)
+    log.error('[adminGeoCrawlOnLogin] Failed:', error)
     return { scheduled: false, reason: 'error', error: String(error?.message || error) }
   }
 }

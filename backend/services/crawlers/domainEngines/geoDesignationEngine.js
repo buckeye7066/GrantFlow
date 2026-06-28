@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:geoDesignationEngine')
 
 const ENGINE_ID = 'geo_designation'
 
@@ -63,7 +65,7 @@ export async function runGeoDesignationEngine(profile, options = {}) {
       profile,
     })
   } catch (error) {
-    console.error(`Geographic designation engine failed: ${error.message}`)
+    qualityLog.error(`Geographic designation engine failed: ${error.message}`)
     return []
   }
 }

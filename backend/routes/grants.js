@@ -16,11 +16,11 @@ import {
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
-import { isPipelineSourceAllowed, evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
+import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
-import { mergeOpportunitySignals } from '../services/profileHelpers.js'
-import { decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
+import { loadProfileContext, mergeOpportunitySignals } from '../services/profileHelpers.js'
+import { decorateOpportunityFreshness, saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import {
   gateOpportunityForPipeline,
   buildTrustMetadata,
@@ -45,6 +45,39 @@ const router = express.Router();
 
 function runLegacyProfilelessGrantQuery(fn) {
   return withProfileScope({ bypass: true }, fn)
+}
+
+async function loadGrantByIdForProfileAwareResponse(db, id, profileId) {
+  const hasProfileId = await grantsHasProfileIdColumn(db, { refresh: true }).catch(() => false)
+  if (hasProfileId && profileId) {
+    return db.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ?').get(String(id), String(profileId))
+  }
+  return runLegacyProfilelessGrantQuery(() =>
+    db.prepare('SELECT * FROM grants WHERE id = ?').get(String(id)),
+  )
+}
+
+function isUniqueGrantConflict(error) {
+  const msg = String(error?.message || '')
+  return (
+    error?.code === '23505' ||
+    error?.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+    (error?.code === 'SQLITE_CONSTRAINT' && /unique/i.test(msg)) ||
+    /duplicate key value|unique constraint failed|ux_grants_profile_opportunity/i.test(msg)
+  )
+}
+
+async function findExistingGrantByProfileOpportunity(db, profileId, opportunityId) {
+  if (!profileId || !opportunityId) return null
+  return db
+    .prepare(
+      `SELECT *
+         FROM grants
+        WHERE profile_id = ?
+          AND funding_opportunity_id = ?
+        LIMIT 1`,
+    )
+    .get(String(profileId), String(opportunityId))
 }
 
 function parseOpportunityContact(opportunity) {
@@ -156,16 +189,16 @@ async function hasColumn(db, { tableName, columnName }) {
   return rows.some((r) => String(r?.name || '').toLowerCase() === String(columnName).toLowerCase())
 }
 
-async function grantsHasProfileIdColumn(db) {
+async function grantsHasProfileIdColumn(db, { refresh = false } = {}) {
   const dialect = db?.dialect || 'sqlite'
   if (dialect === 'postgres') {
-    if (postgresHasGrantsProfileIdColumn === null) {
+    if (refresh || postgresHasGrantsProfileIdColumn === null) {
       postgresHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
     }
     return postgresHasGrantsProfileIdColumn
   }
 
-  if (sqliteHasGrantsProfileIdColumn === null) {
+  if (refresh || sqliteHasGrantsProfileIdColumn === null) {
     sqliteHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
   }
   return sqliteHasGrantsProfileIdColumn
@@ -173,7 +206,10 @@ async function grantsHasProfileIdColumn(db) {
 
 async function ensureGrantAiColumns(db) {
   if (!db || typeof db.prepare !== 'function') return
-  if (ensuredGrantAiColumns) return
+  if (ensuredGrantAiColumns) {
+    const hasProfileId = await grantsHasProfileIdColumn(db, { refresh: true }).catch(() => true)
+    if (hasProfileId) return
+  }
 
   try {
     const columnsToEnsure = [
@@ -189,13 +225,14 @@ async function ensureGrantAiColumns(db) {
     ]
 
     // Ensure profile_id exists too (many code paths expect it).
-    const needsProfileId = !(await grantsHasProfileIdColumn(db))
+    const needsProfileId = !(await grantsHasProfileIdColumn(db, { refresh: true }))
     const cols = needsProfileId ? [{ name: 'profile_id', pg: 'TEXT', sqlite: 'TEXT' }, ...columnsToEnsure] : columnsToEnsure
 
     if (db.dialect === 'postgres') {
       for (const c of cols) {
         await db.prepare(`ALTER TABLE grants ADD COLUMN IF NOT EXISTS ${c.name} ${c.pg};`).run()
       }
+      postgresHasGrantsProfileIdColumn = true
       ensuredGrantAiColumns = true
       return
     }
@@ -210,6 +247,7 @@ async function ensureGrantAiColumns(db) {
       const colType = assertSafeIdentifier(String(c.sqlite).split(' ')[0], 'identifier')
       const tail = String(c.sqlite).slice(colType.length).replace(/[^A-Za-z0-9 \t_'"-]/g, '')
       await db.prepare(`ALTER TABLE grants ADD COLUMN ${colName} ${colType}${tail};`).run()
+      if (c.name === 'profile_id') sqliteHasGrantsProfileIdColumn = true
     }
   } catch (error) {
     // Do not 500 normal grant routes if schema drift exists; log and continue.
@@ -848,7 +886,8 @@ router.get('/:id', async (req, res) => {
       FROM grants g
       LEFT JOIN organizations o ON g.organization_id = o.id
       WHERE g.id = ?
-    `).get(req.params.id);
+        AND (g.profile_id = ? OR g.profile_id IS NULL)
+    `).get(req.params.id, grantAccess.profile_id ?? null);
     
     if (!grant) {
       return res.status(404).json({ error: 'Grant not found' });
@@ -1148,6 +1187,7 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const placeholders = safeColumns.map(() => '?').join(', ')
     const values = [id, ...Object.values(sanitizedData)]
 
+    // audit:allow unscoped-profile-query -- direct grant creation may be organization-scoped; profile_id is included when supplied.
     await req.db.prepare(`
       INSERT INTO grants (${safeColumns.join(', ')})
       VALUES (${placeholders})
@@ -1156,6 +1196,29 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
     res.status(201).json(grant);
   } catch (error) {
+    if (isUniqueGrantConflict(error)) {
+      try {
+        const body = normalizeGrantFields(req.body || {})
+        const existingGrant = await findExistingGrantByProfileOpportunity(
+          req.db,
+          body.profile_id,
+          body.funding_opportunity_id,
+        )
+        if (existingGrant) {
+          routeLogger.info('[grants/create] duplicate suppressed after unique conflict', {
+            profile_id: existingGrant.profile_id || null,
+            grant_id: existingGrant.id,
+          })
+          return res.status(200).json({
+            ...existingGrant,
+            already_exists: true,
+            message: 'Grant already in pipeline',
+          })
+        }
+      } catch (lookupErr) {
+        routeLogger.warn('[grants/create] duplicate lookup failed', { error: lookupErr?.message || String(lookupErr) })
+      }
+    }
     console.error('Error creating grant:', error);
     res.status(500).json(formatError(error));
   }
@@ -1185,15 +1248,18 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
     const safeSetClause = Object.keys(sanitizedData)
       .map((key) => `${assertSafeIdentifier(key, 'identifier')} = ?`)
       .join(', ')
-    const values = [...Object.values(sanitizedData), req.params.id];
+    const values = [...Object.values(sanitizedData), req.params.id, grantAccess.profile_id ?? null];
 
     await req.db.prepare(`
       UPDATE grants 
       SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
+        AND (profile_id = ? OR profile_id IS NULL)
     `).run(...values);
     
-    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    const grant = await req.db
+      .prepare('SELECT * FROM grants WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
+      .get(req.params.id, grantAccess.profile_id ?? null);
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant:', error);
@@ -1217,9 +1283,12 @@ router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
       UPDATE grants
       SET status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(status, req.params.id);
+        AND (profile_id = ? OR profile_id IS NULL)
+    `).run(status, req.params.id, grantAccess.profile_id ?? null);
 
-    const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+    const grant = await req.db
+      .prepare('SELECT * FROM grants WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
+      .get(req.params.id, grantAccess.profile_id ?? null);
 
     // Non-blocking: when a grant is marked as applied, extract opportunity signals.
     if (status === 'applied' && grant?.profile_id && grant?.funding_opportunity_id) {
@@ -1552,6 +1621,18 @@ router.post('/from-opportunity', async (req, res, next) => {
       return res.status(404).json({ error: 'Opportunity not found and no opportunity_data provided' });
     }
 
+    // Back-compat for existing scholarship web-discovery rows. The canonical
+    // provenance for user-reviewed live web leads is web_search; web_llm was a
+    // source label from the extraction implementation, not a separate trust tier.
+    if (String(opportunity.source || '').toLowerCase() === 'web_llm' ||
+        String(opportunity.record_origin || '').toLowerCase() === 'web_llm') {
+      opportunity = {
+        ...opportunity,
+        source: 'web_search',
+        record_origin: 'web_search',
+      }
+    }
+
     // Canonical trust gate: refuse to silently accept placeholder URLs, known
     // junk origins, or loans (unless explicitly opted in) into a user's
     // pipeline. This mirrors what discovery/matching already filter on the
@@ -1560,7 +1641,9 @@ router.post('/from-opportunity', async (req, res, next) => {
       allow_loans: allowLoansBody = false,
       allow_matching_funds: allowMatchingFundsBody = false,
       allow_expired: allowExpiredBody = false,
+      auto_add: autoAddBody = false,
     } = req.body || {}
+    const isAutomaticAdd = autoAddBody === true || String(autoAddBody).toLowerCase() === 'true'
     const pipelineGate = gateOpportunityForPipeline(opportunity, {
       allowLoans: Boolean(allowLoansBody),
       allowMatchingFunds: Boolean(allowMatchingFundsBody),
@@ -1748,16 +1831,13 @@ router.post('/from-opportunity', async (req, res, next) => {
       })
     }
     
-    // Profile-scoped persistence of web-discovered LEADS. When a user saves a
+    // Shared-catalog persistence of web-discovered LEADS. When a user saves a
     // web_search lead (it isn't in the catalog: resolvedOpportunityId is null),
-    // promote it to a real funding_opportunities row scoped to THIS profile
-    // (profile_id = normalizedProfileId — never global, so unverified web noise
-    // can't reach other profiles). The grant then links to it, and the profile's
-    // future discovery (queryNearbyOpportunities matches profile_id) can resurface
-    // it. Best-effort: upsertFundingOpportunity runs the full quality/policy/
-    // validation/reviewer gates, so junk is rejected — on skip/failure we fall
-    // back to the inline-data grant (funding_opportunity_id NULL), preserving the
-    // existing save behavior.
+    // promote it to a real funding_opportunities row in the shared catalog
+    // (profile_id stays NULL). The profile's match/pipeline rows remain scoped
+    // below, so a real web lead can teach the catalog without being treated as
+    // accepted for unrelated profiles. upsertFundingOpportunity runs quality,
+    // policy, validation, reviewer, and reality gates before any catalog write.
     const isWebLead =
       !resolvedOpportunityId &&
       normalizedProfileId &&
@@ -1774,34 +1854,208 @@ router.post('/from-opportunity', async (req, res, next) => {
             source_id: opportunity.source_id || opportunity.application_url || null,
             opportunity_type: opportunity.opportunity_type || 'program',
             is_active: 1,
-            profile_id: normalizedProfileId,
+            profile_id: null,
           },
           { allowDirectories: true },
         )
         if (persisted?.id) {
           resolvedOpportunityId = persisted.id
-          routeLogger.info('[grants/from-opportunity] persisted web lead profile-scoped', {
+          routeLogger.info('[grants/from-opportunity] persisted web lead in shared catalog', {
             requestId,
             profile_id: normalizedProfileId,
             opportunity_id: persisted.id,
           })
         } else {
-          routeLogger.info('[grants/from-opportunity] web lead not persisted (gated); saving inline', {
+          routeLogger.info('[grants/from-opportunity] web lead not persisted (gated); refusing pipeline save', {
             requestId,
+            reason: persisted?.reason ?? 'unknown',
+          })
+          return res.status(422).json({
+            error: 'web_lead_rejected',
+            message: 'This web-discovered funding lead did not pass GrantFlow quality/reality gates, so it was not added to the profile pipeline.',
             reason: persisted?.reason ?? 'unknown',
           })
         }
       } catch (persistErr) {
-        routeLogger.warn('[grants/from-opportunity] web lead persistence failed; saving inline', {
+        routeLogger.warn('[grants/from-opportunity] web lead persistence failed; refusing pipeline save', {
           requestId,
           error: persistErr?.message || String(persistErr),
+        })
+        return res.status(503).json({
+          error: 'web_lead_persistence_failed',
+          message: 'GrantFlow could not verify and catalog this web-discovered lead, so it was not added to the profile pipeline.',
         })
       }
     }
 
+    // Profile-scoped adds must pass the same canonical profile gate as every
+    // crawler auto-add. A real but weak/non-matching crawler return may stay in
+    // funding_opportunities, but it must not become a grant pipeline row for
+    // this profile unless saveToProfilePipeline accepts it.
+    if (normalizedProfileId) {
+      let profileContext = null
+      try {
+        profileContext = await loadProfileContext(req.db, normalizedProfileId)
+      } catch (ctxErr) {
+        routeLogger.warn('[grants/from-opportunity] profile context load failed; saver will use minimal context', {
+          requestId,
+          profile_id: normalizedProfileId,
+          error: ctxErr?.message || String(ctxErr),
+        })
+        profileContext = { profile: { id: normalizedProfileId }, sections: null }
+      }
+
+      const pipelineOpportunity = {
+        ...opportunity,
+        id: resolvedOpportunityId || opportunity.id || opportunity_id || null,
+        sponsor: opportunity.sponsor || opportunity.funder || null,
+        application_url: opportunity.application_url || opportunity.apply_url || null,
+        url: opportunity.url || opportunity.source_url || opportunity.application_url || opportunity.apply_url || null,
+      }
+
+      const isSourceOnlyDirect =
+        !pipelineOpportunity.application_url &&
+        !String(pipelineOpportunity.opportunity_kind || pipelineOpportunity.result_kind || pipelineOpportunity.type || '').toLowerCase().includes('directory')
+      if (isSourceOnlyDirect) {
+        return res.status(422).json({
+          error: 'missing_application_url',
+          message: 'This result has a source link but no application link yet. Visit the source to verify the application path before adding it to the pipeline.',
+        })
+      }
+
+      let pipelineResult = await saveToProfilePipeline(
+        req.db,
+        pipelineOpportunity,
+        normalizedProfileId,
+        profileContext,
+        null,
+        undefined,
+      )
+
+      if (pipelineResult?.gate === 'DISMISSED') {
+        const cleared = await clearPipelineDismissal(req.db, normalizedProfileId, pipelineOpportunity)
+        if (cleared > 0) {
+          routeLogger.info('[grants/from-opportunity] cleared dismissal before canonical retry', {
+            requestId,
+            profile_id: normalizedProfileId,
+            opportunity_id: resolvedOpportunityId || null,
+            cleared_count: cleared,
+          })
+          pipelineResult = await saveToProfilePipeline(
+            req.db,
+            pipelineOpportunity,
+            normalizedProfileId,
+            profileContext,
+            null,
+            undefined,
+          )
+        }
+      }
+
+      if (pipelineResult?.saved && pipelineResult.pipelineId) {
+        await ensureGrantAiColumns(req.db)
+        const grant = await loadGrantByIdForProfileAwareResponse(req.db, pipelineResult.pipelineId, normalizedProfileId)
+        routeLogger.info('[grants/from-opportunity] canonical saver added pipeline row', {
+          requestId,
+          profile_id: normalizedProfileId,
+          grant_id: pipelineResult.pipelineId,
+          opportunity_id: resolvedOpportunityId || null,
+          matchPercentage: pipelineResult.matchPercentage ?? null,
+          decision: pipelineResult.decision ?? null,
+        })
+        if (normalizedProfileId && opportunity) {
+          Promise.resolve(mergeOpportunitySignals(req.db, normalizedProfileId, opportunity, 'save')).catch(() => {})
+          recordBehaviorEvent(req.db, {
+            profileId: normalizedProfileId,
+            action: 'saved',
+            opportunity,
+          }).catch(() => {})
+        }
+        Promise.resolve(scheduleGrantApplicationApproach({ db: req.db, grantId: pipelineResult.pipelineId }))
+          .catch((advisorErr) => {
+            routeLogger.warn('[grants/from-opportunity] approach advisor failed after canonical save', {
+              requestId,
+              grant_id: pipelineResult.pipelineId,
+              error: advisorErr?.message || String(advisorErr),
+            })
+          })
+        return res.status(201).json({
+          ...(grant || {}),
+          id: grant?.id || pipelineResult.pipelineId,
+          organization_id: grant?.organization_id ?? null,
+          profile_id: normalizedProfileId,
+          status: grant?.status ?? 'discovered',
+          pipeline_update_status: 'added',
+          match_score: grant?.match_score ?? pipelineResult.matchPercentage ?? null,
+          match_decision: grant?.match_decision ?? pipelineResult.decision ?? null,
+        })
+      }
+
+      if (pipelineResult?.gate === 'DUPLICATE' && pipelineResult.pipelineId) {
+        await ensureGrantAiColumns(req.db)
+        const existingGrant = await loadGrantByIdForProfileAwareResponse(req.db, pipelineResult.pipelineId, normalizedProfileId)
+        return res.status(200).json({
+          ...(existingGrant || {}),
+          id: existingGrant?.id || pipelineResult.pipelineId,
+          already_exists: true,
+          status: existingGrant?.status ?? 'discovered',
+          pipeline_update_status: 'already',
+          message: 'Grant already in pipeline',
+        })
+      }
+
+      if (isAutomaticAdd) {
+        routeLogger.info('[grants/from-opportunity] cataloged but not auto-added to profile pipeline', {
+          requestId,
+          profile_id: normalizedProfileId,
+          opportunity_id: resolvedOpportunityId || null,
+          gate: pipelineResult?.gate || null,
+          reason: pipelineResult?.reason || null,
+          matchPercentage: pipelineResult?.matchPercentage ?? null,
+        })
+        return res.status(200).json({
+          status: 'skipped',
+          not_added_to_pipeline: true,
+          catalog_opportunity_id: resolvedOpportunityId || null,
+          gate: pipelineResult?.gate || null,
+          reason: pipelineResult?.reason || 'Not a strong match for this profile',
+          match_score: pipelineResult?.matchPercentage ?? null,
+          threshold: pipelineResult?.threshold ?? null,
+          message:
+            'This source was kept in the funding catalog, but it was not added to this profile pipeline because it did not pass the profile match gates.',
+          requestId,
+        })
+      }
+
+      const nonDismissalGateDecline = Boolean(pipelineResult?.gate && pipelineResult?.gate !== 'DISMISSED')
+      const statusCode = (nonDismissalGateDecline || pipelineResult?.gate === 'DISMISSED') ? 422 : 500
+      routeLogger.info('[grants/from-opportunity] canonical saver declined manual add; not adding to profile pipeline', {
+        requestId,
+        profile_id: normalizedProfileId,
+        opportunity_id: resolvedOpportunityId || null,
+        gate: pipelineResult?.gate || null,
+        reason: pipelineResult?.reason || null,
+        matchPercentage: pipelineResult?.matchPercentage ?? null,
+      })
+      return res.status(statusCode).json({
+        error: 'pipeline_gate_failed',
+        status: 'not_added',
+        not_added_to_pipeline: true,
+        catalog_opportunity_id: resolvedOpportunityId || null,
+        gate: pipelineResult?.gate || null,
+        reason: pipelineResult?.reason || 'This opportunity did not pass the profile pipeline gates.',
+        match_score: pipelineResult?.matchPercentage ?? null,
+        threshold: pipelineResult?.threshold ?? null,
+        message:
+          'This source was kept in the funding catalog when possible, but it was not added to this profile pipeline because it did not pass the profile match gates.',
+        requestId,
+      })
+    }
+
     // TRANSACTION: Wrap multi-step grant pipeline creation
     const result = await req.db.withTransaction(async (tx) => {
-      const hasProfileId = await grantsHasProfileIdColumn(tx)
+      await ensureGrantAiColumns(tx)
+      const hasProfileId = await grantsHasProfileIdColumn(tx, { refresh: true })
 
       async function ensureOrganizationRow({ organizationId, profileRow, reason }) {
         const orgId = organizationId ? String(organizationId) : null
@@ -2048,30 +2302,45 @@ router.post('/from-opportunity', async (req, res, next) => {
       
       const contactInfo = parseOpportunityContact(opportunity)
       if (hasProfileId) {
-        await tx.prepare(`
-          INSERT INTO grants (
-            id, organization_id, profile_id, funding_opportunity_id, title, funder, 
-            deadline, status, match_score, match_reasons, application_url,
-            amount_requested, notes,
-            contact_name, contact_email, contact_phone, funder_fax, funder_address, application_method
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          id, 
-          finalOrgId,
-          finalProfileId ? String(finalProfileId) : null,
-          resolvedOpportunityId || null,
-          opportunity.title,
-          opportunity.sponsor,
-          insertDeadline,
-          insertMatchScore,
-          insertMatchReasons,
-          opportunity.application_url,
-          amountRequested,
-          notes,
-          contactInfo.name, contactInfo.email, contactInfo.phone,
-          contactInfo.fax, contactInfo.address, contactInfo.method
-        );
+        try {
+          await tx.prepare(`
+            INSERT INTO grants (
+              id, organization_id, profile_id, funding_opportunity_id, title, funder,
+              deadline, status, match_score, match_reasons, application_url,
+              amount_requested, notes,
+              contact_name, contact_email, contact_phone, funder_fax, funder_address, application_method
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            id,
+            finalOrgId,
+            finalProfileId ? String(finalProfileId) : null,
+            resolvedOpportunityId || null,
+            opportunity.title,
+            opportunity.sponsor,
+            insertDeadline,
+            insertMatchScore,
+            insertMatchReasons,
+            opportunity.application_url,
+            amountRequested,
+            notes,
+            contactInfo.name, contactInfo.email, contactInfo.phone,
+            contactInfo.fax, contactInfo.address, contactInfo.method
+          );
+        } catch (insertErr) {
+          if (isUniqueGrantConflict(insertErr) && finalProfileId && resolvedOpportunityId) {
+            const existingDuplicate = await findExistingGrantByProfileOpportunity(tx, finalProfileId, resolvedOpportunityId)
+            if (existingDuplicate) {
+              return {
+                ...existingDuplicate,
+                organization_id: finalOrgId,
+                already_exists: true,
+                message: 'Grant already in pipeline',
+              }
+            }
+          }
+          throw insertErr
+        }
       } else {
         await tx.prepare(`
           INSERT INTO grants (
@@ -2102,7 +2371,9 @@ router.post('/from-opportunity', async (req, res, next) => {
       if (hasProfileId && finalProfileId) {
         grant = await tx.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ?').get(id, String(finalProfileId))
       } else if (hasProfileId) {
-        grant = await tx.prepare('SELECT * FROM grants WHERE id = ?').get(id)
+        grant = await runLegacyProfilelessGrantQuery(() =>
+          tx.prepare('SELECT * FROM grants WHERE id = ?').get(id),
+        )
       } else {
         grant = await runLegacyProfilelessGrantQuery(() =>
           tx.prepare('SELECT * FROM grants WHERE id = ?').get(id),
@@ -2130,13 +2401,19 @@ router.post('/from-opportunity', async (req, res, next) => {
     
     // Trigger non-blocking application approach advisor for newly created grants.
     if (!result.already_exists && result?.id) {
-      scheduleGrantApplicationApproach({ db: req.db, grantId: result.id })
+      Promise.resolve(scheduleGrantApplicationApproach({ db: req.db, grantId: result.id })).catch((advisorErr) => {
+        routeLogger.warn('[grants/from-opportunity] approach advisor failed after save', {
+          requestId,
+          grant_id: result.id,
+          error: advisorErr?.message || String(advisorErr),
+        })
+      })
     }
 
     // Non-blocking: extract opportunity signals into profile implicit_signals.
     // Only run for newly saved grants with a known profile.
     if (!result.already_exists && normalizedProfileId && opportunity) {
-      mergeOpportunitySignals(req.db, normalizedProfileId, opportunity, 'save').catch(() => {
+      Promise.resolve(mergeOpportunitySignals(req.db, normalizedProfileId, opportunity, 'save')).catch(() => {
         // Signal merge failures must never affect the pipeline save response.
       })
 

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from "react"
-import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2, MapPin, User, Zap, ArrowRight, CheckCircle2, AlertTriangle, Lightbulb } from "lucide-react"
+import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2, MapPin, User, Zap, ArrowRight, CheckCircle2, AlertTriangle, Lightbulb, ExternalLink, FolderOpen } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,14 +13,15 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import { getItemSuggestions } from "@/api/items"
 import { getProfile } from "@/api/profiles"
-import { runSmartCrawler } from "@/api/crawlers"
-import { interpretMatcherIntent, getMatchingGaps } from "@/api/matching"
+import { discoverAllForProfile } from "@/api/crawlers"
+import { interpretMatcherIntent, getMatchingGaps, listProfileFundingSources } from "@/api/matching"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
 import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
 import { formatReasonText } from "@/utils/reasonText"
+import { safeHttpUrl } from "@/lib/safeUrl"
 
 // ---------------------------------------------------------------------------
 // Persistent needs helpers \u2013 stored in localStorage keyed per profile
@@ -229,6 +230,110 @@ function ImproveMatchesCard({ prompts, profileId, onDismiss, variant = "banner" 
   )
 }
 
+function formatFundingSourceMeta(source) {
+  return [
+    source.sponsor,
+    source.geography,
+    source.is_directory ? "Directory to search" : null,
+    source.deadline ? `Due ${source.deadline}` : source.is_rolling ? "Rolling" : null,
+  ].filter(Boolean).join(" - ")
+}
+
+function CrawlerOsSourcePreview({ sources, profileId, isLoading, onRunDiscovery, isRunning }) {
+  if (isLoading) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-5 text-left">
+        <p className="text-sm text-slate-500">Checking profile funding sources...</p>
+      </div>
+    )
+  }
+
+  if (!sources.length || !profileId) return null
+
+  const profileSourcesUrl = createPageUrl("ProfileDetail", {
+    id: profileId,
+    tab: "pipeline",
+    focus: "profile-funding-sources",
+  })
+
+  return (
+    <div className="space-y-4 text-left">
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-emerald-900">
+              <FolderOpen className="h-5 w-5 shrink-0" />
+              <h3 className="text-base font-semibold">
+                Crawler OS already found {sources.length} profile funding source{sources.length === 1 ? "" : "s"}
+              </h3>
+            </div>
+            <p className="mt-1 text-sm leading-6 text-emerald-800">
+              The strict Smart Matcher catalog view returned zero rows at these settings, but the profile does have Crawler OS sources saved. They are shown separately so we do not pretend a directory is an apply-now grant.
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button asChild size="sm" className="bg-emerald-700 hover:bg-emerald-800">
+              <Link to={profileSourcesUrl}>
+                Open profile sources
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onRunDiscovery}
+              disabled={isRunning}
+              className="border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+            >
+              {isRunning ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Zap className="mr-2 h-4 w-4" />
+              )}
+              {isRunning ? "Running..." : "Run full discovery"}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {sources.slice(0, 5).map((source) => {
+          const href = safeHttpUrl(source.url)
+          const RowTag = href ? "a" : "div"
+          return (
+            <RowTag
+              key={source.id}
+              {...(href ? { href, target: "_blank", rel: "noopener noreferrer" } : {})}
+              className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-blue-50/40"
+            >
+              <div className="min-w-0">
+                <div className="flex items-start gap-2">
+                  <span className="inline-flex h-6 min-w-[2.25rem] items-center justify-center rounded bg-emerald-50 px-1.5 text-xs font-mono font-semibold text-emerald-700">
+                    {source.match_score ?? "-"}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-900">{source.title}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">{formatFundingSourceMeta(source)}</p>
+                  </div>
+                </div>
+                {source.why ? <p className="mt-1 line-clamp-2 text-xs text-slate-600">{source.why}</p> : null}
+              </div>
+              {href ? (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-blue-200 bg-white px-2 py-1 text-xs font-medium text-blue-700">
+                  Open <ExternalLink className="h-3 w-3" />
+                </span>
+              ) : (
+                <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-500">No URL</span>
+              )}
+            </RowTag>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function SmartMatcher() {
     const [selectedProfileId, setSelectedProfileId] = useState("")
     const [searchQuery, setSearchQuery] = useState("")
@@ -252,6 +357,33 @@ export default function SmartMatcher() {
     const [isSearchingNeeds, setIsSearchingNeeds] = useState(false)
     // Tracks which profile we already auto-populated keywords for (avoids re-populating on re-render)
     const autoPopulatedProfileRef = useRef(null)
+
+  useEffect(() => {
+        if (selectedProfileId) return
+        try {
+          const params = new URLSearchParams(window.location.search)
+          const remembered =
+            params.get("profile_id") ||
+            params.get("profileId") ||
+            localStorage.getItem("grantflow:last-profile-detail-id") ||
+            localStorage.getItem("grantflow:discover-last-profile")
+          if (remembered && remembered !== "__admin__" && remembered !== "all") {
+            setSelectedProfileId(remembered)
+          }
+        } catch {
+          // If browser storage is unavailable, the visible profile picker remains the source of truth.
+        }
+  }, [selectedProfileId])
+
+  useEffect(() => {
+        if (!selectedProfileId || selectedProfileId === "all" || selectedProfileId === "__admin__") return
+        try {
+          localStorage.setItem("grantflow:last-profile-detail-id", selectedProfileId)
+          localStorage.setItem("grantflow:discover-last-profile", selectedProfileId)
+        } catch {
+          // Non-critical persistence only; the selected profile is still held in component state.
+        }
+  }, [selectedProfileId])
 
   // -- Matching gaps: live profile completeness check --
   const { data: matchingGapsResponse, isLoading: isGapsLoading } = useQuery({
@@ -378,7 +510,7 @@ export default function SmartMatcher() {
         staleTime: 300_000,
   })
 
-  // -- Smart crawler mutation --
+  // -- Profile-scoped Crawler OS discovery mutation --
   const interpretMutation = useMutation({
     mutationFn: () => interpretMatcherIntent(freeTextNeed),
     onSuccess: (raw) => {
@@ -422,28 +554,28 @@ export default function SmartMatcher() {
     },
   })
 
-  const crawlMutation = useMutation({
-        mutationFn: () => runSmartCrawler({
-        profileId: selectedProfileId,
-        minMatchScore: minScore,
-        state: selectedProfile?.state ?? undefined,
-        city: selectedProfile?.city ?? undefined,
-        applicantType: selectedProfile?.primary_type ?? selectedProfile?.applicant_type ?? undefined,
-        primaryCategory: intentPrimaryCategory ?? undefined,
-        intentTerms: Array.isArray(parsedSearchTerms) ? parsedSearchTerms : undefined,
-}),
-        onSuccess: (data) => {
+  const discoverAllMutation = useMutation({
+        mutationFn: () => discoverAllForProfile({ profileId: selectedProfileId }),
+        onSuccess: (raw) => {
+                const data = raw?.data ?? raw ?? {}
                 queryClient.invalidateQueries({ queryKey: ['smart-matcher'] })
-                const count = data?.count ?? 0
+                queryClient.invalidateQueries({ queryKey: ['smart-profile-funding-sources', selectedProfileId] })
+                queryClient.invalidateQueries({ queryKey: ['profile-funding-sources', selectedProfileId] })
+                const enqueued = Number(data?.jobs_enqueued ?? 0)
+                const crawlerTypes = Array.isArray(data?.crawler_types) ? data.crawler_types : []
                 toast({
-                        title: `Found ${count} new opportunit${count === 1 ? 'y' : 'ies'}`,
-                        description: data?.sources_used?.length
-                                ? `Sources: ${data.sources_used.join(', ')}`
-                                : 'Matching results refreshed.',
+                        title: data?.throttled
+                                ? 'Crawler OS already ran recently'
+                                : `Crawler OS started ${enqueued} relevant crawler${enqueued === 1 ? '' : 's'}`,
+                        description: data?.throttled
+                                ? 'The most recent crawl used the same profile snapshot, so GrantFlow kept the fresh results instead of rerunning the same work.'
+                                : crawlerTypes.length
+                                  ? `Queued: ${crawlerTypes.slice(0, 6).join(', ')}${crawlerTypes.length > 6 ? '...' : ''}. Results will save back to this profile.`
+                                  : 'Crawler OS accepted the profile request. Results will save back to this profile as jobs finish.',
                 })
         },
         onError: (err) => {
-                toast({ title: 'Crawl failed', description: err?.message ?? 'Unknown error', variant: 'destructive' })
+                toast({ title: 'Crawler OS did not start', description: err?.message ?? 'Unknown error', variant: 'destructive' })
         },
   })
 
@@ -568,6 +700,24 @@ export default function SmartMatcher() {
         return Array.isArray(prompts) ? prompts : []
   }, [scoredResponse])
 
+  const { data: profileFundingSourcesResponse, isLoading: isProfileFundingSourcesLoading } = useQuery({
+        queryKey: ['smart-profile-funding-sources', selectedProfileId],
+        queryFn: () => listProfileFundingSources(selectedProfileId, { minScore: 0 }),
+        enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
+        staleTime: 60_000,
+  })
+
+  const profileFundingSources = useMemo(() => {
+        const payload = profileFundingSourcesResponse?.data ?? profileFundingSourcesResponse ?? {}
+        const rows = Array.isArray(payload.sources) ? payload.sources : []
+        return rows
+          .filter((source) => {
+            const decision = String(source?.match_decision || '').toLowerCase()
+            return source?.is_directory || decision === 'accept' || decision === 'review'
+          })
+          .sort((a, b) => Number(b?.match_score ?? 0) - Number(a?.match_score ?? 0))
+  }, [profileFundingSourcesResponse])
+
   const filteredOpportunities = useMemo(() => {
         // Defense in depth: even if any backend path leaks a sub-threshold row,
         // the UI honors the slider as a HARD floor \u2014 nothing below minScore shows.
@@ -690,7 +840,7 @@ export default function SmartMatcher() {
                                                                           <div className="relative">
                                                                                             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                                                                                             <Input
-                                                                                                                  placeholder="Single phrase filter, or edit after \u201cUnderstand & search\u201d\u2026"
+                                                                                                                  placeholder="Single phrase filter, or edit after Understand & search..."
                                                                                                                   value={searchQuery}
                                                                                                                   onChange={(e) => {
                                                                                                                     setSearchQuery(e.target.value)
@@ -704,7 +854,7 @@ export default function SmartMatcher() {
                                                                             <p className="text-xs text-slate-500 mt-1">
                                                                               Matching opportunities that mention any of:{" "}
                                                                               {parsedSearchTerms.slice(0, 8).join(" \u00b7 ")}
-                                                                              {parsedSearchTerms.length > 8 ? " \u2026" : ""}
+                                                                              {parsedSearchTerms.length > 8 ? " ..." : ""}
                                                                             </p>
                                                                           ) : null}
                                                           </div>
@@ -727,21 +877,23 @@ export default function SmartMatcher() {
                                   {selectedProfileId && selectedProfileId !== 'all' && (
                         <div className="flex items-center justify-between gap-4">
                           <div className="text-xs text-slate-600">
-                            {isScoring ? 'Scoring opportunities using full profile data\u2026' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
+                            {isScoring
+                              ? 'Scoring opportunities using full profile data...'
+                              : `Showing ${filteredOpportunities.length} server-scored match${filteredOpportunities.length === 1 ? '' : 'es'}${profileFundingSources.length ? `; ${profileFundingSources.length} Crawler OS profile source${profileFundingSources.length === 1 ? '' : 's'} saved` : ''}`}
                           </div>
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => crawlMutation.mutate()}
-                            disabled={crawlMutation.isPending}
+                            onClick={() => discoverAllMutation.mutate()}
+                            disabled={discoverAllMutation.isPending}
                             className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
                           >
-                            {crawlMutation.isPending ? (
+                            {discoverAllMutation.isPending ? (
                               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                             ) : (
                               <Zap className="w-4 h-4 mr-2" />
                             )}
-                            {crawlMutation.isPending ? 'Finding funding…' : 'Find New Funding'}
+                            {discoverAllMutation.isPending ? 'Starting Crawler OS...' : 'Run Crawler OS'}
                           </Button>
                         </div>
                                             )}
@@ -788,17 +940,22 @@ export default function SmartMatcher() {
                                                   />
                                                   <label
                                                       htmlFor={`need-${suggestion._key}`}
-                                                      className={`flex-1 text-sm cursor-pointer select-none ${isNeedChecked ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${isNeedChecked ? "font-medium text-blue-900" : "text-slate-700"}`}
                                                   >
                                                       {suggestion.name}
                                                   </label>
+                                                  {isNeedChecked && (
+                                                      <Badge variant="secondary" className="text-xs border-blue-200 bg-blue-50 text-blue-700">
+                                                          Selected
+                                                      </Badge>
+                                                  )}
                                                   {suggestion.category && (
                                                       <Badge variant="outline" className="text-xs capitalize">
                                                           {suggestion.category.replace(/_/g, " ")}
                                                       </Badge>
                                                   )}
                                                 </div>
-                                                {reasonText && !isNeedChecked && (
+                                                {reasonText && (
                                                   <p className="ml-10 mt-0.5 text-xs text-slate-500 leading-snug">{reasonText}</p>
                                                 )}
                                               </div>
@@ -813,10 +970,15 @@ export default function SmartMatcher() {
                                                   />
                                                   <label
                                                       htmlFor={`need-${item.id}`}
-                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[item.id] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[item.id] ? "font-medium text-blue-900" : "text-slate-700"}`}
                                                   >
                                                       {item.name}
                                                   </label>
+                                                  {needsState.checked[item.id] && (
+                                                      <Badge variant="secondary" className="text-xs border-blue-200 bg-blue-50 text-blue-700">
+                                                          Selected
+                                                      </Badge>
+                                                  )}
                                                   <button
                                                       type="button"
                                                       onClick={() => removeCustomNeed(item.id)}
@@ -834,7 +996,7 @@ export default function SmartMatcher() {
                                   <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
                                       <Plus className="w-4 h-4 text-slate-400 shrink-0" />
                                       <Input
-                                          placeholder="Add a custom need\u2026"
+                                          placeholder="Add a custom need..."
                                           value={newNeedText}
                                           onChange={(e) => setNewNeedText(e.target.value)}
                                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomNeed() } }}
@@ -1006,17 +1168,17 @@ export default function SmartMatcher() {
                           We haven&apos;t searched for funding for this profile yet. Run discovery to find grants, scholarships, benefits, and local programs matched to it.
                         </p>
                         <Button
-                          onClick={() => crawlMutation.mutate()}
-                          disabled={crawlMutation.isPending}
+                          onClick={() => discoverAllMutation.mutate()}
+                          disabled={discoverAllMutation.isPending}
                           className="border-emerald-300 text-emerald-700 bg-white hover:bg-emerald-50"
                           variant="outline"
                         >
-                          {crawlMutation.isPending ? (
+                          {discoverAllMutation.isPending ? (
                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                           ) : (
                             <Zap className="w-4 h-4 mr-2" />
                           )}
-                          {crawlMutation.isPending ? 'Running discovery…' : 'Run discovery'}
+                          {discoverAllMutation.isPending ? 'Starting Crawler OS...' : 'Run discovery'}
                         </Button>
                         {/* Architecture P1: show what to complete now so the
                             first discovery returns better results. */}
@@ -1043,7 +1205,7 @@ export default function SmartMatcher() {
                           onDismiss={() => setImprovePromptsDismissed(true)}
                         />
                       )}
-                      <div id="match-results" className="grid md:grid-cols-3 gap-4">
+                      <div id="match-results" className={`grid gap-4 ${profileFundingSources.length ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
                         <Card>
                           <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
@@ -1077,6 +1239,24 @@ export default function SmartMatcher() {
                             <p className="text-xs text-slate-600 mt-1">{minScore}%+ match score</p>
                           </CardContent>
                         </Card>
+                        {profileFundingSources.length > 0 && (
+                          <Card className="border-emerald-200 bg-emerald-50/40">
+                            <CardHeader className="pb-2">
+                              <CardTitle className="text-sm font-medium text-emerald-800 flex items-center gap-2">
+                                <FolderOpen className="w-4 h-4" /> Profile Sources
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="text-2xl font-bold text-emerald-900">{profileFundingSources.length}</div>
+                              <Button asChild variant="link" className="h-auto p-0 text-xs text-emerald-800">
+                                <Link to={createPageUrl("ProfileDetail", { id: selectedProfileId, tab: "pipeline", focus: "profile-funding-sources" })}>
+                                  Open Crawler OS list
+                                  <ArrowRight className="ml-1 h-3 w-3" />
+                                </Link>
+                              </Button>
+                            </CardContent>
+                          </Card>
+                        )}
                       </div>
 
                       <Tabs defaultValue={topMatches.length > 0 ? "top" : "all"} className="space-y-4">
@@ -1160,11 +1340,52 @@ export default function SmartMatcher() {
                             </div>
                           ) : (
                             <Card>
-                              <CardContent className="p-12 text-center">
-                                <div className="space-y-3">
-                                  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>
+                              <CardContent className="p-6 md:p-10 text-center">
+                                <div className="space-y-4">
+                                  {profileFundingSources.length > 0 || isProfileFundingSourcesLoading ? (
+                                    <CrawlerOsSourcePreview
+                                      sources={profileFundingSources}
+                                      profileId={selectedProfileId}
+                                      isLoading={isProfileFundingSourcesLoading}
+                                      onRunDiscovery={() => discoverAllMutation.mutate()}
+                                      isRunning={discoverAllMutation.isPending}
+                                    />
+                                  ) : (
+                                    <>
+                                      <p className="text-slate-600">
+                                        No server-scored matches found at the current score and keyword settings.
+                                      </p>
+                                      <div className="flex flex-wrap justify-center gap-2">
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          onClick={() => {
+                                            setMinScore(0)
+                                            setSearchQuery("")
+                                            setParsedSearchTerms(null)
+                                            setIntentSummary("")
+                                            queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
+                                          }}
+                                        >
+                                          Clear filters and show broad matches
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          onClick={() => discoverAllMutation.mutate()}
+                                          disabled={discoverAllMutation.isPending}
+                                        >
+                                          {discoverAllMutation.isPending ? (
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                          ) : (
+                                            <Zap className="w-4 h-4 mr-2" />
+                                          )}
+                                          Run full discovery
+                                        </Button>
+                                      </div>
+                                    </>
+                                  )}
                                   {matchingGaps.gaps.length > 0 && (
-                                    <Alert className="bg-amber-50 border-amber-200">
+                                    <Alert className="bg-amber-50 border-amber-200 text-left">
                                       <AlertDescription className="text-amber-800 text-sm">
                                         <span className="font-semibold">Profile tip:</span> Your profile is missing {matchingGaps.gaps.length} data point{matchingGaps.gaps.length === 1 ? '' : 's'} that affect match quality.
                                         Scroll up to the Profile Readiness section and click any item to fix it.

@@ -1,3 +1,5 @@
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainCrawlerEngine')
 /**
  * Domain Template Crawler Engine
  * Registry-driven crawler runner that supports 50–100+ crawler types without duplicating logic.
@@ -277,7 +279,7 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
 
     return scored
   } catch (error) {
-    console.error('Domain crawler error:', error)
+    qualityLog.error('Domain crawler error:', error)
     return []
   }
 }

@@ -55,9 +55,9 @@ export function buildZeroResultDescription(profileGaps = {}) {
     return 'No results found. Tell us who you are (individual, nonprofit, business) to see relevant grants.';
   }
   if (missingKeywords) {
-    return 'No results found. Add focus areas or describe your situation to improve matches.';
+    return 'No results found in this view. If this profile is thin, add focus areas; otherwise rerun discovery or open the profile funding sources already saved by Crawler OS.';
   }
-  return 'No results found. Try widening your search — remove some filters or ask Anya to find alternatives.';
+  return 'No results found in this view. Try rerunning profile discovery, opening saved profile sources, or asking Anya for alternate search language.';
 }
 
 export function toastSuccess(toast, count, searchName, profileGaps) {

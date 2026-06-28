@@ -104,7 +104,7 @@ export async function crawlStateWaiverBenefits(profile, options = {}) {
     }
     return results
   } catch (error) {
-    console.error(`State waiver benefits crawler failed for state ${state}:`, error)
+    log.error(`State waiver benefits crawler failed for state ${state}:`, error)
     return []
   }
 }

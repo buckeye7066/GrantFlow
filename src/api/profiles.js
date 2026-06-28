@@ -49,6 +49,18 @@ export async function updatePreferredLanguage(id, code) {
   })
 }
 
+export async function getProfileProjectReadinessPlan(id) {
+  assertRealProfileId(id, 'getProfileProjectReadinessPlan')
+  return apiFetch(`/api/profiles/${id}/project-readiness-plan`)
+}
+
+export async function prepareProfileProjectReadinessPlan(id) {
+  assertRealProfileId(id, 'prepareProfileProjectReadinessPlan')
+  return apiFetch(`/api/profiles/${id}/project-readiness-plan/prepare`, {
+    method: 'POST',
+  })
+}
+
 export async function uploadProfileAvatar(profileId, file) {
   assertRealProfileId(profileId, 'uploadProfileAvatar')
   const formData = new FormData()

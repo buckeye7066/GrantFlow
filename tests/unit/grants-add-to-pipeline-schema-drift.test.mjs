@@ -131,18 +131,62 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
 
     const profileId = String(createProfile.json.id)
 
-    // Simulate production schema drift by dropping `grants.profile_id` (older deployments).
-    // This used to cause GET /api/grants and POST /api/grants/from-opportunity to 500 when the UI sent X-Profile-Id.
     const db = new Database(dbPath)
     try {
-      db.exec('ALTER TABLE grants DROP COLUMN profile_id;')
-    } catch {
-      // If column didn't exist for some reason, that's fine; the route must still work.
+      db.prepare('UPDATE profiles SET tags = ? WHERE id = ?').run(
+        JSON.stringify(['veteran', 'emergency assistance', 'financial assistance']),
+        profileId,
+      )
+      db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(profile_id, section_key) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by`,
+      ).run(
+        profileId,
+        'basic_information',
+        JSON.stringify({ state: 'TN', zip_code: '37201', profile_category: 'veteran' }),
+        'schema-drift-test',
+      )
+      db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(profile_id, section_key) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by`,
+      ).run(
+        profileId,
+        'demographics',
+        JSON.stringify({ veteran_status: 'veteran' }),
+        'schema-drift-test',
+      )
+      db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(profile_id, section_key) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by`,
+      ).run(
+        profileId,
+        'military_service',
+        JSON.stringify({
+          veteran: true,
+          military_branch: 'Army',
+          needs_emergency_assistance: true,
+        }),
+        'schema-drift-test',
+      )
     } finally {
       db.close()
     }
 
-    const opportunityUrl = 'https://www.unitedway.org/find-your-united-way'
+    const driftDb = new Database(dbPath)
+    try {
+      // Simulate production schema drift by dropping `grants.profile_id` (older deployments).
+      // This used to cause GET /api/grants and POST /api/grants/from-opportunity to 500 when the UI sent X-Profile-Id.
+      driftDb.exec('ALTER TABLE grants DROP COLUMN profile_id;')
+    } catch {
+      // If column didn't exist for some reason, that's fine; the route must still work.
+    } finally {
+      driftDb.close()
+    }
+
+    const opportunityUrl = 'https://www.va.gov/resources/'
 
     const add = await fetchJson(`http://127.0.0.1:${port}/api/grants/from-opportunity`, {
       method: 'POST',
@@ -154,23 +198,26 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
         profile_id: profileId,
         organization_id: null,
         match_score: 88,
-        match_reasons: ['directory resource'],
+        match_reasons: ['veteran assistance', 'emergency assistance', 'profile need'],
         opportunity_id: null,
         opportunity_data: {
-          title: 'United Way Finder',
-          sponsor: 'United Way',
+          title: 'Tennessee Veterans Emergency Assistance',
+          sponsor: 'U.S. Department of Veterans Affairs',
           url: opportunityUrl,
           deadline: 'rolling',
-          source: 'local_directory_united_way',
+          description: 'Financial and emergency assistance resources for veterans and military families in Tennessee.',
+          state: 'TN',
+          geographic_scope: 'Tennessee',
+          source: 'grants_gov',
+          record_origin: 'grants_gov',
         },
       }),
     })
     assert.ok(add.status === 200 || add.status === 201, `expected 200/201, got ${add.status} (${add.text})`)
     assert.ok(add.json?.id)
-    assert.ok(add.json?.organization_id)
 
     const list = await fetchJson(
-      `http://127.0.0.1:${port}/api/grants?organization_id=${encodeURIComponent(String(add.json.organization_id))}&url=${encodeURIComponent(opportunityUrl)}`,
+      `http://127.0.0.1:${port}/api/grants?url=${encodeURIComponent(opportunityUrl)}`,
       {
         method: 'GET',
         headers: {

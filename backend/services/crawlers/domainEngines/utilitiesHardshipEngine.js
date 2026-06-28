@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:utilitiesHardshipEngine')
 
 const ENGINE_ID = 'utilities_hardship'
 
@@ -70,7 +72,7 @@ export async function runUtilitiesHardshipEngine(profile, options = {}) {
     })
     return await normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
   } catch (error) {
-    console.error(`[${ENGINE_ID}] Engine error:`, error)
+    qualityLog.error(`[${ENGINE_ID}] Engine error:`, error)
     return []
   }
 }

@@ -3072,7 +3072,7 @@ registerTool({
       ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString()
       : null
 
-    return storeMemory(db, {
+    return await storeMemory(db, {
       scope: finalScope,
       scopeId,
       memoryType,
@@ -3101,7 +3101,7 @@ registerTool({
 
     const { key, scope = 'global' } = params
     const scopeId = resolveBrainScopeId(scope, context)
-    const memory = getMemory(db, { scope, scopeId, memoryKey: key })
+    const memory = await getMemory(db, { scope, scopeId, memoryKey: key })
     
     if (!memory) {
       return { found: false, key, scope }
@@ -3178,7 +3178,7 @@ registerTool({
       scopeId = user.profileId
     }
     
-    return deleteMemory(db, { scope, scopeId, memoryKey: key })
+    return await deleteMemory(db, { scope, scopeId, memoryKey: key })
   },
 })
 
@@ -3193,7 +3193,7 @@ registerTool({
     const { db, user } = context
     if (!db) throw new Error('Database connection unavailable')
     
-    return getBrainSummary(db, {
+    return await getBrainSummary(db, {
       userId: user?.userId,
       profileId: user?.profileId,
     })
@@ -3214,7 +3214,7 @@ registerTool({
     const { db } = context
     if (!db) throw new Error('Database connection unavailable')
     
-    return cleanupBrain(db, { dryRun: params?.dryRun === true })
+    return await cleanupBrain(db, { dryRun: params?.dryRun === true })
   },
 })
 
@@ -3276,7 +3276,7 @@ registerTool({
     return {
       generated_at: new Date().toISOString(),
       tables,
-      tool_usage: getToolUsageStats(db, { toolName, limit }),
+      tool_usage: await getToolUsageStats(db, { toolName, limit }),
     }
   },
 })

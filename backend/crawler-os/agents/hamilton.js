@@ -18,6 +18,7 @@ import {
   heartbeat, recordAgentJob, getOpportunity, saveDocument, saveApplicationRecord,
 } from '../storage.js';
 import { APPLICABLE_KINDS, OPPORTUNITY_KIND } from '../contract.js';
+import { buildProjectReadinessPlan, renderProjectPlanDocument } from '../projectReadinessPlan.js';
 
 const AGENT_ID = 'hamilton';
 
@@ -144,6 +145,41 @@ export function createHamilton(deps = {}) {
       recordAgentJob(store, { agent_id: AGENT_ID, kind: 'complete', status: 'ok', detail: { opportunityId, pathway, outcome, docs: saved.length } });
       heartbeat(store, AGENT_ID, { now, status: 'idle' });
       return { outcome, pathway, documents: saved, hard_stops: hardStops, application: rec };
+    },
+
+    /**
+     * prepareProjectPlan - save Anya's profile-aware action plan as a profile document.
+     * This is not an application submission and never claims portal work happened.
+     */
+    async prepareProjectPlan(args = {}) {
+      const now = Number.isFinite(args?.now) ? args.now : clock();
+      heartbeat(store, AGENT_ID, { now, status: 'running' });
+      const { profileId, profile } = args;
+      if (!profileId) throw new Error('hamilton.prepareProjectPlan: profileId required');
+      const plan = buildProjectReadinessPlan(profile ?? { id: profileId });
+      const content = renderProjectPlanDocument(plan);
+      const row = saveDocument(store, {
+        profile_id: profileId,
+        opportunity_id: null,
+        name: `${plan.plan_id}_action_plan.md`,
+        kind: 'project_action_plan',
+        format: 'md',
+        content,
+        bytes: Buffer.byteLength(content, 'utf8'),
+      });
+      recordAgentJob(store, {
+        agent_id: AGENT_ID,
+        kind: 'prepare_project_plan',
+        status: 'ok',
+        detail: { profileId, plan_id: plan.plan_id, checklist_items: plan.checklist.length, questions: plan.interview_questions.length },
+      });
+      heartbeat(store, AGENT_ID, { now, status: 'idle' });
+      return {
+        outcome: 'project_plan_ready',
+        plan,
+        document: { id: row.__rowid ?? null, name: `${plan.plan_id}_action_plan.md`, kind: 'project_action_plan' },
+        hard_stops: [],
+      };
     },
   };
 }

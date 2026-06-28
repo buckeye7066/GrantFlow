@@ -67,7 +67,30 @@ function walk(dir) {
   }
 }
 
+function listGitVisibleFiles() {
+  const result = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+    cwd: ROOT,
+    encoding: 'buffer',
+  })
+  if (result.error || result.status !== 0) return null
+  return result.stdout
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .map((file) => path.join(ROOT, file))
+}
+
+function shouldScanFile(file) {
+  const name = path.basename(file)
+  const ext = path.extname(name).toLowerCase()
+  if (BIN_EXTS.has(ext)) return false
+  if (/\.lock$/.test(name)) return false
+  if (IGNORE_FILE_PATTERNS.some((re) => re.test(name))) return false
+  return true
+}
+
 function scan(file) {
+  if (!shouldScanFile(file)) return
   let text
   try {
     text = fs.readFileSync(file, 'utf8')
@@ -105,7 +128,12 @@ if (gitleaksCode !== null) {
 }
 
 // Fallback regex sweep.
-walk(ROOT)
+const gitVisibleFiles = listGitVisibleFiles()
+if (gitVisibleFiles) {
+  for (const file of gitVisibleFiles) scan(file)
+} else {
+  walk(ROOT)
+}
 
 if (findings.length === 0) {
   console.log('[scan-secrets] OK (0 findings)')

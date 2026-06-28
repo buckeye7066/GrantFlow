@@ -1,4 +1,6 @@
 import fetch from 'node-fetch'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:nationalPrograms:fetcher')
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -41,7 +43,7 @@ export class RateLimitedFetcher {
     return new Promise((resolve, reject) => {
       state.queue.push({ url, options, resolve, reject })
       this._pump(host).catch((err) => {
-        console.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
+        qualityLog.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
         // Do NOT resolve here â the task itself carries resolve/reject.
         // A pump-level crash that was not tied to a specific task is just logged.
       })
@@ -65,7 +67,7 @@ export class RateLimitedFetcher {
         .finally(() => {
           state.inFlight -= 1
           this._pump(host).catch(e => {
-            console.error('[RateLimitedFetcher] Background pump error for host ' + host + ':', e)
+            qualityLog.error('[RateLimitedFetcher] Background pump error for host ' + host + ':', e)
             // Drain remaining queued tasks so callers are not left hanging
             const st = this._state(host)
             while (st.queue.length > 0) {

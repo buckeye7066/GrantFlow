@@ -89,10 +89,19 @@ async function startGeoCrawl(payload) {
   // proper Error, and any accidental fire-and-forget usage does not surface as
   // an unhandled promise rejection at the global level.
   try {
-    return await apiFetch("/api/geo-crawl/start", {
+    const response = await apiFetch("/api/geo-crawl/start", {
       method: "POST",
       body: JSON.stringify(payload),
     })
+    // Defensive guard: surface unexpected/empty responses as errors instead of
+    // letting them silently succeed. The geo-crawl start endpoint is expected
+    // to return an object (typically including a run_id); a null/undefined or
+    // non-object response indicates an upstream failure that should not be
+    // treated as success.
+    if (response === null || response === undefined) {
+      throw new Error("Geo crawl did not return a response.")
+    }
+    return response
   } catch (error) {
     throw error instanceof Error ? error : new Error(String(error))
   }
@@ -349,7 +358,7 @@ function summarizeJob(job) {
       if (!sections) {
         summary = null
       } else {
-        const display = sections.toLocaleString("en-US")
+        const display = formatNumber(sections)
         summary = `Updated ${display} profile section${sections === 1 ? "" : "s"}`
       }
       break
@@ -704,13 +713,13 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
         "border border-slate-200 bg-white/80 shadow-sm",
         isClickable ? "cursor-pointer hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/40" : null,
       )}
-      onClick={isClickable ? () => onInspect(lastJob.id) : undefined}
+      onClick={isClickable ? () => { if (lastJob?.id) onInspect(lastJob.id) } : undefined}
       onKeyDown={
         isClickable
           ? (event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault()
-                onInspect(lastJob.id)
+                if (lastJob?.id) onInspect(lastJob.id)
               }
             }
           : undefined
@@ -814,7 +823,7 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
             size="sm"
             onClick={(event) => {
               event.stopPropagation()
-              if (lastJob) onInspect(lastJob.id)
+              if (lastJob?.id) onInspect(lastJob.id)
             }}
             disabled={!lastJob}
             className="flex items-center gap-2"

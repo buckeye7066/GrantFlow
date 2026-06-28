@@ -57,3 +57,26 @@ test('Anya invents nothing when there is no run to explain', () => {
   assert.equal(out.ok, true);
   assert.match(out.message, /2/);
 });
+
+test('Anya builds a warm profile-aware project interview from fields and documents', () => {
+  const anya = createAnya({ store: createMemoryStore() });
+  const out = anya.buildProjectInterview({
+    id: 'food-truck-wv',
+    profile_type: 'individual',
+    location: { city: 'Charleston', state: 'WV' },
+    documents: [
+      {
+        name: 'food-truck-notes.pdf',
+        mime_type: 'application/pdf',
+        extracted_text: 'Food truck startup. Active duty service member. Need refrigeration and commissary agreement.',
+        processing_status: 'completed',
+      },
+    ],
+  });
+
+  assert.match(out.intro, /Good job/i);
+  assert.equal(out.plan.plan_id, 'food_truck_startup');
+  assert.ok(out.plan.document_evidence.length > 0);
+  assert.ok(out.questions.length > 0);
+  assert.equal(out.first_question, out.questions[0]);
+});

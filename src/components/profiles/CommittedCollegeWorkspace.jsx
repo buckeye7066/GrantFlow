@@ -303,7 +303,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">Cost of attendance</span>
             <Button size="sm" variant="outline" onClick={() => openCoaEditor(coa)}>
-              {coa.total === null || coa.total === undefined ? (coa.tuition === null || coa.tuition === undefined ? 'Add COA' : 'Edit COA') : 'Edit COA'}
+              {(coa.total === null || coa.total === undefined) && (coa.tuition === null || coa.tuition === undefined) ? 'Add COA' : 'Edit COA'}
             </Button>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">

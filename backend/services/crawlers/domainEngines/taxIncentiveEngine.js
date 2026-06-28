@@ -2,6 +2,8 @@
  * Tax incentive domain engine. Funding-focused credits and relief programs.
  */
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:taxIncentiveEngine')
 
 const ENGINE_ID = 'tax_incentive'
 
@@ -52,7 +54,7 @@ export async function runTaxIncentiveEngine(profile, options = {}) {
     
     return normalizeAndFilter(relevantResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
   } catch (error) {
-    console.error(`Tax incentive engine error: ${error.message}`);
+    qualityLog.error(`Tax incentive engine error: ${error.message}`);
     return []
   }
 }

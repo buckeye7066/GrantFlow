@@ -762,5 +762,7 @@ if (
     opportunities.slice(0, 5).forEach((o) =>
       log.info(`  [${o.relevance_score}] ${o.title} — ${o.source_url}`),
     )
+  }).catch((err) => {
+    log.error('Private Foundation Crawler Demo failed:', err)
   })
 }

@@ -346,7 +346,7 @@ export async function findStatesNeedingCoverage(db) {
     )
     return { all: unique, covered, uncovered }
   } catch (e) {
-    console.error('[GeoCoverage] findStatesNeedingCoverage error:', e?.message || e)
+    log.error('[GeoCoverage] findStatesNeedingCoverage error:', e?.message || e)
     return { all: [], covered: [], uncovered: [] }
   }
 }
@@ -467,7 +467,7 @@ export async function populateProfileZipCoverage(db) {
       .map((r) => String(r?.z || '').trim())
       .filter((z) => /^\d{5}$/.test(z))
   } catch (e) {
-    console.error('[GeoCoverage] Failed to fetch profile ZIPs:', e?.message || e)
+    log.error('[GeoCoverage] Failed to fetch profile ZIPs:', e?.message || e)
     return { zips: 0, entries: 0 }
   }
 

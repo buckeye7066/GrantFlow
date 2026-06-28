@@ -105,9 +105,29 @@ function _isVeteranProfile(pd) {
 
 function _isBusinessProfile(pd) {
   const t = (pd.primary_type || '').toLowerCase()
+  const needs = Array.isArray(pd.needs)
+    ? pd.needs.join(' ').toLowerCase()
+    : String(pd.needs || '').toLowerCase()
+  const businessText = pd.business && typeof pd.business === 'object'
+    ? Object.values(pd.business)
+      .filter((v) => v !== null && v !== undefined && v !== false)
+      .join(' ')
+      .toLowerCase()
+    : ''
   // 'nonprofit' is NOT a business type — removing it prevents nonprofits from being
   // incorrectly included in business-only program checks.
-  return t === 'small_business' || t === 'organization'
+  return (
+    t === 'small_business' ||
+    t === 'business' ||
+    t === 'organization' ||
+    t === 'entrepreneur' ||
+    t === 'startup' ||
+    t === 'farm' ||
+    t === 'farmer' ||
+    /\b(business|small_business|startup|entrepreneur|self[-_\s]?employ|food truck|farm|farmer|ranch|law firm|legal practice|veteran_entrepreneur)\b/.test(t) ||
+    /\b(business|small_business|startup|entrepreneur|self[-_\s]?employ|food truck|working capital|business equipment)\b/.test(needs) ||
+    /\b(true|startup|food service|llc|inc|corp|sole propriet)/i.test(businessText)
+  )
 }
 
 function _isNonprofitProfile(pd) {

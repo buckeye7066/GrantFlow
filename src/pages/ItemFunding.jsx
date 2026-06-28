@@ -39,6 +39,9 @@ import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import { formatReasonText } from "@/utils/reasonText"
+import { createPageUrl } from "@/utils"
+import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
+import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 
 // Human-readable labels for the applicant type the backend detected from the
 // selected profile. This is what makes the search visibly profile-aware: the
@@ -206,7 +209,7 @@ function ItemResultCard({ opportunity, match, onSelect }) {
             <span>{formatDeadline(opportunity.deadline, opportunity.deadline_type)}</span>
           </div>
         </div>
-        <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "Summary coming soon."}</p>
+        <p className="text-sm text-slate-600 line-clamp-3">{opportunity.description || "No summary available yet."}</p>
         {match ? (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs text-slate-500">
@@ -233,7 +236,7 @@ function ItemResultCard({ opportunity, match, onSelect }) {
   )
 }
 
-function ItemResultDetail({ opportunity, match, open, onClose }) {
+function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
   if (!opportunity) return null
   const detailReasons =
     match?.reasons?.length > 0
@@ -274,6 +277,12 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
             </div>
           </section>
 
+          <OpportunitySourceTrace
+            opportunity={opportunity}
+            match={match}
+            profileName={profileName}
+          />
+
           {match ? (
             <section className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 space-y-2">
               <div className="flex items-center justify-between">
@@ -302,7 +311,7 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
           <section className="space-y-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">Overview</h3>
             <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
-              {opportunity.description || "Summary coming soon."}
+              {opportunity.description || "No summary available yet."}
             </p>
           </section>
 
@@ -757,7 +766,7 @@ export default function ItemFunding() {
                   placeholder="Select profile"
                 />
                 {filters.profileId && filters.profileId !== "all" && selectedProfileQuery.isLoading ? (
-                  <p className="text-[11px] text-slate-400">Loading profile signals\u2026</p>
+                  <p className="text-[11px] text-slate-400">Loading profile signals...</p>
                 ) : null}
               </div>
             </div>
@@ -802,7 +811,7 @@ export default function ItemFunding() {
                     ) : null}
                     {liveSearchQuery.isLoading ? (
                       <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin" /> searching web\u2026
+                        <Loader2 className="w-3 h-3 animate-spin" /> searching web...
                       </span>
                     ) : null}
                   </p>
@@ -810,7 +819,7 @@ export default function ItemFunding() {
                     <p className="inline-flex items-center gap-1 text-slate-500">
                       <Target className="w-3 h-3 text-emerald-500" />
                       Searching as <span className="font-semibold text-slate-700">{applicantTypeLabel}</span>{" "}
-                      \u2014 funders matched to this profile
+                      - funders matched to this profile
                     </p>
                   ) : null}
                 </div>
@@ -864,49 +873,56 @@ export default function ItemFunding() {
         </div>
       ) : submittedItem ? (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
-          <CardContent className="p-12 text-center space-y-4">
-            <ShoppingCart className="w-12 h-12 mx-auto text-slate-300" />
-            <h3 className="text-xl font-semibold text-slate-900">No results with the current filters</h3>
-            <div className="space-y-2 text-sm text-slate-600">
-              {!hasSelectedProfile ? (
-                <p>
-                  <span className="font-semibold text-blue-600">Select a profile above</span> to unlock live web search.
-                  {" "}We will search the internet in real time for programs, donations, and grants that fund{" "}
-                  <span className="font-semibold text-slate-800">{submittedItem}</span>.
-                </p>
-              ) : liveSearchQuery.isLoading ? (
-                <p className="flex items-center justify-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                  Searching the web for <span className="font-semibold text-slate-800">{submittedItem}</span>...
-                </p>
-              ) : (
-                <>
-                  <p>
-                    We searched curated databases and the open web for{" "}
-                    <span className="font-semibold text-slate-800">{submittedItem}</span>, but nothing met the current filters.
-                  </p>
-                  {disqualifiedCount > 0 ? (
-                    <p>
-                      <span className="font-semibold text-slate-800">{disqualifiedCount}</span> were excluded because they require
-                      matching funds or repayment. Toggle <span className="font-semibold">Show match/loan results</span> to
-                      review them.
-                    </p>
-                  ) : (
-                    <p>Try different keywords (e.g., van grant nonprofit, equipment funding, vehicle donation).</p>
-                  )}
-                </>
-              )}
-            </div>
-            {hasSelectedProfile && !liveSearchQuery.isLoading && (
-              <div className="flex flex-col sm:flex-row gap-2 justify-center">
-                <Button variant="outline" onClick={handleRequestItemCrawler}>
-                  Queue deeper crawler sweep
-                </Button>
-                <Button variant="outline" onClick={handleRequestItemGiftCrawler}>
-                  Find donation / gift programs
-                </Button>
-              </div>
-            )}
+          <CardContent className="p-6 sm:p-10">
+            <ZeroResultGuidance
+              title={`No clean item funding found for "${submittedItem}"`}
+              description={
+                !hasSelectedProfile
+                  ? "Select a profile to unlock profile-aware live web search and item-specific crawler jobs."
+                  : "GrantFlow searched the stored catalog and live item sources, but nothing met the current rules and filters."
+              }
+              facts={[
+                { label: "Profile", value: hasSelectedProfile ? selectedProfile?.display_name || "Selected" : "Not selected" },
+                { label: "Excluded review rows", value: String(disqualifiedCount) },
+                { label: "Live web rows", value: String(liveWebCount || 0) },
+              ]}
+              actions={[
+                {
+                  kind: "profile",
+                  label: hasSelectedProfile ? "Review profile details" : "Select a profile",
+                  description: "Item funding works best when GrantFlow knows who needs the item and where.",
+                  href: createPageUrl("MyProfiles"),
+                },
+                {
+                  kind: "review",
+                  label: "Show match/loan results",
+                  description: "Review excluded rows without treating them as compliant funding.",
+                  onClick: () => setIncludeDisqualified(true),
+                  disabled: includeDisqualified || disqualifiedCount === 0,
+                },
+                {
+                  kind: "crawler",
+                  label: "Queue deeper crawler sweep",
+                  description: "Search more sources for this exact item and selected profile.",
+                  onClick: handleRequestItemCrawler,
+                  disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
+                  variant: hasSelectedProfile ? "default" : "outline",
+                },
+                {
+                  kind: "crawler",
+                  label: "Find donation or gift programs",
+                  description: "Look for organizations that provide the item directly.",
+                  onClick: handleRequestItemGiftCrawler,
+                  disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
+                },
+                {
+                  kind: "reset",
+                  label: "Try broader words",
+                  description: "Clear the search so you can try equipment, vehicle, tuition, supplies, or assistance.",
+                  onClick: handleReset,
+                },
+              ]}
+            />
           </CardContent>
         </Card>
       ) : (
@@ -927,6 +943,7 @@ export default function ItemFunding() {
         match={selectedMatch}
         open={Boolean(selectedOpportunity)}
         onClose={() => setSelectedOpportunity(null)}
+        profileName={selectedProfile?.display_name}
       />
     </div>
   )

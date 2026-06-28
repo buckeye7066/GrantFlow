@@ -7,8 +7,10 @@ import compression from 'compression';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
 import { createLogger, setAuditLogSink } from './utils/logger.js';
+import { flushObservability, initObservability } from './utils/observability.js';
 
 const serverLogger = createLogger('server');
+initObservability();
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -77,6 +79,7 @@ import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext } from './middleware/requestContext.js';
+import { ensureAuth, ensureAdmin } from './middleware/auth.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
@@ -186,6 +189,29 @@ const app = express();
 app.set('trust proxy', 1);
 app.set('etag', 'strong');
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
+
+function getUploadCacheFileName(req) {
+  const reqPath = String(req?.path || '').replace(/^\/+/, '')
+  if (!reqPath || reqPath.includes('/')) return null
+  return reqPath
+}
+
+function isPublicUploadCacheRequest(req) {
+  const fileName = getUploadCacheFileName(req)
+  if (!fileName) return false
+  // User/profile documents and knowledge-base files are private and must go
+  // through authenticated download routes. Keep only the profile-avatar disk
+  // cache publicly readable so older avatar_url render paths keep working.
+  return /^avatar_[A-Za-z0-9_-]+_\d+\.(?:png|jpe?g|webp|gif|bmp|tiff?|heic|heif|ico)$/i.test(fileName)
+}
+
+function publicUploadCache(staticMiddleware) {
+  return (req, res, next) => {
+    if (!isPublicUploadCacheRequest(req)) return next()
+    res.setHeader('X-Upload-Access', 'public-avatar-cache')
+    return staticMiddleware(req, res, next)
+  }
+}
 
 // --------------------------------------------------------------------------
 // Base-path API rewrite (Vercel parity for non-Vercel environments)
@@ -500,10 +526,6 @@ app.use('/api/sms', lazyRouter('./routes/smsInbound.js'));
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
-// Wrap every request in an AsyncLocalStorage profile context so the SQL
-// layer (backend/db/scopedQuery.js) can enforce tenant isolation automatically.
-app.use(profileContextMiddleware());
-
 // Mount health check routes EARLY to ensure they're always available
 // req.db is already attached above.
 app.use(healthRouter);
@@ -511,27 +533,28 @@ app.use(healthRouter);
 // IMPORTANT: Missing uploads must return 404 (not SPA index.html).
 // Serve both current + legacy upload locations, then terminate with a strict 404.
 // User-uploaded files use no-cache so updated files are always re-validated.
-app.use('/uploads', express.static(uploadsDir, {
+app.use('/uploads', publicUploadCache(express.static(uploadsDir, {
   index: false,
   setHeaders(res) {
     res.setHeader('Cache-Control', 'no-cache')
   },
-}));
+})));
 try {
   if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-    app.use('/uploads', express.static(legacyUploadsDir, {
+    app.use('/uploads', publicUploadCache(express.static(legacyUploadsDir, {
       index: false,
       setHeaders(res) {
         res.setHeader('Cache-Control', 'no-cache')
       },
-    }));
+    })));
   }
 } catch {
   // ignore legacy-dir probing failures
 }
 app.use('/uploads', (req, res) => {
   const reqPath = String(req.path || '').replace(/^\/+/, '')
-  console.warn('[uploads] missing file', {
+  const publicCacheRequest = isPublicUploadCacheRequest(req)
+  console.warn(publicCacheRequest ? '[uploads] missing public cache file' : '[uploads] private upload blocked', {
     requestId: req.requestId || null,
     path: reqPath || null,
     uploadsDir,
@@ -545,8 +568,8 @@ app.use('/uploads', (req, res) => {
   if (wantsJson) {
     return res.status(404).json({
       ok: false,
-      error: 'File not found',
-      code: 'UPLOAD_MISSING',
+      error: publicCacheRequest ? 'File not found' : 'Upload is not publicly accessible',
+      code: publicCacheRequest ? 'UPLOAD_MISSING' : 'UPLOAD_PRIVATE',
       path: reqPath || null,
     })
   }
@@ -661,10 +684,10 @@ const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || proc
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).
-  app.use(`${normalizedBase}/uploads`, express.static(uploadsDir, { index: false }));
+  app.use(`${normalizedBase}/uploads`, publicUploadCache(express.static(uploadsDir, { index: false })));
   try {
     if (legacyUploadsDir !== uploadsDir && fs.existsSync(legacyUploadsDir)) {
-      app.use(`${normalizedBase}/uploads`, express.static(legacyUploadsDir, { index: false }));
+      app.use(`${normalizedBase}/uploads`, publicUploadCache(express.static(legacyUploadsDir, { index: false })));
     }
   } catch {
     // ignore legacy-dir probing failures
@@ -1659,6 +1682,7 @@ app.use(async (req, _res, next) => {
   if (!user || user.role !== 'admin' || !user.userId) return next()
 
   try {
+    const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
     const existing = await db
       .prepare(
         `
@@ -1671,6 +1695,33 @@ app.use(async (req, _res, next) => {
       .get(user.userId)
 
     if (!existing?.id) {
+      const existingByEmail = adminEmail
+        ? await db
+            .prepare(
+              `
+                SELECT id
+                FROM users
+                WHERE LOWER(TRIM(primary_email)) = ?
+                LIMIT 1
+              `,
+            )
+            .get(adminEmail)
+        : null
+
+      if (existingByEmail?.id) {
+        await db
+          .prepare(
+            `
+              UPDATE users
+              SET is_admin = TRUE
+              WHERE id = ?
+            `,
+          )
+          .run(existingByEmail.id)
+        req.user.userId = existingByEmail.id
+        return next()
+      }
+
       await db
         .prepare(
           `
@@ -1681,7 +1732,7 @@ app.use(async (req, _res, next) => {
         .run(
           user.userId,
           user.full_name || ADMIN_NAME || 'Admin User',
-          user.email || ADMIN_EMAIL || null,
+          adminEmail,
           true,
         )
     }
@@ -1696,11 +1747,15 @@ app.use(async (req, _res, next) => {
 // This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
 app.use(attachRequestContext())
 
+// Wrap route handlers in an AsyncLocalStorage profile context after auth and
+// request context are known, so SQL tenant guards see the real user/profile.
+app.use(profileContextMiddleware());
+
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
 
-// Authentication diagnostics endpoint
-app.get('/api/auth/diagnostics', async (req, res) => {
+// Authentication diagnostics endpoint (admin-only; exposes operational config state).
+app.get('/api/auth/diagnostics', ensureAuth, ensureAdmin, async (req, res) => {
   const diagnostics = {
     status: 'operational',
     timestamp: new Date().toISOString(),
@@ -1796,19 +1851,46 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
         // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
         if (user.role === 'admin' || user.is_admin === true) {
           try {
-            db.prepare(
-              `
-                INSERT INTO users (id, display_name, primary_email, is_admin)
-                VALUES (?, ?, ?, ?)
-              `,
-            ).run(
-              user.userId,
-              user.full_name || ADMIN_NAME || 'Admin User',
-              user.email || ADMIN_EMAIL || null,
-              true,
-            )
+            const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
+            const existingByEmail = adminEmail
+              ? await req.db
+                  .prepare(
+                    `
+                      SELECT *
+                      FROM users
+                      WHERE LOWER(TRIM(primary_email)) = ?
+                      LIMIT 1
+                    `,
+                  )
+                  .get(adminEmail)
+              : null
 
-            dbUser = db
+            if (existingByEmail?.id) {
+              await req.db
+                .prepare(
+                  `
+                    UPDATE users
+                    SET is_admin = TRUE
+                    WHERE id = ?
+                  `,
+                )
+                .run(existingByEmail.id)
+              user.userId = existingByEmail.id
+            } else {
+              await req.db.prepare(
+                `
+                  INSERT INTO users (id, display_name, primary_email, is_admin)
+                  VALUES (?, ?, ?, ?)
+                `,
+              ).run(
+                user.userId,
+                user.full_name || ADMIN_NAME || 'Admin User',
+                adminEmail,
+                true,
+              )
+            }
+
+            dbUser = req.db
               .prepare(
                 `
                   SELECT *
@@ -1872,7 +1954,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
             profiles = await req.db
               .prepare(
                 `
-                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
+                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status, p.created_at
                   FROM profiles p
                   LEFT JOIN profile_emails pe ON pe.profile_id = p.id
                   WHERE p.user_id = ?
@@ -1945,7 +2027,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
 app.use(pipelineMonitor())
 
 // Pipeline health dashboard (admin-only)
-app.get('/api/admin/pipeline-health', (req, res) => {
+app.get('/api/admin/pipeline-health', ensureAuth, ensureAdmin, (req, res) => {
   res.json(getPipelineHealth())
 })
 
@@ -2568,6 +2650,7 @@ function gracefulShutdown(signal) {
     } catch (error) {
       console.error('Error closing database:', error);
     }
+    await flushObservability();
     
     console.log('Graceful shutdown complete');
     process.exit(0);

@@ -21,7 +21,7 @@
  *  5. column_typo         — Known-typo column names that compile against zero
  *                            production migrations and 500 the route on
  *                            Postgres (e.g. `requires_matching_funds`).
- *  6. unstructured_500    — `console.error(...)` immediately before
+ *  6. unstructured_500    — direct error logging immediately before
  *                            `res.status(500)` in a route catch — the
  *                            message ends up unsearchable in production logs.
  *                            Auto-fixed if `routeLogger` is already imported.
@@ -200,7 +200,7 @@ const COLUMN_TYPOS = {
 }
 
 /**
- * Detect a `console.error(...)` call that is followed (within 6 lines) by
+ * Detect a direct error logging call that is followed (within 6 lines) by
  * `res.status(500)` in the same catch block — the canonical "route returned
  * 500 with an opaque error" pattern. Auto-fix uses `routeLogger.error(...)`
  * iff a `const routeLogger = createLogger(...)` declaration already exists
@@ -416,7 +416,7 @@ function scanColumnTypos(filePath, content) {
 }
 
 /**
- * Scan for `console.error(...)` followed by `res.status(500)` in route files.
+ * Scan for direct error logging followed by `res.status(500)` in route files.
  */
 function scanUnstructured500(filePath, content) {
   if (!ROUTE_FILES_PATTERN.test(filePath)) return { issues: [], canAutoFix: false }
@@ -756,7 +756,7 @@ function applyColumnTypos(content) {
 }
 
 /**
- * Apply unstructured_500 repair: replace `console.error(...)` immediately
+ * Apply unstructured_500 repair: replace direct error logging immediately
  * before `res.status(500)` with `routeLogger.error(...)`, iff the file
  * already declares a `routeLogger`. This is intentionally conservative —
  * if the logger isn't present we leave the call alone and let the

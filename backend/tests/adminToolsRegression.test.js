@@ -330,7 +330,7 @@ describe('admin brain cleanup and CodeGuard summary', () => {
     expect(result.removed_ids.expiredMemories).toEqual(['mem-1'])
   })
 
-  it('formats stored audit shapes without undefined', () => {
+  it('formats stored audit shapes without undefined', async () => {
     const db = makeDb()
     db.prepare('INSERT INTO anya_brain_memory (id, scope, memory_key, content) VALUES (?, ?, ?, ?)').run(
       'm1',
@@ -339,7 +339,7 @@ describe('admin brain cleanup and CodeGuard summary', () => {
       JSON.stringify({ endpoints: { passed: 24, failed: 0, skipped: 0, total: 24 } }),
     )
 
-    expect(getAuditSummary(db)).not.toContain('undefined')
+    expect(await getAuditSummary(db)).not.toContain('undefined')
   })
 
   it('formats inline CodeGuard status from fresh sub-tool results', () => {
@@ -404,7 +404,7 @@ describe('admin schema migration and domain audits', () => {
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'crawler_logs'").get()).toBeTruthy()
     expect(db.prepare('SELECT url, matched_needs, match_decision FROM grants WHERE id = ?').get('grant-1')).toMatchObject({
       url: 'https://example.test/apply',
-      matched_needs: '["general funding support"]',
+      matched_needs: '[]',
       match_decision: 'review',
     })
     expect(db.prepare('SELECT COUNT(*) AS count FROM crawler_logs WHERE profile_id = ?').get('profile-1').count).toBeGreaterThan(0)

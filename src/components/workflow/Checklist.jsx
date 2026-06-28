@@ -87,7 +87,7 @@ export default function Checklist({ grantId, organizationId }) {
           <div className="text-center py-8 text-slate-500">
             <ClipboardCheck className="w-12 h-12 mx-auto mb-3 text-slate-300" />
             <p>No checklist items yet.</p>
-            <p className="text-sm mt-1">Move card to "Assess" stage to generate a checklist with AI.</p>
+            <p className="text-sm mt-1">Move the card to Interested / Assessing to generate a checklist with AI.</p>
           </div>
         ) : (
           <div className="space-y-6">

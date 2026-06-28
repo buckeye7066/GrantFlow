@@ -1195,6 +1195,7 @@ router.post('/knowledge/upload', knowledgeUpload.single('document'), async (req,
     // Trigger AI analysis if we have extracted text
     triggerKBAnalysis(req.db, docId, extractedText)
 
+    // audit:allow unscoped-profile-query -- admin knowledge-base documents are global and stored with profile_id NULL.
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
@@ -1265,6 +1266,7 @@ router.post('/knowledge/ingest-url', async (req, res) => {
     // Trigger AI analysis if we have extracted text
     triggerKBAnalysis(req.db, docId, extractedText)
 
+    // audit:allow unscoped-profile-query -- admin knowledge-base documents are global and stored with profile_id NULL.
     const doc = await req.db.prepare(`SELECT * FROM documents WHERE id = ? LIMIT 1`).get(docId)
     res.status(201).json({ ok: true, document: doc })
   } catch (error) {
@@ -1278,11 +1280,13 @@ router.delete('/knowledge/:id', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   try {
     const id = safeTrim(req.params?.id)
+    // audit:allow unscoped-profile-query -- admin knowledge-base documents are global and identified by type.
     const doc = await req.db
       .prepare(`SELECT id, file_path FROM documents WHERE id = ? AND type = ? LIMIT 1`)
       .get(id, KB_DOCUMENT_TYPE)
     if (!doc) return res.status(404).json({ ok: false, error: 'Not found' })
 
+    // audit:allow unscoped-profile-query -- admin-only delete constrained by the type-checked row loaded above.
     await req.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id)
     const deletedFile = doc.file_path ? safeDeleteFile(req, doc.file_path) : false
 
@@ -1636,6 +1640,7 @@ router.post('/upload-profile-document', upload.single('document'), async (req, r
       }
 
       // Insert all sections
+      // audit:allow unscoped-profile-query -- INSERT includes profile_id and is scoped by values passed below.
       const insertSection = req.db.prepare(`
         INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
         VALUES (?, ?, ?, ?)
@@ -1835,9 +1840,26 @@ router.get('/diagnostics', async (req, res) => {
   }
 });
 
+function loginEventTimeMs(event) {
+  const ms = Date.parse(String(event?.at || ''))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+function normalizeLoginEvents(events, limit) {
+  const byId = new Map()
+  for (const event of Array.isArray(events) ? events : []) {
+    if (!event) continue
+    const id = event.id ? String(event.id) : `event:${loginEventTimeMs(event)}:${event.identifier || ''}:${event.method || ''}`
+    if (!byId.has(id)) byId.set(id, { ...event, id })
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => loginEventTimeMs(b) - loginEventTimeMs(a))
+    .slice(0, limit)
+}
+
 // GET /api/admin/login-events - Recent client logins (admin only)
 // Preferred: DB-backed audit logs + session backfill. Falls back to in-memory ring buffer.
-router.get('/login-events', async (req, res) => {
+router.get('/login-events', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
@@ -1854,9 +1876,16 @@ router.get('/login-events', async (req, res) => {
 
     // 1) Durable source: audit_logs (client_sign_in)
     const events = []
+    const sourceStatus = {
+      audit_logs: { ok: true },
+      user_sessions: { ok: true },
+      memory_fallback: { used: false },
+    }
     try {
+      await req.db
+        .prepare('SELECT id, created_at, action, details, user_id, profile_id, ip_address, user_agent FROM audit_logs LIMIT 1')
+        .get()
       const auditRes = await queryAuditLogs(req.db, {
-        category: AUDIT_CATEGORIES.AUTH,
         action: 'client_sign_in',
         startDate: startDateIso,
         limit: Math.max(1, Math.min(200, limit)),
@@ -1878,88 +1907,108 @@ router.get('/login-events', async (req, res) => {
         })
       }
     } catch (auditErr) {
+      sourceStatus.audit_logs = { ok: false, error: auditErr?.message || String(auditErr) }
       console.warn('[admin/login-events] audit_logs query failed:', auditErr?.message || auditErr)
     }
 
     // 2) Backfill: sessions table (helps recover events from before audit logging existed)
+    // Query independently from audit_logs, then merge/sort below. The old
+    // "only if audit rows are under the limit" behavior could hide newer
+    // session rows behind older durable audit rows.
     try {
-      if (events.length < limit) {
-        const remaining = limit - events.length
-        const rows = startDateIso
-          ? await req.db
-              .prepare(
-                `
-                  SELECT
-                    s.id,
-                    COALESCE(s.issued_at, s.created_at) AS at,
-                    s.user_id,
-                    s.profile_id,
-                    s.ip_address,
-                    s.user_agent,
-                    u.primary_email,
-                    u.is_admin
-                  FROM user_sessions s
-                  LEFT JOIN users u ON u.id = s.user_id
-                  WHERE COALESCE(s.issued_at, s.created_at) > ?
-                  ORDER BY COALESCE(s.issued_at, s.created_at) DESC
-                  LIMIT ?
-                `,
-              )
-              .all(startDateIso, remaining)
-          : await req.db
-              .prepare(
-                `
-                  SELECT
-                    s.id,
-                    COALESCE(s.issued_at, s.created_at) AS at,
-                    s.user_id,
-                    s.profile_id,
-                    s.ip_address,
-                    s.user_agent,
-                    u.primary_email,
-                    u.is_admin
-                  FROM user_sessions s
-                  LEFT JOIN users u ON u.id = s.user_id
-                  ORDER BY COALESCE(s.issued_at, s.created_at) DESC
-                  LIMIT ?
-                `,
-              )
-              .all(remaining)
+      const sessionLimit = Math.max(1, Math.min(200, limit))
+      const rows = startDateIso
+        ? await req.db
+            .prepare(
+              `
+                SELECT
+                  s.id,
+                  COALESCE(s.issued_at, s.created_at) AS at,
+                  s.user_id,
+                  s.profile_id,
+                  s.ip_address,
+                  s.user_agent,
+                  u.primary_email,
+                  u.is_admin
+                FROM user_sessions s
+                LEFT JOIN users u ON u.id = s.user_id
+                WHERE COALESCE(s.issued_at, s.created_at) > ?
+                ORDER BY COALESCE(s.issued_at, s.created_at) DESC
+                LIMIT ?
+              `,
+            )
+            .all(startDateIso, sessionLimit)
+        : await req.db
+            .prepare(
+              `
+                SELECT
+                  s.id,
+                  COALESCE(s.issued_at, s.created_at) AS at,
+                  s.user_id,
+                  s.profile_id,
+                  s.ip_address,
+                  s.user_agent,
+                  u.primary_email,
+                  u.is_admin
+                FROM user_sessions s
+                LEFT JOIN users u ON u.id = s.user_id
+                ORDER BY COALESCE(s.issued_at, s.created_at) DESC
+                LIMIT ?
+              `,
+            )
+            .all(sessionLimit)
 
-        for (const r of rows || []) {
-          events.push({
-            id: `session:${r.id}`,
-            type: 'client_sign_in',
-            at: r.at,
-            identifier: r.primary_email ?? null,
-            method: 'session',
-            user_id: r.user_id ?? null,
-            profile_id: r.profile_id ?? null,
-            ip: r.ip_address ?? null,
-            user_agent: r.user_agent ?? null,
-          })
-        }
+      for (const r of rows || []) {
+        events.push({
+          id: `session:${r.id}`,
+          type: 'client_sign_in',
+          at: r.at,
+          identifier: r.primary_email ?? null,
+          method: 'session',
+          user_id: r.user_id ?? null,
+          profile_id: r.profile_id ?? null,
+          ip: r.ip_address ?? null,
+          user_agent: r.user_agent ?? null,
+        })
       }
     } catch (sessionErr) {
+      sourceStatus.user_sessions = { ok: false, error: sessionErr?.message || String(sessionErr) }
       console.warn('[admin/login-events] session backfill failed:', sessionErr?.message || sessionErr)
     }
 
+    const durableFailed = !sourceStatus.audit_logs.ok && !sourceStatus.user_sessions.ok
+    if (durableFailed) {
+      return res.status(503).json({
+        ok: false,
+        error: 'login_events_unavailable',
+        message: 'GrantFlow could not read durable login audit/session sources.',
+        source_status: sourceStatus,
+      })
+    }
+
     // 3) Final fallback: in-memory ring buffer (dev only / best-effort)
-    const finalEvents = events.length > 0 ? events.slice(0, limit) : listClientSignInEvents({ since, limit })
+    const fallbackEvents = events.length > 0 ? [] : listClientSignInEvents({ since, limit })
+    sourceStatus.memory_fallback.used = events.length === 0 && fallbackEvents.length > 0
+    const finalEvents = normalizeLoginEvents(
+      events.length > 0 ? events : fallbackEvents,
+      limit,
+    )
 
     return res.json({
       ok: true,
+      degraded: !sourceStatus.audit_logs.ok || !sourceStatus.user_sessions.ok || sourceStatus.memory_fallback.used,
+      source_status: sourceStatus,
       events: finalEvents,
     })
   } catch (error) {
     routeLogger.error('[admin/login-events] Error:', error)
-    return res.status(500).json({ error: 'Failed to load login events' })
+    return next(error)
   }
 })
 
 // GET /api/admin/page-views - Recent client page views (admin only)
 // Durable source: audit_logs (client_page_view).
-router.get('/page-views', async (req, res) => {
+router.get('/page-views', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
@@ -2034,7 +2083,7 @@ router.get('/page-views', async (req, res) => {
     return res.json({ ok: true, page_views: views })
   } catch (error) {
     routeLogger.error('[admin/page-views] Error:', error)
-    return res.status(500).json({ error: 'Failed to load page views' })
+    return next(error)
   }
 })
 
@@ -5250,7 +5299,7 @@ router.post('/backfill-matches', async (req, res) => {
 
         if (decision.decision === 'REJECT') {
           // Remove hard-ineligible entries
-          await db.prepare('DELETE FROM grants WHERE id = ?').run(row.id)
+          await db.prepare('DELETE FROM grants WHERE id = ? AND profile_id = ?').run(row.id, row.profile_id)
           rejected++
         } else {
           // Update metadata
@@ -5267,7 +5316,7 @@ router.post('/backfill-matches', async (req, res) => {
               evaluated_at = ?,
               match_confidence = ?,
               match_score = ?
-            WHERE id = ?
+            WHERE id = ? AND profile_id = ?
           `).run(
             decision.decision,
             decision.explanation,
@@ -5281,6 +5330,7 @@ router.post('/backfill-matches', async (req, res) => {
             decision.confidence,
             decision.score,
             row.id,
+            row.profile_id,
           )
           if (decision.decision === 'ACCEPT') accepted++
           else reviewed++

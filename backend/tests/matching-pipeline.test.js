@@ -97,8 +97,8 @@ function seedOpportunity(db, overrides = {}) {
   db.prepare(`
     INSERT INTO funding_opportunities (
       id, title, description, source, record_origin, state,
-      is_active, is_national, source_url, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      is_active, is_national, source_url, application_url, link_status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `).run(
     id,
     overrides.title || "Test Grant",
@@ -108,6 +108,8 @@ function seedOpportunity(db, overrides = {}) {
     overrides.state || "TN",
     overrides.is_national ? 1 : 0,
     overrides.source_url || "https://example-real.org/grant",
+    overrides.application_url || overrides.source_url || "https://example-real.org/apply",
+    overrides.link_status || "verified",
   )
   if (overrides.os_match !== false) {
     seedCrawlerOsMatch(db, overrides.profileId || currentProfileId, id, {
@@ -188,13 +190,19 @@ describe("Matching Pipeline", () => {
     const userId = seedUser(db)
     const orgId = seedOrg(db)
     const profileId = seedProfile(db, userId, orgId, { state: "TN" })
+    seedSection(db, profileId, "needs", {
+      needs: ["emergency assistance", "financial assistance"],
+      situation: "Tennessee resident seeking emergency financial assistance",
+    })
 
     seedOpportunity(db, {
-      title: "General Community Fund",
-      description: "Open to all residents for emergency assistance",
+      title: "Tennessee Emergency Assistance Grant",
+      description: "Emergency financial assistance for Tennessee residents facing hardship.",
       state: "TN",
       record_origin: "curated_verified",
-      match_score: 78,
+      match_score: 92,
+      match_decision: "accept",
+      match_reasons: ["need_alignment", "geographic_match", "applicant_type_match"],
     })
 
     // Sparse profile fields are neutral, but results still have to be tied to a

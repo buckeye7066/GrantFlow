@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
-import { Loader2, UploadCloud } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Clock3, FileSearch, Loader2, UploadCloud } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { listDocuments, ingestDocument, deleteDocument, parseAllProfileDocuments } from "@/api/documents"
 import DocumentItem from "@/components/documents/DocumentItem"
@@ -50,6 +50,18 @@ function isLikelyParseable(file) {
     "heif",
   ])
   return parseableMimes.has(file?.type) || parseableExt.has(extension)
+}
+
+function documentEvidenceStatus(doc) {
+  const status = String(doc?.processing_status ?? doc?.status ?? "pending").toLowerCase()
+  const hasEvidence = Boolean(
+    String(doc?.extracted_text ?? "").trim() ||
+    String(doc?.ai_summary ?? "").trim() ||
+    (doc?.extracted_structured && Object.keys(doc.extracted_structured).length > 0),
+  )
+  if (hasEvidence || ["completed", "parsed", "ready"].includes(status)) return "parsed"
+  if (["failed", "error", "parse_failed"].includes(status)) return "failed"
+  return "queued"
 }
 
 export default function ProfileFilesPanel({
@@ -237,6 +249,11 @@ export default function ProfileFilesPanel({
     // Keep current grid rendering; hook for future grouping by type.
     return documents
   }, [documents])
+  const documentStats = useMemo(() => {
+    const counts = { total: documents.length, parsed: 0, queued: 0, failed: 0 }
+    for (const doc of documents) counts[documentEvidenceStatus(doc)] += 1
+    return counts
+  }, [documents])
 
   const isUploading = uploadMutation.isPending
   const isIngestingUrl = urlIngestMutation.isPending
@@ -359,6 +376,26 @@ export default function ProfileFilesPanel({
           <p className="text-sm text-muted-foreground">
             Upload PDFs, images, spreadsheets, screenshots, and more. Files are private and scoped to this profile.
           </p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
+              <FileSearch className="h-3.5 w-3.5" />
+              {documentStats.total} files
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {documentStats.parsed} parsed evidence
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 font-medium text-blue-700">
+              <Clock3 className="h-3.5 w-3.5" />
+              {documentStats.queued} queued
+            </span>
+            {documentStats.failed ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 font-medium text-red-700">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {documentStats.failed} needs attention
+              </span>
+            ) : null}
+          </div>
         </div>
         <Badge variant="outline">{documents.length} total</Badge>
       </CardHeader>
@@ -517,4 +554,3 @@ export default function ProfileFilesPanel({
     </Card>
   )
 }
-

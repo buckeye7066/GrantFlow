@@ -18,6 +18,8 @@
 import React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { listProfileFundingSources } from "@/api/matching"
+import { ExternalLink } from "lucide-react"
+import { safeHttpUrl } from "@/lib/safeUrl"
 
 function fmtAmount(min, max) {
   const f = (n) => `$${Number(n).toLocaleString()}`
@@ -29,30 +31,40 @@ function fmtAmount(min, max) {
 
 function SourceRow({ s }) {
   const amount = fmtAmount(s.amount_min, s.amount_max)
+  const href = safeHttpUrl(s.url)
+  const RowTag = href ? "a" : "div"
   return (
-    <li className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 p-3">
+    <li className="rounded-lg border border-slate-200 transition hover:border-blue-200 hover:bg-blue-50/40">
+      <RowTag
+        {...(href ? { href, target: "_blank", rel: "noopener noreferrer" } : {})}
+        className="flex items-start justify-between gap-3 p-3 text-left"
+        title={href ? `Open ${s.title}` : "No usable URL saved for this source yet"}
+      >
       <div className="min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-2">
           <span className="inline-flex h-6 min-w-[2.25rem] items-center justify-center rounded bg-emerald-50 px-1.5 text-xs font-mono font-semibold text-emerald-700">
             {s.match_score}
           </span>
-          <a
-            href={s.url || undefined}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="truncate font-medium text-slate-900 hover:underline"
-          >
+          <span className="font-medium text-slate-900 hover:underline">
             {s.title}
-          </a>
+          </span>
         </div>
-        <div className="mt-0.5 truncate text-xs text-slate-500">
-          {[s.sponsor, s.geography, amount].filter(Boolean).join(" · ")}
+        <div className="mt-0.5 break-words text-xs text-slate-500">
+          {[s.sponsor, s.geography, amount].filter(Boolean).join(" - ")}
         </div>
         {s.why ? <div className="mt-1 line-clamp-2 text-xs text-slate-600">{s.why}</div> : null}
       </div>
-      <div className="shrink-0 text-right text-xs">
+      <div className="flex shrink-0 flex-col items-end gap-2 text-right text-xs">
         {s.is_rolling ? <span className="text-slate-500">Rolling</span> : s.deadline ? <span className="text-slate-500">{s.deadline}</span> : null}
+        {href ? (
+          <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-white px-2 py-1 font-medium text-blue-700">
+            Open <ExternalLink className="h-3 w-3" />
+          </span>
+        ) : (
+          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-slate-500">No URL</span>
+        )}
       </div>
+      </RowTag>
     </li>
   )
 }
@@ -80,7 +92,7 @@ export default function ProfileFundingSourcesCard({ profileId }) {
   })
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div id="profile-funding-sources" className="scroll-mt-24 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold text-slate-900">Funding Sources</h3>
         {data?.total ? <span className="text-xs text-slate-500">{data.total} matched</span> : null}

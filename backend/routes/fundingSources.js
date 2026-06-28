@@ -13,6 +13,9 @@
 import express from 'express'
 import { requireAuthenticatedUser, getAccessibleProfileIds } from '../utils/accessControl.js'
 import { isTemplatedGeoStub } from '../services/relevanceFilterRules.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
+import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
+import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:funding-sources')
@@ -43,12 +46,14 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
   const minScore = Number.isFinite(Number.parseInt(req.query.min_score, 10)) ? Number.parseInt(req.query.min_score, 10) : 50
 
   try {
+    const profileContext = buildProfileFacets(await loadProfileContext(req.db, profileId))
     const rows = await req.db.prepare(
       `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.deadline, fo.deadline_type,
               fo.amount_min, fo.amount_max, fo.state, fo.is_national,
-              fo.application_url, fo.apply_url, fo.source_url, fo.opportunity_kind,
-              fo.source_trust_tier, fo.categories,
-              pom.match_score, pom.match_decision, pom.match_explanation
+              fo.application_url, fo.apply_url, fo.source_url, fo.source, fo.source_id,
+              fo.record_origin, fo.opportunity_kind, fo.opportunity_type, fo.type, fo.funding_type,
+              fo.source_trust_tier, fo.categories, fo.keywords,
+              pom.match_score, pom.match_decision, pom.match_explanation, pom.match_reasons
          FROM profile_opportunity_matches pom
          JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
         WHERE pom.profile_id = ? AND pom.matcher_version = 'crawler-os'
@@ -57,9 +62,24 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         ORDER BY pom.match_score DESC, fo.updated_at DESC`,
     ).all(profileId)
 
+    const mapped = rows.map((r) => ({
+      ...r,
+      match_score: r.match_score,
+      match_decision: r.match_decision,
+      match_explanation: r.match_explanation,
+      match_reasons: jparse(r.match_reasons, []),
+      url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
+      actionable_url: r.application_url ?? r.apply_url ?? r.source_url ?? null,
+      is_directory: String(r.opportunity_kind ?? '').toUpperCase() === 'DIRECTORY' ||
+        String(r.opportunity_kind ?? '').toUpperCase() === 'PAST_AWARD_INTEL',
+    }))
+    const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+      preserveDirectories: true,
+      rejectHardIneligible: true,
+    })
     const sources = []
     let geoStubsHidden = 0
-    for (const r of rows) {
+    for (const r of canonical.kept) {
       if (isTemplatedGeoStub({ title: r.title, opportunity_kind: r.opportunity_kind })) { geoStubsHidden += 1; continue }
       const kind = String(r.opportunity_kind ?? '').toUpperCase()
       sources.push({
@@ -89,8 +109,8 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       min_score: minScore,
       total: qualified.length,
       // Honest grouping for the owner: apply-now vs worth-a-look vs directories.
-      best_matches: qualified.filter((s) => s.match_decision === 'accept' && !s.is_directory),
-      worth_reviewing: qualified.filter((s) => s.match_decision === 'review' && !s.is_directory),
+      best_matches: qualified.filter((s) => String(s.match_decision).toLowerCase() === 'accept' && !s.is_directory),
+      worth_reviewing: qualified.filter((s) => String(s.match_decision).toLowerCase() === 'review' && !s.is_directory),
       directories: qualified.filter((s) => s.is_directory),
       sources: qualified,
       geo_stubs_hidden: geoStubsHidden,

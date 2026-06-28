@@ -21,6 +21,7 @@ import crypto from 'crypto'
 
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js'
 import { getRobertConfig, maskSecrets } from '../services/robert/robertSafety.js'
 import {
@@ -398,7 +399,8 @@ router.post('/recommendations/:id/accept', requireAuth, async (req, res) => {
         const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js')
         const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(rec.opportunity_id)
         if (opp) {
-          pipelineResult = await saveToProfilePipeline(req.db, opp, rec.profile_id, null, Number(rec.match_score) || null)
+          const profileContext = await loadProfileContext(req.db, rec.profile_id)
+          pipelineResult = await saveToProfilePipeline(req.db, opp, rec.profile_id, profileContext, null, undefined)
         }
       } catch (err) {
         await logAuditEvent(req.db, {
@@ -411,6 +413,7 @@ router.post('/recommendations/:id/accept', requireAuth, async (req, res) => {
           resourceId: rec.id,
           details: { message: maskSecrets(String(err?.message || err)).slice(0, 500) },
         })
+        throw err
       }
     }
     await markAccepted(req.db, rec.id)

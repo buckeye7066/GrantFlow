@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import DocumentItem from './DocumentItem';
 import { useToast } from '@/components/ui/use-toast';
 import client, { apiFetch } from '@/api/client';
+import { openAuthenticatedUrlForPrint } from '@/utils/authenticatedDownload';
 export default function DocumentList({ profileId }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -49,7 +50,7 @@ export default function DocumentList({ profileId }) {
   };
 
   const resolveDocumentUrl = async (doc) => {
-    const fileUri = doc.file_url ?? doc.file_uri;
+    const fileUri = doc.download_url ?? doc.file_url ?? doc.file_uri;
     if (!fileUri) return null;
     if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
       try {
@@ -82,14 +83,9 @@ export default function DocumentList({ profileId }) {
     }
   };
 
-  const printDocument = (doc, url) => {
+  const printDocument = async (doc, url) => {
     if (url) {
-      const printWindow = window.open(url, '_blank', 'noopener,noreferrer');
-      if (printWindow) {
-        printWindow.onload = () => {
-          printWindow.print();
-        };
-      }
+      await openAuthenticatedUrlForPrint(url);
       return;
     }
     if (!doc.extracted_text) return;
@@ -133,7 +129,7 @@ export default function DocumentList({ profileId }) {
       const doc = documents[i];
       const url = await resolveDocumentUrl(doc);
       if (url || doc.extracted_text) {
-        printDocument(doc, url);
+        await printDocument(doc, url);
         if (i < documents.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 250));
         }

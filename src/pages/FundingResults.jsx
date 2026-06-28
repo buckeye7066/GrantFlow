@@ -8,6 +8,7 @@ import { createPageUrl } from '@/utils';
 import { AddToPipelineButton } from '@/components/discovery/SearchResults';
 import FundingResultCard from '@/components/funding/FundingResultCard';
 import { toCanonicalResult } from '@/components/funding/toCanonicalResult';
+import { dedupeFundingResults } from '@/utils/fundingDedupe';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -89,6 +90,19 @@ export default function FundingResults() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const log = useMemo(() => createLogger('FundingResults'), []);
+  const { isAuthenticated, accessToken, sessionExpired, activeProfileId } = useAuthStore((s) => ({
+    isAuthenticated: s.isAuthenticated,
+    accessToken: s.accessToken,
+    sessionExpired: s.sessionExpired,
+    activeProfileId: s.activeProfileId,
+  }));
+  const storedResultsProfileId = useFundingResultsStore((s) => s.profileId);
+  const requestedResultsProfileId =
+    (activeProfileId && activeProfileId !== '__admin__'
+      ? activeProfileId
+      : null) ||
+    storedResultsProfileId ||
+    null;
   const {
     results,
     profileId,
@@ -100,12 +114,7 @@ export default function FundingResults() {
     truncated,
     thresholdFallbackMessage,
     diagnostics,
-  } = useFundingResultsStore();
-  const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((s) => ({
-    isAuthenticated: s.isAuthenticated,
-    accessToken: s.accessToken,
-    sessionExpired: s.sessionExpired,
-  }));
+  } = useFundingResultsStore((s) => s.getResultsForProfile(requestedResultsProfileId));
 
   const [sortBy, setSortBy] = useState('match');
   const [strongMatchesOnly, setStrongMatchesOnly] = useState(false);
@@ -119,11 +128,12 @@ export default function FundingResults() {
     }
   }, [accessToken]);
   const authReady = !sessionExpired && (isAuthenticated || tokenAvailable);
-  const displayedReturned = Number.isFinite(Number(returned)) ? Number(returned) : results.length;
+  const uniqueResults = useMemo(() => dedupeFundingResults(results || []), [results]);
+  const displayedReturned = uniqueResults.length;
   const displayedTotalFound = Number.isFinite(Number(totalFound)) ? Number(totalFound) : displayedReturned;
 
   const filteredAndSorted = useMemo(() => {
-    let list = [...(results || [])];
+    let list = [...uniqueResults];
     if (showHousingOnly) {
       list = list.filter((o) => o.usable_for_housing === true || o.usable_for_housing === 1);
     }
@@ -136,13 +146,12 @@ export default function FundingResults() {
         if (decision === 'ACCEPT' || decision === 'REVIEW') return true;
         // If the engine explicitly rejected, respect that.
         if (decision === 'REJECT') return false;
-        // Engine decision absent: use match_score only (never the raw crawler `match` field).
-        // This is a display convenience, not a pipeline gate; Goal 4 is not violated
+        // Engine decision absent: use match_score only (never the raw crawler
+        // `match` field). Unscored rows are not "strong" on a page with add buttons.
         // because this page never inserts grants â it only presents candidates.
         const score = Number(o?.match_score ?? null);
         if (isNaN(score) || o?.match_score === null) {
-          // No engine score present; include rather than suppress (Goal 7: prefer recall).
-          return true;
+          return false;
         }
         return score >= 70;
       });
@@ -161,7 +170,7 @@ export default function FundingResults() {
       list.sort((a, b) => new Date(b?.created_at ?? 0) - new Date(a?.created_at ?? 0));
     }
     return list;
-  }, [results, sortBy, strongMatchesOnly, showHousingOnly]);
+  }, [uniqueResults, sortBy, strongMatchesOnly, showHousingOnly]);
 
   const handleAddToPipeline = async (opportunity, { silent = false } = {}) => {
     log.debug('add to pipeline requested');
@@ -187,7 +196,7 @@ export default function FundingResults() {
     }
 
     const orgId = organizationId ?? null;
-    const candidateUrl = opportunity.application_url ?? opportunity.url ?? null;
+    const candidateUrl = opportunity.application_url ?? opportunity.apply_url ?? null;
     if (orgId && candidateUrl) {
       try {
         const lookupUrl = candidateUrl;
@@ -216,7 +225,7 @@ export default function FundingResults() {
       }
       return { status: 'failed', error: 'missing_title' };
     }
-    const applicationUrl = opportunity.application_url ?? opportunity.url ?? null;
+    const applicationUrl = opportunity.application_url ?? opportunity.apply_url ?? null;
     if (!applicationUrl) {
       if (!silent) {
         toast({ variant: 'destructive', title: 'No application link', description: `"${opportunity.title}" has no application URL and cannot be added to the pipeline.` });
@@ -249,9 +258,23 @@ export default function FundingResults() {
             descriptionMd: opportunity.descriptionMd ?? opportunity.description,
             eligibilityBullets: opportunity.eligibilityBullets ?? [],
             source: opportunity.source ?? 'discovery',
+            record_origin:
+              opportunity.record_origin ||
+              (String(opportunity.source || '').toLowerCase() === 'web_llm' ? 'web_search' : null),
+            source_id: opportunity.source_id ?? opportunity.external_id ?? null,
           },
         }),
       });
+
+      if (newGrant.not_added_to_pipeline || newGrant.status === 'skipped') {
+        if (!silent) {
+          toast({
+            title: 'Kept out of this pipeline',
+            description: newGrant.message || `"${opportunity.title}" was cataloged but did not pass the profile match gates.`,
+          });
+        }
+        return { status: 'skipped', grant: newGrant, reason: newGrant.reason, gate: newGrant.gate, message: newGrant.message };
+      }
 
       if (newGrant.already_exists) {
         if (!silent) toast({ title: 'Already in pipeline', description: `"${opportunity.title}" is already in your grants pipeline.` });
@@ -278,7 +301,7 @@ export default function FundingResults() {
     }
   };
 
-  if (!results || results.length === 0) {
+  if (!uniqueResults || uniqueResults.length === 0) {
     // Explain the zero-result state using the backend's staged-ladder
     // diagnostics instead of a dead end (Mission System 5, RC-12): what was
     // searched/expanded, and what profile info would unlock more matches.
@@ -334,7 +357,7 @@ export default function FundingResults() {
             We found {displayedReturned} {displayedReturned === 1 ? 'opportunity' : 'opportunities'}
           </h1>
           <p className="text-muted-foreground mt-1">
-            {results.length !== filteredAndSorted.length
+            {uniqueResults.length !== filteredAndSorted.length
               ? `Showing ${filteredAndSorted.length} of ${displayedReturned} returned${strongMatchesOnly ? ' (strong matches ≥70%)' : ''}${showHousingOnly ? ' (housing-usable)' : ''}`
               : 'Review and add opportunities to your pipeline'}
           </p>

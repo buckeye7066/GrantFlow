@@ -42,6 +42,34 @@ export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
         .get(user.userId)
 
       if (!existing?.id) {
+        const normalizedEmail = String(user.email || adminEmail || '').trim().toLowerCase()
+        const existingByEmail = normalizedEmail
+          ? db
+              .prepare(
+                `
+                  SELECT id
+                  FROM users
+                  WHERE LOWER(TRIM(primary_email)) = ?
+                  LIMIT 1
+                `,
+              )
+              .get(normalizedEmail)
+          : null
+
+        if (existingByEmail?.id) {
+          db
+            .prepare(
+              `
+                UPDATE users
+                SET is_admin = ?
+                WHERE id = ?
+              `,
+            )
+            .run(true, existingByEmail.id)
+          req.user.userId = existingByEmail.id
+          return next()
+        }
+
         db
           .prepare(
             `
@@ -52,7 +80,7 @@ export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
           .run(
             user.userId,
             user.full_name || adminName || 'Admin User',
-            user.email || adminEmail || null,
+            normalizedEmail || null,
             true
           )
       }

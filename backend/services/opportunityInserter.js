@@ -812,7 +812,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       // URL cross-source dedup is a data-integrity check — never silent.
       // We allow the insert to proceed (degraded mode) but log loudly so
       // operators can investigate persistent DB issues.
-      console.error('[opportunityInserter] URL dedup query failed (allowing insert; investigate):', err?.message || err)
+      log.error('[opportunityInserter] URL dedup query failed (allowing insert; investigate):', err?.message || err)
     }
   }
 
@@ -1295,7 +1295,7 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = [], opt
         }
       })
     } catch (err) {
-      console.error(`[bulkUpsert] Batch ${i}-${i + batch.length} failed, falling back to individual:`, err.message)
+      log.error(`[bulkUpsert] Batch ${i}-${i + batch.length} failed, falling back to individual:`, err.message)
       for (const opportunity of batch) {
         try {
           const result = await upsertFundingOpportunity(db, opportunity, opts)
@@ -1303,7 +1303,7 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = [], opt
             console.warn('[bulkUpsert] Rejected:', result.reason, '|', opportunity?.title ?? 'untitled')
           }
           if (result?.inserted) inserted.push(result.id)
-        } catch (indivErr) { console.error('[bulkUpsert] Individual insert failed:', indivErr.message, opportunity?.title) }
+        } catch (indivErr) { log.error('[bulkUpsert] Individual insert failed:', indivErr.message, opportunity?.title) }
       }
     }
   }

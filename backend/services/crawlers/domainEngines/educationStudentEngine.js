@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:educationStudentEngine')
 
 const ENGINE_ID = 'education_student'
 
@@ -38,7 +40,7 @@ export async function runEducationStudentEngine(profile, options = {}) {
     
     return normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: true, strict_no_matching: false });
   } catch (err) {
-    console.error(`[${ENGINE_ID}] runEducationStudentEngine failed:`, err)
+    qualityLog.error(`[${ENGINE_ID}] runEducationStudentEngine failed:`, err)
     return []
   }
 }

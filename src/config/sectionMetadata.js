@@ -540,6 +540,12 @@ export const SECTION_METADATA = {
         "help": "Employment status aligned with Employment > Current status. Legacy field 'unemployed' is mapped to this canonical key during save."
       },
       {
+        "name": "unemployed",
+        "label": "Currently unemployed",
+        "format": "boolean_tri",
+        "help": "Legacy/current intake flag indicating the applicant is unemployed. Prefer Employment status / Employment > Current status when a specific status is known."
+      },
+      {
         "name": "displaced_worker",
         "label": "Displaced worker",
         "format": "boolean_tri",
@@ -1160,6 +1166,12 @@ export const SECTION_METADATA = {
           "other",
           "unknown"
         ]
+      },
+      {
+        "name": "immigrant_status",
+        "label": "Immigration status (legacy)",
+        "format": "text",
+        "help": "Legacy/current intake immigration-status field. Canonical matching also reads Demographics > Immigration status, and this key is preserved so imported or seeded profiles render without hiding evidence."
       },
       {
         "name": "ethnicity",

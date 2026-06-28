@@ -2005,14 +2005,16 @@ function humanizeAutomationType(t) {
 // Best-effort, batched title resolution from the grants / funding_opportunities
 // tables so tasks read as real funding-source names instead of raw ids. Missing
 // tables or rows simply leave the fallback (humanized automation type) in place.
-async function resolveTaskTitles(db, tasks) {
+async function resolveTaskTitles(db, tasks, profileId) {
   const map = new Map()
   const grantIds = [...new Set((tasks || []).map((t) => t.grant_id).filter(Boolean).map(String))]
   const oppIds = [...new Set((tasks || []).map((t) => t.opportunity_id).filter(Boolean).map(String))]
-  if (grantIds.length) {
+  if (grantIds.length && profileId) {
     try {
       const ph = grantIds.map(() => '?').join(',')
-      const rows = await db.prepare(`SELECT id, title FROM grants WHERE id IN (${ph})`).all(...grantIds)
+      const rows = await db
+        .prepare(`SELECT id, title FROM grants WHERE profile_id = ? AND id IN (${ph})`)
+        .all(String(profileId), ...grantIds)
       for (const r of rows || []) if (r?.title) map.set(`grant:${r.id}`, r.title)
     } catch { /* table/shape mismatch — keep fallbacks */ }
   }
@@ -2049,7 +2051,7 @@ router.get('/profile-summary', async (req, res) => {
   // 1. Active tasks + their unresolved missing info.
   let tasks = []
   try { tasks = await listApplicationTasks(req.db, { profileId, limit: 200 }) } catch { tasks = [] }
-  const titleMap = await resolveTaskTitles(req.db, tasks)
+  const titleMap = await resolveTaskTitles(req.db, tasks, profileId)
   for (const t of tasks || []) {
     const status = String(t.status || '').toLowerCase()
     if (TERMINAL_TASK_STATUS.has(status)) continue

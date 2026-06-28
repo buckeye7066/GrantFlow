@@ -28,6 +28,9 @@ describe("ProfileSectionEditor metadata schema", () => {
 
     expect(screen.getByText("Legacy fields")).toBeTruthy()
     expect(screen.getByText("legacy_key")).toBeTruthy()
+    const scrollBody = screen.getByTestId("profile-section-editor-scroll")
+    expect(scrollBody.className).toContain("min-h-0")
+    expect(scrollBody.className).toContain("overflow-y-auto")
 
     fireEvent.click(screen.getByText("Save changes"))
 

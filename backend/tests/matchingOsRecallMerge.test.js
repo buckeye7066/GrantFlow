@@ -77,6 +77,17 @@ function createSchema(db) {
       match_reasons TEXT DEFAULT '[]',
       matcher_version TEXT
     );
+    CREATE TABLE grants (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT,
+      funding_opportunity_id TEXT,
+      fingerprint TEXT,
+      title TEXT,
+      funder TEXT,
+      deadline TEXT,
+      url TEXT,
+      application_url TEXT
+    );
   `)
 }
 
@@ -115,16 +126,18 @@ function seedStudent(db) {
 function seedRichOs(db) {
   db.exec(`
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, last_discovery_at, created_at, updated_at)
-    VALUES ('org-1', 'organization', 'organization', 'TN', '37130', '["nonprofit"]', '["community"]', '2026-06-23 12:00:00', '2026-06-23', '2026-06-23');
+    VALUES ('org-1', 'nonprofit', 'nonprofit', 'TN', '37130', '["nonprofit","community programs"]', '["capacity building","program funding"]', '2026-06-23 12:00:00', '2026-06-23', '2026-06-23');
     INSERT INTO profile_sections (profile_id, section_key, data)
-    VALUES ('org-1', 'basic_information', '{"state":"TN","profile_category":"organization"}');
+    VALUES ('org-1', 'basic_information', '{"state":"TN","profile_category":"nonprofit"}');
+    INSERT INTO profile_sections (profile_id, section_key, data)
+    VALUES ('org-1', 'narrative', '{"mission":"Community nonprofit seeking capacity building and program funding."}');
   `)
   for (let i = 1; i <= 12; i += 1) {
     const id = `os-rich-${i}`
     db.prepare(
-      `INSERT INTO funding_opportunities (id, title, sponsor, source, source_id, source_url, application_url, opportunity_kind, type, opportunity_type, is_national, is_active, categories, keywords, amount_max)
-       VALUES (?, ?, 'Foundation', 'grants.gov', ?, 'https://www.grants.gov/y', 'https://www.grants.gov/y', 'DIRECT_GRANT', 'OPPORTUNITY', 'grant', 1, 1, '["grant"]', '["community","nonprofit"]', 25000)`,
-    ).run(id, `Rich OS Grant ${i}`, id)
+      `INSERT INTO funding_opportunities (id, title, sponsor, source, source_id, source_url, application_url, opportunity_kind, type, opportunity_type, is_national, is_active, categories, keywords, eligibility_bullets, amount_max)
+       VALUES (?, ?, 'Foundation', 'grants.gov', ?, 'https://www.grants.gov/y', 'https://www.grants.gov/y', 'DIRECT_GRANT', 'OPPORTUNITY', 'grant', 1, 1, '["nonprofit_ministry","capacity_building","programs"]', '["community","nonprofit","capacity building","program funding"]', '["Eligible applicants include nonprofit organizations"]', 25000)`,
+    ).run(id, `Nonprofit Community Program Grant ${i}`, id)
     db.prepare(
       `INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version)
        VALUES ('org-1', ?, ?, 'ACCEPT', 'Strong', '[]', 'crawler-os')`,

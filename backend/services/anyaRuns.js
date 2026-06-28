@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:anyaRuns')
 
 function safeJson(value, fallback = '{}') {
   try {
@@ -39,7 +41,7 @@ export async function createAnyaRun(db, { mode, kind, sessionId, userId, profile
       )
     return id
   } catch (error) {
-    console.error('Failed to create Anya run:', error)
+    qualityLog.error('Failed to create Anya run:', error)
     throw new Error(`Cannot create Anya run: ${error.message}`)
   }
 }
@@ -56,7 +58,7 @@ export async function appendAnyaRunLog(db, runId, level, message, meta) {
       )
       .run(randomUUID(), runId, level || 'info', String(message || ''), safeJson(meta))
   } catch (error) {
-    console.error(`Failed to log Anya run ${runId}:`, error)
+    qualityLog.error(`Failed to log Anya run ${runId}:`, error)
   }
 }
 
@@ -81,7 +83,7 @@ export async function completeAnyaRun(db, runId, { status, response, error } = {
         runId,
       )
   } catch (dbError) {
-    console.error(`Failed to complete Anya run ${runId}:`, dbError)
+    qualityLog.error(`Failed to complete Anya run ${runId}:`, dbError)
     // Do NOT re-throw: the Anya computation already succeeded.
     // The DB write failure is an observability loss (Goal 8) but must not
     // surface as a workflow error to the caller (Goal 13).

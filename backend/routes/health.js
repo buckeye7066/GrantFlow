@@ -80,6 +80,16 @@ function checkJwtSecret() {
   return { ok: true, configured: true }
 }
 
+function redactFilesystemError(error) {
+  const raw = String(error || '').trim()
+  if (!raw) return null
+  if (/ENOSPC|no space/i.test(raw)) return 'no_space_left'
+  if (/EROFS|read-only/i.test(raw)) return 'read_only_filesystem'
+  if (/EACCES|EPERM|permission/i.test(raw)) return 'permission_denied'
+  if (/ENOENT|not found|no such file/i.test(raw)) return 'path_missing_or_unavailable'
+  return 'upload_storage_unavailable'
+}
+
 async function checkRequiredSchema(db) {
   const required = [
     { table: 'users', column: 'is_admin' },
@@ -130,10 +140,10 @@ async function checkUploadsDir(req) {
 
   const writable = await ensureUploadsDirWritable(uploadsDir)
   if (!writable.ok) {
-    return { ok: false, reason: 'uploads_unwritable', path: uploadsDir, error: writable.error || 'unwritable' }
+    return { ok: false, reason: 'uploads_unwritable', configured: true, error: redactFilesystemError(writable.error) || 'unwritable' }
   }
 
-  return { ok: true, path: uploadsDir }
+  return { ok: true, configured: true }
 }
 
 // Public health summary (safe, non-admin)
@@ -214,12 +224,9 @@ router.get('/healthz', (req, res) => {
 // Storage health (safe, read-only)
 router.get('/api/health/storage', async (req, res) => {
   const uploadsDir = req.uploadsDir || null
-  const legacyUploadsDir = req.legacyUploadsDir || null
   const configured = Boolean(uploadsDir)
   const likelyPersistent = uploadsDir ? isLikelyPersistentPath(uploadsDir) : false
   const writableCheck = uploadsDir ? await ensureUploadsDirWritable(uploadsDir) : { ok: false, error: 'uploads_not_configured' }
-
-  const storageStatus = req.storageStatus || null
 
   let fileCount = null
   const includeCount = String(req.query?.include_count || '').toLowerCase() === 'true'
@@ -242,16 +249,14 @@ router.get('/api/health/storage', async (req, res) => {
   return res.status(degraded ? 503 : 200).json({
     ok: !degraded,
     status: degraded ? 'degraded' : 'ok',
-    uploadsDir,
-    legacyUploadsDir,
     configured,
     writable: ok,
     likely_persistent: likelyPersistent,
     missing_uploads_dir_env: missingEnv,
     allow_ephemeral_uploads: allowEphemeral,
     file_count: fileCount,
-    last_error: ok ? null : (writableCheck?.error || null),
-    storage_status: storageStatus,
+    last_error: ok ? null : (redactFilesystemError(writableCheck?.error) || null),
+    details_redacted: true,
     timestamp: new Date().toISOString(),
   })
 })
@@ -298,7 +303,7 @@ router.get('/readyz', async (req, res) => {
       ok: false,
       status: 'not_ready',
       reason: uploads.reason,
-      uploads_dir: uploads.path,
+      uploads_configured: uploads.configured ?? null,
       error: uploads.error || null,
       timestamp: new Date().toISOString(),
     })
@@ -407,4 +412,3 @@ router.get('/api/health/imports', (_req, res) => {
 })
 
 export default router
-

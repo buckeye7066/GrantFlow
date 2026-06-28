@@ -164,6 +164,7 @@ async function run() {
   const apply = String(process.env.CONFIRM || '').trim().toUpperCase() === 'YES'
   const verifyOnly = envBool('VERIFY_ONLY', false)
 
+  console.log(`[dns] domain=${domain} ttl=${ttl} apply=${apply}`)
   // Guard: axiombiolabs.org serves the Axiom Biolabs lab website via GoDaddy
   // Websites + Marketing. Pointing its apex at Vercel overwrites those records
   // and takes the lab site offline (this already happened once). GrantFlow
@@ -234,4 +235,3 @@ run().catch((e) => {
   console.error('[dns] fatal:', e instanceof Error ? e.stack || e.message : String(e))
   process.exitCode = 1
 })
-

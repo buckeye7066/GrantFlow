@@ -35,6 +35,7 @@ export default function ProfileAutomationsCard({ profileId }) {
   const definitions = Array.isArray(data?.definitions) && data.definitions.length
     ? data.definitions
     : AUTOMATION_TOGGLES
+  const visibleDefinitions = definitions.filter((def) => def.enforced !== false)
   const automations = normalizeAutomationToggles(data?.automations)
 
   const save = useMutation({
@@ -93,7 +94,9 @@ export default function ProfileAutomationsCard({ profileId }) {
         {isLoading ? (
           <p className="text-sm text-slate-500">Loading automation settings…</p>
         ) : (
-          definitions.map((def) => (
+          visibleDefinitions.length === 0 ? (
+            <p className="text-sm text-slate-500">No profile automations are available right now.</p>
+          ) : visibleDefinitions.map((def) => (
             <div
               key={def.key}
               className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white/70 p-3"
@@ -101,11 +104,6 @@ export default function ProfileAutomationsCard({ profileId }) {
               <div className="space-y-0.5">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-slate-900">{def.label}</span>
-                  {def.enforced === false ? (
-                    <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700 border border-amber-200">
-                      Coming soon
-                    </span>
-                  ) : null}
                 </div>
                 <p className="text-xs text-slate-500 leading-snug">{def.description}</p>
               </div>

@@ -6,6 +6,8 @@ tests
 scripts
 !scripts/ensure-build-natives.mjs
 *.md
+!docs/
+!docs/Payment_sheet_Grantflow_2026-06-15_EXTRACT.md
 .env
 .env.*
 !.env.example

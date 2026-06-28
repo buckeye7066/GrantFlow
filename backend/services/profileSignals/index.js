@@ -547,7 +547,7 @@ export async function loadProfileSignals(db, profileId) {
   try {
     intents = deriveIntents(signals);
   } catch (err) {
-    console.error(`[profileSignals] deriveIntents failed for profile ${profileId}:`, err);
+    log.error(`[profileSignals] deriveIntents failed for profile ${profileId}:`, err);
     intents = new Set();
   }
 
@@ -555,7 +555,7 @@ export async function loadProfileSignals(db, profileId) {
   try {
     assistancePrograms = extractAssistancePrograms(sections);
   } catch (err) {
-    console.error(`[profileSignals] extractAssistancePrograms failed for profile ${profileId}:`, err);
+    log.error(`[profileSignals] extractAssistancePrograms failed for profile ${profileId}:`, err);
     assistancePrograms = [];
   }
 
@@ -563,7 +563,7 @@ export async function loadProfileSignals(db, profileId) {
   try {
     rawInputs = buildRawInputs(profile, sections);
   } catch (err) {
-    console.error(`[profileSignals] buildRawInputs failed for profile ${profileId}:`, err);
+    log.error(`[profileSignals] buildRawInputs failed for profile ${profileId}:`, err);
     rawInputs = { profileId, error: err.message };
   }
 
@@ -590,7 +590,7 @@ export function buildSignalsFromContext(profileContext) {
   try {
     intents = deriveIntents(signals);
   } catch (err) {
-    console.error(`[profileSignals] buildSignalsFromContext deriveIntents failed for profile ${profileId}:`, err);
+    log.error(`[profileSignals] buildSignalsFromContext deriveIntents failed for profile ${profileId}:`, err);
     intents = new Set();
   }
 
@@ -598,7 +598,7 @@ export function buildSignalsFromContext(profileContext) {
   try {
     assistancePrograms = extractAssistancePrograms(sections);
   } catch (err) {
-    console.error(`[profileSignals] buildSignalsFromContext extractAssistancePrograms failed for profile ${profileId}:`, err);
+    log.error(`[profileSignals] buildSignalsFromContext extractAssistancePrograms failed for profile ${profileId}:`, err);
     assistancePrograms = [];
   }
 
@@ -606,7 +606,7 @@ export function buildSignalsFromContext(profileContext) {
   try {
     rawInputs = buildRawInputs(profile, sections);
   } catch (err) {
-    console.error(`[profileSignals] buildSignalsFromContext buildRawInputs failed for profile ${profileId}:`, err);
+    log.error(`[profileSignals] buildSignalsFromContext buildRawInputs failed for profile ${profileId}:`, err);
     rawInputs = { profileId, error: err.message };
   }
 

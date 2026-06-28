@@ -145,7 +145,7 @@ export async function runFullCrawl(db, profileId, options = {}) {
       },
     };
   } catch (err) {
-    console.error('[crawlerFramework] runFullCrawl error:', err.message);
+    log.error('[crawlerFramework] runFullCrawl error:', err.message);
     return {
       results: [],
       stats: {
@@ -192,7 +192,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
     _fetchSamGov = module.fetchSamGov;
     if (!_fetchSamGov) throw new Error('fetchSamGov not exported');
   } catch (importErr) {
-    console.error('[crawlerFramework] Failed to load samGov:', importErr.message);
+    log.error('[crawlerFramework] Failed to load samGov:', importErr.message);
     errors.push({ source: 'sam.gov', error: `Module load failed: ${importErr.message}` });
   }
   if (_fetchSamGov) {
@@ -201,7 +201,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
       allOpportunities.push(...opportunities);
       log.info(`[crawlerFramework] SAM.gov: ${opportunities.length} results`);
     } catch (err) {
-      console.error('[crawlerFramework] SAM.gov fetch error:', err.message);
+      log.error('[crawlerFramework] SAM.gov fetch error:', err.message);
       errors.push({ source: 'sam.gov', error: err.message });
     }
   }
@@ -213,7 +213,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
     allOpportunities.push(...opportunities);
     log.info(`[crawlerFramework] USASpending: ${opportunities.length} results`);
   } catch (err) {
-    console.error('[crawlerFramework] USASpending fetch error:', err.message);
+    log.error('[crawlerFramework] USASpending fetch error:', err.message);
     errors.push({ source: 'usaspending.gov', error: err.message });
   }
 
@@ -231,7 +231,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
       `[crawlerFramework] NIH RePORTER: ${results.length} results (text="${text || '<none>'}")`,
     );
   } catch (err) {
-    console.error('[crawlerFramework] NIH RePORTER fetch error:', err.message);
+    log.error('[crawlerFramework] NIH RePORTER fetch error:', err.message);
     errors.push({ source: 'nih.reporter', error: err.message });
   }
 
@@ -243,7 +243,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
       const { ingestOpportunities: _ingest } = await import('./sources/ingestionService.js');
       await _ingest(db, deduplicated, 'federal-crawl');
     } catch (err) {
-      console.error('[crawlerFramework] Ingestion error:', err.message);
+      log.error('[crawlerFramework] Ingestion error:', err.message);
       errors.push({ source: 'ingestion', error: err.message });
     }
   }

@@ -63,61 +63,34 @@ router.get('/local-funding', async (req, res) => {
     const state = lookup?.state || null
 
     const db = req.db
-    const isPostgres = db?.dialect === 'postgres'
+    const activeValue = db?.dialect === 'postgres' ? true : 1
+    const nationalValue = db?.dialect === 'postgres' ? true : 1
     let rows = []
 
     if (state) {
-      if (isPostgres) {
-        rows = await db.prepare(`
-          SELECT title, source_url, application_url, sponsor, source, state
-          FROM funding_opportunities
-          WHERE is_active = ?
-            AND (state = ? OR state = 'nationwide' OR is_national = ?)
-            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT 50
-        `).all(true, state, true);
-      } else {
-        rows = await db.prepare(`
-          SELECT title, source_url, application_url, sponsor, source, state
-          FROM funding_opportunities
-          WHERE is_active = ?
-            AND (state = ? OR state = 'nationwide' OR is_national = ?)
-            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT 50
-        `).all(1, state, 1);
-      }
+      rows = await db.prepare(`
+        SELECT title, source_url, application_url, sponsor, source, state
+        FROM funding_opportunities
+        WHERE is_active = ?
+          AND (state = ? OR state = 'nationwide' OR is_national = ?)
+          AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+          AND ${trustedOriginClause()}
+          AND ${trustedSourceClause()}
+        ORDER BY updated_at DESC
+        LIMIT 50
+      `).all(activeValue, state, nationalValue)
     } else {
-      if (isPostgres) {
-        rows = await db.prepare(`
-          SELECT title, source_url, application_url, sponsor, source, state
-          FROM funding_opportunities
-          WHERE is_active = ?
-            AND (is_national = ? OR state = 'nationwide')
-            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT 50
-        `).all(true, true);
-      } else {
-        rows = await db.prepare(`
-          SELECT title, source_url, application_url, sponsor, source, state
-          FROM funding_opportunities
-          WHERE is_active = ?
-            AND (is_national = ? OR state = 'nationwide')
-            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT 50
-        `).all(1, 1);
-      }
+      rows = await db.prepare(`
+        SELECT title, source_url, application_url, sponsor, source, state
+        FROM funding_opportunities
+        WHERE is_active = ?
+          AND (is_national = ? OR state = 'nationwide')
+          AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+          AND ${trustedOriginClause()}
+          AND ${trustedSourceClause()}
+        ORDER BY updated_at DESC
+        LIMIT 50
+      `).all(activeValue, nationalValue)
     }
 
     const mapped = rows.map((r) => ({

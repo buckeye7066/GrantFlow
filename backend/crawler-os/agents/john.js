@@ -5,7 +5,7 @@
 //
 // Hard doctrine, enforced structurally:
 //   - John NEVER sends. There is no send path in this module — only saveDraft.
-//   - Drafts are authored from the alias GrantFlow@axiombiolabs.org.
+//   - Drafts are authored from the alias Ellie@axiombiolabs.org.
 //   - Every draft includes opt-out language and avoids guarantees/false
 //     personalization; it uses only the evidence Yana captured.
 //   - John respects the suppression list and only drafts from qualified leads
@@ -16,7 +16,7 @@ import {
 } from '../storage.js';
 
 const AGENT_ID = 'john';
-const DEFAULT_ALIAS = 'GrantFlow@axiombiolabs.org';
+const DEFAULT_ALIAS = 'Ellie@axiombiolabs.org';
 
 function composeSubject(lead) {
   const who = lead.profile_type ? titleCase(lead.profile_type) : 'your organization';

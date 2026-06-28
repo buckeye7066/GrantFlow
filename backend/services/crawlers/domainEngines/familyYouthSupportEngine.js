@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:familyYouthSupportEngine')
 
 const ENGINE_ID = 'family_youth_support'
 
@@ -26,7 +28,7 @@ export async function runFamilyYouthSupportEngine(profile, options = {}) {
     })
   } catch (err) {
     // Log suppression reason so the pipeline can diagnose empty results (Goal 8)
-    console.error(`[${ENGINE_ID}] engine error:`, err?.message || err)
+    qualityLog.error(`[${ENGINE_ID}] engine error:`, err?.message || err)
     return []
   }
 }

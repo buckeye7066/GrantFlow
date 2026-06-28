@@ -495,6 +495,39 @@ export async function ensureProfileDiscoveryColumn(db, { logger = console } = {}
 }
 
 /**
+ * profiles.deleted_at column (both dialects).
+ *
+ * Older production databases can predate this column even though fresh schemas
+ * include it. Re-assert it on boot so health checks, crawler scoping, and
+ * profile filters do not fail when migrations were not applied first.
+ */
+export async function ensureProfileSoftDeleteColumn(db, { logger = console } = {}) {
+  return runStep(
+    'profiles.deleted_at',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ')
+        await db.exec('CREATE INDEX IF NOT EXISTS idx_profiles_deleted_at ON profiles(deleted_at)')
+        return
+      }
+
+      let hasColumn = false
+      try {
+        const cols = await db.prepare('PRAGMA table_info(profiles)').all()
+        hasColumn = Array.isArray(cols) && cols.some((c) => c?.name === 'deleted_at')
+      } catch {
+        hasColumn = false
+      }
+      if (!hasColumn) {
+        await db.exec('ALTER TABLE profiles ADD COLUMN deleted_at DATETIME')
+      }
+    },
+  )
+}
+
+/**
  * Ingestion provenance & quality layer tables (both dialects).
  *
  *   opportunity_evidence — per-result evidence snippets (title + matched
@@ -672,6 +705,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
     ['behavior_events', ensureBehaviorEventsTable],
     ['profile_discovery_column', ensureProfileDiscoveryColumn],
+    ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
     ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
     ['profile_portal_status', ensurePortalCompletionStatusTable],

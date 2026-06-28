@@ -110,27 +110,27 @@ export function createSqlStore(db) {
       return row;
     },
     get(table, where) {
-      assertIdent(table, 'table');
-      const { sql, params } = whereClause(where);
-      return db.prepare(`SELECT * FROM ${table}${sql} LIMIT 1`).get(...params) ?? null;
+      const safeTable = assertIdent(table, 'table');
+      const { sql: safeWhereSql, params } = whereClause(where);
+      return db.prepare(`SELECT * FROM ${safeTable}${safeWhereSql} LIMIT 1`).get(...params) ?? null;
     },
     all(table, where) {
-      assertIdent(table, 'table');
-      const { sql, params } = whereClause(where);
-      return db.prepare(`SELECT * FROM ${table}${sql}`).all(...params);
+      const safeTable = assertIdent(table, 'table');
+      const { sql: safeWhereSql, params } = whereClause(where);
+      return db.prepare(`SELECT * FROM ${safeTable}${safeWhereSql}`).all(...params);
     },
     update(table, where, patch) {
-      assertIdent(table, 'table');
+      const safeTable = assertIdent(table, 'table');
       const setCols = assertIdents(Object.keys(patch), 'column');
-      const { sql, params } = whereClause(where);
-      const r = db.prepare(`UPDATE ${table} SET ${setCols.map((c) => `${c}=?`).join(',')}${sql}`)
+      const { sql: safeWhereSql, params } = whereClause(where);
+      const r = db.prepare(`UPDATE ${safeTable} SET ${setCols.map((c) => `${c}=?`).join(',')}${safeWhereSql}`)
         .run(...setCols.map((c) => patch[c]), ...params);
       return r.changes ?? 0;
     },
     remove(table, where) {
-      assertIdent(table, 'table');
-      const { sql, params } = whereClause(where);
-      const r = db.prepare(`DELETE FROM ${table}${sql}`).run(...params);
+      const safeTable = assertIdent(table, 'table');
+      const { sql: safeWhereSql, params } = whereClause(where);
+      const r = db.prepare(`DELETE FROM ${safeTable}${safeWhereSql}`).run(...params);
       return r.changes ?? 0;
     },
   };

@@ -50,7 +50,6 @@ async function pickPort({ start, count = 30 } = {}) {
   if (!Number.isFinite(base) || base <= 0) throw new Error(`Invalid port start: ${start}`)
   for (let i = 0; i < count; i += 1) {
     const port = base + i
-    // eslint-disable-next-line no-await-in-loop
     if (await isPortAvailable(port)) return port
   }
   throw new Error(`No available port found starting at ${start}`)

@@ -626,7 +626,8 @@ router.post('/generate/proposal', enforceTierCapability(TIER_CAPABILITIES.DOCUME
       JOIN organizations o ON g.organization_id = o.id
       LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
       WHERE g.id = ?
-    `).get(grant_id);
+        AND (g.profile_id = ? OR g.profile_id IS NULL)
+    `).get(grant_id, grantAccess.profile_id ?? null);
     
     if (!grant) {
       return res.status(404).json({ error: 'Grant not found' });
@@ -1048,7 +1049,8 @@ router.post('/portal-assist', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_A
       LEFT JOIN organizations o ON g.organization_id = o.id
       LEFT JOIN profiles p ON g.profile_id = p.id
       WHERE g.id = ?
-    `).get(grant_id);
+        AND (g.profile_id = ? OR g.profile_id IS NULL)
+    `).get(grant_id, grantAccess.profile_id ?? null);
 
     if (!grant) return res.status(404).json({ error: 'Grant not found' });
 
@@ -1194,7 +1196,8 @@ router.post('/generate-printable-application', enforceTierCapability(TIER_CAPABI
       LEFT JOIN organizations o ON g.organization_id = o.id
       LEFT JOIN profiles p ON g.profile_id = p.id
       WHERE g.id = ?
-    `).get(grant_id);
+        AND (g.profile_id = ? OR g.profile_id IS NULL)
+    `).get(grant_id, grantAccess.profile_id ?? null);
 
     if (!grant) return res.status(404).json({ error: 'Grant not found' });
 

@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   source TEXT, -- 'grants.gov', 'foundation', 'state', 'federal', etc.
   source_id TEXT, -- external ID from source
   source_url TEXT,
-  record_origin TEXT DEFAULT 'live_crawl' CHECK(record_origin IN ('live_crawl','curated_verified','curated_benefits','curated_program','curated_catalog','scholarship_crawler','school_portal','grants_gov','verified_real','cof_foundation_locator','manual','synthetic','funding_api','url_import','directory_resource','directory:health_resources','directory:student_grants','discovered','geo_crawl','seeded','imported')),
+  record_origin TEXT DEFAULT 'live_crawl' CHECK(record_origin IN ('live_crawl','curated_verified','curated_benefits','curated_program','curated_catalog','scholarship_crawler','school_portal','grants_gov','verified_real','cof_foundation_locator','manual','synthetic','funding_api','clinical_trials','url_import','directory_resource','directory:health_resources','directory:student_grants','discovered','geo_crawl','web_search','seeded','imported')),
   
   description TEXT,
   eligibility_bullets TEXT DEFAULT '[]', -- JSON array
@@ -3783,4 +3783,3 @@ CREATE TABLE IF NOT EXISTS behavior_events (
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_events_profile ON behavior_events(profile_id);
 CREATE INDEX IF NOT EXISTS idx_behavior_events_profile_ts ON behavior_events(profile_id, ts);
-

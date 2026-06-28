@@ -9,6 +9,51 @@
 import { createHash } from 'crypto'
 import { resolveApplicantType } from './profileHelpers.js'
 
+const FALSEY_TEXT_VALUES = new Set([
+  '',
+  '0',
+  'false',
+  'no',
+  'none',
+  'n/a',
+  'na',
+  'not applicable',
+  'not-applicable',
+  'not specified',
+  'unspecified',
+  'unknown',
+  'prefer not to say',
+])
+
+function asBoolNullable(v) {
+  if (v === true) return true
+  if (v === false) return false
+  if (v === 1 || v === '1') return true
+  if (v === 0 || v === '0') return false
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    if (['yes', 'true', 'y', 't', 'on'].includes(s)) return true
+    if (FALSEY_TEXT_VALUES.has(s) || ['n', 'f', 'off'].includes(s)) return false
+  }
+  return null
+}
+
+function hasSpecificTextValue(v) {
+  if (v === null || v === undefined) return false
+  if (typeof v === 'boolean') return v
+  const s = String(v).trim().toLowerCase()
+  return !FALSEY_TEXT_VALUES.has(s)
+}
+
+function hasSpecificAnswerValue(value) {
+  if (value === null || value === undefined || value === false) return false
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string' || typeof value === 'number') return hasSpecificTextValue(value)
+  if (Array.isArray(value)) return value.some((entry) => hasSpecificAnswerValue(entry))
+  if (typeof value === 'object') return Object.values(value).some((entry) => hasSpecificAnswerValue(entry))
+  return false
+}
+
 // ---------------------------------------------------------------------------
 // State name → 2-letter abbreviation. Used to normalize the multi-state
 // `states[]` array (which may carry full names like "Tennessee") so geo
@@ -594,15 +639,16 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
           if (answers[nk]) rawNeeds.push(...safeParseArray(answers[nk]))
         }
       }
+      const sectionHasSpecificAnswers = hasSpecificAnswerValue(answers)
       // Section key itself may be a need category (e.g. "medical", "housing")
-      if (NEED_ALIAS_MAP[sectionKey.toLowerCase()]) {
+      if (sectionHasSpecificAnswers && NEED_ALIAS_MAP[sectionKey.toLowerCase()]) {
         rawNeeds.push(sectionKey)
       }
       // Also handle '_information' suffix keys used in real profile sections
       // e.g. "health_information" → "health" → maps to "health_medical"
       // e.g. "housing_information" → "housing", "education_information" → "education"
       const baseKey = sectionKey.toLowerCase().replace(/_information$/, '')
-      if (baseKey !== sectionKey.toLowerCase() && NEED_ALIAS_MAP[baseKey]) {
+      if (sectionHasSpecificAnswers && baseKey !== sectionKey.toLowerCase() && NEED_ALIAS_MAP[baseKey]) {
         rawNeeds.push(baseKey)
       }
     }
@@ -638,19 +684,19 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     const ma = militarySection.answers ?? militarySection
     if (ma && typeof ma === 'object') {
       isVeteranFromSections =
-        Boolean(ma.is_veteran) ||
-        Boolean(ma.veteran) ||                        // common field name: { veteran: true }
-        Boolean(ma.served_in_military) ||
-        Boolean(ma.military_service) ||
-        Boolean(ma.veteran_status) ||
-        String(ma.branch ?? '').length > 0 ||
-        String(ma.military_branch ?? '').length > 0 || // common field: military_branch: "Army"
-        String(ma.discharge_status ?? '').length > 0
+        asBoolNullable(ma.is_veteran) === true ||
+        asBoolNullable(ma.veteran) === true ||                        // common field name: { veteran: true }
+        asBoolNullable(ma.served_in_military) === true ||
+        asBoolNullable(ma.military_service) === true ||
+        asBoolNullable(ma.veteran_status) === true ||
+        hasSpecificTextValue(ma.branch) ||
+        hasSpecificTextValue(ma.military_branch) || // common field: military_branch: "Army"
+        hasSpecificTextValue(ma.discharge_status)
     }
   }
 
   const isVeteran =
-    Boolean(profile.is_veteran) ||
+    asBoolNullable(profile.is_veteran) === true ||
     entityType === 'veteran' ||
     needCategories.includes('veteran') ||
     String(rawType ?? '').toLowerCase().includes('veteran') ||
@@ -680,7 +726,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   }
 
   const isStudent =
-    Boolean(profile.is_student) ||
+    asBoolNullable(profile.is_student) === true ||
     entityType === 'student' ||
     String(rawType ?? '').toLowerCase().includes('student') ||
     isStudentFromSections
@@ -690,8 +736,8 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   // other community service organizations that operate as nonprofits even if not 501(c)(3).
   const rawTypeLower = String(rawType ?? '').toLowerCase()
   const isNonprofit =
-    Boolean(profile.is_nonprofit) ||
-    Boolean(profile.requires_501c3) ||
+    asBoolNullable(profile.is_nonprofit) === true ||
+    asBoolNullable(profile.requires_501c3) === true ||
     entityType === 'nonprofit' ||
     rawTypeLower.includes('nonprofit') ||
     rawTypeLower.includes('volunteer_fire') ||
@@ -713,17 +759,17 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     const ba = businessSection.answers ?? businessSection
     if (ba && typeof ba === 'object') {
       isBusinessFromSections =
-        Boolean(ba.owns_business) ||
-        Boolean(ba.is_self_employed) ||
-        Boolean(ba.has_business) ||
-        String(ba.business_name ?? '').length > 0 ||
-        String(ba.naics_code ?? '').length > 0 ||    // common business field
-        String(ba.ein ?? '').length > 0
+        asBoolNullable(ba.owns_business) === true ||
+        asBoolNullable(ba.is_self_employed) === true ||
+        asBoolNullable(ba.has_business) === true ||
+        hasSpecificTextValue(ba.business_name) ||
+        hasSpecificTextValue(ba.naics_code) ||    // common business field
+        hasSpecificTextValue(ba.ein)
     }
   }
 
   const isBusiness =
-    Boolean(profile.is_business) ||
+    asBoolNullable(profile.is_business) === true ||
     entityType === 'business' ||
     String(rawType ?? '').toLowerCase().includes('business') ||
     isBusinessFromSections
@@ -1408,25 +1454,14 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   // Every downstream consumer (matchEngine, relevanceFilter, Anya) reads
   // these through the normalized profile.
   // ---------------------------------------------------------------------------
-  const _asBoolNullable = (v) => {
-    if (v === true) return true
-    if (v === false) return false
-    if (v === 1 || v === '1') return true
-    if (v === 0 || v === '0') return false
-    if (typeof v === 'string') {
-      const s = v.trim().toLowerCase()
-      if (['yes', 'true', 'y', 't'].includes(s)) return true
-      if (['no', 'false', 'n', 'f'].includes(s)) return false
-    }
-    return null
-  }
+  const _asBoolNullable = asBoolNullable
   const _parseNumber = (v) => {
     if (v === null || v === undefined || v === '') return null
     const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.+-]/g, ''))
     return Number.isFinite(n) ? n : null
   }
   const _str = (v) =>
-    typeof v === 'string' && v.trim() ? v.trim() : null
+    typeof v === 'string' && hasSpecificTextValue(v) ? v.trim() : null
 
   const _orgDetailsSection =
     profileSections?.organization_details?.answers ??

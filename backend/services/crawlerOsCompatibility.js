@@ -32,7 +32,7 @@ function safeJsonParse(value, fallback) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
-async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
+export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
   if (!db || !profileId) return []
   const activeClause = db?.dialect === 'postgres'
     ? 'AND (fo.is_active IS NULL OR fo.is_active = TRUE)'

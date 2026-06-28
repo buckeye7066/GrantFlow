@@ -25,10 +25,11 @@ router.get('/announcements/pending', async (req, res) => {
     try { profileIds = (await getAccessibleProfileIds(req.db, user)) || [] } catch { profileIds = [] }
     const audienceVals = ['all', ...profileIds.map(String)]
     const audiencePh = audienceVals.map(() => '?').join(', ')
+    const activePredicate = req.db?.dialect === 'postgres' ? 'active IS TRUE' : 'active = 1'
     const rows = await req.db.prepare(
       `SELECT id, title, body, type, created_at
          FROM announcements
-        WHERE active = 1
+        WHERE ${activePredicate}
           AND (starts_at IS NULL OR starts_at <= CURRENT_TIMESTAMP)
           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
           AND audience IN (${audiencePh})

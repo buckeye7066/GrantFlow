@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import { dispatchCrawlerJob } from '../crawlerDispatcher.js'
 import { auditLog } from './audit.js'
+import { createLogger } from '../../utils/logger.js'
+const qualityLog = createLogger('services:nationalPrograms:continuousRunner')
 
 function minutes(ms) {
   return Math.round(ms / 60000)
@@ -105,7 +107,7 @@ export function startNationalProgramsCrawler({
         try {
           db.prepare('UPDATE crawler_jobs SET status = "failed" WHERE id = ?').run(jobId)
         } catch (updateError) {
-          console.error('Failed to update job status:', updateError)
+          qualityLog.error('Failed to update job status:', updateError)
         }
       })
     } catch (error) {

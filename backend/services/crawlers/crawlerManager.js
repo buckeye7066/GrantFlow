@@ -75,7 +75,7 @@ async function ensureCrawlSchema(db) {
     crawlSchemaEnsured = true;
   } catch (err) {
     if (!String(err?.message).includes('already exists')) {
-      console.error('[CrawlerManager] Schema ensure error:', err.message);
+      log.error('[CrawlerManager] Schema ensure error:', err.message);
       throw err; // Re-throw non-duplicate errors
     }
     crawlSchemaEnsured = true;
@@ -703,7 +703,7 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
             result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
           );
         } catch (err) {
-          console.error(`Failed to store result ${result.id}:`, err.message);
+          log.error(`Failed to store result ${result.id}:`, err.message);
           throw err; // abort the transaction → DELETE rolls back, results preserved
         }
       }
@@ -766,14 +766,14 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         });
         fundingUpserted++;
       } catch (e) {
-        console.error(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
+        log.error(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
         // Do not modify fundingUpserted â it counts successes only
       }
     }
     log.info(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);
     return { fundingUpserted };
   } catch (err) {
-    console.error('[CrawlerManager] Error storing results:', err.message);
+    log.error('[CrawlerManager] Error storing results:', err.message);
     throw err;
   }
 }

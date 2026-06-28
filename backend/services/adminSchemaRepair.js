@@ -150,8 +150,8 @@ export async function ensureAdminSchemaRepair(db, { backfill = true } = {}) {
     }
 
     await db.prepare(isPg
-      ? `UPDATE grants SET matched_needs = '["general funding support"]' WHERE profile_id IS NOT NULL AND (matched_needs IS NULL OR matched_needs::text IN ('', '[]', 'null'))`
-      : `UPDATE grants SET matched_needs = '["general funding support"]' WHERE profile_id IS NOT NULL AND (matched_needs IS NULL OR matched_needs = '' OR matched_needs = '[]')`).run()
+      ? `UPDATE grants SET matched_needs = '[]' WHERE profile_id IS NOT NULL AND (matched_needs IS NULL OR matched_needs::text IN ('', 'null'))`
+      : `UPDATE grants SET matched_needs = '[]' WHERE profile_id IS NOT NULL AND (matched_needs IS NULL OR matched_needs = '')`).run()
     await db.prepare(`UPDATE grants SET match_decision = COALESCE(NULLIF(match_decision, ''), 'review') WHERE match_decision IS NULL OR match_decision = ''`).run()
     await db.prepare(isPg
       ? `UPDATE grants SET match_explanation = '{"source":"admin_schema_repair","reason":"Runtime repair backfill"}' WHERE match_explanation IS NULL OR match_explanation::text IN ('', 'null')`

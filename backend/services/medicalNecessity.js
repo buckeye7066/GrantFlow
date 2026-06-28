@@ -45,7 +45,7 @@ export async function extractMedicalProfile(db, profileId) {
   try {
     profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
   } catch (dbErr) {
-    console.error('[medicalNecessity] DB error fetching profile', profileId, dbErr)
+    log.error('[medicalNecessity] DB error fetching profile', profileId, dbErr)
     throw new Error(`Database error fetching profile ${profileId}: ${dbErr.message}`)
   }
   if (!profile) return null
@@ -56,7 +56,7 @@ export async function extractMedicalProfile(db, profileId) {
       'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
     ).all(profileId)
   } catch (dbErr) {
-    console.error('[medicalNecessity] DB error fetching profile sections', profileId, dbErr)
+    log.error('[medicalNecessity] DB error fetching profile sections', profileId, dbErr)
     rows = []
   }
 
@@ -257,7 +257,7 @@ export async function scanPipelineForMedNec(db, profileId) {
       WHERE g.profile_id = ? AND g.status NOT IN ('closed', 'declined', 'archived')
     `).all(profileId)
   } catch (dbErr) {
-    console.error('[medicalNecessity] scanPipelineForMedNec DB error for profile', profileId, dbErr)
+    log.error('[medicalNecessity] scanPipelineForMedNec DB error for profile', profileId, dbErr)
     return []
   }
 
@@ -320,7 +320,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
       console.warn('[medicalNecessity] OpenAI client unavailable (no key or misconfigured)')
     }
   } catch (err) {
-    console.error('[medicalNecessity] OpenAI client creation failed:', err)
+    log.error('[medicalNecessity] OpenAI client creation failed:', err)
     openai = null
   }
 
@@ -356,7 +356,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
       usage: completion.usage || null,
     }
   } catch (err) {
-    console.error('[medicalNecessity] AI generation failed:', err.message)
+    log.error('[medicalNecessity] AI generation failed:', err.message)
     return {
       type: documentType,
       content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),

@@ -3,6 +3,8 @@
  */
 
 import { normalizeAndFilter } from './engineHelper.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:housingCommunityFinanceEngine')
 
 const ENGINE_ID = 'housing_community_finance'
 
@@ -33,7 +35,7 @@ export async function runHousingCommunityFinanceEngine(profile, options = {}) {
         })
     return normalizeAndFilter(filtered, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
   } catch (error) {
-    console.error(`[${ENGINE_ID}] engine error: ${error.message}`)
+    qualityLog.error(`[${ENGINE_ID}] engine error: ${error.message}`)
     return []
   }
 }

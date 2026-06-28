@@ -234,7 +234,13 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 0) {
+  // Normalize the step to a number for numeric step comparisons. The step may
+  // arrive as either a number (0-4) or, in unusual cases, a numeric string.
+  // Coercing here means a step of "0" still matches the welcome step below
+  // instead of falling through to unreachable code.
+  const numericStep = typeof step === "string" ? Number(step) : step
+
+  if (numericStep === 0) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -249,7 +255,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 1) {
+  if (numericStep === 1) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -279,7 +285,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 2) {
+  if (numericStep === 2) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -317,7 +323,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 3) {
+  if (numericStep === 3) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -345,7 +351,7 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
     )
   }
 
-  if (step === 4) {
+  if (numericStep === 4) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
@@ -436,7 +442,7 @@ function resolvePageName(pathname) {
   return null
 }
 
-export default function AnyaChat({ profileId, currentPage: currentPageProp, prefillMessage, onPrefillConsumed }) {
+export default function AnyaChat({ profileId, currentPage: currentPageProp, initialSessionOptions, prefillMessage, onPrefillConsumed }) {
   const user = useAuthStore((state) => state.user)
   const profiles = useAuthStore((state) => state.profiles)
   // Accept every admin shape the auth store normalizes (is_admin snake_case,
@@ -554,6 +560,14 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       const primaryType = PROFILE_TYPE_MAP[obProfileType] || "individual"
 
       let profileId = activeProfile?.id
+      // Guard against a truthy-but-invalid id (e.g. '__admin__' or a malformed
+      // string) being used to construct API endpoints. If we have a value that
+      // does NOT pass the real-id check, fail loudly instead of silently routing
+      // to create — except when it's falsy (no profile yet), which we handle by
+      // creating below.
+      if (profileId && !isRealProfileId(profileId)) {
+        throw new Error('[onboarding] active profile has an invalid (non-routable) id')
+      }
       if (!isRealProfileId(profileId)) {
         // No real profile yet (or admin sentinel) — create one with collected type.
         // The admin sentinel is never a routable id, so we always promote to "create".
@@ -597,9 +611,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         })
       }
 
-      // Persist life situations → relevant sections
+      // Persist life situations → relevant sections.
+      // Use Promise.allSettled so a single failing section update does not abort
+      // the others (avoids leaving the profile in a worse partial state than
+      // necessary) and lets us report exactly which sections failed.
       const patches = situationsToSectionPatches(obSituations)
-      await Promise.all(
+      const results = await Promise.allSettled(
         patches.map((p) =>
           apiFetch(`/api/profiles/${profileId}/sections/${p.section_key}`, {
             method: "PUT",
@@ -607,6 +624,20 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           })
         )
       )
+      const failedPatches = results
+        .map((r, idx) => ({ r, section: patches[idx]?.section_key }))
+        .filter(({ r }) => r.status === "rejected")
+      if (failedPatches.length > 0) {
+        const failedSections = failedPatches.map(({ section }) => section).filter(Boolean)
+        for (const { r, section } of failedPatches) {
+          log.warn(`[onboarding] section patch failed (${section}):`, r.reason?.message ?? r.reason)
+        }
+        // Surface a partial-save error so the user knows exactly what to revisit
+        // and the onboarding flag is NOT set (handled by the throw below).
+        throw new Error(
+          `[onboarding] failed to persist ${failedSections.length} section(s): ${failedSections.join(", ")}`
+        )
+      }
 
       // Write confirmed — now it is honest to mark onboarding complete.
       localStorage.setItem(ONBOARDING_LS_KEY, "1")
@@ -620,12 +651,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       // Persistence failed — surface it and leave onboarding UNmarked so the user
       // can retry rather than being told their profile was saved when it wasn't.
       // This single catch covers profile create/update, state persistence, and
-      // the life-situation Promise.all so any failure is reported to the user.
+      // the life-situation section patches so any failure is reported to the user.
       log.warn("[onboarding] Failed to persist profile data:", err.message)
       toast({
         variant: "destructive",
-        title: "Couldn't save your profile",
-        description: "Something went wrong saving your details. Please try again from your profile page.",
+        title: "Couldn't fully save your profile",
+        description: "Some of your details may not have been saved. Please review and finish from your profile page.",
       })
     }
   }, [profiles, effectiveProfileId, obProfileType, obState, obSituations, user, queryClient, log])
@@ -826,6 +857,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         // (./anyaSession.js).
         const { session: activeSession } = await bootstrapAnyaSession({
           profileId: effectiveProfileId ?? null,
+          title: initialSessionOptions?.title ?? undefined,
+          metadata: initialSessionOptions?.metadata ?? undefined,
           createSession: createAnyaSession,
         })
         if (!isMounted) return
@@ -876,7 +909,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     // → creates another session → `isLoading` stays true → the Admin Tools
     // button stays disabled forever (Anya goals 4, 6, 8). Bootstrap only needs
     // to run when the profile identity or admin-ness changes.
-  }, [effectiveProfileId, isAdmin])
+  }, [effectiveProfileId, isAdmin, initialSessionOptions?.metadata, initialSessionOptions?.title])
 
   useEffect(() => {
     let isMounted = true
@@ -919,7 +952,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
     if (adapter) {
       if (adapter.pageType) ctx.pageType = adapter.pageType
-      // Skip undefined/null adapter fields so they are not injected into context.
+      // Skip nullish values without dropping valid numeric 0.
       if (adapter.completion?.resultCount !== null && adapter.completion?.resultCount !== undefined) ctx.resultCount = adapter.completion.resultCount
       if (adapter.completion?.pipelineCount !== null && adapter.completion?.pipelineCount !== undefined) ctx.pipelineCount = adapter.completion.pipelineCount
       const primary = adapter.primaryEntityId ?? null
@@ -993,8 +1026,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
     { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },
-    { type: "navigate", label: "Run Discover Grants", payload: { path: createPageUrl("DiscoverGrants") } },
-    { type: "navigate", label: "Add a grant to Pipeline", payload: { path: createPageUrl("Pipeline") } },
+    { type: "navigate", label: "Open Discover Grants", payload: { path: createPageUrl("DiscoverGrants") } },
+    { type: "navigate", label: "Open Pipeline", payload: { path: createPageUrl("Pipeline") } },
   ], [])
   const nextStepActions = useMemo(() => {
     if (!copilotEnabled) return []

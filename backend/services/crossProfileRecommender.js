@@ -330,7 +330,7 @@ if (
 ) {
   const profileId = process.argv[2]
   if (!profileId) {
-    console.error('Usage: node crossProfileRecommender.js <profileId>')
+    log.error('Usage: node crossProfileRecommender.js <profileId>')
     process.exit(1)
   }
 
@@ -339,7 +339,7 @@ if (
     const dbModule = await import('../db/database.js')
     db = dbModule.default || dbModule.db
   } catch {
-    console.error('Could not load database. Exiting.')
+    log.error('Could not load database. Exiting.')
     process.exit(1)
   }
 

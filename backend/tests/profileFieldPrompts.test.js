@@ -69,6 +69,17 @@ function createDb() {
       source_category TEXT,
       link_status TEXT DEFAULT 'unknown'
     );
+    CREATE TABLE grants (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT,
+      funding_opportunity_id TEXT,
+      fingerprint TEXT,
+      title TEXT,
+      funder TEXT,
+      deadline TEXT,
+      url TEXT,
+      application_url TEXT
+    );
     CREATE TABLE profile_opportunity_matches (
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,

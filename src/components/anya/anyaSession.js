@@ -16,13 +16,24 @@
  * stored on the server (audit history preserved) — they just never resurface
  * in the freshly opened panel.
  *
- * @param {{ profileId?: string|null, createSession: (args: { profileId?: string }) => Promise<{ id?: string }> }} args
+ * @param {{
+ *   profileId?: string|null,
+ *   title?: string|null,
+ *   metadata?: object|null,
+ *   createSession: (args: { profileId?: string, title?: string, metadata?: object }) => Promise<{ id?: string }>
+ * }} args
  * @returns {Promise<{ session: { id?: string }|null, profileId: string|null }>}
  */
-export async function bootstrapAnyaSession({ profileId, createSession }) {
+export async function bootstrapAnyaSession({ profileId, title, metadata, createSession }) {
   let desiredProfileId = profileId ?? null
+  const buildPayload = (pid) => {
+    const payload = { profileId: pid ?? undefined }
+    if (title) payload.title = title
+    if (metadata && typeof metadata === 'object') payload.metadata = metadata
+    return payload
+  }
   try {
-    const session = await createSession({ profileId: desiredProfileId ?? undefined })
+    const session = await createSession(buildPayload(desiredProfileId))
     return { session: session ?? null, profileId: desiredProfileId }
   } catch (error) {
     const status = error?.status ?? null
@@ -31,7 +42,7 @@ export async function bootstrapAnyaSession({ profileId, createSession }) {
     if (!isProfileMissing) throw error
     // Supplied profile is gone — open a fresh profile-less session instead.
     desiredProfileId = null
-    const session = await createSession({ profileId: undefined })
+    const session = await createSession(buildPayload(undefined))
     return { session: session ?? null, profileId: null }
   }
 }

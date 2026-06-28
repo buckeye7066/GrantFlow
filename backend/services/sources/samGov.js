@@ -140,7 +140,7 @@ export async function fetchSamGov(options = {}) {
     if (is404) {
       log.warn('[sam.gov] Opportunities API returned 404 — the SAM_GOV_API_KEY likely lacks Opportunities-API access; skipping SAM (set/verify the key to enable).')
     } else {
-      console.error('[sam.gov] Error fetching opportunities:', error.message);
+      log.error('[sam.gov] Error fetching opportunities:', error.message);
     }
     return {
       opportunities: [],
@@ -169,7 +169,7 @@ function parseSamGovResponse(data) {
         opportunities.push(normalized);
       }
     } catch (error) {
-      console.error('[sam.gov] Error normalizing record:', error.message, { noticeId: record?.noticeId, solicitationNumber: record?.solicitationNumber });
+      log.error('[sam.gov] Error normalizing record:', error.message, { noticeId: record?.noticeId, solicitationNumber: record?.solicitationNumber });
     }
   }
 

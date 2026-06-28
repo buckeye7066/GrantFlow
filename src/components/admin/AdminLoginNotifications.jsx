@@ -14,20 +14,40 @@ function formatWhen(iso) {
   }
 }
 
+function eventTimeMs(row) {
+  const ms = Date.parse(String(row?.at || ''))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+function mergeNewestById(incoming, previous, limit) {
+  const byId = new Map()
+  const combined = [
+    ...(Array.isArray(incoming) ? incoming : []),
+    ...(Array.isArray(previous) ? previous : []),
+  ]
+  combined.forEach((event) => {
+    if (event?.id && !byId.has(event.id)) byId.set(event.id, event)
+  })
+  return Array.from(byId.values())
+    .sort((a, b) => eventTimeMs(b) - eventTimeMs(a))
+    .slice(0, limit)
+}
+
 export default function AdminLoginNotifications() {
   const { toast } = useToast()
   const [events, setEvents] = useState([])
   const [pageViews, setPageViews] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [degraded, setDegraded] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
 
   const lastSeenMsRef = useRef(0)
   const lastSeenViewsMsRef = useRef(0)
   const seenIdsRef = useRef(new Set())
 
-  const fetchEvents = async ({ isManual } = {}) => {
-    const sinceIso = lastSeenMsRef.current ? new Date(lastSeenMsRef.current).toISOString() : null
+  const fetchEvents = async ({ isManual, resetCursor } = {}) => {
+    const sinceIso = !resetCursor && lastSeenMsRef.current ? new Date(lastSeenMsRef.current).toISOString() : null
     const qs = new URLSearchParams()
     if (sinceIso) qs.set('since', sinceIso)
     qs.set('limit', '50')
@@ -39,29 +59,28 @@ export default function AdminLoginNotifications() {
       setError(null)
       const data = await apiFetch(url)
       const incoming = Array.isArray(data?.events) ? data.events : []
+      setDegraded(data?.degraded ? data?.source_status || { degraded: true } : null)
 
-      if (incoming.length > 0) {
+      if (incoming.length > 0 || resetCursor) {
         // Track max timestamp to advance the cursor.
         const maxMs = incoming.reduce((acc, e) => {
           const ms = Date.parse(e?.at || '')
           return Number.isFinite(ms) ? Math.max(acc, ms) : acc
-        }, lastSeenMsRef.current || 0)
+        }, resetCursor ? 0 : (lastSeenMsRef.current || 0))
         lastSeenMsRef.current = maxMs
 
         // Toast only for unseen ids.
-        const newOnes = incoming.filter((e) => e?.id && !seenIdsRef.current.has(e.id))
+        const newOnes = resetCursor ? [] : incoming.filter((e) => e?.id && !seenIdsRef.current.has(e.id))
         newOnes.forEach((e) => {
           if (e?.id) seenIdsRef.current.add(e.id)
         })
+        if (resetCursor) {
+          seenIdsRef.current = new Set(incoming.map((e) => e?.id).filter(Boolean))
+        }
 
         // Keep latest first, de-dupe by id.
         setEvents((prev) => {
-          const next = [...incoming, ...prev]
-          const byId = new Map()
-          next.forEach((e) => {
-            if (e?.id && !byId.has(e.id)) byId.set(e.id, e)
-          })
-          return Array.from(byId.values()).slice(0, 50)
+          return mergeNewestById(incoming, resetCursor ? [] : prev, 50)
         })
 
         // Notify the admin (toast) for each new login.
@@ -76,14 +95,15 @@ export default function AdminLoginNotifications() {
       }
     } catch (err) {
       setError(err?.message || 'Failed to load login events')
+      setDegraded(null)
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
   }
 
-  const fetchPageViews = async () => {
-    const sinceIso = lastSeenViewsMsRef.current ? new Date(lastSeenViewsMsRef.current).toISOString() : null
+  const fetchPageViews = async ({ resetCursor } = {}) => {
+    const sinceIso = !resetCursor && lastSeenViewsMsRef.current ? new Date(lastSeenViewsMsRef.current).toISOString() : null
     const qs = new URLSearchParams()
     if (sinceIso) qs.set('since', sinceIso)
     qs.set('limit', '100')
@@ -92,21 +112,22 @@ export default function AdminLoginNotifications() {
     try {
       const data = await apiFetch(url)
       const incoming = Array.isArray(data?.page_views) ? data.page_views : []
-      if (incoming.length === 0) return
+      if (incoming.length === 0) {
+        if (resetCursor) {
+          lastSeenViewsMsRef.current = 0
+          setPageViews([])
+        }
+        return
+      }
 
       const maxMs = incoming.reduce((acc, e) => {
         const ms = Date.parse(e?.at || '')
         return Number.isFinite(ms) ? Math.max(acc, ms) : acc
-      }, lastSeenViewsMsRef.current || 0)
+      }, resetCursor ? 0 : (lastSeenViewsMsRef.current || 0))
       lastSeenViewsMsRef.current = maxMs
 
       setPageViews((prev) => {
-        const next = [...incoming, ...prev]
-        const byId = new Map()
-        next.forEach((e) => {
-          if (e?.id && !byId.has(e.id)) byId.set(e.id, e)
-        })
-        return Array.from(byId.values()).slice(0, 200)
+        return mergeNewestById(incoming, resetCursor ? [] : prev, 200)
       })
     } catch (err) {
       // Do not block the login list if page views fail.
@@ -124,8 +145,8 @@ export default function AdminLoginNotifications() {
     return () => clearInterval(id)
   }, [])
 
-  const rows = useMemo(() => (Array.isArray(events) ? events : []), [events])
-  const viewRows = useMemo(() => (Array.isArray(pageViews) ? pageViews : []), [pageViews])
+  const rows = useMemo(() => [...(Array.isArray(events) ? events : [])].sort((a, b) => eventTimeMs(b) - eventTimeMs(a)), [events])
+  const viewRows = useMemo(() => [...(Array.isArray(pageViews) ? pageViews : [])].sort((a, b) => eventTimeMs(b) - eventTimeMs(a)), [pageViews])
 
   return (
     <div className="space-y-6">
@@ -138,7 +159,7 @@ export default function AdminLoginNotifications() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchEvents({ isManual: true })}
+            onClick={() => fetchEvents({ isManual: true, resetCursor: true })}
             disabled={refreshing}
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -146,6 +167,11 @@ export default function AdminLoginNotifications() {
           </Button>
         </CardHeader>
         <CardContent>
+          {degraded ? (
+            <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Login audit data is degraded. Durable source status is not fully healthy.
+            </div>
+          ) : null}
           {loading ? (
             <div className="text-sm text-slate-600">Loading…</div>
           ) : error ? (
@@ -195,7 +221,7 @@ export default function AdminLoginNotifications() {
           <CardTitle className="flex items-center gap-2 text-slate-900">
             Page views (recent)
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={() => fetchPageViews()} disabled={refreshing}>
+          <Button variant="outline" size="sm" onClick={() => fetchPageViews({ resetCursor: true })} disabled={refreshing}>
             <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -242,4 +268,3 @@ export default function AdminLoginNotifications() {
     </div>
   )
 }
-

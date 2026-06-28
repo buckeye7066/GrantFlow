@@ -12,6 +12,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useSavedGrantsStore } from '@/stores/savedGrantsStore';
 import FundingResultCard from '@/components/funding/FundingResultCard';
 import { toCanonicalResult } from '@/components/funding/toCanonicalResult';
+import { dedupeFundingResults } from '@/utils/fundingDedupe';
 
 const SOURCE_LABELS = {
   local_funding: 'Local funding',
@@ -76,6 +77,31 @@ function getResultKindBadge(opp) {
   return RESULT_KIND_BADGE[kind] || null;
 }
 
+function getPipelineAddBlockReason(opp) {
+  if (!opp || typeof opp !== 'object') return 'Missing opportunity data.';
+  const decision = String(opp.match_decision || opp.matchDecision || '').toLowerCase();
+  if (decision === 'reject') return 'This source did not pass the profile match gate.';
+  if (opp.link_status === 'broken') return 'The application link is marked broken.';
+
+  const kind = String(opp.result_kind || opp.opportunity_kind || opp.kind || opp.type || '').toLowerCase();
+  const provenance = String(opp.record_origin || opp.source || '').toLowerCase();
+  if (
+    kind.includes('directory') ||
+    kind.includes('referral') ||
+    kind === 'past_award_intel' ||
+    provenance.startsWith('directory')
+  ) {
+    return 'This is a referral or search source, not a direct pipeline opportunity.';
+  }
+
+  if (!(opp.application_url || opp.apply_url)) {
+    return opp.source_url || opp.url
+      ? 'Only a source link is available. Visit the source and verify the application link before adding this to the pipeline.'
+      : 'No application link is available yet.';
+  }
+  return null;
+}
+
 /**
  * Returns housing usability info for an opportunity.
  * Checks: usable_for_housing flag, refund_potential flag, and funding_category.
@@ -131,7 +157,7 @@ function getOpportunityKey(opp, idx) {
   return `${String(raw)}|${idx}`;
 }
 
-export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName }) => {
+export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName, disabledReason = null }) => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [lastStatus, setLastStatus] = React.useState(null);
@@ -161,6 +187,15 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
         return;
       }
 
+      if (['filtered', 'rejected', 'ineligible', 'skipped'].includes(status)) {
+        toast({
+          title: 'Kept out of this pipeline',
+          description: result?.message || result?.reason || `"${opp?.title || opportunity?.title || 'This item'}" did not pass the profile match gates.`,
+          duration: 4500,
+        });
+        return;
+      }
+
       if (status === 'added') {
         toast({
           title: 'Added to pipeline',
@@ -182,6 +217,25 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
   });
 
   const handleClick = () => mutation.mutate(opportunity);
+
+  if (disabledReason) {
+    return (
+      <TooltipProvider delayDuration={200}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="block">
+              <Button variant="outline" className="w-full bg-slate-50 text-slate-600 border-slate-200" disabled>
+                <Info className="w-4 h-4 mr-2" /> Review source only
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs">
+            <p>{disabledReason}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
 
   if (mutation.isPending) {
     return (
@@ -208,6 +262,14 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
     );
   }
 
+  if (['filtered', 'rejected', 'ineligible', 'skipped'].includes(lastStatus)) {
+    return (
+      <Button variant="outline" className="w-full bg-amber-50 text-amber-800 border-amber-200" disabled>
+        <Check className="w-4 h-4 mr-2" /> Kept out
+      </Button>
+    );
+  }
+
   return (
     <Button onClick={handleClick} className="w-full">
       <Plus className="w-4 h-4 mr-2" />
@@ -225,15 +287,17 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const { toast } = useToast();
   const { savedIds, toggleGrant, isSaved } = useSavedGrantsStore();
 
+  const uniqueResults = React.useMemo(() => dedupeFundingResults(results), [results]);
+
   // Apply housing filter
   const displayResults = React.useMemo(() => {
-    if (!filterHousingOnly) return results;
-    return results.filter((opp) => Boolean(getHousingInfo(opp)));
-  }, [results, filterHousingOnly]);
+    if (!filterHousingOnly) return uniqueResults;
+    return uniqueResults.filter((opp) => Boolean(getHousingInfo(opp)));
+  }, [uniqueResults, filterHousingOnly]);
 
   const housingUsableCount = React.useMemo(
-    () => results.filter((opp) => Boolean(getHousingInfo(opp))).length,
-    [results]
+    () => uniqueResults.filter((opp) => Boolean(getHousingInfo(opp))).length,
+    [uniqueResults]
   );
 
   // Keys that correspond to the currently displayed results. When the housing
@@ -243,13 +307,20 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     () => displayResults.map((opp, idx) => getOpportunityKey(opp, idx)),
     [displayResults]
   );
+  const addableDisplayKeys = React.useMemo(
+    () => displayResults
+      .map((opp, idx) => ({ key: getOpportunityKey(opp, idx), blocked: Boolean(getPipelineAddBlockReason(opp)) }))
+      .filter((item) => !item.blocked)
+      .map((item) => item.key),
+    [displayResults]
+  );
 
   // Reconcile selection whenever the displayed set changes (e.g. filter toggle).
   // Drop any selected keys that no longer correspond to a displayed result.
   React.useEffect(() => {
     setSelectedOpportunities((prev) => {
       if (prev.size === 0) return prev;
-      const validKeys = new Set(displayKeys);
+      const validKeys = new Set(addableDisplayKeys);
       let changed = false;
       const next = new Set();
       prev.forEach((k) => {
@@ -258,36 +329,36 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
       });
       return changed ? next : prev;
     });
-  }, [displayKeys]);
+  }, [addableDisplayKeys]);
 
   /** Distinct crawler / catalog pipeline keys (often one per run, e.g. "national" or a directory name). */
   const uniqueSources = React.useMemo(() => {
-    if (!results || results.length === 0) return [];
+    if (!uniqueResults || uniqueResults.length === 0) return [];
     const set = new Set();
-    results.forEach((opp) => {
+    uniqueResults.forEach((opp) => {
       const s = opp.source || opp.crawler_type || 'catalog';
       if (s) set.add(s);
     });
     return Array.from(set);
-  }, [results]);
+  }, [uniqueResults]);
 
   /** Distinct funders / program owners — better reflects "how many different programs" users expect. */
   const distinctFunders = React.useMemo(() => {
-    if (!results || results.length === 0) return [];
+    if (!uniqueResults || uniqueResults.length === 0) return [];
     const set = new Set();
-    results.forEach((opp) => {
+    uniqueResults.forEach((opp) => {
       const sp = (opp.sponsor || opp.funder || '').trim();
       if (sp) set.add(sp);
     });
     return Array.from(set);
-  }, [results]);
+  }, [uniqueResults]);
 
   /** Badges: show per-funder labels when one pipeline returned many programs; otherwise pipeline keys. */
   const summaryBadges = React.useMemo(() => {
-    if (!results?.length) return [];
+    if (!uniqueResults?.length) return [];
     if (uniqueSources.length === 1 && distinctFunders.length > 1) return distinctFunders;
     return uniqueSources;
-  }, [results?.length, uniqueSources, distinctFunders]);
+  }, [uniqueResults?.length, uniqueSources, distinctFunders]);
 
   const handleToggleSelection = (opportunityKey) => {
     setSelectedOpportunities(prev => {
@@ -302,18 +373,19 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   };
 
   const handleSelectAll = () => {
-    if (selectedOpportunities.size === displayResults.length && displayResults.length > 0) {
+    if (selectedOpportunities.size === addableDisplayKeys.length && addableDisplayKeys.length > 0) {
       setSelectedOpportunities(new Set());
     } else {
-      const allKeys = displayResults.map((opp, idx) => getOpportunityKey(opp, idx));
-      setSelectedOpportunities(new Set(allKeys));
+      setSelectedOpportunities(new Set(addableDisplayKeys));
     }
   };
 
   const handleBulkAdd = async () => {
     // Use displayResults so the index used to compute keys matches the index
     // used when keys were created (handleSelectAll / render iterate displayResults).
-    const selectedOpps = displayResults.filter((opp, idx) => selectedOpportunities.has(getOpportunityKey(opp, idx)));
+    const selectedOpps = displayResults.filter((opp, idx) =>
+      selectedOpportunities.has(getOpportunityKey(opp, idx)) && !getPipelineAddBlockReason(opp)
+    );
     
     if (selectedOpps.length === 0) return;
 
@@ -384,7 +456,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     });
   };
 
-  if (!results || results.length === 0) {
+  if (!uniqueResults || uniqueResults.length === 0) {
     // Zero-result is a diagnosable state, never a dead end (mission Goals 8/9).
     // When the staged-ladder diagnostics are available, explain what was
     // searched/expanded and which profile fields to fill in next.
@@ -448,10 +520,10 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     (acc, key) => (selectedOpportunities.has(key) ? acc + 1 : acc),
     0
   );
-  const allSelected = displayResults.length > 0 && selectedDisplayCount === displayResults.length;
+  const allSelected = addableDisplayKeys.length > 0 && selectedDisplayCount === addableDisplayKeys.length;
 
   return (
-    <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
+    <div data-component="SearchResults" data-results-count={uniqueResults.length} data-selected-count={selectedOpportunities.size}>
       {/* Search pipeline vs program diversity: `source` is often identical per run; sponsors differ per card. */}
       {uniqueSources.length > 0 && (
         <div className="mb-4 flex flex-col gap-1.5 text-sm text-muted-foreground">
@@ -481,7 +553,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
               <Badge variant="outline">+{summaryBadges.length - 8} more</Badge>
             )}
           </div>
-          {uniqueSources.length === 1 && results.length > 1 && (
+          {uniqueSources.length === 1 && uniqueResults.length > 1 && (
             <p className="text-xs text-slate-500 pl-6 max-w-3xl">
               The number above is the data pipeline (how results were gathered). Each card is still a separate opportunity
               {distinctFunders.length > 1 ? ', often from different funders or portals.' : '.'}
@@ -526,7 +598,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
             Show funding usable for housing only
           </label>
           <span className="text-xs text-teal-700 ml-auto">
-            {housingUsableCount} of {results.length} result{results.length !== 1 ? 's' : ''} can help with off-campus living
+            {housingUsableCount} of {uniqueResults.length} result{uniqueResults.length !== 1 ? 's' : ''} can help with off-campus living
           </span>
           <TooltipProvider delayDuration={200}>
             <Tooltip>
@@ -556,11 +628,12 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 checked={allSelected}
                 onCheckedChange={handleSelectAll}
                 id="select-all"
+                disabled={addableDisplayKeys.length === 0}
               />
               <label htmlFor="select-all" className="font-medium cursor-pointer">
                 {selectedDisplayCount > 0 
                   ? `${selectedDisplayCount} selected`
-                  : 'Select all'
+                  : addableDisplayKeys.length > 0 ? 'Select all pipeline-ready' : 'No pipeline-ready items'
                 }
               </label>
             </div>
@@ -583,6 +656,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
           const oppKey = getOpportunityKey(opp, idx);
           const isSelected = selectedOpportunities.has(oppKey);
           const savedId = opp.id ?? opp.source_id;
+          const pipelineBlockReason = getPipelineAddBlockReason(opp);
           
           return (
             <div 
@@ -596,12 +670,14 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   checked={isSelected}
                   onCheckedChange={() => handleToggleSelection(oppKey)}
                   id={`select-${oppKey}`}
+                  disabled={Boolean(pipelineBlockReason)}
                 />
                 <label
                   htmlFor={`select-${oppKey}`}
-                  className="text-sm font-medium cursor-pointer flex-1 min-w-0"
+                  className={`text-sm font-medium flex-1 min-w-0 ${pipelineBlockReason ? 'cursor-not-allowed text-slate-500' : 'cursor-pointer'}`}
+                  title={pipelineBlockReason || undefined}
                 >
-                  Select
+                  {pipelineBlockReason ? 'Source only' : 'Select'}
                 </label>
                 {/* Save / star bookmark */}
                 {savedId !== null && savedId !== undefined && (
@@ -641,7 +717,12 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                     {formatSourceLabel(opp.source || opp.crawler_type)}
                   </Badge>
                 )}
-                {!opp.application_url && (
+                {!(opp.application_url || opp.apply_url) && (opp.source_url || opp.url) && (
+                  <Badge variant="outline" className="text-xs shrink-0 border-amber-300 text-amber-700 bg-amber-50">
+                    Source only
+                  </Badge>
+                )}
+                {!(opp.application_url || opp.apply_url || opp.url || opp.source_url) && (
                   <Badge variant="outline" className="text-xs shrink-0 border-amber-300 text-amber-700 bg-amber-50">
                     No apply link
                   </Badge>
@@ -710,6 +791,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   opportunity={opp} 
                   onAddToPipeline={onAddToPipeline}
                   organizationName={organizationName}
+                  disabledReason={pipelineBlockReason}
                 />
               </div>
             </div>

@@ -85,6 +85,30 @@ const profileContext = {
   sections: null,
 }
 
+const emsProfileContext = {
+  profile: {
+    id: 'p1',
+    primary_type: 'individual',
+    state: 'TN',
+    needs: JSON.stringify(['professional_development', 'employment']),
+  },
+  sections: {
+    employment: { occupation: 'EMT', notes: 'Paramedic training and EMS continuing education' },
+  },
+}
+
+const farmBusinessProfileContext = {
+  profile: {
+    id: 'p1',
+    primary_type: 'small_business',
+    state: 'TN',
+    needs: JSON.stringify(['business', 'startup', 'agriculture', 'equipment']),
+  },
+  sections: {
+    small_business_details: { business_name: 'Test Farm LLC', industry: 'Agriculture', years_in_business: 1 },
+  },
+}
+
 function countGrants(db) {
   return Number(db.prepare('SELECT COUNT(*) AS n FROM grants').get().n)
 }
@@ -147,6 +171,62 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
     expect(second.saved).toBe(false)
     expect(second.gate).toBe('DUPLICATE')
     expect(countGrants(db)).toBe(1)
+  })
+
+  it('dedups conservative acronym-family crawler variants before they repeat in the pipeline', async () => {
+    const umbrella = {
+      id: 'web-naemt-1',
+      title: 'NAEMT Educational Scholarships',
+      sponsor: 'National Association of Emergency Medical Technicians',
+      description: 'Individual active NAEMT members pursuing EMT-Basic, EMT-Paramedic, or continuing EMS education.',
+      url: 'https://www.naemt.org/initiatives/naemt-foundation/scholarships',
+      source: 'web_search',
+      record_origin: 'web_search',
+    }
+    const first = await saveToProfilePipeline(db, umbrella, 'p1', emsProfileContext, 90, 55)
+    expect(first.saved).toBe(true)
+    expect(countGrants(db)).toBe(1)
+
+    const variant = {
+      id: 'web-naemt-2',
+      title: 'NAEMT EMT-Paramedic Scholarship',
+      sponsor: 'National Association of Emergency Medical Technicians',
+      description: 'Active NAEMT members pursuing EMT-Paramedic education.',
+      url: 'https://www.naemt.org/initiatives/naemt-foundation/scholarships',
+      source: 'web_search',
+      record_origin: 'web_search',
+    }
+    const second = await saveToProfilePipeline(db, variant, 'p1', emsProfileContext, 90, 55)
+
+    expect(second.saved).toBe(false)
+    expect(second.gate).toBe('DUPLICATE')
+    expect(countGrants(db)).toBe(1)
+  })
+
+  it('does not dedup distinct same-funder acronym programs', async () => {
+    const valueAdded = {
+      id: 'usda-1',
+      title: 'USDA Value Added Producer Grant',
+      sponsor: 'USDA Rural Development',
+      description: 'Planning and working capital grants for value-added agricultural products.',
+      url: 'https://www.rd.usda.gov/programs-services/business-programs/value-added-producer-grants',
+      source: 'grants_gov',
+    }
+    const first = await saveToProfilePipeline(db, valueAdded, 'p1', farmBusinessProfileContext, 90, 55)
+    expect(first.saved).toBe(true)
+    expect(countGrants(db)).toBe(1)
+
+    const reap = {
+      id: 'usda-2',
+      title: 'USDA REAP Grant',
+      sponsor: 'USDA Rural Development',
+      description: 'Renewable energy and energy efficiency assistance for rural businesses and producers.',
+      url: 'https://www.rd.usda.gov/programs-services/energy-programs/rural-energy-america-program-renewable-energy-systems-energy-efficiency-improvement-guaranteed-loans',
+      source: 'grants_gov',
+    }
+    const second = await saveToProfilePipeline(db, reap, 'p1', farmBusinessProfileContext, 90, 55)
+    expect(second.saved).toBe(true)
+    expect(countGrants(db)).toBe(2)
   })
 })
 

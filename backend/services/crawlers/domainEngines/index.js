@@ -10,6 +10,8 @@ import { runHousingCommunityFinanceEngine } from './housingCommunityFinanceEngin
 import { runWorkforceUnionEngine } from './workforceUnionEngine.js'
 import { runFamilyYouthSupportEngine } from './familyYouthSupportEngine.js'
 import { runGeoDesignationEngine } from './geoDesignationEngine.js'
+import { createLogger } from '../../../utils/logger.js'
+const qualityLog = createLogger('services:crawlers:domainEngines:index')
 
 export const DOMAIN_ENGINES = [
   { id: 'tax_incentive', label: 'Tax Credits and Incentives', run: runTaxIncentiveEngine },
@@ -24,7 +26,7 @@ export const DOMAIN_ENGINES = [
 
 export async function runAllDomainEngines(profile, options = {}) {
   if (!profile || typeof profile !== 'object') {
-    console.error('[domainEngines] runAllDomainEngines called without a valid profile â aborting crawl')
+    qualityLog.error('[domainEngines] runAllDomainEngines called without a valid profile â aborting crawl')
     return []
   }
   const results = []
@@ -39,7 +41,7 @@ export async function runAllDomainEngines(profile, options = {}) {
         results.push({ ...o, crawler_type: id, source: id })
       }
     } catch (err) {
-      console.error(`[domainEngines] Engine "${id}" failed:`, err?.message ?? err)
+      qualityLog.error(`[domainEngines] Engine "${id}" failed:`, err?.message ?? err)
     }
   }
   return results

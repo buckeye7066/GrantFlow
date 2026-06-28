@@ -122,6 +122,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
       await runDiscovery(db, profile.id, {
         uploadDir: options.uploadDir,
         getOpenAI: options.getOpenAI,
+        fetcher: options.fetcher,
         requestedBy: 'scheduled-auto-discovery',
         profileDigest: decision.digest,
         trigger: 'scheduled_daily',
@@ -208,7 +209,7 @@ export async function checkScheduledAutoDiscovery(db, options = {}) {
     )
     return result
   } catch (err) {
-    console.error('[scheduled-auto-discovery] Batch failed:', err?.message || err)
+    log.error('[scheduled-auto-discovery] Batch failed:', err?.message || err)
     throw err
   }
 }

@@ -1,7 +1,12 @@
 import express from 'express'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
-import { runCrawler, triggerAutoDiscoveryCrawlers, stampLastDiscoveryAt } from '../services/crawlerOsCompatibility.js'
+import {
+  runCrawler,
+  triggerAutoDiscoveryCrawlers,
+  stampLastDiscoveryAt,
+  loadCrawlerOsProfileResults,
+} from '../services/crawlerOsCompatibility.js'
 import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
@@ -39,6 +44,25 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
 
 const router = express.Router()
+
+async function runProfileCrawlerOs(db, profileId, options = {}) {
+  const floor = Number.isFinite(Number(options?.minScore)) ? Number(options.minScore) : undefined
+  const maxResults = Number(options?.maxResults) || 200
+  const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: String(profileId), floor })
+  const results = await loadCrawlerOsProfileResults(db, profileId, maxResults)
+  return {
+    engine: 'crawler-os',
+    crawler_type: options?.crawlerType || 'crawler-os',
+    inserted: persisted?.opportunities ?? run?.stored ?? results.length,
+    evaluated: persisted?.matches ?? results.length,
+    total: results.length,
+    results,
+    sources: run?.sources ?? [],
+    rejected: run?.rejected ?? 0,
+    pipelinePruned: persisted?.pipelinePruned ?? 0,
+    hamiltonCleaned: persisted?.hamiltonCleaned ?? 0,
+  }
+}
 
 // Upload dir + OpenAI factory mirror backend/routes/crawlers.js so the
 // on-demand discover-all dispatch can pass the same context the login/daily
@@ -774,7 +798,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
     const expandedNeed = expandNeed(need_text)
 
     // 1. Run curated crawler pipeline
-    const result = await runCrawler(db, profile_id, {
+    const result = await runProfileCrawlerOs(db, profile_id, {
       minScore: 1,
       maxResults: 200,
       crawlerType: 'comprehensive',
@@ -823,6 +847,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
 
     res.json({
       success: true,
+      engine: 'crawler-os',
       need_text,
       expanded: {
         canonicalNeed: expandedNeed?.canonicalNeed || null,
@@ -994,7 +1019,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   let sourcesUsed = ['crawler-os']
   try {
     routeLogger.info(`[run-smart] profile=${profile_id} engine=crawler-os dispatchProfDev=${dispatchProfDev} (licensed=${profileIsLicensedProfessional}, profDevNeed=${profileHasProfDevNeed}, intent=${intentSignalsProfDev})`)
-    const result = await runCrawler(db, profile_id, {
+    const result = await runProfileCrawlerOs(db, profile_id, {
       minScore,
       maxResults: 200,
       crawlerType: 'crawler-os',
@@ -1104,6 +1129,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
 
     return res.json({
       success: true,
+      engine: 'crawler-os',
       count: decoratedSmart.length,
       total_found: allOpportunities.length,
       min_match_score: minScore,

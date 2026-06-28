@@ -11,14 +11,16 @@
 
 const APPLICANT_TYPE_SYNONYMS = {
   individual: ['individual', 'person', 'resident'],
-  family: ['family', 'household', 'parent', 'parents', 'caregiver'],
+  family: ['family', 'household', 'parent', 'parents', 'caregiver', 'widow', 'widower', 'surviving spouse'],
   student: ['student', 'scholar', 'undergraduate', 'graduate', 'pupil'],
+  teacher: ['teacher', 'educator', 'classroom teacher'],
   nonprofit: ['nonprofit', 'non-profit', '501c3', '501(c)(3)', 'charity', 'ngo'],
   church: ['church', 'congregation', 'parish'],
-  ministry: ['ministry', 'faith-based', 'religious'],
+  ministry: ['ministry', 'minister', 'pastor', 'clergy', 'faith-based', 'religious'],
   school: ['school', 'district', 'k-12', 'education', 'university', 'college'],
   vfd: ['volunteer fire', 'fire department', 'vfd', 'first responder', 'ems'],
-  business: ['business', 'company', 'llc', 'startup', 'small business', 'employer'],
+  law_enforcement: ['law enforcement', 'police', 'sheriff', 'border patrol', 'public safety'],
+  business: ['business', 'company', 'llc', 'startup', 'small business', 'employer', 'entrepreneur', 'food truck', 'restaurant', 'food service'],
   // NOTE: applicant-type synonyms must be IDENTITY words, not theme words.
   // 'rural'/'community'/'city'/'county' are themes that appear in almost any
   // mission statement — a rural church is not a "farm" applicant and a community
@@ -26,23 +28,83 @@ const APPLICANT_TYPE_SYNONYMS = {
   // grants into every org's results, so they are excluded here (they remain
   // useful as NEED/geo signals elsewhere).
   farm: ['farm', 'farmer', 'agriculture', 'ranch'],
-  government: ['government', 'municipal', 'tribal', 'municipality'],
-  veteran: ['veteran', 'military', 'service member'],
+  government: ['government', 'municipal', 'municipality', 'county', 'parks department', 'federal agency'],
+  tribal: ['tribal', 'tribe', 'indian tribe', 'native nation', 'reservation'],
+  candidate: ['candidate', 'politician', 'campaign', 'local election'],
+  veteran: ['veteran', 'former service member', 'prior service', 'ex military'],
+  active_duty: ['active duty', 'currently serving', 'service member', 'servicemember', 'military member'],
+  guard_reserve: ['national guard', 'reserve', 'reservist', 'guard member'],
+  transitioning_service_member: ['transitioning service member', 'separating service member', 'retiring service member', 'transitioning out', 'ets'],
+  military_spouse: ['military spouse', 'service member spouse', 'spouse of service member'],
 };
 
 const NEED_KEYWORDS = {
   housing: ['housing', 'rent', 'mortgage', 'homeless', 'shelter', 'utilities'],
-  food: ['food', 'nutrition', 'meals', 'snap', 'pantry'],
-  medical: ['medical', 'health', 'disability', 'treatment', 'prescription', 'mental health'],
-  education: ['education', 'tuition', 'scholarship', 'school', 'books', 'training'],
-  emergency: ['emergency', 'disaster', 'fire', 'flood', 'crisis', 'relief'],
+  food: ['food assistance', 'food support', 'groceries', 'nutrition', 'meals', 'snap', 'pantry'],
+  childcare: ['childcare', 'child care', 'daycare', 'day care', 'early childhood', 'after school care', 'dependent care'],
+  transportation: ['transportation', 'transit', 'bus pass', 'bus passes', 'gas card', 'gas cards', 'rideshare', 'vehicle repair', 'medical transportation'],
+  medical: ['medical', 'health', 'healthcare', 'health care', 'treatment', 'prescription', 'copay', 'co-pay'],
+  disability: ['disability', 'disabled', 'special needs', 'accessibility', 'accommodation', 'assistive technology', 'adaptive equipment'],
+  medical_bills: ['medical bill', 'medical bills', 'hospital bill', 'hospital bills', 'copay', 'co-pay', 'medical debt', 'patient assistance'],
+  medication: ['medication', 'medicine', 'prescription', 'prescriptions', 'rx', 'pharmacy', 'drug assistance'],
+  mental_health: ['mental health', 'behavioral health', 'counseling', 'therapy', 'psychiatric', 'suicide prevention', 'trauma support'],
+  substance_recovery: ['substance recovery', 'substance use', 'addiction', 'opioid', 'sud', 'recovery program', 'treatment center'],
+  education: ['education', 'tuition', 'scholarship', 'school', 'books', 'training', 'classroom', 'teacher supplies', 'student aid'],
+  scholarship: ['scholarship', 'scholarships', 'award aid', 'merit aid', 'need based aid', 'need-based aid'],
+  fafsa: ['fafsa', 'federal student aid', 'student aid application'],
+  pell: ['pell', 'pell grant', 'federal pell'],
+  fellowship: ['fellowship', 'fellowships', 'graduate award', 'research fellowship'],
+  research_funding: ['research funding', 'research grant', 'dissertation grant', 'graduate research', 'research assistantship'],
+  stipend: ['stipend', 'living stipend', 'monthly stipend'],
+  tuition: ['tuition', 'fees', 'cost of attendance', 'coa', 'room and board'],
+  textbooks: ['textbooks', 'textbook', 'books', 'course materials', 'school supplies'],
+  college_prep: ['college prep', 'college preparation', 'sat prep', 'act prep', 'college application'],
+  first_gen: ['first gen', 'first-gen', 'first generation', 'first-generation'],
+  curriculum: ['curriculum', 'lesson plan', 'lesson plans', 'homeschool materials', 'instructional materials'],
+  classroom_supplies: ['classroom supplies', 'teacher supplies', 'school supplies', 'student materials', 'instructional supplies'],
+  stem_classroom: ['stem classroom', 'science classroom', 'math classroom', 'robotics', 'coding class', 'lab equipment'],
+  arts_education: ['arts education', 'music education', 'visual arts', 'theater education', 'arts classroom'],
+  professional_development: ['professional development', 'teacher training', 'educator training', 'certification training'],
+  special_education: ['special education', 'idea', 'iep', 'special needs classroom', 'disability services'],
+  school_nutrition: ['school nutrition', 'school meals', 'cafeteria', 'food service equipment', 'breakfast program', 'lunch program'],
+  school_transportation: ['school transportation', 'school bus', 'bus fleet', 'student transportation', 'clean school bus'],
+  library_media: ['library', 'library media', 'media center', 'school library', 'public library', 'museum'],
+  emergency: ['emergency', 'disaster', 'fire', 'flood', 'crisis', 'relief', 'hazard mitigation', 'emergency management'],
   equipment: ['equipment', 'apparatus', 'gear', 'vehicle', 'truck', 'tools'],
-  operations: ['operations', 'operating', 'general support', 'capacity', 'payroll'],
+  operations: ['operations', 'operating', 'general support', 'payroll'],
+  capacity_building: ['capacity', 'capacity building', 'organizational capacity', 'staffing', 'strategic planning'],
   capital: ['capital', 'building', 'construction', 'renovation', 'facility'],
   programs: ['program', 'programming', 'services', 'outreach', 'project'],
   technology: ['technology', 'computers', 'software', 'internet', 'broadband'],
-  veterans: ['veteran', 'military', 'va benefits'],
-  energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar'],
+  community_facilities: ['community facility', 'community facilities', 'essential community facility', 'public facility'],
+  infrastructure: ['infrastructure', 'public works', 'bridge', 'water system', 'sewer system', 'utility system'],
+  roads_transportation: ['road project', 'road repair', 'roadway', 'bridge', 'bridges', 'transportation grant', 'safe streets', 'sidewalk', 'trail'],
+  water_sewer: ['water system', 'water infrastructure', 'sewer', 'wastewater', 'drinking water', 'stormwater', 'clean water'],
+  environmental_remediation: ['environmental remediation', 'brownfield', 'brownfields', 'cleanup', 'pollution', 'environmental justice'],
+  housing_development: ['housing development', 'affordable housing', 'public housing', 'housing authority', 'rental development'],
+  economic_development: ['economic development', 'business district', 'workforce development', 'job creation', 'downtown revitalization'],
+  broadband: ['broadband', 'internet access', 'fiber', 'digital equity', 'connectivity'],
+  veterans: ['veteran', 'va benefits'],
+  active_duty_support: ['active duty', 'currently serving', 'servicemember', 'service member support', 'military onesource'],
+  military_transition: ['transition assistance', 'tap', 'transitioning service member', 'separating from service', 'separation from service', 'retiring from service', 'ets'],
+  military_spouse_support: ['military spouse', 'spouse education', 'spouse career', 'mycaa'],
+  employment: ['employment', 'job', 'jobs', 'career', 'workforce', 'work study', 'work-study', 'campus job'],
+  workforce: ['workforce', 'job training', 'career training', 'apprenticeship', 'reentry employment', 'work readiness'],
+  energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar', 'utility', 'utilities', 'electric bill', 'gas bill'],
+  agriculture: ['agriculture', 'farm', 'farmer', 'ranch', 'livestock', 'crop', 'usda'],
+  public_safety: ['public safety', 'law enforcement', 'police', 'sheriff', 'border patrol', 'security'],
+  recreation: ['parks', 'recreation', 'parks recreation', 'parks and recreation', 'baseball', 'sports', 'summer program', 'athletics', 'youth sports'],
+  legal: ['legal', 'attorney', 'lawyer', 'law firm', 'law practice', 'legal aid'],
+  campaign: ['campaign', 'campaign finance', 'election', 'candidate filing', 'political committee'],
+  caregiving: ['caregiver', 'caregiving', 'respite', 'memory care', 'long term care', 'home care', 'dementia care', 'elder care', 'aging services'],
+  survivor_benefits: ['survivor benefits', 'surviving spouse', 'widow benefits', 'widower benefits', 'death benefit'],
+  cancer_support: ['cancer', 'oncology', 'chemotherapy', 'breast cancer', 'stage 4', 'metastatic'],
+  dementia_support: ['dementia', 'alzheimers', 'alzheimer', 'memory care'],
+  black_lung_benefits: ['black lung', 'coal miner widow', 'coal miner survivor', 'miner survivor', 'coal miner benefits'],
+  animal_welfare: ['animal shelter', 'animal rescue', 'animal welfare', 'humane society', 'spay', 'neuter', 'veterinary assistance'],
+  domestic_violence: ['domestic violence', 'family violence', 'dv shelter', 'victim services', 'vawa', 'survivor advocacy'],
+  reentry: ['reentry', 'second chance', 'justice involved', 'formerly incarcerated', 'reintegration'],
+  startup: ['startup', 'start a business', 'starting a business', 'small business startup', 'entrepreneur', 'food truck', 'restaurant startup', 'mobile food', 'working capital'],
 };
 
 // HIGH-PRECISION phrase → applicant-bucket safety net. Unlike the broad
@@ -100,22 +162,98 @@ export function detectKeywordApplicantTriggers(blob, isIndividual) {
 
 function lc(x) { return String(x ?? '').toLowerCase(); }
 
+function key(x) {
+  return lc(x)
+    .trim()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+const NEGATIVE_TEXT_VALUES = new Set([
+  '',
+  '0',
+  'false',
+  'no',
+  'none',
+  'n/a',
+  'na',
+  'not applicable',
+  'not-applicable',
+  'not specified',
+  'unspecified',
+  'unknown',
+  'prefer not to say',
+]);
+
+function valueText(value) {
+  if (value === null || value === undefined || value === false) return '';
+  if (value === true) return 'true';
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim();
+    return NEGATIVE_TEXT_VALUES.has(text.toLowerCase()) ? '' : text;
+  }
+  if (Array.isArray(value)) return value.map(valueText).filter(Boolean).join(' ');
+  if (typeof value === 'object') return Object.values(value).map(valueText).filter(Boolean).join(' ');
+  return String(value);
+}
+
 function gatherText(profile) {
   const parts = [];
-  const push = (v) => { if (v != null) parts.push(typeof v === 'string' ? v : JSON.stringify(v)); };
-  push(profile?.type); push(profile?.profile_type); push(profile?.name);
+  const push = (v) => {
+    const text = valueText(v);
+    if (text) parts.push(text);
+  };
+  // Identity fields are handled structurally by deriveApplicantTypes and
+  // PRIMARY_TYPE_DEFAULT_NEEDS. Do not feed them into need-text scanning:
+  // "animal_shelter" should not become only "housing" because it contains
+  // "shelter", and "special_education_program" should not suppress the richer
+  // special-ed defaults because it contains "education".
+  push(profile?.name);
   push(profile?.description); push(profile?.summary); push(profile?.mission);
   push(profile?.needs); push(profile?.need_categories); push(profile?.tags);
-  for (const s of profile?.sections ?? []) { push(s?.title); push(s?.body); push(s?.value); }
+  for (const s of profile?.sections ?? []) { push(s?.title); push(s?.body); push(s?.value); push(s?.data); }
   for (const o of profile?.organizations ?? []) { push(o?.name); push(o?.type); push(o?.mission); }
   for (const d of profile?.documents ?? []) { push(d?.name); push(d?.extracted_text); push(d?.summary); }
   if (profile?.school) { push(profile.school.name); push(profile.school.type); }
   return parts.join(' \n ').toLowerCase();
 }
 
+function gatherStructuredApplicantHints(profile) {
+  const hints = [];
+  const push = (v) => { if (v !== null && v !== undefined && v !== '') hints.push(lc(v)); };
+  push(profile?.military_status);
+  push(profile?.service_status);
+  push(profile?.military_service_status);
+  for (const section of profile?.sections ?? []) {
+    const sectionKey = lc(section?.section_key ?? section?.key ?? section?.title);
+    const isMilitarySection =
+      sectionKey.includes('military') ||
+      sectionKey.includes('service') ||
+      sectionKey.includes('veteran') ||
+      sectionKey === 'demographics';
+    if (!isMilitarySection) continue;
+    const data = section?.data ?? {};
+    push(data?.military_status);
+    push(data?.service_status);
+    push(data?.status);
+    push(data?.relationship_to_service_member);
+    if (data?.is_veteran === true || data?.veteran === true) push('veteran');
+    if (data?.is_active_duty === true || data?.active_duty === true) push('active duty');
+    if (data?.is_guard_reserve === true || data?.guard_reserve === true || data?.is_reservist === true) push('guard reserve');
+    if (data?.is_transitioning_service_member === true || data?.transitioning_service_member === true) push('transitioning service member');
+    if (data?.is_military_spouse === true || data?.military_spouse === true) push('military spouse');
+  }
+  return hints;
+}
+
 // Applicant types that describe an ORGANIZATION (vs. a person/household).
-const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'business', 'farm', 'government']);
-const INDIVIDUAL_APPLICANT_TYPES = new Set(['individual', 'family', 'student', 'veteran']);
+const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal']);
+const INDIVIDUAL_APPLICANT_TYPES = new Set([
+  'individual', 'family', 'student', 'teacher', 'candidate', 'veteran', 'active_duty',
+  'guard_reserve', 'transitioning_service_member', 'military_spouse',
+  'widow', 'widower', 'surviving_spouse', 'patient', 'dementia_patient',
+]);
 
 // AUTHORITATIVE primary_type -> applicant-bucket map. The substring-synonym
 // scan below cannot recognize multi-word canonical types whose stored
@@ -132,15 +270,56 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   // Person / household (federal grant APIs don't serve these directly; they
   // get honest benefit/direct-aid directories and locators).
   individual: ['individual'],
+  person: ['individual'],
+  adult: ['individual'],
+  individual_adult: ['individual'],
+  low_income_individual: ['individual'],
   medical_need: ['individual'],
+  medical_assistance: ['individual'],
+  health_profile: ['individual'],
+  medical_profile: ['individual'],
+  patient_assistance: ['individual'],
+  medical_hardship: ['individual'],
+  cancer_patient: ['individual'],
+  breast_cancer_patient: ['individual'],
+  patient: ['individual'],
   senior: ['individual'],
+  older_adult: ['individual'],
+  elderly: ['individual'],
   veteran: ['veteran', 'individual'],
+  active_duty: ['active_duty', 'individual'],
+  active_duty_service_member: ['active_duty', 'individual'],
+  servicemember: ['active_duty', 'individual'],
+  service_member: ['active_duty', 'individual'],
+  guard_reserve: ['guard_reserve', 'individual'],
+  national_guard: ['guard_reserve', 'individual'],
+  reservist: ['guard_reserve', 'individual'],
+  transitioning_service_member: ['transitioning_service_member', 'active_duty', 'individual'],
+  separating_service_member: ['transitioning_service_member', 'active_duty', 'individual'],
+  military_spouse: ['military_spouse', 'family', 'individual'],
   disabled_adult: ['individual'],
-  teacher: ['individual'],
-  classroom_teacher: ['individual'],
-  educator: ['individual'],
+  adult_with_disability: ['individual'],
+  person_with_disability: ['individual'],
+  widow: ['family', 'individual'],
+  widower: ['family', 'individual'],
+  surviving_spouse: ['family', 'individual'],
+  coal_miner_widow: ['family', 'individual'],
+  miner_widow: ['family', 'individual'],
+  dementia_patient: ['family', 'individual'],
+  teacher: ['teacher', 'individual'],
+  classroom_teacher: ['teacher', 'individual'],
+  educator: ['teacher', 'individual'],
   family: ['family', 'individual'],
+  single_parent: ['family', 'individual'],
+  single_mom: ['family', 'individual'],
   homeschool_family: ['family', 'individual'],
+  // Public office / campaign profiles: funding is mostly campaign-finance
+  // guidance and compliance resources, not grants. Keep it a distinct bucket.
+  candidate: ['candidate', 'individual'],
+  political_candidate: ['candidate', 'individual'],
+  local_candidate: ['candidate', 'individual'],
+  politician: ['candidate', 'individual'],
+  campaign_committee: ['candidate'],
   // Students
   student: ['student', 'individual'],
   high_school_student: ['student', 'individual'],
@@ -154,48 +333,320 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   school_food_service: ['school', 'government'],
   school_transportation: ['school', 'government'],
   library: ['nonprofit', 'government'],
+  public_library: ['nonprofit', 'government'],
+  county_library: ['nonprofit', 'government'],
   library_media_center: ['nonprofit', 'government'],
   pta_pto: ['nonprofit'],
   // Nonprofits / community orgs
   nonprofit: ['nonprofit'],
   organization: ['nonprofit'], // legacy seed string
   food_pantry: ['nonprofit'],
+  food_bank: ['nonprofit'],
+  food_shelf: ['nonprofit'],
+  soup_kitchen: ['nonprofit'],
   homeless_shelter: ['nonprofit'],
+  shelter: ['nonprofit'],
+  emergency_shelter: ['nonprofit'],
+  transitional_housing: ['nonprofit'],
   animal_rescue: ['nonprofit'],
+  animal_shelter: ['nonprofit'],
+  animal_welfare: ['nonprofit'],
+  humane_society: ['nonprofit'],
   mental_health_nonprofit: ['nonprofit'],
+  behavioral_health_nonprofit: ['nonprofit'],
+  mh_nonprofit: ['nonprofit'],
   substance_recovery_org: ['nonprofit'],
+  recovery_program: ['nonprofit'],
+  sud_program: ['nonprofit'],
   reentry_program: ['nonprofit'],
+  second_chance_program: ['nonprofit'],
+  reintegration_program: ['nonprofit'],
   community_center: ['nonprofit'],
+  neighborhood_center: ['nonprofit'],
+  civic_center: ['nonprofit'],
   museum: ['nonprofit'],
+  historical_museum: ['nonprofit'],
+  art_museum: ['nonprofit'],
   domestic_violence_shelter: ['nonprofit'],
+  dv_shelter: ['nonprofit'],
+  family_violence_shelter: ['nonprofit'],
   // Faith-based (also nonprofit-eligible for federal/foundation funding)
   church: ['church', 'nonprofit'],
   ministry: ['ministry', 'nonprofit'],
+  minister: ['church', 'ministry', 'nonprofit'],
+  pastor: ['church', 'ministry', 'nonprofit'],
+  clergy: ['church', 'ministry', 'nonprofit'],
   // Emergency services
   volunteer_fire_department: ['vfd', 'government'],
+  police_department: ['law_enforcement', 'government'],
+  sheriff_department: ['law_enforcement', 'government'],
+  law_enforcement_agency: ['law_enforcement', 'government'],
+  border_patrol: ['law_enforcement', 'government'],
+  federal_agency: ['government'],
   // Government / public agencies
   county_government: ['government'],
+  city_government: ['government'],
+  township_government: ['government'],
   local_government: ['government'],
   municipality: ['government'],
   public_agency: ['government'],
+  state_local_gov: ['government'],
   local_housing_authority: ['government'],
+  housing_authority: ['government'],
+  phra: ['government'],
+  public_housing_authority: ['government'],
   parks_department: ['government'],
+  parks_recreation: ['government'],
+  parks_recreation_department: ['government'],
+  parks_and_rec: ['government'],
+  county_parks_recreation: ['government'],
+  public_recreation_program: ['government'],
+  youth_sports_program: ['government', 'nonprofit'],
   regional_planning_agency: ['government'],
   economic_development_agency: ['government'],
-  tribal_government: ['government'],
+  tribal_government: ['tribal', 'government'],
+  indian_tribe: ['tribal', 'government'],
+  native_nation: ['tribal', 'government'],
+  reservation: ['tribal', 'government'],
   public_health_department: ['government'],
+  health_department: ['government'],
+  doh: ['government'],
+  county_health_department: ['government'],
+  local_health_department: ['government'],
+  public_library_system: ['government'],
   // Business
   business: ['business'],
   small_business: ['business'], // legacy seed string
+  entrepreneur: ['business'],
+  veteran_entrepreneur: ['veteran', 'business', 'individual'],
+  active_duty_entrepreneur: ['active_duty', 'business', 'individual'],
+  military_spouse_entrepreneur: ['military_spouse', 'business', 'individual'],
+  guard_reserve_entrepreneur: ['guard_reserve', 'business', 'individual'],
+  transitioning_service_member_entrepreneur: ['transitioning_service_member', 'active_duty', 'business', 'individual'],
+  food_truck: ['business'],
+  food_truck_startup: ['business'],
+  restaurant_startup: ['business'],
+  attorney: ['business'],
+  lawyer: ['business'],
+  law_firm: ['business'],
+  legal_practice: ['business'],
+  attorney_practice: ['business'],
   minority_owned_business: ['business'],
   women_owned_business: ['business'],
+  // Agriculture
+  farm: ['farm'],
+  farmer: ['farm'],
+  ranch: ['farm'],
+  rancher: ['farm'],
+});
+
+// Sparse-profile starters. These are NOT exclusions and they are NOT match
+// scores; they are the minimum useful search language for a declared identity
+// when the profile has not filled every field yet. Empty fields stay neutral.
+const PRIMARY_TYPE_DEFAULT_NEEDS = Object.freeze({
+  individual: ['food', 'energy', 'housing', 'medical'],
+  person: ['food', 'energy', 'housing', 'medical'],
+  adult: ['food', 'energy', 'housing', 'medical'],
+  individual_adult: ['food', 'energy', 'housing', 'medical'],
+  low_income_individual: ['food', 'energy', 'housing', 'medical'],
+  family: ['food', 'energy', 'housing', 'childcare', 'medical'],
+  single_parent: ['food', 'energy', 'housing', 'childcare', 'medical'],
+  single_mom: ['food', 'energy', 'housing', 'childcare', 'medical'],
+  senior: ['medical', 'caregiving', 'food', 'energy', 'housing', 'transportation'],
+  older_adult: ['medical', 'caregiving', 'food', 'energy', 'housing', 'transportation'],
+  elderly: ['medical', 'caregiving', 'food', 'energy', 'housing', 'transportation'],
+  disabled_adult: ['disability', 'medical', 'housing', 'transportation', 'employment'],
+  adult_with_disability: ['disability', 'medical', 'housing', 'transportation', 'employment'],
+  person_with_disability: ['disability', 'medical', 'housing', 'transportation', 'employment'],
+  medical_need: ['medical', 'medical_bills', 'medication', 'transportation', 'caregiving'],
+  medical_assistance: ['medical', 'medical_bills', 'medication', 'transportation', 'caregiving'],
+  health_profile: ['medical', 'medical_bills', 'medication', 'transportation', 'caregiving'],
+  medical_profile: ['medical', 'medical_bills', 'medication', 'transportation', 'caregiving'],
+  patient_assistance: ['medical', 'medical_bills', 'medication', 'transportation', 'caregiving'],
+  cancer_patient: ['cancer_support', 'medical', 'medical_bills', 'medication', 'transportation', 'housing'],
+  breast_cancer_patient: ['cancer_support', 'medical', 'medical_bills', 'medication', 'transportation', 'housing'],
+  dementia_patient: ['dementia_support', 'medical', 'caregiving', 'transportation'],
+  widow: ['survivor_benefits', 'housing', 'food', 'medical'],
+  widower: ['survivor_benefits', 'housing', 'food', 'medical'],
+  surviving_spouse: ['survivor_benefits', 'housing', 'food', 'medical'],
+  coal_miner_widow: ['black_lung_benefits', 'survivor_benefits', 'medical', 'caregiving', 'food'],
+  miner_widow: ['black_lung_benefits', 'survivor_benefits', 'medical', 'caregiving', 'food'],
+
+  student: ['scholarship', 'education', 'housing', 'fafsa'],
+  high_school_student: ['scholarship', 'college_prep', 'fafsa', 'first_gen'],
+  college_student: ['scholarship', 'tuition', 'housing', 'textbooks', 'fafsa', 'pell'],
+  graduate_student: ['fellowship', 'research_funding', 'tuition', 'stipend', 'scholarship'],
+  homeschool_family: ['education', 'curriculum', 'scholarship', 'stem_classroom'],
+
+  teacher: ['classroom_supplies', 'education', 'professional_development'],
+  classroom_teacher: ['classroom_supplies', 'education', 'technology', 'professional_development'],
+  educator: ['classroom_supplies', 'education', 'professional_development'],
+  school: ['education', 'programs', 'technology', 'capital'],
+  public_school: ['education', 'programs', 'technology', 'capital'],
+  school_district: ['education', 'programs', 'technology', 'capital'],
+  special_education_program: ['special_education', 'disability', 'education', 'classroom_supplies'],
+  school_food_service: ['school_nutrition', 'food', 'equipment'],
+  school_transportation: ['school_transportation', 'roads_transportation', 'equipment'],
+  pta_pto: ['classroom_supplies', 'arts_education', 'stem_classroom', 'education'],
+  library: ['library_media', 'education', 'technology', 'community_facilities'],
+  public_library: ['library_media', 'education', 'technology', 'community_facilities'],
+  county_library: ['library_media', 'education', 'technology', 'community_facilities'],
+  library_media_center: ['library_media', 'education', 'technology'],
+
+  nonprofit: ['capacity_building', 'programs', 'operations'],
+  organization: ['capacity_building', 'programs', 'operations'],
+  church: ['programs', 'food', 'housing', 'capacity_building'],
+  ministry: ['programs', 'food', 'housing', 'capacity_building'],
+  minister: ['programs', 'food', 'housing', 'capacity_building'],
+  pastor: ['programs', 'food', 'housing', 'capacity_building'],
+  clergy: ['programs', 'food', 'housing', 'capacity_building'],
+  food_pantry: ['food', 'capacity_building', 'equipment'],
+  food_bank: ['food', 'capacity_building', 'equipment'],
+  food_shelf: ['food', 'capacity_building', 'equipment'],
+  soup_kitchen: ['food', 'capacity_building', 'equipment'],
+  homeless_shelter: ['housing', 'housing_development', 'mental_health', 'capacity_building'],
+  shelter: ['housing', 'housing_development', 'mental_health', 'capacity_building'],
+  emergency_shelter: ['housing', 'housing_development', 'mental_health', 'capacity_building'],
+  transitional_housing: ['housing', 'housing_development', 'mental_health', 'capacity_building'],
+  domestic_violence_shelter: ['domestic_violence', 'housing', 'mental_health', 'public_safety'],
+  dv_shelter: ['domestic_violence', 'housing', 'mental_health', 'public_safety'],
+  family_violence_shelter: ['domestic_violence', 'housing', 'mental_health', 'public_safety'],
+  reentry_program: ['reentry', 'workforce', 'employment', 'housing', 'mental_health'],
+  second_chance_program: ['reentry', 'workforce', 'employment', 'housing', 'mental_health'],
+  reintegration_program: ['reentry', 'workforce', 'employment', 'housing', 'mental_health'],
+  substance_recovery_org: ['substance_recovery', 'mental_health', 'medical'],
+  recovery_program: ['substance_recovery', 'mental_health', 'medical'],
+  sud_program: ['substance_recovery', 'mental_health', 'medical'],
+  mental_health_nonprofit: ['mental_health', 'medical', 'capacity_building'],
+  behavioral_health_nonprofit: ['mental_health', 'medical', 'capacity_building'],
+  mh_nonprofit: ['mental_health', 'medical', 'capacity_building'],
+  animal_rescue: ['animal_welfare', 'capacity_building', 'equipment'],
+  animal_shelter: ['animal_welfare', 'capacity_building', 'equipment'],
+  animal_welfare: ['animal_welfare', 'capacity_building', 'equipment'],
+  humane_society: ['animal_welfare', 'capacity_building', 'equipment'],
+  community_center: ['community_facilities', 'programs', 'recreation', 'capacity_building'],
+  neighborhood_center: ['community_facilities', 'programs', 'recreation', 'capacity_building'],
+  civic_center: ['community_facilities', 'programs', 'recreation', 'capacity_building'],
+  museum: ['library_media', 'arts_education', 'community_facilities', 'programs'],
+  historical_museum: ['library_media', 'arts_education', 'community_facilities', 'programs'],
+  art_museum: ['library_media', 'arts_education', 'community_facilities', 'programs'],
+
+  volunteer_fire_department: ['public_safety', 'emergency', 'equipment', 'operations'],
+  police_department: ['public_safety', 'equipment', 'technology', 'programs'],
+  sheriff_department: ['public_safety', 'equipment', 'technology', 'programs'],
+  law_enforcement_agency: ['public_safety', 'equipment', 'technology', 'programs'],
+  border_patrol: ['public_safety', 'equipment', 'technology', 'programs'],
+  federal_agency: ['public_safety', 'technology', 'programs'],
+
+  county_government: ['infrastructure', 'community_facilities', 'public_safety', 'economic_development'],
+  city_government: ['infrastructure', 'community_facilities', 'public_safety', 'economic_development'],
+  township_government: ['infrastructure', 'community_facilities', 'public_safety', 'economic_development'],
+  local_government: ['infrastructure', 'community_facilities', 'public_safety', 'economic_development'],
+  municipality: ['infrastructure', 'community_facilities', 'public_safety', 'economic_development'],
+  public_agency: ['infrastructure', 'community_facilities', 'public_safety', 'programs'],
+  state_local_gov: ['infrastructure', 'community_facilities', 'public_safety', 'economic_development'],
+  local_housing_authority: ['housing', 'housing_development', 'community_facilities'],
+  housing_authority: ['housing', 'housing_development', 'community_facilities'],
+  public_housing_authority: ['housing', 'housing_development', 'community_facilities'],
+  parks_department: ['recreation', 'community_facilities', 'equipment'],
+  parks_recreation: ['recreation', 'community_facilities', 'equipment'],
+  parks_recreation_department: ['recreation', 'community_facilities', 'equipment'],
+  parks_and_rec: ['recreation', 'community_facilities', 'equipment'],
+  county_parks_recreation: ['recreation', 'community_facilities', 'equipment'],
+  public_recreation_program: ['recreation', 'programs', 'equipment'],
+  youth_sports_program: ['recreation', 'programs', 'equipment'],
+  regional_planning_agency: ['economic_development', 'infrastructure', 'broadband'],
+  economic_development_agency: ['economic_development', 'infrastructure', 'workforce'],
+  public_health_department: ['medical', 'mental_health', 'substance_recovery', 'public_safety'],
+  health_department: ['medical', 'mental_health', 'substance_recovery', 'public_safety'],
+  county_health_department: ['medical', 'mental_health', 'substance_recovery', 'public_safety'],
+  local_health_department: ['medical', 'mental_health', 'substance_recovery', 'public_safety'],
+  tribal_government: ['housing_development', 'community_facilities', 'medical', 'public_safety', 'education', 'broadband', 'infrastructure', 'economic_development'],
+  indian_tribe: ['housing_development', 'community_facilities', 'medical', 'public_safety', 'education', 'broadband', 'infrastructure', 'economic_development'],
+  native_nation: ['housing_development', 'community_facilities', 'medical', 'public_safety', 'education', 'broadband', 'infrastructure', 'economic_development'],
+  reservation: ['housing_development', 'community_facilities', 'medical', 'public_safety', 'education', 'broadband', 'infrastructure', 'economic_development'],
+
+  business: ['startup', 'capital', 'operations'],
+  small_business: ['startup', 'capital', 'operations'],
+  entrepreneur: ['startup', 'capital', 'operations'],
+  food_truck: ['startup', 'capital', 'equipment', 'operations'],
+  food_truck_startup: ['startup', 'capital', 'equipment', 'operations'],
+  restaurant_startup: ['startup', 'capital', 'equipment', 'operations'],
+  attorney: ['legal', 'operations', 'technology'],
+  lawyer: ['legal', 'operations', 'technology'],
+  law_firm: ['legal', 'operations', 'technology'],
+  legal_practice: ['legal', 'operations', 'technology'],
+  attorney_practice: ['legal', 'operations', 'technology'],
+  minority_owned_business: ['startup', 'capital', 'operations'],
+  women_owned_business: ['startup', 'capital', 'operations'],
+  veteran_entrepreneur: ['startup', 'capital', 'equipment', 'veteran_startup'],
+  active_duty_entrepreneur: ['startup', 'capital', 'equipment', 'military_startup'],
+  military_spouse_entrepreneur: ['startup', 'capital', 'equipment', 'military_startup'],
+  guard_reserve_entrepreneur: ['startup', 'capital', 'equipment', 'military_startup'],
+  transitioning_service_member_entrepreneur: ['startup', 'capital', 'equipment', 'military_startup'],
+  farm: ['agriculture', 'equipment', 'operations', 'energy'],
+  farmer: ['agriculture', 'equipment', 'operations', 'energy'],
+  ranch: ['agriculture', 'equipment', 'operations', 'energy'],
+  rancher: ['agriculture', 'equipment', 'operations', 'energy'],
+
+  candidate: ['campaign', 'operations'],
+  political_candidate: ['campaign', 'operations'],
+  local_candidate: ['campaign', 'operations'],
+  politician: ['campaign', 'operations'],
+  campaign_committee: ['campaign', 'operations'],
+});
+
+const NEED_IMPLICATIONS = Object.freeze({
+  disability: ['medical'],
+  medical_bills: ['medical'],
+  medication: ['medical'],
+  mental_health: ['medical'],
+  substance_recovery: ['medical', 'mental_health'],
+  scholarship: ['education'],
+  fafsa: ['education', 'scholarship'],
+  pell: ['education', 'scholarship', 'fafsa'],
+  fellowship: ['education', 'scholarship'],
+  research_funding: ['education'],
+  stipend: ['education'],
+  tuition: ['education'],
+  textbooks: ['education'],
+  college_prep: ['education', 'scholarship'],
+  first_gen: ['education', 'scholarship'],
+  curriculum: ['education'],
+  classroom_supplies: ['education'],
+  stem_classroom: ['education', 'classroom_supplies'],
+  arts_education: ['education', 'classroom_supplies'],
+  professional_development: ['education'],
+  special_education: ['education', 'disability'],
+  school_nutrition: ['education', 'food'],
+  school_transportation: ['education', 'transportation', 'roads_transportation'],
+  library_media: ['education', 'community_facilities'],
+  capacity_building: ['operations'],
+  community_facilities: ['capital'],
+  infrastructure: ['capital'],
+  roads_transportation: ['infrastructure', 'transportation'],
+  water_sewer: ['infrastructure'],
+  environmental_remediation: ['infrastructure'],
+  housing_development: ['housing', 'community_facilities'],
+  economic_development: ['programs'],
+  broadband: ['technology', 'infrastructure'],
+  workforce: ['employment'],
+  domestic_violence: ['housing', 'mental_health', 'public_safety'],
+  reentry: ['employment', 'workforce', 'housing', 'mental_health'],
+  cancer_support: ['medical'],
+  dementia_support: ['medical', 'caregiving'],
+  black_lung_benefits: ['medical', 'survivor_benefits'],
+  veteran_startup: ['startup'],
+  military_startup: ['startup'],
 });
 
 function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   const explicit = []
     .concat(profile?.applicant_types ?? [])
+    .concat(profile?.primary_type ?? [])
     .concat(profile?.type ?? [])
     .concat(profile?.profile_type ?? [])
+    .concat(gatherStructuredApplicantHints(profile))
     .map(lc)
     .filter(Boolean);
   const found = new Set();
@@ -214,7 +665,7 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   //   2. ONLY when the profile declares no identity at all, fall back to a blob
   //      scan so a bare profile still searches something (never zero).
   for (const e of explicit) {
-    const mapped = PRIMARY_TYPE_TO_APPLICANT[e];
+    const mapped = PRIMARY_TYPE_TO_APPLICANT[e] ?? PRIMARY_TYPE_TO_APPLICANT[key(e)];
     if (mapped) for (const bucket of mapped) found.add(bucket);
   }
   for (const e of explicit) {
@@ -234,11 +685,13 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   // organizational applicant types (an individual is not an organization).
   // "high_school_student" CONTAINS "school", so detect person tokens with word
   // boundaries (+ a "student" catch-all) rather than a naive org-substring test.
-  const primaryRaw = lc(profile?.profile_type ?? profile?.type ?? '');
+  const primaryRaw = lc(profile?.primary_type ?? profile?.profile_type ?? profile?.type ?? '');
+  const primaryKey = key(primaryRaw);
   const primaryIsIndividual =
     INDIVIDUAL_APPLICANT_TYPES.has(primaryRaw) ||
+    INDIVIDUAL_APPLICANT_TYPES.has(primaryKey) ||
     primaryRaw.includes('student') ||
-    /\b(individual|person|resident|family|household|parent|parents|caregiver|scholar|undergraduate|graduate|pupil|veteran)\b/.test(primaryRaw);
+    /\b(individual|person|resident|family|household|parent|parents|caregiver|widow|widower|surviving spouse|surviving_spouse|patient|scholar|undergraduate|graduate|pupil|teacher|educator|candidate|politician|veteran|active duty|active_duty|servicemember|service member|national guard|guard_reserve|reservist|military spouse|transitioning service member)\b/.test(primaryRaw);
   if (primaryIsIndividual) {
     for (const t of [...found]) if (ORG_APPLICANT_TYPES.has(t)) found.delete(t);
     // A person applicant is an INDIVIDUAL applicant — ensure individual-eligible
@@ -280,6 +733,45 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   return [...found];
 }
 
+function addNeedPhrase(found, phrase) {
+  const text = lc(phrase).trim();
+  if (!text) return;
+  const token = key(text);
+  if (NEED_KEYWORDS[token] || NEED_IMPLICATIONS[token]) found.add(token);
+  for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
+    if (kws.some((k) => text.includes(k) || token.includes(key(k)))) found.add(canon);
+  }
+}
+
+function addProfileTypeDefaultNeeds(found, profile) {
+  const explicitTypes = []
+    .concat(profile?.primary_type ?? [])
+    .concat(profile?.profile_type ?? [])
+    .concat(profile?.type ?? [])
+    .concat(profile?.applicant_types ?? [])
+    .map(key)
+    .filter(Boolean);
+  for (const t of explicitTypes) {
+    for (const need of PRIMARY_TYPE_DEFAULT_NEEDS[t] ?? []) addNeedPhrase(found, need);
+  }
+}
+
+function applyNeedImplications(found) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [need, implied] of Object.entries(NEED_IMPLICATIONS)) {
+      if (!found.has(need)) continue;
+      for (const parent of implied) {
+        if (!found.has(parent)) {
+          found.add(parent);
+          changed = true;
+        }
+      }
+    }
+  }
+}
+
 function deriveNeeds(profile, blob) {
   const explicit = []
     .concat(profile?.needs ?? [])
@@ -287,16 +779,22 @@ function deriveNeeds(profile, blob) {
     .map(lc)
     .filter(Boolean);
   const found = new Set();
-  for (const e of explicit) {
-    // accept canonical need names directly
-    if (NEED_KEYWORDS[e]) found.add(e);
-    for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
-      if (kws.some((k) => e.includes(k))) found.add(canon);
-    }
-  }
+  for (const e of explicit) addNeedPhrase(found, e);
   for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
     if (kws.some((k) => blob.includes(k))) found.add(canon);
   }
+  if (found.size === 0) addProfileTypeDefaultNeeds(found, profile);
+  applyNeedImplications(found);
+  if ((found.has('veterans') || /\b(veteran|former service member|prior service|ex[-\s]?military|service-disabled)\b/i.test(blob)) &&
+      (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
+    found.add('veteran_startup');
+  }
+  if ((found.has('active_duty_support') || found.has('military_transition') || found.has('military_spouse_support') ||
+      /\b(active duty|currently serving|servicemember|service member|national guard|reservist|military spouse|transitioning out|separating from service|ets)\b/i.test(blob)) &&
+      (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
+    found.add('military_startup');
+  }
+  applyNeedImplications(found);
   return [...found];
 }
 
@@ -338,7 +836,7 @@ export function buildThesis(profile = {}) {
 
   const isStudent = applicant_types.includes('student') || Boolean(profile?.school);
   const isOrg = applicant_types.some((t) =>
-    ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'business', 'farm', 'government'].includes(t));
+    ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal'].includes(t));
 
   return {
     profile_id: profile?.id ?? profile?.profile_id ?? null,

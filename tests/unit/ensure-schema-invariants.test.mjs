@@ -33,6 +33,7 @@ import {
   ensureAnyaMatchSuggestions,
   ensureOrganizationsSoftDeleteColumns,
   ensureFundingOpportunityVerificationColumns,
+  ensureProfileSoftDeleteColumn,
   __testables,
 } from '../../backend/startup/ensureSchemaInvariants.js'
 
@@ -113,6 +114,7 @@ test('ensureSchemaInvariants runs every declared step (ran === step count)', asy
       'matching_low_coverage_events',
       'behavior_events',
       'profile_discovery_column',
+      'profile_soft_delete_column',
       'funding_opportunity_verification_columns',
       'ingestion_provenance_tables',
       'profile_portal_status',
@@ -213,6 +215,36 @@ test('end-to-end against a fresh sqlite DB: matching_low_coverage_events table i
 
   raw.close()
   try { fs.unlinkSync(tmpPath) } catch {}
+})
+
+test('profile soft-delete invariant adds deleted_at to older sqlite profile tables', async () => {
+  let Database
+  try {
+    Database = (await import('better-sqlite3')).default
+  } catch {
+    return
+  }
+
+  const raw = new Database(':memory:')
+  raw.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY)')
+  const db = {
+    dialect: 'sqlite',
+    exec(sql) { raw.exec(sql); return Promise.resolve() },
+    prepare(sql) {
+      const stmt = raw.prepare(sql)
+      return {
+        get: (...args) => Promise.resolve(stmt.get(...args)),
+        all: (...args) => Promise.resolve(stmt.all(...args)),
+        run: (...args) => Promise.resolve(stmt.run(...args)),
+      }
+    },
+  }
+
+  const out = await ensureProfileSoftDeleteColumn(db, { logger: silentLogger })
+  const cols = raw.prepare('PRAGMA table_info(profiles)').all().map((c) => c.name)
+  assert.equal(out, true)
+  assert.ok(cols.includes('deleted_at'), 'profiles.deleted_at must be created')
+  raw.close()
 })
 
 test('orchestrator is idempotent: second call is a no-op summary', async () => {

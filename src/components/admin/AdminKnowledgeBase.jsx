@@ -8,7 +8,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Loader2, FileText, Link as LinkIcon, Trash2, Search } from 'lucide-react'
+import { Loader2, FileText, Link as LinkIcon, Trash2, Search, Download } from 'lucide-react'
+import { downloadAuthenticatedUrl } from '@/utils/authenticatedDownload'
 
 function formatBytes(bytes) {
   const n = Number(bytes || 0)
@@ -82,6 +83,21 @@ export default function AdminKnowledgeBase() {
       setViewOpen(false)
     } finally {
       setViewLoading(false)
+    }
+  }
+
+  const downloadDoc = async (doc) => {
+    if (!doc?.id) return
+    try {
+      await downloadAuthenticatedUrl(`/api/documents/${encodeURIComponent(doc.id)}/download`, {
+        fallbackFileName: String(doc.name || 'knowledge-document').trim() || 'knowledge-document',
+      })
+    } catch (e) {
+      toast({
+        variant: 'destructive',
+        title: 'Unable to open file',
+        description: e?.message || 'The file could not be downloaded.',
+      })
     }
   }
 
@@ -329,10 +345,11 @@ export default function AdminKnowledgeBase() {
                 </Button>
               </div>
 
-              {viewDoc.file_url ? (
-                <a className="text-sm text-blue-700 underline" href={viewDoc.file_url} target="_blank" rel="noreferrer">
+              {viewDoc.file_url || viewDoc.file_path ? (
+                <Button variant="outline" size="sm" onClick={() => downloadDoc(viewDoc)}>
+                  <Download className="w-4 h-4 mr-2" />
                   Open file
-                </a>
+                </Button>
               ) : null}
 
               {viewDoc.notes ? (
@@ -350,4 +367,3 @@ export default function AdminKnowledgeBase() {
     </div>
   )
 }
-

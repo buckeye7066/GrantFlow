@@ -128,3 +128,7 @@ backend/config/designatedProfiles.local.json
 
 # Live-editing coordination lock (see .cursor/rules/respect-edit-lock.mdc) — never commit
 .agent-edit-lock
+
+# FlexFactor audit scratch lists (intermediate tooling output, not app content)
+grantflow_critical_files.txt
+grantflow_files_with_defects.txt

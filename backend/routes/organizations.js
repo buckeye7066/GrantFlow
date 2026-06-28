@@ -247,6 +247,7 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
     
+    // audit:allow unscoped-profile-query -- organizations do not carry profile_id; access is enforced by ensureAuth/creation ownership.
     await req.db.prepare(`
       INSERT INTO organizations (${columns.join(', ')})
       VALUES (${placeholders})
@@ -300,6 +301,7 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
     const values = [...Object.values(sanitizedData), req.params.id];
     
+    // audit:allow unscoped-profile-query -- organizations do not carry profile_id; access is enforced by ensureOrganizationAccess above.
     await req.db.prepare(`
       UPDATE organizations 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
@@ -357,6 +359,7 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
 router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
+    // audit:allow unscoped-profile-query -- organization access is enforced above; grant rows remain tied to the authorized organization.
     const grants = await req.db.prepare(`
       SELECT g.* FROM grants g
       JOIN organizations o ON o.id = g.organization_id
@@ -376,6 +379,7 @@ router.get('/:id/grants', ensureAuth, async (req, res) => {
 router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
+    // audit:allow unscoped-profile-query -- organization access is enforced above; document rows remain tied to the authorized organization.
     const documents = await req.db.prepare(`
       SELECT d.* FROM documents d
       JOIN organizations o ON o.id = d.organization_id

@@ -172,7 +172,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       stats.crawlers_run++
     } catch (err) {
       stats.crawlers_failed++
-      console.error(`[domainCorpusCrawler] CRITICAL: ${config.id} failed:`, err?.message || String(err))
+      log.error(`[domainCorpusCrawler] CRITICAL: ${config.id} failed:`, err?.message || String(err))
       // Do NOT re-throw timeout errors mid-loop; log and continue so remaining crawlers run.
       // The caller can inspect stats.crawlers_failed to decide whether to abort.
     }
@@ -213,7 +213,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     }
     stats.crawlers_run += DOMAIN_ENGINES.length
   } catch (err) {
-    console.error('[domainCorpusCrawler] CRITICAL: Domain engines phase failed:', err?.message || err)
+    log.error('[domainCorpusCrawler] CRITICAL: Domain engines phase failed:', err?.message || err)
     throw new Error('Domain engines failure - core funding categories unavailable')
   }
 
@@ -239,7 +239,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     inserted = await bulkUpsertFundingOpportunities(db, deduped)
     stats.total_inserted = inserted.length
   } catch (err) {
-    console.error('[domainCorpusCrawler] CRITICAL: Database insert failed:', err?.message)
+    log.error('[domainCorpusCrawler] CRITICAL: Database insert failed:', err?.message)
     throw new Error(`Failed to persist ${deduped.length} funding opportunities - data loss risk`)
   }
 

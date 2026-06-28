@@ -224,6 +224,13 @@ async function notifyPipelineDeadlines(db, isPostgres, todayExpr, dateAddFn) {
  */
 async function notifyApplicationDeadlines(db, isPostgres, todayExpr, dateAddFn) {
   const inStatusPlaceholders = APPLICATION_ACTIVE_STATUSES.map(() => '?').join(', ')
+  const deadlineDateExpr = isPostgres ? 'ga.deadline_date::date' : 'ga.deadline_date'
+  const validDeadlineGuard = isPostgres
+    ? `
+           AND TRIM(ga.deadline_date::text) <> ''
+           AND ga.deadline_date::text ~ '^\\d{4}-\\d{2}-\\d{2}'`
+    : `
+           AND TRIM(ga.deadline_date) <> ''`
   let candidates = []
   try {
     candidates = await db
@@ -241,8 +248,9 @@ async function notifyApplicationDeadlines(db, isPostgres, todayExpr, dateAddFn) 
          JOIN users u ON u.id = ga.user_id
          WHERE ga.status IN (${inStatusPlaceholders})
            AND ga.deadline_date IS NOT NULL
-           AND ga.deadline_date >= ${todayExpr}
-           AND ga.deadline_date <= ${dateAddFn(8)}
+           ${validDeadlineGuard}
+           AND ${deadlineDateExpr} >= ${todayExpr}
+           AND ${deadlineDateExpr} <= ${dateAddFn(8)}
            AND ga.user_id IS NOT NULL`,
       )
       .all(...APPLICATION_ACTIVE_STATUSES)
@@ -283,7 +291,7 @@ export async function generateDeadlineNotifications(db) {
   try {
     await ensureNotificationsTable(db)
   } catch (error) {
-    console.error('[deadlineNotifications] Could not ensure notifications table:', error?.message || error)
+    log.error('[deadlineNotifications] Could not ensure notifications table:', error?.message || error)
     return { created: 0 }
   }
 

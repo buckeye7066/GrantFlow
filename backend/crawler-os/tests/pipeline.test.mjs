@@ -55,7 +55,17 @@ test('a placeholder candidate is rejected by the reality gate and never enters t
 
 test('when every source yields nothing, a zero-result ladder explains why and what next', async () => {
   // Force grants.gov to return zero rows AND fail the directory routes.
-  const d = deps({ grantsGov: [], fail: new Set(['cof.org', 'benefits.gov', 'api.grants.gov', 'api.sam.gov']) });
+  const d = deps({ grantsGov: [], fail: new Set([
+    'cof.org',
+    'benefits.gov',
+    'api.grants.gov',
+    'api.sam.gov',
+    'federalregister.gov',
+    'fema.gov',
+    'rd.usda.gov',
+    'dhs.gov',
+    'cops.usdoj.gov',
+  ]) });
   const thesis = buildThesis(SAMPLE_VFD_PROFILE);
   const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run0' });
   assert.equal(r.stored, 0);
@@ -63,6 +73,9 @@ test('when every source yields nothing, a zero-result ladder explains why and wh
   assert.ok(typeof r.zero_result.zero_result_reason === 'string');
   assert.ok(Array.isArray(r.zero_result.next_steps) && r.zero_result.next_steps.length > 0);
   assert.ok(Array.isArray(r.zero_result.searched_sources));
+  assert.ok(r.profile_evolution, 'profile evolution signal must be returned');
+  assert.equal(r.profile_evolution.event_type, 'profile_coverage_gap');
+  assert.ok(Array.isArray(r.profile_evolution.recommended_source_lanes));
 });
 
 test('telemetry records the run and its source outcomes (nothing fails silently)', async () => {

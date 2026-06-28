@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('middleware:requestTimeout')
 /**
  * Per-route request timeout middleware.
  *
@@ -9,7 +11,7 @@ export function requestTimeout(ms) {
   return function timeout(req, res, next) {
     let timer = setTimeout(() => {
       if (!res.headersSent && !res.writableEnded) {
-        console.error(`[timeout] ${req.method} ${req.originalUrl} exceeded ${ms}ms`)
+        qualityLog.error(`[timeout] ${req.method} ${req.originalUrl} exceeded ${ms}ms`)
         try {
           res.status(504).json({
             error: 'Request timed out',
@@ -17,7 +19,7 @@ export function requestTimeout(ms) {
             timeout_ms: ms,
           })
         } catch (err) {
-          console.error(`[timeout] Failed to send timeout response: ${err.message}`)
+          qualityLog.error(`[timeout] Failed to send timeout response: ${err.message}`)
         }
       }
     }, ms)

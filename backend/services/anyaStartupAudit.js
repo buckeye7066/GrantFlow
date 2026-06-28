@@ -35,36 +35,37 @@ export function triggerStartupAudit(db, opts = {}) {
     return
   }
   if (_auditRunning) return
-  if (!shouldRunAudit(db)) return
 
   _auditRunning = true
   const port = opts.port || process.env.PORT || 3001
   const baseUrl = `http://localhost:${port}`
   const adminToken = opts.adminToken || process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
-  log.info('[anyaStartupAudit] Starting background CodeGuard audit...')
-
   // Run asynchronously — never block the request
   ;(async () => {
+    if (!(await shouldRunAudit(db))) return
+
+    log.info('[anyaStartupAudit] Starting background CodeGuard audit...')
+
     const startTime = Date.now()
     const results = { endpoints: null, matchQuality: null, mission: null }
 
     try {
       results.endpoints = await testEndpoints(db, baseUrl, adminToken)
     } catch (e) {
-      console.error('[anyaStartupAudit] Endpoint test failed:', e.message)
+      log.error('[anyaStartupAudit] Endpoint test failed:', e.message)
     }
 
     try {
       results.matchQuality = await auditMatchQuality(db)
     } catch (e) {
-      console.error('[anyaStartupAudit] Match quality audit failed:', e.message)
+      log.error('[anyaStartupAudit] Match quality audit failed:', e.message)
     }
 
     try {
       results.mission = await verifyMissionGoals(db)
     } catch (e) {
-      console.error('[anyaStartupAudit] Mission verification failed:', e.message)
+      log.error('[anyaStartupAudit] Mission verification failed:', e.message)
     }
 
     try {
@@ -80,7 +81,7 @@ export function triggerStartupAudit(db, opts = {}) {
       log.info(`[anyaStartupAudit] Mission score: ${results.mission.score}% (${results.mission.pass}/${results.mission.total})`)
     }
   })().catch(e => {
-    console.error('[anyaStartupAudit] Unexpected error:', e)
+    log.error('[anyaStartupAudit] Unexpected error:', e)
   }).finally(() => {
     _auditRunning = false
   })

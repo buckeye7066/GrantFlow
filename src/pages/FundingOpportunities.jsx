@@ -54,6 +54,8 @@ import { formatAddress, createPageUrl } from "@/utils"
 import { formatReasonText } from "@/utils/reasonText"
 import { env } from "@/config/env.js"
 import GeoFundingView from "@/components/funding/GeoFundingView"
+import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
+import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, parseBooleanQuery } from "@/hooks/useGrantTools"
 
 const NOT_AVAILABLE = 'N/A'
@@ -422,7 +424,7 @@ function OpportunityCard({
         </div>
 
         {/* Synopsis / Description */}
-        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "Summary coming soon."}</p>
+        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "No summary available yet."}</p>
 
         {/* Contact Info - Application URL */}
         {opportunity.application_url && (
@@ -810,6 +812,11 @@ function OpportunityDetail({
                 </div>
               )}
             </div>
+            <OpportunitySourceTrace
+              opportunity={opportunity}
+              match={match}
+              profileName={selectedProfileName}
+            />
             {showMatchInsights ? (
               <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 space-y-2">
                 <div className="flex items-center justify-between">
@@ -837,7 +844,7 @@ function OpportunityDetail({
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Opportunity Overview</h3>
             <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">
-              {opportunity.description || "Summary coming soon."}
+              {opportunity.description || "No summary available yet."}
             </p>
           </section>
 
@@ -1090,6 +1097,23 @@ export default function FundingOpportunities() {
 
   const clearGeoRunFilter = () => {
     setFilters((prev) => ({ ...prev, geo_run_id: "" }))
+    const next = new URLSearchParams(searchParams)
+    next.delete("geo_run_id")
+    next.delete("run_id")
+    setSearchParams(next, { replace: true })
+  }
+
+  const resetFundingFilters = () => {
+    const profileId = filters.profileId && filters.profileId !== "all" ? filters.profileId : "all"
+    setFilters({
+      search: "",
+      state: "all",
+      source: "all",
+      nationalOnly: false,
+      profileId,
+      compliance: "grant_only",
+      geo_run_id: "",
+    })
     const next = new URLSearchParams(searchParams)
     next.delete("geo_run_id")
     next.delete("run_id")
@@ -1666,17 +1690,7 @@ export default function FundingOpportunities() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    setFilters({
-                      search: "",
-                      state: "all",
-                      source: "all",
-                      nationalOnly: false,
-                      profileId: "",
-                      compliance: "grant_only",
-                      geo_run_id: "",
-                    })
-                  }
+                  onClick={resetFundingFilters}
                 >
                   Reset filters
                 </Button>
@@ -1916,26 +1930,54 @@ export default function FundingOpportunities() {
         </>
       ) : (
         <Card className="border border-slate-200 bg-white/70 backdrop-blur">
-          <CardContent className="p-12 text-center space-y-4">
-            <Layers className="w-12 h-12 mx-auto text-slate-300" />
-            <h3 className="text-xl font-semibold text-slate-900">No opportunities found</h3>
-            <p className="text-sm text-slate-600 max-w-md mx-auto">
-              {opportunitiesResponse?.data?.length === 0 && opportunitiesResponse?.total === 0 ? (
-                <>
-                  No funding opportunities have been loaded yet. Try Discover Grants to search for funding that matches your profile.
-                </>
-              ) : (
-                <>
-                  Adjust your filters or try Discover Grants to search for more opportunities.
-                </>
-              )}
-            </p>
-            <Link to={createPageUrl("DiscoverGrants")}>
-              <Button size="lg" className="mt-4">
-                <Target className="w-4 h-4 mr-2" />
-                Find grants in Discover Grants
-              </Button>
-            </Link>
+          <CardContent className="p-6 sm:p-10">
+            <ZeroResultGuidance
+              title="No opportunities passed the current view"
+              description={
+                opportunitiesResponse?.data?.length === 0 && opportunitiesResponse?.total === 0
+                  ? "GrantFlow did not find stored funding rows for this exact view. That is a search state, not a final answer."
+                  : "The current filters narrowed the list to zero visible results. Use the next moves below to widen carefully without ignoring the rules."
+              }
+              facts={[
+                { label: "Profile", value: filters.profileId && filters.profileId !== "all" ? selectedProfile?.display_name || "Selected" : "Not selected" },
+                { label: "Funding terms", value: filters.compliance === "grant_only" ? "Grant-only" : "Including review-required" },
+                { label: "Hidden by trust", value: String(opportunitiesResponse?.trust_dropped ?? 0) },
+              ]}
+              actions={[
+                {
+                  kind: "profile",
+                  label: filters.profileId && filters.profileId !== "all" ? "Review profile details" : "Select or complete a profile",
+                  description: "Profile fields guide crawler choice and match explanations.",
+                  href: createPageUrl("MyProfiles"),
+                },
+                {
+                  kind: "filters",
+                  label: "Reset filters",
+                  description: "Clear source, state, search text, and run filters.",
+                  onClick: resetFundingFilters,
+                },
+                {
+                  kind: "discovery",
+                  label: "Run profile discovery",
+                  description: "Search live sources for this profile instead of only the stored catalog.",
+                  href: createPageUrl("DiscoverGrants", filters.profileId && filters.profileId !== "all" ? { profile_id: filters.profileId } : undefined),
+                  variant: "default",
+                },
+                {
+                  kind: "review",
+                  label: "Include review-required",
+                  description: "Show rows that may require match funds or repayment for manual review.",
+                  onClick: () => setFilters((prev) => ({ ...prev, compliance: "all" })),
+                  disabled: filters.compliance === "all",
+                },
+                {
+                  kind: "crawler",
+                  label: "Browse by ZIP",
+                  description: "Switch to the geographic funding view for local programs.",
+                  onClick: () => setViewMode("geo"),
+                },
+              ]}
+            />
           </CardContent>
         </Card>
       )}

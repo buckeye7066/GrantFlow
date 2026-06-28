@@ -417,7 +417,8 @@ export async function ensureApplicationTask(db, {
       }
       if (patch.length > 0) {
         params.push(existing.id)
-        await db.prepare(`UPDATE application_tasks SET ${patch.join(', ')}, updated_at = ${nowSqlLiteral(db)} WHERE id = ?`).run(...params)
+        const safeNowSql = nowSqlLiteral(db)
+        await db.prepare(`UPDATE application_tasks SET ${patch.join(', ')}, updated_at = ${safeNowSql} WHERE id = ?`).run(...params)
         const refreshed = await db.prepare('SELECT * FROM application_tasks WHERE id = ?').get(existing.id)
         return rowToTask(refreshed)
       }

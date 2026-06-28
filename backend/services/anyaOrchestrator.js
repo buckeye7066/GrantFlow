@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
-import { getProfileContext } from '../db/scopedQuery.js'
+import { getProfileContext, runProfileContext } from '../db/scopedQuery.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { createLogger } from '../utils/logger.js'
@@ -349,6 +349,10 @@ async function resolveExistingUserId(db, user) {
   }
 }
 
+function runProfilelessSessionMutation(fn) {
+  return runProfileContext({ bypass: true }, fn)
+}
+
 function assertProfileAccess(user, profileId) {
   if (!profileId) return
   if (user.isAdmin) return
@@ -575,14 +579,19 @@ export async function createSession(db, user, { profileId, title, metadata } = {
 
 export async function deleteSession(db, user, sessionId) {
   assertAuthenticated(user)
-  const session = await db
-    .prepare('SELECT * FROM anya_sessions WHERE id = ?')
-    .get(sessionId)
-  assertSessionAccess(user, session)
+  const session = await getSession(db, user, sessionId)
 
   // Hard delete — FK cascades handle anya_messages, anya_tasks, anya_context.
   // anya_runs and anya_tool_usage use ON DELETE SET NULL, preserving the audit trail.
-  await db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId)
+  if (session.profile_id) {
+    await db
+      .prepare('DELETE FROM anya_sessions WHERE id = ? AND profile_id = ?')
+      .run(sessionId, session.profile_id)
+  } else {
+    await runProfilelessSessionMutation(() =>
+      db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId),
+    )
+  }
   return { deleted: true, id: sessionId }
 }
 
@@ -681,13 +690,26 @@ export async function addMessage(db, user, sessionId, { role, content, toolName,
 
   await stmt.run(messageId, session.id, role, content, toolName ?? null, payload)
 
-  await db.prepare(
-    `
-      UPDATE anya_sessions
-      SET updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `,
-  ).run(session.id)
+  if (session.profile_id) {
+    await db.prepare(
+      `
+        UPDATE anya_sessions
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND profile_id = ?
+      `,
+    ).run(session.id, session.profile_id)
+  } else {
+    await runProfilelessSessionMutation(() =>
+      db.prepare(
+        `
+          UPDATE anya_sessions
+          SET updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+      ).run(session.id),
+    )
+  }
 
   const latest = await getMessages(db, user, session.id, { limit: 1, direction: 'latest' })
   return latest[0]

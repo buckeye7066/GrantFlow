@@ -1,5 +1,7 @@
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
+import { createLogger } from './logger.js'
+const qualityLog = createLogger('utils:aiProviders')
 
 let cachedAnthropic = null
 let cachedAnthropicKey = null
@@ -120,7 +122,7 @@ export async function invokeTextWithFallback({
       return { ok: true, provider: 'anthropic', text, raw: text, usage: null, openaiError, anthropicError: null }
     } catch (error) {
       anthropicError = error?.message ?? String(error)
-      console.error('[aiProviders] Anthropic text call failed:', anthropicError)
+      qualityLog.error('[aiProviders] Anthropic text call failed:', anthropicError)
     }
   }
 
@@ -199,7 +201,7 @@ export async function invokeJsonWithFallback({
       return { ok: true, provider: 'anthropic', json: parsed, raw: rawText, usage: null, openaiError, anthropicError: null }
     } catch (error) {
       anthropicError = error?.message ?? String(error)
-      console.error('[aiProviders] Anthropic JSON call failed:', anthropicError)
+      qualityLog.error('[aiProviders] Anthropic JSON call failed:', anthropicError)
     }
   }
 

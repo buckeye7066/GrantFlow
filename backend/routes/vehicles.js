@@ -192,7 +192,7 @@ router.post('/ingest', ingestAuth, async (req, res) => {
   }
 
   if (!db) {
-    console.error('[vehicles/ingest] Database is not available');
+    routeLogger.error('[vehicles/ingest] Database is not available');
     return res.status(500).json({ ok: false, error: 'Database unavailable' });
   }
 
@@ -212,18 +212,17 @@ router.post('/ingest', ingestAuth, async (req, res) => {
       });
     }
 
-    const isPg = db.dialect === 'postgres';
-
-    let id;
-    if (isPg) {
-      // PostgreSQL: gen_random_uuid() - let the DB generate the id
-      // clean_title is a native boolean column in Postgres
-      const inserted = await db.prepare(
+    // Adapter path: application-generated id keeps the insert portable.
+    // The DB adapter rewrites boolean-ish params for Postgres, so this stays cross-database.
+    const id = randomUUID();
+    await db
+      .prepare(
         `INSERT INTO vehicle_opportunities
-           (vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         RETURNING id`,
-      ).get(
+           (id, vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
         data.vehicle_type,
         data.title,
         data.price,
@@ -234,35 +233,9 @@ router.post('/ingest', ingestAuth, async (req, res) => {
         data.location,
         data.link,
         data.vin,
-        data.clean_title,
+        data.clean_title ? 1 : 0,
         data.source,
       );
-      id = inserted?.id;
-    } else {
-      // SQLite: generate id manually; clean_title stored as integer (1/0)
-      id = randomUUID();
-      await db
-        .prepare(
-          `INSERT INTO vehicle_opportunities
-             (id, vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          data.vehicle_type,
-          data.title,
-          data.price,
-          data.mileage,
-          data.year,
-          data.transmission,
-          data.color,
-          data.location,
-          data.link,
-          data.vin,
-          data.clean_title ? 1 : 0,
-          data.source,
-        );
-    }
 
     routeLogger.info('[vehicles/ingest] Inserted vehicle opportunity', {
       id,
@@ -275,7 +248,7 @@ router.post('/ingest', ingestAuth, async (req, res) => {
       scheduleDebouncedVehicleSync(db);
     } catch (syncErr) {
       // Log but do NOT fail the request if sync scheduling fails
-      console.error('[vehicles/ingest] Failed to schedule GitHub sync:', syncErr?.message || String(syncErr));
+      routeLogger.error('[vehicles/ingest] Failed to schedule GitHub sync:', syncErr?.message || String(syncErr));
     }
 
     return res.status(201).json({
@@ -305,7 +278,7 @@ router.post('/ingest', ingestAuth, async (req, res) => {
       });
     }
 
-    console.error('[vehicles/ingest] Insert error:', err?.message || String(err), { link: data.link });
+    routeLogger.error('[vehicles/ingest] Insert error:', err?.message || String(err), { link: data.link });
     return res.status(500).json(formatError(err));
   }
 });

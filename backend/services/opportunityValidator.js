@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const qualityLog = createLogger('services:opportunityValidator')
 /**
  * Opportunity Validator
  *
@@ -280,7 +282,7 @@ export async function checkUrlDuplicate(db, normalizedUrl, excludeId = null) {
   } catch (err) {
     // URL dedup is best-effort; we don't block insertion on query failures,
     // but a silent catch hides real DB issues. Log loudly so operators see it.
-    console.error('[opportunityValidator] checkUrlDuplicate query failed:', err?.message || err)
+    qualityLog.error('[opportunityValidator] checkUrlDuplicate query failed:', err?.message || err)
   }
 
   return { isDuplicate: false, existingId: null }

@@ -54,37 +54,6 @@ async function checkBackendHealth() {
   }
 }
 
-/**
- * Check authentication diagnostics
- */
-async function checkAuthDiagnostics(providerId) {
-  try {
-    const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-    const base = apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
-    const response = await fetch(`${base}/api/auth/diagnostics`, { 
-      method: 'GET',
-      signal: AbortSignal.timeout(5000)
-    })
-    
-    if (response.ok) {
-      const data = await response.json()
-      console.info('[SocialSignIn] Auth diagnostics:', data)
-      
-      // Check if the specific provider is configured
-      if (data.providers && data.providers[providerId]) {
-        return {
-          configured: data.providers[providerId].configured,
-          details: data.providers[providerId]
-        }
-      }
-    }
-    return { configured: false }
-  } catch (error) {
-    console.error('[SocialSignIn] Diagnostics check failed:', error)
-    return { configured: false }
-  }
-}
-
 // Pure helper hoisted above the component so handleClick can call it
 // without tripping ESLint's no-use-before-define guard. Does not depend on
 // component state.
@@ -147,12 +116,6 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
         
         if (!backendHealthy) {
           throw new Error('Backend server is not responding. Please ensure the server is running and try again.')
-        }
-        
-        // Check if provider is configured
-        const diagnostics = await checkAuthDiagnostics(provider.id)
-        if (!diagnostics.configured) {
-          throw new Error(`${provider.label} is not configured on the server. Please contact your administrator to set up OAuth credentials.`)
         }
       }
       

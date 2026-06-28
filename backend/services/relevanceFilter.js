@@ -106,8 +106,9 @@ function buildOppText(opportunity) {
  *   - Rules flagged `hard: true` still return { pass: false } and REJECT.
  *   - Soft rules (default) return { pass: true, softFail: true, penalty }
  *     so callers can reduce the score instead of discarding the opportunity.
- *   - Directory / general funding resources ALWAYS pass (they must survive
- *     filtering unless explicitly excluded).
+ *   - Directory / general funding resources pass by default for legacy recall
+ *     paths. Profile-specific display/pipeline gates can set
+ *     opts.allowDirectories=false so directories do not bypass relevance.
  *
  * The optional `opts.mode` lets legacy callers keep strict behavior:
  *   - 'strict' (default): soft rules still fail (backward-compatible)
@@ -134,7 +135,9 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
     String(opportunity.record_origin || '').startsWith('directory') ||
     String(opportunity.type || '').toUpperCase() === 'DIRECTORY',
   )
-  if (isDirectoryResource) return { pass: true, directory: true }
+  if (isDirectoryResource && opts.allowDirectories !== false) {
+    return { pass: true, directory: true }
+  }
 
   // A HARD rule (or strict mode) always wins, regardless of rule order — so we
   // must NOT return on the first soft match. Remember the first soft match but

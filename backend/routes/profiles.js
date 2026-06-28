@@ -51,6 +51,7 @@ import {
   mergeSchoolPortalAwards,
   removeMergedSchoolPortalAward,
 } from '../services/schoolPortalImportService.js'
+import { buildProjectReadinessPlan, renderProjectPlanDocument } from '../crawler-os/projectReadinessPlan.js'
 
 /**
  * Mission goal #4/#5: every saved profile must carry a profile-type
@@ -127,6 +128,7 @@ function canAccessProfileIdFromCtx(ctx, profileId) {
   if (ctx?.isAdmin === true) return true
   if (ctx?.accessibleProfileIds === null) return true // admin sentinel (all)
   if (ctx?.accessibleProfileIds instanceof Set && ctx.accessibleProfileIds.has(id)) return true
+  if (ctx?.activeProfileId && String(ctx.activeProfileId) === id) return true
   return false
 }
 
@@ -275,18 +277,79 @@ async function optionalRows(db, label, sql, params = []) {
   try {
     return coerceDbRows(await db.prepare(sql).all(...params))
   } catch (error) {
-    const message = error?.message || String(error)
-    if (
-      message.includes('no such table') ||
-      message.includes('does not exist') ||
-      message.includes('no such column') ||
-      (message.includes('column') && message.includes('does not exist'))
-    ) {
+    if (isOptionalSchemaLookupError(error)) {
+      const message = error?.message || String(error)
       console.warn(`[profiles] Skipping optional ${label} application lookup: ${message}`)
       return []
     }
     throw error
   }
+}
+
+function isOptionalSchemaLookupError(error) {
+  const message = String(error?.message || error)
+  return (
+    message.includes('no such table') ||
+    message.includes('does not exist') ||
+    message.includes('no such column') ||
+    (message.includes('column') && message.includes('does not exist'))
+  )
+}
+
+function projectPlanDocumentSelect({ includeStructured = true } = {}) {
+  return `
+    SELECT d.id, d.name, d.type, d.mime_type, d.extracted_text,
+           ${includeStructured ? 'd.extracted_structured' : 'NULL AS extracted_structured'},
+           d.ai_summary, d.notes, d.processing_status, d.created_at
+      FROM documents d
+  `
+}
+
+async function loadProjectPlanDocumentRows(db, label, safeFromWhereSql, params = [], { optionalSchema = false } = {}) {
+  const safeOrderLimitSql = `
+      ${safeFromWhereSql}
+      ORDER BY d.created_at DESC
+      LIMIT 100
+  `
+  try {
+    return coerceDbRows(await db.prepare(`${projectPlanDocumentSelect()} ${safeOrderLimitSql}`).all(...params))
+  } catch (error) {
+    const message = String(error?.message || error).toLowerCase()
+    if (message.includes('extracted_structured')) {
+      try {
+        return coerceDbRows(
+          await db.prepare(`${projectPlanDocumentSelect({ includeStructured: false })} ${safeOrderLimitSql}`).all(...params),
+        )
+      } catch (fallbackError) {
+        if (optionalSchema && isOptionalSchemaLookupError(fallbackError)) {
+          console.warn(`[profiles] Skipping optional ${label} application lookup: ${fallbackError?.message || fallbackError}`)
+          return []
+        }
+        throw fallbackError
+      }
+    }
+    if (optionalSchema && isOptionalSchemaLookupError(error)) {
+      console.warn(`[profiles] Skipping optional ${label} application lookup: ${error?.message || error}`)
+      return []
+    }
+    throw error
+  }
+}
+
+function mergeProjectPlanDocuments(rows) {
+  const byId = new Map()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = row?.id ? String(row.id) : null
+    if (!id || byId.has(id)) continue
+    byId.set(id, row)
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => {
+      const aMs = Date.parse(String(a?.created_at || ''))
+      const bMs = Date.parse(String(b?.created_at || ''))
+      return (Number.isFinite(bMs) ? bMs : 0) - (Number.isFinite(aMs) ? aMs : 0)
+    })
+    .slice(0, 100)
 }
 
 function mapProfile(row) {
@@ -326,6 +389,96 @@ function mapProfile(row) {
         ? `/api/profiles/${String(row.id)}/avatar/download${avatarVersion ? `?v=${encodeURIComponent(avatarVersion)}` : ''}`
         : null,
     profile_image_url: rawAvatar ?? null,
+  }
+}
+
+async function loadProfileForProjectPlan(req, id) {
+  const row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!row) return null
+  const profile = mapProfile(row)
+  const sectionRows = coerceDbRows(await req.db.prepare(
+    `SELECT section_key, data, updated_at, updated_by
+       FROM profile_sections
+      WHERE profile_id = ?
+      ORDER BY section_key`,
+  ).all(id))
+  profile.sections = sectionRows.map((section) => ({
+    section_key: section.section_key,
+    data: normalizeProfileSectionData(section.section_key, safeParseJSON(section.data, {})),
+    updated_at: section.updated_at,
+    updated_by: section.updated_by,
+  }))
+  const docs = mergeProjectPlanDocuments([
+    ...(await loadProjectPlanDocumentRows(req.db, 'project-plan direct documents', 'WHERE d.profile_id = ?', [id])),
+    ...(await loadProjectPlanDocumentRows(
+      req.db,
+      'project-plan linked documents',
+      `JOIN profile_documents pd ON pd.document_id = d.id
+       WHERE pd.profile_id = ?`,
+      [id],
+      { optionalSchema: true },
+    )),
+  ])
+  profile.documents = docs.map((doc) => ({
+    ...doc,
+    extracted_structured: safeParseJSON(doc.extracted_structured, null),
+  }))
+  return profile
+}
+
+async function saveProjectPlanDocument(req, profileId, plan) {
+  const documentId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex')
+  const content = renderProjectPlanDocument(plan)
+  const now = new Date().toISOString()
+  const contentHash = crypto.createHash('sha256').update(content).digest('hex')
+  const notes = JSON.stringify({ generated_by: 'hamilton', plan_id: plan.plan_id })
+  const fullInsertSql = `INSERT INTO documents (
+        id, profile_id, name, type, mime_type, extracted_text, ai_summary,
+        processing_status, status, notes, content_hash, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', 'draft', ?, ?, ?, ?)`
+  try {
+    await req.db.prepare(fullInsertSql).run(
+      documentId,
+      profileId,
+      `${plan.title}.md`,
+      'project_action_plan',
+      'text/markdown',
+      content,
+      plan.summary,
+      notes,
+      contentHash,
+      now,
+      now,
+    )
+  } catch (error) {
+    const msg = String(error?.message || error).toLowerCase()
+    if (!msg.includes('no such column')) throw error
+    await req.db.prepare(
+      `INSERT INTO documents (
+          id, profile_id, name, type, mime_type, extracted_text, ai_summary,
+          processing_status, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?)`,
+    ).run(
+      documentId,
+      profileId,
+      `${plan.title}.md`,
+      'project_action_plan',
+      'text/markdown',
+      content,
+      plan.summary,
+      notes,
+    )
+  }
+  await req.db.prepare(
+    `INSERT INTO profile_documents (profile_id, document_id)
+     VALUES (?, ?)
+     ON CONFLICT DO NOTHING`,
+  ).run(profileId, documentId)
+  return {
+    id: documentId,
+    name: `${plan.title}.md`,
+    type: 'project_action_plan',
+    processing_status: 'completed',
   }
 }
 
@@ -700,12 +853,7 @@ router.get('/:id/school-link', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canRead =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canRead) return res.status(403).json({ error: 'Not authorized' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized' })
 
     let link = null
     try {
@@ -747,12 +895,7 @@ router.post('/:id/school-link/revoke', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) return res.status(403).json({ error: 'Not authorized' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized' })
 
     let result
     try {
@@ -785,12 +928,7 @@ router.get('/:id/emails', async (req, res) => {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) {
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
@@ -812,12 +950,7 @@ router.post('/:id/emails', async (req, res) => {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) {
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
@@ -875,12 +1008,7 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
 
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) {
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) {
       return res.status(403).json({ error: 'Not authorized to manage profile emails' })
     }
 
@@ -926,14 +1054,9 @@ router.get('/:id/portal-access-schedule', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    // Authorization: same gate as the PUT — only an admin, the profile owner, or
-    // the active profile may read the schedule (it's profile-scoped data).
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canView =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    // Profile-scoped schedule: reuse the central profile access decision so
+    // email-shared owners can use the same tools as account owners.
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to view this profile' })
     const prefs = await loadAutomationPreferences(req.db, profileId)
     res.json({ schedule: normalizeSchedule(prefs) })
   } catch (error) {
@@ -945,12 +1068,7 @@ router.put('/:id/portal-access-schedule', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to manage this profile' })
 
     // Validate by normalizing — bad windows are dropped; an empty/disabled
     // schedule means "any time" (the prior always-on behavior).
@@ -987,12 +1105,7 @@ router.get('/:id/automation-preferences', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canView =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to view this profile' })
     const prefs = await loadAutomationPreferences(req.db, profileId)
     res.json({
       automations: normalizeAutomationToggles(prefs?.automations),
@@ -1007,12 +1120,7 @@ router.put('/:id/automation-preferences', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
-    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
-    const canManage =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canManage) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to manage this profile' })
 
     // Accept either { automations: {...} } or a bare {...} of toggle keys.
     // normalizeAutomationToggles drops unknown keys and coerces to booleans, so
@@ -1041,11 +1149,7 @@ router.get('/:id/award-summary', async (req, res) => {
     const profileId = String(req.params.id)
     const profileRow = await req.db.prepare('SELECT id, display_name, user_id FROM profiles WHERE id = ?').get(profileId)
     if (!profileRow) return res.status(404).json({ error: 'Profile not found' })
-    const canView =
-      req.ctx?.isAdmin === true ||
-      (req.ctx?.userId && profileRow.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
-      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
-    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    if (!canAccessProfileRowFromCtx(req.ctx, profileRow)) return res.status(403).json({ error: 'Not authorized to view this profile' })
 
     // Committed-college scholarships (financial_aid_pipeline on the committed app).
     let aidEntries = []
@@ -2658,6 +2762,50 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
 // A dedicated tiny GET/PUT keeps the contract simple and avoids coupling the
 // language choice to the section-payload guard. English is the default.
 // ---------------------------------------------------------------------------
+// Project readiness plan - Anya asks for missing facts; Hamilton saves the
+// checklist/how-to packet. Parsed profile documents are evidence, not penalties.
+router.get('/:id/project-readiness-plan', async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    const profile = await loadProfileForProjectPlan(req, id)
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+      return denyAuth(req, res)
+    }
+
+    const plan = buildProjectReadinessPlan(profile)
+    return res.json({ ok: true, plan })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/:id/project-readiness-plan/prepare', async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    const profile = await loadProfileForProjectPlan(req, id)
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+      return denyAuth(req, res)
+    }
+
+    const plan = buildProjectReadinessPlan(profile)
+    const document = await saveProjectPlanDocument(req, id, plan)
+    return res.json({ ok: true, outcome: 'project_plan_ready', plan, document })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Preferred language - the first thing Anya asks during onboarding.
 router.get('/:id/preferred-language', async (req, res) => {
   const { id } = req.params
 
@@ -2795,6 +2943,7 @@ router.post('/:id/portal-awards/merge', async (req, res) => {
   }
 
   logProfileSectionRejections(id, 'university_applications', guardedPayload.rejected)
+  // audit:allow unscoped-profile-query -- INSERT includes profile_id and the route validates access to id before writing.
   await req.db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -2867,6 +3016,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     guardedData = deriveNamePartsIntoBasicInfo(guardedData, profile?.display_name).data
   }
 
+  // audit:allow unscoped-profile-query -- INSERT includes profile_id and the route validates access to id before writing.
   const upsert = req.db.prepare(
     `
     INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -3597,6 +3747,7 @@ router.post('/:id/repair', async (req, res) => {
     const existingKeys = new Set(existingSections.map(s => s.section_key))
 
     // Create missing sections (as empty JSON)
+    // audit:allow unscoped-profile-query -- INSERT includes profile_id and the route validates access to id before repairing.
     const upsert = req.db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, '{}', 'system-repair')

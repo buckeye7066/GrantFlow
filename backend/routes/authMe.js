@@ -3,7 +3,7 @@
  *
  * Provides:
  *   GET /api/auth/me         — Returns the current authenticated user with their accessible profiles.
- *   GET /api/auth/diagnostics — Returns operational status of the auth subsystem (JWT, DB, OAuth providers).
+ *   GET /api/auth/diagnostics — Admin-only operational status of the auth subsystem.
  *
  * These handlers were previously defined inline in server.js. They are extracted here to keep
  * server.js responsible only for mounting routes, and to make this logic independently testable.
@@ -14,6 +14,7 @@
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:authMe')
@@ -79,7 +80,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             )
             .get(user.userId)
         } catch (dbError) {
-          console.error('[/api/auth/me] Database error fetching user:', dbError)
+          routeLogger.error('[/api/auth/me] Database error fetching user:', dbError)
           return res.status(503).json({
             error: 'service_unavailable',
             error_type: 'database_error',
@@ -114,7 +115,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 )
                 .get(user.userId)
             } catch (repairError) {
-              console.error(
+              routeLogger.error(
                 '[/api/auth/me] Unable to self-heal missing admin user:',
                 {
                   message: repairError?.message || String(repairError),
@@ -211,7 +212,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             }
           }
         } catch (dbError) {
-          console.error('[/api/auth/me] Database error fetching profiles:', dbError)
+          routeLogger.error('[/api/auth/me] Database error fetching profiles:', dbError)
           // Return user data without profiles if profiles query fails (avoid 5xx for auth bootstrap).
           profiles = []
         }
@@ -262,7 +263,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         active_profile_id: user.profileId ?? null,
       })
     } catch (error) {
-      console.error('[/api/auth/me] Unexpected error:', error)
+      routeLogger.error('[/api/auth/me] Unexpected error:', error)
       return res.status(503).json({
         error: 'service_unavailable',
         error_type: 'internal_error',
@@ -274,7 +275,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
   // -------------------------------------------------------------------------
   // GET /api/auth/diagnostics
   // -------------------------------------------------------------------------
-  router.get('/diagnostics', async (_req, res) => {
+  router.get('/diagnostics', ensureAuth, ensureAdmin, async (_req, res) => {
     const diagnostics = {
       status: 'operational',
       timestamp: new Date().toISOString(),
