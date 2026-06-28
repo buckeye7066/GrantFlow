@@ -313,7 +313,7 @@ export default function Layout({ children, currentPageName }) {
           </SidebarFooter>
         </Sidebar>
 
-        <main className="min-w-0 flex-1 flex flex-col overflow-hidden">
+        <main className="min-w-0 flex-1 flex flex-col">
           <header className="bg-background/80 backdrop-blur border-b border-border px-4 md:px-6 py-3 flex flex-col gap-2 sticky top-0 z-20">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3 md:gap-4">
@@ -362,7 +362,7 @@ export default function Layout({ children, currentPageName }) {
             </div>
           </header>
 
-          <div className="flex-1 overflow-auto overscroll-contain bg-background text-foreground">
+          <div className="flex-1 bg-background text-foreground">
             <div className="min-h-full">
               <AutoTimeTracker />
               <MaintenanceGate />
