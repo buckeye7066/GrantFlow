@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { AlertTriangle } from 'lucide-react';
+import { captureFrontendException } from '@/utils/observability.js';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -13,6 +14,10 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
+    captureFrontendException(error, {
+      area: 'component_boundary',
+      componentStack: errorInfo?.componentStack,
+    });
     if (import.meta.env.DEV) {
       console.error("Uncaught error:", error, errorInfo);
     }

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
 import { maybeReloadForStaleChunk } from "@/utils/lazyWithRetry"
+import { captureFrontendException } from "@/utils/observability.js"
 
 const MAX_RETRIES = 3
 
@@ -50,6 +51,15 @@ export default class RouteErrorBoundary extends React.Component {
     }
 
     // Keep this log — it's the primary breadcrumb when users report "blank screen".
+    captureFrontendException(error, {
+      area: 'route_boundary',
+      route: this.props.routeName ?? null,
+      errorCount: newCount,
+      stale_chunk: isStaleChunkError(error),
+      requestId: error?.requestId ?? error?.request_id ?? null,
+      componentStack: info?.componentStack,
+    })
+
     console.error("[RouteErrorBoundary] route crash", {
       route: this.props.routeName ?? null,
       message: error?.message,
