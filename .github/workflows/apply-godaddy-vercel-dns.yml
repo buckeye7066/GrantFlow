@@ -31,7 +31,7 @@ jobs:
   dns:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Guard - refuse to break the lab website
         # Inputs are passed via env (NOT interpolated into the script body) so a
