@@ -32,4 +32,19 @@ jobs:
         uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
+        id: analyze
         uses: github/codeql-action/analyze@v4
+        with:
+          # This private repo does not currently have GitHub Advanced Security
+          # purchased, so Code Scanning uploads fail with a configuration error.
+          # Keep the analysis real and preserve SARIF as a workflow artifact.
+          upload: never
+
+      - name: Retain CodeQL SARIF artifact
+        if: always() && steps.analyze.outputs.sarif-output != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: ${{ steps.analyze.outputs.sarif-output }}
+          if-no-files-found: warn
+          retention-days: 30
