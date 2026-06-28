@@ -154,7 +154,7 @@ const CASES = [
     notSelectedSources: ['cancer_care'],
   },
   {
-    name: 'military-background individual starting a food truck in West Virginia',
+    name: 'ambiguous military-background individual starting a food truck in West Virginia',
     profile: {
       id: 'food-truck-wv',
       profile_type: 'individual',
@@ -163,11 +163,11 @@ const CASES = [
       needs: ['food truck startup', 'kitchen equipment', 'working capital'],
     },
     applicantTypes: ['individual'],
-    needs: ['startup', 'equipment', 'capital', 'military_startup'],
-    selectedSources: ['sba_veteran_business', 'sba_vboc', 'sba_boots_to_business', 'wv_sbdc_funding', 'wv_business_funding_resources'],
-    notNeeds: ['food', 'veterans', 'veteran_startup'],
+    needs: ['startup', 'equipment', 'capital'],
+    selectedSources: ['wv_sbdc_funding', 'wv_business_funding_resources'],
+    notNeeds: ['food', 'veterans', 'veteran_startup', 'military_startup'],
     notApplicantTypes: ['veteran', 'active_duty'],
-    notSelectedSources: ['benefits_gov', 'united_way_211'],
+    notSelectedSources: ['benefits_gov', 'united_way_211', 'sba_veteran_business', 'sba_vboc', 'sba_boots_to_business'],
   },
   {
     name: 'active duty service member starting a food truck in West Virginia',

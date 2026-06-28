@@ -78,6 +78,25 @@ function mapPreferencesRow(row) {
   }
 }
 
+async function ensurePreferencesRow(db, dialect, userId, customPreferences = {}) {
+  const id = crypto.randomUUID()
+  const customJson = JSON.stringify(customPreferences || {})
+  const sql =
+    dialect === 'postgres'
+      ? `
+          INSERT INTO user_preferences (id, user_id, custom_preferences)
+          VALUES (?, ?, ?::jsonb)
+          ON CONFLICT(user_id) DO NOTHING
+        `
+      : `
+          INSERT INTO user_preferences (id, user_id, custom_preferences)
+          VALUES (?, ?, ?)
+          ON CONFLICT(user_id) DO NOTHING
+        `
+  await db.prepare(sql).run(id, userId, customJson)
+  return db.prepare('SELECT * FROM user_preferences WHERE user_id = ?').get(userId)
+}
+
 // Get user preferences (or create with defaults if not exists)
 router.get('/', async (req, res) => {
   const userId = req.ctx?.userId ?? null
@@ -95,7 +114,6 @@ router.get('/', async (req, res) => {
     
     if (!preferences) {
       // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
-      const id = crypto.randomUUID()
       // Initialize custom preferences with feature flags and incognito toggle.
       // `anya_match_scout_muted` defaults to false so new users get the
       // recommend-only popup. They can mute it from Settings; the scout
@@ -105,20 +123,7 @@ router.get('/', async (req, res) => {
         incognitoEnabled: false,
         anya_match_scout_muted: false,
       }
-      const insertSql =
-        dialect === 'postgres'
-          ? `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?::jsonb)
-            `
-          : `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?)
-            `
-      await req.db.prepare(insertSql).run(id, userId, JSON.stringify(defaultCustom))
-      preferences = await req.db
-        .prepare('SELECT * FROM user_preferences WHERE id = ?')
-        .get(id)
+      preferences = await ensurePreferencesRow(req.db, dialect, userId, defaultCustom)
     } else {
       let custom = preferences.custom_preferences
       if (typeof custom === 'string') {
@@ -174,18 +179,8 @@ router.put('/', async (req, res) => {
     // Ensure row exists before update.
     let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     if (!existing?.id) {
-      const id = crypto.randomUUID()
-      const insertSql =
-        dialect === 'postgres'
-          ? `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?::jsonb)
-            `
-          : `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?)
-            `
-      await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
+      await ensurePreferencesRow(req.db, dialect, userId, {})
+      existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     }
 
     const updates = []
@@ -260,22 +255,7 @@ router.post('/reset', async (req, res) => {
 
     await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
 
-    const id = crypto.randomUUID()
-    const insertSql =
-      dialect === 'postgres'
-        ? `
-            INSERT INTO user_preferences (id, user_id, custom_preferences)
-            VALUES (?, ?, ?::jsonb)
-          `
-        : `
-            INSERT INTO user_preferences (id, user_id, custom_preferences)
-            VALUES (?, ?, ?)
-          `
-    await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
-    
-    const preferences = await req.db
-      .prepare('SELECT * FROM user_preferences WHERE id = ?')
-      .get(id)
+    const preferences = await ensurePreferencesRow(req.db, dialect, userId, {})
     
     res.json(mapPreferencesRow(preferences))
   } catch (error) {

@@ -277,18 +277,79 @@ async function optionalRows(db, label, sql, params = []) {
   try {
     return coerceDbRows(await db.prepare(sql).all(...params))
   } catch (error) {
-    const message = error?.message || String(error)
-    if (
-      message.includes('no such table') ||
-      message.includes('does not exist') ||
-      message.includes('no such column') ||
-      (message.includes('column') && message.includes('does not exist'))
-    ) {
+    if (isOptionalSchemaLookupError(error)) {
+      const message = error?.message || String(error)
       console.warn(`[profiles] Skipping optional ${label} application lookup: ${message}`)
       return []
     }
     throw error
   }
+}
+
+function isOptionalSchemaLookupError(error) {
+  const message = String(error?.message || error)
+  return (
+    message.includes('no such table') ||
+    message.includes('does not exist') ||
+    message.includes('no such column') ||
+    (message.includes('column') && message.includes('does not exist'))
+  )
+}
+
+function projectPlanDocumentSelect({ includeStructured = true } = {}) {
+  return `
+    SELECT d.id, d.name, d.type, d.mime_type, d.extracted_text,
+           ${includeStructured ? 'd.extracted_structured' : 'NULL AS extracted_structured'},
+           d.ai_summary, d.notes, d.processing_status, d.created_at
+      FROM documents d
+  `
+}
+
+async function loadProjectPlanDocumentRows(db, label, safeFromWhereSql, params = [], { optionalSchema = false } = {}) {
+  const safeOrderLimitSql = `
+      ${safeFromWhereSql}
+      ORDER BY d.created_at DESC
+      LIMIT 100
+  `
+  try {
+    return coerceDbRows(await db.prepare(`${projectPlanDocumentSelect()} ${safeOrderLimitSql}`).all(...params))
+  } catch (error) {
+    const message = String(error?.message || error).toLowerCase()
+    if (message.includes('extracted_structured')) {
+      try {
+        return coerceDbRows(
+          await db.prepare(`${projectPlanDocumentSelect({ includeStructured: false })} ${safeOrderLimitSql}`).all(...params),
+        )
+      } catch (fallbackError) {
+        if (optionalSchema && isOptionalSchemaLookupError(fallbackError)) {
+          console.warn(`[profiles] Skipping optional ${label} application lookup: ${fallbackError?.message || fallbackError}`)
+          return []
+        }
+        throw fallbackError
+      }
+    }
+    if (optionalSchema && isOptionalSchemaLookupError(error)) {
+      console.warn(`[profiles] Skipping optional ${label} application lookup: ${error?.message || error}`)
+      return []
+    }
+    throw error
+  }
+}
+
+function mergeProjectPlanDocuments(rows) {
+  const byId = new Map()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = row?.id ? String(row.id) : null
+    if (!id || byId.has(id)) continue
+    byId.set(id, row)
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => {
+      const aMs = Date.parse(String(a?.created_at || ''))
+      const bMs = Date.parse(String(b?.created_at || ''))
+      return (Number.isFinite(bMs) ? bMs : 0) - (Number.isFinite(aMs) ? aMs : 0)
+    })
+    .slice(0, 100)
 }
 
 function mapProfile(row) {
@@ -347,19 +408,17 @@ async function loadProfileForProjectPlan(req, id) {
     updated_at: section.updated_at,
     updated_by: section.updated_by,
   }))
-  const docs = await optionalRows(
-    req.db,
-    'project-plan documents',
-    `SELECT DISTINCT d.id, d.name, d.type, d.mime_type, d.extracted_text,
-            d.extracted_structured, d.ai_summary, d.notes, d.processing_status,
-            d.created_at
-       FROM documents d
-       LEFT JOIN profile_documents pd ON pd.document_id = d.id
-      WHERE d.profile_id = ? OR pd.profile_id = ?
-      ORDER BY d.created_at DESC
-      LIMIT 100`,
-    [id, id],
-  )
+  const docs = mergeProjectPlanDocuments([
+    ...(await loadProjectPlanDocumentRows(req.db, 'project-plan direct documents', 'WHERE d.profile_id = ?', [id])),
+    ...(await loadProjectPlanDocumentRows(
+      req.db,
+      'project-plan linked documents',
+      `JOIN profile_documents pd ON pd.document_id = d.id
+       WHERE pd.profile_id = ?`,
+      [id],
+      { optionalSchema: true },
+    )),
+  ])
   profile.documents = docs.map((doc) => ({
     ...doc,
     extracted_structured: safeParseJSON(doc.extracted_structured, null),

@@ -29,6 +29,7 @@ import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/
 import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
+import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
   detectProfessionalDevelopmentIntent,
   loadCuratedProfessionalDevelopmentPrograms,
@@ -453,6 +454,9 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // The legacy path below remains the reversible fallback for explicit
       // `?legacy_matching=1` callers and for profiles the OS has not yet
       // scored at all.
+      const baseContext = await loadProfileContext(req.db, profileId)
+      const profileContext = buildProfileFacets(baseContext)
+
       const OS_RECALL_FLOOR = Number(process.env.OS_RECALL_FLOOR) || 10
       let osMergeRows = null  // populated when we fall through to legacy
       if (req.query.legacy_matching !== '1') {
@@ -462,9 +466,10 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
             .prepare(
               `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
                       m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
-                 FROM profile_opportunity_matches m
+                FROM profile_opportunity_matches m
                  JOIN funding_opportunities o ON o.id = m.opportunity_id
                 WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+                  AND LOWER(COALESCE(m.match_decision, '')) <> 'reject'
                   AND (o.is_active IS NULL OR o.is_active = 1)
                   AND (o.is_hidden IS NULL OR o.is_hidden = 0)
                 ORDER BY m.match_score DESC`,
@@ -501,6 +506,11 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               engine: 'crawler-os',
             }
           })
+          const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+            preserveDirectories: true,
+            rejectHardIneligible: true,
+          })
+          mapped = canonical.kept
           // dedupeOpportunityList / filterOutPipelineMembers return { results, ... }
           mapped = dedupeOpportunityList(mapped).results
           mapped = (await filterOutPipelineMembers(req.db, profileId, mapped)).results
@@ -580,9 +590,6 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       const applyProfDevExclusion =
         effectivePrimaryCategory === 'professional_development' &&
         !explicitlyIncludeIncomeSupport
-
-      const baseContext = await loadProfileContext(req.db, profileId)
-                   const profileContext = buildProfileFacets(baseContext)
 
       // Normalize the profile once, up front, so the geographic pre-filter can
       // read ALL of the profile's states (primary + secondary address +
@@ -1241,6 +1248,20 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // over the per-path filters above so no fallback/ladder/annotation step
       // can reintroduce a sub-threshold row. (User directive: "if the slider
       // is at 70, no results below 70 should show — globally & permanently.")
+      // Merge sparse Crawler OS rows before the final gates. They should improve
+      // recall, not bypass the strict score floor, duplicate collapse, or
+      // profile-scoped pipeline exclusion that every other result uses.
+      let osMergeMergedCount = 0
+      if (Array.isArray(osMergeRows) && osMergeRows.length > 0) {
+        osMergeMergedCount = osMergeRows.length
+        capped = [...osMergeRows, ...capped].sort(
+          (a, b) => Number(b.match_score ?? 0) - Number(a.match_score ?? 0),
+        )
+        routeLogger.info(
+          `[matching] merged ${osMergeRows.length} crawler-os rows before final gates for profile ${profileId}`,
+        )
+      }
+
       if (strictMin && Number.isFinite(minScore)) {
         capped = capped.filter((opp) => (opp.match_score ?? 0) >= minScore)
       }
@@ -1276,35 +1297,12 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           capped = filtered.results
         } catch (exclErr) {
           // Recall over suppression — a filter failure must not blank results.
-          routeLogger.warn(`[matching] pipeline exclusion skipped: ${exclErr?.message || exclErr}`)
-        }
-      }
-
-      // Merge OS-discovered rows that the early-return path saved for us when
-      // OS qualified.length was below OS_RECALL_FLOOR. We dedupe by id /
-      // fingerprint / source_id (the same keys the OS persistence uses) and
-      // sort by match_score so the highest-confidence rows lead. Without
-      // this, a sparse OS run would stream three directory pointers to a
-      // student profile and hide the 90k-row legacy catalog forever.
-      let osMergeMergedCount = 0
-      if (Array.isArray(osMergeRows) && osMergeRows.length > 0) {
-        const cappedIds = new Set(capped.map((o) => o?.id).filter(Boolean))
-        const cappedFingerprints = new Set(capped.map((o) => o?.fingerprint).filter(Boolean))
-        const cappedSourceIds = new Set(capped.map((o) => o?.source_id).filter(Boolean))
-        const newOsRows = osMergeRows.filter((r) =>
-          r &&
-          !cappedIds.has(r.id) &&
-          !(r.fingerprint && cappedFingerprints.has(r.fingerprint)) &&
-          !(r.source_id && cappedSourceIds.has(r.source_id)),
-        )
-        if (newOsRows.length > 0) {
-          osMergeMergedCount = newOsRows.length
-          capped = [...newOsRows, ...capped].sort(
-            (a, b) => Number(b.match_score ?? 0) - Number(a.match_score ?? 0),
-          )
-          routeLogger.info(
-            `[matching] merged ${newOsRows.length} crawler-os rows on top of legacy results for profile ${profileId}`,
-          )
+          routeLogger.error(`[matching] pipeline exclusion failed: ${exclErr?.message || exclErr}`)
+          return res.status(503).json({
+            error: 'pipeline_exclusion_unavailable',
+            message: 'GrantFlow could not verify which opportunities are already in this profile pipeline. Please retry before adding new results.',
+            profile_id: profileId,
+          })
         }
       }
 

@@ -212,6 +212,44 @@ test('profileNormalizer: normalizeProfile detects veteran flag', () => {
   assert.equal(norm.isVeteran, true)
 })
 
+test('profileNormalizer: negative military and business strings do not become eligibility signals', () => {
+  const raw = {
+    primary_type: 'individual',
+    state: 'TN',
+    is_veteran: 'false',
+    is_business: 'false',
+  }
+  const sections = {
+    military_service: {
+      answers: {
+        is_veteran: 'no',
+        veteran: 'false',
+        served_in_military: 'no',
+        military_service: 'none',
+        veteran_status: 'not applicable',
+        branch: 'not specified',
+        discharge_status: 'unknown',
+      },
+    },
+    business: {
+      answers: {
+        owns_business: 'no',
+        is_self_employed: 'false',
+        has_business: 'none',
+        business_name: 'not specified',
+        naics_code: 'n/a',
+        ein: 'none',
+      },
+    },
+  }
+
+  const norm = normalizeProfile(raw, sections)
+  assert.equal(norm.isVeteran, false)
+  assert.equal(norm.isBusiness, false)
+  assert.ok(!norm.needCategories.includes('veteran'))
+  assert.ok(!norm.needCategories.includes('business'))
+})
+
 test('profileNormalizer: normalizeProfile detects student flag', () => {
   const raw = { primary_type: 'high_school_student', state: 'CA' }
   const norm = normalizeProfile(raw)

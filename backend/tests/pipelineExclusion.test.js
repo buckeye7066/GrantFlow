@@ -126,6 +126,14 @@ describe('filterOutPipelineMembers', () => {
     expect(results).toHaveLength(2)
   })
 
+  it('fails closed when the profile pipeline cannot be read', async () => {
+    const broken = new Database(':memory:')
+    await expect(filterOutPipelineMembers(broken, 'p1', [{ id: 'a' }])).rejects.toMatchObject({
+      code: 'PIPELINE_EXCLUSION_UNAVAILABLE',
+    })
+    broken.close()
+  })
+
   it('excludes a pipeline member re-crawled under a NEW id/source by title+funder', async () => {
     // Repro of the reported leak: the same scholarship is in the pipeline, then
     // re-crawled under a new catalog id AND a different source label, so its
@@ -173,6 +181,55 @@ describe('filterOutPipelineMembers', () => {
     const { results, excluded } = await filterOutPipelineMembers(db, 'p1', opportunities)
     expect(excluded).toBe(0)
     expect(results.map((o) => o.id)).toEqual(['other'])
+  })
+
+  it('excludes conservative acronym-family crawler variants already in the pipeline', async () => {
+    insertGrant(db, {
+      id: 'g-naemt',
+      profile_id: 'p1',
+      funding_opportunity_id: 'web-naemt-1',
+      title: 'NAEMT Educational Scholarships',
+      funder: 'National Association of Emergency Medical Technicians',
+    })
+    const opportunities = [
+      {
+        id: 'web-naemt-2',
+        title: 'NAEMT EMT-Paramedic Scholarship',
+        sponsor: 'National Association of Emergency Medical Technicians',
+        description: 'Active NAEMT members pursuing EMT-Paramedic education.',
+        source: 'web_search',
+        record_origin: 'web_search',
+      },
+      { id: 'fresh-ems', title: 'EMS Equipment Mini-Grant', sponsor: 'Community Foundation' },
+    ]
+
+    const { results, excluded } = await filterOutPipelineMembers(db, 'p1', opportunities)
+
+    expect(excluded).toBe(1)
+    expect(results.map((o) => o.id)).toEqual(['fresh-ems'])
+  })
+
+  it('does NOT exclude distinct same-funder acronym programs', async () => {
+    insertGrant(db, {
+      id: 'g-usda-vapg',
+      profile_id: 'p1',
+      funding_opportunity_id: 'usda-vapg',
+      title: 'USDA Value Added Producer Grant',
+      funder: 'USDA Rural Development',
+    })
+    const opportunities = [
+      {
+        id: 'usda-reap',
+        title: 'USDA REAP Grant',
+        sponsor: 'USDA Rural Development',
+        description: 'Renewable energy and energy efficiency assistance for rural businesses and producers.',
+      },
+    ]
+
+    const { results, excluded } = await filterOutPipelineMembers(db, 'p1', opportunities)
+
+    expect(excluded).toBe(0)
+    expect(results.map((o) => o.id)).toEqual(['usda-reap'])
   })
 })
 
@@ -222,5 +279,59 @@ describe('dedupeOpportunityList', () => {
     const { results, removed } = dedupeOpportunityList(list)
     expect(removed).toBe(0)
     expect(results).toHaveLength(2)
+  })
+
+  it('collapses conservative acronym-family crawler variants, keeping the best row', () => {
+    const list = [
+      {
+        id: 'web-naemt-1',
+        title: 'NAEMT Educational Scholarships',
+        sponsor: 'National Association of Emergency Medical Technicians',
+        description: 'Individual active NAEMT members pursuing EMT-Basic, EMT-Paramedic, or continuing EMS education.',
+        match_score: 82,
+        source: 'web_search',
+      },
+      {
+        id: 'web-naemt-2',
+        title: 'NAEMT EMT-Paramedic Scholarship',
+        sponsor: 'National Association of Emergency Medical Technicians',
+        description: 'Active NAEMT members pursuing EMT-Paramedic education.',
+        match_score: 96,
+        source: 'web_search',
+      },
+      { id: 'fresh-ems', title: 'EMS Equipment Mini-Grant', sponsor: 'Community Foundation', match_score: 80 },
+    ]
+
+    const { results, removed } = dedupeOpportunityList(list)
+
+    expect(removed).toBe(1)
+    expect(results).toHaveLength(2)
+    expect(results.find((o) => o.sponsor === 'National Association of Emergency Medical Technicians').id)
+      .toBe('web-naemt-2')
+    expect(results.some((o) => o.id === 'fresh-ems')).toBe(true)
+  })
+
+  it('does NOT collapse distinct same-funder acronym programs', () => {
+    const list = [
+      {
+        id: 'usda-vapg',
+        title: 'USDA Value Added Producer Grant',
+        sponsor: 'USDA Rural Development',
+        description: 'Planning and working capital grants for value-added agricultural products.',
+        match_score: 91,
+      },
+      {
+        id: 'usda-reap',
+        title: 'USDA REAP Grant',
+        sponsor: 'USDA Rural Development',
+        description: 'Renewable energy and energy efficiency assistance for rural businesses and producers.',
+        match_score: 92,
+      },
+    ]
+
+    const { results, removed } = dedupeOpportunityList(list)
+
+    expect(removed).toBe(0)
+    expect(results.map((o) => o.id)).toEqual(['usda-vapg', 'usda-reap'])
   })
 })

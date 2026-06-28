@@ -42,6 +42,8 @@ async function main() {
   // Gate 0: CI/workstation guard — ensure Rollup native optional dep is present (npm optional-deps can be flaky on Linux CI).
   await run('node', ['scripts/ensure-rollup-native.mjs'], { label: 'rollup-native' })
   await run('node', ['scripts/guard-corruption-hotspots.mjs'], { label: 'corruption-hotspots' })
+  await run(npmBin(), ['run', 'scan:secrets'], { label: 'secret-scan' })
+  await run(npmBin(), ['run', 'deployment-config:check'], { label: 'deployment-config' })
 
   // Gate 0a: production-deploy guard — every backend import must resolve inside the
   // Dockerfile runtime image. Catches the "Railway built fine but the container

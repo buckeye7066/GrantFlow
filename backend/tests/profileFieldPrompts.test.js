@@ -69,6 +69,17 @@ function createDb() {
       source_category TEXT,
       link_status TEXT DEFAULT 'unknown'
     );
+    CREATE TABLE grants (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT,
+      funding_opportunity_id TEXT,
+      fingerprint TEXT,
+      title TEXT,
+      funder TEXT,
+      deadline TEXT,
+      url TEXT,
+      application_url TEXT
+    );
 
     -- Sparse profile: no type, no state/zip, no needs, no eligibility, never discovered.
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, last_discovery_at, created_at, updated_at)

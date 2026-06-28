@@ -821,7 +821,7 @@ export const SECTION_CONFIG = {
     hidden_fields: [
       {
         name: "mission",
-        note: "Mission is captured in “Story & Goals” to avoid asking the same question twice.",
+        note: 'Mission is captured in "Story & Goals" to avoid asking the same question twice.',
       },
     ],
     fields: [
@@ -858,7 +858,7 @@ export const SECTION_CONFIG = {
       { name: "in_epa_ej_area", label: "EPA Environmental Justice Area", type: "boolean" },
       { name: "in_usda_persistent_poverty_county", label: "USDA Persistent-Poverty County", type: "boolean" },
       { name: "in_appalachian_region", label: "Appalachian Region", type: "boolean", description: "Served by Appalachian Regional Commission." },
-      { name: "broadband_unserved", label: "Broadband-Unserved (FCC Map Block)", type: "boolean", description: "No high-speed internet — USDA ReConnect and NTIA grants." },
+      { name: "broadband_unserved", label: "Broadband-Unserved (FCC Map Block)", type: "boolean", description: "No high-speed internet - USDA ReConnect and NTIA grants." },
       { name: "in_fema_disaster_area", label: "FEMA Disaster Declaration Area", type: "boolean" },
       // Specialized Org Types
       { name: "is_tribal_government", label: "Tribal Government / Tribally Controlled Organization", type: "boolean" },
@@ -909,9 +909,9 @@ export const SECTION_CONFIG = {
       { name: "assistance_notes", label: "Assistance notes", component: Textarea, props: { rows: 2, placeholder: "Any nuance about benefits or barriers" } },
       { name: "notes", label: "Notes", component: Textarea, props: { rows: 3, placeholder: "Context for financial need" } },
       { name: "underemployed", label: "Underemployed", type: "boolean", description: "Working part-time or below skill level." },
-      { name: "has_medical_debt", label: "Medical Debt", type: "boolean", description: "Outstanding medical bills — debt relief programs available." },
+      { name: "has_medical_debt", label: "Medical Debt", type: "boolean", description: "Outstanding medical bills - debt relief programs available." },
       { name: "has_education_debt", label: "Education/Student Loan Debt", type: "boolean", description: "Student loan forgiveness programs available." },
-      { name: "bankruptcy_foreclosure", label: "Bankruptcy / Foreclosure", type: "boolean", description: "Recent financial crisis — recovery assistance available." },
+      { name: "bankruptcy_foreclosure", label: "Bankruptcy / Foreclosure", type: "boolean", description: "Recent financial crisis - recovery assistance available." },
       { name: "first_time_homebuyer", label: "First-Time Homebuyer", type: "boolean", description: "Down payment assistance programs available." },
     ],
   },
@@ -1031,7 +1031,7 @@ export const SECTION_CONFIG = {
     fields: [
       { name: "insurance_provider", label: "Insurance provider", component: Input },
       { name: "plan_name", label: "Plan name", component: Input },
-      { name: "plan_type", label: "Plan type", component: Input, props: { placeholder: "Medicaid, Medicare, Marketplace, HMO, PPO…" } },
+      { name: "plan_type", label: "Plan type", component: Input, props: { placeholder: "Medicaid, Medicare, Marketplace, HMO, PPO..." } },
       { name: "member_id", label: "Member ID (optional)", component: Input },
       { name: "group_id", label: "Group ID (optional)", component: Input },
       { name: "policy_holder_name", label: "Policy holder name", component: Input },
@@ -1219,7 +1219,7 @@ export const SECTION_CONFIG = {
       { name: "fafsa_completed", label: "FAFSA Completed", type: "boolean", description: "Required for most federal financial aid." },
       { name: "first_generation_college_student", label: "First-Generation College Student", type: "boolean", description: "First in your family to attend college." },
       { name: "dual_enrollment", label: "Dual Enrollment / Early College", type: "boolean" },
-      { name: "rotc_jrotc", label: "ROTC / JROTC Participation", type: "boolean", description: "Military training — ROTC scholarships available." },
+      { name: "rotc_jrotc", label: "ROTC / JROTC Participation", type: "boolean", description: "Military training - ROTC scholarships available." },
       { name: "cte_pathway", label: "CTE Pathway", component: Input, props: { placeholder: "e.g., EMT, welding, cybersecurity, nursing" }, description: "Career/Technical Education pathway." },
       { name: "honor_societies", label: "Honor Societies", component: Input, props: { placeholder: "e.g., NHS, Phi Theta Kappa" } },
       { name: "efc_sai_band", label: "EFC/SAI Band", component: Input, props: { placeholder: "Expected Family Contribution / Student Aid Index" } },
@@ -1283,7 +1283,7 @@ export const SECTION_CONFIG = {
     hidden_fields: [
       {
         name: "household_size",
-        note: "Household size is captured in “Financial Situation” to avoid redundancy.",
+        note: 'Household size is captured in "Financial Situation" to avoid redundancy.',
       },
     ],
     fields: [
@@ -1619,8 +1619,8 @@ export default function ProfileSectionEditor({
   return (
     <Dialog open={open} onOpenChange={(next) => !isSaving && !next && onClose()}>
       {/* Keep actions visible even for long forms */}
-      <DialogContent data-flash-id="profile-section-editor" className="max-w-xl max-h-[85vh] overflow-hidden flex flex-col">
-        <DialogHeader>
+      <DialogContent data-flash-id="profile-section-editor" className="!flex max-h-[85vh] min-h-0 w-[calc(100vw-2rem)] max-w-xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <DialogTitle>
@@ -1654,12 +1654,12 @@ export default function ProfileSectionEditor({
         </DialogHeader>
 
         {/* Scrollable body (native scrollbar/slider) */}
-        <div className="flex-1 overflow-y-auto pr-1">
+        <div data-testid="profile-section-editor-scroll" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
           {!config ? (
             <Alert variant="default">
               <Info className="w-4 h-4" />
               <AlertDescription className="text-sm text-slate-600">
-                This section isn’t wired to a form yet. Close this dialog and use the “Edit section” button to update the
+                This section is not wired to a form yet. Close this dialog and use the "Edit section" button to update the
                 JSON directly.
               </AlertDescription>
             </Alert>
@@ -1734,7 +1734,7 @@ export default function ProfileSectionEditor({
                       <div className="space-y-1">
                         <Label htmlFor={field.name} className="flex items-center gap-1">
                           <span>{field.label}</span>
-                          {/* Goal 11 — surface "why we ask" from profileFieldUsageRegistry.
+                          {/* Goal 11 - surface "why we ask" from profileFieldUsageRegistry.
                               Unknown ids degrade silently inside FieldHelpTip. */}
                           <FieldHelpTip id={`${sectionKey}.${field.name}`} />
                         </Label>
@@ -1921,7 +1921,7 @@ export default function ProfileSectionEditor({
           )}
         </div>
 
-        <DialogFooter className="flex items-center justify-between border-t border-slate-200 pt-4">
+        <DialogFooter className="flex shrink-0 items-center justify-between border-t border-slate-200 pt-4">
           <Button variant="ghost" onClick={onClose} disabled={isSaving}>
             Cancel
           </Button>

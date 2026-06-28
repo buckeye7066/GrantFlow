@@ -284,7 +284,7 @@ describe('admin code and health tools', () => {
 })
 
 describe('admin brain cleanup and CodeGuard summary', () => {
-  it('supports dryRun and reports cleanup counts plus ids', () => {
+  it('supports dryRun and reports cleanup counts plus ids', async () => {
     const db = makeDb()
     const id = randomUUID()
     db.prepare('INSERT INTO anya_brain_memory (id, scope, memory_key, content, expires_at) VALUES (?, ?, ?, ?, ?)').run(
@@ -295,13 +295,13 @@ describe('admin brain cleanup and CodeGuard summary', () => {
       '2000-01-01T00:00:00.000Z',
     )
 
-    const dry = cleanupBrain(db, { dryRun: true })
+    const dry = await cleanupBrain(db, { dryRun: true })
     expect(dry.expiredMemories).toBe(1)
     expect(dry.removed_ids.expiredMemories).toContain(id)
     expect(db.prepare('SELECT COUNT(*) AS count FROM anya_brain_memory').get().count).toBe(1)
   })
 
-  it('coerces wrapped rows during brain cleanup dry runs', () => {
+  it('coerces wrapped rows during brain cleanup dry runs', async () => {
     const statements = {
       anya_brain_memory: { rows: [{ id: 'mem-1' }] },
       anya_context: { rows: [{ id: 'ctx-1' }] },
@@ -323,14 +323,14 @@ describe('admin brain cleanup and CodeGuard summary', () => {
         }
       },
     }
-    const result = cleanupBrain(db, { dryRun: true })
+    const result = await cleanupBrain(db, { dryRun: true })
     expect(result.expiredMemories).toBe(1)
     expect(result.oldContext).toBe(1)
     expect(result.oldToolUsage).toBe(1)
     expect(result.removed_ids.expiredMemories).toEqual(['mem-1'])
   })
 
-  it('formats stored audit shapes without undefined', () => {
+  it('formats stored audit shapes without undefined', async () => {
     const db = makeDb()
     db.prepare('INSERT INTO anya_brain_memory (id, scope, memory_key, content) VALUES (?, ?, ?, ?)').run(
       'm1',
@@ -339,7 +339,7 @@ describe('admin brain cleanup and CodeGuard summary', () => {
       JSON.stringify({ endpoints: { passed: 24, failed: 0, skipped: 0, total: 24 } }),
     )
 
-    expect(getAuditSummary(db)).not.toContain('undefined')
+    expect(await getAuditSummary(db)).not.toContain('undefined')
   })
 
   it('formats inline CodeGuard status from fresh sub-tool results', () => {
@@ -404,7 +404,7 @@ describe('admin schema migration and domain audits', () => {
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'crawler_logs'").get()).toBeTruthy()
     expect(db.prepare('SELECT url, matched_needs, match_decision FROM grants WHERE id = ?').get('grant-1')).toMatchObject({
       url: 'https://example.test/apply',
-      matched_needs: '["general funding support"]',
+      matched_needs: '[]',
       match_decision: 'review',
     })
     expect(db.prepare('SELECT COUNT(*) AS count FROM crawler_logs WHERE profile_id = ?').get('profile-1').count).toBeGreaterThan(0)

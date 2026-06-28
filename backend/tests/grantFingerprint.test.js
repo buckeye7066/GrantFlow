@@ -3,7 +3,11 @@ import {
   grantFingerprint,
   grantFingerprintFromOpportunity,
   chooseGrantUrl,
+  grantFamilyKey,
+  grantUrlKey,
   GRANT_FINGERPRINT_VERSION,
+  likelySameGrantOpportunity,
+  normalizeGrantUrl,
 } from '../utils/grantFingerprint.js'
 
 describe('grantFingerprint', () => {
@@ -50,6 +54,111 @@ describe('chooseGrantUrl', () => {
   it('rejects non-http strings and returns null when nothing is usable', () => {
     expect(chooseGrantUrl({ url: 'not-a-url', application_url: 'ftp://blocked' })).toBeNull()
     expect(chooseGrantUrl({})).toBeNull()
+  })
+})
+
+describe('grant identity helpers', () => {
+  it('normalizes grant urls while preserving non-tracking query params', () => {
+    expect(normalizeGrantUrl('https://Example.org/apply/?utm_source=x&round=2026'))
+      .toEqual('https://example.org/apply?round=2026')
+    expect(grantUrlKey({ application_url: 'https://example.org/apply?utm_campaign=x' }))
+      .toEqual('https://example.org/apply')
+  })
+
+  it('collapses NAEMT scholarship variants as the same grant family', () => {
+    const umbrella = {
+      title: 'NAEMT Educational Scholarships',
+      sponsor: 'National Association of Emergency Medical Technicians',
+      description: 'Individual active NAEMT members pursuing EMT-Basic, EMT-Paramedic, or continuing EMS education.',
+    }
+    const variant = {
+      title: 'NAEMT EMT-Paramedic Scholarship',
+      sponsor: 'National Association of Emergency Medical Technicians',
+      description: 'Active NAEMT members pursuing EMT-Paramedic education.',
+    }
+
+    expect(grantFamilyKey(umbrella)).toEqual(grantFamilyKey(variant))
+    expect(likelySameGrantOpportunity(umbrella, variant)).toBe(true)
+  })
+
+  it('collapses scholarship-family umbrella titles even when a saved pipeline row has no description', () => {
+    const savedPipelineRow = {
+      title: 'NAEMT Educational Scholarships',
+      funder: 'National Association of Emergency Medical Technicians',
+    }
+    const recrawledVariant = {
+      title: 'NAEMT EMT-Paramedic Scholarship',
+      sponsor: 'National Association of Emergency Medical Technicians',
+      description: 'Active NAEMT members pursuing EMT-Paramedic education.',
+    }
+
+    expect(grantFamilyKey(savedPipelineRow)).toEqual(grantFamilyKey(recrawledVariant))
+    expect(likelySameGrantOpportunity(savedPipelineRow, recrawledVariant)).toBe(true)
+  })
+
+  it('does not collapse distinct same-funder acronym programs', () => {
+    const valueAdded = {
+      title: 'USDA Value Added Producer Grant',
+      sponsor: 'USDA Rural Development',
+      description: 'Planning and working capital grants for value-added agricultural products.',
+    }
+    const reap = {
+      title: 'USDA REAP Grant',
+      sponsor: 'USDA Rural Development',
+      description: 'Renewable energy and energy efficiency assistance.',
+    }
+
+    expect(grantFamilyKey(valueAdded)).toEqual(grantFamilyKey(reap))
+    expect(likelySameGrantOpportunity(valueAdded, reap)).toBe(false)
+  })
+
+  it('does not collapse a generic acronym umbrella title into a distinct program without evidence overlap', () => {
+    const genericUmbrella = {
+      title: 'USDA Grants',
+      sponsor: 'USDA Rural Development',
+      description: 'General information about USDA grant programs and application resources.',
+    }
+    const reap = {
+      title: 'USDA REAP Grant',
+      sponsor: 'USDA Rural Development',
+      description: 'Renewable energy and energy efficiency assistance for rural businesses and producers.',
+    }
+
+    expect(grantFamilyKey(genericUmbrella)).toEqual(grantFamilyKey(reap))
+    expect(likelySameGrantOpportunity(genericUmbrella, reap)).toBe(false)
+  })
+
+  it('does not collapse distinct programs just because they share a landing page URL', () => {
+    const stateFund = {
+      title: 'Tennessee Emergency Fund',
+      sponsor: 'Example Foundation',
+      description: 'State emergency assistance for Tennessee residents.',
+      source_url: 'https://example.org/grants',
+    }
+    const nationalFund = {
+      title: 'National Emergency Fund',
+      sponsor: 'Example Foundation',
+      description: 'National emergency assistance program.',
+      source_url: 'https://example.org/grants?utm_source=crawler',
+    }
+
+    expect(normalizeGrantUrl(stateFund.source_url)).toEqual(normalizeGrantUrl(nationalFund.source_url))
+    expect(likelySameGrantOpportunity(stateFund, nationalFund)).toBe(false)
+  })
+
+  it('does not collapse numbered awards on the same landing page', () => {
+    const first = {
+      title: 'Rich OS Grant 1',
+      sponsor: 'Foundation',
+      source_url: 'https://www.grants.gov/y',
+    }
+    const second = {
+      title: 'Rich OS Grant 2',
+      sponsor: 'Foundation',
+      source_url: 'https://www.grants.gov/y',
+    }
+
+    expect(likelySameGrantOpportunity(first, second)).toBe(false)
   })
 })
 

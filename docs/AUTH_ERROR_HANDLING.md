@@ -18,11 +18,12 @@ Users were experiencing 502 errors when attempting to use OAuth authentication (
 #### A. Authentication Diagnostics Endpoint (`/api/auth/diagnostics`)
 **Location:** `backend/server.js`
 
-A new endpoint that provides real-time status of the authentication system:
+A protected admin endpoint that provides real-time status of the authentication system:
 - JWT secret configuration status
 - Database connectivity
 - OAuth provider configuration status for Google, Facebook, and Yahoo
-- Returns 200 (operational) or 503 (degraded) status
+- Requires admin authentication
+- Returns 200 (operational) or 503 (degraded) status when called by an admin
 
 **Example Response:**
 ```json
@@ -95,13 +96,13 @@ Comprehensive improvements to the social authentication flow:
 **New Features:**
 1. **Backend Health Check**
    - Validates backend availability before attempting authentication
-   - Checks `/health` endpoint with 5-second timeout
+   - Checks `/api/health` endpoint with 5-second timeout
    - Provides clear error message if backend is down
 
-2. **Provider Configuration Check**
-   - Queries `/api/auth/diagnostics` to verify OAuth setup
-   - Warns users if provider credentials are missing
-   - Prevents authentication attempts with unconfigured providers
+2. **Provider Start Handling**
+   - Sends the user to `/api/auth/:provider/start`
+   - Lets the backend return a clear provider-not-configured error when credentials are missing
+   - Does not expose `/api/auth/diagnostics` to public users
 
 3. **Retry Mechanism**
    - Automatically retries failed requests up to 2 times
@@ -200,12 +201,12 @@ The implementation uses existing environment variables:
 ### Debugging Authentication Issues
 1. Check browser console for `[SocialSignIn]` log messages
 2. Review backend logs for `[auth]` prefixed messages
-3. Call `/api/auth/diagnostics` to check configuration
-4. Verify health endpoint shows all dependencies healthy
+3. As an admin, call `/api/auth/diagnostics` to check configuration
+4. Verify `/api/health` shows a healthy public status
 5. Check environment variables are set correctly
 
 ## Security Considerations
-- Diagnostics endpoint does not expose actual credential values
+- Diagnostics endpoint requires admin authentication and does not expose actual credential values
 - Only reports "present" or "missing" for secrets
 - Error messages in production mode are sanitized
 - Technical stack traces only shown in development

@@ -84,8 +84,10 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
       const profileId = 'profile_test_1'
       const fileName = 'test-download.txt'
       const filePath = path.join(uploadsDir, fileName)
+      const avatarPath = path.join(uploadsDir, 'avatar_profile_test_1_123.png')
       mkdirSync(uploadsDir, { recursive: true })
       writeFileSync(filePath, 'hello world', 'utf8')
+      writeFileSync(avatarPath, 'avatar cache', 'utf8')
 
       // Satisfy FK constraints (documents.profile_id -> profiles.id)
       db.prepare(
@@ -113,6 +115,42 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
     }
 
     const base = `http://127.0.0.1:${port}`
+
+    const publicDiagnostics = await fetch(`${base}/api/auth/diagnostics`)
+    assert.equal(publicDiagnostics.status, 401)
+
+    const adminDiagnostics = await fetch(`${base}/api/auth/diagnostics`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
+    assert.equal(adminDiagnostics.status, 200)
+
+    const publicPipelineHealth = await fetch(`${base}/api/admin/pipeline-health`)
+    assert.equal(publicPipelineHealth.status, 401)
+
+    const adminPipelineHealth = await fetch(`${base}/api/admin/pipeline-health`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
+    assert.equal(adminPipelineHealth.status, 200)
+
+    const storageHealth = await fetch(`${base}/api/health/storage`)
+    assert.equal(storageHealth.status, 200)
+    const storageJson = await storageHealth.json()
+    assert.equal(storageJson.details_redacted, true)
+    assert.equal(Object.hasOwn(storageJson, 'uploadsDir'), false)
+    assert.equal(Object.hasOwn(storageJson, 'legacyUploadsDir'), false)
+    assert.equal(Object.hasOwn(storageJson, 'storage_status'), false)
+
+    // Direct /uploads access is intentionally limited to public avatar cache files.
+    const directUpload = await fetch(`${base}/uploads/test-download.txt`, {
+      headers: { Accept: 'application/json' },
+    })
+    assert.equal(directUpload.status, 404)
+    const directJson = await directUpload.json()
+    assert.equal(directJson.code, 'UPLOAD_PRIVATE')
+
+    const publicAvatarCache = await fetch(`${base}/uploads/avatar_profile_test_1_123.png`)
+    assert.equal(publicAvatarCache.status, 200)
+    assert.equal(await publicAvatarCache.text(), 'avatar cache')
 
     // Unauthenticated => 401
     const unauth = await fetch(`${base}/api/documents/doc_test_1/download`)

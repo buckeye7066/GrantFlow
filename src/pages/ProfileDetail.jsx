@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowRight,
   Calendar,
   ClipboardList,
@@ -82,7 +83,7 @@ function FlowStepButton({ icon: Icon, title, detail, tooltip, onClick, active = 
         <button
           type="button"
           onClick={onClick}
-          className={`group flex min-h-[7rem] w-full flex-col justify-between rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
+          className={`group flex min-h-[7rem] w-full cursor-pointer flex-col justify-between rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
             active
               ? "border-blue-300 bg-blue-50 text-blue-950"
               : "border-slate-200 bg-white text-slate-900 hover:border-blue-200"
@@ -215,7 +216,7 @@ function WorkspaceTabTrigger({ icon: Icon, title, detail, tooltip, value, active
       <TooltipTrigger asChild>
         <TabsTrigger
           value={value}
-          className={`group h-auto w-full whitespace-normal rounded-lg border text-left shadow-none transition hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950 focus-visible:ring-blue-500 data-[state=active]:border-blue-300 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-950 data-[state=active]:shadow-none ${
+          className={`group h-auto w-full cursor-pointer whitespace-normal rounded-lg border text-left shadow-none transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950 hover:shadow-sm focus-visible:ring-blue-500 data-[state=active]:border-blue-300 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-950 data-[state=active]:shadow-none ${
             compact ? "items-start justify-start gap-2 px-3 py-2.5" : "items-start justify-start gap-3 px-4 py-3.5"
           } ${
             active
@@ -240,6 +241,11 @@ function WorkspaceTabTrigger({ icon: Icon, title, detail, tooltip, value, active
               {detail}
             </span>
           </span>
+          <ArrowRight
+            className={`mt-1 shrink-0 transition group-hover:translate-x-0.5 ${
+              active ? "text-blue-700" : "text-slate-400 group-hover:text-blue-600"
+            } ${compact ? "h-3.5 w-3.5" : "h-4 w-4"}`}
+          />
         </TabsTrigger>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
@@ -362,7 +368,7 @@ function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
       <TooltipProvider delayDuration={150}>
         <TabsList
           aria-label="Main profile workflow"
-          className="flex h-auto w-full max-w-full justify-start gap-3 overflow-x-auto overflow-y-hidden whitespace-nowrap bg-transparent p-0 pb-2 [scrollbar-width:thin] [&>button]:min-w-[17rem] [&>button]:shrink-0 sm:[&>button]:flex-1"
+          className="!grid h-auto w-full grid-cols-1 gap-3 bg-transparent p-0 sm:grid-cols-2 xl:grid-cols-4"
         >
           {primaryTabs.map((tab) => (
             <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} />
@@ -372,7 +378,7 @@ function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">More profile tools</p>
           <TabsList
             aria-label="Additional profile tools"
-            className="flex h-auto w-full max-w-full justify-start gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap bg-transparent p-0 pb-2 [scrollbar-width:thin] [&>button]:min-w-[13.5rem] [&>button]:shrink-0 md:[&>button]:flex-1"
+            className="!grid h-auto w-full grid-cols-1 gap-2 bg-transparent p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
           >
             {supportingTabs.map((tab) => (
               <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} compact />
@@ -381,6 +387,64 @@ function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
         </div>
       </TooltipProvider>
     </section>
+  )
+}
+
+export function WorkAreaLinkCard({
+  icon: Icon,
+  title,
+  detail,
+  actionLabel,
+  onOpen,
+  disabledReason,
+}) {
+  const isInteractive = typeof onOpen === "function"
+  const className = `group flex w-full items-start justify-between gap-4 rounded-lg border bg-white p-6 text-left shadow-sm transition ${
+    isInteractive
+      ? "cursor-pointer border-slate-200 hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+      : "border-slate-200 opacity-80"
+  }`
+  const content = (
+    <>
+      <div className="flex min-w-0 items-start gap-4">
+        <span
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${
+            isInteractive ? "bg-blue-50 text-blue-600 group-hover:bg-blue-100" : "bg-slate-100 text-slate-500"
+          }`}
+        >
+          <Icon className="h-5 w-5" />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-lg font-semibold text-slate-900">{title}</span>
+          <span className="mt-1 block text-sm leading-relaxed text-slate-600">{detail}</span>
+          {disabledReason ? (
+            <span className="mt-3 block text-sm text-slate-500">{disabledReason}</span>
+          ) : null}
+        </span>
+      </div>
+      <span
+        className={`mt-1 inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
+          isInteractive
+            ? "border-blue-200 bg-blue-50 text-blue-700 group-hover:border-blue-300 group-hover:bg-blue-100"
+            : "border-slate-200 bg-slate-50 text-slate-500"
+        }`}
+      >
+        {actionLabel}
+        {isInteractive ? (
+          <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
+        ) : null}
+      </span>
+    </>
+  )
+
+  if (!isInteractive) {
+    return <div className={className}>{content}</div>
+  }
+
+  return (
+    <button type="button" className={className} onClick={onOpen}>
+      {content}
+    </button>
   )
 }
 
@@ -409,8 +473,8 @@ export default function ProfileDetail() {
   )
   const layoutOptions = React.useMemo(
     () => [
-      { value: "expanded", label: "Expanded · 2 columns" },
-      { value: "compact", label: "Compact · 3 columns" },
+      { value: "expanded", label: "Expanded - 2 columns" },
+      { value: "compact", label: "Compact - 3 columns" },
     ],
     [],
   )
@@ -501,6 +565,8 @@ export default function ProfileDetail() {
         description: "We'll parse the contents and sync profile-specific results shortly.",
       })
       queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["documents", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profile-project-readiness-plan", profileId] })
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : "Unable to upload this document."
@@ -811,7 +877,7 @@ export default function ProfileDetail() {
 
   // IMPORTANT: All hooks must be called before any conditional returns (React rules of hooks).
   const [activeTab, setActiveTab] = React.useState("profile")
-  // Pending scroll target — when set, we retry scrolling to the element via
+  // Pending scroll target - when set, we retry scrolling to the element via
   // requestAnimationFrame until it mounts (replaces the fragile fixed timeout).
   const [pendingScrollTarget, setPendingScrollTarget] = React.useState(null)
   // Deep-link support: ?tab=&section=&field= (emitted by MissingInfoChecklist /
@@ -829,7 +895,7 @@ export default function ProfileDetail() {
     deepLinkHandled.current = token
     if (tabParam) setActiveTab(tabParam)
     if (focusParam) setPendingScrollTarget(focusParam)
-    // Only pop the section editor for sections that actually have one — for
+    // Only pop the section editor for sections that actually have one - for
     // documents / universities we just land on the tab.
     if (sectionParam && EDITABLE_SECTIONS.has(sectionParam)) {
       const existing =
@@ -864,7 +930,7 @@ export default function ProfileDetail() {
       }
       attempts += 1
       if (attempts > 60) {
-        // ~1s worth of frames — give up quietly rather than spin forever.
+        // ~1s worth of frames - give up quietly rather than spin forever.
         setPendingScrollTarget(null)
         return
       }
@@ -881,7 +947,7 @@ export default function ProfileDetail() {
   const failedTargetCollegeSyncProfiles = useRef(new Set())
   const targetCollegeSyncInFlight = useRef(false)
 
-  // Derived state — computed here (before early returns) using optional chaining so they are
+  // Derived state - computed here (before early returns) using optional chaining so they are
   // safe when `profile` is still undefined (loading / error states).
   const canDocumentAI = isAdmin || Boolean(profile?.billing?.tier?.enable_document_ai)
 
@@ -1088,7 +1154,7 @@ export default function ProfileDetail() {
     const educationData = profile?.sections?.find((s) => s.section_key === "education")?.data ?? {}
     const { applications, addedCount } = syncTargetCollegesToApplications(educationData, uniApps)
     if (addedCount === 0) {
-      // Nothing to add — treat as a completed (no-op) sync for this profile.
+      // Nothing to add - treat as a completed (no-op) sync for this profile.
       hasSyncedTargetColleges.current = true
       return
     }
@@ -1129,7 +1195,10 @@ export default function ProfileDetail() {
               No profile selected. Choose a profile from the Profiles page to view its details.
             </AlertDescription>
           </Alert>
-          <Button onClick={() => navigate(createPageUrl("MyProfiles"))}>← Back to Profiles</Button>
+          <Button onClick={() => navigate(createPageUrl("MyProfiles"))}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Profiles
+          </Button>
         </div>
       </div>
     )
@@ -1169,7 +1238,8 @@ export default function ProfileDetail() {
           </Alert>
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" onClick={() => navigate(-1)}>
-              ← Go Back
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Go Back
             </Button>
             <Button onClick={() => navigate(createPageUrl("MyProfiles"))}>View all profiles</Button>
           </div>
@@ -1188,14 +1258,15 @@ export default function ProfileDetail() {
           </div>
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" onClick={() => navigate(createPageUrl("MyProfiles"))}>
-              ← Back to Profiles
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Profiles
             </Button>
             <Button variant="outline" onClick={() => setAppearanceOpen(true)}>
               <Palette className="w-4 h-4 mr-2" />
               Appearance
             </Button>
             {/*
-              Print Profile Packet — opens /PrintProfilePacket?profile_id=<id>
+              Print Profile Packet - opens /PrintProfilePacket?profile_id=<id>
               in a new tab. The packet renders profile summary, pipeline by
               stage, items that need human review (with the application_steps
               the pipeline_automation worker prepared), and a simple next-steps
@@ -1322,7 +1393,7 @@ export default function ProfileDetail() {
           </TabsContent>
 
           <TabsContent value="pipeline" className="mt-6 space-y-6">
-            {/* Portal access for Hamilton — pulled to the TOP of the tab and
+            {/* Portal access for Hamilton - pulled to the TOP of the tab and
                 given a labelled anchor so the "Portal Logins" button on the
                 Master Pipeline page (focus=portal-logins) can deep-link the
                 user straight here. Previously these cards sat below the
@@ -1331,7 +1402,7 @@ export default function ProfileDetail() {
               {/* The Portals dashboard IS the page: every portal that applies to
                   this profile (schools, funders, plus the right applications and
                   benefits for its type + state) is auto-listed. Green = ready,
-                  red = click to log in once. No explainer clutter — the card
+                  red = click to log in once. No explainer clutter - the card
                   speaks for itself. Power-user manual entry lives under Advanced. */}
               <ProfileFundingSourcesCard profileId={profileId} />
               <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
@@ -1340,17 +1411,17 @@ export default function ProfileDetail() {
                   now the primary way to set up portals. */}
               <details className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
                 <summary className="cursor-pointer text-sm font-medium text-slate-700">
-                  Advanced — add a portal manually
+                  Advanced - add a portal manually
                 </summary>
                 <div className="mt-4 space-y-6">
-                  {/* Saved portal logins — available for every profile type, since
+                  {/* Saved portal logins - available for every profile type, since
                       Hamilton uses them to sign in to any grant/application portal she
                       automates from the pipeline. */}
                   <SavedLoginsCard profileId={profileId} />
-                  {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
+                  {/* Saved portal SESSIONS (captured logins) - the self-serve "log in
                       from your phone or computer" capture flow + disclaimer. */}
                   <PortalSessionsCard profileId={profileId} />
-                  {/* Two-way portal data sync — pull real data (test scores, aid
+                  {/* Two-way portal data sync - pull real data (test scores, aid
                       awards) into GrantFlow and push GrantFlow funding/awards back
                       into the portal, using the saved session above. Shows real
                       per-host run status. */}
@@ -1359,84 +1430,76 @@ export default function ProfileDetail() {
               </details>
               <PortalAccessScheduleCard profileId={profileId} />
             </div>
-            <div className="rounded-lg border bg-white p-6">
-              <h3 className="text-lg font-semibold mb-4">Pipeline View</h3>
-              <p className="text-slate-600 mb-4">
-                View and manage grants in your pipeline for this profile.
-              </p>
-              <Button onClick={() => navigate(createPageUrl("Pipeline", { profile_id: profileId }))}>
-                Go to Pipeline
-              </Button>
-            </div>
+            <WorkAreaLinkCard
+              icon={KeyRound}
+              title="Pipeline view"
+              detail="View and manage grants in your pipeline for this profile."
+              actionLabel="Open pipeline"
+              onOpen={() => navigate(createPageUrl("Pipeline", { profile_id: profileId }))}
+            />
           </TabsContent>
 
           <TabsContent value="item-funding" className="mt-6">
-            <div className="rounded-lg border bg-white p-6">
-              <h3 className="text-lg font-semibold mb-4">Item Funding</h3>
-              <p className="text-slate-600 mb-4">
-                Search for specific item funding opportunities.
-              </p>
-              <Button onClick={() => navigate(createPageUrl("ItemFunding", { profile_id: profileId }))}>
-                Go to Item Funding
-              </Button>
-            </div>
+            <WorkAreaLinkCard
+              icon={Search}
+              title="Item funding"
+              detail="Search for specific item funding opportunities."
+              actionLabel="Open item funding"
+              onOpen={() => navigate(createPageUrl("ItemFunding", { profile_id: profileId }))}
+            />
           </TabsContent>
 
           <TabsContent value="deadlines" className="mt-6">
-            <div className="rounded-lg border bg-white p-6">
-              <h3 className="text-lg font-semibold mb-4">Grant Deadlines</h3>
-              <p className="text-slate-600 mb-4">
-                Track upcoming grant deadlines for this profile.
-              </p>
-              <Button onClick={() => navigate(createPageUrl("GrantDeadline", { profile_id: profileId }))}>
-                Go to Grant Deadlines
-              </Button>
-            </div>
+            <WorkAreaLinkCard
+              icon={Calendar}
+              title="Grant deadlines"
+              detail="Track upcoming grant deadlines for this profile."
+              actionLabel="Open deadlines"
+              onOpen={() => navigate(createPageUrl("GrantDeadline", { profile_id: profileId }))}
+            />
           </TabsContent>
 
           <TabsContent value="monitoring" className="mt-6">
-            <div className="rounded-lg border bg-white p-6">
-              <h3 className="text-lg font-semibold mb-4">Grant Monitoring</h3>
-              <p className="text-slate-600 mb-4">
-                Monitor awarded grants and compliance requirements.
-              </p>
-              {hasOrganizationId ? (
-                <Button onClick={() => navigate(createPageUrl("GrantMonitoring", { organization_id: profile.organization_id }))}>
-                  Go to Grant Monitoring
-                </Button>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  Grant monitoring is available for organization profiles. Link this profile to an
-                  organization to track awarded grants and compliance.
-                </p>
-              )}
-            </div>
+            <WorkAreaLinkCard
+              icon={ClipboardList}
+              title="Grant monitoring"
+              detail="Monitor awarded grants and compliance requirements."
+              actionLabel={hasOrganizationId ? "Open monitoring" : "Unavailable"}
+              onOpen={
+                hasOrganizationId
+                  ? () => navigate(createPageUrl("GrantMonitoring", { organization_id: profile.organization_id }))
+                  : undefined
+              }
+              disabledReason={
+                hasOrganizationId
+                  ? undefined
+                  : "Grant monitoring is available for organization profiles. Link this profile to an organization to track awarded grants and compliance."
+              }
+            />
           </TabsContent>
 
           <TabsContent value="proposals" className="mt-6">
             <div className="space-y-6">
-              <div className="rounded-lg border bg-white p-6">
-                <h3 className="text-lg font-semibold mb-2">Proposals</h3>
-                <p className="text-slate-600 mb-4">Manage grant proposals linked to this profile's organization.</p>
-                <div className="flex flex-wrap gap-3">
-                  {hasOrganizationId ? (
-                    <Button onClick={() => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))}>
-                      View Proposals
-                    </Button>
-                  ) : (
-                    <Button disabled title="Link this profile to an organization to manage proposals.">
-                      View Proposals
-                    </Button>
-                  )}
-                  <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
-                    View Document Library
-                  </Button>
-                </div>
-                {!hasOrganizationId && (
-                  <p className="mt-3 text-sm text-slate-500">
-                    Proposals are tied to an organization. Link this profile to an organization to manage them.
-                  </p>
-                )}
+              <WorkAreaLinkCard
+                icon={FolderOpen}
+                title="Proposals"
+                detail="Manage grant proposals linked to this profile's organization."
+                actionLabel={hasOrganizationId ? "Open proposals" : "Unavailable"}
+                onOpen={
+                  hasOrganizationId
+                    ? () => navigate(createPageUrl("Proposals", { organization_id: profile.organization_id }))
+                    : undefined
+                }
+                disabledReason={
+                  hasOrganizationId
+                    ? undefined
+                    : "Proposals are tied to an organization. Link this profile to an organization to manage them."
+                }
+              />
+              <div>
+                <Button variant="outline" onClick={() => navigate(createPageUrl("Documents", { profile_id: profileId }))}>
+                  View Document Library
+                </Button>
               </div>
 
               <ProfileFilesPanel
@@ -1478,14 +1541,8 @@ export default function ProfileDetail() {
                         {profile.billing.is_pro_bono ? 'Pro Bono Account' : `$${profile.billing.monthly_rate || 0}/month`}
                       </p>
                     </div>
-                    {hasOrganizationId ? (
-                      <Button onClick={() => navigate(createPageUrl("Billing", { organization_id: profile.organization_id }))}>
-                        View Full Billing
-                      </Button>
-                    ) : (
-                      <Button disabled title="Link this profile to an organization to view full billing.">
-                        View Full Billing
-                      </Button>
+                    {hasOrganizationId ? null : (
+                      <span className="text-sm text-slate-500">Link this profile to an organization to view full billing.</span>
                     )}
                   </div>
                   {profile.billing.is_pro_bono && (
@@ -1508,6 +1565,24 @@ export default function ProfileDetail() {
               ) : (
                 <p className="text-slate-600">No billing information available for this profile.</p>
               )}
+              <div className="mt-6">
+                <WorkAreaLinkCard
+                  icon={CreditCard}
+                  title="Full billing"
+                  detail="Open billing, members, invoices, and access details for this profile's organization."
+                  actionLabel={hasOrganizationId ? "Open billing" : "Unavailable"}
+                  onOpen={
+                    hasOrganizationId
+                      ? () => navigate(createPageUrl("Billing", { organization_id: profile.organization_id }))
+                      : undefined
+                  }
+                  disabledReason={
+                    hasOrganizationId
+                      ? undefined
+                      : "Link this profile to an organization to view full billing."
+                  }
+                />
+              </div>
             </div>
           </TabsContent>
 
@@ -1616,8 +1691,8 @@ export default function ProfileDetail() {
 
             <div className="mt-6 rounded-lg border bg-white p-4">
               <p className="text-sm text-slate-600">
-                Tip: these settings are the same ones used on the main <strong>Settings</strong> page—this tab is just
-                a quicker place to tweak them while you’re working inside a profile.
+                Tip: these settings are the same ones used on the main <strong>Settings</strong> page - this tab is just
+                a quicker place to tweak them while you are working inside a profile.
               </p>
             </div>
           </TabsContent>

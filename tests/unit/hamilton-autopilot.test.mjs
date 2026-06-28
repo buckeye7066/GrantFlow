@@ -162,6 +162,13 @@ describe('hamiltonAutopilotEngine — internal mappers', () => {
     assert.equal(v.major, 'Biology')
     assert.equal(v.essay, 'Essay text')
   })
+
+  it('extractConfirmationReference accepts explicit codes and rejects prose', () => {
+    assert.equal(_internal.extractConfirmationReference('Thanks! Confirmation #: MOCK-ABCDEF'), 'MOCK-ABCDEF')
+    assert.equal(_internal.extractConfirmationReference('Reference code ABCDEF'), 'ABCDEF')
+    assert.equal(_internal.extractConfirmationReference('Application designed to help students submit forms'), null)
+    assert.equal(_internal.extractConfirmationReference('Confirmation thanks for applying'), null)
+  })
 })
 
 // ── Mock portal E2E ─────────────────────────────────────────────────

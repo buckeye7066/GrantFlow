@@ -1860,7 +1860,7 @@ function normalizeLoginEvents(events, limit) {
 
 // GET /api/admin/login-events - Recent client logins (admin only)
 // Preferred: DB-backed audit logs + session backfill. Falls back to in-memory ring buffer.
-router.get('/login-events', async (req, res) => {
+router.get('/login-events', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
@@ -1877,9 +1877,16 @@ router.get('/login-events', async (req, res) => {
 
     // 1) Durable source: audit_logs (client_sign_in)
     const events = []
+    const sourceStatus = {
+      audit_logs: { ok: true },
+      user_sessions: { ok: true },
+      memory_fallback: { used: false },
+    }
     try {
+      await req.db
+        .prepare('SELECT id, created_at, action, details, user_id, profile_id, ip_address, user_agent FROM audit_logs LIMIT 1')
+        .get()
       const auditRes = await queryAuditLogs(req.db, {
-        category: AUDIT_CATEGORIES.AUTH,
         action: 'client_sign_in',
         startDate: startDateIso,
         limit: Math.max(1, Math.min(200, limit)),
@@ -1901,6 +1908,7 @@ router.get('/login-events', async (req, res) => {
         })
       }
     } catch (auditErr) {
+      sourceStatus.audit_logs = { ok: false, error: auditErr?.message || String(auditErr) }
       console.warn('[admin/login-events] audit_logs query failed:', auditErr?.message || auditErr)
     }
 
@@ -1965,28 +1973,43 @@ router.get('/login-events', async (req, res) => {
         })
       }
     } catch (sessionErr) {
+      sourceStatus.user_sessions = { ok: false, error: sessionErr?.message || String(sessionErr) }
       console.warn('[admin/login-events] session backfill failed:', sessionErr?.message || sessionErr)
     }
 
+    const durableFailed = !sourceStatus.audit_logs.ok && !sourceStatus.user_sessions.ok
+    if (durableFailed) {
+      return res.status(503).json({
+        ok: false,
+        error: 'login_events_unavailable',
+        message: 'GrantFlow could not read durable login audit/session sources.',
+        source_status: sourceStatus,
+      })
+    }
+
     // 3) Final fallback: in-memory ring buffer (dev only / best-effort)
+    const fallbackEvents = events.length > 0 ? [] : listClientSignInEvents({ since, limit })
+    sourceStatus.memory_fallback.used = events.length === 0 && fallbackEvents.length > 0
     const finalEvents = normalizeLoginEvents(
-      events.length > 0 ? events : listClientSignInEvents({ since, limit }),
+      events.length > 0 ? events : fallbackEvents,
       limit,
     )
 
     return res.json({
       ok: true,
+      degraded: !sourceStatus.audit_logs.ok || !sourceStatus.user_sessions.ok || sourceStatus.memory_fallback.used,
+      source_status: sourceStatus,
       events: finalEvents,
     })
   } catch (error) {
     routeLogger.error('[admin/login-events] Error:', error)
-    return res.status(500).json({ error: 'Failed to load login events' })
+    return next(error)
   }
 })
 
 // GET /api/admin/page-views - Recent client page views (admin only)
 // Durable source: audit_logs (client_page_view).
-router.get('/page-views', async (req, res) => {
+router.get('/page-views', async (req, res, next) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
@@ -2061,7 +2084,7 @@ router.get('/page-views', async (req, res) => {
     return res.json({ ok: true, page_views: views })
   } catch (error) {
     routeLogger.error('[admin/page-views] Error:', error)
-    return res.status(500).json({ error: 'Failed to load page views' })
+    return next(error)
   }
 })
 

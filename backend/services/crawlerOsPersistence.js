@@ -17,6 +17,7 @@
 import { storage } from '../crawler-os/index.js';
 import { recordDismissal, reconcileDismissedGrants } from './pipelineDismissals.js';
 import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
+import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -33,33 +34,61 @@ const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
  * @returns {number} count of pipeline entries dismissed
  */
 async function prunePipelineRejects(db, memStore, idRemap) {
+  const catalogById = new Map(memStore.all('funding_opportunities').map((o) => [o.id, o]));
   const rejects = memStore
     .all('profile_opportunity_matches')
     .filter((m) => m.decision === 'reject');
   let dismissed = 0;
   for (const m of rejects) {
     const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id;
+    const osOpp = catalogById.get(m.opportunity_id) ?? null;
+    const liveOpp = osOpp ? { ...osOppToLiveRow(osOpp), id: oppId } : { id: oppId };
     const grants = await db
-      .prepare('SELECT id, status FROM grants WHERE profile_id = ? AND funding_opportunity_id = ?')
-      .all(m.profile_id, oppId);
-    if (!grants || grants.length === 0) continue;            // not in any pipeline → nothing to remove
-    if (grants.some((g) => g.status && PROTECTED.has(g.status))) continue; // preserve user-progressed work
-    await recordDismissal(db, {
-      profileId: m.profile_id,
-      // buildDismissalKey reads opportunity.id for the opportunity_id key.
-      opportunity: { id: oppId },
-      reason: 'crawler_os_reject',
+      .prepare('SELECT id, status, funding_opportunity_id, fingerprint, title, funder, deadline, url, application_url FROM grants WHERE profile_id = ?')
+      .all(m.profile_id);
+    const matchingGrants = (grants || []).filter((g) => {
+      if (g.funding_opportunity_id === oppId) return true;
+      return likelySameGrantOpportunity(liveOpp, g);
     });
-    dismissed += 1;
+    if (matchingGrants.length === 0) continue;
+    if (matchingGrants.some((g) => g.status && PROTECTED.has(g.status))) continue;
+    for (const grantRow of matchingGrants) {
+      await recordDismissal(db, {
+        profileId: m.profile_id,
+        grantRow,
+        opportunity: liveOpp,
+        reason: 'crawler_os_reject',
+      });
+      dismissed += 1;
+    }
   }
   if (dismissed > 0) await reconcileDismissedGrants(db);
   return dismissed;
 }
-
 function jparse(v, fallback) {
   if (v === null || v === undefined) return fallback;
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return fallback; }
+}
+
+function asList(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map((x) => String(x ?? '')).filter(Boolean);
+  if (v instanceof Set) return [...v].map((x) => String(x ?? '')).filter(Boolean);
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return [];
+    if (s.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed.map((x) => String(x ?? '')).filter(Boolean);
+      } catch {
+        // Fall through to scalar string.
+      }
+    }
+    return [s];
+  }
+  return [String(v)];
 }
 
 /**
@@ -80,9 +109,19 @@ export function profileContextToThesisInput(ctx = {}) {
   }));
 
   const needCategories = [
-    ...(Array.isArray(signals.needCategories) ? signals.needCategories : []),
-    ...(Array.isArray(profile.interests) ? profile.interests : []),
-    ...(signals.keywordSet ? [...signals.keywordSet] : []),
+    ...asList(signals.needs),
+    ...asList(signals.needCategories),
+    ...asList(profile.needs),
+    ...asList(profile.need_categories),
+    ...asList(ctx.facets?.intent?.primary_need_category),
+    ...asList(ctx.normalized?.needCategories),
+  ];
+  const keywordTerms = [
+    ...asList(profile.interests),
+    ...asList(profile.keywords),
+    ...asList(signals.keywords),
+    ...asList(signals.keywordSet),
+    ...asList(ctx.facets?.intent?.keywords),
   ];
 
   const location = signals.location ?? {};
@@ -93,7 +132,7 @@ export function profileContextToThesisInput(ctx = {}) {
     applicant_types: Array.isArray(signals.applicantTypes) ? signals.applicantTypes
       : (signals.applicantTypes ? [...signals.applicantTypes] : []),
     name: profile.display_name ?? null,
-    tags: Array.isArray(profile.tags) ? profile.tags : [],
+    tags: [...new Set([...asList(profile.tags), ...keywordTerms].filter(Boolean))],
     need_categories: [...new Set(needCategories.filter(Boolean))],
     sections: sectionList,
     organizations: org ? [{ name: org.name, type: org.organization_type ?? org.nonprofit_type, mission: org.mission }] : [],
@@ -140,6 +179,7 @@ function osOppToLiveRow(o) {
     source_trust_tier: o.trust_tier ?? null,
     reality_status: o.reality_status ?? null,
     record_origin: 'live_crawl', // CHECK: live_crawl|curated_verified|manual|synthetic
+    canonical_opportunity_key: o.canonical_opportunity_key ?? null,
     fingerprint: o.canonical_opportunity_key ?? null,
     evidence_url: o.evidence_url ?? null,
     is_active: 1,
@@ -227,7 +267,13 @@ export async function persistRun(db, memStore, run, opts = {}) {
   for (const o of catalog) {
     const row = osOppToLiveRow(o);
     let targetId = o.id;
-    if (row.fingerprint) {
+    if (row.canonical_opportunity_key) {
+      const existing = await db
+        .prepare('SELECT id FROM funding_opportunities WHERE canonical_opportunity_key = ? LIMIT 1')
+        .get(row.canonical_opportunity_key);
+      if (existing && existing.id) targetId = existing.id;
+    }
+    if (targetId === o.id && row.fingerprint) {
       const existing = await db
         .prepare('SELECT id FROM funding_opportunities WHERE fingerprint = ? LIMIT 1')
         .get(row.fingerprint);

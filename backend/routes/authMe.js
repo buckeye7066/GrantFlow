@@ -3,7 +3,7 @@
  *
  * Provides:
  *   GET /api/auth/me         — Returns the current authenticated user with their accessible profiles.
- *   GET /api/auth/diagnostics — Returns operational status of the auth subsystem (JWT, DB, OAuth providers).
+ *   GET /api/auth/diagnostics — Admin-only operational status of the auth subsystem.
  *
  * These handlers were previously defined inline in server.js. They are extracted here to keep
  * server.js responsible only for mounting routes, and to make this logic independently testable.
@@ -14,6 +14,7 @@
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:authMe')
@@ -274,7 +275,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
   // -------------------------------------------------------------------------
   // GET /api/auth/diagnostics
   // -------------------------------------------------------------------------
-  router.get('/diagnostics', async (_req, res) => {
+  router.get('/diagnostics', ensureAuth, ensureAdmin, async (_req, res) => {
     const diagnostics = {
       status: 'operational',
       timestamp: new Date().toISOString(),

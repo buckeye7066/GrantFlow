@@ -38,6 +38,9 @@ export const ALLOWED_RECORD_ORIGINS = new Set([
   'directory:student_grants',
   'discovered',
   'geo_crawl',
+  // User-initiated live web leads. These are allowed as low-trust leads and
+  // still pass through quality/reviewer/reality gates before storage.
+  'web_search',
   'seeded',
   'imported',
 ])

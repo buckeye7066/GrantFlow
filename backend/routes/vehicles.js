@@ -198,15 +198,9 @@ router.post('/ingest', ingestAuth, async (req, res) => {
 
   try {
     // Deduplicate by link
-    let existing;
-    if (db.dialect === 'postgres') {
-      const result = await db.query('SELECT id FROM vehicle_opportunities WHERE link = $1 LIMIT 1', [data.link]);
-      existing = result.rows[0];
-    } else {
-      existing = await db
-        .prepare('SELECT id FROM vehicle_opportunities WHERE link = ? LIMIT 1')
-        .get(data.link);
-    }
+    const existing = await db
+      .prepare('SELECT id FROM vehicle_opportunities WHERE link = ? LIMIT 1')
+      .get(data.link);
 
     if (existing) {
       routeLogger.info('[vehicles/ingest] Duplicate skipped', { link: data.link, existingId: existing.id });
@@ -222,14 +216,17 @@ router.post('/ingest', ingestAuth, async (req, res) => {
 
     let id;
     if (isPg) {
-      // PostgreSQL: gen_random_uuid() — let the DB generate the id
-      // clean_title is a native boolean column in Postgres
-      const result = await db.query(
-        `INSERT INTO vehicle_opportunities
-           (vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING id`,
-        [
+      // Adapter path: application-generated id keeps the insert portable.
+      // The adapter rewrites boolean literals for Postgres, so this stays cross-database.
+      id = randomUUID();
+      await db
+        .prepare(
+          `INSERT INTO vehicle_opportunities
+             (id, vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
           data.vehicle_type,
           data.title,
           data.price,
@@ -240,11 +237,9 @@ router.post('/ingest', ingestAuth, async (req, res) => {
           data.location,
           data.link,
           data.vin,
-          data.clean_title,
+          data.clean_title ? 1 : 0,
           data.source,
-        ],
-      );
-      id = result.rows[0]?.id;
+        );
     } else {
       // SQLite: generate id manually; clean_title stored as integer (1/0)
       id = randomUUID();

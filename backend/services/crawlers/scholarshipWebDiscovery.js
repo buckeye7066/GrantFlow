@@ -26,6 +26,7 @@ import { buildLocalFundingQueries } from '../shared/liveWebSearch.js'
 import { htmlToText } from '../yana/yanaContactEnrichment.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
 import { createLogger } from '../../utils/logger.js'
+import { RELEVANCE_FLOOR } from '../../config/relevanceFloor.js'
 
 const log = createLogger('service:scholarshipWebDiscovery')
 
@@ -214,6 +215,7 @@ export async function discoverScholarshipsViaWeb(db, {
   // 3) upsert to catalog + persist a per-profile match (web-llm version).
   let inserted = 0
   let matched = 0
+  let catalogOnly = 0
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   for (const o of extracted) {
     try {
@@ -221,8 +223,8 @@ export async function discoverScholarshipsViaWeb(db, {
         title: o.title,
         sponsor: o.sponsor || 'Scholarship sponsor',
         description: o.eligibility_summary || `Scholarship discovered via web search.`,
-        source: 'web_llm',
-        record_origin: 'web_llm',
+        source: 'web_search',
+        record_origin: 'web_search',
         source_url: o.apply_url,
         application_url: o.apply_url,
         opportunity_type: 'scholarship',
@@ -253,6 +255,12 @@ export async function discoverScholarshipsViaWeb(db, {
           deadline: o.deadline,
         }
         const decision = computeMatchDecision(osOpp, thesis)
+        const score = Math.round(Number(decision.match_score ?? decision.score ?? 0) || 0)
+        const verdict = String(decision.decision || '').toLowerCase()
+        if (verdict === 'reject' || score < RELEVANCE_FLOOR) {
+          catalogOnly += 1
+          continue
+        }
         await db.prepare(
           // id is the NOT-NULL PK with no default; use the same deterministic
           // "{profile}:{opp}" id persistRun uses so re-runs update in place.
@@ -264,7 +272,7 @@ export async function discoverScholarshipsViaWeb(db, {
              match_explanation = excluded.match_explanation, matcher_version = excluded.matcher_version,
              updated_at = ${nowFn}`,
         ).run(
-          `${profileId}:${oppId}`, String(profileId), String(oppId), Math.round(decision.match_score || 0),
+          `${profileId}:${oppId}`, String(profileId), String(oppId), score,
           decision.decision || 'review', (decision.match_explain?.why || '').slice(0, 500),
           WEB_LLM_MATCHER_VERSION,
         )
@@ -275,8 +283,8 @@ export async function discoverScholarshipsViaWeb(db, {
     }
   }
 
-  log.info(`[scholarshipWebDiscovery] profile=${profileId} queries=${queries.length} leads=${leads.length} extracted=${extracted.length} inserted=${inserted} matched=${matched}`)
-  return { ok: true, inserted, matched, extracted: extracted.length, leads: leads.length, queries: queries.length }
+  log.info(`[scholarshipWebDiscovery] profile=${profileId} queries=${queries.length} leads=${leads.length} extracted=${extracted.length} inserted=${inserted} matched=${matched} catalogOnly=${catalogOnly}`)
+  return { ok: true, inserted, matched, catalog_only: catalogOnly, extracted: extracted.length, leads: leads.length, queries: queries.length }
 }
 
 export default { discoverScholarshipsViaWeb, isScholarshipWebDiscoveryEnabled, WEB_LLM_MATCHER_VERSION }

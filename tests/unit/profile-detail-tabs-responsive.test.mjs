@@ -7,15 +7,17 @@ function read(relPath) {
   return fs.readFileSync(path.resolve(process.cwd(), relPath), 'utf8')
 }
 
-test('ProfileDetail: tabs list is scrollable (no grid overlap)', () => {
+test('ProfileDetail: tabs list wraps into a responsive grid instead of a dead horizontal scrollbar', () => {
   const src = read('src/pages/ProfileDetail.jsx')
   const start = src.indexOf('<TabsList')
   assert.ok(start >= 0, 'TabsList not found')
   const snippet = src.slice(start, start + 600)
 
-  assert.ok(snippet.includes('overflow-x-auto'), 'TabsList should be horizontally scrollable')
-  assert.ok(snippet.includes('whitespace-nowrap'), 'TabsList should prevent wrapping/overlap')
-  assert.ok(snippet.includes('shrink-0'), 'TabsTrigger should not shrink into overlap')
-  assert.ok(!snippet.includes('grid-cols-'), 'TabsList should not use grid-cols-* for tab layout')
+  assert.ok(snippet.includes('!grid'), 'TabsList should use a stable grid layout')
+  assert.ok(snippet.includes('grid-cols-1'), 'TabsList should stack safely on narrow screens')
+  assert.ok(snippet.includes('sm:grid-cols-2'), 'TabsList should wrap into two columns on small screens')
+  assert.ok(snippet.includes('xl:grid-cols-4'), 'TabsList should spread into four columns on wide screens')
+  assert.ok(!snippet.includes('overflow-x-auto'), 'TabsList should not depend on a horizontal scrollbar')
+  assert.ok(!snippet.includes('whitespace-nowrap'), 'TabsList labels should be allowed to wrap instead of clipping')
 })
 

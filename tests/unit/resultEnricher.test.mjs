@@ -28,8 +28,9 @@ test('canonicalResultForProfile rejects profile-inappropriate exclusive business
   const result = canonicalResultForProfile(profile, opp)
 
   assert.equal(result.display, false)
-  assert.equal(result.dropReason, 'decision')
-  assert.equal(result.decision.decision, 'REJECT')
+  assert.equal(result.dropReason, 'entity_business_sba')
+  assert.equal(result.decision, null)
+  assert.equal(result.profileGate.pass, false)
 })
 
 test('canonicalResultForProfile returns canonical fields for a true housing match', () => {

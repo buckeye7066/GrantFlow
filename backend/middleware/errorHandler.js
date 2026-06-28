@@ -3,6 +3,7 @@
  */
 
 import { recordRequestError } from '../services/requestIdErrorStore.js'
+import { captureException } from '../utils/observability.js'
 
 /**
  * Format error response based on environment
@@ -86,6 +87,14 @@ export function errorHandler(err, req, res, next) {
   } catch (recordError) {
     console.warn('Failed to record error:', recordError.message);
   }
+
+  captureException(err, {
+    requestId,
+    path: req.path,
+    method: req.method,
+    statusCode,
+    retryable,
+  })
 
   if (retryable) {
     // Transient — warn, don't error-spam, and omit the stack (it's a timeout,

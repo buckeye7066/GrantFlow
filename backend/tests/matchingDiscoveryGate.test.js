@@ -68,6 +68,17 @@ function createDb() {
       source_category TEXT,
       link_status TEXT DEFAULT 'unknown'
     );
+    CREATE TABLE grants (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT,
+      funding_opportunity_id TEXT,
+      fingerprint TEXT,
+      title TEXT,
+      funder TEXT,
+      deadline TEXT,
+      url TEXT,
+      application_url TEXT
+    );
     -- Profile with NO discovery run yet (last_discovery_at IS NULL).
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, last_discovery_at, created_at, updated_at)
     VALUES ('profile-never-discovered', 'church', 'church', 'OH', '43215', '["ministry","community"]', '["housing"]', NULL, '2026-04-26', '2026-04-26');

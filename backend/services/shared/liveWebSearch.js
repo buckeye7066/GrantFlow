@@ -180,7 +180,7 @@ export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
     description: r.snippet || '',
     url: r.url,
     source_url: r.url,
-    application_url: r.url,
+    application_url: null,
     state: state || null,
     is_national: 0,
     opportunity_type: 'program',

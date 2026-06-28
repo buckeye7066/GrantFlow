@@ -288,29 +288,25 @@ Users and developers will see helpful logs:
 
 ## Developer Tools Integration
 
-The diagnostics endpoint provides detailed info in browser DevTools:
+The public flow provides health and OAuth-start status in browser DevTools. Detailed auth diagnostics are admin-only.
 
 **Network Tab:**
 ```
-GET /health
+GET /api/health
 Status: 200 OK
 Response: { "status": "healthy", "dependencies": { ... } }
 
 GET /api/auth/diagnostics
-Status: 200 OK
-Response: { "status": "operational", "providers": { ... } }
+Status: 401 Unauthorized unless admin-authenticated
+
+GET /api/auth/google/start
+Status: 302 Redirect or 503 Provider Not Configured
 ```
 
 **Console Tab:**
 ```
-[SocialSignIn] Auth diagnostics: {
-  status: "operational",
-  providers: {
-    google: { configured: true },
-    facebook: { configured: false },
-    yahoo: { configured: false }
-  }
-}
+[SocialSignIn] Starting google authentication (attempt 1/3)
+[SocialSignIn] Redirecting to: http://localhost:8080/api/auth/google/start
 ```
 
 This comprehensive error handling ensures users always know what's happening and what they can do to resolve issues!

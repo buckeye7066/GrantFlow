@@ -11,6 +11,7 @@ import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
+import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:discovery')
@@ -206,6 +207,11 @@ router.post('/comprehensiveMatch', async (req, res) => {
             engine: 'crawler-os',
           }
         })
+        const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+          preserveDirectories: true,
+          rejectHardIneligible: true,
+        })
+        mapped = canonical.kept
         if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
           // filterOutPipelineMembers returns { results, ... }
           mapped = (await filterOutPipelineMembers(req.db, matchProfileId, mapped)).results

@@ -35,17 +35,18 @@ export function triggerStartupAudit(db, opts = {}) {
     return
   }
   if (_auditRunning) return
-  if (!shouldRunAudit(db)) return
 
   _auditRunning = true
   const port = opts.port || process.env.PORT || 3001
   const baseUrl = `http://localhost:${port}`
   const adminToken = opts.adminToken || process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
-  log.info('[anyaStartupAudit] Starting background CodeGuard audit...')
-
   // Run asynchronously — never block the request
   ;(async () => {
+    if (!(await shouldRunAudit(db))) return
+
+    log.info('[anyaStartupAudit] Starting background CodeGuard audit...')
+
     const startTime = Date.now()
     const results = { endpoints: null, matchQuality: null, mission: null }
 

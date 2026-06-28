@@ -32,6 +32,7 @@ import {
 } from '@/utils/inferLocationFromAddress';
 import { useFundingResultsStore } from '@/stores/fundingResultsStore';
 import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
+import { dedupeFundingResults } from '@/utils/fundingDedupe';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
 // fleet to the background dispatcher (which runs each relevant crawler to
@@ -495,21 +496,6 @@ export default function DiscoverGrants() {
     }
   }, [profiles, searchParams, selectedProfileId]);
 
-
-  // Clear stale results and invalidate caches whenever the effective profile changes.
-  // Also bump the poll-loop cancellation token so any in-flight poll for the
-  // previous profile stops touching state / issuing stale-keyed queries.
-  useEffect(() => {
-    pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
-    setSearchResults([]);
-    setCrawlerResultMeta(null);
-    setCoverageInfo(null);
-    setHasSearched(false);
-    setProfileCompletionHint(null);
-    queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
-    queryClient.invalidateQueries({ queryKey: ['discover-profile'] });
-  }, [effectiveProfileId, queryClient]);
-
   // On unmount, cancel any in-flight poll loop.
   useEffect(() => {
     return () => {
@@ -553,6 +539,35 @@ export default function DiscoverGrants() {
     [organizations, selectedProfile],
   );
 
+  // Clear stale results and invalidate caches whenever the effective profile changes.
+  // Also bump the poll-loop cancellation token so any in-flight poll for the
+  // previous profile stops touching state / issuing stale-keyed queries.
+  useEffect(() => {
+    pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
+    setSearchResults([]);
+    setCrawlerResultMeta(null);
+    setCoverageInfo(null);
+    setHasSearched(false);
+    setProfileCompletionHint(null);
+    setFundingResults({
+      results: [],
+      profileId: effectiveProfileId ?? selectedProfileId ?? null,
+      organizationName: selectedProfile?.display_name ?? null,
+      organizationId: selectedProfile?.organization_id ?? null,
+      returned: 0,
+      totalFound: 0,
+    })
+    queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
+    queryClient.invalidateQueries({ queryKey: ['discover-profile'] });
+  }, [
+    effectiveProfileId,
+    selectedProfileId,
+    selectedProfile?.display_name,
+    selectedProfile?.organization_id,
+    queryClient,
+    setFundingResults,
+  ]);
+
   // Guard against stale profileDetail from a previously-selected profile.
   // effectiveProfileId is the authoritative identifier; selectedProfileId is the fallback
   // when effectiveProfileId hasn't resolved yet (e.g., URL param not set).
@@ -585,24 +600,44 @@ export default function DiscoverGrants() {
     retryDelay: (attempt) => Math.min(3000 * 2 ** attempt, 15000),
   })
 
-  const catalogOpportunities = useMemo(() => {
+  const catalogPayload = useMemo(() => {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
-    const rows = payload?.opportunities ?? []
+    const activeId = effectiveProfileId ? String(effectiveProfileId) : null
+    const payloadProfileId =
+      payload?.profile_id ??
+      payload?.profileId ??
+      payload?.profile?.id ??
+      null
+    if (activeId && payloadProfileId && String(payloadProfileId) !== activeId) {
+      return {}
+    }
+    return payload
+  }, [catalogMatchResponse, effectiveProfileId])
+
+  const catalogOpportunities = useMemo(() => {
+    const rows = catalogPayload?.opportunities ?? []
     if (!Array.isArray(rows)) return []
     // Defense in depth: if any backend path leaks results below the user's
     // slider value, the UI must still honor the slider as a hard floor.
     const minScoreFloor = clampMinScore(debouncedMinMatchScore)
-    return rows
+    return dedupeFundingResults(rows
       .filter((opp) => {
         const score = Number(opp.match_score ?? opp.match ?? -Infinity)
         return Number.isFinite(score) && score >= minScoreFloor
       })
       .map((opp) => ({
         id: opp.id,
+        funding_opportunity_id: opp.funding_opportunity_id,
+        opportunity_id: opp.opportunity_id,
+        source_id: opp.source_id,
+        fingerprint: opp.fingerprint,
+        canonical_opportunity_key: opp.canonical_opportunity_key,
         title: opp.title,
         program_name: opp.title,
         sponsor: opp.sponsor || opp.funder,
-        url: opp.application_url ?? opp.source_url ?? opp.url,
+        application_url: opp.application_url ?? opp.apply_url ?? null,
+        source_url: opp.source_url ?? opp.url ?? null,
+        url: opp.application_url ?? opp.apply_url ?? opp.source_url ?? opp.url,
         deadline: opp.deadline,
         deadlineAt: opp.deadline,
         description: opp.description,
@@ -612,42 +647,39 @@ export default function DiscoverGrants() {
         matched_fields: opp.match_reasons ?? [],
         matchReasons: opp.match_reasons ?? [],
         source: opp.source || 'catalog',
+        record_origin: opp.record_origin ?? null,
         usable_for_housing: opp.usable_for_housing ?? false,
         refund_potential: opp.refund_potential ?? false,
         funding_category: opp.funding_category ?? null,
-      }))
-  }, [catalogMatchResponse, debouncedMinMatchScore])
+      })))
+  }, [catalogPayload, debouncedMinMatchScore])
 
   const catalogResultMeta = useMemo(() => {
-    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
-    return normalizeResultMetadata(payload, catalogOpportunities)
-  }, [catalogMatchResponse, catalogOpportunities])
+    return normalizeResultMetadata(catalogPayload, catalogOpportunities)
+  }, [catalogPayload, catalogOpportunities])
 
   // Feature A: the matching endpoint returns discovery_pending:true when this
   // profile has never had discovery run. We then show a friendly run-discovery
   // empty state instead of a blank/zero list \u2014 and never imply "no matches".
   const discoveryPending = useMemo(() => {
-    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
-    return Boolean(payload?.discovery_pending)
-  }, [catalogMatchResponse])
+    return Boolean(catalogPayload?.discovery_pending)
+  }, [catalogPayload])
 
   // Feature B: data-driven guidance band. score_histogram is an array of
   // { min, max, count, top_source } buckets across the 0\u201380 range. Absent on
   // older responses \u2014 the band degrades gracefully (hidden).
   const scoreHistogram = useMemo(() => {
-    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
-    const buckets = payload?.score_histogram
+    const buckets = catalogPayload?.score_histogram
     return Array.isArray(buckets) ? buckets : []
-  }, [catalogMatchResponse])
+  }, [catalogPayload])
 
   // Architecture P1: high-value profile fields that, if filled, would unlock or
   // improve this profile's matches. Surfaced as encouraging prompts (never a
   // gate). Present in both the discovery_pending and the normal response.
   const profileFieldPrompts = useMemo(() => {
-    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
-    const prompts = payload?.profile_field_prompts
+    const prompts = catalogPayload?.profile_field_prompts
     return Array.isArray(prompts) ? prompts : []
-  }, [catalogMatchResponse])
+  }, [catalogPayload])
 
   const { data: profileFundingSources } = useQuery({
     queryKey: ['discover-profile-funding-sources', effectiveProfileId],
@@ -661,38 +693,32 @@ export default function DiscoverGrants() {
     return Number.isFinite(n) ? n : 0
   }, [profileFundingSources])
 
+  const combinedOpportunities = useMemo(() => {
+    return dedupeFundingResults([...catalogOpportunities, ...searchResults])
+      .sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
+  }, [catalogOpportunities, searchResults])
+
   // Keep FundingResults store in sync with the combined view so /FundingResults
   // always displays whatever the user last saw on DiscoverGrants.
   useEffect(() => {
-    if (catalogOpportunities.length === 0 && searchResults.length === 0) return
-    const seen = new Set()
-    const merged = []
-    for (const opp of catalogOpportunities) {
-      const key = opp.id ?? `${opp.title}|${opp.sponsor ?? ''}`
-      if (!seen.has(key)) { seen.add(key); merged.push(opp) }
-    }
-    for (const opp of searchResults) {
-      const key = opp.id ?? opp.url ?? `${opp.title}|${opp.sponsor ?? ''}`
-      if (!seen.has(key)) { seen.add(key); merged.push(opp) }
-    }
-    merged.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
     const profileIdForStore = effectiveProfileId ?? selectedProfileId
+    if (!profileIdForStore) return
     setFundingResults({
-      results: merged,
+      results: combinedOpportunities,
       profileId: profileIdForStore,
       organizationName: selectedProfile?.display_name ?? null,
       organizationId: selectedProfile?.organization_id ?? null,
-      returned: merged.length,
+      returned: combinedOpportunities.length,
       // Use the deduped merged length as the authoritative total \u2014 summing the
       // two source totals double-counts the heavily-overlapping catalog and
       // crawler results.
-      totalFound: merged.length,
+      totalFound: combinedOpportunities.length,
       totalScored: catalogResultMeta?.totalScored ?? null,
       truncated: Boolean(catalogResultMeta?.truncated || crawlerResultMeta?.truncated),
       thresholdFallbackMessage: crawlerResultMeta?.thresholdFallbackMessage ?? null,
       diagnostics: catalogResultMeta?.diagnostics ?? crawlerResultMeta?.diagnostics ?? null,
     })
-  }, [catalogOpportunities, catalogResultMeta, searchResults, crawlerResultMeta, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
+  }, [combinedOpportunities, catalogResultMeta, crawlerResultMeta, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
 
   const isECFProfile =
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
@@ -984,8 +1010,11 @@ export default function DiscoverGrants() {
   // outside the temporal dead zone. Same reasoning for handleAddToPipeline
   // below \u2014 both are used in render-time JSX above their lexical position.
   async function handleCrawlerResults(opportunities, responsePayload = null) {
-    log.debug('processing crawler results', { count: opportunities.length })
-    const resultMeta = normalizeResultMetadata(responsePayload, opportunities)
+    const rawOpportunities = Array.isArray(opportunities) ? opportunities : []
+    const uniqueOpportunities = dedupeFundingResults(rawOpportunities)
+    const collapsedCount = rawOpportunities.length - uniqueOpportunities.length
+    log.debug('processing crawler results', { count: rawOpportunities.length, uniqueCount: uniqueOpportunities.length })
+    const resultMeta = normalizeResultMetadata(responsePayload, uniqueOpportunities)
     setCrawlerResultMeta(resultMeta)
     if (responsePayload && (responsePayload.coverage_plan || responsePayload.coverage_report)) {
       setCoverageInfo({
@@ -1001,17 +1030,19 @@ export default function DiscoverGrants() {
     // Auto-add high-confidence matches (\u226570%).
     let addedCount = 0
     let alreadyCount = 0
+    let skippedCount = 0
     let failedCount = 0
     let attempted = 0
 
-    for (const opp of opportunities) {
+    for (const opp of uniqueOpportunities) {
       const score = Number(opp.match_score ?? opp.match ?? 0);
       if (Number.isFinite(score) && score >= AUTO_ADD_SCORE) {
         attempted += 1
         try {
-          const result = await handleAddToPipeline(opp, { silent: true })
+          const result = await handleAddToPipeline(opp, { silent: true, autoAdd: true })
           if (result?.status === 'added') addedCount += 1
           else if (result?.status === 'already') alreadyCount += 1
+          else if (result?.status === 'skipped') skippedCount += 1
           else failedCount += 1
         } catch (error) {
           failedCount += 1
@@ -1023,34 +1054,37 @@ export default function DiscoverGrants() {
     // Refresh pipeline once (avoid spamming invalidations during batch add).
     queryClient.invalidateQueries({ queryKey: ['grants'] })
 
-    if (opportunities.length === 0) {
+    if (uniqueOpportunities.length === 0) {
       toast({
         title: 'No results found',
         description: buildZeroResultDescription(profileGaps),
       })
     } else {
+      const collapseNote = collapsedCount > 0 ? ` Collapsed ${collapsedCount} duplicate variant${collapsedCount === 1 ? '' : 's'}.` : ''
       toast({
         title: 'Search complete',
-        description: `Found ${opportunities.length} opportunities. Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${failedCount} failed (from ${attempted} eligible).`,
+        description: `Found ${uniqueOpportunities.length} opportunities.${collapseNote} Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed (from ${attempted} eligible).`,
       })
     }
 
     // Update search results to show crawler results
     setHasSearched(true)
-    setSearchResults(opportunities);
+    setSearchResults(uniqueOpportunities);
 
     // Populate the FundingResults store so /FundingResults page displays results after navigation
     const profileIdForStore = effectiveProfileId ?? selectedProfileId
     setFundingResults({
-      results: opportunities,
+      results: uniqueOpportunities,
       profileId: profileIdForStore,
       organizationName: selectedProfile?.display_name ?? null,
       organizationId: selectedProfile?.organization_id ?? null,
       ...resultMeta,
+      returned: uniqueOpportunities.length,
+      totalFound: uniqueOpportunities.length,
     })
   }
 
-  async function handleAddToPipeline(opportunity, { silent = false } = {}) {
+  async function handleAddToPipeline(opportunity, { silent = false, autoAdd = false } = {}) {
     log.debug('add to pipeline requested')
     if (!authReady) {
       if (!silent) {
@@ -1078,7 +1112,7 @@ export default function DiscoverGrants() {
     const orgId = selectedProfile?.organization_id;
     
     // Check for duplicates if we have an org
-    const duplicateUrl = opportunity.application_url ?? opportunity.url ?? null
+    const duplicateUrl = opportunity.application_url ?? opportunity.apply_url ?? null
     if (orgId && duplicateUrl) {
       try {
         const existingGrants = await client.entities.Grant.filter({
@@ -1120,6 +1154,17 @@ export default function DiscoverGrants() {
         }
         return { status: 'failed', error: 'missing_title' }
       }
+      const applicationUrl = opportunity.application_url ?? opportunity.apply_url ?? null
+      if (!applicationUrl) {
+        if (!silent) {
+          toast({
+            variant: 'destructive',
+            title: 'Application link needed',
+            description: `"${opportunity.title}" only has a source link. Visit the source and verify the application link before adding it to the pipeline.`,
+          })
+        }
+        return { status: 'failed', error: 'missing_application_url' }
+      }
 
       // IMPORTANT: use apiFetch so Authorization is attached (prevents 401s).
       const newGrant = await apiFetch('/api/grants/from-opportunity', {
@@ -1128,25 +1173,39 @@ export default function DiscoverGrants() {
           opportunity_id: opportunity.id || null,
           profile_id: profileIdForAdd,
           organization_id: orgId || null,
+          auto_add: Boolean(autoAdd),
           // The server re-scores the authoritative profile/opportunity before
           // pipeline insert, so client-side match fields are intentionally omitted.
           opportunity_data: {
             title: opportunity.title,
             sponsor: opportunity.sponsor,
             deadline: opportunity.deadlineAt || opportunity.deadline,
-            application_url: opportunity.application_url ?? null,
-            url: opportunity.url ?? null,
+            application_url: applicationUrl,
+            url: opportunity.url ?? opportunity.source_url ?? null,
             awardMin: opportunity.awardMin || opportunity.amount_min,
             awardMax: opportunity.awardMax || opportunity.amount_max,
             descriptionMd: opportunity.descriptionMd || opportunity.description,
             eligibilityBullets: opportunity.eligibilityBullets || [],
             source: opportunity.source || 'discovery',
+            record_origin:
+              opportunity.record_origin ||
+              (String(opportunity.source || '').toLowerCase() === 'web_llm' ? 'web_search' : null),
             contact_info: opportunity.contact_info || opportunity.contact || null,
             application_method: opportunity.application_method || null,
             applicationNote: opportunity.application_note || opportunity.applicationNote || null,
           },
         }),
       })
+
+      if (newGrant.not_added_to_pipeline || newGrant.status === 'skipped') {
+        if (!silent) {
+          toast({
+            title: 'Kept out of this pipeline',
+            description: newGrant.message || `"${opportunity.title}" was cataloged but did not pass the profile match gates.`,
+          })
+        }
+        return { status: 'skipped', grant: newGrant, reason: newGrant.reason, gate: newGrant.gate, message: newGrant.message }
+      }
       
       // Check if it was already in pipeline
       if (newGrant.already_exists) {
@@ -1252,18 +1311,18 @@ export default function DiscoverGrants() {
     if (!explicit.state && !explicit.zip && !inferred.state && !inferred.zip) {
       items.push({ id: 'add-location', icon: Lightbulb, text: 'Add your location (state/ZIP) to your profile', detail: 'Location data is critical for finding local funding and community resources near you.' });
     }
-    if (searchResults.length === 0) {
+    if (combinedOpportunities.length === 0) {
       items.push({ id: 'run-crawlers', icon: Search, text: 'Run a search to discover funding opportunities', detail: 'Click "Find Funding Opportunities" to search all sources matched to your profile.' });
     }
-    if (searchResults.length > 0) {
-      const highMatches = searchResults.filter(r => (r.match_score || r.match || 0) >= GOOD_MATCH_SCORE);
+    if (combinedOpportunities.length > 0) {
+      const highMatches = combinedOpportunities.filter(r => (r.match_score || r.match || 0) >= GOOD_MATCH_SCORE);
       if (highMatches.length > 0) {
         items.push({ id: 'review-top', icon: CheckCircle2, text: 'Review your top ' + highMatches.length + ' high-match opportunities', detail: 'These opportunities scored 80%+ match with your profile. Consider adding them to your pipeline.' });
       }
       items.push({ id: 'add-pipeline', icon: ArrowRight, text: 'Add promising grants to your pipeline', detail: 'Use the checkboxes to select opportunities, then click Add to Pipeline to track and manage them.' });
     }
     return items.filter(s => !dismissedSuggestions.includes(s.id));
-  }, [selectedProfile, profileDetailForUi, selectedOrg, searchResults, dismissedSuggestions]);
+  }, [selectedProfile, profileDetailForUi, selectedOrg, combinedOpportunities, dismissedSuggestions]);
 
   const dismissSuggestion = (id) => {
     setDismissedSuggestions(prev => {
@@ -1301,7 +1360,7 @@ export default function DiscoverGrants() {
     log.debug('suggested next step clicked', {
       suggestionId,
       activeProfileId,
-      searchResultCount: searchResults.length,
+      searchResultCount: combinedOpportunities.length,
     })
 
     switch (suggestionId) {
@@ -1616,7 +1675,7 @@ export default function DiscoverGrants() {
             discovery run, so the backend returned discovery_pending and an empty
             list. Prompt the user to run discovery rather than implying "no
             matches". Suppressed while searching or once any results exist. */}
-        {discoveryPending && !isSearching && searchResults.length === 0 && catalogOpportunities.length === 0 && (
+        {discoveryPending && !isSearching && combinedOpportunities.length === 0 && (
           <Card className="mb-8 border-blue-200 bg-blue-50/50">
             <CardContent className="p-6 space-y-4 text-center">
               <Sparkles className="h-8 w-8 mx-auto text-blue-600" />
@@ -1658,7 +1717,7 @@ export default function DiscoverGrants() {
         )}
 
         {/* Zero-result recovery card: shown after a search completes with no results */}
-        {!discoveryPending && hasSearched && searchResults.length === 0 && catalogOpportunities.length === 0 && !isSearching && (
+        {!discoveryPending && hasSearched && combinedOpportunities.length === 0 && !isSearching && (
           <Card className="mb-8 border-amber-200 bg-amber-50/50">
             <CardContent className="p-6 space-y-5">
               <div className="flex items-start gap-3">
@@ -1899,7 +1958,7 @@ export default function DiscoverGrants() {
         {/* Architecture P1: compact "Improve your matches" banner above results
             (not while discovery is pending \u2014 that path shows the prominent card). */}
         {!discoveryPending && !improvePromptsDismissed && selectedProfile?.id &&
-          ((catalogOpportunities.length > 0) || searchResults.length > 0) && (
+          combinedOpportunities.length > 0 && (
           <ImproveMatchesCard
             prompts={profileFieldPrompts}
             profileId={selectedProfile.id}
@@ -1909,29 +1968,14 @@ export default function DiscoverGrants() {
         )}
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
-        {((catalogOpportunities.length > 0) || searchResults.length > 0) && (
+        {combinedOpportunities.length > 0 && (
           <div ref={resultsRef}>
             <SearchResults
-              results={(() => {
-                const seen = new Set()
-                const merged = []
-                for (const opp of catalogOpportunities) {
-                  const key = opp.id ?? `${opp.title}|${opp.sponsor ?? ''}`
-                  if (seen.has(key)) continue
-                  seen.add(key)
-                  merged.push(opp)
-                }
-                for (const opp of searchResults) {
-                  const key = opp.id ?? opp.url ?? `${opp.title}|${opp.sponsor ?? ''}`
-                  if (seen.has(key)) continue
-                  seen.add(key)
-                  merged.push(opp)
-                }
-                return merged.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
-              })()}
+              results={combinedOpportunities}
               profileId={effectiveProfileId ?? selectedProfileId}
               onAddToPipeline={handleAddToPipeline}
               organizationName={selectedProfile?.display_name}
+              diagnostics={catalogResultMeta?.diagnostics ?? crawlerResultMeta?.diagnostics ?? null}
             />
           </div>
         )}

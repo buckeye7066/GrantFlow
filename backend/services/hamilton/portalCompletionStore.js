@@ -190,7 +190,16 @@ export async function setPortalStatus(db, {
       `INSERT INTO profile_portal_status
          (profile_id, portal_host, status, source, evidence, grant_id, document_id,
           completed_at, merged_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ${completedStamp ? nowFn : 'NULL'}, ${mergedStamp ? nowFn : 'NULL'}, ${nowFn}, ${nowFn})`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ${completedStamp ? nowFn : 'NULL'}, ${mergedStamp ? nowFn : 'NULL'}, ${nowFn}, ${nowFn})
+       ON CONFLICT(profile_id, portal_host) DO UPDATE SET
+          status = excluded.status,
+          source = COALESCE(excluded.source, profile_portal_status.source),
+          evidence = COALESCE(excluded.evidence, profile_portal_status.evidence),
+          grant_id = COALESCE(excluded.grant_id, profile_portal_status.grant_id),
+          document_id = COALESCE(excluded.document_id, profile_portal_status.document_id),
+          completed_at = COALESCE(excluded.completed_at, profile_portal_status.completed_at),
+          merged_at = COALESCE(excluded.merged_at, profile_portal_status.merged_at),
+          updated_at = ${nowFn}`,
     ).run(String(profileId), host, next, source, evidence, grantId, documentId)
   }
   return getPortalStatus(db, profileId, host)
@@ -254,7 +263,10 @@ export async function recordReminderSent(db, profileId, portalHost) {
   if (!existing) {
     await db.prepare(
       `INSERT INTO profile_portal_status (profile_id, portal_host, status, last_reminded_at, created_at, updated_at)
-       VALUES (?, ?, 'unmerged', ${nowFn}, ${nowFn}, ${nowFn})`,
+       VALUES (?, ?, 'unmerged', ${nowFn}, ${nowFn}, ${nowFn})
+       ON CONFLICT(profile_id, portal_host) DO UPDATE SET
+          last_reminded_at = ${nowFn},
+          updated_at = ${nowFn}`,
     ).run(String(profileId), host)
     return
   }

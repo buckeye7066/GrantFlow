@@ -106,8 +106,8 @@ export function toCanonicalResult(opp) {
   )
   const ineligibility = pickArray(opp.ineligibility_reasons, opp.eligibility_concerns)
 
-  const url = pickString(opp.application_url, opp.url, opp.source_url)
-  const sourceUrl = pickString(opp.source_url, opp.url, opp.application_url)
+  const applicationUrl = pickString(opp.application_url, opp.apply_url, opp.applicationUrl, opp.applyUrl)
+  const sourceUrl = pickString(opp.source_url, opp.sourceUrl, opp.url, applicationUrl)
 
   const score = pickNumber(opp.match_score, opp.match, opp.score)
   const confidence = pickNumber(opp.match_confidence, opp.confidence)
@@ -121,7 +121,7 @@ export function toCanonicalResult(opp) {
     title: pickString(opp.title, opp.program_name, opp.name) || 'Untitled opportunity',
     sponsor: pickString(opp.sponsor, opp.funder, opp.organization, opp.agency) || '',
     description: pickString(opp.description, opp.descriptionMd, opp.summary) || '',
-    application_url: url,
+    application_url: applicationUrl,
     source_url: sourceUrl,
     source: pickString(opp.source, opp.crawler_type, opp.record_origin) || 'unknown',
     kind,

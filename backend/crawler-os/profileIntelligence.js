@@ -170,9 +170,40 @@ function key(x) {
     .replace(/^_+|_+$/g, '');
 }
 
+const NEGATIVE_TEXT_VALUES = new Set([
+  '',
+  '0',
+  'false',
+  'no',
+  'none',
+  'n/a',
+  'na',
+  'not applicable',
+  'not-applicable',
+  'not specified',
+  'unspecified',
+  'unknown',
+  'prefer not to say',
+]);
+
+function valueText(value) {
+  if (value === null || value === undefined || value === false) return '';
+  if (value === true) return 'true';
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim();
+    return NEGATIVE_TEXT_VALUES.has(text.toLowerCase()) ? '' : text;
+  }
+  if (Array.isArray(value)) return value.map(valueText).filter(Boolean).join(' ');
+  if (typeof value === 'object') return Object.values(value).map(valueText).filter(Boolean).join(' ');
+  return String(value);
+}
+
 function gatherText(profile) {
   const parts = [];
-  const push = (v) => { if (v != null) parts.push(typeof v === 'string' ? v : JSON.stringify(v)); };
+  const push = (v) => {
+    const text = valueText(v);
+    if (text) parts.push(text);
+  };
   // Identity fields are handled structurally by deriveApplicantTypes and
   // PRIMARY_TYPE_DEFAULT_NEEDS. Do not feed them into need-text scanning:
   // "animal_shelter" should not become only "housing" because it contains
@@ -759,7 +790,7 @@ function deriveNeeds(profile, blob) {
     found.add('veteran_startup');
   }
   if ((found.has('active_duty_support') || found.has('military_transition') || found.has('military_spouse_support') ||
-      /\b(active duty|currently serving|servicemember|service member|national guard|reservist|military spouse|military background|transitioning out|separating from service|ets)\b/i.test(blob)) &&
+      /\b(active duty|currently serving|servicemember|service member|national guard|reservist|military spouse|transitioning out|separating from service|ets)\b/i.test(blob)) &&
       (found.has('startup') || found.has('capital') || found.has('operations') || found.has('equipment'))) {
     found.add('military_startup');
   }

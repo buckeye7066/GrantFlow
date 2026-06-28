@@ -71,7 +71,7 @@ export default function AdminSystemHealth() {
                 Avatars and uploaded documents may disappear after restart if the uploads directory is not on a persistent, writable volume.
               </p>
               <div className="mt-2 text-xs text-amber-900 space-y-1">
-                <div><span className="font-semibold">uploadsDir:</span> {storage?.uploadsDir || storage?.uploads_dir || 'unknown'}</div>
+                <div><span className="font-semibold">uploadsDir:</span> {storage?.details_redacted ? 'redacted in health response' : (storage?.uploadsDir || storage?.uploads_dir || 'unknown')}</div>
                 <div><span className="font-semibold">writable:</span> {String(storage?.writable ?? 'unknown')}</div>
                 <div><span className="font-semibold">likely persistent:</span> {String(storage?.likely_persistent ?? 'unknown')}</div>
                 {storage?.last_error ? <div><span className="font-semibold">last error:</span> {String(storage.last_error)}</div> : null}

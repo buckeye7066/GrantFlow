@@ -78,7 +78,7 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
         '../utils/recordOrigins.js'
       );
       const activeVal = db.dialect === 'postgres' ? 'TRUE' : '1';
-      const count = db
+      const count = await db
         .prepare(
           `
             SELECT COUNT(*) AS n FROM funding_opportunities

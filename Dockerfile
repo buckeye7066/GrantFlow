@@ -83,6 +83,12 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 
+# Runtime writes are limited to app data/upload directories. Drop root before
+# booting the server so a compromised request handler does not own the image.
+RUN mkdir -p /app/data /app/uploads \
+  && chown -R node:node /app/data /app/uploads
+USER node
+
 # Expose port (Railway will set PORT env var)
 EXPOSE 8080
 

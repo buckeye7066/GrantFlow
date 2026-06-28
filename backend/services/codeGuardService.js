@@ -59,7 +59,7 @@ const ENDPOINTS = [
   { path: '/api/documents?limit=3', auth: true, name: 'Documents' },
   { path: '/api/anya/health', auth: true, name: 'Anya health' },
   { path: '/api/admin/diagnostics', auth: true, name: 'Admin diagnostics' },
-  { path: '/api/admin/pipeline-health', auth: false, name: 'Pipeline health' },
+  { path: '/api/admin/pipeline-health', auth: true, name: 'Pipeline health' },
   { path: '/api/source-directory?limit=3', auth: false, name: 'Source directory' },
   { path: '/api/crawl-logs?limit=3', auth: false, name: 'Crawl logs' },
 ]
@@ -468,10 +468,10 @@ export async function verifyMissionGoals(db) {
  * @param {Object} db
  * @returns {string} Plain text summary
  */
-export function getAuditSummary(db) {
+export async function getAuditSummary(db) {
   const lines = []
 
-  const epHealth = getMemory(db, { scope: 'global', memoryKey: 'codeguard.endpoint_health' })
+  const epHealth = await getMemory(db, { scope: 'global', memoryKey: 'codeguard.endpoint_health' })
   if (epHealth?.content) {
     const h = epHealth.content.endpoints ?? epHealth.content
     lines.push(`Endpoint Health (${h.timestamp ?? 'unknown'}): ${h.passed ?? 0} pass, ${h.failed ?? 0} fail, ${h.skipped ?? 0} skip of ${h.total ?? 0}`)
@@ -485,7 +485,7 @@ export function getAuditSummary(db) {
     }
   }
 
-  const matchQ = getMemory(db, { scope: 'global', memoryKey: 'codeguard.match_quality' })
+  const matchQ = await getMemory(db, { scope: 'global', memoryKey: 'codeguard.match_quality' })
   if (matchQ?.content) {
     const m = matchQ.content.matchQuality ?? matchQ.content
     const g = m.grades || {}
@@ -496,7 +496,7 @@ export function getAuditSummary(db) {
     }
   }
 
-  const mission = getMemory(db, { scope: 'global', memoryKey: 'codeguard.mission_score' })
+  const mission = await getMemory(db, { scope: 'global', memoryKey: 'codeguard.mission_score' })
   if (mission?.content) {
     const mv = mission.content.mission ?? mission.content
     lines.push(`Mission Score (${mv.timestamp ?? 'unknown'}): ${mv.score ?? 0}% — ${mv.pass ?? 0} pass, ${mv.warn ?? 0} warn, ${mv.fail ?? 0} fail of ${mv.total ?? 0}`)
@@ -554,9 +554,9 @@ export function formatAuditSummary({ endpoints = null, matchQuality = null, miss
  * @param {Object} db
  * @returns {boolean}
  */
-export function shouldRunAudit(db) {
+export async function shouldRunAudit(db) {
   try {
-    const last = getMemory(db, { scope: 'global', memoryKey: 'codeguard.last_audit' })
+    const last = await getMemory(db, { scope: 'global', memoryKey: 'codeguard.last_audit' })
     if (!last?.content?.timestamp) return true
     const hoursSince = (Date.now() - new Date(last.content.timestamp).getTime()) / 3_600_000
     return hoursSince >= AUDIT_COOLDOWN_HOURS

@@ -32,12 +32,12 @@
  *      we require funder too; bare lower(title) is kept only for dismissal
  *      tombstones whose funder/URL drifted (mirrors pipelineDismissals).
  *
- * Posture: recall-over-suppression. If anything in here throws (missing
- * table on an old deploy, dialect quirk), we LOG and return the original
- * list unfiltered — a dedup filter must never blank a user's results.
+ * Posture: fail closed on unreadable pipeline state. If the grants pipeline
+ * cannot be read, callers must surface a retryable error rather than risk
+ * re-showing saved/dismissed funding as fresh results.
  */
 
-import { grantFingerprintFromOpportunity } from '../utils/grantFingerprint.js'
+import { grantFingerprintFromOpportunity, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { ensurePipelineDismissalsSchema } from './pipelineDismissals.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -148,6 +148,7 @@ export async function loadPipelineExclusionIndex(db, profileId) {
   const fingerprints = new Set()
   const titleFunders = new Set()
   const titles = new Set()
+  const pipelineRows = []
   // Bare normalized titles of awards the user has ALREADY secured/imported in
   // their university_applications section. Always checked (unlike `titles`,
   // which is opt-in) because these are user-confirmed awards whose funder/source
@@ -166,6 +167,7 @@ export async function loadPipelineExclusionIndex(db, profileId) {
       )
       .all(profile)
     for (const row of grantRows || []) {
+      pipelineRows.push(row)
       const oppId = norm(row.funding_opportunity_id)
       if (oppId) oppIds.add(oppId)
       const fp = norm(row.fingerprint)
@@ -181,11 +183,14 @@ export async function loadPipelineExclusionIndex(db, profileId) {
       if (t) titles.add(t)
     }
   } catch (err) {
-    log.warn('failed to load profile pipeline grants (passing results through)', {
+    log.error('failed to load profile pipeline grants', {
       profileId: profile,
       error: String(err?.message || err),
     })
-    return null
+    const wrapped = new Error(`pipeline_exclusion_unavailable: ${err?.message || err}`)
+    wrapped.code = 'PIPELINE_EXCLUSION_UNAVAILABLE'
+    wrapped.cause = err
+    throw wrapped
   }
 
   // 2. Sticky dismissal tombstones for this profile.
@@ -268,7 +273,7 @@ export async function loadPipelineExclusionIndex(db, profileId) {
     })
   }
 
-  return { oppIds, fingerprints, titleFunders, titles, sectionTitles }
+  return { oppIds, fingerprints, titleFunders, titles, sectionTitles, pipelineRows }
 }
 
 /**
@@ -298,6 +303,7 @@ function isExcluded(opp, index, { matchTitle = false } = {}) {
   if (fp && index.fingerprints.has(fp)) return true
   const tf = titleFunderKey(titleOf(opp), funderOf(opp))
   if (tf && index.titleFunders.has(tf)) return true
+  if (Array.isArray(index.pipelineRows) && index.pipelineRows.some((row) => likelySameGrantOpportunity(opp, row))) return true
   // User-secured/imported section awards: matched on bare normalized title
   // regardless of `matchTitle`, because their funder label drifts from the
   // catalog's and the title is the only stable identity we have for them.
@@ -331,6 +337,7 @@ export async function filterOutPipelineMembers(db, profileId, opportunities, opt
       index.fingerprints.size === 0 &&
       index.titleFunders.size === 0 &&
       index.titles.size === 0 &&
+      (index.pipelineRows?.length ?? 0) === 0 &&
       (index.sectionTitles?.size ?? 0) === 0)
   ) {
     // Nothing to exclude (or load failed) — pass through untouched.
@@ -443,6 +450,9 @@ export function dedupeOpportunityList(opportunities) {
           groupIndex = keyToIndex.get(k)
           break
         }
+      }
+      if (groupIndex === -1) {
+        groupIndex = kept.findIndex((existing) => likelySameGrantOpportunity(opp, existing))
       }
       if (groupIndex === -1) {
         const newIndex = kept.length

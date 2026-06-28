@@ -57,6 +57,7 @@ import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
+import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -381,6 +382,7 @@ export async function enforceNoDuplicateGrants(db) {
       }
     }
     const keyBuckets = new Map()
+    const familyBuckets = new Map()
     const linkByKey = (key, id) => {
       if (!key) return
       if (keyBuckets.has(key)) union(keyBuckets.get(key), id)
@@ -393,6 +395,16 @@ export async function enforceNoDuplicateGrants(db) {
       }
       if (row.fingerprint !== null && row.fingerprint !== undefined && norm(row.fingerprint) !== '') {
         linkByKey(`p:${p}|fp:${norm(row.fingerprint)}`, row.id)
+      }
+      const stableUrl = grantUrlKey(row)
+      if (stableUrl) {
+        linkByKey(`p:${p}|url:${stableUrl}`, row.id)
+      }
+      const familyKey = grantFamilyKey(row)
+      if (familyKey) {
+        const bucketKey = `p:${p}|family:${familyKey}`
+        if (!familyBuckets.has(bucketKey)) familyBuckets.set(bucketKey, [])
+        familyBuckets.get(bucketKey).push(row)
       }
       const title = norm(row.title)
       if (title !== '') {
@@ -414,6 +426,16 @@ export async function enforceNoDuplicateGrants(db) {
             ''
           if (corroborator) {
             linkByKey(`p:${p}|tf:${title}|${funder}|${corroborator}`, row.id)
+          }
+        }
+      }
+    }
+
+    for (const bucket of familyBuckets.values()) {
+      for (let i = 0; i < bucket.length; i += 1) {
+        for (let j = i + 1; j < bucket.length; j += 1) {
+          if (likelySameGrantOpportunity(bucket[i], bucket[j])) {
+            union(bucket[i].id, bucket[j].id)
           }
         }
       }

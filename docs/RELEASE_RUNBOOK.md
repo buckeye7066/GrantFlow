@@ -10,6 +10,7 @@
 - **Single-source config**:
   - **Vercel** routing is defined in `vercel.json` (SPA fallback + `/api` rewrites).
   - **Railway** build/start is defined in `railway.json` + `Dockerfile`.
+  - **Railway readiness** is `/readyz`; `/api/health` is a public health summary and is not sufficient production readiness proof.
 - **Known incident**:
   - If `app.axiombiolabs.org/grantflow/*` works but `www.axiombiolabs.org/grantflow/login` 404s, you have **domain routing drift** (see **E-001** in `docs/ERROR_LEDGER.md`).
 
@@ -64,7 +65,8 @@
    - Recommended automation:
      - `SMOKE_BASE_URL=https://app.axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod`
 4. Verify backend health:
-   - `GET https://<railway-service>/api/health` returns 200 (or 200 + `"status":"warning"` is acceptable)
+   - `GET https://<railway-service>/readyz` returns 200 with `"status":"ready"`
+   - `GET https://<railway-service>/api/health` returns 200 as a public health summary
    - Use `X-Request-Id` to correlate any failures in Railway logs
 5. Verify the canonical profile schema endpoint:
    - `GET /api/profiles/schema` (should return full data point list + explanations)

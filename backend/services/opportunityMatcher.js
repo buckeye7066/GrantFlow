@@ -17,14 +17,16 @@
 import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
-import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
+import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { extractHostname } from '../config/urlRules.js'
 import { RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR, isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { evaluateExclusion } from './exclusionEngine.js'
+import { evaluateProfileSpecificGate } from './matching/profileSpecificGate.js'
 import {
   grantFingerprintFromOpportunity,
   chooseGrantUrl,
   GRANT_FINGERPRINT_VERSION,
+  likelySameGrantOpportunity,
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { createLogger } from '../utils/logger.js'
@@ -136,12 +138,15 @@ export async function saveToProfilePipeline(
     const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
 
     // Gate 1: Source allowlist — blocks non-approved sources entirely
-    const oppSource = opportunity?.source ? String(opportunity.source).trim() : null
-    if (oppSource && !isPipelineSourceAllowed(oppSource)) {
-      log.info(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — source "${oppSource}" not allowed`)
+    const sourceGate = evaluatePipelineSource({
+      source: opportunity?.source ? String(opportunity.source).trim() : null,
+      record_origin: opportunity?.record_origin ? String(opportunity.record_origin).trim() : null,
+    })
+    if (!sourceGate.allowed) {
+      log.info(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — ${sourceGate.reason}`)
       return {
         saved: false,
-        reason: `Source "${oppSource}" is not in the pipeline allowed sources list`,
+        reason: sourceGate.reason || 'Source is not approved for profile pipelines',
         gate: 'SOURCE_ALLOWLIST',
         matchPercentage: null,
         threshold,
@@ -259,6 +264,19 @@ export async function saveToProfilePipeline(
     // potentially useful real opportunities. Rules marked hard:true still reject.
     if (profileContext) {
       const profileData = extractProfileData(profileContext)
+      const profileGate = evaluateProfileSpecificGate(profileContext, opportunity, { mode: 'pipeline' })
+      if (!profileGate.pass) {
+        log.info(`[opportunityMatcher] Gate:PROFILE_SPECIFIC suppressed "${opportunity.title}" - ${profileGate.reason}`)
+        return {
+          saved: false,
+          reason: profileGate.reason,
+          gate: 'PROFILE_SPECIFIC',
+          ruleId: profileGate.ruleId,
+          matchPercentage: adjustedScore,
+          threshold,
+        }
+      }
+
       const relevance = applyRelevanceFilter(opportunity, profileData, { mode: 'soft' })
       if (!relevance.pass) {
         log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
@@ -363,6 +381,10 @@ export async function saveToProfilePipeline(
     //                                 rows whose url/deadline drifted between
     //                                 crawls (so the fingerprint differs) but
     //                                 which are clearly the same program.
+    //   (d) same URL / same acronym family — catches web-crawler variants like
+    //                                 "NAEMT Educational Scholarships" vs
+    //                                 "NAEMT EMT-Paramedic Scholarship" without
+    //                                 collapsing ordinary same-funder programs.
     // If any arm matches, we SKIP (never insert a second row).
     const candidateFp = grantFingerprintFromOpportunity(opportunity)
     const candidateTitleFunder = titleFunderKey(opportunity.title, opportunity.sponsor || opportunity.funder)
@@ -402,6 +424,11 @@ export async function saveToProfilePipeline(
       // (c) normalized title+funder
       const rowTitleFunder = titleFunderKey(row.title, row.funder)
       if (candidateTitleFunder && rowTitleFunder && candidateTitleFunder === rowTitleFunder) {
+        existing = row
+        break
+      }
+      // (d) stable URL or conservative acronym-family match
+      if (likelySameGrantOpportunity(opportunity, row)) {
         existing = row
         break
       }
@@ -665,7 +692,8 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
 
   let sourceBlockedCount = 0
   for (const opportunity of opportunities) {
-    if (!isPipelineSourceAllowed(opportunity.source)) {
+    const sourceGate = evaluatePipelineSource(opportunity)
+    if (!sourceGate.allowed) {
       sourceBlockedCount++
       continue
     }

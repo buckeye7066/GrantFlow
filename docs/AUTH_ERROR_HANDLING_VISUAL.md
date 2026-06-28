@@ -13,7 +13,7 @@
 │          SocialSignInButtons Component (Enhanced)                   │
 │  ┌───────────────────────────────────────────────────────────────┐ │
 │  │ Step 1: Check Backend Health                                  │ │
-│  │   GET /health                                                 │ │
+│  │   GET /api/health                                             │ │
 │  │   Timeout: 5 seconds                                          │ │
 │  └────────────┬──────────────────────────────────────────────────┘ │
 │               │                                                      │
@@ -147,7 +147,7 @@
 
 ## Diagnostic Endpoints
 
-### GET /health
+### GET /api/health
 Returns overall system health status
 
 **Response:**
@@ -164,7 +164,7 @@ Returns overall system health status
 ```
 
 ### GET /api/auth/diagnostics
-Returns authentication system configuration status
+Returns authentication system configuration status for authenticated admins. Unauthenticated requests should return 401/403.
 
 **Response:**
 ```json
@@ -212,15 +212,13 @@ npm run smoke:auth-diagnostics
 [test] Starting authentication error handling smoke tests
 [test] API Base URL: http://localhost:8080
 
-[test] Testing /health endpoint...
+[test] Testing /api/health endpoint...
 [test] Health endpoint status: 200
 [test] ✅ Health endpoint test passed
 
 [test] Testing /api/auth/diagnostics endpoint...
-[test] Diagnostics endpoint status: 200
-[test] google configured: false
-[test] facebook configured: false
-[test] yahoo configured: false
+[test] Diagnostics endpoint status: 401
+[test] PASS Auth diagnostics correctly require admin authentication
 [test] ✅ Auth diagnostics endpoint test passed
 
 [test] Testing OAuth start endpoints...

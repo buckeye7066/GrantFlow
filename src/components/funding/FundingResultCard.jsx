@@ -107,8 +107,9 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
   const ineligibility = Array.isArray(result.ineligibility_reasons)
     ? result.ineligibility_reasons
     : []
-  const url = result.application_url || result.source_url || result.url || null
-  const action = pickAction(result)
+  const hasApplicationUrl = Boolean(result.application_url || result.apply_url)
+  const url = result.application_url || result.apply_url || result.source_url || result.url || null
+  const action = hasApplicationUrl ? pickAction(result) : 'visit'
 
   const isBroken = linkStatus === 'broken' || linkStatus === 'unreachable'
   const isDirectory = kind === 'directory' || kind === 'referral'
@@ -339,6 +340,7 @@ FundingResultCard.propTypes = {
     sponsor: PropTypes.string,
     description: PropTypes.string,
     application_url: PropTypes.string,
+    apply_url: PropTypes.string,
     source_url: PropTypes.string,
     url: PropTypes.string,
     source: PropTypes.string,

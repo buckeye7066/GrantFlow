@@ -22,35 +22,12 @@ jobs:
 
       - name: Install
         # Work around occasional npm optional-deps resolution issues (rollup native bindings used by Vite).
-        # Explicitly include optional deps so `vite build` doesn't fail with missing @rollup/* binaries.
-        # For chore(deps) PRs: if lock file is out of sync with package.json, fall back to npm install.
-        run: npm ci --include=optional || npm install --include=optional
+        # Keep CI lockfile-only so it validates the committed dependency graph.
+        run: npm ci --include=optional
 
-      # Same command Vercel runs — fail in minutes instead of after full unit + release gates.
+      # Same command Vercel runs; fail in minutes instead of after full unit + release gates.
       - name: Vite production build (Vercel parity)
         run: npm run build
-
-      - name: Auto-fix lint issues
-        # Attempt to auto-fix common lint issues before the strict check.
-        # This helps recover from CodeGuard/AI code fixers that leave behind
-        # auto-fixable issues like unused eslint-disable directives.
-        # Changes are NOT committed - this just helps CI pass when possible.
-        # Note: We ignore warnings during auto-fix (they'll be caught in strict check).
-        #
-        # `fix-eqeqeq-null.mjs` runs FIRST because eqeqeq has no built-in
-        # auto-fix (the rule is intentionally not auto-fixable in ESLint —
-        # converting `x == null` to `x === null` would silently change
-        # semantics by no longer matching `undefined`). Our codemod is
-        # string/template/comment-safe and rewrites `x == null` →
-        # `(x === null || x === undefined)` (and `!=` to the inverse), so
-        # any future automated fixer or AI assistant that re-introduces the
-        # idiom is normalised before lint, and CI never breaks on it again.
-        run: |
-          echo "Normalising == null / != null patterns..."
-          node scripts/fix-eqeqeq-null.mjs || true
-          echo "Attempting ESLint auto-fix..."
-          npx eslint --fix "src/**/*.{js,jsx}" "backend/**/*.js" 2>/dev/null || true
-          echo "Auto-fix complete. Proceeding to validation..."
 
       - name: Detect code corruption
         # Early detection of common automated code fixer corruption patterns before
@@ -61,19 +38,21 @@ jobs:
           echo "Checking for code corruption patterns..."
           node scripts/detect-code-corruption.mjs || {
             echo ""
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  CODE CORRUPTION DETECTED - See above for details            ║"
-            echo "║  This is likely caused by automated code fixers.             ║"
-            echo "║  The corrupted code must be fixed before CI can pass.        ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo "CODE CORRUPTION DETECTED - See above for details"
+            echo "This is likely caused by automated code fixers."
+            echo "The corrupted code must be fixed before CI can pass."
             exit 1
           }
 
+      - name: Secret scan
+        # This is blocking on purpose: production readiness cannot depend on
+        # someone noticing leaked credentials after a deploy.
+        run: npm run scan:secrets
+
       - name: Audit (high+)
-        # Non-blocking: transitive dev-dep vulnerabilities (minimatch via eslint) have no fix
-        # available yet. The audit still runs and reports, but won't block the pipeline.
-        continue-on-error: true
-        run: npm audit --audit-level=high --omit=dev || true
+        # Blocking for production dependencies; missing fixes should be explicit,
+        # not silently bypassed by CI.
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Release gates
         run: npm run release:gates
@@ -133,7 +112,7 @@ jobs:
           cache: npm
 
       - name: Install
-        run: npm ci --include=optional || npm install --include=optional
+        run: npm ci --include=optional
 
       - name: Migrate fresh database (full chain)
         run: npm run migrate
