@@ -24,10 +24,12 @@ test('offline crawler routing proof labels itself honestly', () => {
   assert.doesNotMatch(script, /live crawl proof/i)
 })
 
-test('deployment proof distinguishes branch readiness from live production status', () => {
+test('deployment proof requires the certified branch to be live in production', () => {
   const script = readRepoFile('scripts/production-deployment-proof.mjs')
   assert.match(script, /current branch pushed/)
   assert.match(script, /current production surfaces are green/)
-  assert.match(script, /does NOT prove[\s\S]*branch commit is already live/i)
+  assert.match(script, /live backend reports the exact commit/)
+  assert.match(script, /live backend commit matches certified branch/)
+  assert.match(script, /shaMatches\(expectedHead, liveCommit\)/)
   assert.doesNotMatch(script, /proves the current branch commit is already live/i)
 })

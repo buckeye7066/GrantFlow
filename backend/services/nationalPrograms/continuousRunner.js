@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { dispatchCrawlerJob } from '../crawlerDispatcher.js'
 import { auditLog } from './audit.js'
 import { createLogger } from '../../utils/logger.js'
+import { runWithSchedulerLock, reportBackgroundError } from '../schedulerLock.js'
 const qualityLog = createLogger('services:nationalPrograms:continuousRunner')
 
 function minutes(ms) {
@@ -20,13 +21,13 @@ export function startNationalProgramsCrawler({
 
   const intervalMs = Math.max(5, intervalMinutes) * 60 * 1000
 
-  const tick = async () => {
+  const tickUnlocked = async () => {
     const startedAt = Date.now()
     try {
       // Avoid overlapping runs
       let existing;
       try {
-        existing = db
+        existing = await db
           .prepare(
             `
               SELECT id, status, created_at
@@ -43,6 +44,7 @@ export function startNationalProgramsCrawler({
           )
           .get()
       } catch (dbError) {
+        reportBackgroundError(dbError, { lockName: 'national-programs-crawler', phase: 'existing_job_check' })
         await auditLog({
           action: 'continuous_db_error',
           error: dbError instanceof Error ? dbError.message : String(dbError),
@@ -70,13 +72,14 @@ export function startNationalProgramsCrawler({
       }
 
       try {
-        db.prepare(
+        await db.prepare(
           `
             INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, created_at)
             VALUES (?, 'national', 'queued', ?, 'system', CURRENT_TIMESTAMP)
           `,
         ).run(jobId, JSON.stringify(parameters))
       } catch (insertError) {
+        reportBackgroundError(insertError, { lockName: 'national-programs-crawler', phase: 'insert_job' })
         await auditLog({
           action: 'continuous_insert_error',
           job_id: jobId,
@@ -105,12 +108,14 @@ export function startNationalProgramsCrawler({
         })
         // Mark job as failed in database so it doesn't block future runs
         try {
-          db.prepare('UPDATE crawler_jobs SET status = "failed" WHERE id = ?').run(jobId)
+          await db.prepare("UPDATE crawler_jobs SET status = 'failed' WHERE id = ?").run(jobId)
         } catch (updateError) {
+          reportBackgroundError(updateError, { lockName: 'national-programs-crawler', phase: 'mark_dispatch_failed' })
           qualityLog.error('Failed to update job status:', updateError)
         }
       })
     } catch (error) {
+      reportBackgroundError(error, { lockName: 'national-programs-crawler', phase: 'tick' })
       await auditLog({
         action: 'continuous_tick_error',
         error: error instanceof Error ? error.message : String(error),
@@ -123,9 +128,14 @@ export function startNationalProgramsCrawler({
     }
   }
 
+  const tick = () => runWithSchedulerLock(db, {
+    lockName: 'national-programs-crawler',
+    ttlMs: Math.max(intervalMs, 30 * 60 * 1000),
+    logger: console,
+  }, tickUnlocked)
+
   // Kick off immediately, then on interval
   tick().catch(e => console.warn('[background]', e?.message || e))
   const handle = setInterval(() => tick().catch(e => console.warn('[background]', e?.message || e)), intervalMs)
   return () => clearInterval(handle)
 }
-

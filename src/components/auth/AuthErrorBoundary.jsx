@@ -1,6 +1,7 @@
 import { Component } from 'react'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, RefreshCw } from 'lucide-react'
+import { captureFrontendException } from '@/utils/observability.js'
 
 /**
  * Error boundary component for catching authentication-related errors
@@ -23,6 +24,10 @@ class AuthErrorBoundary extends Component {
   componentDidCatch(error, errorInfo) {
     // Log the error to console for debugging
     console.error('[AuthErrorBoundary] Caught error:', error, errorInfo)
+    captureFrontendException(error, {
+      area: 'auth_boundary',
+      componentStack: errorInfo?.componentStack,
+    })
     
     this.setState({
       error,

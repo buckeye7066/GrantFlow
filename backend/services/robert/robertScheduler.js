@@ -18,6 +18,7 @@ import { ROBERT_TRIGGERS } from './robertTypes.js'
 import { getRobertConfig } from './robertSafety.js'
 import { autoSeedWeakestProfiles } from './robertFundingTraceBridge.js'
 import { upsertSourceCandidate } from './robertRunStore.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 let _running = false
 let _interval = null
@@ -94,9 +95,16 @@ async function kickOff({ db, deps, logger, trigger }) {
     // operator explicitly pins ROBERT_SCHEDULED_MODE. On-demand/API runs are
     // unaffected (they pass their own mode). The OS pipeline is SSRF-safe and
     // self-throttling, and an empty run now degrades honestly.
-    const scheduledMode = (process.env.ROBERT_SCHEDULED_MODE || 'full-cycle').toLowerCase()
-    const result = await runRobert({ db, deps, trigger, mode: scheduledMode })
-    if (logger?.info) logger.info('robert.scheduler.run', { run_id: result?.run_id, mode: result?.mode, status: result?.status, status_reason: result?.status_reason || null })
+    await runWithSchedulerLock(db, {
+      lockName: 'robert:discovery',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger,
+    }, async () => {
+      const scheduledMode = (process.env.ROBERT_SCHEDULED_MODE || 'full-cycle').toLowerCase()
+      const result = await runRobert({ db, deps, trigger, mode: scheduledMode })
+      if (logger?.info) logger.info('robert.scheduler.run', { run_id: result?.run_id, mode: result?.mode, status: result?.status, status_reason: result?.status_reason || null })
+      return result
+    })
   } catch (err) {
     if (logger?.error) logger.error('robert.scheduler.error', { message: String(err?.message || err) })
   } finally {
@@ -108,12 +116,16 @@ async function kickOffAutoSeed({ db, cfg, logger }) {
   if (_stopped || _autoSeedRunning) return
   _autoSeedRunning = true
   try {
-    const result = await autoSeedWeakestProfiles(db, {
+    const result = await runWithSchedulerLock(db, {
+      lockName: 'robert:autoseed',
+      ttlMs: 60 * 60 * 1000,
+      logger,
+    }, () => autoSeedWeakestProfiles(db, {
       limit: cfg.autoSeedMaxProfiles,
       maxEntitiesPerProfile: cfg.autoSeedMaxEntitiesPerProfile,
       minRisk: cfg.autoSeedMinRisk,
       deps: { upsert: upsertSourceCandidate },
-    })
+    }))
     if (logger?.info) {
       logger.info('robert.scheduler.autoseed', {
         evaluated: result?.evaluated,

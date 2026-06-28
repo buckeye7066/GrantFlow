@@ -1,5 +1,5 @@
 import express from 'express';
-import { ensureProfileAccess, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { ensureProfileAccess, isAdminUser, isAdminUserWithDb, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isJunkOpportunity } from '../services/contentFilter.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
@@ -25,12 +25,227 @@ router.use((req, res, next) => {
   return next()
 })
 
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value
+  if (!value) return []
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function normalizeSearchTerms(...sources) {
+  const terms = []
+  for (const source of sources) {
+    const values = Array.isArray(source) ? source : [source]
+    for (const value of values) {
+      const text = String(value ?? '').trim().toLowerCase()
+      if (!text) continue
+      for (const part of text.split(/[,\n;|]+/)) {
+        const term = part.trim()
+        if (term && term.length >= 2) terms.push(term)
+      }
+    }
+  }
+  return [...new Set(terms)].slice(0, 20)
+}
+
+function searchableOpportunityText(opp) {
+  return [
+    opp?.title,
+    opp?.program_name,
+    opp?.sponsor,
+    opp?.funder,
+    opp?.description,
+    opp?.summary,
+    opp?.eligibility_bullets,
+    opp?.keywords,
+    opp?.categories,
+    opp?.source,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function formatProfileSearchResult(opp) {
+  const freshness = decorateOpportunityFreshness(opp)
+  return {
+    ...opp,
+    id: opp.id,
+    source_id: opp.source_id ?? null,
+    title: opp.title || opp.program_name,
+    program_name: opp.program_name || opp.title,
+    sponsor: opp.sponsor || opp.funder,
+    funder: opp.funder || opp.sponsor,
+    url: opp.url || opp.actionable_url || opp.application_url || opp.apply_url || opp.source_url || null,
+    application_url: opp.application_url || opp.actionable_url || opp.url || opp.apply_url || opp.source_url || null,
+    deadline: opp.deadline,
+    award_min: opp.amount_min ?? opp.award_min ?? null,
+    award_max: opp.amount_max ?? opp.award_max ?? null,
+    amount_min: opp.amount_min ?? opp.award_min ?? null,
+    amount_max: opp.amount_max ?? opp.award_max ?? null,
+    description: opp.description || opp.summary,
+    state: opp.state,
+    source: opp.source || 'crawler-os',
+    eligibility: opp.eligibility_bullets,
+    match: Number(opp.match_score ?? opp.fit_score ?? 0),
+    fit_score: Number(opp.match_score ?? opp.fit_score ?? 0),
+    match_score: Number(opp.match_score ?? opp.fit_score ?? 0),
+    updated_at: opp.updated_at ?? null,
+    created_at: opp.created_at ?? null,
+    freshness: opp.freshness ?? freshness.freshness,
+    days_since_verified: opp.days_since_verified ?? freshness.days_since_verified,
+    freshness_warning: opp.freshness_warning ?? freshness.freshness_warning,
+    engine: 'crawler-os',
+  }
+}
+
+async function loadProfileOsResults(req, profileId, {
+  minScore = DEFAULT_MIN_SCORE,
+  includePipeline = false,
+  filters = {},
+  searchTerms = [],
+  page = 1,
+  perPage = 50,
+} = {}) {
+  const baseContext = await loadProfileContext(req.db, profileId)
+  const profileContext = buildProfileFacets(baseContext)
+  const isPostgres = req.db?.dialect === 'postgres'
+  const activeClause = isPostgres
+    ? '(o.is_active IS NULL OR o.is_active = TRUE)'
+    : '(o.is_active IS NULL OR o.is_active = 1)'
+  const hiddenClause = isPostgres
+    ? '(o.is_hidden IS NULL OR o.is_hidden = FALSE)'
+    : '(o.is_hidden IS NULL OR o.is_hidden = 0)'
+
+  const osRows = await req.db
+    .prepare(
+      `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+              m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
+         FROM profile_opportunity_matches m
+         JOIN funding_opportunities o ON o.id = m.opportunity_id
+        WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+          AND ${activeClause}
+          AND ${hiddenClause}
+        ORDER BY m.match_score DESC`,
+    )
+    .all(profileId)
+
+  let mapped = osRows.map((o) => {
+    const kind = String(o.opportunity_kind ?? '').toUpperCase()
+    const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
+    return {
+      ...o,
+      match_score: Number(o.os_match_score ?? 0),
+      match_decision: o.os_match_decision,
+      match_explanation: o.os_match_explanation,
+      match_reasons: parseJsonArray(o.os_match_reasons),
+      is_directory: isDirectory,
+      trust_tier: o.source_trust_tier ?? o.trust_tier ?? null,
+      url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+      actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+      engine: 'crawler-os',
+    }
+  })
+
+  const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+    preserveDirectories: true,
+    rejectHardIneligible: true,
+  })
+  mapped = canonical.kept
+
+  const normalizedTerms = normalizeSearchTerms(searchTerms)
+  if (normalizedTerms.length > 0) {
+    mapped = mapped.filter((opp) => {
+      const haystack = searchableOpportunityText(opp)
+      return normalizedTerms.some((term) => haystack.includes(term))
+    })
+  }
+
+  if (filters?.state) {
+    const state = String(filters.state).trim().toUpperCase()
+    if (state) {
+      mapped = mapped.filter((opp) => {
+        const oppState = String(opp.state ?? '').trim().toUpperCase()
+        return !oppState || oppState === state || oppState === 'NATIONWIDE'
+      })
+    }
+  }
+  if (filters?.min_award) {
+    const min = Number(filters.min_award)
+    if (Number.isFinite(min)) mapped = mapped.filter((opp) => opp.amount_max === null || opp.amount_max === undefined || Number(opp.amount_max) >= min)
+  }
+  if (filters?.max_award) {
+    const max = Number(filters.max_award)
+    if (Number.isFinite(max)) mapped = mapped.filter((opp) => opp.amount_min === null || opp.amount_min === undefined || Number(opp.amount_min) <= max)
+  }
+
+  mapped = mapped.filter((opp) => opp.is_directory || Number(opp.match_score) >= Number(minScore))
+  mapped = deduplicateOpportunities(mapped).map(formatProfileSearchResult)
+
+  let excludedAlreadyInPipeline = 0
+  if (!includePipeline) {
+    const filtered = await filterOutPipelineMembers(req.db, profileId, mapped)
+    mapped = filtered.results
+    excludedAlreadyInPipeline = filtered.excluded
+  }
+
+  const safePage = Math.max(1, Number.parseInt(String(page), 10) || 1)
+  const safePerPage = Math.max(1, Math.min(Number.parseInt(String(perPage), 10) || 50, 100))
+  const offset = (safePage - 1) * safePerPage
+  const pageResults = mapped.slice(offset, offset + safePerPage)
+
+  return {
+    profileContext,
+    results: pageResults,
+    total: mapped.length,
+    excludedAlreadyInPipeline,
+    page: safePage,
+    perPage: safePerPage,
+    hasMore: offset + pageResults.length < mapped.length,
+    dropped: canonical.dropped,
+  }
+}
+
 // GET /api/discover-grants
 // Lightweight Discover Grants compatibility endpoint used by Admin CodeGuard.
 // It returns real active opportunities from the same funding_opportunities
 // table that powers the Discover UI, never placeholders.
 router.get('/discover-grants', async (req, res) => {
   try {
+    const profileId = String(req.query?.profile_id || req.query?.profileId || '').trim()
+    if (profileId) {
+      if (!(await ensureProfileAccess(req, res, profileId))) return
+      const os = await loadProfileOsResults(req, profileId, {
+        minScore: Number.isFinite(Number(req.query?.min_score)) ? Number(req.query.min_score) : DEFAULT_MIN_SCORE,
+        includePipeline: req.query?.include_pipeline === '1',
+        filters: { state: req.query?.state },
+        page: Number(req.query?.page) || 1,
+        perPage: Number(req.query?.limit) || 10,
+      })
+      return res.json({
+        ok: true,
+        profile_id: profileId,
+        engine: 'crawler-os',
+        profile_matched: true,
+        total_found: os.total,
+        included: os.results.length,
+        results: os.results,
+        excluded_already_in_pipeline: os.excludedAlreadyInPipeline || undefined,
+      })
+    }
+
+    if (!(await isAdminUserWithDb(req.db, req.user))) {
+      return res.status(400).json({
+        ok: false,
+        error: 'profile_id_required',
+        message: 'Profile discovery requires a profile_id so results come from Crawler OS profile matches.',
+      })
+    }
+
     const limit = Math.max(1, Math.min(Number(req.query?.limit) || 10, 50))
     const state = String(req.query?.state || '').trim().toUpperCase()
     const clauses = [req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1']
@@ -53,6 +268,9 @@ router.get('/discover-grants', async (req, res) => {
       .all(...params, limit)
     return res.json({
       ok: true,
+      catalog_browse: true,
+      profile_matched: false,
+      warning: 'Admin catalog browse only. These rows are not profile matches.',
       total_found: rows.length,
       included: rows.length,
       results: rows,
@@ -563,7 +781,62 @@ router.post('/comprehensiveMatch', async (req, res) => {
  */
 router.post('/searchOpportunities', async (req, res) => {
   try {
-    const { profile_id, filters = {}, additional_keywords = [], page = 1, per_page = 50 } = req.body;
+    const {
+      profile_id,
+      filters = {},
+      additional_keywords = [],
+      enhanced_prompt = '',
+      page = 1,
+      per_page = 50,
+    } = req.body;
+
+    if (profile_id) {
+      const profileId = String(profile_id)
+      if (!(await ensureProfileAccess(req, res, profileId))) return
+      const os = await loadProfileOsResults(req, profileId, {
+        minScore: Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE,
+        includePipeline: req.body?.include_pipeline === true || req.body?.include_pipeline === '1',
+        filters,
+        searchTerms: normalizeSearchTerms(
+          additional_keywords,
+          filters?.q,
+          filters?.search,
+          filters?.keyword,
+          enhanced_prompt,
+        ),
+        page,
+        perPage: per_page,
+      })
+      return res.json({
+        success: true,
+        engine: 'crawler-os',
+        profile_id: profileId,
+        results: os.results,
+        total: os.total,
+        excluded_already_in_pipeline: os.excludedAlreadyInPipeline || undefined,
+        page: os.page,
+        per_page: os.perPage,
+        has_more: os.hasMore,
+        canonical_dropped: os.dropped,
+      })
+    }
+
+    const adminGlobalCatalog = req.body?.admin_global_catalog === true || req.body?.admin_global_catalog === '1'
+    if (!adminGlobalCatalog) {
+      return res.status(400).json({
+        success: false,
+        error: 'profile_id_required',
+        engine: 'crawler-os',
+        message: 'Search requires a profile_id so results come from Crawler OS profile matches. Admin catalog browsing must set admin_global_catalog=true.',
+      })
+    }
+    if (!(await isAdminUserWithDb(req.db, req.user))) {
+      return res.status(403).json({
+        success: false,
+        error: 'admin_required',
+        message: 'Global catalog browsing is admin-only and is not a profile match result.',
+      })
+    }
     
     const conditions = [];
     const params = [];
@@ -720,6 +993,9 @@ router.post('/searchOpportunities', async (req, res) => {
 
     res.json({
       success: true,
+      catalog_browse: true,
+      profile_matched: false,
+      warning: 'Admin catalog browse only. These rows are not profile matches.',
       results,
       total,
       excluded_already_in_pipeline: excludedAlreadyInPipeline || undefined,

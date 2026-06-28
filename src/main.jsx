@@ -10,6 +10,9 @@ import { enforceBasename } from '@/utils/enforceBasename.js'
 import { registerQueryClient } from '@/stores/authStore'
 import { migrateLegacyProfileScopedKeys } from '@/utils/profileScopedStorage'
 import { maybeReloadForStaleChunk } from '@/utils/lazyWithRetry'
+import { captureFrontendException, initFrontendObservability } from '@/utils/observability.js'
+
+initFrontendObservability()
 
 // Global stale-chunk recovery. After a deploy, the open tab still references
 // chunk hashes that no longer exist; a dynamic import() then fails. lazyWithRetry
@@ -22,12 +25,24 @@ if (typeof window !== 'undefined') {
   window.addEventListener('vite:preloadError', (event) => {
     if (maybeReloadForStaleChunk(event?.payload ?? event)) {
       event.preventDefault?.()
+      return
     }
+    captureFrontendException(event?.payload ?? event, { area: 'vite_preload' })
   })
   window.addEventListener('unhandledrejection', (event) => {
     if (maybeReloadForStaleChunk(event?.reason)) {
       event.preventDefault?.()
+      return
     }
+    captureFrontendException(event?.reason, { area: 'unhandledrejection' })
+  })
+  window.addEventListener('error', (event) => {
+    captureFrontendException(event?.error || event?.message || event, {
+      area: 'window_error',
+      source: event?.filename,
+      line: event?.lineno,
+      column: event?.colno,
+    })
   })
 }
 

@@ -18,6 +18,7 @@
 import { parseCron } from '../john/johnScheduler.js'
 import { runOutlookGrantFeed } from './outlookGrantFeeder.js'
 import { createLogger } from '../../utils/logger.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 const log = createLogger('service:emailGrantScheduler')
 const POLL_INTERVAL_MS = 60_000
@@ -85,7 +86,12 @@ async function tick({ db, now = new Date() } = {}) {
 
   running = true
   try {
-    const result = await runOutlookGrantFeed(db, { top: scanTop() })
+    const result = await runWithSchedulerLock(db, {
+      lockName: 'email-grants:sync',
+      ttlMs: 60 * 60 * 1000,
+      logger: log,
+    }, () => runOutlookGrantFeed(db, { top: scanTop() }))
+    if (result?.skipped) return result
     log.info('nightly email→grant sync ran', {
       ok: result?.ok, candidates: result?.candidates, imported: result?.summary?.imported,
     })

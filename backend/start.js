@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { captureException, flushObservability, initObservability } from './utils/observability.js'
 
 // Prevent unhandled promise rejections from crashing the server process.
 // Background tasks (crawlers, cron jobs, health checks) may fire DB queries that reject
@@ -10,9 +11,24 @@ import { fileURLToPath } from 'node:url'
 // and blocks recovery via admin endpoints. Log the error and keep the process alive.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[process] Unhandled promise rejection (server staying alive):', reason?.message || reason)
+  captureException(reason instanceof Error ? reason : new Error(String(reason)), {
+    source: 'process.unhandledRejection',
+    promise: String(promise),
+  })
   if (reason?.stack) {
     console.error('[process] Stack:', reason.stack)
   }
+})
+
+process.on('uncaughtException', (error) => {
+  console.error('[process] Uncaught exception:', error?.message || error)
+  captureException(error instanceof Error ? error : new Error(String(error)), {
+    source: 'process.uncaughtException',
+  })
+  process.exitCode = 1
+  const forceExit = setTimeout(() => process.exit(1), 2500)
+  forceExit.unref?.()
+  flushObservability(2000).finally(() => process.exit(1))
 })
 
 function isTruthy(value) {
@@ -44,6 +60,7 @@ const shouldOverrideDotenv =
 // - In SMOKE_MODE / automation (tests), we must NOT override the env passed by the test runner
 //   (especially PORT/DB paths), otherwise parallel tests can collide and hang.
 dotenv.config({ override: shouldOverrideDotenv })
+initObservability()
 
 function findSqliteDbPath() {
   const explicit = String(process.env.SQLITE_DB_PATH || '').trim()

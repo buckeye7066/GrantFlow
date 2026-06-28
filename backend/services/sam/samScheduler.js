@@ -25,6 +25,7 @@
 import { runSam } from './samAgent.js'
 import { SAM_MODES, SAM_TRIGGERS } from './samTypes.js'
 import { makeInternalHttpProbe } from './samHttpProbe.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 let activeTimer = null
 let starting = false
@@ -90,16 +91,20 @@ export function startSamScheduler({ db, logger = console } = {}) {
     }
     if (shouldRunOnStartup()) {
       // Fire-and-forget, never block boot.
-      runSam({
-        db,
-        ctx: null,
-        mode: chooseScheduledMode(),
-        trigger: SAM_TRIGGERS.STARTUP,
-        dryRun: true,
-        // Without a probe, autonomous Sam fail-skips every HTTP check yet still
-        // reports a green score. Loopback probe with the server's admin token.
-        httpProbe: makeInternalHttpProbe(),
-      }).catch((err) => logger.warn?.('[sam:scheduler] startup run failed:', err?.message || err))
+      runWithSchedulerLock(db, {
+        lockName: 'sam:observe',
+        ttlMs: 60 * 60 * 1000,
+        logger,
+      }, () => runSam({
+          db,
+          ctx: null,
+          mode: chooseScheduledMode(),
+          trigger: SAM_TRIGGERS.STARTUP,
+          dryRun: true,
+          // Without a probe, autonomous Sam fail-skips every HTTP check yet still
+          // reports a green score. Loopback probe with the server's admin token.
+          httpProbe: makeInternalHttpProbe(),
+        })).catch((err) => logger.warn?.('[sam:scheduler] startup run failed:', err?.message || err))
     }
     if (shouldRunOnSchedule()) {
       scheduleNext({ db, logger })
@@ -126,14 +131,18 @@ function scheduleNext({ db, logger }) {
   const delay = msUntilNextDaily(cron)
   activeTimer = setTimeout(async () => {
     try {
-      await runSam({
-        db,
-        ctx: null,
-        mode: chooseScheduledMode(),
-        trigger: SAM_TRIGGERS.SCHEDULED,
-        dryRun: true,
-        httpProbe: makeInternalHttpProbe(),
-      })
+      await runWithSchedulerLock(db, {
+        lockName: 'sam:observe',
+        ttlMs: 60 * 60 * 1000,
+        logger,
+      }, () => runSam({
+          db,
+          ctx: null,
+          mode: chooseScheduledMode(),
+          trigger: SAM_TRIGGERS.SCHEDULED,
+          dryRun: true,
+          httpProbe: makeInternalHttpProbe(),
+        }))
     } catch (err) {
       logger.warn?.('[sam:scheduler] scheduled run failed:', err?.message || err)
     } finally {

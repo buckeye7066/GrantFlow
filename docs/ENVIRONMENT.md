@@ -179,7 +179,14 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
 ### Optional observability
 
 - `LOG_LEVEL`
-- `SENTRY_DSN`
+- `SENTRY_DSN` (Railway/backend error capture)
+- `SENTRY_ENVIRONMENT` (Railway/backend environment label)
+- `SENTRY_RELEASE` (Railway/backend release identifier; defaults to Railway/Vercel commit metadata when present)
+- `SENTRY_TRACES_SAMPLE_RATE` (Railway/backend tracing sample rate; default `0`)
+- `VITE_SENTRY_DSN` (Vercel/frontend browser error capture)
+- `VITE_SENTRY_ENVIRONMENT` (Vercel/frontend environment label)
+- `VITE_SENTRY_RELEASE` (Vercel/frontend release identifier)
+- `VITE_SENTRY_TRACES_SAMPLE_RATE` (Vercel/frontend tracing sample rate; default `0`)
 
 ---
 
@@ -197,4 +204,3 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
 - To rollback DB provider:
   - set `DB_PROVIDER=sqlite` and `SQLITE_DB_PATH=...`
   - redeploy Railway service
-

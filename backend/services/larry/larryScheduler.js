@@ -48,6 +48,7 @@
 import { getLarryConfig } from './larrySafety.js'
 import { LARRY_MODES, LARRY_TRIGGERS } from './larryTypes.js'
 import { runLarry } from './larryAgent.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 const STATE = {
   started: false,
@@ -167,12 +168,20 @@ export function startLarryScheduler({
     }
     STATE.running = true
     try {
-      const result = await runLarry({
+      const result = await runWithSchedulerLock(db, {
+        lockName: 'yana-leads:legacy',
+        ttlMs: 60 * 60 * 1000,
+        logger: log,
+      }, () => runLarry({
         db,
         mode: deps.scheduledMode || LARRY_MODES.SCORE_FIT,
         trigger,
         options: deps.scheduledOptions || {},
-      })
+      }))
+      if (result?.skipped) {
+        STATE.lastResult = result
+        return
+      }
       STATE.lastRunAt = new Date().toISOString()
       STATE.lastResult = { ok: result?.ok, run_id: result?.run_id, mode: result?.mode }
       log.info?.('[Yana/leads] run complete', STATE.lastResult)

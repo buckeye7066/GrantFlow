@@ -38,6 +38,7 @@
 
 import { HamiltonAgentAdapter } from '../agentControl/agentAdapters/hamiltonAgentAdapter.js'
 import { isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000
 const MIN_INTERVAL_MS = 60 * 1000
@@ -85,26 +86,33 @@ async function tick({ db, logger = console } = {}) {
 
   running = true
   try {
-    const adapter = new HamiltonAgentAdapter()
-    // Provide an inert signal: this is a headless scheduled run with no Agent
-    // Control run row, so there is no stop/pause channel and heartbeats/events
-    // are no-ops. The adapter already tolerates an absent/partial signal.
-    const result = await adapter.start({
-      db,
-      controlRunId: null,
-      stepId: null,
-      options: {
-        allow_hamilton_autopilot: true,
-        hamilton_batch_size: resolveBatchSize(),
-      },
-      signal: {
-        shouldStop: () => stopped,
-        shouldPause: () => false,
-        isEmergency: () => false,
-        heartbeat: async () => {},
-        recordEvent: async () => {},
-      },
+    const result = await runWithSchedulerLock(db, {
+      lockName: 'hamilton:autopilot',
+      ttlMs: 30 * 60 * 1000,
+      logger,
+    }, async () => {
+      const adapter = new HamiltonAgentAdapter()
+      // Provide an inert signal: this is a headless scheduled run with no Agent
+      // Control run row, so there is no stop/pause channel and heartbeats/events
+      // are no-ops. The adapter already tolerates an absent/partial signal.
+      return await adapter.start({
+        db,
+        controlRunId: null,
+        stepId: null,
+        options: {
+          allow_hamilton_autopilot: true,
+          hamilton_batch_size: resolveBatchSize(),
+        },
+        signal: {
+          shouldStop: () => stopped,
+          shouldPause: () => false,
+          isEmergency: () => false,
+          heartbeat: async () => {},
+          recordEvent: async () => {},
+        },
+      })
     })
+    if (result?.skipped) return result
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
       logger?.info?.('[hamilton:scheduler] tick', {

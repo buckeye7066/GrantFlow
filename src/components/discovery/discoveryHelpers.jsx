@@ -60,10 +60,15 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     throw new Error('Profile data is required to run comprehensive match.')
   }
 
+  const selectedProfileId = selectedOrg?.id || selectedOrg?.profile_id
+  if (!selectedProfileId) {
+    throw new Error('Profile id is required so discovery can use Crawler OS profile matches.')
+  }
+
   const stateList = extractStateList(selectedOrg)
   
   const response = await client.functions.invoke('comprehensiveMatch', {
-    profile_json: selectedOrg,
+    profile_json: selectedProfileId,
     states: stateList,
     page: 1,
     freshness_days: 60
@@ -77,7 +82,7 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
   const allOpportunities = (response.opportunities || []).map(opp => ({
     id: opp.id,
     source_id: opp.source_id,
-    title: opp.program_name,
+    title: opp.program_name || opp.title,
     sponsor: opp.sponsor,
     url: (() => {
       const raw = opp.url;
@@ -99,14 +104,14 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     awardMin: opp.amount_min,
     awardMax: opp.amount_max,
     amount_description: opp.amount_description,
-    descriptionMd: opp.description,
+    descriptionMd: opp.description || opp.summary,
     eligibilityBullets:
       typeof opp.eligibility_summary === 'string'
         ? opp.eligibility_summary.split('; ').filter(Boolean)
         : [],
-    match: opp.fit_score || 0,
-    match_score: opp.fit_score || 0,
-    source: 'comprehensive_match',
+    match: opp.fit_score || opp.match_score || 0,
+    match_score: opp.fit_score || opp.match_score || 0,
+    source: opp.source || 'comprehensive_match',
     matched_fields: opp.matched_fields || []
   }));
 
@@ -153,20 +158,10 @@ export async function runECFServiceSearch(selectedOrgId, queryClient) {
   // Invalidate cache to ensure new funding opportunities are fetched
   queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] });
   
-  // Search for newly added services
-  const searchResponse = await client.functions.invoke('searchOpportunities', {
-    profile_id: selectedOrgId,
-    filters: {}
-  });
-
-  if (!searchResponse?.success) {
-    throw new Error(searchResponse?.error || 'Service search failed');
-  }
-
-  // Filter to only show ECF services
-  const ecfServices = (searchResponse.results || []).filter(r => 
-    r.source === 'ecf_choices_discovery'
-  );
+  // Use the profile-specific ECF endpoint response directly. Do not call the
+  // generic catalog search here; profile search results must come through the
+  // Crawler OS match table.
+  const ecfServices = discoverResponse.services || [];
 
   return {
     opportunities: ecfServices,

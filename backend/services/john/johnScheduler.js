@@ -16,6 +16,7 @@
 import { runJohn } from './johnAgent.js'
 import { getJohnConfig } from './johnOutreachSafety.js'
 import { JOHN_MODES, JOHN_TRIGGERS } from './johnTypes.js'
+import { runWithSchedulerLock } from '../schedulerLock.js'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -92,12 +93,19 @@ async function tick({ db, logger, config }) {
 
   running = true
   try {
-    const result = await runJohn({
+    const result = await runWithSchedulerLock(db, {
+      lockName: 'john:draft',
+      ttlMs: 60 * 60 * 1000,
+      logger,
+    }, () => runJohn({
       db,
       mode: JOHN_MODES.DRAFT,
       trigger: JOHN_TRIGGERS.SCHEDULE,
       logger,
-    })
+    }))
+    if (result?.skipped) {
+      return result
+    }
     return { ran: true, result }
   } catch (err) {
     logger?.warn?.('[John] scheduler tick failed', { error: err?.message })
@@ -117,12 +125,16 @@ export function startJohnScheduler({ db, logger = console, config = getJohnConfi
   if (config.runOnStartup) {
     // Fire-and-forget startup run.
     Promise.resolve()
-      .then(() => runJohn({
+      .then(() => runWithSchedulerLock(db, {
+        lockName: 'john:draft',
+        ttlMs: 60 * 60 * 1000,
+        logger,
+      }, () => runJohn({
         db,
         mode: config.mode === JOHN_MODES.OBSERVE ? JOHN_MODES.OBSERVE : JOHN_MODES.DRAFT,
         trigger: JOHN_TRIGGERS.STARTUP,
         logger,
-      }))
+      })))
       .catch((err) => logger?.warn?.('[John] startup run failed', { error: err?.message }))
   }
 
