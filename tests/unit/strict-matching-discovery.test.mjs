@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import fs from 'node:fs'
 
 import { calculateMatchScore } from '../../backend/services/matchingEngine.js'
 import { upsertFundingOpportunity } from '../../backend/services/opportunityInserter.js'
@@ -338,4 +339,33 @@ test('seedOnStartup (F): seedFundingOpportunities returns 0 when DISABLE_SEEDING
   }
 })
 
+// ---------------------------------------------------------------------------
+// G) Discovery route authority: profile searches must use Crawler OS matches
+// ---------------------------------------------------------------------------
+
+test('discovery (G): searchOpportunities uses Crawler OS before any raw catalog browse', () => {
+  const text = fs.readFileSync(path.resolve('backend/routes/discovery.js'), 'utf8')
+  const routeIdx = text.indexOf("router.post('/searchOpportunities'")
+  assert.ok(routeIdx > 0, 'searchOpportunities route must exist')
+
+  const osHelperIdx = text.indexOf('loadProfileOsResults(req, profileId', routeIdx)
+  const rawCatalogIdx = text.indexOf("let query = 'SELECT * FROM funding_opportunities'", routeIdx)
+
+  assert.ok(osHelperIdx > routeIdx, 'profile search must call loadProfileOsResults')
+  assert.ok(rawCatalogIdx > routeIdx, 'admin raw catalog browse may still exist behind an explicit flag')
+  assert.ok(
+    osHelperIdx < rawCatalogIdx,
+    'profile search must return Crawler OS results before the raw funding_opportunities catalog path',
+  )
+  assert.match(text, /m\.profile_id = \? AND m\.matcher_version = 'crawler-os'/)
+  assert.match(text, /admin_global_catalog/)
+  assert.match(text, /profile_id_required/)
+})
+
+test('discovery (G): frontend comprehensive match sends profile id, not a profile object', () => {
+  const text = fs.readFileSync(path.resolve('src/components/discovery/discoveryHelpers.jsx'), 'utf8')
+  assert.match(text, /const selectedProfileId = selectedOrg\?\.id \|\| selectedOrg\?\.profile_id/)
+  assert.match(text, /profile_json: selectedProfileId/)
+  assert.doesNotMatch(text, /profile_json:\s*selectedOrg[,}]/)
+})
 

@@ -87,6 +87,7 @@ import { MAX_JSON_BODY_SIZE, GRANT_STATUSES } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
+import { runWithSchedulerLock } from './services/schedulerLock.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
@@ -2687,7 +2688,11 @@ if (process.env.NODE_ENV !== 'test') {
       ;(async () => {
         try {
           const { preResolveActiveProfiles } = await import('./services/hamilton/profilePortalIndex.js')
-          const runOnce = () => preResolveActiveProfiles(db, { limit: 50 })
+          const runOnce = () => runWithSchedulerLock(db, {
+            lockName: 'profile-portals:pre-resolve',
+            ttlMs: 30 * 60 * 1000,
+            logger: console,
+          }, () => preResolveActiveProfiles(db, { limit: 50 }))
             .then((r) => console.log('[profile-portals] pre-resolve:', JSON.stringify(r)))
             .catch((err) => console.warn('[profile-portals] pre-resolve failed:', err?.message || err))
           runOnce()
@@ -3109,7 +3114,11 @@ if (process.env.NODE_ENV !== 'test') {
 
     // Auto-merge duplicate profiles once per deploy (production only).
     setTimeout(() => {
-      scheduleAutoProfileDedupe({ db }).catch((err) => {
+      runWithSchedulerLock(db, {
+        lockName: 'auto-profile-dedupe',
+        ttlMs: 30 * 60 * 1000,
+        logger: console,
+      }, () => scheduleAutoProfileDedupe({ db })).catch((err) => {
         console.warn('[auto-dedupe] failed:', err?.message || String(err))
       })
     }, 20_000)
@@ -3139,7 +3148,11 @@ if (process.env.NODE_ENV !== 'test') {
         import('./services/anyaAutonomousScheduler.js')
           .then(({ runOnStartup }) => {
             console.log('[Anya] Starting autonomous operations on server startup...');
-            runOnStartup(db).catch(err => {
+            runWithSchedulerLock(db, {
+              lockName: 'anya:startup',
+              ttlMs: 2 * 60 * 60 * 1000,
+              logger: console,
+            }, () => runOnStartup(db)).catch(err => {
               console.error('[Anya] Failed to complete autonomous operations:', err);
             });
           })
@@ -3147,7 +3160,11 @@ if (process.env.NODE_ENV !== 'test') {
             console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
           });
       } else {
-        runStartupOperations(db).catch(err => {
+        runWithSchedulerLock(db, {
+          lockName: 'anya:startup-operations',
+          ttlMs: 2 * 60 * 60 * 1000,
+          logger: console,
+        }, () => runStartupOperations(db)).catch(err => {
           console.error('[Anya] Failed to complete crawler operations:', err);
         });
       }
@@ -3160,7 +3177,11 @@ if (process.env.NODE_ENV !== 'test') {
       setInterval(() => {
         import('./services/anyaAutonomousScheduler.js')
           .then(({ checkSchedule }) => {
-            checkSchedule(db).catch(err => {
+            runWithSchedulerLock(db, {
+              lockName: 'anya:scheduled-check',
+              ttlMs: 45 * 60 * 1000,
+              logger: console,
+            }, () => checkSchedule(db)).catch(err => {
               console.error('[Anya] Scheduled check failed:', err?.message || err);
             });
           })
@@ -3174,7 +3195,11 @@ if (process.env.NODE_ENV !== 'test') {
   } else {
     // Even without autonomous operations, run basic startup crawlers
     setTimeout(() => {
-      runStartupOperations(db).catch(err => {
+      runWithSchedulerLock(db, {
+        lockName: 'anya:startup-operations',
+        ttlMs: 2 * 60 * 60 * 1000,
+        logger: console,
+      }, () => runStartupOperations(db)).catch(err => {
         console.error('[Anya] Failed to complete crawler operations:', err);
       });
     }, 5000);
@@ -3214,7 +3239,11 @@ if (process.env.NODE_ENV !== 'test') {
   } else {
     // Run once at startup (5s delay to let the DB settle).
     setTimeout(() => {
-      runDeadlineCron().catch((err) => {
+      runWithSchedulerLock(db, {
+        lockName: 'deadline-cron',
+        ttlMs: 30 * 60 * 1000,
+        logger: console,
+      }, () => runDeadlineCron()).catch((err) => {
         console.error('[deadline-cron] Startup run failed:', err?.message || err)
       })
     }, 5000)
@@ -3231,7 +3260,11 @@ if (process.env.NODE_ENV !== 'test') {
         // Run at 2am (hours === 2) and only once per calendar day.
         if (now.getHours() === 2 && lastRunDate !== todayStr) {
           lastRunDate = todayStr
-          runDeadlineCron().catch((err) => {
+          runWithSchedulerLock(db, {
+            lockName: 'deadline-cron',
+            ttlMs: 30 * 60 * 1000,
+            logger: console,
+          }, () => runDeadlineCron()).catch((err) => {
             console.error('[deadline-cron] Daily run failed:', err?.message || err)
           })
         }
@@ -3270,8 +3303,13 @@ if (process.env.NODE_ENV !== 'test') {
       }
     }
     // Run once at startup after a 30s delay, then on the configured interval.
-    setTimeout(runOnce, 30_000)
-    setInterval(runOnce, intervalMs)
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'link-verification',
+      ttlMs: Math.max(30 * 60 * 1000, Math.min(intervalMs, 2 * 60 * 60 * 1000)),
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 30_000)
+    setInterval(lockedRunOnce, intervalMs)
   }
 
   // Billing cycle — generate due invoices (weekly Fri 09:00 ET / semimonthly /
@@ -3288,8 +3326,13 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[billing-cycle] failed:', err.message)
       }
     }
-    setTimeout(runOnce, 45_000)
-    setInterval(runOnce, intervalMs)
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'billing-cycle',
+      ttlMs: Math.max(15 * 60 * 1000, Math.min(intervalMs, 60 * 60 * 1000)),
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 45_000)
+    setInterval(lockedRunOnce, intervalMs)
   }
 
   // Weekly link-verification report — every Monday ~06:00 America/New_York, run
@@ -3402,8 +3445,13 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[weekly-verify-report] failed:', err.message)
       }
     }
-    setTimeout(runOnce, 60_000)
-    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday window
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'weekly-verification-report',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 60_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday window
   }
 
   // Hamilton weekly per-profile funding digest — every Monday 08:00
@@ -3450,8 +3498,13 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[hamilton-weekly-digest] failed:', err.message)
       }
     }
-    setTimeout(runOnce, 90_000)
-    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 08:00 ET window
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'hamilton-weekly-digest',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 90_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 08:00 ET window
   }
 
   // Monday-morning UNMERGED-PORTAL reminder — every Monday 09:00 America/New_York
@@ -3500,8 +3553,13 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[monday-portal-reminder] failed:', err.message)
       }
     }
-    setTimeout(runOnce, 90_000)
-    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 09:00 ET window
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'monday-portal-reminder',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 90_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed Monday 09:00 ET window
   }
 
   // Sam's nightly maintenance sweep — every day 04:00 America/New_York. Enters a
@@ -3546,8 +3604,13 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[nightly-maintenance] failed:', err.message)
       }
     }
-    setTimeout(runOnce, 120_000)
-    setInterval(runOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'nightly-maintenance',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 120_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
   }
 
   if (BACKGROUND_SERVICES_DISABLED) {
