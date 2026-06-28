@@ -87,8 +87,11 @@ COPY --from=builder /app/package-lock.json ./package-lock.json
 # booting the server so a compromised request handler does not own the image.
 RUN mkdir -p /app/data /app/uploads \
   && chown -R node:node /app/data /app/uploads
-ENV UPLOADS_DIR=/app/uploads
-USER node
+# Production must set UPLOADS_DIR to a mounted persistent volume (Railway: /data/uploads).
+# Do not default it in the image; the backend fails fast if production storage is ephemeral.
+COPY docker-entrypoint.sh /usr/local/bin/grantflow-entrypoint
+RUN chmod +x /usr/local/bin/grantflow-entrypoint
+ENTRYPOINT ["grantflow-entrypoint"]
 
 # Expose port (Railway will set PORT env var)
 EXPOSE 8080

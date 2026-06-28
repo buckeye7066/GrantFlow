@@ -252,11 +252,6 @@ if (__appBasePathNormalized && __appBasePathNormalized !== '') {
 // --- Upload storage health (single source of truth) ---
 const isProdEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
 const allowEphemeralUploads = String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true'
-const isRailwayRuntime = Boolean(
-  String(process.env.RAILWAY_ENVIRONMENT || '').trim() ||
-    String(process.env.RAILWAY_PROJECT_ID || '').trim() ||
-    String(process.env.RAILWAY_SERVICE_ID || '').trim(),
-)
 
 // ── Production reality gate (mission rule) ───────────────────────────────
 // "Real funding only" is enforced at the process level instead of trusting
@@ -338,19 +333,15 @@ try {
     const missingEnv = !String(process.env.UPLOADS_DIR || '').trim()
     const persistentOk = storageStatus.likely_persistent === true
     const writableOk = storageStatus.writable === true
-    // Railway production deployments may temporarily lack a volume mount (or a configured UPLOADS_DIR),
-    // which would otherwise crash the process and fail healthchecks. If UPLOADS_DIR is missing entirely
-    // we allow a degraded boot on Railway so the service can still start; operators can then attach a
-    // volume and set UPLOADS_DIR without getting stuck in a deploy-fail loop.
-    const allowImplicitEphemeralOnRailway = missingEnv && isRailwayRuntime && !allowEphemeralUploads
 
-    if ((missingEnv || !persistentOk || !writableOk) && !allowEphemeralUploads && !allowImplicitEphemeralOnRailway) {
+    if ((missingEnv || !persistentOk || !writableOk) && !allowEphemeralUploads) {
       const reason = missingEnv
         ? 'UPLOADS_DIR is required in production'
         : !persistentOk
           ? `UPLOADS_DIR is not a likely persistent mount: ${uploadsDir}`
           : `UPLOADS_DIR is not writable: ${uploadsDir}`
       console.error('[storage] FATAL: refusing to boot with non-persistent uploads storage', {
+        reason,
         uploadsDir,
         missingEnv,
         likely_persistent: storageStatus.likely_persistent,
@@ -366,8 +357,6 @@ try {
       console.error('[storage] DEGRADED upload storage', {
         uploadsDir,
         missingEnv,
-        allowImplicitEphemeralOnRailway,
-        isRailwayRuntime,
         likely_persistent: storageStatus.likely_persistent,
         writable: storageStatus.writable,
         last_error: storageStatus.last_error,

@@ -25,11 +25,6 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
   const isProdEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
   const allowEphemeralUploads =
     String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true';
-  const isRailwayRuntime = Boolean(
-    String(process.env.RAILWAY_ENVIRONMENT || '').trim() ||
-      String(process.env.RAILWAY_PROJECT_ID || '').trim() ||
-      String(process.env.RAILWAY_SERVICE_ID || '').trim(),
-  );
 
   let storageStatus = {
     uploads_dir: uploadsDir,
@@ -54,13 +49,10 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
       const missingEnv = !String(process.env.UPLOADS_DIR || '').trim();
       const persistentOk = storageStatus.likely_persistent === true;
       const writableOk = storageStatus.writable === true;
-      const allowImplicitEphemeralOnRailway =
-        missingEnv && isRailwayRuntime && !allowEphemeralUploads;
 
       if (
         (missingEnv || !persistentOk || !writableOk) &&
-        !allowEphemeralUploads &&
-        !allowImplicitEphemeralOnRailway
+        !allowEphemeralUploads
       ) {
         const reason = missingEnv
           ? 'UPLOADS_DIR is required in production'
@@ -70,6 +62,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         console.error(
           '[storage] FATAL: refusing to boot with non-persistent uploads storage',
           {
+            reason,
             uploadsDir,
             missingEnv,
             likely_persistent: storageStatus.likely_persistent,
@@ -87,8 +80,6 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         console.error('[storage] DEGRADED upload storage', {
           uploadsDir,
           missingEnv,
-          allowImplicitEphemeralOnRailway,
-          isRailwayRuntime,
           likely_persistent: storageStatus.likely_persistent,
           writable: storageStatus.writable,
           last_error: storageStatus.last_error,
