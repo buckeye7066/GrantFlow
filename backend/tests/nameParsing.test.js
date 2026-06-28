@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { parseFullName, looksLikeOrganization, deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 
 describe('parseFullName', () => {
-  it('splits a three-part personal name (the Anastasia case)', () => {
-    expect(parseFullName('Anastasia Nicole White')).toMatchObject({
-      first_name: 'Anastasia',
+  it('splits a three-part personal name', () => {
+    expect(parseFullName('Jordan Nicole Lane')).toMatchObject({
+      first_name: 'Jordan',
       middle_name: 'Nicole',
-      last_name: 'White',
+      last_name: 'Lane',
       is_org: false,
     })
   })
@@ -28,17 +28,17 @@ describe('parseFullName', () => {
   })
 
   it('handles "Last, First Middle" comma form', () => {
-    expect(parseFullName('White, Anastasia Nicole')).toMatchObject({
-      first_name: 'Anastasia',
+    expect(parseFullName('Lane, Jordan Nicole')).toMatchObject({
+      first_name: 'Jordan',
       middle_name: 'Nicole',
-      last_name: 'White',
+      last_name: 'Lane',
     })
   })
 
   it('does not split organization names', () => {
     expect(parseFullName('Helping Hands Foundation')).toMatchObject({ is_org: true, first_name: '', last_name: '' })
     expect(looksLikeOrganization('Acme Inc')).toBe(true)
-    expect(looksLikeOrganization('Anastasia Nicole White')).toBe(false)
+    expect(looksLikeOrganization('Jordan Nicole Lane')).toBe(false)
   })
 
   it('returns empty parts for blank input', () => {
@@ -49,33 +49,33 @@ describe('parseFullName', () => {
 
 describe('deriveNamePartsIntoBasicInfo', () => {
   it('derives first/last from full_name when missing', () => {
-    const { data, changed } = deriveNamePartsIntoBasicInfo({ full_name: 'Anastasia Nicole White' })
+    const { data, changed } = deriveNamePartsIntoBasicInfo({ full_name: 'Jordan Nicole Lane' })
     expect(changed).toBe(true)
-    expect(data.first_name).toBe('Anastasia')
-    expect(data.last_name).toBe('White')
+    expect(data.first_name).toBe('Jordan')
+    expect(data.last_name).toBe('Lane')
     expect(data.middle_name).toBe('Nicole')
   })
 
   it('falls back to the supplied display name when the section has no full_name', () => {
-    const { data, changed } = deriveNamePartsIntoBasicInfo({}, 'Anastasia Nicole White')
+    const { data, changed } = deriveNamePartsIntoBasicInfo({}, 'Jordan Nicole Lane')
     expect(changed).toBe(true)
-    expect(data.first_name).toBe('Anastasia')
-    expect(data.last_name).toBe('White')
+    expect(data.first_name).toBe('Jordan')
+    expect(data.last_name).toBe('Lane')
   })
 
   it('never clobbers human-entered first/last names', () => {
-    const input = { full_name: 'Anastasia Nicole White', first_name: 'Ana', last_name: 'W' }
+    const input = { full_name: 'Jordan Nicole Lane', first_name: 'Jo', last_name: 'L' }
     const { data, changed } = deriveNamePartsIntoBasicInfo(input)
     expect(changed).toBe(false)
     expect(data).toBe(input)
-    expect(data.first_name).toBe('Ana')
+    expect(data.first_name).toBe('Jo')
   })
 
   it('fills only the missing half', () => {
-    const { data, changed } = deriveNamePartsIntoBasicInfo({ full_name: 'Anastasia Nicole White', first_name: 'Anastasia' })
+    const { data, changed } = deriveNamePartsIntoBasicInfo({ full_name: 'Jordan Nicole Lane', first_name: 'Jordan' })
     expect(changed).toBe(true)
-    expect(data.first_name).toBe('Anastasia')
-    expect(data.last_name).toBe('White')
+    expect(data.first_name).toBe('Jordan')
+    expect(data.last_name).toBe('Lane')
   })
 
   it('does not derive parts for organization names', () => {

@@ -499,6 +499,7 @@ export default function UniversityApplicationForm({
     } catch (error) {
       // Surface the error to the console so it is not silently swallowed.
       // The parent owns isSubmitting state and user-facing error messaging.
+
       console.error("Failed to submit university application form:", error)
     }
   }

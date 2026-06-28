@@ -14,7 +14,15 @@ function walk(dir) {
   for (const ent of entries) {
     const full = path.join(dir, ent.name)
     if (ent.isDirectory()) {
-      if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'build' || ent.name === 'coverage') continue
+      // Skip build/vendor/tooling dirs. `.cursor` holds vendored editor tooling
+      // (Impeccable skills, rules) whose own IMPECCABLE_* / CURSOR_* env
+      // references are NOT GrantFlow app config and must not leak into the app's
+      // .env.example. `.git` is internal state. (This comment deliberately omits
+      // the env-access syntax so the generator does not scan ITSELF as a source.)
+      if (
+        ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'build' ||
+        ent.name === 'coverage' || ent.name === '.cursor' || ent.name === '.git'
+      ) continue
       out.push(...walk(full))
       continue
     }
@@ -184,7 +192,7 @@ export function buildOutputs() {
     if (v.startsWith('VITE_')) continue
     const val =
       v === 'ADMIN_EMAIL'
-        ? 'buckeye7066@gmail.com'
+        ? 'admin@example.invalid'
         : v === 'ADMIN_NAME'
           ? 'Admin User'
           : v === 'DB_PROVIDER'
@@ -207,7 +215,7 @@ export function buildOutputs() {
     if (v.startsWith('VITE_')) continue
     const val =
       v === 'ADMIN_EMAIL'
-        ? 'buckeye7066@gmail.com'
+        ? 'admin@example.invalid'
         : v === 'ADMIN_NAME'
           ? 'Admin User'
           : v === 'DB_PROVIDER'

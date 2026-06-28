@@ -1,6 +1,6 @@
 ## GrantFlow Cloud Deployment (Vercel + Railway)
 
-This playbook captures the supported production path for GrantFlow at `https://www.axiombiolabs.org/grantflow`, using **Vercel** for the SPA and **Railway** for the API.
+This playbook captures the supported production path for GrantFlow using **Vercel** for the SPA and **Railway** for the API. Use only the app/subdomain routes intentionally attached to Vercel; do not repoint the Axiom BioLabs lab-site apex unless that takeover is deliberate and approved.
 
 ---
 
@@ -51,7 +51,7 @@ This playbook captures the supported production path for GrantFlow at `https://w
    }
    ```
 7. Trigger a deploy. Vercel will build and host the static bundle automatically.
-8. **Domains:** ensure every expected production host is attached to this Vercel project. If `app.*` works but `www.*` or apex deep links 404, see **E-001** in `docs/ERROR_LEDGER.md`.
+8. **Domains:** ensure every expected GrantFlow production host is attached to this Vercel project. If `app.*`, `www.*`, or another approved GrantFlow host 404s on deep links, see **E-001** in `docs/ERROR_LEDGER.md`.
 
 ---
 
@@ -91,7 +91,12 @@ This playbook captures the supported production path for GrantFlow at `https://w
 1. Open a PR into the deploy branch once the local gates pass.
 2. Once approved, merge to `main`. Vercel/Railway will auto-build if configured.
 3. In Vercel, promote the new build to production if your project does not auto-promote.
-4. DNS: ensure expected production hosts point to Vercel, not registrar/default hosting. See E-001 in `docs/ERROR_LEDGER.md`.
+4. DNS: ensure expected GrantFlow production hosts point to Vercel, not registrar/default hosting. Do not point `axiombiolabs.org` apex at Vercel while the lab website lives on GoDaddy. See E-001 in `docs/ERROR_LEDGER.md`.
+3. In Vercel, promote the new build to production (`Production Deployments → Promote`).
+   - Preferred GrantFlow host: subdomain/CNAME to `cname.vercel-dns-0.com`.
+   - Manual GitHub path: Actions -> Apply GoDaddy DNS for Vercel -> Run workflow -> `confirm=YES`
+   - Local dry-run path: `GODADDY_DOMAIN=axiombiolabs.org npm run dns:godaddy:vercel`
+   - Local apply path requires `GODADDY_API_KEY`, `GODADDY_API_SECRET`, and `CONFIRM=YES`; apex takeover also requires `ALLOW_LAB_APEX_TAKEOVER=I_UNDERSTAND`.
 
 ---
 
@@ -103,10 +108,13 @@ Run these only against the actual deployed hosts you intend to call healthy:
 curl -fsS https://grantflow-production.up.railway.app/readyz
 SMOKE_BASE_URL=https://app.axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod
 SMOKE_BASE_URL=https://www.axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod
-SMOKE_BASE_URL=https://axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod
+# Only run an apex smoke if the apex is intentionally serving GrantFlow.
+# SMOKE_BASE_URL=https://axiombiolabs.org SMOKE_BASE_PATH=/grantflow npm run smoke:prod
 ```
 
 Record failures as missing evidence or open incidents. A local smoke, offline proof, or successful build is not proof that the exact production deployment is healthy.
+
+Also spot-check key flows (pipeline, documents upload, billing) to confirm the Railway backend responds as expected.
 
 ---
 
@@ -144,3 +152,4 @@ openssl rand -hex 32
 ```
 
 Keep this doc close when cutting releases; updating it after each deploy keeps the team aligned with the actual production path.
+Keep this doc close when cutting releases—updating it after each deploy will keep the team aligned.

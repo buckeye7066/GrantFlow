@@ -5,6 +5,19 @@ alwaysApply: true
 
 # Auto-Push Fixes to buckeye7066/GrantFlow main
 
+## Standing user directive (authoritative)
+
+> "From now on, any fix I request is global and permanent. Pushed and merged
+> to main in the GitHub repo if a repo exists."
+
+This is a permanent standing instruction. Every fix the user requests is treated
+as **global** (applied across all affected files / layers, never a local-only or
+one-off patch) and **permanent** (committed and landed on `main`, never left as a
+throwaay or in-memory change). If a Git repository exists for the work, the fix
+MUST be **pushed AND merged into `main`** in the same turn it is applied. The
+default repo for this workspace is `buckeye7066/GrantFlow`; if work happens in a
+different repo, push/merge to that repo's `main` instead.
+
 Whenever the agent applies a code change that fixes a bug, resolves an error,
 corrects a regression, or otherwise repairs broken behavior in this repo, the
 change MUST be committed and pushed to the `main` branch of the public
@@ -71,9 +84,11 @@ Does **not** apply to:
 - Do **not** commit secrets (`.env`, credential files, API keys). If a fix
   appears to require one, stop and warn the user.
 - If the current branch is not `main`, push the fix branch and open a PR
-  against `main` instead of pushing directly — but the default branch in
-  this repo is `main`, and committing on `main` and pushing is the
-  expected path.
+  against `main`, then **merge that PR into `main`** (e.g. `gh pr merge --squash`)
+  once checks pass — opening the PR alone does not satisfy the standing
+  directive that fixes land on `main`. The default branch in this repo is
+  `main`, so committing on `main` and pushing is the expected path and already
+  satisfies the merge requirement.
 
 ## Summary format after each fix
 

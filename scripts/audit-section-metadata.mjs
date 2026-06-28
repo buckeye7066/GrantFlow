@@ -26,6 +26,12 @@ const SUPPORTED_FORMATS = new Set([
   'enum',
 ])
 
+// A profile section key is "declared" if it matches a metadata field's
+// canonical name OR one of that field's legacy_aliases. Seed fixtures and the
+// live DB still carry pre-canonicalisation keys (e.g. `unemployed` →
+// `employment_status`, `immigrant_status` → `immigration_status`) that are
+// mapped to the canonical key on save — counting only canonical names flags
+// those legacy keys as false-positive orphans and breaks CI.
 function buildDeclaredFieldIndex(fields = []) {
   const declared = new Set()
   const formats = new Map()

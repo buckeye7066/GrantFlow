@@ -1,7 +1,7 @@
 /**
- * Anastasia / MTSU end-to-end:
+ * Source-safe student / MTSU end-to-end:
  *
- *   1. Anastasia's pipeline merges with her MTSU financial-aid portal.
+ *   1. The student pipeline merges with the MTSU financial-aid portal.
  *      Manually-imported MTSU awards (institutional aid: True Blue,
  *      Centennial, Honors, departmental) land BOTH in her
  *      university_applications section AND in the global
@@ -37,8 +37,8 @@ import { _resetAuthSchemaCache } from '../../backend/services/hamilton/hamiltonA
 import { HamiltonAgentAdapter } from '../../backend/services/agentControl/agentAdapters/hamiltonAgentAdapter.js'
 import { makeSignal } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
 
-const ANASTASIA_PROFILE_ID = 'profile-anastasia-white'
-const ANASTASIA_USER_ID = 'u-anastasia'
+const STUDENT_PROFILE_ID = 'profile-anastasia-white'
+const STUDENT_USER_ID = 'u-demo-student'
 const MTSU_APPLICATION_ID = 'app-mtsu'
 
 function makeDb() {
@@ -131,15 +131,15 @@ function makeDb() {
       PRIMARY KEY (profile_id, document_id)
     );
     INSERT INTO profiles (id, user_id, display_name, primary_type, status)
-      VALUES ('${ANASTASIA_PROFILE_ID}', '${ANASTASIA_USER_ID}', 'Anastasia Nicole White', 'high_school_student', 'active');
+      VALUES ('${STUDENT_PROFILE_ID}', '${STUDENT_USER_ID}', 'Demo Tennessee STEM Student', 'high_school_student', 'active');
     INSERT INTO users (id, primary_email, is_admin, role)
-      VALUES ('${ANASTASIA_USER_ID}', 'tishka1201@icloud.com', 0, 'user');
+      VALUES ('${STUDENT_USER_ID}', 'demo.student@example.invalid', 0, 'user');
   `)
-  // Seed Anastasia's MTSU university application entry.
+  // Seed the student's MTSU university application entry.
   sqlite.prepare(
     `INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, ?, ?, ?)`,
   ).run(
-    ANASTASIA_PROFILE_ID,
+    STUDENT_PROFILE_ID,
     'university_applications',
     JSON.stringify({
       applications: [
@@ -168,7 +168,7 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // Pipeline ↔ MTSU portal merge
 // ---------------------------------------------------------------------------
-describe('Anastasia / MTSU pipeline ↔ portal merge', () => {
+describe('source-safe student / MTSU pipeline portal merge', () => {
   it("the merge service recognises 'mtsu' as a supported provider", () => {
     const ids = SCHOOL_PORTAL_PROVIDERS.map((p) => p.id)
     assert.ok(ids.includes('mtsu'), `SCHOOL_PORTAL_PROVIDERS must include 'mtsu', got: ${ids.join(', ')}`)
@@ -181,8 +181,8 @@ describe('Anastasia / MTSU pipeline ↔ portal merge', () => {
   it('creates an MTSU portal connection and merges its awards into the pipeline + funding_opportunities', async () => {
     const db = makeDb()
 
-    // 1. Connect Anastasia's MTSU portal with three real institutional awards.
-    const conn = await createSchoolPortalConnection(db, ANASTASIA_PROFILE_ID, {
+    // 1. Connect the student's MTSU portal with three institutional awards.
+    const conn = await createSchoolPortalConnection(db, STUDENT_PROFILE_ID, {
       provider_id: 'mtsu',
       connection_label: 'MTSU MyMT Award Letter (2026-27)',
       school_name: 'Middle Tennessee State University',
@@ -199,7 +199,7 @@ describe('Anastasia / MTSU pipeline ↔ portal merge', () => {
     assert.equal(conn.connection.available_awards.length, 3)
 
     // 2. Merge ALL three MTSU awards into the pipeline at once.
-    const mergeResult = await mergeSchoolPortalAwards(db, ANASTASIA_PROFILE_ID, {
+    const mergeResult = await mergeSchoolPortalAwards(db, STUDENT_PROFILE_ID, {
       connection_id: conn.connection.id,
       application_id: MTSU_APPLICATION_ID,
       award_ids: conn.connection.available_awards.map((a) => a.id),
@@ -212,10 +212,10 @@ describe('Anastasia / MTSU pipeline ↔ portal merge', () => {
       'Issue #534 — every merged MTSU award must surface in funding_opportunities so Discover Grants sees it',
     )
 
-    // 3. Confirm the awards appear under Anastasia's MTSU university application.
+    // 3. Confirm the awards appear under the student's MTSU university application.
     const sec = await db
       .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'university_applications'`)
-      .get(ANASTASIA_PROFILE_ID)
+      .get(STUDENT_PROFILE_ID)
     const parsed = JSON.parse(sec.data)
     const mtsuApp = parsed.applications.find((a) => a.id === MTSU_APPLICATION_ID)
     assert.equal(mtsuApp.imported_portal_awards.length, 3)
@@ -253,7 +253,7 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
     const db = makeDb()
     await ensureApplicationTaskSchema(db)
 
-    // Seed three MTSU funding_opportunities + matching application_tasks for Anastasia.
+    // Seed three MTSU funding_opportunities + matching application_tasks for the student.
     const mtsuOpps = [
       {
         id: 'mtsu-true-blue', title: 'MTSU True Blue', sponsor: 'MTSU',
@@ -281,13 +281,13 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
         `INSERT INTO application_tasks
            (id, profile_id, opportunity_id, automation_type, status, current_pipeline_stage, created_at, updated_at)
          VALUES (?, ?, ?, ?, 'queued', 'ready_to_submit', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      ).run(`task-${o.id}`, ANASTASIA_PROFILE_ID, o.id, o.opportunity_type)
+      ).run(`task-${o.id}`, STUDENT_PROFILE_ID, o.id, o.opportunity_type)
     }
 
     const adapter = new HamiltonAgentAdapter()
     const events = []
     const signal = makeSignal({
-      runId: 'run-anastasia',
+      runId: 'run-demo-student',
       stepId: 'step-hamilton',
       agentName: 'hamilton',
       shouldStop: () => false,
@@ -299,7 +299,7 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
 
     const result = await adapter.start({
       db,
-      controlRunId: 'run-anastasia',
+      controlRunId: 'run-demo-student',
       stepId: 'step-hamilton',
       options: { hamilton_batch_size: 10 },
       signal,

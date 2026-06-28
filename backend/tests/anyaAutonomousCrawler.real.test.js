@@ -116,28 +116,26 @@ describe('anyaAutonomousCrawler: real metrics, no hallucinated counts', () => {
   })
 
   it('apply mode (write enabled) actually modifies silent catch and issues_fixed === applied fixes', async () => {
-    process.env.ANYA_AUTONOMOUS_WRITE_CHANGES = 'true'
-    try {
-      const before = await fs.readFile(path.join(tmpDir, 'src/silent.js'), 'utf8')
-      expect(before).toMatch(/catch \(err\) \{\}/)
+    const before = await fs.readFile(path.join(tmpDir, 'src/silent.js'), 'utf8')
+    expect(before).toMatch(/catch \(err\) \{\}/)
 
-      const report = await runAutonomousCodeCrawl(
-        { dryRun: false, writeFlag: true, fixEmptyCatch: true, maxIterations: 100 },
-        mockContext,
-      )
-      expect(report.dry_run).toBe(false)
+    const report = await runAutonomousCodeCrawl(
+      { dryRun: false, writeFlag: true, fixEmptyCatch: true, maxIterations: 100 },
+      mockContext,
+    )
+    expect(report.dry_run).toBe(false)
+    expect(report.permission_required).toBe(false)
+    expect(report.audit_required).toBe(true)
+    expect(report.env_write_gate_required).toBe(false)
 
-      const after = await fs.readFile(path.join(tmpDir, 'src/silent.js'), 'utf8')
-      expect(after).not.toBe(before)
-      expect(after).toMatch(/console\.error\('\[AnyaAudit\] Suppressed error/)
-      expect(after).toMatch(/throw err/)
+    const after = await fs.readFile(path.join(tmpDir, 'src/silent.js'), 'utf8')
+    expect(after).not.toBe(before)
+    expect(after).toMatch(/console\.error\('\[AnyaAudit\] Suppressed error/)
+    expect(after).toMatch(/throw err/)
 
-      expect(report.issues_fixed).toBeGreaterThan(0)
-      const totalReported = report.modifications.reduce((acc, m) => acc + m.changes_count, 0)
-      expect(report.issues_fixed).toBe(totalReported)
-    } finally {
-      delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
-    }
+    expect(report.issues_fixed).toBeGreaterThan(0)
+    const totalReported = report.modifications.reduce((acc, m) => acc + m.changes_count, 0)
+    expect(report.issues_fixed).toBe(totalReported)
   })
 })
 
@@ -186,7 +184,6 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
 
   beforeEach(async () => {
     await seedFixture()
-    delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
   })
 
   afterAll(async () => {
@@ -228,9 +225,8 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
     expect(r.issues_found).toBe(r.findings_found)
   })
 
-  it('dry_run provenance: requested, effective, forced_by_env are distinguishable', async () => {
+  it('dry_run provenance: requested, effective, and policy fields are distinguishable', async () => {
     // Case 1: caller requests dry run explicitly
-    delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
     const r1 = await runAutonomousCodeCrawl({ dryRun: true }, mockContext)
     expect(r1.dry_run_requested).toBe(true)
     expect(r1.dry_run_effective).toBe(true)
@@ -238,25 +234,15 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
     expect(r1.writes_explicitly_enabled).toBe(false)
     expect(r1.dry_run).toBe(r1.dry_run_effective) // legacy alias
 
-    // Case 2: caller requests writes but env gate vetoes
-    delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
-    const r2 = await runAutonomousCodeCrawl({ dryRun: false }, mockContext)
+    // Case 2: caller requests writes; no environment gate vetoes Anya repair.
+    const r2 = await runAutonomousCodeCrawl({ dryRun: false, maxFileChanges: 0 }, mockContext)
     expect(r2.dry_run_requested).toBe(false)
-    expect(r2.dry_run_effective).toBe(true)
-    expect(r2.dry_run_forced_by_env).toBe(true)
-    expect(r2.writes_explicitly_enabled).toBe(false)
-
-    // Case 3: caller requests writes AND env gate opens AND writeFlag is set
-    process.env.ANYA_AUTONOMOUS_WRITE_CHANGES = 'true'
-    try {
-      const r3 = await runAutonomousCodeCrawl({ dryRun: false, writeFlag: true }, mockContext)
-      expect(r3.dry_run_requested).toBe(false)
-      expect(r3.dry_run_effective).toBe(false)
-      expect(r3.dry_run_forced_by_env).toBe(false)
-      expect(r3.writes_explicitly_enabled).toBe(true)
-    } finally {
-      delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
-    }
+    expect(r2.dry_run_effective).toBe(false)
+    expect(r2.dry_run_forced_by_env).toBe(false)
+    expect(r2.writes_explicitly_enabled).toBe(true)
+    expect(r2.env_write_gate_required).toBe(false)
+    expect(r2.permission_required).toBe(false)
+    expect(r2.audit_required).toBe(true)
   })
 
   it('modifications include actionable details (diff, diff_preview, backup, dry_run flags)', async () => {
@@ -406,7 +392,6 @@ describe('anyaAutonomousCrawler: extended honest-metrics contract', () => {
 
   beforeEach(async () => {
     await seedExtendedFixture()
-    delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
   })
 
   afterAll(async () => {

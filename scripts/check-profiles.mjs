@@ -22,21 +22,21 @@ import { fileURLToPath } from 'node:url'
 import { supportedSectionKeys as CANONICAL_SECTIONS } from '../backend/config/profileSchema.js'
 
 const REQUIRED_PROFILE_MATCHERS = [
-  { label: 'John', test: (name) => /john\s+white/i.test(name) },
-  { label: 'Robert', test: (name) => /robert\s+white/i.test(name) },
-  { label: 'Anastasia', test: (name) => /anastasia/i.test(name) },
-  { label: 'Luibov', test: (name) => /luibov/i.test(name) },
-  { label: 'Focus Forward', test: (name) => /focus\s+forward/i.test(name) },
-  { label: 'Axiom Biolabs', test: (name) => /axiom\s+biolabs/i.test(name) },
-  { label: 'Brian', test: (name) => /brian/i.test(name) },
-  { label: 'Hollie', test: (name) => /hollie/i.test(name) },
-  { label: 'Olivia', test: (name) => /olivia/i.test(name) },
-  { label: 'Avanell', test: (name) => /avanell/i.test(name) },
-  { label: 'Angelika', test: (name) => /angelika/i.test(name) },
-  { label: 'Rachel', test: (name) => /rachel/i.test(name) },
-  { label: 'Josh', test: (name) => /\bjosh\b/i.test(name) },
-  { label: 'Jason', test: (name) => /jason/i.test(name) },
-  { label: 'Kathy', test: (name) => /kathy/i.test(name) },
+  { label: 'Axiom Community Health', test: (name) => /axiom\s+community\s+health/i.test(name) },
+  { label: 'Bright Trails Youth', test: (name) => /bright\s+trails\s+youth/i.test(name) },
+  { label: 'Riverbend Veteran Housing', test: (name) => /riverbend\s+veteran\s+housing/i.test(name) },
+  { label: 'Harper Family Support', test: (name) => /harper\s+family\s+support/i.test(name) },
+  { label: 'Northside Robotics', test: (name) => /northside\s+robotics/i.test(name) },
+  { label: 'Demo Tennessee STEM Student', test: (name) => /demo\s+tennessee\s+stem\s+student/i.test(name) },
+  { label: 'Summit Adaptive Sports', test: (name) => /summit\s+adaptive\s+sports/i.test(name) },
+  { label: 'Oak Street Early Learning', test: (name) => /oak\s+street\s+early\s+learning/i.test(name) },
+  { label: 'Sierra Tribal Artisans', test: (name) => /sierra\s+tribal\s+artisans/i.test(name) },
+  { label: 'Greenline Food Cooperative', test: (name) => /greenline\s+food\s+cooperative/i.test(name) },
+  { label: 'Lakeside Recovery', test: (name) => /lakeside\s+recovery/i.test(name) },
+  { label: 'Mercy Table Church Pantry', test: (name) => /mercy\s+table\s+church\s+pantry/i.test(name) },
+  { label: 'Rural EMS Training', test: (name) => /rural\s+ems\s+training/i.test(name) },
+  { label: 'Community Caregiver Relief', test: (name) => /community\s+caregiver\s+relief/i.test(name) },
+  { label: 'First Generation Nursing Student', test: (name) => /first\s+generation\s+nursing\s+student/i.test(name) },
 ]
 
 function main() {

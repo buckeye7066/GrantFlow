@@ -1,48 +1,69 @@
 /**
  * User Profile Mappings
- * 
- * Maps specific user emails to their designated profile IDs.
- * When these users sign up or log in, they will be automatically
- * assigned to their designated profile instead of the first available one.
- * 
- * To add a new mapping:
- * 1. Find the profile ID from the profiles table or baseline-profiles.json
- * 2. Add the email and profile_id to the USER_PROFILE_MAPPINGS object
- * 3. The user will be automatically linked on their next login/signup
+ *
+ * Source-controlled defaults must never contain real client email addresses.
+ * Production/staging mappings should be supplied through either:
+ *   - USER_PROFILE_MAPPINGS_JSON='{"person@example.com":"profile-id"}'
+ *   - USER_PROFILE_MAPPINGS_FILE=/absolute/path/to/userProfileMappings.local.json
+ *
+ * The local file path is ignored by git.
  */
 
+import fs from 'fs'
+import path from 'path'
 import { ADMIN_EMAIL } from './constants.js'
 
-export const USER_PROFILE_MAPPINGS = {
-  // Format: 'user@email.com': 'profile-id-from-database'
-  
-  // Admin user
-  [ADMIN_EMAIL]: null, // Admin has access to all profiles
-  
-  // Specific user mappings
-  'holliet52@gmail.com': 'profile-hollie-knox',
-  'isawstars08@yahoo.com': 'profile-brian-client',
-  'allmonkey915@gmail.com': 'profile-avanell-leamon',
-  'oliviabeltran@gmail.com': 'profile-olivia-beltran',
-  'joshua.dasher@gmail.com': 'profile-josh-dasher',
-  'rdashermiller@gmail.com': 'profile-rachel-miller',
-  // Prefer stable IDs; if the DB already has a different ID, auth will match by email first.
-  'angelikaps.rn@gmail.com': 'profile-angelika-ptak',
-  'pjandcrdasher@att.net': 'profile-paul-jason-dasher',
-  // Liubov
-  'anyawhite@rocketmail.com': 'profile-luibov-samoylenko',
-
-  // Melissa Justus — swap to the real owner email when known (must match designatedProfiles owner_email).
-  'melissa.justus@example.com': 'profile-melissa-justus',
-  // William — add owner primary_email when known:
-  // 'william.owner@example.com': 'profile-william',
+const SOURCE_SAFE_PROFILE_MAPPINGS = {
+  [ADMIN_EMAIL]: null, // Admin has access to all profiles.
+  'client.avanell@example.invalid': 'profile-avanell-leamon',
+  'client.olivia@example.invalid': 'profile-olivia-beltran',
+  'client.brian@example.invalid': 'profile-brian-client',
+  'client.hollie@example.invalid': 'profile-hollie-knox',
+  'client.angelika@example.invalid': 'profile-angelika-ptak',
+  'client.paul@example.invalid': 'profile-paul-jason-dasher',
+  'client.rachel@example.invalid': 'profile-rachel-miller',
+  'client.melissa@example.invalid': 'profile-melissa-justus',
 }
 
-/**
- * Get the designated profile ID for a given email address
- * @param {string} email - User's email address (case-insensitive)
- * @returns {string|null} Profile ID if mapped, null otherwise
- */
+function normalizeMappings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out = {}
+  for (const [email, profileId] of Object.entries(value)) {
+    const key = String(email || '').trim().toLowerCase()
+    if (!key) continue
+    out[key] = profileId === null ? null : String(profileId || '').trim()
+  }
+  return out
+}
+
+function parseMappingsJson(raw, source) {
+  if (!raw) return {}
+  try {
+    return normalizeMappings(JSON.parse(String(raw)))
+  } catch (error) {
+    console.warn(`[userProfileMappings] Ignoring invalid ${source}:`, error?.message || error)
+    return {}
+  }
+}
+
+function loadMappingsFile(filePath) {
+  if (!filePath) return {}
+  try {
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath)
+    if (!fs.existsSync(resolved)) return {}
+    return parseMappingsJson(fs.readFileSync(resolved, 'utf8'), `mapping file ${resolved}`)
+  } catch (error) {
+    console.warn('[userProfileMappings] Failed to load mapping file:', error?.message || error)
+    return {}
+  }
+}
+
+export const USER_PROFILE_MAPPINGS = Object.freeze({
+  ...SOURCE_SAFE_PROFILE_MAPPINGS,
+  ...loadMappingsFile(process.env.USER_PROFILE_MAPPINGS_FILE),
+  ...parseMappingsJson(process.env.USER_PROFILE_MAPPINGS_JSON, 'USER_PROFILE_MAPPINGS_JSON'),
+})
+
 /** Sentinel returned when the email is the admin account (all-profiles access, no single profile). */
 export const ADMIN_PROFILE_SENTINEL = '__admin__'
 
@@ -64,19 +85,13 @@ export function getDesignatedProfileForEmail(email) {
   )
 
   if (!matchingKey) {
-    return null // truly unmapped
+    return null
   }
 
   const profileId = USER_PROFILE_MAPPINGS[matchingKey]
-  // Distinguish admin (null in map) from unmapped (key absent)
   return profileId === null ? ADMIN_PROFILE_SENTINEL : profileId
 }
 
-/**
- * Check if a user email has a designated profile mapping
- * @param {string} email - User's email address
- * @returns {boolean} True if the email has a designated profile
- */
 /**
  * Check if a user email has a designated (non-admin) profile mapping.
  * Returns false for unmapped users AND for the admin account.
@@ -98,6 +113,5 @@ export function hasDesignatedProfile(email) {
     return false
   }
 
-  // Admin has a key but no real profile ID â not a 'designated profile' assignment
   return USER_PROFILE_MAPPINGS[matchingKey] !== null
 }

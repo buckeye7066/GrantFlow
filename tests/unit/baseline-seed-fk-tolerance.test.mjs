@@ -59,7 +59,7 @@ async function createDbWrapper(dbFilePath) {
   return wrapper
 }
 
-test('baseline seed: does not hard-fail when grants reference missing opportunities', async () => {
+test('baseline seed: source-safe empty grant fixture does not hard-fail', async () => {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-baseline-seed-'))
   const dbPath = path.join(tmp, 'test.db')
 
@@ -91,10 +91,12 @@ test('baseline seed: does not hard-fail when grants reference missing opportunit
     assert.equal(result.ok, true)
     assert.equal(result.skipped, false)
 
+    assert.equal(result.decisions.grants, true)
+    assert.equal(result.counts.grants_upserted, 0)
+
     const grantsCount = Number((await db.prepare('SELECT COUNT(*) as count FROM grants').get())?.count || 0)
-    assert.ok(grantsCount > 0, 'expected baseline seeding to insert at least one grant')
+    assert.equal(grantsCount, 0, 'source-safe public baseline should not reintroduce funding-source traces')
   } finally {
     db.close()
   }
 })
-

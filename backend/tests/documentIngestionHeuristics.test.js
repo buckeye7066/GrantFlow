@@ -10,10 +10,10 @@ import {
 } from '../services/documentIngestion/heuristics.js'
 
 /**
- * Real-world TN Medicaid (TennCare) and ECF CHOICES document shapes.
+ * Synthetic TN Medicaid (TennCare) and ECF CHOICES document shapes.
  *
  * These tests pin the user-facing contract:
- *   "If the user uploads Kimberly's TennCare card or Gilbert's ECF
+ *   "If the user uploads a TennCare card or ECF
  *    CHOICES award letter, the Medicaid number lands on the profile."
  *
  * Mission goals served:
@@ -26,7 +26,7 @@ import {
  */
 
 describe('parseDateToISO', () => {
-  it('parses MM/DD/YYYY (Kimberly DOB)', () => {
+  it('parses MM/DD/YYYY', () => {
     expect(parseDateToISO('10/11/1964')).toBe('1964-10-11')
   })
   it('parses M/D/YYYY', () => {
@@ -49,12 +49,12 @@ describe('parseDateToISO', () => {
 
 describe('isLikelyIdentifier', () => {
   it('accepts realistic Medicaid IDs', () => {
-    expect(isLikelyIdentifier('ZECM15043724')).toBe(true) // Gilbert's seed
+    expect(isLikelyIdentifier('ZECM15043724')).toBe(true)
     expect(isLikelyIdentifier('999888777')).toBe(true)
     expect(isLikelyIdentifier('ABC1234567')).toBe(true)
   })
   it('rejects narrative text', () => {
-    expect(isLikelyIdentifier('Kimberly Botts')).toBe(false)
+    expect(isLikelyIdentifier('Sample Client')).toBe(false)
     expect(isLikelyIdentifier('TennCare BlueCare')).toBe(false)
     expect(isLikelyIdentifier('1234')).toBe(false) // too short
   })
@@ -92,10 +92,10 @@ describe('detectMedicaidContext / detectMedicareContext', () => {
   })
 })
 
-describe('extractMedicalInsuranceHeuristics — Kimberly TennCare BlueCare card', () => {
+describe('extractMedicalInsuranceHeuristics — TennCare BlueCare card', () => {
   const card = `
 TennCare BlueCare
-Member Name: KIMBERLY BOTTS
+Member Name: SAMPLE CLIENT
 Member ID: 999888777
 Group No: 0001
 RxBIN: 003858
@@ -128,7 +128,7 @@ describe('extractMedicalInsuranceHeuristics — ECF CHOICES award letter', () =>
   const letter = `
 TENNESSEE DIVISION OF TENNCARE
 Employment & Community First CHOICES Notice of Enrollment
-Member: KIMBERLY BOTTS
+Member: SAMPLE CLIENT
 Recipient ID: ABC1234567
 Effective Date: March 1, 2024
 ECF CHOICES enrollment confirmed.
@@ -147,11 +147,11 @@ ECF CHOICES enrollment confirmed.
   })
 })
 
-describe('extractMedicalInsuranceHeuristics — Gilbert ECF CHOICES (literal seed string)', () => {
-  // Verbatim from Gilbert's seed:
+describe('extractMedicalInsuranceHeuristics — ECF CHOICES waiver text', () => {
+  // Synthetic waiver-style text:
   //   "Medicaid Waiver Program (ECF CHOICES - TN). Medicaid number: ZECM15043724."
   const text = `
-Member Name: GILBERT ALLEN MCCOSH
+Member Name: ALEX SAMPLE
 Medicaid Waiver Program (ECF CHOICES - TN). Medicaid number: ZECM15043724.
 DOB: 08/19/1952
 `
@@ -169,7 +169,7 @@ describe('extractMedicalInsuranceHeuristics — Amerigroup TennCare card', () =>
   const card = `
 Amerigroup Community Care
 TennCare Medicaid
-Member: KIMBERLY BOTTS
+Member: SAMPLE CLIENT
 Member ID #  ABC123456789
 Group #: 87654
 DOB: 10/11/1964
@@ -192,7 +192,7 @@ describe('extractMedicalInsuranceHeuristics — Medicaid eligibility notice (no 
   const notice = `
 Tennessee Department of Human Services
 Medicaid Eligibility Notice
-Recipient: GILBERT ALLEN
+Recipient: ALEX SAMPLE
 Medicaid Recipient ID: 9876543210
 DOB: 01/15/1972
 `
@@ -223,10 +223,10 @@ describe('extractMedicalInsuranceHeuristics — empty / malformed input', () => 
 describe('extractBasicInformationHeuristics — DOB capture', () => {
   it('captures date_of_birth as ISO from "Date of Birth"', () => {
     const result = extractBasicInformationHeuristics(
-      'Patient: Kimberly Botts\nDate of Birth: 10/11/1964\nPhone: (423) 504-7778',
+      'Patient: Sample Client\nDate of Birth: 10/11/1964\nPhone: (555) 010-7777',
     )
     expect(result.date_of_birth).toBe('1964-10-11')
-    expect(result.phone).toMatch(/4235047778|\(423\)\s*504[-.]?7778|423[-.\s]504[-.]?7778/)
+    expect(result.phone).toMatch(/5550107777|\(555\)\s*010[-.]?7777|555[-.\s]010[-.]?7777/)
   })
   it('captures DOB from "DOB" abbreviation', () => {
     const result = extractBasicInformationHeuristics('DOB: 08/19/1952')

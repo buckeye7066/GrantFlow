@@ -63,6 +63,8 @@ router.get('/local-funding', async (req, res) => {
     const state = lookup?.state || null
 
     const db = req.db
+    const activeValue = db?.dialect === 'postgres' ? true : 1
+    const nationalValue = db?.dialect === 'postgres' ? true : 1
     let rows = []
 
     if (state) {
@@ -76,7 +78,7 @@ router.get('/local-funding', async (req, res) => {
           AND ${trustedSourceClause()}
         ORDER BY updated_at DESC
         LIMIT 50
-      `).all(1, state, 1)
+      `).all(activeValue, state, nationalValue)
     } else {
       rows = await db.prepare(`
         SELECT title, source_url, application_url, sponsor, source, state
@@ -88,7 +90,7 @@ router.get('/local-funding', async (req, res) => {
           AND ${trustedSourceClause()}
         ORDER BY updated_at DESC
         LIMIT 50
-      `).all(1, 1)
+      `).all(activeValue, nationalValue)
     }
 
     const mapped = rows.map((r) => ({

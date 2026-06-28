@@ -2,7 +2,7 @@
  * nameParsing.js  (shared — imported by both backend and frontend)
  *
  * "Parse, baby, parse." A single source of truth for turning a single
- * `full_name` / `display_name` string (e.g. "Anastasia Nicole White")
+ * `full_name` / `display_name` string (e.g. "Jordan Nicole Lane")
  * into the decomposed `{ first_name, middle_name, last_name }` shape that
  * the Hamilton automation agent and most application portals expect.
  *
@@ -127,10 +127,10 @@ function nonEmptyStr(v) {
  * Why this exists:
  *   The profile-merge path (services/profileDedupeService.js mergeValues) used
  *   to JOIN two overlapping name strings when it merged two profiles'
- *   basic_information.full_name — e.g. merging "Robert White" with
- *   "Robert Michael White" produced "Robert White\nRobert Michael White", which
+ *   basic_information.full_name — e.g. merging "Jordan Lane" with
+ *   "Jordan Michael Lane" produced "Jordan Lane\nJordan Michael Lane", which
  *   synced into profiles.display_name and rendered as
- *   "Robert White Robert Michael White" in the profile header AND the generated
+ *   "Jordan Lane Jordan Michael Lane" in the profile header AND the generated
  *   PDF title. This helper is the single, shared collapser used both by the
  *   producer (so a name can never be doubled at write time) and by the boot
  *   sweep (so already-doubled rows self-heal).
@@ -140,11 +140,11 @@ function nonEmptyStr(v) {
  *   2. Two halves that name the SAME person: the token sequence splits into two
  *      contiguous personal names that share the same first AND last token, where
  *      one half is a token-subsequence of the other. We keep the LONGER (more
- *      complete) half: "Robert White Robert Michael White"
- *      -> "Robert Michael White".
+ *      complete) half: "Jordan Lane Jordan Michael Lane"
+ *      -> "Jordan Michael Lane".
  *
  * What is LEFT ALONE (returned whitespace-normalized but otherwise verbatim):
- *   - Non-doubled personal names: "Robert White", "Mary Jane Watson",
+ *   - Non-doubled personal names: "Jordan Lane", "Mary Jane Watson",
  *     "John Q. Public".
  *   - Organization names (Inc/LLC/Foundation/Church/…): a repeated org token
  *     like "Church of God of Prophecy" is legitimate, never a person-name

@@ -1,5 +1,5 @@
 // CUTOVER (Crawler OS): exercises the legacy crawler route/engine now superseded
-// by a no-op shim (legacyCrawlSuperseded.js); invariants are owned + tested by the
+// by a retired OS-compatibility no-op; invariants are owned + tested by the
 // Crawler OS (backend/crawler-os/tests). Skipped pending a re-point to the OS.
 
 /**

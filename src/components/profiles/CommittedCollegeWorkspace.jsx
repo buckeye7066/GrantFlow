@@ -204,6 +204,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
         zip: savedAddr.zip || '',
       })
     }
+
   }, [housingStatus, savedAddr.line1, savedAddr.city, savedAddr.state, savedAddr.zip])
 
   const openPrintSummary = () => {

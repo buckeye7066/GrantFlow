@@ -55,9 +55,12 @@ convention ("remember to check X in every code path"). The standing rule:
 > scatter new ad-hoc checks across call sites.
 
 **The single enforcer is `backend/startup/enforceInvariants.js`**, run on every
-boot from `runSelfHeal()` in `backend/startup/selfHeal.js` (step 9). It mirrors
-`backend/startup/ensureSchemaInvariants.js` (which owns schema-shape DDL —
-data-repair invariants go in `enforceInvariants.js`).
+boot from `backend/server.js` immediately after `ensureSchemaInvariants()`. The
+full `runSelfHeal()` orchestrator in `backend/startup/selfHeal.js` also calls it
+as step 9 for Sam/Anya on-demand and maintenance runs, but boot wires the
+invariant sweep directly so it cannot be skipped by self-heal schedule changes.
+It mirrors `backend/startup/ensureSchemaInvariants.js` (which owns schema-shape
+DDL; data-repair invariants go in `enforceInvariants.js`).
 
 When you add or change behavior that touches an invariant below, change the
 enforcer + its test — do not rely on a new per-call check alone.

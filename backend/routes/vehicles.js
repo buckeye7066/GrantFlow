@@ -212,59 +212,30 @@ router.post('/ingest', ingestAuth, async (req, res) => {
       });
     }
 
-    const isPg = db.dialect === 'postgres';
-
-    let id;
-    if (isPg) {
-      // Adapter path: application-generated id keeps the insert portable.
-      // The adapter rewrites boolean literals for Postgres, so this stays cross-database.
-      id = randomUUID();
-      await db
-        .prepare(
-          `INSERT INTO vehicle_opportunities
-             (id, vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          data.vehicle_type,
-          data.title,
-          data.price,
-          data.mileage,
-          data.year,
-          data.transmission,
-          data.color,
-          data.location,
-          data.link,
-          data.vin,
-          data.clean_title ? 1 : 0,
-          data.source,
-        );
-    } else {
-      // SQLite: generate id manually; clean_title stored as integer (1/0)
-      id = randomUUID();
-      await db
-        .prepare(
-          `INSERT INTO vehicle_opportunities
-             (id, vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          data.vehicle_type,
-          data.title,
-          data.price,
-          data.mileage,
-          data.year,
-          data.transmission,
-          data.color,
-          data.location,
-          data.link,
-          data.vin,
-          data.clean_title ? 1 : 0,
-          data.source,
-        );
-    }
+    // Adapter path: application-generated id keeps the insert portable.
+    // The DB adapter rewrites boolean-ish params for Postgres, so this stays cross-database.
+    const id = randomUUID();
+    await db
+      .prepare(
+        `INSERT INTO vehicle_opportunities
+           (id, vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        data.vehicle_type,
+        data.title,
+        data.price,
+        data.mileage,
+        data.year,
+        data.transmission,
+        data.color,
+        data.location,
+        data.link,
+        data.vin,
+        data.clean_title ? 1 : 0,
+        data.source,
+      );
 
     routeLogger.info('[vehicles/ingest] Inserted vehicle opportunity', {
       id,

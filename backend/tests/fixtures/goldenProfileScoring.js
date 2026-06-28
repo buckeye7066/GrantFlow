@@ -22,16 +22,16 @@
 // ---------------------------------------------------------------------------
 
 export const GOLDEN_SCORING_PROFILES = Object.freeze([
-  // 1) STUDENT — Robert White archetype: paramedic-track student, Cleveland TN /
+  // 1) STUDENT — synthetic paramedic-track student, Cleveland TN /
   //    Bradley County, financial need, STEM/EMS interests.
   {
     key: 'student_paramedic_tn',
-    display_name: 'Robert White',
+    display_name: 'Jordan Lane',
     primary_type: 'high_school_student',
     sections: {
       basic_information: {
-        first_name: 'Robert',
-        last_name: 'White',
+        first_name: 'Jordan',
+        last_name: 'Lane',
         state: 'TN',
         city: 'Cleveland',
         zip: '37311',

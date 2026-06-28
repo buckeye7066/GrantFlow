@@ -1,14 +1,30 @@
-# Point axiombiolabs.org apex + www at Vercel (fixes E-001 when DNS was still on GoDaddy).
-# Repo secrets required: GODADDY_API_KEY, GODADDY_API_SECRET
-# Actions → Apply GoDaddy DNS for Vercel → confirm = YES
-name: Apply GoDaddy DNS for Vercel
+# DISABLED-BY-DEFAULT / GUARDED.
+#
+# WARNING: Running this against axiombiolabs.org points the domain APEX + www at
+# Vercel, which OVERWRITES the GoDaddy "Websites + Marketing" DNS records that
+# serve the Axiom Biolabs lab website. A prior run of this workflow took that
+# website offline (the apex started serving the GrantFlow app instead).
+#
+# The lab website must own the apex (axiombiolabs.org / www). GrantFlow should
+# live on its own subdomain (e.g. grantflow.axiombiolabs.org via a CNAME), which
+# this apex-takeover script is the WRONG tool for. This workflow now refuses to
+# touch the lab apex unless an operator explicitly acknowledges the consequence.
+name: Apply GoDaddy DNS for Vercel (GUARDED)
 
 on:
   workflow_dispatch:
     inputs:
+      domain:
+        description: 'Domain to repoint at Vercel (do NOT use the lab apex axiombiolabs.org)'
+        required: true
+        default: ''
       confirm:
         description: 'Type YES to apply DNS changes'
         required: true
+        default: 'NO'
+      i_understand_this_breaks_the_lab_site:
+        description: 'ONLY if domain is axiombiolabs.org: type I_UNDERSTAND to override the lab-site guard'
+        required: false
         default: 'NO'
 
 jobs:
@@ -16,6 +32,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Guard - refuse to break the lab website
+        # Inputs are passed via env (NOT interpolated into the script body) so a
+        # crafted value cannot inject shell. DOMAIN is normalized (lowercase,
+        # whitespace and trailing dots stripped) before comparison so case- or
+        # trailing-dot variants of the lab apex (e.g. "Axiombiolabs.ORG",
+        # "axiombiolabs.org.") cannot slip past the guard while still resolving
+        # to the same GoDaddy zone.
+        env:
+          DOMAIN_RAW: ${{ github.event.inputs.domain }}
+          ACK: ${{ github.event.inputs.i_understand_this_breaks_the_lab_site }}
+        run: |
+          domain="$(printf '%s' "$DOMAIN_RAW" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | sed 's/\.*$//')"
+          if [ -z "$domain" ]; then
+            echo "Aborted: no domain provided."; exit 1
+          fi
+          if [ "$domain" = "axiombiolabs.org" ] && [ "$ACK" != "I_UNDERSTAND" ]; then
+            echo "BLOCKED: axiombiolabs.org serves the Axiom Biolabs lab website via GoDaddy"
+            echo "Websites + Marketing. Pointing its apex at Vercel takes that site offline."
+            echo "Put GrantFlow on a subdomain (CNAME grantflow -> cname.vercel-dns-0.com) instead."
+            echo "If you REALLY mean to take the lab site offline, re-run with"
+            echo "i_understand_this_breaks_the_lab_site = I_UNDERSTAND."
+            exit 1
+          fi
 
       - name: Validate confirmation
         if: github.event.inputs.confirm != 'YES'
@@ -26,15 +66,25 @@ jobs:
       - name: Apply DNS via GoDaddy API
         if: github.event.inputs.confirm == 'YES'
         env:
-          GODADDY_DOMAIN: axiombiolabs.org
+          GODADDY_DOMAIN: ${{ github.event.inputs.domain }}
           GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
           GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+          VERCEL_WWW_CNAME: cname.vercel-dns-0.com
           CONFIRM: 'YES'
+        run: node scripts/godaddy-set-vercel-dns.mjs
+
+      - name: Verify GoDaddy records now match Vercel
+        if: github.event.inputs.confirm == 'YES'
+        env:
+          GODADDY_DOMAIN: ${{ github.event.inputs.domain }}
+          GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
+          GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+          VERCEL_WWW_CNAME: cname.vercel-dns-0.com
+          VERIFY_ONLY: 'true'
         run: node scripts/godaddy-set-vercel-dns.mjs
 
       - name: Post-apply notes
         if: github.event.inputs.confirm == 'YES'
         run: |
           echo "Propagation: minutes to 48h."
-          echo "Verify health on www and apex after TTL."
-          echo "Railway: add to CORS_ORIGIN if needed: https://www.axiombiolabs.org,https://axiombiolabs.org"
+          echo "Verify the intended domain serves the intended app after propagation."

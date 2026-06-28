@@ -164,13 +164,28 @@ router.post('/comprehensiveMatch', async (req, res) => {
         : '(is_loan = 0 OR is_loan IS NULL)',
     );
 
-    // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
+    // Crawler OS is the authoritative profile-scoped discovery source. This
+    // compatibility endpoint may not backfill sparse OS coverage with generic
+    // catalog matches.
     const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
+    if (req.query.legacy_matching === '1' || req.body?.legacy_matching === '1') {
+      return res.status(410).json({
+        success: false,
+        error: 'legacy_matching_retired',
+        engine: 'crawler-os',
+        message: 'Legacy catalog matching has been retired. Run Crawler OS discovery for this profile.',
+      })
+    }
+    if (!matchProfileId) {
+      return res.status(400).json({
+        success: false,
+        error: 'profile_required',
+        engine: 'crawler-os',
+        message: 'Crawler OS discovery requires a profile id.',
+      })
+    }
 
-    // ── Crawler OS first ──────────────────────────────────────────────────
-    // Serve canonical OS matches when the OS has scored this profile, instead of
-    // recomputing with the legacy scorer. Additive + reversible (?legacy_matching=1).
-    if (matchProfileId && req.query.legacy_matching !== '1' && req.body?.legacy_matching !== '1') {
+    if (matchProfileId) {
       let osRows = []
       try {
         osRows = await req.db
@@ -185,50 +200,55 @@ router.post('/comprehensiveMatch', async (req, res) => {
               ORDER BY m.match_score DESC`,
           )
           .all(matchProfileId)
-      } catch {
-        osRows = []
-      }
-      if (osRows.length > 0) {
-        const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
-        let mapped = osRows.map((o) => {
-          let reasons = []
-          try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
-          const kind = String(o.opportunity_kind ?? '').toUpperCase()
-          return {
-            ...o,
-            match_score: o.os_match_score,
-            match_decision: o.os_match_decision,
-            match_explanation: o.os_match_explanation,
-            match_reasons: reasons,
-            is_directory: kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL',
-            trust_tier: o.source_trust_tier ?? null,
-            url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-            actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-            engine: 'crawler-os',
-          }
-        })
-        const canonical = canonicalizeOpportunityList(profileContext, mapped, {
-          preserveDirectories: true,
-          rejectHardIneligible: true,
-        })
-        mapped = canonical.kept
-        if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
-          // filterOutPipelineMembers returns { results, ... }
-          mapped = (await filterOutPipelineMembers(req.db, matchProfileId, mapped)).results
-        }
-        const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
-        return res.json({
-          success: true,
+      } catch (osErr) {
+        routeLogger.error('comprehensive_match.os_query_failed', osErr)
+        return res.status(503).json({
+          success: false,
+          error: 'crawler_os_match_store_unavailable',
           engine: 'crawler-os',
-          opportunities: qualified,
-          total: qualified.length,
-          page,
-          threshold_used: osMin,
-          total_evaluated: mapped.length,
+          message: 'Crawler OS match data is unavailable. Generic fallback matching is disabled.',
         })
       }
-    }
 
+      const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
+      let mapped = osRows.map((o) => {
+        let reasons = []
+        try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
+        const kind = String(o.opportunity_kind ?? '').toUpperCase()
+        const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
+        return {
+          ...o,
+          match_score: Number(o.os_match_score ?? 0),
+          match_decision: o.os_match_decision,
+          match_explanation: o.os_match_explanation,
+          match_reasons: reasons,
+          is_directory: isDirectory,
+          trust_tier: o.source_trust_tier ?? null,
+          url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+          actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+          engine: 'crawler-os',
+        }
+      })
+      const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+        preserveDirectories: true,
+        rejectHardIneligible: true,
+      })
+      mapped = canonical.kept
+      if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+        mapped = (await filterOutPipelineMembers(req.db, matchProfileId, mapped)).results
+      }
+      const qualified = mapped.filter((o) => o.is_directory || Number(o.match_score) >= osMin)
+      return res.json({
+        success: true,
+        engine: 'crawler-os',
+        opportunities: qualified,
+        total: qualified.length,
+        page,
+        threshold_used: osMin,
+        total_evaluated: mapped.length,
+        zero_result: qualified.length === 0 || undefined,
+      })
+    }
     if (matchProfileId) {
       conditions.push('(profile_id IS NULL OR profile_id = ?)')
       params.push(matchProfileId)

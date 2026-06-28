@@ -46,44 +46,61 @@ export function createRobert(deps = {}) {
      * @returns {Promise<object>} aggregate result
      */
     async run(opts = {}) {
-      heartbeat(store, AGENT_ID, { now: clock(), status: 'running' });
-      const profiles = opts.profiles ?? [];
-      const theses = profiles.map((p) => buildThesis(p));
-      const matchProfiles = theses; // match every stored opp to every profile
+      let profileCount = 0;
+      try {
+        heartbeat(store, AGENT_ID, { now: clock(), status: 'running' });
+        const profiles = opts.profiles ?? [];
+        const theses = profiles.map((p) => buildThesis(p));
+        profileCount = theses.length;
+        const matchProfiles = theses; // match every stored opp to every profile
 
-      const runs = [];
-      let storedTotal = 0;
-      let recommendedTotal = 0;
+        const runs = [];
+        let storedTotal = 0;
+        let recommendedTotal = 0;
 
-      if (theses.length === 0) {
-        // No profiles: still build the universe; store globally, match later.
-        const r = await runDiscovery({ store, fetcher, env, clock }, { thesis: broadThesis(), matchProfiles: [], runId: opts.runId });
-        runs.push(r); storedTotal += r.stored;
-      } else {
+        if (theses.length === 0) {
+          // No profiles: still build the universe; store globally, match later.
+          const r = await runDiscovery({ store, fetcher, env, clock }, { thesis: broadThesis(), matchProfiles: [], runId: opts.runId });
+          runs.push(r); storedTotal += r.stored;
+        } else {
+          for (const th of theses) {
+            const r = await runDiscovery({ store, fetcher, env, clock }, { thesis: th, matchProfiles, runId: opts.runId });
+            runs.push(r); storedTotal += r.stored; recommendedTotal += r.recommendations.length;
+          }
+        }
+
+        // Per-profile recommendation rollup (ACCEPT-band only) over the catalog.
+        const recommendationsByProfile = {};
         for (const th of theses) {
-          const r = await runDiscovery({ store, fetcher, env, clock }, { thesis: th, matchProfiles, runId: opts.runId });
-          runs.push(r); storedTotal += r.stored; recommendedTotal += r.recommendations.length;
+          if (!th.profile_id) continue;
+          recommendationsByProfile[th.profile_id] = getMatchesForProfile(store, th.profile_id, { minScore: th.min_match_score })
+            .filter((m) => m.decision === 'accept');
+        }
+
+        const summary = {
+          agent: AGENT_ID,
+          runs: runs.map((r) => ({ run_id: r.run_id, profile_id: r.profile_id, stored: r.stored, rejected: r.rejected, recommendations: r.recommendations.length, zero_result: r.zero_result?.zero_result_reason ?? null })),
+          stored_total: storedTotal,
+          recommended_total: recommendedTotal,
+          recommendations_by_profile: recommendationsByProfile,
+        };
+        recordAgentJob(store, { agent_id: AGENT_ID, kind: 'discovery', status: 'ok', detail: { stored_total: storedTotal, profiles: theses.length } });
+        return summary;
+      } catch (error) {
+        const message = error?.message || String(error);
+        try {
+          recordAgentJob(store, { agent_id: AGENT_ID, kind: 'discovery', status: 'error', detail: { error: message, profiles: profileCount } });
+        } catch (recordError) {
+          console.error('Robert failed to record discovery error:', recordError?.message || recordError);
+        }
+        throw error;
+      } finally {
+        try {
+          heartbeat(store, AGENT_ID, { now: clock(), status: 'idle' });
+        } catch (heartbeatError) {
+          console.error('Robert failed to mark heartbeat idle:', heartbeatError?.message || heartbeatError);
         }
       }
-
-      // Per-profile recommendation rollup (ACCEPT-band only) over the catalog.
-      const recommendationsByProfile = {};
-      for (const th of theses) {
-        if (!th.profile_id) continue;
-        recommendationsByProfile[th.profile_id] = getMatchesForProfile(store, th.profile_id, { minScore: th.min_match_score })
-          .filter((m) => m.decision === 'accept');
-      }
-
-      const summary = {
-        agent: AGENT_ID,
-        runs: runs.map((r) => ({ run_id: r.run_id, profile_id: r.profile_id, stored: r.stored, rejected: r.rejected, recommendations: r.recommendations.length, zero_result: r.zero_result?.zero_result_reason ?? null })),
-        stored_total: storedTotal,
-        recommended_total: recommendedTotal,
-        recommendations_by_profile: recommendationsByProfile,
-      };
-      recordAgentJob(store, { agent_id: AGENT_ID, kind: 'discovery', status: 'ok', detail: { stored_total: storedTotal, profiles: theses.length } });
-      heartbeat(store, AGENT_ID, { now: clock(), status: 'idle' });
-      return summary;
     },
   };
 }

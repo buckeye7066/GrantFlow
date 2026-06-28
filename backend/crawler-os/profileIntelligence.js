@@ -268,7 +268,7 @@ const INDIVIDUAL_APPLICANT_TYPES = new Set([
 // engine still scores relevance so this never floods.
 const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   // Person / household (federal grant APIs don't serve these directly; they
-  // get benefit directories + foundation locator + scholarship web discovery).
+  // get honest benefit/direct-aid directories and locators).
   individual: ['individual'],
   person: ['individual'],
   adult: ['individual'],

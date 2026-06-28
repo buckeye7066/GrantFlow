@@ -17,6 +17,8 @@ function extractProfileId(req) {
   if (fromParams) return String(fromParams).trim() || null
   const fromQuery = req?.query?.profileId || req?.query?.profile_id
   if (fromQuery) return String(fromQuery).trim() || null
+  const fromBody = req?.body?.profileId || req?.body?.profile_id
+  if (fromBody) return String(fromBody).trim() || null
   const fromHeader = req?.headers?.['x-profile-id']
   if (fromHeader) return String(fromHeader).trim() || null
   const fromUser = req?.user?.profileId || req?.user?.profile_id || req?.user?.activeProfileId

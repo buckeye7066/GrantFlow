@@ -191,6 +191,7 @@ export default function AdminDiagnostics() {
 
   useEffect(() => {
     loadDiagnostics();
+
   }, []);
 
   const handleRefresh = () => {

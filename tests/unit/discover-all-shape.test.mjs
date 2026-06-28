@@ -20,7 +20,7 @@
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { triggerAutoDiscoveryCrawlers } from '../../backend/services/legacyCrawlSuperseded.js'
+import { triggerAutoDiscoveryCrawlers } from '../../backend/services/crawlerOsCompatibility.js'
 
 describe('triggerAutoDiscoveryCrawlers — discover-all contract', () => {
   it('returns the zero-shape (not undefined fields) when db/profileId missing', async () => {

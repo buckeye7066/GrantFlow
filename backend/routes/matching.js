@@ -1,41 +1,22 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
-import { loadPreferenceSignals } from '../services/matchEngine.js'
 import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
 import { getProfileFieldPrompts } from '../services/profileFieldPrompts.js'
-import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
-import { isJunkOpportunity } from '../services/contentFilter.js'
 import {
   interpretFundingIntent,
   sanitizeSearchTerm,
-  detectPrimaryCategory,
-  INCOME_SUPPORT_CATEGORIES,
 } from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
-import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
-import {
-  applyFundableOpportunityNormalization,
-  evaluateFundableOpportunity,
-} from '../services/matching/qualityGate.js'
-import { deriveMatchReasonCodes, MATCH_REASON_CODES } from '../services/matching/reasons.js'
-import { normalizeOpportunityState, normalizeState } from '../utils/stateNormalization.js'
-import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/zeroResultLadder.js'
-import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
-import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
+import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
-import {
-  detectProfessionalDevelopmentIntent,
-  loadCuratedProfessionalDevelopmentPrograms,
-  applyProfessionalDevelopmentQueryPolicy,
-  recordLowCoverageEvent,
-} from '../services/matching/professionalDevelopmentPolicy.js'
+import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -374,6 +355,9 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // bypass with ?ignore_discovery_gate=1. Tolerant: if the column is
       // missing on an older DB the read throws and we fall through to normal
       // behavior (the boot invariant adds it).
+      const baseContext = await loadProfileContext(req.db, profileId)
+      const profileContext = buildProfileFacets(baseContext)
+
       if (req.query.ignore_discovery_gate !== '1') {
         let discoveryStamp
         try {
@@ -433,882 +417,87 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
               }
       }
 
-      // ── Crawler OS first: serve canonical per-profile matches ────────────
-      // The Crawler OS is the single matching authority. When it has scored this
-      // profile (profile_opportunity_matches rows with matcher_version
-      // 'crawler-os'), serve those — mapped to the response shape, pipeline
-      // members excluded — instead of recomputing with the legacy scorer.
-      //
-      // RECALL FLOOR: a sparse OS run (e.g. an individual student whose only
-      // OS-stored matches are the 3 directory pointers) MUST NOT starve
-      // Discover. When OS qualified.length < OS_RECALL_FLOOR we fall through
-      // to the legacy matcher (which scans the full 90k+ catalog) and merge
-      // the OS qualified rows on top so OS-discovered scholarships and
-      // directories stay surfaced. This honors the workspace mission rules:
-      //   - "Avoid zero results when relevant funding likely exists. Recall
-      //     over suppression."
-      //   - "Directory-style or general funding resources must always
-      //     survive filtering unless explicitly excluded."
-      //   - "If total_found > 0 and included === 0, log why, relax, re-score."
-      //
-      // The legacy path below remains the reversible fallback for explicit
-      // `?legacy_matching=1` callers and for profiles the OS has not yet
-      // scored at all.
-      const baseContext = await loadProfileContext(req.db, profileId)
-      const profileContext = buildProfileFacets(baseContext)
-
-      const OS_RECALL_FLOOR = Number(process.env.OS_RECALL_FLOOR) || 10
-      let osMergeRows = null  // populated when we fall through to legacy
-      if (req.query.legacy_matching !== '1') {
-        let osRows = []
-        try {
-          osRows = await req.db
-            .prepare(
-              `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
-                      m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
-                FROM profile_opportunity_matches m
-                 JOIN funding_opportunities o ON o.id = m.opportunity_id
-                WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
-                  AND LOWER(COALESCE(m.match_decision, '')) <> 'reject'
-                  AND (o.is_active IS NULL OR o.is_active = 1)
-                  AND (o.is_hidden IS NULL OR o.is_hidden = 0)
-                ORDER BY m.match_score DESC`,
-            )
-            .all(profileId)
-        } catch (osQueryErr) {
-          // Surface schema/dialect drift instead of silently swallowing —
-          // a missing profile_opportunity_matches table would otherwise look
-          // identical to "OS hasn't run yet" and silently fall back forever.
-          routeLogger.warn(
-            `[matching] OS rows query failed for profile ${profileId}: ${osQueryErr?.message || osQueryErr}`,
-          )
-          osRows = []
-        }
-        if (osRows.length > 0) {
-          const osMin = Number.isFinite(Number.parseInt(req.query.min_score, 10))
-            ? Number.parseInt(req.query.min_score, 10)
-            : 50
-          let mapped = osRows.map((o) => {
-            const kind = String(o.opportunity_kind ?? '').toUpperCase()
-            const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
-            let reasons = []
-            try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
-            return {
-              ...o,
-              match_score: o.os_match_score,
-              match_decision: o.os_match_decision,
-              match_explanation: o.os_match_explanation,
-              match_reasons: reasons,
-              is_directory: isDirectory,
-              trust_tier: o.source_trust_tier ?? null,
-              url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-              actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-              engine: 'crawler-os',
-            }
-          })
-          const canonical = canonicalizeOpportunityList(profileContext, mapped, {
-            preserveDirectories: true,
-            rejectHardIneligible: true,
-          })
-          mapped = canonical.kept
-          // dedupeOpportunityList / filterOutPipelineMembers return { results, ... }
-          mapped = dedupeOpportunityList(mapped).results
-          mapped = (await filterOutPipelineMembers(req.db, profileId, mapped)).results
-          const qualified = mapped.filter((o) => Number(o.match_score) >= osMin)
-
-          if (qualified.length >= OS_RECALL_FLOOR) {
-            const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
-            return res.json({
-              profile_id: profileId,
-              engine: 'crawler-os',
-              min_score: osMin,
-              total_scored: mapped.length,
-              returned: qualified.length,
-              qualified_count: qualified.length,
-              score_histogram: [],
-              opportunities: qualified,
-              referrals: [],
-              profile_field_prompts: profileFieldPrompts,
-            })
-          }
-
-          // Sparse OS recall — keep ALL mapped OS rows (qualified + directories)
-          // for the merge below. Directories are protected even when their
-          // score is under min so the Foundation Center / studentaid.gov-style
-          // pointers remain discoverable.
-          const directoryOsRows = mapped.filter((o) => o.is_directory)
-          osMergeRows = [
-            ...qualified,
-            ...directoryOsRows.filter((d) => !qualified.some((q) => q.id === d.id)),
-          ]
-          routeLogger.info(
-            `[matching] OS recall sparse for profile ${profileId}: qualified=${qualified.length} ` +
-            `directories=${directoryOsRows.length} floor=${OS_RECALL_FLOOR} — merging legacy matcher results`,
-          )
-        }
-      }
-
-      const minScore = Number.parseInt(req.query.min_score ?? String(DEFAULT_MIN_SCORE), 10)
-      // When strict=1 (Discover slider), do not relax threshold — honor the user's minimum match %.
-      const strictMin =
-        req.query.strict === '1' ||
-        req.query.allow_relax === '0' ||
-        String(req.query.relax ?? '1') === '0'
-      const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
-      const sortBy = req.query.sort_by ?? 'match_score' // match_score | deadline | amount | recently_added
-      const searchTerms = collectSearchTermsFromQuery(req)
-      const freeTextNeed = typeof req.query.need_text === 'string' ? req.query.need_text.trim() : ''
-
-      // ── Primary-category routing (spec §3, §4) ────────────────────────────
-      // The frontend passes primary_category from interpretFundingIntent.
-      // We also re-detect server-side from the search terms so older clients
-      // and direct API callers get the same protection (defense in depth).
-      const queryPrimaryCategory = typeof req.query.primary_category === 'string'
-        ? String(req.query.primary_category).toLowerCase().trim()
-        : ''
-      const explicitlyIncludeIncomeSupport =
-        req.query.include_income_support === '1' || req.query.allow_income_support === '1'
-
-      const detectedCat = detectPrimaryCategory(searchTerms.join(' '), searchTerms)
-      const effectivePrimaryCategory = queryPrimaryCategory || detectedCat.primary_category
-      const queryExcluded = String(req.query.excluded_categories ?? '')
-        .split(',')
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean)
-      const excludedCategories = new Set([
-        ...queryExcluded,
-        ...(detectedCat.excluded_categories || []),
-        ...(effectivePrimaryCategory === 'professional_development'
-          ? INCOME_SUPPORT_CATEGORIES
-          : []),
-      ])
-
-      // Spec §3: when professional_development is the intent, hard-exclude
-      // means-tested cash-assistance programs from the SQL candidate set
-      // (NOT just from the score). This is the rule "exclude general
-      // means-tested cash-assistance programs unless explicitly requested."
-      const applyProfDevExclusion =
-        effectivePrimaryCategory === 'professional_development' &&
-        !explicitlyIncludeIncomeSupport
-
-      // Normalize the profile once, up front, so the geographic pre-filter can
-      // read ALL of the profile's states (primary + secondary address +
-      // multi-state arrays). Reused below for the per-opportunity decision so
-      // we never normalize twice. RC-17: pass documents so uploaded extracted
-      // text folds into the canonical need vocabulary.
-      const profileNormForGeo = normalizeProfile(
-        profileContext?.profile ?? profileContext,
-        profileContext?.sections ?? null,
-        profileContext?.signals ?? null,
-        profileContext?.documents ?? null,
-      )
-
-      const pdIntent = detectProfessionalDevelopmentIntent({
-        searchTerms,
-        freeText: freeTextNeed,
-        profileContext,
-      })
-
-      const isPostgres = req.db?.dialect === 'postgres'
-      const activeVal = isPostgres ? 'TRUE' : '1'
-      const conditions = [`is_active = ${activeVal}`]
-      const params = []
-
-      // Unconditional exclusion of loans and matching-required funds.
-      conditions.push(
-              isPostgres
-                ? '(requires_match IS NULL OR requires_match = FALSE)'
-                : '(requires_match = 0 OR requires_match IS NULL)',
-            )
-                   conditions.push(
-                           isPostgres
-                             ? '(is_loan IS NULL OR is_loan = FALSE)'
-                             : '(is_loan = 0 OR is_loan IS NULL)',
-                         )
-
-      conditions.push(trustedOriginClause())
-
-      conditions.push(trustedSourceClause())
-
-      // ── Spec §3: hard-exclude cash-assistance / income-support programs
-      // when the user's intent is professional development. Without this
-      // SSI/SNAP/TANF rows enter the candidate set and (because their
-      // categories often include words like "training" or "financial") leak
-      // through scoring. Tracked separately from the score-cap below so we
-      // can honor `include_income_support=1` callers (e.g., Anya admin tools).
-      if (applyProfDevExclusion) {
-        const exclusionTerms = [
-          'income_support', 'cash_assistance', 'food_assistance', 'income_assistance',
-          'general_assistance', 'tanf', 'ssi', 'ssdi', 'snap', 'wic',
-          'general assistance', 'cash assistance', 'food assistance',
-        ]
-        const orParts = exclusionTerms
-          .map(() => '(LOWER(COALESCE(categories, \'\')) NOT LIKE ? AND LOWER(COALESCE(title, \'\')) NOT LIKE ?)')
-          .join(' AND ')
-        conditions.push(`(${orParts})`)
-        for (const term of exclusionTerms) {
-          const pattern = `%${term}%`
-          params.push(pattern, pattern)
-        }
-        routeLogger.info(`[matching] prof-dev intent: excluding ${exclusionTerms.length} cash-assistance categories from candidate set`)
-      }
-
-      // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
-      conditions.push('(profile_id IS NULL OR profile_id = ?)')
-      params.push(profileId)
-
-      // Geographic pre-filter: only load opps in ANY of the profile's normalized
-      // states (primary + secondary address + multi-state `states[]`), national
-      // opportunities, or unspecified rows. A two-address profile (home in one
-      // state, school in another) must match LOCAL opportunities in BOTH states.
-      // If the profile has no real state, do not show specific-state rows unless
-      // explicitly requested.
-      //
-      // Multi-source, deduped: signals.states (primary + secondary, ZIP-enriched)
-      // + profileNorm.states (also folds the multi-state arrays). The primary
-      // (signals.location.state) is preserved for back-compat with consumers that
-      // still read the singular value.
-      const primaryProfileState = normalizeState(profileContext?.signals?.location?.state || profileContext?.profile?.state)
-      const profileStateList = []
-      const _pushState = (raw) => {
-        const norm = normalizeState(raw)
-        if (norm && !profileStateList.includes(norm)) profileStateList.push(norm)
-      }
-      _pushState(primaryProfileState)
-      for (const s of (Array.isArray(profileContext?.signals?.states) ? profileContext.signals.states : [])) _pushState(s)
-      for (const s of (Array.isArray(profileNormForGeo?.states) ? profileNormForGeo.states : [])) _pushState(s)
-      // Back-compat alias: many later branches read `profileState` as the single
-      // primary. Keep it pointing at the primary so single-address behavior and
-      // diagnostics are unchanged.
-      const profileState = primaryProfileState
-      const includeOtherStates = req.query.include_other_states === '1'
-      if (profileStateList.length > 0) {
-        const natVal = isPostgres ? 'TRUE' : '1'
-        const placeholders = profileStateList.map(() => '?').join(', ')
-        conditions.push(`(UPPER(state) IN (${placeholders}) OR LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
-        params.push(...profileStateList)
-      } else if (!includeOtherStates) {
-        const natVal = isPostgres ? 'TRUE' : '1'
-        conditions.push(`(LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
-      }
-
-      // Keep results current
-      conditions.push(
-              `(deadline_type IN ('rolling','ongoing') OR deadline IS NULL OR deadline >= ${
-                        isPostgres ? 'CURRENT_DATE' : "date('now')"
-              })`,
-            )
-
-      if (searchTerms.length > 0) {
-        const orParts = searchTerms.map(
-          () =>
-            '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)',
-        )
-        conditions.push(`(${orParts.join(' OR ')})`)
-        for (const t of searchTerms) {
-          const pattern = `%${t}%`
-          params.push(pattern, pattern, pattern, pattern)
-        }
-        if (searchTerms.length > 1) {
-          routeLogger.info(`[matching] catalog filter: ${searchTerms.length} OR search terms (smart matcher / multi-keyword)`)
-        }
-      }
-
-      // (profile isolation already applied above; no duplicate needed)
-
-      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
-
-      const deadlineNullSort = isPostgres
-                     ? 'deadline IS NULL'
-              : "deadline IS NULL OR deadline = ''"
-                   const isNationalSort = isPostgres
-                     ? "(is_national = TRUE OR state = 'nationwide')"
-                           : "(is_national = 1 OR state = 'nationwide')"
-
-      const rawCandidates = await req.db
-                     .prepare(
-                               `
-                                       SELECT * FROM funding_opportunities
-                                               ${where}
-                                                       ORDER BY
-                                                                 CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END,
-                                                                           CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END,
-                                                                                     deadline ASC, updated_at DESC
-                                                                                             LIMIT ?
-                                                                                                     `,
-                             )
-                     .all(...params, limit)
-
-      // Resolve profile applicant type once for the hard eligibility gate
-      // below. Mirrors the resolution used by /matching-gaps so we read the
-      // same source of truth.
-      const basicSection = profileContext?.sections?.basic_information ?? {}
-      const profileApplicantType =
-        profileRow.applicant_type ??
-        profileRow.primary_type ??
-        profileRow.primary_profile_type ??
-        basicSection.profile_category ??
-        null
-
-      const rejectStats = {
-        quality: 0,
-        wrongState: 0,
-        junk: 0,
-        reject: 0,
-        rejectDirectoryPreserved: 0,
-        trust: 0,
-        noReason: 0,
-        sourceNotAllowed: 0,
-        ineligibleApplicantType: 0,
-      }
-      const qualityDropReasons = {}
-      const sourceDropReasons = {}
-      const eligibilityDropReasons = {}
-      const referralTemplates = new Map()
-      const candidates = []
-      for (const rawCandidate of rawCandidates) {
-        const quality = evaluateFundableOpportunity(rawCandidate)
-        if (!quality.ok) {
-          rejectStats.quality++
-          qualityDropReasons[quality.reason] = (qualityDropReasons[quality.reason] || 0) + 1
-          continue
-        }
-        const normalized = applyFundableOpportunityNormalization(rawCandidate, quality)
-        const candidateState = normalizeOpportunityState(normalized.state)
-        // Multi-state aware: keep the opportunity if its state matches ANY of
-        // the profile's states (primary + secondary + states[]), not just the
-        // primary. A two-address profile must see local opportunities in BOTH.
-        if (
-          !includeOtherStates &&
-          candidateState &&
-          candidateState !== 'nationwide' &&
-          profileStateList.length > 0 &&
-          !profileStateList.includes(String(candidateState).toUpperCase())
-        ) {
-          rejectStats.wrongState++
-          continue
-        }
-        normalized.state = candidateState
-
-        // GATE 1: pipeline-source policy. If an opportunity won't survive
-        // saveToProfilePipeline / POST /api/grants/from-opportunity (denylist
-        // or untrusted record_origin), it must not be surfaced here either.
-        // Symmetry between matcher and writer is the project rule.
-        const sourceGate = evaluatePipelineSource({
-          source: normalized.source ?? rawCandidate.source ?? null,
-          record_origin: normalized.record_origin ?? rawCandidate.record_origin ?? null,
+      // Crawler OS is the single discovery/matching authority. Sparse or zero
+      // profile-scoped OS coverage is returned honestly with diagnostics; it is
+      // never patched over by generic legacy catalog matches.
+      if (req.query.legacy_matching === '1') {
+        return res.status(410).json({
+          error: 'legacy_matching_retired',
+          engine: 'crawler-os',
+          message: 'Legacy catalog matching has been retired. Run Crawler OS discovery for this profile.',
         })
-        if (!sourceGate.allowed) {
-          rejectStats.sourceNotAllowed++
-          sourceDropReasons[sourceGate.reason] = (sourceDropReasons[sourceGate.reason] || 0) + 1
-          continue
-        }
-
-        // GATE 2: hard applicant-type eligibility. Drops opportunities whose
-        // text or applicant_types array EXCLUDES this profile's bucket
-        // (e.g. NSF research-institution programs against an individual
-        // profile). Soft mismatches still flow through and get a scoring
-        // penalty inside computeMatchDecision.
-        const eligDecision = evaluateApplicantTypeEligibility(normalized, profileApplicantType)
-        if (eligDecision.decision === 'mismatch') {
-          rejectStats.ineligibleApplicantType++
-          eligibilityDropReasons[eligDecision.reason] = (eligibilityDropReasons[eligDecision.reason] || 0) + 1
-          continue
-        }
-        if (eligDecision.decision === 'review') {
-          // Surface but flag — computeMatchDecision will emit a REVIEW score.
-          normalized.eligibility_unknown = true
-        }
-
-        if (quality.kind === 'referral_template') {
-          if (!referralTemplates.has(quality.referralKey)) {
-            referralTemplates.set(quality.referralKey, {
-              ...normalized,
-              type: 'referral',
-              opportunity_type: 'referral',
-              referral_key: quality.referralKey,
-              excluded_from_grant_scoring: true,
-              actionable_url: normalized.application_url ?? normalized.source_url ?? rawCandidate.application_url ?? null,
-              url: normalized.application_url ?? normalized.source_url ?? rawCandidate.application_url ?? null,
-            })
-          }
-          continue
-        }
-        candidates.push(normalized)
       }
 
-      if (pdIntent.active) {
-        // Profile-aware: only inject curated programs whose declared targeting
-        // (state / occupation / student / heritage) fits THIS profile, so we
-        // stop surfacing e.g. Texas-nurse or WV-only or API-heritage programs to
-        // an unrelated profile.
-        const curatedPd = loadCuratedProfessionalDevelopmentPrograms(profileContext)
-        const seenCurated = new Set(candidates.map((c) => String(c.id || c.title || '').toLowerCase()))
-        for (const opp of curatedPd) {
-          const key = String(opp.id || opp.title || '').toLowerCase()
-          if (!key || seenCurated.has(key)) continue
-          seenCurated.add(key)
-          candidates.push(opp)
-        }
-        routeLogger.info(`[matching] PD intent active — injected ${curatedPd.length} curated professional-development programs`)
-      }
-
-      const healthSet = profileContext?.signals?.health
-      const healthFacets = profileContext?.facets?.health ?? {}
-      const kws = profileContext?.signals?.keywordSet ?? new Set()
-      const filterHints = {
-              hasHealthNeeds:
-                (healthSet instanceof Set && healthSet.size > 0) ||
-                healthFacets.disability_types?.length > 0 ||
-                healthFacets.visual_impairment || healthFacets.hearing_impairment ||
-                healthFacets.chronic_illness || healthFacets.mental_health_condition ||
-                kws.has('disability') || kws.has('chronic') || kws.has('mental health') || kws.has('epilepsy'),
-              needsTransport: kws.has('transportation') || kws.has('ride assistance'),
-      }
-
-      // Reuse the single profile normalization computed up front for the geo
-      // pre-filter (avoids re-running normalizeProfile per request). Sections
-      // are still needed below for scoreOpportunity's signal building.
-      const profileSectionsForDecision = profileContext?.sections ?? null
-      const profileNormForDecision = profileNormForGeo
-
-      // Directory-style / general funding resources must always survive
-      // filtering unless explicitly excluded (project rule). However, they
-      // are NOT direct grants and must not score higher than real funding
-      // opportunities — see `applyDirectoryScoreCap` below.
-      const isDirectoryRecord = (opp) => Boolean(
-        opp?.is_directory_resource ||
-        opp?.excluded_from_grant_scoring ||
-        String(opp?.source || '').startsWith('directory') ||
-        String(opp?.source || '').includes('local_directory') ||
-        String(opp?.record_origin || '').startsWith('directory') ||
-        String(opp?.type || '').toUpperCase() === 'DIRECTORY' ||
-        String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY' ||
-        String(opp?.opportunity_type || '').toLowerCase() === 'referral' ||
-        String(opp?.type || '').toLowerCase() === 'referral' ||
-        String(opp?.funding_type || '').toLowerCase() === 'referral' ||
-        String(opp?.funding_type || '').toLowerCase() === 'referral_service',
-      )
-
-      // Cap the displayed match score for directory / referral entries.
-      //   • A directory points the user at a place to call/search — it is
-      //     not, itself, a grant. Letting one hit 100 would put it above
-      //     a real direct grant in the same list.
-      //   • Per project rule "Counts displayed in the UI must map 1:1 to
-      //     backend response fields", we communicate this via the score
-      //     itself rather than a hidden tier so the strict slider works
-      //     intuitively (e.g. a slider at 85% should not bury direct
-      //     grants underneath inflated directory rows).
-      // 70 places directory entries firmly in REVIEW tier (below ACCEPT)
-      // while keeping them visible at moderate slider positions (≤70%).
-      const DIRECTORY_SCORE_CAP = 70
-      const applyDirectoryScoreCap = (score, isDirectory) => {
-        if (!isDirectory) return score
-        if (typeof score !== 'number' || !Number.isFinite(score)) return score
-        return Math.min(score, DIRECTORY_SCORE_CAP)
-      }
-
-      // ── Spec §4: cross-category score cap. When the user's intent is
-      // professional development and the opportunity's category does not
-      // overlap (e.g., income support, food, utilities), cap the match score
-      // at 25 so the result falls below the default 50% threshold. We never
-      // touch directory entries (they keep their soft 70 cap) and we never
-      // touch opportunities tagged as professional_development / education /
-      // employment / healthcare since those legitimately overlap.
-      const CROSS_CATEGORY_CAP = 25
-      const PROF_DEV_OVERLAP_KEYWORDS = [
-        'professional_development', 'continuing_education', 'continuing education',
-        'cme', 'ceu', 'license', 'licensure', 'certification', 'credentialing',
-        'workforce', 'wioa', 'training', 'scholarship', 'tuition', 'education',
-        'employment', 'career', 'vocational', 'apprentic', 'reentry', 're-entry',
-        'remediation', 'recertification', 'healthcare', 'health workforce',
-        'nurse', 'nursing', 'physician', 'social work', 'mental health',
-        'allied health', 'professional', 'fellowship', 'residency',
-      ]
-      // Student-aid overlap keywords — the same idea applied to the
-      // student_aid primary category. An opportunity with any of these
-      // tokens is "in scope" for an off-campus / cost-of-attendance / room-
-      // and-board / FAFSA / Pell / state-student-aid query and keeps its
-      // full score. Anything else (general adult homelessness, SNAP, LIHEAP,
-      // etc.) gets the 25-point cap so it does not crowd out real student
-      // aid in the slider — but it remains in the result set per the user
-      // rule "directory-style resources must always survive filtering" and
-      // "Population / eligibility mismatches must reduce score, not discard
-      // results".
-      const STUDENT_AID_OVERLAP_KEYWORDS = [
-        'student_aid', 'student aid', 'scholarship', 'grant', 'tuition',
-        'fafsa', 'pell', 'fseog', 'work-study', 'work study',
-        'cost of attendance', 'cost_of_attendance', 'coa',
-        'room and board', 'room_and_board',
-        'student housing', 'student_housing',
-        'off-campus', 'off campus', 'off_campus',
-        'on-campus', 'on campus', 'on_campus',
-        'dorm', 'residence hall', 'residence_hall',
-        'college', 'university', 'undergrad', 'graduate',
-        'campus', 'institutional aid', 'institutional_aid',
-        'completion grant', 'emergency aid', 'emergency_aid',
-        'student emergency aid', 'student_emergency_aid',
-        'student living', 'student_living',
-        'education', 'student',
-        'forensic', 'stem', 'women in stem', 'heritage',
-        'veteran', 'military',
-      ]
-      // Strict-equality nullish coercion. Repo policy is
-      // `eqeqeq: ['error', 'always']`, so we spell out the
-      // null-or-undefined check explicitly: empty string for nullish,
-      // joined array for arrays, String(v) otherwise.
-      const stringifyForOverlap = (v) => {
-        if (v === null || v === undefined) return ''
-        if (Array.isArray(v)) return v.join(' ')
-        return String(v)
-      }
-      const opportunityHasProfDevOverlap = (opp) => {
-        const haystack = [
-          opp?.categories,
-          opp?.title,
-          opp?.description,
-          opp?.keywords,
-          opp?.eligibility_criteria,
-          opp?.tags,
-        ]
-          .map(stringifyForOverlap)
-          .join(' ')
-          .toLowerCase()
-        if (!haystack) return false
-        return PROF_DEV_OVERLAP_KEYWORDS.some((kw) => haystack.includes(kw))
-      }
-      const opportunityHasStudentAidOverlap = (opp) => {
-        const haystack = [
-          opp?.categories,
-          opp?.title,
-          opp?.description,
-          opp?.keywords,
-          opp?.eligibility_criteria,
-          opp?.tags,
-        ]
-          .map(stringifyForOverlap)
-          .join(' ')
-          .toLowerCase()
-        if (!haystack) return false
-        return STUDENT_AID_OVERLAP_KEYWORDS.some((kw) => haystack.includes(kw))
-      }
-      const applyCrossCategoryCap = (score, opp) => {
-        if (typeof score !== 'number' || !Number.isFinite(score)) return score
-        if (effectivePrimaryCategory === 'professional_development') {
-          if (opportunityHasProfDevOverlap(opp)) return score
-          return Math.min(score, CROSS_CATEGORY_CAP)
-        }
-        if (effectivePrimaryCategory === 'student_aid') {
-          if (opportunityHasStudentAidOverlap(opp)) return score
-          return Math.min(score, CROSS_CATEGORY_CAP)
-        }
-        if (!profileNormForDecision.isStudent && opportunityHasStudentAidOverlap(opp)) {
-          return Math.min(score, CROSS_CATEGORY_CAP)
-        }
-        return score
-      }
-
-      const trustDropReasons = {}
-      // Soft user-behavior preference signals (saves/applies/dismisses) — loaded
-      // ONCE per request and applied as a small bounded nudge inside the canonical
-      // decision engine. No-op (zero change) when the profile has no activity.
-      const preferenceSignals = await loadPreferenceSignals(req.db, profileId).catch(() => null)
-      const allScored = candidates
-                     .map((opp) => {
-                                  const isDirectory = isDirectoryRecord(opp)
-                                  if (isJunkOpportunity(opp, filterHints) && !isDirectory) { rejectStats.junk++; return null }
-
-                                  // Canonical consumer-side trust check. Mirrors discovery.js so
-                                  // both surfaces hide the same placeholder/loan/expired/untrusted
-                                  // rows. Directory rows stay (allowDirectory=true) to respect the
-                                  // "directory-style resources must always survive" mission rule.
-                                  const trust = assessOpportunityTrust(opp, {
-                                    allowDirectory: true,
-                                    allowExpired: false,
-                                  })
-                                  if (!trust.display) {
-                                    rejectStats.trust++
-                                    for (const r of trust.reasons) {
-                                      trustDropReasons[r] = (trustDropReasons[r] || 0) + 1
-                                    }
-                                    return null
-                                  }
-
-                                  // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing.
-                                  // Pass sections + signals so scoreOpportunity can build keyword/facet
-                                  // signals — otherwise keyword-matching opps score identically to generic ones.
-                                  const decision = computeMatchDecision(profileNormForDecision, opp, {
-                                    profileSections: profileSectionsForDecision,
-                                    signals: profileContext?.signals ?? null,
-                                    preferenceSignals,
-                                  })
-                                  if (decision.decision === 'REJECT') {
-                                    if (!isDirectory) { rejectStats.reject++; return null }
-                                    rejectStats.rejectDirectoryPreserved++
-                                    decision.decision = 'REVIEW'
-                                    decision.explanation = (decision.explanation || '') + ' (directory preserved as REVIEW)'
-                                  }
-                                  // Derive reason codes for explainability. If the decision passed
-                                  // (not REJECT) but no specific signal codes fired, that is a fact
-                                  // about EXPLAINABILITY, not a fact about FIT — Goal #2 (match,
-                                  // don't eliminate) and Goal #8 (avoid zero-result UX) require us
-                                  // to keep the row, attribute it to the decision shape, and let
-                                  // scoring rank it. Previously this branch silently dropped
-                                  // every "passes scoring but no labelled signals" candidate, which
-                                  // contributed directly to the 0-included-of-N problem on
-                                  // sparse-profile users.
-                                  let matchReasons = deriveMatchReasonCodes(decision, opp, trust)
-                                  if (matchReasons.length === 0) {
-                                    rejectStats.noReason++
-                                    matchReasons =
-                                      decision?.decision === 'ACCEPT'
-                                        ? [MATCH_REASON_CODES.STRONG_SCORE]
-                                        : [MATCH_REASON_CODES.REVIEW_SCORE]
-                                  }
-
-                                  // Soft downgrade for stale/non-official rows.
-                                  const downgradedScore = trust.downgrade
-                                    ? Math.max(0, (decision.score ?? 0) - 5)
-                                    : decision.score
-                                  // Cap directory/referral entries (Goal: don't let
-                                  // a place-to-call outrank a direct grant on the
-                                  // user's match-score slider).
-                                  const directoryCappedScore = applyDirectoryScoreCap(downgradedScore, isDirectory)
-                                  const directoryCapped = isDirectory && typeof downgradedScore === 'number' && downgradedScore > DIRECTORY_SCORE_CAP
-
-                                  // Spec §4: cross-category cap (e.g., SSI for a
-                                  // PROBE ethics CE search, or generic homeless-shelter
-                                  // rows for a "off-campus living expenses at MTSU"
-                                  // student-aid search) — if the opportunity has no
-                                  // overlap with the primary category, cap at 25 so it
-                                  // falls below the default 50% threshold.
-                                  const crossCategoryApplied =
-                                    typeof directoryCappedScore === 'number' &&
-                                    directoryCappedScore > CROSS_CATEGORY_CAP &&
-                                    ((effectivePrimaryCategory === 'professional_development' &&
-                                      !opportunityHasProfDevOverlap(opp)) ||
-                                     (effectivePrimaryCategory === 'student_aid' &&
-                                      !opportunityHasStudentAidOverlap(opp)))
-                                  const adjustedScore = applyCrossCategoryCap(directoryCappedScore, opp)
-
-                               return {
-                                           ...opp,
-                                           match_score: adjustedScore,
-                                           is_directory: isDirectory,
-                                           directory_score_capped: directoryCapped || undefined,
-                                           directory_score_cap: isDirectory ? DIRECTORY_SCORE_CAP : undefined,
-                                           directory_uncapped_score: directoryCapped ? downgradedScore : undefined,
-                                           cross_category_capped: crossCategoryApplied || undefined,
-                                           cross_category_cap: crossCategoryApplied ? CROSS_CATEGORY_CAP : undefined,
-                                           cross_category_uncapped_score: crossCategoryApplied ? directoryCappedScore : undefined,
-                                           match_reasons: matchReasons,
-                                           match_decision: decision.decision,
-                                           match_explanation: decision.explanation,
-                                           trust_tier: trust.trustTier,
-                                           source_trust: trust.sourceTrust,
-                                           trust_flags: trust.flags,
-                                           trust_reasons: Array.isArray(trust.reasons) ? trust.reasons.slice(0, 10) : [],
-                                           trust_downgrade: Boolean(trust.downgrade),
-                                           trust_downgrade_reason: trust.downgrade
-                                             ? (Array.isArray(trust.reasons) ? trust.reasons : []).find((r) =>
-                                                 r === 'link_marked_broken' ||
-                                                 r === 'non_actionable_primary_url' ||
-                                                 String(r).startsWith('untrusted_origin'),
-                                               ) || 'lower_trust_source'
-                                             : null,
-                                           actionable_url: trust.primaryUrl ?? null,
-                                           url: trust.primaryUrl ?? opp.application_url ?? opp.source_url ?? null,
-                               }
-                     })
-                     .filter((opp) => opp !== null)
-
-      if (pdIntent.active) {
-        const adjusted = applyProfessionalDevelopmentQueryPolicy(allScored, pdIntent)
-        allScored.length = 0
-        allScored.push(...adjusted)
-        allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-      }
-
-      if (rejectStats.quality || rejectStats.wrongState || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust || rejectStats.noReason) {
-        routeLogger.info(`[matching] candidates=${rawCandidates.length} quality_candidates=${candidates.length} scored=${allScored.length} referrals=${referralTemplates.size} drops=${JSON.stringify(rejectStats)} quality_reasons=${JSON.stringify(qualityDropReasons)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
-      }
-
-      // Sort by user-requested criteria
-      if (sortBy === 'recently_added') {
-        allScored.sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0))
-      } else if (sortBy === 'deadline') {
-        allScored.sort((a, b) => {
-          const da = a.deadline ? new Date(a.deadline) : new Date('2099-12-31')
-          const db = b.deadline ? new Date(b.deadline) : new Date('2099-12-31')
-          return da - db
-        })
-      } else if (sortBy === 'amount') {
-        allScored.sort((a, b) => (b.amount_max ?? b.amount_min ?? 0) - (a.amount_max ?? a.amount_min ?? 0))
-      } else {
-        allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-      }
-
-      let scored = Number.isFinite(minScore)
-        ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)
-        : allScored
-
-      // Zero-results fallback: progressively lower threshold so users see something.
-      // Skipped when strict=1 (Discover page) so the UI min-match slider is honored.
-      // When relaxation occurs, include guidance so the UI can prompt profile improvement.
-      let effectiveMinScore = minScore
-      let relaxedReason = null
-      if (!strictMin && scored.length === 0 && allScored.length > 0) {
-        // Mild relaxation only (30, then 15). We deliberately DROPPED the
-        // threshold-to-zero dump and the top-20 "LAST RESORT" — those returned
-        // irrelevant rows and, worse, superseded the canonical staged
-        // zero-result ladder below. When nothing scores >= 15, `scored` stays
-        // empty so assembleFundingResults() provides the proper, clearly
-        // LABELED fallback (relaxed-direct → directory → geo-expand → profile
-        // gaps → honest zero). (Mission System 5, RC-12.)
-        const fallbackThresholds = [30, 15]
-        for (const threshold of fallbackThresholds) {
-          scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
-          if (scored.length > 0) {
-            effectiveMinScore = threshold
-            relaxedReason =
-              'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
-            routeLogger.info(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
-            break
-          }
-        }
-      } else if (strictMin && scored.length === 0 && allScored.length > 0) {
-        const rawScores = allScored
-          .map(o => typeof o.match_score === 'number' ? o.match_score : 0)
-          .sort((a, b) => b - a)
-        const bestScore = rawScores[0] || 0
-        const sugIdx = Math.min(4, rawScores.length - 1)
-        const suggestedThreshold = Math.max(5, Math.floor(rawScores[sugIdx] / 5) * 5)
-        const countAtSuggested = rawScores.filter(s => s >= suggestedThreshold).length
-        allScored._scoreHint = { bestScore, suggestedThreshold, countAtSuggested, totalScored: rawScores.length }
-        routeLogger.info(`[matching] strict min_score=${minScore} — no relax; returning 0 of ${allScored.length} scored (best=${bestScore}, suggest=${suggestedThreshold})`)
-      }
-
-      const MAX_RESPONSE = 500
-      let capped = scored.length > MAX_RESPONSE ? scored.slice(0, MAX_RESPONSE) : scored
-
-      // Mission rule (Phase 6): run the canonical zero-result fallback
-      // ladder so every funding-result envelope carries the same
-      // diagnostics (tier, tier_attempts, directory_only, geo_expanded,
-      // profile_gaps) AND so per-card threshold_relaxed/relaxed_reason
-      // flags reach the canonical FundingResultCard.
-      const ladderProfileGaps = []
+      const osMin = Number.isFinite(Number.parseInt(req.query.min_score, 10))
+        ? Number.parseInt(req.query.min_score, 10)
+        : Number.parseInt(String(DEFAULT_MIN_SCORE), 10)
+      let osRows = []
       try {
-        const sig = profileContext?.signals ?? {}
-        if (!sig?.location?.state && !sig?.location?.zip) ladderProfileGaps.push('location')
-        if (!sig?.entityType && !profileContext?.profile?.primary_type) ladderProfileGaps.push('profile_type')
-        if (!sig?.interests?.size && !sig?.demographics?.size) ladderProfileGaps.push('interests')
-      } catch { /* ignore — best-effort gap signal */ }
+        osRows = await req.db
+          .prepare(
+            `SELECT o.*, m.match_score AS os_match_score, m.match_decision AS os_match_decision,
+                    m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities o ON o.id = m.opportunity_id
+              WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+              ORDER BY m.match_score DESC`,
+          )
+          .all(profileId)
+      } catch (osQueryErr) {
+        routeLogger.error(
+          `[matching] Crawler OS rows query failed for profile ${profileId}: ${osQueryErr?.message || osQueryErr}`,
+        )
+        return res.status(503).json({
+          error: 'crawler_os_match_store_unavailable',
+          engine: 'crawler-os',
+          message: 'Crawler OS match data is unavailable. Generic fallback matching is disabled.',
+        })
+      }
 
-      const ladder = assembleFundingResults(allScored, {
-        minScore: Number.isFinite(minScore) ? minScore : 50,
-        maxResults: MAX_RESPONSE,
-        profileGaps: ladderProfileGaps,
-        strictMinScore: strictMin,
+      osRows = osRows.filter((o) => {
+        const active = o.is_active === null || o.is_active === undefined || Number(o.is_active) !== 0
+        const hidden = o.is_hidden !== null && o.is_hidden !== undefined && Number(o.is_hidden) !== 0
+        return active && !hidden
       })
 
-      // If the existing pipeline produced no items but the ladder found
-      // a usable tier (RELAXED_DIRECT, DIRECTORY, GEO_EXPAND), surface
-      // the ladder's items so the user never sees a blank page.
-      //
-      // strict=1 (Discover slider, admin batch runs at a fixed min_score)
-      // must NOT have its threshold relaxed by the ladder fallback —
-      // otherwise the UI slider value (and admin queries like
-      // ?min_score=70&strict=1) silently return items below the requested
-      // threshold (the score_hint still tells the caller the best score so
-      // they can lower the slider deliberately).
-      if (
-        !strictMin &&
-        capped.length === 0 &&
-        Array.isArray(ladder.opportunities) &&
-        ladder.opportunities.length > 0
-      ) {
-        capped = ladder.opportunities
-        if (ladder.threshold_relaxed_reason) {
-          relaxedReason = relaxedReason || ladder.threshold_relaxed_reason
-        }
-      } else if (!strictMin && ladder.threshold_relaxed) {
-        // Annotate every shown item with the per-card relaxed flags so
-        // FundingResultCard renders the honest "lower-confidence" banner.
-        capped = capped.map((o) => ({
+      let mapped = osRows.map((o) => {
+        const kind = String(o.opportunity_kind ?? '').toUpperCase()
+        const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
+        let reasons = []
+        try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
+        return {
           ...o,
-          threshold_relaxed: true,
-          relaxed_reason: o.relaxed_reason || ladder.threshold_relaxed_reason,
-        }))
-      }
+          match_score: Number(o.os_match_score ?? 0),
+          match_decision: o.os_match_decision,
+          match_explanation: o.os_match_explanation,
+          match_reasons: reasons,
+          is_directory: isDirectory,
+          trust_tier: o.source_trust_tier ?? null,
+          url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+          actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+          engine: 'crawler-os',
+        }
+      })
 
-      // ── Hard min-score floor (strict mode) ───────────────────────────────
-      // When the caller is strict (the Discover/SmartMatcher slider, admin
-      // batch runs at a fixed min_score), the user's minimum match % is an
-      // absolute floor: nothing below it may ever appear. Belt-and-suspenders
-      // over the per-path filters above so no fallback/ladder/annotation step
-      // can reintroduce a sub-threshold row. (User directive: "if the slider
-      // is at 70, no results below 70 should show — globally & permanently.")
-      // Merge sparse Crawler OS rows before the final gates. They should improve
-      // recall, not bypass the strict score floor, duplicate collapse, or
-      // profile-scoped pipeline exclusion that every other result uses.
-      let osMergeMergedCount = 0
-      if (Array.isArray(osMergeRows) && osMergeRows.length > 0) {
-        osMergeMergedCount = osMergeRows.length
-        capped = [...osMergeRows, ...capped].sort(
-          (a, b) => Number(b.match_score ?? 0) - Number(a.match_score ?? 0),
-        )
-        routeLogger.info(
-          `[matching] merged ${osMergeRows.length} crawler-os rows before final gates for profile ${profileId}`,
-        )
-      }
+      const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+        preserveDirectories: true,
+        rejectHardIneligible: true,
+      })
+      mapped = canonical.kept
 
-      if (strictMin && Number.isFinite(minScore)) {
-        capped = capped.filter((opp) => (opp.match_score ?? 0) >= minScore)
-      }
-
-      // ── Intra-list dedup ─────────────────────────────────────────────────
-      // Collapse rows that refer to the same underlying award (same
-      // opportunity_id OR fingerprint OR normalized title+funder), keeping the
-      // best copy. matching.js merges catalog rows with curated PD programs, so
-      // the same scholarship can arrive twice under different source labels
-      // (e.g. "national_pd_program" + "national_pd_scholarship"); without this
-      // the user sees the same award twice. Display-only (no DB writes).
-      let duplicateCollapsedCount = 0
-      try {
-        const dd = dedupeOpportunityList(capped)
-        duplicateCollapsedCount = dd.removed
-        capped = dd.results
-      } catch (dedupeErr) {
-        routeLogger.warn(`[matching] result dedup skipped: ${dedupeErr?.message || dedupeErr}`)
-      }
-
-      // ── Pipeline exclusion ───────────────────────────────────────────────
-      // Never re-surface an opportunity the user already acted on: anything in
-      // THIS profile's pipeline (any stage) or carrying a dismissal tombstone
-      // is removed. Profile-scoped, so it also guarantees no cross-profile
-      // bleed-over. Admin/debug callers can opt out with ?include_pipeline=1.
-      // (User directive: "crawlers still return results already in the
-      // pipeline — fix this globally and permanently.")
+      const deduped = dedupeOpportunityList(mapped)
+      mapped = deduped.results
       let pipelineExcludedCount = 0
       if (req.query.include_pipeline !== '1') {
-        try {
-          const filtered = await filterOutPipelineMembers(req.db, profileId, capped)
-          pipelineExcludedCount = filtered.excluded
-          capped = filtered.results
-        } catch (exclErr) {
-          // Recall over suppression — a filter failure must not blank results.
-          routeLogger.error(`[matching] pipeline exclusion failed: ${exclErr?.message || exclErr}`)
-          return res.status(503).json({
-            error: 'pipeline_exclusion_unavailable',
-            message: 'GrantFlow could not verify which opportunities are already in this profile pipeline. Please retry before adding new results.',
-            profile_id: profileId,
-          })
-        }
+        const filtered = await filterOutPipelineMembers(req.db, profileId, mapped)
+        pipelineExcludedCount = filtered.excluded
+        mapped = filtered.results
       }
 
-      // Mission rule (Phase 3): every match output must carry a
-      // profile_signal_audit so users/Anya/tests can answer "what facts from
-      // my profile did the matcher actually use?".
+      const qualified = mapped.filter((o) => o.is_directory || Number(o.match_score) >= osMin)
+      const qualifiedCount = qualified.filter((o) => Number(o.match_score) >= osMin).length
+      const zeroResult = qualified.length === 0
+      const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
       let signalAudit = null
       try {
         signalAudit = buildProfileSignalAudit(profileContext)
@@ -1316,101 +505,47 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         signalAudit = { error: auditErr?.message ?? String(auditErr) }
       }
 
-      const qualifiedCount = capped.filter((o) => (o.match_score ?? 0) >= minScore).length
-      if (qualifiedCount < 3) {
+      if (zeroResult) {
         try {
-          routeLogger.warn(`[matching][low-coverage] profile=${profileId} qualified=${qualifiedCount} returned=${capped.length} candidates=${rawCandidates.length} primary_category=${effectivePrimaryCategory || 'none'} terms=${JSON.stringify(searchTerms.slice(0, 12))}`)
-          // Best-effort persistence so admins can build a coverage dashboard.
-          // Wrapped in try/catch — failure must not block the matching response.
-          await req.db
-            .prepare(
-              `INSERT INTO low_coverage_events (profile_id, primary_category, search_terms, qualified_count, returned_count, candidate_count, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ${isPostgres ? 'NOW()' : "datetime('now')"})`,
-            )
-            .run(
-              profileId,
-              effectivePrimaryCategory || null,
-              JSON.stringify(searchTerms.slice(0, 32)),
-              qualifiedCount,
-              capped.length,
-              rawCandidates.length,
-            )
-            .catch?.(() => {})
-        } catch (telemetryErr) {
-          // Table may not exist on older deploys; log once at debug level.
-          routeLogger.debug?.(`[matching][low-coverage] persistence skipped: ${telemetryErr?.message || telemetryErr}`)
+          await recordLowCoverageEvent(req.db, {
+            profileId,
+            searchTerms: collectSearchTermsFromQuery(req),
+            freeText: typeof req.query.need_text === 'string' ? req.query.need_text.trim() : '',
+            qualifiedCount: 0,
+            minScore: osMin,
+            intent: { active: false },
+          })
+        } catch {
+          // Best-effort telemetry only.
         }
       }
-      if (qualifiedCount < 3 && (searchTerms.length > 0 || pdIntent.active)) {
-        void recordLowCoverageEvent(req.db, {
-          profileId,
-          searchTerms,
-          freeText: freeTextNeed,
-          qualifiedCount,
-          minScore,
-          intent: pdIntent,
-        })
-      }
 
-      // Guidance band data: bucketed score distribution computed from ALL
-      // scored opportunities (BEFORE the slider's min-score filter), with the
-      // dominant friendly source family per bucket. Drives the color-coded,
-      // notched band the Discover/SmartMatcher slider renders above itself.
-      const scoreHistogram = buildScoreHistogram(allScored)
-
-      // Architecture P1: surface the high-value profile fields that, if filled,
-      // would unlock/improve matches. Additive prompts only (never a gate).
-      const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
-
-      res.json({
-              profile_id: profileId,
-              profile_applicant_type: profileApplicantType ?? null,
-              profile_field_prompts: profileFieldPrompts,
-              primary_category: effectivePrimaryCategory || null,
-              excluded_categories: Array.from(excludedCategories),
-              engine: osMergeMergedCount > 0 ? 'crawler-os+legacy' : 'legacy',
-              os_merged_count: osMergeMergedCount > 0 ? osMergeMergedCount : undefined,
-              min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
-              total_scored: rawCandidates.length,
-              returned: capped.length,
-              qualified_count: qualifiedCount,
-              score_histogram: scoreHistogram,
-              opportunities: capped,
-              referrals: Array.from(referralTemplates.values()),
-              diagnostics: {
-                dropped_for_no_reason: rejectStats.noReason,
-                dropped_for_wrong_state: rejectStats.wrongState,
-                dropped_source_not_allowed: rejectStats.sourceNotAllowed,
-                dropped_ineligible_applicant_type: rejectStats.ineligibleApplicantType,
-                source_drop_reasons: sourceDropReasons,
-                eligibility_drop_reasons: eligibilityDropReasons,
-                professional_development_intent: pdIntent.active || undefined,
-                branded_program: pdIntent.branded?.label || undefined,
-                income_support_excluded: pdIntent.excludeIncomeSupport || undefined,
-                excluded_already_in_pipeline: pipelineExcludedCount || undefined,
-                duplicate_results_collapsed: duplicateCollapsedCount || undefined,
-              },
-              coverage_summary: {
-                total_candidates: rawCandidates.length,
-                returned: capped.length,
-                dropped_quality: rejectStats.quality,
-                dropped_wrong_state: rejectStats.wrongState,
-                dropped_source_not_allowed: rejectStats.sourceNotAllowed,
-                dropped_ineligible_count: rejectStats.ineligibleApplicantType,
-                dropped_trust: rejectStats.trust,
-                dropped_no_reason: rejectStats.noReason,
-              },
-              profile_signal_audit: signalAudit,
-              score_hint: allScored._scoreHint || null,
-              threshold_relaxed: !strictMin && (effectiveMinScore !== minScore || ladder.threshold_relaxed) ? true : undefined,
-              threshold_relaxed_reason: !strictMin ? (relaxedReason || ladder.threshold_relaxed_reason || undefined) : undefined,
-              result_tier: ladder.tier,
-              directory_only: ladder.directory_only || undefined,
-              geo_expanded: ladder.geo_expanded || undefined,
-              profile_gaps: ladder.profile_gaps?.length ? ladder.profile_gaps : undefined,
-              tier_attempts: ladder.tier_attempts,
-              tier_explanation: ladder.explanation,
-              truncated: scored.length > MAX_RESPONSE ? true : undefined,
+      return res.json({
+        profile_id: profileId,
+        profile_applicant_type: profileContext?.profile?.primary_type ?? profileRow.primary_type ?? null,
+        profile_field_prompts: profileFieldPrompts,
+        engine: 'crawler-os',
+        min_score: osMin,
+        total_scored: mapped.length,
+        returned: qualified.length,
+        qualified_count: qualifiedCount,
+        zero_result: zeroResult || undefined,
+        message: zeroResult
+          ? 'Crawler OS found no rules-eligible funding for this profile. No generic fallback results were added.'
+          : undefined,
+        score_histogram: buildScoreHistogram(mapped),
+        opportunities: qualified,
+        referrals: [],
+        diagnostics: {
+          duplicate_results_collapsed: deduped.removed || undefined,
+          excluded_already_in_pipeline: pipelineExcludedCount || undefined,
+        },
+        coverage_summary: {
+          total_candidates: osRows.length,
+          returned: qualified.length,
+          source: 'profile_opportunity_matches',
+        },
+        profile_signal_audit: signalAudit,
       })
              } catch (error) {
                    // A live crawl can saturate the PG pool / IO while this heavy

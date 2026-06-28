@@ -4,7 +4,7 @@ import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 
 // Section fields that hold a person's name. Merging two profiles must NEVER
 // concatenate two overlapping forms of the same name (the historic
-// "Robert White Robert Michael White" doubling bug). For these fields we collapse
+// "Jordan Lane Jordan Michael Lane" doubling bug). For these fields we collapse
 // the merge result back to the single most-complete name. Centralized so the
 // producer (this merge) and the boot sweep (enforceInvariants) agree on which
 // fields are name-shaped.
@@ -40,7 +40,7 @@ export function tokenizeProfileDisplayName(displayName) {
   return key.split(' ').filter(Boolean)
 }
 
-/** True when names likely refer to the same person (e.g. "Luibov" vs "Luibov S Samoylenko"). */
+/** True when names likely refer to the same person (e.g. "Lina" vs "Lina S. Moreno"). */
 export function profilesHaveSimilarNames(nameA, nameB) {
   const a = tokenizeProfileDisplayName(nameA)
   const b = tokenizeProfileDisplayName(nameB)
@@ -207,7 +207,7 @@ function mergeValues(existingValue, incomingValue, key = null) {
     if (existingTrimmed.toLowerCase().includes(trimmed.toLowerCase())) return existingTrimmed
     // Person-name fields are SINGLE-VALUED: never accumulate two forms of the
     // same name as multi-line text (that synced into display_name and produced
-    // the "Robert White Robert Michael White" double). Keep the most-complete
+    // the "Jordan Lane Jordan Michael Lane" double). Keep the most-complete
     // single name instead — prefer the longer form, then collapse defensively.
     if (key && PERSON_NAME_FIELDS.has(String(key).toLowerCase())) {
       const longer = trimmed.length > existingTrimmed.length ? trimmed : existingTrimmed
@@ -1152,4 +1152,3 @@ export async function deduplicateProfileGroups(db, {
     results,
   }
 }
-

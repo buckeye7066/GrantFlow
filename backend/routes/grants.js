@@ -4,6 +4,7 @@ import { safeParseJSON } from '../utils/safeJson.js';
 import { validatePagination, validateRequiredFields, sanitizeColumns } from '../utils/validation.js';
 import { formatError } from '../middleware/errorHandler.js';
 import { mutationRateLimiter } from '../middleware/rateLimiting.js';
+import { withProfileScope } from '../middleware/profileContext.js'
 import { GRANT_STATUSES } from '../config/constants.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import {
@@ -41,6 +42,20 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
 
 const router = express.Router();
+
+function runLegacyProfilelessGrantQuery(fn) {
+  return withProfileScope({ bypass: true }, fn)
+}
+
+async function loadGrantByIdForProfileAwareResponse(db, id, profileId) {
+  const hasProfileId = await grantsHasProfileIdColumn(db, { refresh: true }).catch(() => false)
+  if (hasProfileId && profileId) {
+    return db.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ?').get(String(id), String(profileId))
+  }
+  return runLegacyProfilelessGrantQuery(() =>
+    db.prepare('SELECT * FROM grants WHERE id = ?').get(String(id)),
+  )
+}
 
 function isUniqueGrantConflict(error) {
   const msg = String(error?.message || '')
@@ -174,16 +189,16 @@ async function hasColumn(db, { tableName, columnName }) {
   return rows.some((r) => String(r?.name || '').toLowerCase() === String(columnName).toLowerCase())
 }
 
-async function grantsHasProfileIdColumn(db) {
+async function grantsHasProfileIdColumn(db, { refresh = false } = {}) {
   const dialect = db?.dialect || 'sqlite'
   if (dialect === 'postgres') {
-    if (postgresHasGrantsProfileIdColumn === null) {
+    if (refresh || postgresHasGrantsProfileIdColumn === null) {
       postgresHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
     }
     return postgresHasGrantsProfileIdColumn
   }
 
-  if (sqliteHasGrantsProfileIdColumn === null) {
+  if (refresh || sqliteHasGrantsProfileIdColumn === null) {
     sqliteHasGrantsProfileIdColumn = await hasColumn(db, { tableName: 'grants', columnName: 'profile_id' })
   }
   return sqliteHasGrantsProfileIdColumn
@@ -191,7 +206,10 @@ async function grantsHasProfileIdColumn(db) {
 
 async function ensureGrantAiColumns(db) {
   if (!db || typeof db.prepare !== 'function') return
-  if (ensuredGrantAiColumns) return
+  if (ensuredGrantAiColumns) {
+    const hasProfileId = await grantsHasProfileIdColumn(db, { refresh: true }).catch(() => true)
+    if (hasProfileId) return
+  }
 
   try {
     const columnsToEnsure = [
@@ -207,13 +225,14 @@ async function ensureGrantAiColumns(db) {
     ]
 
     // Ensure profile_id exists too (many code paths expect it).
-    const needsProfileId = !(await grantsHasProfileIdColumn(db))
+    const needsProfileId = !(await grantsHasProfileIdColumn(db, { refresh: true }))
     const cols = needsProfileId ? [{ name: 'profile_id', pg: 'TEXT', sqlite: 'TEXT' }, ...columnsToEnsure] : columnsToEnsure
 
     if (db.dialect === 'postgres') {
       for (const c of cols) {
         await db.prepare(`ALTER TABLE grants ADD COLUMN IF NOT EXISTS ${c.name} ${c.pg};`).run()
       }
+      postgresHasGrantsProfileIdColumn = true
       ensuredGrantAiColumns = true
       return
     }
@@ -228,6 +247,7 @@ async function ensureGrantAiColumns(db) {
       const colType = assertSafeIdentifier(String(c.sqlite).split(' ')[0], 'identifier')
       const tail = String(c.sqlite).slice(colType.length).replace(/[^A-Za-z0-9 \t_'"-]/g, '')
       await db.prepare(`ALTER TABLE grants ADD COLUMN ${colName} ${colType}${tail};`).run()
+      if (c.name === 'profile_id') sqliteHasGrantsProfileIdColumn = true
     }
   } catch (error) {
     // Do not 500 normal grant routes if schema drift exists; log and continue.
@@ -1933,7 +1953,8 @@ router.post('/from-opportunity', async (req, res, next) => {
       }
 
       if (pipelineResult?.saved && pipelineResult.pipelineId) {
-        const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(pipelineResult.pipelineId)
+        await ensureGrantAiColumns(req.db)
+        const grant = await loadGrantByIdForProfileAwareResponse(req.db, pipelineResult.pipelineId, normalizedProfileId)
         routeLogger.info('[grants/from-opportunity] canonical saver added pipeline row', {
           requestId,
           profile_id: normalizedProfileId,
@@ -1971,7 +1992,8 @@ router.post('/from-opportunity', async (req, res, next) => {
       }
 
       if (pipelineResult?.gate === 'DUPLICATE' && pipelineResult.pipelineId) {
-        const existingGrant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(pipelineResult.pipelineId)
+        await ensureGrantAiColumns(req.db)
+        const existingGrant = await loadGrantByIdForProfileAwareResponse(req.db, pipelineResult.pipelineId, normalizedProfileId)
         return res.status(200).json({
           ...(existingGrant || {}),
           id: existingGrant?.id || pipelineResult.pipelineId,
@@ -2032,7 +2054,8 @@ router.post('/from-opportunity', async (req, res, next) => {
 
     // TRANSACTION: Wrap multi-step grant pipeline creation
     const result = await req.db.withTransaction(async (tx) => {
-      const hasProfileId = await grantsHasProfileIdColumn(tx)
+      await ensureGrantAiColumns(tx)
+      const hasProfileId = await grantsHasProfileIdColumn(tx, { refresh: true })
 
       async function ensureOrganizationRow({ organizationId, profileRow, reason }) {
         const orgId = organizationId ? String(organizationId) : null
@@ -2226,17 +2249,21 @@ router.post('/from-opportunity', async (req, res, next) => {
         dupParams.push(oppUrl)
       }
 
-      const existingGrant = await tx
-        .prepare(
-          `
-            SELECT id, title
-            FROM grants
-            WHERE ${dupWhere.join(' AND ')}
-              AND (${dupMatch.join(' OR ')})
-            LIMIT 1
-          `,
-        )
-        .get(...dupParams)
+      const loadExistingGrant = () =>
+        tx
+          .prepare(
+            `
+              SELECT id, title
+              FROM grants
+              WHERE ${dupWhere.join(' AND ')}
+                AND (${dupMatch.join(' OR ')})
+              LIMIT 1
+            `,
+          )
+          .get(...dupParams)
+      const existingGrant = hasProfileId
+        ? await loadExistingGrant()
+        : await runLegacyProfilelessGrantQuery(loadExistingGrant)
       
       if (existingGrant) {
         return { 
@@ -2340,7 +2367,18 @@ router.post('/from-opportunity', async (req, res, next) => {
         );
       }
       
-      const grant = await tx.prepare('SELECT * FROM grants WHERE id = ?').get(id);
+      let grant = null
+      if (hasProfileId && finalProfileId) {
+        grant = await tx.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ?').get(id, String(finalProfileId))
+      } else if (hasProfileId) {
+        grant = await runLegacyProfilelessGrantQuery(() =>
+          tx.prepare('SELECT * FROM grants WHERE id = ?').get(id),
+        )
+      } else {
+        grant = await runLegacyProfilelessGrantQuery(() =>
+          tx.prepare('SELECT * FROM grants WHERE id = ?').get(id),
+        )
+      }
       return { ...grant, organization_id: finalOrgId };
     });
 
@@ -2558,17 +2596,21 @@ router.post('/from-opportunity', async (req, res, next) => {
           throw new Error('no_lookup_keys')
         }
 
-        const row = await req.db
-          .prepare(
-            `
-              SELECT id, title, organization_id${hasProfileId ? ', profile_id' : ''}
-              FROM grants
-              WHERE ${clauses.join(' AND ')}
-                AND (${matchClauses.join(' OR ')})
-              LIMIT 1
-            `,
-          )
-          .get(...params)
+        const loadDuplicateGrant = () =>
+          req.db
+            .prepare(
+              `
+                SELECT id, title, organization_id${hasProfileId ? ', profile_id' : ''}
+                FROM grants
+                WHERE ${clauses.join(' AND ')}
+                  AND (${matchClauses.join(' OR ')})
+                LIMIT 1
+              `,
+            )
+            .get(...params)
+        const row = hasProfileId
+          ? await loadDuplicateGrant()
+          : await runLegacyProfilelessGrantQuery(loadDuplicateGrant)
 
         if (row) {
           return res.status(200).json({

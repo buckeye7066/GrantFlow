@@ -10,7 +10,6 @@ import {
   runScheduledAutoDiscovery,
   resetScheduledAutoDiscoveryStateForTests,
 } from '../services/scheduledAutoDiscovery.js'
-import { makeOfflineFetcher } from '../crawler-os/tests/fixtures/fakeFetch.mjs'
 import { randomUUID } from 'crypto'
 
 function seedUser(db) {
@@ -111,12 +110,21 @@ describe('scheduledAutoDiscovery', () => {
   it('queues jobs for active profiles when forced enabled', async () => {
     const userId = seedUser(db)
     const profileId = seedProfile(db, userId)
+    const discoveryRuns = []
 
     const report = await runScheduledAutoDiscovery(db, {
       forceEnabled: true,
-      fetcher: makeOfflineFetcher(),
+      runDiscovery: async (runDb, runProfileId, runOptions) => {
+        discoveryRuns.push({ db: runDb, profileId: runProfileId, options: runOptions })
+        return { engine: 'crawler-os', synchronous: true }
+      },
     })
     expect(report.profiles_queued).toBe(1)
+    expect(discoveryRuns).toHaveLength(1)
+    expect(discoveryRuns[0].db).toBe(db)
+    expect(discoveryRuns[0].profileId).toBe(profileId)
+    expect(discoveryRuns[0].options.requestedBy).toBe('scheduled-auto-discovery')
+    expect(discoveryRuns[0].options.trigger).toBe('scheduled_daily')
 
     const count = db
       .prepare(

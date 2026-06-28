@@ -156,8 +156,11 @@ When you add or change behavior that touches one of these invariants, you change
 the single enforcer + its test — you do NOT scatter new ad-hoc checks.
 
 The canonical enforcer is **`backend/startup/enforceInvariants.js`**, run on
-every boot from `runSelfHeal()` in `backend/startup/selfHeal.js` (step 9, after
-`reconcileDismissedGrants`). It mirrors `backend/startup/ensureSchemaInvariants.js`:
+every boot from `backend/server.js` immediately after `ensureSchemaInvariants()`.
+The full `runSelfHeal()` orchestrator in `backend/startup/selfHeal.js` also calls
+it as step 9 for Sam/Anya on-demand and maintenance runs, but boot wires the
+invariant sweep directly so it cannot be skipped by self-heal schedule changes.
+It mirrors `backend/startup/ensureSchemaInvariants.js`:
 each invariant is its own guarded, idempotent, dialect-agnostic step that detects
 violations, repairs/quarantines them, and logs a structured summary. Schema-shape
 DDL stays in `ensureSchemaInvariants.js`; data-repair invariants go here.

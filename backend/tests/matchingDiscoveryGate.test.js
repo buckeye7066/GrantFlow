@@ -79,6 +79,18 @@ function createDb() {
       url TEXT,
       application_url TEXT
     );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      match_reasons TEXT DEFAULT '[]',
+      matcher_version TEXT,
+      computed_at TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    );
     -- Profile with NO discovery run yet (last_discovery_at IS NULL).
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, last_discovery_at, created_at, updated_at)
     VALUES ('profile-never-discovered', 'church', 'church', 'OH', '43215', '["ministry","community"]', '["housing"]', NULL, '2026-04-26', '2026-04-26');
@@ -108,6 +120,13 @@ function createDb() {
         2000, 8000, 'rolling', 'https://www.grants.gov/search-results-detail/456',
         1, 'nationwide', '["grant","housing"]', '["ministry","community","housing"]', 'grant', 'OPPORTUNITY', 1, 'grant'
       );
+    INSERT INTO profile_opportunity_matches
+      (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version, computed_at, updated_at)
+    VALUES
+      ('profile-never-discovered', 'real-grant-1', 78, 'review', 'Crawler OS matched ministry/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-never-discovered', 'real-grant-2', 74, 'review', 'Crawler OS matched housing ministry signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-discovered', 'real-grant-1', 78, 'review', 'Crawler OS matched ministry/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-discovered', 'real-grant-2', 74, 'review', 'Crawler OS matched housing ministry signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
   `)
   return db
 }

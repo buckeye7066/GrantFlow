@@ -57,10 +57,22 @@ function walk(dir, out = []) {
 }
 
 // Match the lhs of `<lhs> == null` / `<lhs> != null`. Conservative: only
-// identifiers, member access, optional chaining, and bracket-numeric index.
+// identifiers, member access, optional chaining, and bracket index.
 // Anything more complex (function calls, ternaries, etc.) is left alone so
 // the human reviewer can decide.
-const IDENT = /[A-Za-z_$][A-Za-z0-9_$]*(?:\?\.|\.)?(?:[A-Za-z0-9_$]|\[[0-9]+\])*/.source
+//
+// The chain is matched from its ROOT identifier through every `.`/`?.` hop
+// and `[index]` access. This MUST cover the full member expression: an
+// earlier version allowed only a single `.`/`?.` hop, so on a 3+ segment
+// optional chain (`adapter.completion?.resultCount`) it could not anchor at
+// the root and the regexp engine instead matched mid-chain
+// (`completion?.resultCount`), orphaning the `adapter.` prefix into the
+// syntactically-invalid `adapter.(…)`. Matching the whole chain greedily
+// from the root makes the leftmost match consume the entire LHS, so a
+// mid-chain match can never occur. The bracket body forbids nested brackets
+// (`[^\][]`) so a computed key such as `[formData.payment_terms]` is handled
+// while we still bail out of anything genuinely nested.
+const IDENT = /[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*|\[[^\][]*\])*/.source
 const EXPRESSION_RX = new RegExp(`(${IDENT})\\s*(==|!=)\\s*null\\b`)
 
 /**
@@ -68,8 +80,12 @@ const EXPRESSION_RX = new RegExp(`(${IDENT})\\s*(==|!=)\\s*null\\b`)
  * content. Mirrors scripts/codemod/eqeqeq-fix.mjs's lexer.
  *
  * Returns { src, changes }.
+ *
+ * Exported so the regression suite (backend/tests/fixEqeqeqNull.test.mjs) can
+ * exercise the operator rewrite directly without shelling out or walking the
+ * repo.
  */
-function rewriteSource(src) {
+export function rewriteSource(src) {
   let out = ''
   let i = 0
   const n = src.length
@@ -198,35 +214,43 @@ function rewriteSource(src) {
   return { src: out, changes }
 }
 
-let files = process.argv.slice(2).filter(Boolean).map((f) => path.resolve(f))
-if (files.length === 0) {
-  files = [
-    ...walk(path.join(repoRoot, 'backend')),
-    ...walk(path.join(repoRoot, 'src')),
-    ...walk(path.join(repoRoot, 'shared')),
-    ...walk(path.join(repoRoot, 'scripts')),
-  ]
+function runCli() {
+  let files = process.argv.slice(2).filter(Boolean).map((f) => path.resolve(f))
+  if (files.length === 0) {
+    files = [
+      ...walk(path.join(repoRoot, 'backend')),
+      ...walk(path.join(repoRoot, 'src')),
+      ...walk(path.join(repoRoot, 'shared')),
+      ...walk(path.join(repoRoot, 'scripts')),
+    ]
+  }
+
+  let totalFixed = 0
+  let filesTouched = 0
+  for (const full of files) {
+    let before
+    try {
+      before = readFileSync(full, 'utf8')
+    } catch (err) {
+      console.error(`skip ${full}: ${err.message}`)
+      continue
+    }
+    const { src: after, changes } = rewriteSource(before)
+    if (changes > 0 && after !== before) {
+      writeFileSync(full, after, 'utf8')
+      totalFixed += changes
+      filesTouched += 1
+      console.log(`${path.relative(repoRoot, full)}: ${changes} replacement(s)`)
+    }
+  }
+
+  console.log(
+    `[codemod/eqeqeq-null] rewrote ${totalFixed} operator(s) across ${filesTouched} file(s) (string/template/comment-safe).`,
+  )
 }
 
-let totalFixed = 0
-let filesTouched = 0
-for (const full of files) {
-  let before
-  try {
-    before = readFileSync(full, 'utf8')
-  } catch (err) {
-    console.error(`skip ${full}: ${err.message}`)
-    continue
-  }
-  const { src: after, changes } = rewriteSource(before)
-  if (changes > 0 && after !== before) {
-    writeFileSync(full, after, 'utf8')
-    totalFixed += changes
-    filesTouched += 1
-    console.log(`${path.relative(repoRoot, full)}: ${changes} replacement(s)`)
-  }
+// Only walk + rewrite the repo when invoked as a script. Importing the module
+// (e.g. from the regression test) must have no side effects.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runCli()
 }
-
-console.log(
-  `[codemod/eqeqeq-null] rewrote ${totalFixed} operator(s) across ${filesTouched} file(s) (string/template/comment-safe).`,
-)

@@ -22,6 +22,7 @@ import { TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   ensureGrantAccess,
   ensureOrganizationAccess,
+  ensureProfileAccess,
   getAccessibleOrganizationIds,
   isAdminUser,
   requireAuthenticatedUser,
@@ -1329,9 +1330,8 @@ router.post('/discover-needs', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_
   try {
     const { profile_id, custom_goal } = req.body;
     if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
-    // IDOR guard: this reads the full profile PII below, so verify the caller may
-    // access this organization/profile (sibling routes /match, /analyze/eligibility do the same).
-    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return;
+    // IDOR guard: this reads full profile PII, so verify profile ownership before loading it.
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return;
 
     const profile = await req.db.prepare(`
       SELECT p.*
@@ -1441,7 +1441,7 @@ router.post('/generate-profile-todo', enforceTierCapability(TIER_CAPABILITIES.DO
     const { profile_id } = req.body;
     if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
     // IDOR guard: reads the full profile + its grants/sections below — verify access first.
-    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return;
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return;
 
     const db = req.db;
 

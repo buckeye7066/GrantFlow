@@ -5,6 +5,7 @@ import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { runGrantFlowDomainAudits } from './anyaGrantFlowAudits.js'
+import { ANYA_CODE_REPAIR_POLICY } from '../config/missionGoals.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('anyaAutonomousCrawler')
 
@@ -54,11 +55,12 @@ export const SEARCH_KIND = Object.freeze({
 //                         (including dry-run planned fixes)
 //   issues_fixed        = sum(modification.changes_count) across modifications
 //
-//   dry_run_requested     = boolean from the caller's options (pre-gate)
-//   writes_explicitly_enabled = env ANYA_AUTONOMOUS_WRITE_CHANGES === 'true'
+//   dry_run_requested     = boolean from the caller's options
+//   writes_explicitly_enabled = true iff the caller intentionally requested
+//                         writes for code-error repair
 //   dry_run_effective     = what actually happened (final)
-//   dry_run_forced_by_env = true iff the caller asked for writes but the env
-//                           gate vetoed them
+//   dry_run_forced_by_env = retained legacy telemetry; always false because
+//                           Anya code-error edits no longer require an env gate
 //
 // Legacy back-compat (kept so scheduler + older dashboards don't break):
 //   dry_run               = dry_run_effective (same value)
@@ -672,7 +674,7 @@ export async function runAutonomousCodeCrawl(options, context) {
     pattern = null,
     maxIterations = 2000,
     maxFileChanges = 20,
-    dryRun = false,
+    dryRun = true,
     fixConsoleLog = false,
     fixEmptyCatch = true,
     fixTodos = false,
@@ -688,30 +690,22 @@ export async function runAutonomousCodeCrawl(options, context) {
     // Skip AST analysis entirely (mostly for unit tests that don't want acorn
     // loaded).
     skipAst = false,
-    // Explicit opt-in from a CLI harness (--write) or test. The crawler
-    // requires BOTH this flag AND the env gate to be true before writes
-    // are allowed. Defaults to false so API routes cannot silently enable
-    // writes by toggling a request option.
+    // Legacy per-invocation flag from the CLI/admin route. It is retained for
+    // telemetry, but dryRun=false is now the write decision. The old env gate
+    // was removed by the Anya code-error repair policy.
     writeFlag = false,
   } = options || {}
 
   const dryRunRequested = Boolean(dryRun)
-  // Accept two env names:
-  //   - ANYA_AUTONOMOUS_WRITES=1       (canonical, documented in README)
-  //   - ANYA_AUTONOMOUS_WRITE_CHANGES  (legacy; kept for back-compat)
-  // A truthy value ('1', 'true', 'yes', 'on') on either unlocks writes.
-  const envValue =
-    process.env.ANYA_AUTONOMOUS_WRITES ?? process.env.ANYA_AUTONOMOUS_WRITE_CHANGES ?? ''
-  const writesEnvEnabled = /^(1|true|yes|on)$/i.test(String(envValue).trim())
   const writeFlagEnabled = Boolean(writeFlag)
-  // Writes require BOTH gates to be lit — the env flag (operator opt-in on
-  // the host) AND the caller-provided flag (explicit intent at invocation
-  // time, e.g. `--write` on the CLI). Either missing → dry run.
-  const writesExplicitlyEnabled = writesEnvEnabled && writeFlagEnabled
-  const effectiveDryRun = dryRunRequested || !writesExplicitlyEnabled
-  // dry_run_forced_by_env: caller asked for writes (dryRunRequested=false) but
-  // the env safety gate vetoed them, so we're running effectively dry.
-  const dryRunForcedByEnv = !dryRunRequested && !writesExplicitlyEnabled
+  // Writes are controlled by the caller's dryRun choice. No environment
+  // permission gate is required for Anya code-error repair.
+  const writesExplicitlyEnabled = !dryRunRequested
+  const effectiveDryRun = dryRunRequested
+  // Retained for older dashboards that still read this field.
+  const dryRunForcedByEnv = false
+  const writesEnvEnabled = true
+  const envWriteGateRequired = false
 
   // Resolve per call so tests that chdir() into a temp dir work, and so that
   // absolute directory arguments are honored as-is.
@@ -732,6 +726,10 @@ export async function runAutonomousCodeCrawl(options, context) {
     writes_explicitly_enabled: writesExplicitlyEnabled,
     writes_env_enabled: writesEnvEnabled,
     write_flag_enabled: writeFlagEnabled,
+    env_write_gate_required: envWriteGateRequired,
+    write_policy: ANYA_CODE_REPAIR_POLICY.scope,
+    permission_required: ANYA_CODE_REPAIR_POLICY.permission_required,
+    audit_required: ANYA_CODE_REPAIR_POLICY.audit_required,
   }, context)
 
   const allIssues = []
@@ -887,6 +885,9 @@ export async function runAutonomousCodeCrawl(options, context) {
           dry_run: effectiveDryRun,
           dry_run_requested: dryRunRequested,
           dry_run_forced_by_env: dryRunForcedByEnv,
+          write_policy: ANYA_CODE_REPAIR_POLICY.scope,
+          permission_required: ANYA_CODE_REPAIR_POLICY.permission_required,
+          audit_required: ANYA_CODE_REPAIR_POLICY.audit_required,
           fixes_applied: fixesApplied,
           diff,
           diff_preview: diffPreview,
@@ -900,6 +901,9 @@ export async function runAutonomousCodeCrawl(options, context) {
           changes_count: fixesApplied.length,
           backup: backup ? relativeTo(rootDir, backup) : null,
           dry_run: effectiveDryRun,
+          write_policy: ANYA_CODE_REPAIR_POLICY.scope,
+          permission_required: ANYA_CODE_REPAIR_POLICY.permission_required,
+          audit_required: ANYA_CODE_REPAIR_POLICY.audit_required,
         }, context)
       } catch (fixErr) {
         errors.push({ file: relFile, stage: 'fix', message: fixErr?.message || String(fixErr) })
@@ -1002,6 +1006,10 @@ export async function runAutonomousCodeCrawl(options, context) {
       writes_explicitly_enabled: writesExplicitlyEnabled,
       writes_env_enabled: writesEnvEnabled,
       write_flag_enabled: writeFlagEnabled,
+      env_write_gate_required: envWriteGateRequired,
+      write_policy: ANYA_CODE_REPAIR_POLICY.scope,
+      permission_required: ANYA_CODE_REPAIR_POLICY.permission_required,
+      audit_required: ANYA_CODE_REPAIR_POLICY.audit_required,
 
       max_iterations: maxIterations,
       max_file_changes: maxFileChanges,

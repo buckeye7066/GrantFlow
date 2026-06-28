@@ -1,4 +1,5 @@
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
+import { isFreeWeekActive } from '../../shared/freeWeek.js'
 
 export const TIER_CAPABILITIES = Object.freeze({
   PIPELINE_AUTOMATION: 'enable_pipeline_automation',
@@ -14,12 +15,16 @@ export async function getProfileBillingAccount(db, profileId) {
 
 export async function hasTierCapability(db, req, profileId, capabilityKey) {
   if (req.ctx?.isAdmin) return true
+  // Free Week promotion: every capability is unlocked for everyone while active.
+  if (isFreeWeekActive(process.env)) return true
   const billing = await getProfileBillingAccount(db, profileId)
   return Boolean(billing?.tier?.[capabilityKey])
 }
 
 export async function requireTierCapability(req, res, profileId, capabilityKey) {
   if (req.ctx?.isAdmin) return true
+  // Free Week promotion: skip the upgrade gate entirely while active.
+  if (isFreeWeekActive(process.env)) return true
 
   const billing = await getProfileBillingAccount(req.db, profileId)
   const allowed = Boolean(billing?.tier?.[capabilityKey])

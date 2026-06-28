@@ -77,8 +77,35 @@ test('refresh rewrites the body to current copy and preserves the org-specific h
     // …replaced with the current copy, still org-specific from source evidence…
     assert.match(after.body_text, /SCBA gear/)
     assert.match(after.body_text, /Anya/)
-    // …and the original salutation is preserved.
+    // …and a real person/title salutation is preserved.
     assert.match(after.body_text, /^Hi Chief,/)
+  } finally {
+    restore()
+    db.close()
+  }
+})
+
+test('refresh replaces old generic team salutations with the professional fallback', async () => {
+  const restore = applyDefaultJohnEnv()
+  const db = makeJohnDb()
+  try {
+    const id = await seedDraft(db, {
+      recipient_email: 'info@riverbendvfd.test',
+      recipient_name: null,
+      recipient_role: null,
+      body_text: 'Hey Team,\n\nOld body.',
+      personalization_json: { salutation: 'Hey Team,', organization_name: 'Riverbend Volunteer Fire Department' },
+    })
+    const provider = makeRefreshProvider()
+    const r = await refreshDraftBodies(db, { provider })
+
+    assert.equal(r.ok, true)
+    assert.equal(r.updated, 1)
+    assert.equal(provider.patches.length, 1, 'Outlook draft PATCHed once')
+
+    const after = await getDraft(db, id)
+    assert.match(after.body_text, /^Hello,/)
+    assert.doesNotMatch(after.body_text, /^Hey Team,/i)
   } finally {
     restore()
     db.close()

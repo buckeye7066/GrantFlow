@@ -4,26 +4,26 @@ import { compileRoutes, classifyOwners } from '../../backend/services/hamilton/h
 
 const ROUTES = compileRoutes([
   {
-    profileId: 'p-robert',
-    label: 'Robert White',
+    profileId: 'p-student-driver',
+    label: 'Demo Student Driver',
     match: {
-      usernames: ['buckeye7066@gmail.com', 'rwhite08@clevelandstatecc.edu'],
-      usernamePrefixes: ['firerookie', 'rwhite', 'buckeye'],
+      usernames: ['student.driver@example.invalid', 'student.driver@school.example.invalid'],
+      usernamePrefixes: ['studentdriver', 'driverstudent', 'demo-driver'],
     },
   },
   {
-    profileId: 'p-john',
-    label: 'Dr. John White',
+    profileId: 'p-health-educator',
+    label: 'Demo Health Educator',
     match: {
-      usernames: ['jwhiternmba@yahoo.com', 'johnw13', 'jwhite'],
-      emailDomains: ['serenova.org'],
-      keywords: ['johnwhite', 'jwhiternmba'],
+      usernames: ['educator@example.invalid', 'educator13', 'healthdemo'],
+      emailDomains: ['healthdemo.example.invalid'],
+      keywords: ['healtheducator', 'healthdemo'],
     },
   },
   {
-    profileId: 'p-anastasia',
-    label: 'Anastasia Nicole White',
-    match: { usernamePrefixes: ['anastasia', 'anyawhite', 'anw'] },
+    profileId: 'p-stem-student',
+    label: 'Demo Tennessee STEM Student',
+    match: { usernamePrefixes: ['demostem', 'studentstem', 'dstem'] },
   },
   {
     profileId: 'p-axiom',
@@ -33,23 +33,22 @@ const ROUTES = compileRoutes([
 ])
 
 test('exact username match', () => {
-  assert.deepEqual(classifyOwners({ username: 'buckeye7066@gmail.com' }, ROUTES), ['p-robert'])
+  assert.deepEqual(classifyOwners({ username: 'student.driver@example.invalid' }, ROUTES), ['p-student-driver'])
 })
 
-test('username prefix match (case-insensitive)', () => {
-  assert.deepEqual(classifyOwners({ username: 'FireRookie_74@yahoo.com' }, ROUTES), ['p-robert'])
-  assert.deepEqual(classifyOwners({ username: 'rwhite08@clevelandstatecc.edu' }, ROUTES), ['p-robert'])
+test('username prefix match is case-insensitive', () => {
+  assert.deepEqual(classifyOwners({ username: 'StudentDriver_74@example.invalid' }, ROUTES), ['p-student-driver'])
+  assert.deepEqual(classifyOwners({ username: 'student.driver@school.example.invalid' }, ROUTES), ['p-student-driver'])
 })
 
 test('email-domain match', () => {
-  assert.deepEqual(classifyOwners({ username: 'john@serenova.org' }, ROUTES), ['p-john'])
+  assert.deepEqual(classifyOwners({ username: 'person@healthdemo.example.invalid' }, ROUTES), ['p-health-educator'])
 })
 
-test('a credential can belong to two owners (person + org)', () => {
-  // dr.johnwhite@axiombiolabs.org → John (keyword 'johnwhite') AND Axiom (email domain)
+test('a credential can belong to two owners: person plus org', () => {
   assert.deepEqual(
-    classifyOwners({ username: 'dr.johnwhite@axiombiolabs.org' }, ROUTES).sort(),
-    ['p-axiom', 'p-john'],
+    classifyOwners({ username: 'healtheducator@axiombiolabs.org' }, ROUTES).sort(),
+    ['p-axiom', 'p-health-educator'],
   )
 })
 
@@ -57,15 +56,15 @@ test('host match routes org logins', () => {
   assert.deepEqual(classifyOwners({ username: 'someone', host: 'portal.axiombiolabs.org' }, ROUTES), ['p-axiom'])
 })
 
-test('anastasia school + rocketmail identifiers', () => {
-  assert.deepEqual(classifyOwners({ username: 'anw2aw@mtmail.mtsu.edu' }, ROUTES), ['p-anastasia'])
-  assert.deepEqual(classifyOwners({ username: 'anyawhite@rocketmail.com' }, ROUTES), ['p-anastasia'])
+test('student school plus personal identifiers', () => {
+  assert.deepEqual(classifyOwners({ username: 'dstem2@mtmail.mtsu.edu' }, ROUTES), ['p-stem-student'])
+  assert.deepEqual(classifyOwners({ username: 'studentstem@example.invalid' }, ROUTES), ['p-stem-student'])
 })
 
-test('ambiguous / unknown identifiers route to nobody (admin-vault-only)', () => {
+test('ambiguous or unknown identifiers route to nobody', () => {
   assert.deepEqual(classifyOwners({ username: 'sleepy_joe' }, ROUTES), [])
   assert.deepEqual(classifyOwners({ username: 'blackjack02', host: 'www.dominos.com' }, ROUTES), [])
-  assert.deepEqual(classifyOwners({ username: '+1 4235047778' }, ROUTES), [])
+  assert.deepEqual(classifyOwners({ username: '+1 5550100000' }, ROUTES), [])
 })
 
 test('compileRoutes tolerates @-prefixed domains and missing facets', () => {
@@ -73,7 +72,7 @@ test('compileRoutes tolerates @-prefixed domains and missing facets', () => {
   assert.deepEqual(classifyOwners({ username: 'x@example.com' }, c), ['p'])
 })
 
-test('empty / malformed inputs do not throw', () => {
+test('empty or malformed inputs do not throw', () => {
   assert.deepEqual(classifyOwners({}, ROUTES), [])
   assert.deepEqual(classifyOwners({ username: null, host: undefined }, ROUTES), [])
   assert.deepEqual(compileRoutes(null), [])

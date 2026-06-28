@@ -92,7 +92,9 @@ test('inferred concrete applicant categories do not get polluted by broad source
   });
   const match = computeMatchDecision(opp, vfdThesis);
   assert.notEqual(match.decision, 'accept', 'individual-only grant must not become a strong VFD match');
-  assert.ok(match.match_explain.warnings.some((w) => /applicant type/i.test(w)));
+  assert.equal(match.match_explain.matched_profile_type, false);
+  assert.equal(match.match_explain.score_breakdown.applicant_type, 0);
+  assert.ok(match.match_score < 50, `individual-only grant should remain weak for a VFD profile, got ${match.match_score}`);
 });
 
 test('match engine scores concrete needs before wildcard fallback', () => {
@@ -105,8 +107,8 @@ test('match engine scores concrete needs before wildcard fallback', () => {
     reality_status: REALITY_STATUS.VERIFIED, trust_tier: TRUST_TIER.OFFICIAL_API,
   });
   const match = computeMatchDecision(opp, thesis);
-  assert.equal(match.match_explain.score_breakdown.need, 25);
-  assert.deepEqual(match.match_explain.matched_needs.sort(), ['emergency', 'equipment']);
+  assert.ok(match.match_explain.score_breakdown.need_component >= 60);
+  assert.deepEqual(match.match_explain.matched_needs.sort(), ['emergency', 'technology_equipment', 'vfd']);
 });
 
 test('safeUrl blocks bracketed IPv6 private/link-local literals', () => {

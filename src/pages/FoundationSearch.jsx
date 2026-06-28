@@ -176,6 +176,7 @@ export default function FoundationSearch() {
       .catch((err) => {
         // region is best-effort; surface for debugging only.
         if (import.meta?.env?.DEV) {
+
           console.warn("getProfileRegion failed (non-fatal):", err)
         }
       })

@@ -16,9 +16,9 @@ import Database from 'better-sqlite3'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'buckeye7066@gmail.com'
-const ADMIN_PHONE = process.env.ADMIN_PHONE || '+14235047778'
-const ADMIN_NAME = process.env.ADMIN_NAME || 'Buckeye Admin'
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.invalid'
+const ADMIN_PHONE = process.env.ADMIN_PHONE || '+15550101000'
+const ADMIN_NAME = process.env.ADMIN_NAME || 'GrantFlow Admin'
 
 function resolveDbPath() {
   const envPath = process.env.DB_PATH

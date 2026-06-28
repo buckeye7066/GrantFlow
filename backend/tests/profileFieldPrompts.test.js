@@ -80,6 +80,18 @@ function createDb() {
       url TEXT,
       application_url TEXT
     );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      match_reasons TEXT DEFAULT '[]',
+      matcher_version TEXT,
+      computed_at TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    );
 
     -- Sparse profile: no type, no state/zip, no needs, no eligibility, never discovered.
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, last_discovery_at, created_at, updated_at)
@@ -114,6 +126,10 @@ function createDb() {
       1000, 5000, 'rolling', 'https://www.grants.gov/search-results-detail/123',
       1, 'nationwide', '["grant"]', '["housing","community"]', 'grant', 'OPPORTUNITY', 1, 'grant'
     );
+    INSERT INTO profile_opportunity_matches
+      (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version, computed_at, updated_at)
+    VALUES
+      ('profile-complete', 'real-grant-1', 76, 'review', 'Crawler OS matched housing/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
   `)
   return db
 }

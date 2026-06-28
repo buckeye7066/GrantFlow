@@ -14,6 +14,15 @@ export function getGrant(grantId) {
   return apiFetch(`/api/grants/${grantId}`)
 }
 
+// Remove a grant from a profile's pipeline. Authorized for admin OR the profile
+// owner (backend ensureGrantAccess). The delete is STICKY — the backend records
+// a pipeline dismissal so the matcher / crawlers won't silently re-add it; a
+// later manual re-add clears that tombstone.
+export function deleteGrant(grantId) {
+  if (!grantId) return Promise.reject(new Error('grantId required'))
+  return apiFetch(`/api/grants/${encodeURIComponent(grantId)}`, { method: 'DELETE' })
+}
+
 export function getGrantAutomationEvents(grantId, { limit = 25 } = {}) {
   const params = new URLSearchParams()
   if (limit) params.set('limit', String(limit))

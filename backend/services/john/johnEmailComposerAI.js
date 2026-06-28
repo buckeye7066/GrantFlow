@@ -26,7 +26,7 @@ import {
   classifySubject,
   getJohnConfig,
 } from './johnOutreachSafety.js'
-import { interpretLead } from './johnLeadInterpreter.js'
+import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
 import { researchOrganization } from './johnOrgResearch.js'
 
 const GRANTFLOW_FACTS = [
@@ -126,6 +126,7 @@ function textToHtml(text) {
 
 function buildPrompt(lead, interpretation, facts, config, researchSummary = '') {
   const org = interpretation.organization_name || 'the organization'
+  const salutationMatch = /^(?:hi|hello)\s+([^,]+),/i.exec(interpretation.salutation || '')
   const ctx = {
     organization_name: org,
     organization_type: interpretation.organization_type || lead?.organization_type || null,
@@ -141,17 +142,14 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     // What we found about this org on the live web (titles + snippets only).
     // Empty when web research is unavailable — the prompt then omits it.
     web_research: researchSummary ? String(researchSummary) : null,
-    recipient_first_name:
-      interpretation.salutation && /^Hi\s+(\w+),/.test(interpretation.salutation)
-        ? interpretation.salutation.match(/^Hi\s+(\w+),/)[1]
-        : null,
+    recipient_salutation_name: salutationMatch ? salutationMatch[1] : null,
   }
   const system = [
     'You are Dr. John White, founder of GrantFlow, MBA, and a working scientist who has had to raise money for his own lab. You are writing a short, personable cold-outreach email to an organization you have NOT spoken with before. Write the way a sharp, generous peer writes: warm, plain-spoken, specific, and a little human. Never like a marketing template.',
     '',
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',
-    'Address a PERSON, not a list. If you were given a recipient/contact name, the body must read as if written to that individual. Only fall back to a generic greeting when no person is known. Never write "Hi Team" when you have a name.',
+    'Write to one decision-maker, not to a mailing list. If a recipient/contact name is available, the body must read as if written to that individual. If no person is known, write as one thoughtful note to the organization without using a team/list greeting. The system adds the final salutation separately.',
     '',
     'The email body MUST, in this order:',
     '1. LEAD WITH THEM. Spend the FIRST ONE TO TWO PARAGRAPHS genuinely on what THIS organization (and this person) is doing: their mission, the specific programs/work/population they serve, and why it matters, drawn from the supplied facts and web_research (what we found about them on the public web). This is the heart of the email and must make it unmistakable the note was written for them, not blasted to a list. Be specific and warm, like someone who actually looked into their work and respects it. Use ONLY facts present in the supplied data (including web_research snippets); NEVER invent achievements, dollar figures, programs, names, or events, and do not treat a web_research snippet as more certain than it is. If the facts are genuinely thin, write honestly and specifically about their sector and the kind of work they appear to do, rather than padding with vague praise.',
@@ -164,6 +162,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     '- Be concrete. If you cannot say something specific, say something honest and brief rather than filler. Do not repeat a word or phrase awkwardly, and do not stack adjectives.',
     '',
     'Hard rules (a violation makes the email unusable):',
+    '- Do NOT write any greeting or salutation in the body. The system adds it separately. This means no "Hey Team", "Hi Team", "Hello Team", "Dear Team", "Hi there", or named greeting.',
     '- Do NOT promise, guarantee, or imply guaranteed funding/approval.',
     '- Do NOT claim any prior relationship, meeting, or conversation.',
     '- Do NOT use urgency, pressure, scarcity, or "act now" language.',
@@ -190,6 +189,23 @@ function stripDashes(text) {
     .replace(/\s*[—–]\s*/g, ', ')
     .replace(/\s+,/g, ',')
     .replace(/,\s*,/g, ',')
+}
+
+/**
+ * The model is instructed not to write the salutation, but this makes the rule
+ * deterministic. If the first line is a greeting, including "Hey Team", we drop
+ * it and prepend John's vetted salutation from the lead interpreter.
+ */
+function stripOpeningSalutation(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return raw
+
+  const lines = raw.split(/\n/)
+  const first = String(lines[0] || '').trim()
+  if (/^(hey|hi|hello|dear|greetings)\b/i.test(first) && first.length <= 90) {
+    return lines.slice(1).join('\n').trim()
+  }
+  return raw
 }
 
 function parseJsonObject(text) {
@@ -251,12 +267,10 @@ export async function composeEmailWithAI(lead, opts = {}) {
 
   let subject = stripDashes(String(parsed.subject).replace(/\s+/g, ' ').trim()).slice(0, 180)
   const aiBody = stripDashes(String(parsed.body).trim())
+  const personalizedBody = stripOpeningSalutation(aiBody)
 
-  // Greeting: prefer the model's own opening only if it greets; otherwise lead
-  // with the interpreter's safe salutation.
-  const hasGreeting = /^(hi|hello|dear|greetings)\b/i.test(aiBody)
-  const salutation = interpretation.salutation || 'Hi team,'
-  const composedBody = (hasGreeting ? aiBody : `${salutation}\n\n${aiBody}`) + '\n' + buildFooter(config, interpretation.organization_name)
+  const salutation = interpretation.salutation || DEFAULT_SALUTATION
+  const composedBody = `${salutation}\n\n${personalizedBody}` + '\n' + buildFooter(config, interpretation.organization_name)
 
   // Pre-validate against the SAME gates the draft service enforces, so we never
   // hand the safety layer something it will block — fall back to template instead.
@@ -285,6 +299,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
       template: 'ai_v1',
       model: aiModel(config),
       salutation,
+      ai_opening_salutation_stripped: personalizedBody !== aiBody,
       contact_name: interpretation.contact?.name || null,
       contact_role: interpretation.contact?.role || null,
       organization_name: interpretation.organization_name,

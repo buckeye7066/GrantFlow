@@ -23,13 +23,14 @@
 import { composeWithTemplate } from './johnEmailWriter.js'
 import { evaluateDraftSafety, getJohnConfig } from './johnOutreachSafety.js'
 import { SAFETY_STATUS } from './johnTypes.js'
-import { interpretLead } from './johnLeadInterpreter.js'
+import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
 import { listDrafts, updateDraft } from './johnRunStore.js'
 import { createOutlookProvider } from './johnOutlookProvider.js'
 import { markDraftDeletedInOutlook } from './johnDraftReconcile.js'
 
 // Statuses whose Outlook draft is still live and editable.
 const REFRESHABLE_STATUSES = new Set(['created', 'needs_sender_alias_review', 'needs_review'])
+const GENERIC_TEAM_SALUTATION_RE = /^(hey|hi|hello|dear)\s+team\s*,?$/i
 
 /**
  * Reconstruct the original Yana lead packet from a stored draft row. The draft
@@ -61,14 +62,23 @@ function leadFromDraft(row) {
   }
 }
 
+function normalizeStoredSalutation(stored, base) {
+  const salutation = String(stored || '').trim()
+  if (!salutation) return base.salutation || DEFAULT_SALUTATION
+  if (GENERIC_TEAM_SALUTATION_RE.test(salutation)) return base.salutation || DEFAULT_SALUTATION
+  return salutation
+}
+
 /**
  * Build the interpretation for composition, preserving the original salutation
- * when one was stored (so we don't change "Hi Chief," to "Hi team," on refresh).
+ * when one was stored (so we don't change a real person greeting on refresh),
+ * while replacing old generic team greetings with the current professional
+ * fallback/person-level salutation.
  */
 function interpretationForDraft(row, lead) {
   const p = row.personalization_json || {}
   const base = interpretLead(lead)
-  if (p.salutation) base.salutation = p.salutation
+  base.salutation = normalizeStoredSalutation(p.salutation, base)
   return base
 }
 

@@ -97,7 +97,9 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'active_duty', 'guard_reserve', 'transitioning_service_member', 'military_spouse', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'education', 'veterans', 'active_duty_support', 'military_transition', 'military_spouse_support', 'caregiving', 'survivor_benefits'],
     geography: { national: true, states: [] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    // The adapter emits one DIRECTORY candidate for the benefit finder, not
+    // individual apply-now benefit rows. Keep the registry honest.
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html',
     requires_env: [],
     refresh_frequency_days: 14,
@@ -394,18 +396,21 @@ export const SOURCES = Object.freeze([
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
     base_url: 'https://studentaid.gov',
-    directory: false, loan_allowed: false, cost_share_allowed: false,
+    // Truth-in-registry: the studentAidGov adapter is family:'directory' and
+    // emits OPPORTUNITY_KIND.DIRECTORY with apply_url:null (there is no single
+    // apply endpoint to scrape). The registry must agree so the planner counts
+    // this as a directory/locator, not a direct scholarship funder.
+    directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['student', 'family'],
     need_categories: ['education'],
     geography: { national: true, states: [] },
-    default_kinds: [OPPORTUNITY_KIND.SCHOLARSHIP],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
   },
   // (CareerOneStop Scholarship Finder was removed here on 2026-06-23: DOL
   // retired the scholarship Web API — their 21 live services include none, and
   // scholarship* endpoints 404 while occupation returns 200 with the same token.
-  // Individual scholarships are sourced by the Brave+LLM scholarshipWebDiscovery
-  // service instead. If DOL reinstates it, re-add a row + a thin adapter.)
+  // If DOL reinstates it, re-add a row plus a thin adapter.)
   //
   // --- Net-new key-free federal lanes (2026-06-24) ---------------------------
   {

@@ -200,39 +200,13 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   }
   const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
 
-  // Individual long-tail: the registry has no API for local/private scholarships
-  // (they live on the open web), so the OS pipeline alone leaves individuals with
-  // near-zero real matches. For a PERSON profile, additionally run Brave + LLM
-  // scholarship discovery (best-effort, bounded, gated on BRAVE+ANTHROPIC keys;
-  // matcher_version='web-llm' so the next OS run's match reconcile never wipes
-  // it). Never blocks or fails the core discovery.
-  let webScholarships = null;
-  if (!dryRun && thesis && thesis.is_org === false) {
-    try {
-      const { discoverScholarshipsViaWeb, isScholarshipWebDiscoveryEnabled } = await import(
-        './crawlers/scholarshipWebDiscovery.js'
-      );
-      if (isScholarshipWebDiscoveryEnabled()) {
-        webScholarships = await discoverScholarshipsViaWeb(db, {
-          profileContext: ctx,
-          thesis,
-          computeMatchDecision,
-          maxPages: 5,
-        });
-      }
-    } catch (err) {
-      // best-effort — individual web discovery must never break OS discovery.
-      webScholarships = { ok: false, error: err?.message || String(err) };
-    }
-  }
-
   // Return the full-fidelity stored opportunities (OS shape, with
   // applicant_types/need_categories/geography/kind) so the caller can cross-match
   // them against OTHER profiles in the same cycle — the live funding_opportunities
   // table does NOT persist those matching fields, so they can only be matched
   // in-memory while the run objects are alive.
   const opportunities = storage.listCatalog(store);
-  return { run, persisted, thesis, webScholarships, opportunities };
+  return { run, persisted, thesis, opportunities };
 }
 
 /**

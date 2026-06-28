@@ -46,10 +46,10 @@ const FACTORIES = Object.freeze({
   // reality gate -> match engine unchanged and widen REAL federal coverage.
   federal_register: createFederalRegisterAdapter,
   nih_guide: createAgencyRssAdapter,
-  // NOTE: CareerOneStop's Scholarship Web API was RETIRED (verified 2026-06-23:
+  // NOTE: CareerOneStop's Scholarship Web API was retired (verified 2026-06-23:
   // their 21 live services include no scholarship endpoint; scholarship* paths
-  // 404 while occupation returns 200). Individual scholarships are covered by
-  // the Brave+LLM scholarshipWebDiscovery service instead.
+  // 404 while occupation returns 200). Student profiles use honest directory
+  // sources unless a real source-specific adapter is added.
   united_way_211: officialDirectory('united_way_211'),
   donorschoose: officialDirectory('donorschoose'),
   cancer_care: officialDirectory('cancer_care'),

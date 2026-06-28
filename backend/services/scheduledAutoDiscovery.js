@@ -5,17 +5,12 @@
  * using the same profile/sections/signals logic as login auto-discovery.
  * Skips profiles already crawled today unless material profile content changed.
  *
- * NOTE: this used to import triggerAutoDiscoveryCrawlers from
- * autoDiscoveryCrawlers.js — that path enqueues legacy `crawler_jobs` rows
- * which the dispatcher now marks `superseded_by_crawler_os` and never runs
- * (post-cutover). Daily auto-discovery was therefore a silent no-op. We now
- * import from legacyCrawlSuperseded.js so the scheduled run drives the
- * Crawler OS (runProfileDiscoveryLive) for each profile — same code path as
- * login auto-discovery and the Discover button.
+ * Daily auto-discovery drives the Crawler OS (runProfileDiscoveryLive) for
+ * each profile — same code path as login auto-discovery and the Discover button.
  */
 
 import { randomUUID } from 'crypto'
-import { triggerAutoDiscoveryCrawlers } from './legacyCrawlSuperseded.js'
+import { triggerAutoDiscoveryCrawlers } from './crawlerOsCompatibility.js'
 import { computeProfileDigest } from './profileHelpers.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { createLogger } from '../utils/logger.js'
@@ -113,6 +108,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
     .all()
 
   report.profiles_total = Array.isArray(profiles) ? profiles.length : 0
+  const runDiscovery = options.runDiscovery || triggerAutoDiscoveryCrawlers
 
   for (const profile of profiles || []) {
     try {
@@ -123,7 +119,7 @@ export async function runScheduledAutoDiscovery(db, options = {}) {
         continue
       }
 
-      await triggerAutoDiscoveryCrawlers(db, profile.id, {
+      await runDiscovery(db, profile.id, {
         uploadDir: options.uploadDir,
         getOpenAI: options.getOpenAI,
         fetcher: options.fetcher,

@@ -46,6 +46,7 @@ export function resetDb(db) {
     "DELETE FROM application_drafts",
     "DELETE FROM budgets",
     "DELETE FROM grants",
+    "DELETE FROM profile_opportunity_matches",
     "DELETE FROM funding_opportunities",
     "DELETE FROM vehicle_opportunities",
     "DELETE FROM form_schemas",
@@ -95,4 +96,3 @@ export function pickAnyZipFromSeed() {
   // Deterministic, always-valid US ZIP for crawler smoke.
   return "10001"
 }
-

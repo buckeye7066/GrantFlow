@@ -1300,6 +1300,7 @@ function ApplicationCard({
     // Only re-sync drafts when the dialog opens (or the underlying data
     // identity changes); interest dialog is fully driven by local draft state
     // while open.
+
   }, [interestDialogOpen, application.interests, application.activity_catalog])
 
   const effectiveOptions = useMemo(() => {

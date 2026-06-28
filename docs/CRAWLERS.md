@@ -1,87 +1,82 @@
-# GrantFlow Crawlers — Unified Reference
+# GrantFlow Crawlers - Unified Reference
 
-Single reference for crawler goals, implementation, and operations. **Goals and rules for Cursor:** see **[CURSOR_MASTER_PROMPT_CRAWLERS.md](CURSOR_MASTER_PROMPT_CRAWLERS.md)**.
-
----
-
-## 1. Goals (summary)
-
-- **Real only:** Every funding source has a valid http/https URL. No placeholders, example.com, or TBD links.
-- **No loans, no matching funds:** Exclude loans, microloans, and matching-fund/cost-share programs everywhere (crawlers, API, DB query).
-- **Profile-driven (except Geo):** All crawlers except Geo use full profile data and respect the Discover Grants slider (`min_match_score`). ECF and similar state benefit programs are eligibility-based only (no slider).
-- **Local:** 25 miles from profile ZIP and from each interested-school ZIP (students).
-- **Student:** School portals, FAFSA-style need, GPA, test scores, gender, location; grants/scholarships only.
-- **Geo:** Not profile-based; every US ZIP; store by state → ZIP; real URL only.
-
-Full rules and per-crawler goals: **[CURSOR_MASTER_PROMPT_CRAWLERS.md](CURSOR_MASTER_PROMPT_CRAWLERS.md)**.
+Single reference for crawler goals, implementation, and operations. Product rules live in [canonical_rules.md](canonical_rules.md); crawler planning rules live in [CURSOR_MASTER_PROMPT_CRAWLERS.md](CURSOR_MASTER_PROMPT_CRAWLERS.md).
 
 ---
 
-## 2. Policy implementation
+## 1. Goals
 
-Central enforcement lives in **`backend/services/crawlers/opportunityPolicy.js`**:
+- **Real only:** Every funding source must have a valid http/https URL. No placeholders, example.com, TBD links, or generic informational pages passed off as funding.
+- **Rules over score:** Funding can be high-scoring and still disallowed. Rules and goals decide eligibility.
+- **No loans or matching funds:** Exclude loans, microloans, matching-fund, and cost-share programs everywhere.
+- **Profile-driven:** Crawler OS builds a thesis from the active profile before source selection and matching. Profile-free discovery is retired.
+- **No cross-profile bleed:** Matches are written and read per profile. A source found for one profile cannot silently become a result for another profile.
+- **Honest zero results:** Sparse or zero Crawler OS coverage must be visible and explainable. Do not backfill generic legacy catalog results.
+- **Directories are labeled:** Directory-style resources may survive when rules allow them, but they must be labeled as directories rather than grants.
 
-- `isValidRealUrl`, `isPlaceholderOpportunity`, `isLoanLike`, `isMatchingFunds`, `enforceOpportunityPolicy`, `filterByPolicy`
-- Applied on: **live path** (after normalize + after rescore), **DB fallback** (after scoring), **persist** (before `bulkUpsertFundingOpportunities`), **run-multiple**
-- **DB query** (`buildCandidateOpportunityQuery`): always excludes `requires_match = TRUE`, `match_percentage > 0`, and loan types (no env toggles)
+---
 
-**Tests**
+## 2. Active Implementation
+
+The active crawler is **Crawler OS**:
+
+- `backend/crawler-os/sourceRegistry.js` - active source registry and per-source kind/trust metadata.
+- `backend/crawler-os/profileIntelligence.js` - profile thesis used for planning and matching.
+- `backend/crawler-os/pipeline.js` - fetch, parse, reality checks, per-profile matching, and source telemetry.
+- `backend/crawler-os/matchEngine.js` - Crawler OS compatibility facade; delegates every score/verdict to `backend/services/matchEngine.js`.
+- `backend/crawler-os/contract.js` - normalized opportunity kinds, reality status, and trust tiers.
+- `backend/services/matchEngine.js` - canonical ACCEPT/REVIEW/REJECT authority and match explanation builder.
+- `backend/services/crawlerOsService.js` - live app boundary used by routes, schedulers, and agents.
+- `backend/services/crawlerOsPersistence.js` - persistence into opportunities, matches, source runs, and profile discovery stamps.
+
+The matching route serves `profile_opportunity_matches` from Crawler OS by default. Crawler OS owns discovery, source telemetry, and profile-scoped match persistence; `backend/services/matchEngine.js` owns the decision. The old catalog matcher is retired unless the server-only emergency flag `CRAWLER_OS_ALLOW_LEGACY_MATCHING=1` is deliberately set.
+
+---
+
+## 3. Commands
 
 ```bash
-node --test tests/unit/opportunityPolicy.test.mjs
-node --test tests/unit/real-crawlers-policy.test.mjs
-node --test tests/unit/real-crawlers-local-funding.test.mjs
+npm run crawler-os:test
+npm run crawler-os:lint
+npm run crawler:verify
+npm run crawler:doctor
+npm run crawler:smoke
+npm run crawler:run -- <profileId> [--floor=N]
 ```
 
-**Debug “why 0 results”**
+Notes:
 
-- Run `POST /api/real-crawlers/run`; check `response.debug.live.validation_rejection_counts` and `response.debug.policy_rejections_db`
-- `scripts/check-crawler-results.mjs` prints DB counts and reminds where policy rejection counts appear in the API response
-
----
-
-## 3. Data sources
-
-- **Real crawlers (Discover Grants):** Grants.gov, Benefits.gov, studentaid.gov, state and directory URLs. Details: **[DATA_SOURCES.md](DATA_SOURCES.md)**.
-- **National Zip / Geo crawler:** Stores by state and ZIP; uses real URLs only; no profile.
-- **National Crawler V2** (separate pipeline): registry in `backend/services/nationalCrawlerV2/registry.js`; modes SMOKE_MODE, STATE_MODE, NATIONAL_MODE. See **[CRAWLER_ARCHITECTURE.md](CRAWLER_ARCHITECTURE.md)** and **[CRAWLER_SCHEMA.md](CRAWLER_SCHEMA.md)**.
+- `crawler:doctor` and `crawler:smoke` run deterministic Crawler OS checks.
+- `crawler:run` requires a profile id because active discovery is profile-driven.
+- `crawler:verify` writes `test-results/crawler-os-report.json` and `.md`.
 
 ---
 
-## 4. Crawler environment variables
+## 4. Environment
 
-**Real crawlers (backend/routes/realCrawlers.js)**
+- `CRAWLER_PROFILE_ID` - optional profile id for `npm run crawler:run`.
+- `CRAWLER_MIN_FLOOR` / `CRAWLER_FLOOR` - optional minimum floor for the OS CLI runner.
+- `CRAWLER_OS_ALLOW_LEGACY_MATCHING` - emergency-only escape hatch for the retired catalog matcher. Leave unset.
 
-- `LIVE_CRAWL_TIMEOUT_MS` — timeout per crawler (default `12000`)
-- `MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK` — if live returns at least this many, skip DB fallback (default `3`)
-- `LIVE_CRAWL_PERSIST_OPPS` — persist live results to DB (default `true`)
-- `ENABLE_TOKEN_NARROWING` — use profile tokens in DB candidate query (default `true`)
-- `DISABLE_ECF_UNLOCK_GATING` — set `true` to run ECF crawler regardless of eligibility (default `false`)
-
-**National Crawler V2 (scripts)**
-
-- `CRAWLER_MODE` — `SMOKE_MODE` | `STATE_MODE` | `NATIONAL_MODE`
-- `CRAWLER_STATE` — 2-letter state for STATE_MODE
-- `CRAWLER_USE_LIVE_SOURCES` — use live URLs vs fixtures (default `false`)
-- `CRAWLER_MAX_SOURCES`, `CRAWLER_MAX_URLS_PER_SOURCE`, `CRAWLER_TIMEOUT_SECONDS`
-
-Full app env: **[ENVIRONMENT.md](ENVIRONMENT.md)**. Generated inventory: run `node scripts/inventory-env.mjs` (see ENV_VARS.md).
+Retired National Crawler V2 variables such as `CRAWLER_MODE`, `CRAWLER_STATE`, and `CRAWLER_USE_LIVE_SOURCES` are no longer used by the active crawler commands.
 
 ---
 
-## 5. Defect log (recent)
+## 5. Debugging Zero Results
 
-- **cof.org foundation-locator:** Switched to `community-foundation-locator` (valid TLS); local + nationalZip use it.
-- **Cheerio ESM:** Use named import `import { load } from 'cheerio'`.
-- **Windows file:// paths:** Use `pathToFileURL()` / `fileURLToPath()` for fixture paths.
-- **crawler:doctor scope:** Runs only nationalCrawlerV2 smoke tests.
+- Run `POST /api/real-crawlers/run` or `npm run crawler:run -- <profileId>`.
+- Check per-source outcomes in `crawler_source_runs`.
+- Check profile matches in `profile_opportunity_matches` where `matcher_version = 'crawler-os'`.
+- Run `npm run crawler:verify` and inspect `test-results/crawler-os-report.md`.
+
+Zero results are a mission-relevant state. Fix source coverage, profile extraction, or rule interpretation; do not patch over zero results with generic fallback matches.
 
 ---
 
-## 6. National Crawler V2 (separate pipeline)
+## 6. Retired Crawlers
 
-V2 discovers and normalizes U.S. funding/benefits into **TRACK_A** (client/beneficiary) and **TRACK_B** (provider/org). It does **not** drive the Discover Grants UI; that uses the real crawlers (local, government, student, health, special needs, ECF) and Geo crawler.
+National Crawler V2 and the old strategy/domain crawler family are retired for discovery. Historical docs and archived files may remain for audit context, but they are not the live crawler authority.
 
-- Architecture and flow: **[CRAWLER_ARCHITECTURE.md](CRAWLER_ARCHITECTURE.md)**
-- Normalized schema (nf_programs_a/b): **[CRAWLER_SCHEMA.md](CRAWLER_SCHEMA.md)**
-- Registry and scope: **[CRAWLER_SOURCES.md](CRAWLER_SOURCES.md)** (V2 registry and smoke sources)
+- `/api/crawler-v2/run` returns `410`.
+- `crawler:run` and `crawler:smoke` execute Crawler OS.
+- Runtime import checks must keep old discovery crawler modules unreachable from the backend runtime.

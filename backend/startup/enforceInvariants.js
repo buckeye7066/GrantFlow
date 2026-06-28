@@ -742,9 +742,9 @@ export async function enforceProfileScopedPipeline(db) {
  *
  * The profile-merge path (services/profileDedupeService.js) historically JOINED
  * two overlapping forms of the same name when it merged two profiles'
- * basic_information.full_name — e.g. "Robert White" + "Robert Michael White"
- * became "Robert White\nRobert Michael White", which synced into
- * profiles.display_name and rendered as "Robert White Robert Michael White" in
+ * basic_information.full_name — e.g. "Jordan Lane" + "Jordan Michael Lane"
+ * became "Jordan Lane\nJordan Michael Lane", which synced into
+ * profiles.display_name and rendered as "Jordan Lane Jordan Michael Lane" in
  * the profile header AND the generated Pipeline Potential Breakdown PDF title.
  *
  * The producer is now fixed (mergeValues collapses person-name fields), but this
@@ -1147,7 +1147,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   steps.push(await enforceNoDuplicateGrants(db))
   steps.push(await enforceRelevanceFloor(db))
   // Profile-level data repair (not pipeline): collapse any doubled display_name
-  // (e.g. "Robert White Robert Michael White") back to a single name.
+  // (e.g. "Jordan Lane Jordan Michael Lane") back to a single name.
   steps.push(await enforceProfileDisplayNameNotDoubled(db))
   // Profile-level DATA repair (not pipeline): collapse a conflicting income
   // across the 'financial' vs 'financial_information' sections of an INDIVIDUAL

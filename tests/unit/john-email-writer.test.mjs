@@ -43,7 +43,7 @@ test('composeEmailFromLead produces an email that passes the safety classifier',
 
     // Personalization records the salutation, evidence, and config snapshot.
     assert.equal(r.personalization.template, 'default')
-    assert.equal(r.personalization.salutation, 'Hi Chief,')
+    assert.equal(r.personalization.salutation, 'Hello Chief Allen,')
     assert.ok(r.personalization.evidence_topic)
     assert.equal(r.personalization.config_snapshot.from_alias, cfg.fromAlias)
 

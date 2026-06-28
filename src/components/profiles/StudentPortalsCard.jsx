@@ -78,6 +78,7 @@ function extractAwardAmount(resultsJson) {
     const parsed = JSON.parse(resultsJson)
     return parsed.awardAmountRaw ? ` — ${parsed.awardAmountRaw}` : ""
   } catch (err) {
+
     console.warn("extractAwardAmount: failed to parse results_json", err)
     return ""
   }

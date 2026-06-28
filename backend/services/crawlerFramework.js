@@ -3,12 +3,11 @@ const log = createLogger('crawlerFramework')
 /**
  * crawlerFramework.js
  *
- * Single canonical crawler framework with pluggable source adapters.
- * Wraps the strategy-based crawlerManager and direct API source adapters.
+ * Compatibility helpers kept for old imports. New discovery code must call
+ * backend/services/crawlerOsService.js directly.
  */
 
-// Re-export the core crawler runner from crawlerManager
-export { runCrawler, SCHEMA } from './legacyCrawlSuperseded.js'
+export { runCrawler, SCHEMA } from './crawlerOsCompatibility.js'
 
 // Source adapters (real APIs)
 export { fetchSamGov as fetchGrantsGov } from './sources/samGov.js'
@@ -84,7 +83,7 @@ export async function runFullCrawl(db, profileId, options = {}) {
   try {
     let _runCrawler;
     try {
-      const module = await import('./legacyCrawlSuperseded.js');
+      const module = await import('./crawlerOsCompatibility.js');
       _runCrawler = module.runCrawler;
       if (!_runCrawler) throw new Error('runCrawler not exported');
     } catch (importErr) {

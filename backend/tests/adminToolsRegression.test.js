@@ -311,13 +311,13 @@ describe('admin brain cleanup and CodeGuard summary', () => {
       dialect: 'postgres',
       prepare(sql) {
         return {
-          all() {
+          async all() {
             if (sql.includes('anya_brain_memory')) return statements.anya_brain_memory
             if (sql.includes('anya_context')) return statements.anya_context
             if (sql.includes('anya_tool_usage')) return statements.anya_tool_usage
             return { rows: [] }
           },
-          run() {
+          async run() {
             throw new Error('dryRun should not delete')
           },
         }

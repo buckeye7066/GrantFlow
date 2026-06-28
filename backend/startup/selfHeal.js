@@ -15,11 +15,13 @@
  * created; all heavy I/O-bound tasks are skipped.
  *
  * ── On-demand execution (Sam / Anya) ────────────────────────────────────────
- * runSelfHeal is invoked at boot (server.js) AND on demand by Sam's nightly
- * maintenance sweep and Anya's `owner.run_self_heal` tool. Every step is
- * idempotent and safe to re-run live (seeds are gated on count thresholds, the
- * baseline upsert preserves live avatars via COALESCE, enforceInvariants is
- * per-step guarded). The ONE step that is NOT safe to expose on demand is a
+ * runSelfHeal is invoked on demand by Sam's nightly maintenance sweep and
+ * Anya's `owner.run_self_heal` tool. Boot wires the schema/data invariant
+ * sweeps directly in server.js, while this orchestrator remains the full
+ * runtime maintenance pass. Every step is idempotent and safe to re-run live
+ * (seeds are gated on count thresholds, the baseline upsert preserves live
+ * avatars via COALESCE, enforceInvariants is per-step guarded). The ONE step
+ * that is NOT safe to expose on demand is a
  * `force` baseline RE-SEED (BASELINE_SEED_MODE=force re-upserts every profile/
  * grant/document — a boot-only recovery lever). When `onDemand:true` we coerce
  * the seed mode to 'auto' so an on-demand run can never trigger that destructive

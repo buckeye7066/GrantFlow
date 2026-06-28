@@ -1109,6 +1109,7 @@ export default function ProfileOverview({
       }
     } catch (error) {
       // Defensive: never let a file-selection error crash the component.
+
       console.error("Failed to handle avatar file selection", error)
     } finally {
       if (event.target) {
@@ -1125,6 +1126,7 @@ export default function ProfileOverview({
       }
     } catch (error) {
       // Defensive: never let a file-selection error crash the component.
+
       console.error("Failed to handle document file selection", error)
     } finally {
       if (event.target) {

@@ -27,13 +27,16 @@ auditors, and future contributors can hold John to a consistent bar.
 - fake-personal ("I noticed you recently…" without a real Yana evidence URL)
 - deceptive
 - overly corporate
+- generic team/list greetings such as `Hey Team,`, `Hi Team,`, or `Dear Team,`
 
 ## Email anatomy
 
 Every John email contains, in order:
 
-1. **Salutation** — first name from a Yana contact point if it's safe to
-   use, otherwise `Hi team,`.
+1. **Salutation** — a safe person-level greeting when Yana has a usable name
+   or natural title (`Hello Allen,`, `Hello Dr. Karen Smith,`,
+   `Hello Chief Allen,`). If no person or natural role is known, use the
+   neutral professional fallback `Hello,`, never `Hey Team,` or `Hi team,`.
 2. **Specific reference** — one sentence noting the organisation and the
    public evidence Yana surfaced (e.g. "doing meaningful work around
    replacing 25-year-old SCBA gear").
@@ -82,6 +85,7 @@ starting with `Re:` since John never sends a reply).
 | `we guarantee`, `100% funding`, `you will receive funding` | implies certainty |
 | `as we discussed`, `per our call`, `nice meeting you` | claims a relationship that does not exist |
 | `desperate`, `last chance`, `don't miss out` | predatory framing |
+| `Hey Team`, `Hi Team`, `Dear Team` | generic list-style greeting |
 
 If any of those appear in the rendered body, John blocks the draft.
 
@@ -104,7 +108,7 @@ appropriate evidence.
 
 ### Volunteer fire department
 
-> Hi Chief,
+> Hello Chief Allen,
 >
 > I came across Riverbend Volunteer Fire Department while looking at
 > organizations doing meaningful work around replacing 25-year-old SCBA
@@ -140,9 +144,10 @@ appropriate evidence.
 
 ### Church / ministry
 
-Identical structure; "doing meaningful work around" line points at the
-ministry program Yana found (e.g. "after-school tutoring at the church"
-with a `source_url`).
+Identical structure; the salutation should use a safe person/title greeting
+when available (for example, `Hello Pastor Smith,`) or the neutral
+professional fallback `Hello,`. The hook points at the ministry program
+Yana found (e.g. "after-school tutoring at the church" with a `source_url`).
 
 ### Nonprofit (general)
 
@@ -151,8 +156,9 @@ re-employment program").
 
 ### School / booster club
 
-Identical structure; salutation typically resolves to `Hi Principal,` or
-`Hi team,`. The hook references the specific school program Yana found.
+Identical structure; salutation typically resolves to a safe person/title
+form such as `Hello Principal Adams,` or to the neutral fallback `Hello,`.
+The hook references the specific school program Yana found.
 
 ### Food pantry / free clinic
 
@@ -194,3 +200,4 @@ the literal phrase `no thanks` (or `unsubscribe`, `remove me`, `opt out`,
 - Always sign as Dr. John White / GrantFlow.
 - Never claim to have spoken to or met the recipient.
 - Never imply funding is guaranteed.
+- Never use a generic team/list greeting such as `Hey Team,` or `Hi team,`.

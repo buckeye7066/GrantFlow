@@ -32,7 +32,7 @@ const APPLICANT_RULES = Object.freeze([
   ['church', /\b(church|congregation|parish|faith-based|religious organization)\b/i],
   ['ministry', /\b(ministry|faith-based|religious organization|outreach ministry)\b/i],
   ['business', /\b(business|small business|company|employer|startup|entrepreneur)\b/i],
-  ['farm', /\b(farm|farmer|agriculture|agricultural|rural business|ranch)\b/i],
+  ['farm', /\b(farm|farmer|ranch|agricultural producer|agricultural producers|rural business)\b/i],
   ['government', /\b(city|county|municipal|state agency|local government|tribal|public agency)\b/i],
   ['individual', /\b(individual|resident|household|family|parent|caregiver)\b/i],
 ]);

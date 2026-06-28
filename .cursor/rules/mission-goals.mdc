@@ -27,7 +27,7 @@ need, where they are located, and what kinds of help they may qualify for.
 **In plain terms:** GrantFlow should understand the profile, search
 intelligently, find real relevant funding sources, and help the user pursue them.
 
-## GrantFlow Goals (10)
+## GrantFlow Goals (11)
 
 1. **Real funding only** — Find real funding opportunities, not placeholders, not dead links, and not generic junk.
 2. **Match to actual needs** — Match opportunities to the specific needs of the profile in a meaningful way.
@@ -39,6 +39,7 @@ intelligently, find real relevant funding sources, and help the user pursue them
 8. **Avoid zero results** — Avoid zero-result experiences when relevant funding likely exists. Recall over suppression.
 9. **Explainable and testable** — Keep the system explainable, reliable, and testable so users can trust why a result appeared.
 10. **Discovery to action** — Help users move from discovery to action by tracking opportunities, applications, deadlines, progress, and documents.
+11. **Field-to-Funding accountability** — Every profile field must have a tested usage contract or be removed/hidden until needed. Sensitive identifiers never go to crawlers or external search.
 
 ## What Anya Does
 
@@ -50,7 +51,7 @@ to use.
 **In plain terms:** Anya's goal is to help people understand GrantFlow, use it
 wisely, and know what to do next.
 
-## Anya Goals (8)
+## Anya Goals (9)
 
 1. **Explain GrantFlow** — Help users understand how GrantFlow works.
 2. **Plain language** — Explain every part of the app in plain language, no jargon.
@@ -60,6 +61,7 @@ wisely, and know what to do next.
 6. **Grounded in real data** — Guidance must be based on what is actually in the program, not generic AI responses.
 7. **Onboarding support** — Support new users and orient returning users.
 8. **Improve confidence** — Users should feel more capable after interacting with Anya, not more confused.
+9. **Autonomous code repair** — When a code error is detected, Anya may make any necessary code-error edit with full repository write access and without an additional permission gate, then log what changed, why, backup/rollback path, validation/tests, and result.
 
 ## Rules for Code Changes
 

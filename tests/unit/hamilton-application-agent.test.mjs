@@ -65,20 +65,41 @@ function makeMemoryDb() {
               '{"applications":[{"name":"University of New Haven","status":"submitted"}]}');
     CREATE TABLE IF NOT EXISTS funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, description TEXT, application_url TEXT,
-      funding_source_type TEXT, category TEXT
+      funding_source_type TEXT, category TEXT, profile_id TEXT, record_origin TEXT,
+      opportunity_kind TEXT, source_trust_tier TEXT, reality_status TEXT, reality_reasons TEXT
     );
-    INSERT INTO funding_opportunities (id, title, description, application_url, funding_source_type, category)
+    INSERT INTO funding_opportunities (id, title, description, application_url, funding_source_type, category, record_origin, opportunity_kind, source_trust_tier, reality_status, reality_reasons)
       VALUES ('opp-mtsu-merit', 'MTSU Presidential Scholarship',
-              'A merit scholarship for incoming undergraduates at Middle Tennessee State University.',
-              'https://www.mtsu.edu/financial-aid/scholarships/', 'university', 'scholarship');
-    INSERT INTO funding_opportunities (id, title, description, application_url, funding_source_type)
+               'A merit scholarship for incoming undergraduates at Middle Tennessee State University.',
+               'https://www.mtsu.edu/financial-aid/scholarships/', 'university', 'scholarship',
+               'live_crawl', 'PROGRAM', 'official', 'VERIFIED', '[]');
+    INSERT INTO funding_opportunities (id, title, description, application_url, funding_source_type, record_origin, opportunity_kind, source_trust_tier, reality_status, reality_reasons)
       VALUES ('opp-fafsa', 'MTSU Federal Work-Study',
-              'Need-based federal work-study at Middle Tennessee State University. Requires FAFSA.',
-              'https://www.mtsu.edu/financial-aid/', 'university');
-    INSERT INTO funding_opportunities (id, title, description, application_url)
+               'Need-based federal work-study at Middle Tennessee State University. Requires FAFSA.',
+               'https://www.mtsu.edu/financial-aid/', 'university',
+               'live_crawl', 'PROGRAM', 'official', 'VERIFIED', '[]');
+    INSERT INTO funding_opportunities (id, title, description, application_url, record_origin, opportunity_kind, source_trust_tier, reality_status, reality_reasons)
       VALUES ('opp-external', 'Going Merry General Scholarship',
-              'A scholarship marketplace listing.',
-              'https://www.goingmerry.com/scholarships/example-99');
+               'A scholarship marketplace listing.',
+               'https://www.goingmerry.com/scholarships/',
+               'live_crawl', 'PROGRAM', 'verified', 'VERIFIED', '[]');
+    CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      matcher_version TEXT,
+      updated_at TEXT,
+      computed_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    );
+    INSERT INTO profile_opportunity_matches
+      (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at)
+      VALUES
+      ('p-mtsu', 'opp-mtsu-merit', 92, 'accept', 'Crawler OS approved MTSU scholarship for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('p-mtsu', 'opp-fafsa', 88, 'review', 'Crawler OS approved MTSU financial aid for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('p-mtsu', 'opp-external', 74, 'review', 'Crawler OS approved external scholarship marketplace for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS grants (
       id TEXT PRIMARY KEY, status TEXT, application_url TEXT
     );

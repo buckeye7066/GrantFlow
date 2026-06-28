@@ -67,6 +67,18 @@ function createDb() {
       url TEXT,
       application_url TEXT
     );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      match_reasons TEXT DEFAULT '[]',
+      matcher_version TEXT,
+      computed_at TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    );
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, created_at, updated_at)
     VALUES ('profile-focus-forward-ministries', 'church', 'church', 'OH', '43215', '["ministry","community"]', '["housing","transportation"]', '2026-04-26', '2026-04-26');
     INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, created_at, updated_at)
@@ -147,6 +159,13 @@ function createDb() {
         1000, 5000, 'rolling', 'https://www.grants.gov/search-results-detail/tn-1',
         0, 'TN', '["grant","housing"]', '["housing","rent"]', 'grant', 'OPPORTUNITY', 1, 'grant'
       );
+    INSERT INTO profile_opportunity_matches
+      (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version, computed_at, updated_at)
+    VALUES
+      ('profile-focus-forward-ministries', 'real-grant-1', 82, 'review', 'Crawler OS matched ministry/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-pa-business', 'real-grant-1', 62, 'review', 'Crawler OS matched a nationwide funding source.', '["nationwide_scope"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-pa-business', 'pa-grant-1', 86, 'accept', 'Crawler OS matched Pennsylvania business equipment signals.', '["profile_need_match","location_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('profile-no-state', 'real-grant-1', 58, 'review', 'Crawler OS matched only nationwide funding because profile state is unavailable.', '["nationwide_scope"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
   `)
   return db
 }
@@ -176,12 +195,7 @@ describe('matching quality gate route', () => {
       expect(urls.some((url) => url.includes('churchlawandtax.com'))).toBe(false)
       expect(urls.some((url) => url.includes('find-a-cap/?zip='))).toBe(false)
       expect(urls.some((url) => url.includes('foundation-locator?state='))).toBe(false)
-      expect(response.body.referrals).toHaveLength(2)
-      expect(response.body.referrals.map((ref) => ref.referral_key).sort()).toEqual([
-        'communityactionpartnership.com/find-a-cap',
-        'example.org/foundation-locator',
-      ])
-      expect(response.body.diagnostics.dropped_for_no_reason).toBe(0)
+      expect(response.body.referrals).toHaveLength(0)
       expect(response.body.opportunities.length).toBeGreaterThan(0)
       expect(response.body.opportunities.every((opp) => Array.isArray(opp.match_reasons) && opp.match_reasons.length > 0)).toBe(true)
     } finally {

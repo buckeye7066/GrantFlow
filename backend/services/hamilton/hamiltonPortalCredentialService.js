@@ -25,7 +25,6 @@ import crypto from 'node:crypto'
 import psl from 'psl'
 import { encryptRuntimeSecret, decryptRuntimeSecret } from '../../utils/runtimeSecrets.js'
 import { normalizeHost } from './hamiltonCredentialSessionService.js'
-import { isValidTotpSecret } from './hamiltonTotp.js'
 import {
   getUnlockedKey,
   wrapSecretWithKey,
@@ -185,9 +184,9 @@ function rowToMasked(row) {
     login_url: row.login_url || null,
     username_masked: maskUsername(row.username),
     has_password: Boolean(row.password_ciphertext || row.wrapped_ciphertext),
-    // Whether an authenticator-app (TOTP) seed is saved so Hamilton can clear a
-    // 2FA gate on her own. The seed itself is NEVER returned — only this flag.
-    has_totp: Boolean(row.totp_secret_ciphertext),
+    // MFA automation is disabled by policy. Legacy rows may still carry old
+    // ciphertext columns, but Hamilton must never advertise or use them.
+    has_totp: false,
     // Whether this login was auto-provisioned under the profile's master
     // passphrase (its password is wrapped with the master key, not just the
     // server vault). The wrapped secret itself is NEVER returned.
@@ -265,14 +264,10 @@ export async function saveCredential(db, {
   const provenance = ['admin', 'user', 'hamilton'].includes(managedBy) ? managedBy : 'user'
   await ensureSchema(db)
 
-  // Optional authenticator-app seed. Validate now so a malformed seed is
-  // rejected at save time (clear error) rather than silently failing at login.
-  // Encrypt it with the same AES-256-GCM envelope as the password.
   const totp = totpSecret && String(totpSecret).trim() ? String(totpSecret).trim() : null
-  if (totp && !isValidTotpSecret(totp)) {
-    throw new Error('totpSecret is not a valid authenticator (base32 seed or otpauth:// URI)')
+  if (totp) {
+    throw new Error('TOTP seed storage is disabled by Hamilton policy. Ask the user to clear 2FA and save a trusted browser session instead.')
   }
-  const totpEnc = totp ? encryptRuntimeSecret(totp) : null
 
   const enc = encryptRuntimeSecret(String(password))
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
@@ -283,29 +278,15 @@ export async function saveCredential(db, {
   ).get(String(profileId), host, String(username))
 
   if (existing) {
-    // Re-saving WITHOUT a totpSecret leaves any existing one intact (a password
-    // update shouldn't silently drop the 2FA seed); passing one replaces it.
-    if (totpEnc) {
-      await db.prepare(
-        `UPDATE hamilton_portal_credentials SET
-           user_id = ?, label = ?, login_url = ?, username = ?,
-           password_ciphertext = ?, password_iv = ?, password_tag = ?,
-           totp_secret_ciphertext = ?, totp_secret_iv = ?, totp_secret_tag = ?,
-           managed_by = ?, status = 'active', updated_at = ${nowFn}
-         WHERE id = ?`,
-      ).run(String(userId), label, loginUrl, String(username),
-        enc.value_ciphertext, enc.iv, enc.tag,
-        totpEnc.value_ciphertext, totpEnc.iv, totpEnc.tag, provenance, existing.id)
-    } else {
-      await db.prepare(
-        `UPDATE hamilton_portal_credentials SET
-           user_id = ?, label = ?, login_url = ?, username = ?,
-           password_ciphertext = ?, password_iv = ?, password_tag = ?,
-           managed_by = ?, status = 'active', updated_at = ${nowFn}
-         WHERE id = ?`,
-      ).run(String(userId), label, loginUrl, String(username),
-        enc.value_ciphertext, enc.iv, enc.tag, provenance, existing.id)
-    }
+    await db.prepare(
+      `UPDATE hamilton_portal_credentials SET
+         user_id = ?, label = ?, login_url = ?, username = ?,
+         password_ciphertext = ?, password_iv = ?, password_tag = ?,
+         totp_secret_ciphertext = NULL, totp_secret_iv = NULL, totp_secret_tag = NULL,
+         managed_by = ?, status = 'active', updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(String(userId), label, loginUrl, String(username),
+      enc.value_ciphertext, enc.iv, enc.tag, provenance, existing.id)
     return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(existing.id))
   }
 
@@ -319,7 +300,7 @@ export async function saveCredential(db, {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ${nowFn}, ${nowFn})`,
   ).run(id, String(userId), String(profileId), host, label, loginUrl, String(username),
     enc.value_ciphertext, enc.iv, enc.tag,
-    totpEnc?.value_ciphertext ?? null, totpEnc?.iv ?? null, totpEnc?.tag ?? null, provenance)
+    null, null, null, provenance)
   return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(id))
 }
 
@@ -345,6 +326,29 @@ export async function deleteCredential(db, id) {
   await ensureSchema(db)
   const res = await db.prepare('DELETE FROM hamilton_portal_credentials WHERE id = ?').run(String(id))
   return (res?.changes ?? res?.rowCount ?? 0) > 0
+}
+
+/**
+ * Drop every MASTER-WRAPPED (auto-provisioned) credential for a profile.
+ *
+ * The wrapped_* secret is encrypted with the profile's scrypt-derived master
+ * key. When the master passphrase is RESET (a new salt+verifier, no re-wrap),
+ * those secrets become permanently unreadable — and saveAutoProvisionedCredential
+ * short-circuits on `already_existed`, so they would never regenerate either.
+ * Purging them lets autopilot recreate fresh logins under the new passphrase.
+ *
+ * Only has_master_wrap rows are removed; user-entered / server-vault-only
+ * credentials (has_master_wrap falsy) do NOT depend on the passphrase and are
+ * left untouched. The `has_master_wrap` predicate is dialect-agnostic: nonzero
+ * INTEGER (sqlite) and TRUE (postgres) both satisfy a bare truthiness check.
+ */
+export async function purgeMasterWrappedCredentials(db, profileId) {
+  if (!db || !profileId) return { deleted: 0 }
+  await ensureSchema(db)
+  const res = await db
+    .prepare('DELETE FROM hamilton_portal_credentials WHERE profile_id = ? AND has_master_wrap')
+    .run(String(profileId))
+  return { deleted: res?.changes ?? res?.rowCount ?? 0 }
 }
 
 // --- Admin vault management ----------------------------------------------
@@ -531,26 +535,13 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
       return null
     }
   }
-  // Decrypt the authenticator seed too, when present, so the engine can derive
-  // the live 2FA code. A decrypt failure here is non-fatal: Hamilton still has
-  // username+password and falls back to the 2FA hard-stop.
-  let totpSecret = null
-  if (match.totp_secret_ciphertext) {
-    try {
-      totpSecret = decryptRuntimeSecret({
-        value_ciphertext: match.totp_secret_ciphertext,
-        iv: match.totp_secret_iv,
-        tag: match.totp_secret_tag,
-      })
-    } catch { totpSecret = null }
-  }
   return {
     id: match.id,
     portal_host: match.portal_host,
     login_url: match.login_url || null,
     username: match.username || null,
     password,
-    totp_secret: totpSecret,
+    totp_secret: null,
     // Provisioned-but-not-yet-registered: the engine uses this to avoid claiming
     // a working account when only the vault password exists.
     pending_registration: Boolean(match.pending_registration),

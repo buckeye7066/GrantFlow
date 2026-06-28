@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { getProfileContext, runProfileContext } from '../db/scopedQuery.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { createLogger } from '../utils/logger.js'
@@ -250,7 +251,7 @@ const _STATIC_PROMPT_ADMIN_SECTION = [
   '- admin.code.crawl: Crawl a directory tree to understand project structure',
   '- admin.code.analyze: Analyze specific files for bugs, patterns, or improvement opportunities',
   '- admin.code.lint: Run linting on specific files to check for issues',
-  '- admin.code.edit: Suggest code changes (read-only analysis; not production writes)',
+  '- admin.code.edit: Apply code-error edits with automatic backup and audit log when a fix is needed',
   '- admin.code.scan: Scan for security issues, deprecated patterns, or code smells',
   '- admin.code.missionAudit: Audit code against mission goals',
   '- admin.code.autoRepair: Auto-repair common anti-patterns (admin only)',
@@ -348,6 +349,10 @@ async function resolveExistingUserId(db, user) {
   }
 }
 
+function runProfilelessSessionMutation(fn) {
+  return runProfileContext({ bypass: true }, fn)
+}
+
 function assertProfileAccess(user, profileId) {
   if (!profileId) return
   if (user.isAdmin) return
@@ -387,6 +392,19 @@ function mapSession(row) {
     user_id: row.user_id ?? null,
     metadata: row.metadata ? JSON.parse(row.metadata) : {},
   }
+}
+
+function resolveReadScopeProfileId(user, options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'profileId')) {
+    return coerceProfileId(options.profileId)
+  }
+  return coerceProfileId(
+    getProfileContext()?.profileId ??
+      user?.activeProfileId ??
+      user?.profile_id ??
+      user?.profileId ??
+      null,
+  )
 }
 
 function mapMessage(row) {
@@ -556,33 +574,50 @@ export async function createSession(db, user, { profileId, title, metadata } = {
     throw new Error('Unable to create session')
   }
 
-  return await getSession(db, user, id)
+  return await getSession(db, user, id, { profileId: normalizedProfileId })
 }
 
 export async function deleteSession(db, user, sessionId) {
   assertAuthenticated(user)
-  const session = await db
-    .prepare('SELECT * FROM anya_sessions WHERE id = ?')
-    .get(sessionId)
-  assertSessionAccess(user, session)
+  const session = await getSession(db, user, sessionId)
 
   // Hard delete — FK cascades handle anya_messages, anya_tasks, anya_context.
   // anya_runs and anya_tool_usage use ON DELETE SET NULL, preserving the audit trail.
-  await db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId)
+  if (session.profile_id) {
+    await db
+      .prepare('DELETE FROM anya_sessions WHERE id = ? AND profile_id = ?')
+      .run(sessionId, session.profile_id)
+  } else {
+    await runProfilelessSessionMutation(() =>
+      db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId),
+    )
+  }
   return { deleted: true, id: sessionId }
 }
 
-export async function getSession(db, user, sessionId) {
+export async function getSession(db, user, sessionId, options = {}) {
   assertAuthenticated(user)
-  const row = await db
-    .prepare(
-      `
-        SELECT *
-        FROM anya_sessions
-        WHERE id = ?
-      `,
-    )
-    .get(sessionId)
+  const scopeProfileId = resolveReadScopeProfileId(user, options)
+  const row = scopeProfileId
+    ? await db
+        .prepare(
+          `
+            SELECT *
+            FROM anya_sessions
+            WHERE id = ?
+              AND profile_id = ?
+          `,
+        )
+        .get(sessionId, scopeProfileId)
+    : await db
+        .prepare(
+          `
+            SELECT *
+            FROM anya_sessions
+            WHERE id = ?
+          `,
+        )
+        .get(sessionId)
 
   assertSessionAccess(user, row)
   return mapSession(row)
@@ -655,13 +690,26 @@ export async function addMessage(db, user, sessionId, { role, content, toolName,
 
   await stmt.run(messageId, session.id, role, content, toolName ?? null, payload)
 
-  await db.prepare(
-    `
-      UPDATE anya_sessions
-      SET updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `,
-  ).run(session.id)
+  if (session.profile_id) {
+    await db.prepare(
+      `
+        UPDATE anya_sessions
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND profile_id = ?
+      `,
+    ).run(session.id, session.profile_id)
+  } else {
+    await runProfilelessSessionMutation(() =>
+      db.prepare(
+        `
+          UPDATE anya_sessions
+          SET updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
+      ).run(session.id),
+    )
+  }
 
   const latest = await getMessages(db, user, session.id, { limit: 1, direction: 'latest' })
   return latest[0]

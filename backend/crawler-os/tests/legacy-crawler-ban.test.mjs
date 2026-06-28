@@ -1,11 +1,12 @@
 // crawler-os/tests/legacy-crawler-ban.test.mjs
 //
-// Cutover guard (Requirement A — old-system removal). The Crawler OS is the ONE
-// discovery/matching authority; it must never depend on any legacy crawler
-// module. This test fails if:
+// Cutover guard (Requirement A: old-system removal). The Crawler OS is the ONE
+// discovery spine; matching decisions must delegate to the shared canonical
+// matcher and the OS must never depend on legacy crawler modules. This test
+// fails if:
 //
 //   (1) any file under backend/crawler-os/ imports a path that escapes
-//       backend/crawler-os/ (self-containment — the new OS is an island), or
+//       backend/crawler-os/ without being allowlisted as a shared contract, or
 //   (2) the public service seam backend/services/crawlerOsService.js imports a
 //       known legacy crawler module (it may only reach ../crawler-os/, ../db/,
 //       and node: builtins).
@@ -28,9 +29,10 @@ const serviceSeam = path.join(backendRoot, 'services', 'crawlerOsService.js');
 const IMPORT_RE = /(?:^|\s|;|\()\s*(?:import|export)\s+(?:[\s\S]*?\bfrom\s+)?['"]([^'"]+)['"]/g;
 const DYNAMIC_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
-// Legacy crawler/matching modules the new system must never import.
+// Legacy crawler modules the new system must never import. The canonical
+// services/matchEngine.js is deliberately not on this list: doctrine requires
+// every runtime, including Crawler OS, to use it as the sole decision authority.
 const LEGACY_DENYLIST = [
-  'services/matchEngine',
   'services/opportunityMatcher',
   'services/opportunityNormalizer',
   'services/comprehensiveCrawler',
@@ -46,6 +48,11 @@ const LEGACY_DENYLIST = [
   'config/matchThresholds',
   'config/relevanceFloor',
 ];
+
+const ALLOWED_SHARED_IMPORTS = new Set([
+  'shared/pipelineStages.js',
+  'backend/services/matchEngine.js',
+]);
 
 function listFiles(dir) {
   const out = [];
@@ -68,7 +75,7 @@ function specifiersOf(file) {
   return [...specs];
 }
 
-test('every file under backend/crawler-os/ is self-contained (no import escapes the OS)', () => {
+test('every file under backend/crawler-os/ uses only the OS or approved shared contracts', () => {
   const escapes = [];
   for (const file of listFiles(osRoot)) {
     for (const spec of specifiersOf(file)) {
@@ -76,12 +83,14 @@ test('every file under backend/crawler-os/ is self-contained (no import escapes 
       if (!spec.startsWith('.')) continue; // bare npm packages are fine
       const resolved = path.resolve(path.dirname(file), spec);
       const rel = path.relative(osRoot, resolved).replace(/\\/g, '/');
+      const repoRel = path.relative(path.resolve(backendRoot, '..'), resolved).replace(/\\/g, '/');
+      if (ALLOWED_SHARED_IMPORTS.has(repoRel)) continue;
       if (rel.startsWith('..')) {
         escapes.push(`${path.relative(osRoot, file)} -> ${spec}`);
       }
     }
   }
-  assert.deepEqual(escapes, [], `Crawler OS must be self-contained; offending imports:\n${escapes.join('\n')}`);
+  assert.deepEqual(escapes, [], `Crawler OS imports must stay inside the OS or approved shared contracts; offending imports:\n${escapes.join('\n')}`);
 });
 
 test('crawlerOsService.js (the seam) imports no legacy crawler module', () => {
