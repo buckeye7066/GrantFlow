@@ -4,8 +4,9 @@
  *
  * This script intentionally checks only public/status-style signals and never
  * reads environment variables or secret config. It proves the local branch is
- * clean/pushed and the current production surfaces are green. It does NOT prove
- * the current branch commit is already live unless the deployment provider later
+ * clean/pushed (or, with --target-branch, that local HEAD matches that remote
+ * branch) and the current production surfaces are green. It does NOT prove the
+ * current branch commit is already live unless the deployment provider later
  * exposes and verifies that exact commit SHA.
  */
 
@@ -16,6 +17,17 @@ import process from 'node:process'
 
 const WRITE_REPORT = process.argv.includes('--write')
 const REQUIRE_CLEAN = process.argv.includes('--require-clean')
+const TARGET_BRANCH = readArgValue('--target-branch')
+
+function readArgValue(name) {
+  const index = process.argv.indexOf(name)
+  if (index === -1) return null
+  const value = process.argv[index + 1]
+  if (!value || value.startsWith('--')) {
+    throw new Error(`${name} requires a branch name`)
+  }
+  return value.trim()
+}
 
 function run(cmd, args, { json = false, optional = false } = {}) {
   const invocation = buildInvocation(cmd, args)
@@ -99,11 +111,13 @@ async function main() {
   const localHead = run('git', ['rev-parse', 'HEAD'])
   const branchName = run('git', ['branch', '--show-current'])
   const currentBranch = firstLine(branchName.stdout).trim()
-  const remoteHead = currentBranch
-    ? run('git', ['rev-parse', '--verify', `origin/${currentBranch}`], { optional: true })
-    : { ok: false, stdout: '', stderr: 'no current branch' }
-  add(checks, 'current branch pushed to origin', remoteHead, localHead.ok && remoteHead.ok && firstLine(localHead.stdout) === firstLine(remoteHead.stdout), {
+  const branchToVerify = TARGET_BRANCH || currentBranch
+  const remoteHead = branchToVerify
+    ? run('git', ['rev-parse', '--verify', `origin/${branchToVerify}`], { optional: true })
+    : { ok: false, stdout: '', stderr: 'no branch selected' }
+  add(checks, TARGET_BRANCH ? `local HEAD matches origin/${TARGET_BRANCH}` : 'current branch pushed to origin', remoteHead, localHead.ok && remoteHead.ok && firstLine(localHead.stdout) === firstLine(remoteHead.stdout), {
     branch: currentBranch || null,
+    verified_branch: branchToVerify || null,
     local_head: firstLine(localHead.stdout) || null,
     origin_head: firstLine(remoteHead.stdout) || null,
   })
@@ -161,7 +175,9 @@ async function main() {
   const report = {
     ok: failures.length === 0,
     generated_at: new Date().toISOString(),
-    mode: 'release-readiness status check; verifies clean local tree/current branch pushed plus current production health; no env vars or secrets read',
+    mode: TARGET_BRANCH
+      ? `release-readiness status check; verifies clean local tree/local HEAD matches origin/${TARGET_BRANCH} plus current production health; no env vars or secrets read`
+      : 'release-readiness status check; verifies clean local tree/current branch pushed plus current production health; no env vars or secrets read',
     checks,
     failures,
   }
