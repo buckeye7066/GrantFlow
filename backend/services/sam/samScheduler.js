@@ -14,9 +14,18 @@
  *                                       subset to keep the scheduler tiny
  *                                       and dependency-free
  *   SAM_MODE=observe                    'observe' or 'gatekeeper' for scheduled runs;
- *                                       'repair-safe' is REJECTED here — the scheduler
- *                                       will never silently mutate code
+ *                                       'repair-safe' is REJECTED here UNLESS
+ *                                       SAM_SCHEDULE_AUTOFIX=true (see below)
  *   SAM_ALLOW_SAFE_REPAIR=false         informational; scheduler still won't write
+ *                                       unless SAM_SCHEDULE_AUTOFIX is on
+ *   SAM_SCHEDULE_AUTOFIX=false          OPT-IN: when true the daily run does the
+ *                                       full heavy code/function sweep AND applies
+ *                                       Sam's whitelisted SAFE fixes (eslint --fix,
+ *                                       readiness logs) autonomously, then emails
+ *                                       the operator the issues + corrections. Still
+ *                                       bounded by samSafeFixes' allowlist, forbidden
+ *                                       paths, and policy gate — it can only touch
+ *                                       src/, docs/, backend/services/sam.
  *
  * If anything is misconfigured, the scheduler logs once and goes back to
  * sleep. It never throws on the hot path.
@@ -42,16 +51,53 @@ export function shouldRunOnSchedule() {
   return isSamEnabled() && /^(1|true|yes|on)$/i.test(String(process.env.SAM_RUN_ON_SCHEDULE || '').trim())
 }
 
+export function shouldAutofix() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.SAM_SCHEDULE_AUTOFIX || '').trim())
+}
+
 function chooseScheduledMode() {
+  // Opt-in autonomous autofix: the daily run does the full code/function sweep
+  // AND applies Sam's whitelisted SAFE fixes. This is the ONLY way the scheduler
+  // runs repair-safe; it stays bounded by samSafeFixes' allowlist + policy gate.
+  if (shouldAutofix()) return SAM_MODES.REPAIR_SAFE
+
   const requested = String(process.env.SAM_MODE || SAM_MODES.OBSERVE).toLowerCase()
   if (requested === SAM_MODES.GATEKEEPER) return SAM_MODES.GATEKEEPER
-  // The scheduler refuses to run repair-safe — that mode requires an
+  // Without autofix, the scheduler refuses repair-safe — that mode requires an
   // authenticated admin in the request context.
   if (requested === SAM_MODES.REPAIR_SAFE) {
-    console.warn('[sam:scheduler] SAM_MODE=repair-safe is not allowed for scheduled runs; falling back to observe.')
+    console.warn('[sam:scheduler] SAM_MODE=repair-safe requires SAM_SCHEDULE_AUTOFIX=true; falling back to observe.')
     return SAM_MODES.OBSERVE
   }
   return SAM_MODES.OBSERVE
+}
+
+/**
+ * Build the runSam() args for a scheduled/startup run. Read-only by default;
+ * when SAM_SCHEDULE_AUTOFIX is on it authorises the repair-safe run, turns OFF
+ * dryRun (so fixes actually apply), and forces the heavy code sweep.
+ */
+function buildRunArgs({ db, trigger }) {
+  const mode = chooseScheduledMode()
+  const autofix = mode === SAM_MODES.REPAIR_SAFE && shouldAutofix()
+  return {
+    db,
+    // An authorised internal context lets runSam honour repair-safe. Without
+    // autofix this stays null so the run is purely read-only.
+    ctx: autofix ? { samAuthorised: true, userId: null, source: 'sam-scheduler' } : null,
+    mode,
+    trigger,
+    // dryRun:false is required for repair-safe to apply fixes; observe/gatekeeper
+    // ignore it and never write regardless.
+    dryRun: !autofix,
+    // The autofix sweep wants the full heavy code/function scan even though it
+    // runs in repair-safe (which is otherwise light). Gatekeeper already implies
+    // heavy via its own default, so only force it for the autofix path.
+    ...(autofix ? { includeHeavy: true } : {}),
+    // Without a probe, autonomous Sam fail-skips every HTTP check yet still
+    // reports a green score. Loopback probe with the server's admin token.
+    httpProbe: makeInternalHttpProbe(),
+  }
 }
 
 /**
@@ -92,25 +138,18 @@ export function startSamScheduler({ db, logger = console } = {}) {
     if (shouldRunOnStartup()) {
       // Fire-and-forget, never block boot.
       runWithSchedulerLock(db, {
-        lockName: 'sam:observe',
+        lockName: 'sam:scheduler',
         ttlMs: 60 * 60 * 1000,
         logger,
-      }, () => runSam({
-          db,
-          ctx: null,
-          mode: chooseScheduledMode(),
-          trigger: SAM_TRIGGERS.STARTUP,
-          dryRun: true,
-          // Without a probe, autonomous Sam fail-skips every HTTP check yet still
-          // reports a green score. Loopback probe with the server's admin token.
-          httpProbe: makeInternalHttpProbe(),
-        })).catch((err) => logger.warn?.('[sam:scheduler] startup run failed:', err?.message || err))
+      }, () => runSam(buildRunArgs({ db, trigger: SAM_TRIGGERS.STARTUP })))
+        .catch((err) => logger.warn?.('[sam:scheduler] startup run failed:', err?.message || err))
     }
     if (shouldRunOnSchedule()) {
       scheduleNext({ db, logger })
       logger.info?.('[sam:scheduler] scheduled mode armed', {
         schedule: process.env.SAM_SCHEDULE || '0 4 * * *',
         mode: chooseScheduledMode(),
+        autofix: shouldAutofix(),
       })
     }
     return true
@@ -132,17 +171,10 @@ function scheduleNext({ db, logger }) {
   activeTimer = setTimeout(async () => {
     try {
       await runWithSchedulerLock(db, {
-        lockName: 'sam:observe',
+        lockName: 'sam:scheduler',
         ttlMs: 60 * 60 * 1000,
         logger,
-      }, () => runSam({
-          db,
-          ctx: null,
-          mode: chooseScheduledMode(),
-          trigger: SAM_TRIGGERS.SCHEDULED,
-          dryRun: true,
-          httpProbe: makeInternalHttpProbe(),
-        }))
+      }, () => runSam(buildRunArgs({ db, trigger: SAM_TRIGGERS.SCHEDULED })))
     } catch (err) {
       logger.warn?.('[sam:scheduler] scheduled run failed:', err?.message || err)
     } finally {
@@ -160,4 +192,6 @@ export const __testing__ = {
   parseDailyCron,
   msUntilNextDaily,
   chooseScheduledMode,
+  shouldAutofix,
+  buildRunArgs,
 }
