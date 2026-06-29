@@ -50,11 +50,20 @@ const SYSTEM = [
   'applicant described could actually apply for.',
   'Hard rules:',
   '- Invent NOTHING. Every field must be supported by the page text.',
+  '- "funder" MUST be the SPECIFIC organization giving the money (e.g. "Ingram Charitable Fund").',
+  '  If the page is an aggregator/list and no single named funder owns the opportunity,',
+  '  do NOT extract it — set it aside. Never use "various", "multiple", "unknown", or "not specified".',
+  '- "apply_url" MUST prefer the funder\'s OWN application/details page. Only fall back to the',
+  '  page URL if the funder\'s direct link is not present on the page.',
   '- EXCLUDE closed/expired opportunities, pure directories/lists, news articles,',
   '  blog posts, login pages, and anything that is not an applyable funding opportunity.',
   '- If the page is not a real funding opportunity for this applicant, return an empty list.',
   '- A loan is NOT a grant; only include loans if the applicant allows loans.',
-].join(' ');
+].join(' ')
+
+// Funder names that mean "we don't actually know the funder" — drop these; an
+// opportunity with no concrete sponsor is not actionable for the applicant.
+const VAGUE_FUNDER = /^(unknown|n\/?a|none|not\s*specified|various|various funders?|multiple|multiple funders?|see (the )?(website|page|link)|tbd|general|other)$/i;
 
 /**
  * extractOpportunitiesFromPage — run the LLM extraction for one page.
@@ -115,10 +124,13 @@ export async function extractOpportunitiesFromPage(
   }
   if (!res?.ok || !res.json) return [];
   const list = Array.isArray(res.json.opportunities) ? res.json.opportunities : [];
-  // Keep only model-marked-relevant rows with the minimum identity fields.
-  return list.filter(
-    (o) => o && o.relevant !== false && o.title && (o.funder || o.sponsor),
-  );
+  // Keep only model-marked-relevant rows with a concrete title AND a concrete,
+  // named funder (drop "various"/"unknown" aggregator rows — not actionable).
+  return list.filter((o) => {
+    if (!o || o.relevant === false || !o.title) return false;
+    const funder = String(o.funder || o.sponsor || '').trim();
+    return funder.length >= 2 && !VAGUE_FUNDER.test(funder);
+  });
 }
 
 export default { extractOpportunitiesFromPage, htmlToText };
