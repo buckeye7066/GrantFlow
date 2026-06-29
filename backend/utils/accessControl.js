@@ -561,3 +561,32 @@ export async function ensureAdminUser(req, res) {
 
   return true
 }
+
+/**
+ * Build a grant access-scope SQL clause from the request context populated by
+ * attachRequestContext (req.ctx: { isAdmin, accessibleProfileIds,
+ * accessibleOrgIds }). Admins (or a null id set, which the access layer uses to
+ * mean "all") get `1 = 1`; everyone else is restricted to grants tied to one of
+ * their accessible organizations or profiles. An empty access set yields
+ * `1 = 0` so a no-access caller honestly gets zeros, never the whole table.
+ *
+ * This is the single source of truth for grant scoping on aggregate endpoints
+ * (e.g. /api/pipeline/stats), so every dashboard count is access-consistent
+ * with /api/stats/dashboard instead of leaking DB-wide totals.
+ *
+ * @returns {{ sql: string, params: Array<string|number> }}
+ */
+export function buildGrantScopeFromContext(ctx) {
+  const isAdmin = Boolean(ctx?.isAdmin)
+  const profileIds = ctx?.accessibleProfileIds
+  const orgIds = ctx?.accessibleOrgIds
+  // null id set = "all rows" (admin classification inside the access layer).
+  if (isAdmin || profileIds === null || orgIds === null) {
+    return { sql: '1 = 1', params: [] }
+  }
+  const orgList = [...(orgIds || [])]
+  const profileList = [...(profileIds || [])]
+  const orgSql = orgList.length ? `organization_id IN (${orgList.map(() => '?').join(', ')})` : '1 = 0'
+  const profileSql = profileList.length ? `profile_id IN (${profileList.map(() => '?').join(', ')})` : '1 = 0'
+  return { sql: `(${orgSql} OR ${profileSql})`, params: [...orgList, ...profileList] }
+}
