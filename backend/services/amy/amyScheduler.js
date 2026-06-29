@@ -1,8 +1,9 @@
 /**
  * amyScheduler.js
  *
- * Optional background runner for Amy, the synthetic crawler-training agent.
- * Disabled by default (like every sibling agent). When enabled it runs ONCE
+ * Background runner for Amy, the synthetic crawler-training agent.
+ * ON by default (owner directive 2026-06-29); opt out with AMY_ENABLED=false.
+ * When enabled it runs ONCE
  * per day and generates a target number of synthetic profiles — default 100 —
  * across all categories, runs them through Crawler-OS discovery, writes an
  * Anya handoff report, and cleans up the synthetic profiles.
@@ -48,7 +49,10 @@ function bool(v, dflt = false) {
 }
 
 export function getAmyConfig() {
-  const enabled = bool(process.env.AMY_ENABLED, false)
+  // ON by default (owner directive 2026-06-29). Amy's synthetic crawler-training
+  // runs daily; discovery stays dry-run (AMY_PERSIST=false) and all tuning is
+  // proven + reversible. Disable explicitly with AMY_ENABLED=false.
+  const enabled = bool(process.env.AMY_ENABLED, true)
   return {
     enabled,
     runOnSchedule: bool(process.env.AMY_RUN_ON_SCHEDULE, true),

@@ -36,13 +36,35 @@ import {
   stopRun,
 } from '../services/agentControl/agentControlOrchestrator.js'
 import {
+  getAgentSetting,
   getRun,
   getRunHighlights,
   listEvents,
   listRuns,
   listSteps,
   recordEvent,
+  setAgentSetting,
 } from '../services/agentControl/agentControlStore.js'
+import {
+  getAutonomousConfig,
+  setAutonomousEnabled,
+} from '../services/anyaAutonomousScheduler.js'
+
+// Persisted key for the Anya autonomous-scheduler master toggle.
+const ANYA_AUTONOMOUS_SETTING_KEY = 'anya.autonomous_enabled'
+
+/** Resolve current Anya autonomous-enabled state: persisted toggle wins, else live config. */
+async function readAnyaAutonomousState(db) {
+  const persisted = await getAgentSetting(db, ANYA_AUTONOMOUS_SETTING_KEY)
+  const cfg = getAutonomousConfig()
+  return {
+    enabled: cfg.enabled === true,
+    persisted: persisted === null ? null : persisted === 'true',
+    source: persisted === null ? 'default' : 'toggle',
+    operations: cfg.operations,
+    run_on_schedule: cfg.runOnSchedule === true,
+  }
+}
 
 const router = express.Router()
 const log = createLogger('route:agent-control')
@@ -108,6 +130,26 @@ router.get('/status', asyncHandler(async (req, res) => {
     ...status,
     highlights,
   })
+}))
+
+// Anya autonomous-scheduler master toggle (owner-flipped, persisted).
+router.get('/anya/autonomous', asyncHandler(async (req, res) => {
+  const state = await readAnyaAutonomousState(req.db)
+  res.json({ ok: true, ...state })
+}))
+
+router.put('/anya/autonomous', asyncHandler(async (req, res) => {
+  const raw = req.body?.enabled
+  if (typeof raw !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'enabled_boolean_required' })
+  }
+  await setAgentSetting(req.db, ANYA_AUTONOMOUS_SETTING_KEY, raw ? 'true' : 'false', {
+    updatedByEmail: req.user?.email || null,
+  })
+  setAutonomousEnabled(raw) // apply to the live in-memory scheduler immediately
+  await logAdminAction(req, 'anya_autonomous_toggle', { enabled: raw })
+  const state = await readAnyaAutonomousState(req.db)
+  res.json({ ok: true, ...state })
 }))
 
 router.get('/runs', asyncHandler(async (req, res) => {
