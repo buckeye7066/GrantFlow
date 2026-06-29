@@ -158,6 +158,79 @@ export const BEHAVIOR_DECAY_HALF_LIFE_DAYS = 45
 /** Max number of recent events aggregated per profile (bounds the read). */
 export const BEHAVIOR_MAX_EVENTS = 500
 
+// ── Post-weight signal boosts (applied AFTER the weighted component score) ──
+//
+// These were previously scattered as inline magic numbers inside
+// scoreOpportunity()'s "housing-aware signal bonuses" block — the most
+// impactful knobs in the engine, yet the only ones NOT centralized here. They
+// are intentionally SOFT and bounded: each can lift a borderline match over a
+// threshold, but the substance of the score is the weighted
+// need/eligibility/geo/category model above (W_NEED/W_ELIGIBILITY/W_GEO/
+// W_CATEGORY). Values are unchanged from the historical inline literals — this
+// block centralizes them so they can be reviewed and re-tuned in one place.
+//
+// Stacking note (max realistic post-weight swing): the boosts are largely
+// mutually exclusive by profile type. The largest student stack is roughly
+// GPA_BOOST_HIGH(12)+HOPE_SCHOLARSHIP_BOOST(15)+MAJOR_INTEREST_STACK_MAX(20)+
+// TN_GEO_BOOST(8)+HOUSING_USABLE_BOOST(10); the largest org/individual stack is
+// roughly NEED_GEO_FIT_MAX(24)+POPULATION_MISSION_BOOST_MAX(8)+
+// WORKFORCE_BOOST_MAX(8)+FAITH_MATCH_BOOST(10). Everything is clamped to 0-100
+// at the end, so no stack can exceed the score ceiling.
+
+/** Profile-depth multiplier: richest profiles get up to +DEPTH_BONUS_MAX_PCT. */
+export const DEPTH_BONUS_MAX_PCT = 0.10
+/** Divisor mapping depth (0-100) → fractional bonus (depth/DIVISOR, capped). */
+export const DEPTH_BONUS_DIVISOR = 1000
+
+/** Ceiling for a non-student profile matched against a student-aid opportunity. */
+export const STUDENT_AID_NONSTUDENT_CAP = 40
+
+/** Workforce / pro-bono service-term alignment boost (per term hit, and cap). */
+export const WORKFORCE_BOOST_PER_HIT = 3
+export const WORKFORCE_BOOST_MAX = 8
+
+/** GPA merit boosts for scholarship/merit opportunities, by GPA tier. */
+export const GPA_BOOST_HIGH = 12   // GPA ≥ 3.75
+export const GPA_BOOST_MID = 8     // GPA ≥ 3.50
+export const GPA_BOOST_LOW = 5     // GPA ≥ 3.00
+/** Extra boost when a GPA≥3.0 student profile matches a TN HOPE scholarship. */
+export const HOPE_SCHOLARSHIP_BOOST = 15
+
+/** Major / STEM / interest boosts for student × scholarship opportunities. */
+export const MAJOR_MATCH_BOOST = 12
+export const STEM_SCHOLARSHIP_BOOST = 10
+export const STEM_PLATFORM_BOOST = 6
+export const INTEREST_BOOST_PER_HIT = 4
+export const INTEREST_BOOST_MAX = 8
+export const SCHOLARSHIP_PLATFORM_BOOST = 5
+/** Total cap for the combined major+STEM+interest+platform stack. */
+export const MAJOR_INTEREST_STACK_MAX = 20
+
+/** Faith-affiliation alignment boosts. */
+export const FAITH_MATCH_BOOST = 10
+export const FAITH_CATEGORY_BOOST = 8
+
+/** Talent / music / leadership signal boosts. */
+export const MUSIC_TALENT_BOOST = 12
+export const TALENT_CATEGORY_BOOST = 8
+export const LEADERSHIP_BOOST = 5
+
+/** Tennessee geographic-signal boost for TN-specific opportunities. */
+export const TN_GEO_BOOST = 8
+
+/** Housing-usable funding matched to a student's housing need. */
+export const HOUSING_USABLE_BOOST = 10
+
+/** Population-served / mission-focus alignment (per hit, and cap). */
+export const POPULATION_MISSION_BOOST_PER_HIT = 2
+export const POPULATION_MISSION_BOOST_MAX = 8
+
+/** Direct need + geographic fit boost (base, per-hit, cap, and geo gate). */
+export const NEED_GEO_FIT_BASE = 12
+export const NEED_GEO_FIT_PER_HIT = 5
+export const NEED_GEO_FIT_MAX = 24
+export const NEED_GEO_FIT_MIN_GEO_SUBSCALE = 75
+
 // ── Admin / Seeding ─────────────────────────────────────────────────────
 
 /** Minimum score for admin seed-to-pipeline operations */
