@@ -29,6 +29,11 @@ const FACTORIES = Object.freeze({
   snap: officialDirectory('snap'),
   medicaid: officialDirectory('medicaid'),
   pell_grant: officialDirectory('pell_grant'),
+  // Sibling federal need-based student aid (full federal-aid family beyond Pell).
+  fseog: officialDirectory('fseog'),
+  federal_work_study: officialDirectory('federal_work_study'),
+  teach_grant: officialDirectory('teach_grant'),
+  iraq_afghanistan_service_grant: officialDirectory('iraq_afghanistan_service_grant'),
   us_dept_of_ed: officialDirectory('us_dept_of_ed'),
   usda_rd: createUsdaRdAdapter,
   fema_afg: createFemaAfgAdapter,
