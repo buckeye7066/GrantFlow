@@ -10,7 +10,13 @@ function readRepoFile(relativePath) {
 test('Anya panel keeps a phone-friendly full-width sheet with safe-area padding', () => {
   const file = readRepoFile('src/components/anya/AnyaFloatingButton.jsx')
   assert.match(file, /h-\[100dvh\]/)
-  assert.match(file, /w-full sm:w-\[540px\] md:w-\[600px\]/)
+  // Phone-friendly responsive width: full-width on mobile, narrowing to a panel
+  // on larger screens. Assert each class independently (not as one contiguous
+  // string) so adding mobile guards like `max-w-[100vw]`/`sm:max-w-[92vw]` —
+  // which is exactly what improved the layout — doesn't break this guard.
+  assert.match(file, /\bw-full\b/)
+  assert.match(file, /sm:w-\[540px\]/)
+  assert.match(file, /md:w-\[600px\]/)
   assert.match(file, /pt-\[env\(safe-area-inset-top\)\]/)
   assert.match(file, /pb-\[env\(safe-area-inset-bottom\)\]/)
 })
