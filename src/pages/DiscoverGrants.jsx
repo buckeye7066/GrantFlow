@@ -617,13 +617,28 @@ export default function DiscoverGrants() {
   const catalogOpportunities = useMemo(() => {
     const rows = catalogPayload?.opportunities ?? []
     if (!Array.isArray(rows)) return []
-    // Defense in depth: if any backend path leaks results below the user's
-    // slider value, the UI must still honor the slider as a hard floor.
+    // The slider is the user's preferred floor, but mission rule: results the
+    // backend deliberately surfaced (zero-result recovery / relaxed threshold /
+    // directories) must NOT be re-dropped here — "found but not displayed" is a
+    // bug, not a UX choice. We keep below-floor rows only when the backend
+    // explicitly flagged them as recovered/relaxed/directory; otherwise the
+    // slider still acts as a hard floor (defense in depth).
     const minScoreFloor = clampMinScore(debouncedMinMatchScore)
+    const recoveryApplied = Boolean(catalogPayload?.relaxation?.applied)
+    const isDirectoryRow = (opp) =>
+      Boolean(
+        opp?.is_directory ||
+          opp?.is_directory_resource ||
+          String(opp?.opportunity_kind ?? '').toUpperCase() === 'DIRECTORY',
+      )
     return dedupeFundingResults(rows
       .filter((opp) => {
         const score = Number(opp.match_score ?? opp.match ?? -Infinity)
-        return Number.isFinite(score) && score >= minScoreFloor
+        if (Number.isFinite(score) && score >= minScoreFloor) return true
+        return (
+          recoveryApplied &&
+          (opp?.threshold_relaxed || opp?.eligibility_relaxed || opp?.geo_expanded || isDirectoryRow(opp))
+        )
       })
       .map((opp) => ({
         id: opp.id,
@@ -651,6 +666,10 @@ export default function DiscoverGrants() {
         usable_for_housing: opp.usable_for_housing ?? false,
         refund_potential: opp.refund_potential ?? false,
         funding_category: opp.funding_category ?? null,
+        is_directory: opp.is_directory ?? false,
+        threshold_relaxed: opp.threshold_relaxed ?? false,
+        eligibility_relaxed: opp.eligibility_relaxed ?? false,
+        geo_expanded: opp.geo_expanded ?? false,
       })))
   }, [catalogPayload, debouncedMinMatchScore])
 

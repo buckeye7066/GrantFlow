@@ -2164,6 +2164,10 @@ app.use('/api/robert', lazyRouter('./routes/robert.js'));
 // so Sam's HTTP probes can hit /api/health/* and /readyz cleanly.
 app.use('/api/sam', lazyRouter('./routes/sam.js'))
 
+// Amy — synthetic crawler-training agent. Admin-only; surfaces crawler-quality
+// reports + improvement approval queue and an on-demand run trigger.
+app.use('/api/amy', lazyRouter('./routes/amy.js'))
+
 // School-portal bridge — public partner-auth (Bearer API key) routes that let
 // a registered school's student-information system push roster data into
 // GrantFlow profiles and read back the funding sources the matcher says each
@@ -2770,6 +2774,21 @@ if (process.env.NODE_ENV !== 'test') {
         startSamScheduler({ db, logger: console })
       } catch (samErr) {
         console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
+      }
+    })();
+    // Amy — synthetic crawler-training agent scheduler. Disabled by default;
+    // enable with AMY_ENABLED=true. When on it runs once/day and generates
+    // AMY_DAILY_PROFILE_TARGET (default 100) synthetic profiles, runs them
+    // through Crawler-OS discovery (dry-run by default → no catalog pollution),
+    // writes an Anya handoff report, and cleans up the synthetic profiles.
+    ;(async () => {
+      try {
+        const { startAmyScheduler } = await import('./services/amy/amyScheduler.js')
+        const result = startAmyScheduler({ db, logger: console })
+        if (result?.started) console.log(`[Server] Amy scheduler started (target=${result.daily_target}/day)`)
+        else console.log('[Server] Amy scheduler not started:', result?.reason || 'disabled')
+      } catch (amyErr) {
+        console.warn('[Server] Amy scheduler startup skipped:', amyErr?.message || amyErr)
       }
     })();
     // Agent-control lock sweeper — reclaims orphaned/expired locks on a timer so

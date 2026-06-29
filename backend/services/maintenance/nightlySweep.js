@@ -66,6 +66,21 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     selfHeal = { ok: false, error: err?.message }
   }
 
+  // Sam cleanup sweep for Amy's synthetic crawler-training profiles. Amy tags
+  // every profile it creates as synthetic + allow_sam_cleanup with an expiry,
+  // so the system never clogs with training records. Gated OFF by default
+  // (AMY_AUTO_CLEANUP=true to enable); only ever deletes EXPIRED Amy-owned rows,
+  // guarded inside cleanupAmyProfiles. Best-effort — never blocks the sweep.
+  if (String(process.env.AMY_AUTO_CLEANUP ?? 'false').toLowerCase() === 'true') {
+    try {
+      const { cleanupAmyProfiles } = await import('../amy/amyProfileStore.js')
+      const amy = await cleanupAmyProfiles(db, { expiredOnly: true })
+      if (amy?.deleted > 0) log.info('nightly Amy synthetic-profile cleanup', { deleted: amy.deleted, scanned: amy.scanned })
+    } catch (err) {
+      log.warn('nightly Amy cleanup failed (non-fatal)', { error: err?.message })
+    }
+  }
+
   let sam = null
   let criticals = 0
   try {

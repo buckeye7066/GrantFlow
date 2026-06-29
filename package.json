@@ -91,7 +91,9 @@
     "production:proof": "npm run crawler:profile-proof && node ./scripts/production-readiness-smoke.mjs",
     "production:deploy-proof": "node ./scripts/production-deployment-proof.mjs",
     "production:deploy-proof:write": "node ./scripts/production-deployment-proof.mjs --write",
-    "purge:regional": "node backend/scripts/regional-purge.mjs"
+    "purge:regional": "node backend/scripts/regional-purge.mjs",
+    "amy:train": "node ./scripts/amy-train.mjs",
+    "amy:cleanup": "node ./scripts/amy-cleanup.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

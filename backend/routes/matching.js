@@ -12,11 +12,12 @@ import {
   sanitizeSearchTerm,
 } from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
-import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
+import { DEFAULT_MIN_SCORE, REVIEW_SCORE } from '../config/matchThresholds.js'
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
+import { assembleFundingResults } from '../services/zeroResultLadder.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -460,7 +461,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         return active && !hidden
       })
 
-      let mapped = osRows.map((o) => {
+      const rawMapped = osRows.map((o) => {
         const kind = String(o.opportunity_kind ?? '').toUpperCase()
         const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
         let reasons = []
@@ -479,11 +480,11 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         }
       })
 
-      const canonical = canonicalizeOpportunityList(profileContext, mapped, {
+      const canonical = canonicalizeOpportunityList(profileContext, rawMapped, {
         preserveDirectories: true,
         rejectHardIneligible: true,
       })
-      mapped = canonical.kept
+      let mapped = canonical.kept
 
       const deduped = dedupeOpportunityList(mapped)
       mapped = deduped.results
@@ -494,10 +495,122 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         mapped = filtered.results
       }
 
-      const qualified = mapped.filter((o) => o.is_directory || Number(o.match_score) >= osMin)
+      const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
+      const profileGapLabels = Array.isArray(profileFieldPrompts)
+        ? profileFieldPrompts.map((p) => p?.label || p?.field || p?.section_key).filter(Boolean)
+        : []
+      const resultLimit = Number.isFinite(Number.parseInt(req.query.limit, 10))
+        ? Math.max(1, Number.parseInt(req.query.limit, 10))
+        : 200
+
+      // ── Score floor ─────────────────────────────────────────────────────
+      // Directories always survive (mission rule). Everything else must clear
+      // the requested min_score (default 75).
+      let qualified = mapped.filter((o) => o.is_directory || Number(o.match_score) >= osMin)
+
+      // ── Zero-result recovery ladder (mission rule) ──────────────────────
+      // Zero results is a FAILURE state, not an acceptable outcome. When the
+      // score floor (or canonical filtering) leaves nothing to show but real
+      // candidates DO exist for this profile, we must relax constraints and
+      // re-surface — never return a bare `returned: 0` while `total_scored`/
+      // `total_candidates` are non-zero (the "0 included of X found" bug).
+      //
+      // Recovery is on by default and traceable. `?no_fallback=1` restores the
+      // strict legacy behavior for debugging.
+      let relaxation = null
+      const allowFallback = req.query.no_fallback !== '1'
+      // The zero-result ladder classifies rows by `kind` (direct vs directory).
+      // Crawler-OS rows carry `opportunity_kind` (e.g. DIRECT_GRANT, SCHOLARSHIP,
+      // DIRECTORY); normalize so non-directory funding is treated as relaxable
+      // direct opportunity and directories keep surviving.
+      const toLadderInput = (list) =>
+        (Array.isArray(list) ? list : []).map((o) => ({
+          ...o,
+          kind: o.is_directory ? 'directory' : o.kind || 'direct',
+        }))
+      if (allowFallback && qualified.length === 0 && (mapped.length > 0 || rawMapped.length > 0)) {
+        // Tier A — candidates survived canonicalization but scored below the
+        // floor: relax the score threshold (non-strict) so the user still sees
+        // honestly-labeled lower-confidence matches and directories.
+        let recovered = []
+        let ladder = null
+        if (mapped.length > 0) {
+          ladder = assembleFundingResults(toLadderInput(mapped), {
+            minScore: osMin,
+            maxResults: resultLimit,
+            profileGaps: profileGapLabels,
+            strictMinScore: false,
+          })
+          recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
+        }
+
+        // Tier B — canonicalization removed EVERYTHING (hard ineligibility /
+        // trust / profile-gate). Mission rule: population/eligibility
+        // mismatches must REDUCE score, not discard. Re-canonicalize softly so
+        // those candidates survive as low-confidence reviewable results, then
+        // relax the score floor over them.
+        if (recovered.length === 0 && rawMapped.length > 0) {
+          const soft = canonicalizeOpportunityList(profileContext, rawMapped, {
+            preserveDirectories: true,
+            rejectHardIneligible: false,
+            profileGateMode: 'fallback',
+            allowUnmatchedDirectoryFallback: true,
+          })
+          const softKept = (soft.kept || []).map((o) =>
+            String(o.match_decision || '').toUpperCase() === 'REJECT'
+              ? {
+                  ...o,
+                  match_decision: 'REVIEW',
+                  decision: 'REVIEW',
+                  match_score: Math.min(Number(o.match_score) || 0, REVIEW_SCORE),
+                  eligibility_relaxed: true,
+                }
+              : o,
+          )
+          if (softKept.length > 0) {
+            ladder = assembleFundingResults(toLadderInput(softKept), {
+              minScore: osMin,
+              maxResults: resultLimit,
+              profileGaps: profileGapLabels,
+              strictMinScore: false,
+            })
+            recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
+            recovered = recovered.map((o) => ({ ...o, eligibility_relaxed: true }))
+          }
+        }
+
+        if (recovered.length > 0) {
+          qualified = recovered
+          relaxation = {
+            applied: true,
+            tier: ladder?.tier ?? null,
+            threshold_relaxed: Boolean(ladder?.threshold_relaxed),
+            threshold_relaxed_reason: ladder?.threshold_relaxed_reason ?? null,
+            directory_only: Boolean(ladder?.directory_only),
+            geo_expanded: Boolean(ladder?.geo_expanded),
+            requested_min_score: osMin,
+            recovered_count: recovered.length,
+            eligibility_relaxed: recovered.some((o) => o.eligibility_relaxed),
+            tier_attempts: ladder?.tier_attempts ?? [],
+          }
+          routeLogger.info(
+            `[matching] zero-result recovery for profile ${profileId}: ` +
+              `min_score=${osMin} canonical_kept=${mapped.length} raw_candidates=${rawMapped.length} ` +
+              `dropped=${JSON.stringify(canonical.dropped || {})} -> recovered=${recovered.length} tier=${ladder?.tier}`,
+          )
+        }
+      }
+
       const qualifiedCount = qualified.filter((o) => Number(o.match_score) >= osMin).length
       const zeroResult = qualified.length === 0
-      const profileFieldPrompts = await getProfileFieldPrompts(req.db, profileId)
+      if (zeroResult && rawMapped.length > 0) {
+        // Candidates existed but everything was filtered AND recovery surfaced
+        // nothing — record exactly why so the suppression is never silent.
+        routeLogger.warn(
+          `[matching] suppression for profile ${profileId}: ${rawMapped.length} candidate(s) ` +
+            `but 0 returned. canonical_kept=${mapped.length} dropped=${JSON.stringify(canonical.dropped || {})}`,
+        )
+      }
       let signalAudit = null
       try {
         signalAudit = buildProfileSignalAudit(profileContext)
@@ -520,25 +633,35 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         }
       }
 
+      // Counts must map 1:1 to what is shown. When recovery surfaced results
+      // that the strict canonical pass had filtered, the scored pool reflects
+      // the recovered set so `returned` can never exceed `total_scored`.
+      const totalScored = relaxation ? Math.max(mapped.length, qualified.length) : mapped.length
+      const histogramSource = relaxation ? qualified : mapped
+
       return res.json({
         profile_id: profileId,
         profile_applicant_type: profileContext?.profile?.primary_type ?? profileRow.primary_type ?? null,
         profile_field_prompts: profileFieldPrompts,
         engine: 'crawler-os',
         min_score: osMin,
-        total_scored: mapped.length,
+        total_scored: totalScored,
         returned: qualified.length,
         qualified_count: qualifiedCount,
         zero_result: zeroResult || undefined,
+        relaxation: relaxation || undefined,
+        threshold_relaxed: relaxation ? relaxation.threshold_relaxed : undefined,
         message: zeroResult
           ? 'Crawler OS found no rules-eligible funding for this profile. No generic fallback results were added.'
-          : undefined,
-        score_histogram: buildScoreHistogram(mapped),
+          : relaxation?.threshold_relaxed_reason || undefined,
+        score_histogram: buildScoreHistogram(histogramSource),
         opportunities: qualified,
         referrals: [],
         diagnostics: {
           duplicate_results_collapsed: deduped.removed || undefined,
           excluded_already_in_pipeline: pipelineExcludedCount || undefined,
+          dropped_reasons: canonical.dropped && Object.keys(canonical.dropped).length > 0 ? canonical.dropped : undefined,
+          relaxation_applied: relaxation ? true : undefined,
         },
         coverage_summary: {
           total_candidates: osRows.length,

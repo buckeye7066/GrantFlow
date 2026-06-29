@@ -1,7 +1,7 @@
 ﻿import React, { Suspense } from 'react';
 import { lazyWithRetry } from '@/utils/lazyWithRetry';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop, Megaphone } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop, Megaphone, FlaskConical } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -12,6 +12,7 @@ import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
 import AdminYanaConsole from '@/components/admin/AdminYanaConsole';
 import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
 import AdminSamConsole from '@/components/admin/AdminSamConsole';
+import AdminAmyConsole from '@/components/admin/AdminAmyConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
@@ -134,6 +135,10 @@ export default function Admin() {
               <Wrench className="w-4 h-4 mr-2" />
               Sam
             </TabsTrigger>
+            <TabsTrigger value="amy">
+              <FlaskConical className="w-4 h-4 mr-2" />
+              Amy
+            </TabsTrigger>
             <TabsTrigger value="broadcast">
               <Megaphone className="w-4 h-4 mr-2" />
               Broadcast
@@ -234,6 +239,10 @@ export default function Admin() {
 
           <TabsContent value="sam" className="mt-6">
             <AdminSamConsole />
+          </TabsContent>
+
+          <TabsContent value="amy" className="mt-6">
+            <AdminAmyConsole />
           </TabsContent>
 
           <TabsContent value="broadcast" className="mt-6">

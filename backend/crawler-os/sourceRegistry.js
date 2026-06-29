@@ -8,6 +8,10 @@
 // Pure data. No I/O.
 
 import { TRUST_TIER, OPPORTUNITY_KIND } from './contract.js';
+// Amy-managed additive coverage overrides (broaden an existing source's
+// need_categories/applicant_types). Additive-only + reversible; see
+// backend/config/crawlerCoverageOverrides.js.
+import { mergeSourceCoverage } from '../config/crawlerCoverageOverrides.js';
 
 /**
  * Source row fields:
@@ -994,8 +998,8 @@ export const SOURCES = Object.freeze([
 
 const BY_ID = Object.freeze(Object.fromEntries(SOURCES.map((s) => [s.source_id, s])));
 
-export function allSources() { return SOURCES.map((s) => ({ ...s })); }
-export function getSource(id) { const s = BY_ID[id]; return s ? { ...s } : null; }
+export function allSources() { return SOURCES.map((s) => mergeSourceCoverage({ ...s })); }
+export function getSource(id) { const s = BY_ID[id]; return s ? mergeSourceCoverage({ ...s }) : null; }
 export function sourceIds() { return SOURCES.map((s) => s.source_id); }
 
 export default { SOURCES, allSources, getSource, sourceIds };
