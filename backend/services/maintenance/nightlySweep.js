@@ -95,6 +95,10 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
       dryRun: true,
       trigger: 'scheduled',
       persist: true,
+      // John's per-run email belongs to the real 05:00 ET heavy code sweep, not
+      // this light maintenance observe-pass — suppress it here to avoid a daily
+      // duplicate. Findings are still persisted to sam_runs.
+      emailReport: false,
       // Credentialed loopback probe so the nightly health verdict actually
       // executes the HTTP-class checks instead of fail-skipping them (this was
       // the one autonomous caller still missing the probe).

@@ -3707,6 +3707,114 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
   }
 
+  // Sam's daily FULL code/function sweep — every day 05:00 America/New_York.
+  // Runs Sam's HEAVY checks (source scan, broken-import crawl, ESLint, mission/
+  // SQL-safety audit) READ-ONLY (advise mode, no prod gates, no maintenance
+  // window) and persists the findings to sam_runs. Two consumers read this run:
+  // the sam-autofix GitHub Action (corrects + ships the auto-fixable issues) and
+  // Anya's 09:00 ET owner report (emails the human what still needs attention).
+  // We stash the run id in system_kv so Anya reads exactly this sweep. Same
+  // hourly-tick + ET-day-key marker pattern (once-per-day guard + catch-up).
+  function scheduleSamDailyCodeSweep(dbInstance) {
+    const MARKER = 'sam_daily_code_sweep_last_run'
+    const RUN_ID_KEY = 'sam_daily_code_sweep_run_id'
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.SAM_DAILY_CODE_SWEEP_HOUR_ET) || 5))
+    const nowEt = () => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hour: 'numeric', hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(new Date())
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+      return { hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
+    }
+    const eligibleDayKey = ({ hour, ymd }) => {
+      if (hour >= TRIGGER_HOUR) return ymd
+      const [Y, M, D] = ymd.split('-').map(Number)
+      const d = new Date(Date.UTC(Y, M - 1, D))
+      d.setUTCDate(d.getUTCDate() - 1)
+      return d.toISOString().slice(0, 10)
+    }
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const dayKey = eligibleDayKey(nowEt())
+        const last = await kvGet(dbInstance, MARKER)
+        if (last === dayKey) return // already swept for this ET day
+        const { runSamDailyCodeSweep, isSamDailyCodeSweepEnabled } = await import('./services/sam/samDailyCodeSweep.js')
+        if (!isSamDailyCodeSweepEnabled()) { await kvSet(dbInstance, MARKER, dayKey); return }
+        const summary = await runSamDailyCodeSweep(dbInstance, {})
+        console.log('[sam-daily-code-sweep]', summary)
+        // Hand the run id to Anya + persist the summary for status/observability.
+        try {
+          if (summary?.run_id) await kvSet(dbInstance, RUN_ID_KEY, String(summary.run_id))
+          await kvSet(dbInstance, `${MARKER}_summary`, JSON.stringify({ day: dayKey, ...summary }))
+        } catch { /* best-effort */ }
+        if (summary?.ran) await kvSet(dbInstance, MARKER, dayKey)
+      } catch (err) {
+        console.warn('[sam-daily-code-sweep] failed:', err.message)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'sam-daily-code-sweep',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 120_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 05:00 ET window
+  }
+
+  // Anya's daily owner code report — every day 09:00 America/New_York. Reads the
+  // findings from Sam's 05:00 sweep (via the system_kv run-id pointer; falls back
+  // to the latest Sam run) and emails the owner a plain-English digest of the
+  // code/function errors/weaknesses/bugs that still need a human, plus a note on
+  // what was auto-corrected. Same hourly-tick + ET-day-key pattern; only marks
+  // done once the email actually sends, so a not-yet-configured mailbox retries.
+  function scheduleAnyaDailyOwnerReport(dbInstance) {
+    const MARKER = 'anya_daily_owner_report_last_run'
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.ANYA_DAILY_REPORT_HOUR_ET) || 9))
+    const nowEt = () => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hour: 'numeric', hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(new Date())
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+      return { hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
+    }
+    const eligibleDayKey = ({ hour, ymd }) => {
+      if (hour >= TRIGGER_HOUR) return ymd
+      const [Y, M, D] = ymd.split('-').map(Number)
+      const d = new Date(Date.UTC(Y, M - 1, D))
+      d.setUTCDate(d.getUTCDate() - 1)
+      return d.toISOString().slice(0, 10)
+    }
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const dayKey = eligibleDayKey(nowEt())
+        const last = await kvGet(dbInstance, MARKER)
+        if (last === dayKey) return // already reported for this ET day
+        const { runAnyaDailyOwnerReport, isAnyaDailyReportEnabled } = await import('./services/anya/anyaDailyOwnerReport.js')
+        if (!isAnyaDailyReportEnabled()) { await kvSet(dbInstance, MARKER, dayKey); return }
+        const runId = await kvGet(dbInstance, 'sam_daily_code_sweep_run_id')
+        const summary = await runAnyaDailyOwnerReport(dbInstance, { runId: runId || null })
+        console.log('[anya-daily-owner-report]', summary)
+        try { await kvSet(dbInstance, `${MARKER}_summary`, JSON.stringify({ day: dayKey, ...summary })) } catch { /* best-effort */ }
+        // Only mark done when the email actually sent (mailbox configured), so a
+        // misconfigured environment retries on the next tick instead of skipping.
+        if (summary?.sent) await kvSet(dbInstance, MARKER, dayKey)
+      } catch (err) {
+        console.warn('[anya-daily-owner-report] failed:', err.message)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'anya-daily-owner-report',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 150_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 09:00 ET window
+  }
+
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
@@ -3716,6 +3824,8 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleHamiltonWeeklyDigest(db)
     scheduleMondayPortalReminder(db)
     scheduleNightlyMaintenanceSweep(db)
+    scheduleSamDailyCodeSweep(db)
+    scheduleAnyaDailyOwnerReport(db)
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
     startHealthService(db);

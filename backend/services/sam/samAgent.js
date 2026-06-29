@@ -100,6 +100,9 @@ export async function runSam(args = {}) {
     httpProbe = null,
     runCommand = runWhitelistedCommand,
     persist = true,
+    // When false, suppress the per-run John email (e.g. the light nightly
+    // maintenance observe-sweep, so John only gets the real heavy code sweep).
+    emailReport = true,
     // Explicit override for the heavy code/function sweep (source-tree walks,
     // ESLint, mission audit). Defaults to gatekeeper-only, but the autonomous
     // autofix scheduler runs repair-safe AND wants the heavy code scan, so it
@@ -290,10 +293,12 @@ export async function runSam(args = {}) {
       // Owner request: email a per-run report (issues found + corrections made)
       // whenever a sweep surfaces anything. Fires only on findings>0; clean runs
       // send nothing. Best-effort — a mail failure never affects the run result.
-      try {
-        out.email_report = await sendSamReportEmail(out)
-      } catch (mailErr) {
-        console.warn('[sam] report email skipped:', mailErr?.message || mailErr)
+      if (emailReport) {
+        try {
+          out.email_report = await sendSamReportEmail(out)
+        } catch (mailErr) {
+          console.warn('[sam] report email skipped:', mailErr?.message || mailErr)
+        }
       }
 
       // Charter §6: if any safe fixes were applied AND policy allows, put them on
@@ -349,10 +354,12 @@ export async function runSam(args = {}) {
       error: maskSecrets(String(err?.message || err)),
     }
     // A crashed sweep is itself an issue worth surfacing — email it too.
-    try {
-      await sendSamReportEmail(failedOut)
-    } catch (mailErr) {
-      console.warn('[sam] crash report email skipped:', mailErr?.message || mailErr)
+    if (emailReport) {
+      try {
+        await sendSamReportEmail(failedOut)
+      } catch (mailErr) {
+        console.warn('[sam] crash report email skipped:', mailErr?.message || mailErr)
+      }
     }
     return failedOut
   } finally {

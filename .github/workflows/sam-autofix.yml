@@ -1,0 +1,143 @@
+name: sam-autofix
+
+# Sam's daily code-correction job that actually reaches production.
+#
+# The prod runtime can't durably edit code (ephemeral disk, no .git), so the
+# auto-fixable half of Sam's sweep lives here: run eslint --fix, prove the result
+# still passes the full test gate, then open a PR and squash-merge it to main.
+# Railway auto-deploys main → live production.
+#
+# Runs 05:00 ET. GitHub cron is UTC-only and DST-unaware, so we fire at both
+# 09:00 and 10:00 UTC and the guard below proceeds only at the 05:00 ET hour.
+on:
+  schedule:
+    - cron: '0 9 * * *'   # 05:00 ET during EDT
+    - cron: '0 10 * * *'  # 05:00 ET during EST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Run regardless of the 05:00 ET guard'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sam-autofix
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard — only run at 05:00 America/New_York (scheduled)
+        id: guard
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          HOUR=$(TZ=America/New_York date +%H)
+          if [ "$HOUR" = "05" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not 05:00 ET (ET hour=$HOUR) — skipping this UTC tick."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout main
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        if: steps.guard.outputs.proceed == 'true'
+        run: npm ci --legacy-peer-deps
+
+      - name: Run eslint --fix (Sam's safe corrections)
+        if: steps.guard.outputs.proceed == 'true'
+        run: npm run lint -- --fix || true
+
+      - name: Detect changes
+        if: steps.guard.outputs.proceed == 'true'
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No eslint-fixable changes today."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Files Sam corrected:"
+            git diff --name-only | tee /tmp/sam-fixed-files.txt
+          fi
+
+      - name: Commit corrections to a branch
+        if: steps.guard.outputs.proceed == 'true' && steps.diff.outputs.changed == 'true'
+        id: commit
+        run: |
+          BRANCH="sam/autofix-$(date -u +%Y%m%d-%H%M%S)"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          git config user.name  "sam-autofix[bot]"
+          git config user.email "sam-autofix@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          # Commit ONLY the eslint changes (node_modules/dist are gitignored and
+          # no build has run yet, so -A is safe here).
+          git add -A
+          git commit -m "fix(sam): daily eslint --fix corrections
+
+          Auto-applied by Sam's daily code sweep (sam-autofix workflow).
+          Files corrected:
+          $(cat /tmp/sam-fixed-files.txt)
+
+          Co-Authored-By: Sam (GrantFlow code agent) <noreply@anthropic.com>"
+
+      - name: Validate corrections with the full test gate
+        if: steps.guard.outputs.proceed == 'true' && steps.diff.outputs.changed == 'true'
+        id: gate
+        run: |
+          if npm test; then
+            echo "green=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "green=false" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
+
+      - name: Push branch
+        if: steps.guard.outputs.proceed == 'true' && steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git push -u origin "${{ steps.commit.outputs.branch }}"
+
+      - name: Open PR and merge if green
+        if: steps.guard.outputs.proceed == 'true' && steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ steps.commit.outputs.branch }}"
+          GREEN="${{ steps.gate.outputs.green }}"
+          BODY="Sam's daily \`eslint --fix\` corrections.
+
+          Files:
+          $(cat /tmp/sam-fixed-files.txt | sed 's/^/- /')
+
+          Test gate (\`npm test\`): **$([ "$GREEN" = "true" ] && echo PASS || echo FAIL)**.
+
+          🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+          gh pr create --base main --head "$BRANCH" \
+            --title "fix(sam): daily eslint --fix corrections" --body "$BODY"
+          if [ "$GREEN" = "true" ]; then
+            echo "Gate green → squash-merging to main (auto-deploys to prod)."
+            gh pr merge "$BRANCH" --squash --delete-branch
+          else
+            echo "::warning::Test gate FAILED — leaving the PR open for human review (NOT merged)."
+          fi
