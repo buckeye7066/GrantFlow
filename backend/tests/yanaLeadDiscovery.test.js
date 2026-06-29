@@ -114,6 +114,31 @@ describe('discoverLeadCandidates', () => {
     const count = db.prepare('SELECT COUNT(*) AS c FROM yana_lead_candidates').get().c
     expect(count).toBe(3)
   })
+
+  it('defaultLoadOrganizations skips non-routable .invalid emails (Amy synthetic profiles)', async () => {
+    const db = makeDb()
+    // Minimal organizations table matching the columns the loader reads.
+    db.exec(`CREATE TABLE organizations (
+      id TEXT PRIMARY KEY, name TEXT, email TEXT, website TEXT,
+      mission TEXT, focus_areas TEXT, program_areas TEXT, applicant_type TEXT,
+      ein TEXT, city TEXT, state TEXT,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT
+    )`)
+    const real = richOrg(1)
+    db.prepare(`INSERT INTO organizations (id, name, email, website, mission, focus_areas, program_areas, applicant_type, ein, city, state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(real.id, real.name, real.email, real.website, real.mission, real.focus_areas, real.program_areas, real.applicant_type, real.ein, real.city, real.state)
+    // Amy synthetic org: amy+<scenario>@synthetic.grantflow.invalid — must be excluded.
+    db.prepare(`INSERT INTO organizations (id, name, email) VALUES (?, ?, ?)`)
+      .run('amy-1', 'Amy Synthetic — Nonprofit Organization #1', 'amy+nonprofit-v1@synthetic.grantflow.invalid')
+
+    // No injected loader → exercises the real defaultLoadOrganizations SQL.
+    const res = await discoverLeadCandidates(db, {})
+    expect(res.considered).toBe(1) // only the real org; the .invalid org is filtered out
+    const rows = db.prepare('SELECT contact_email FROM yana_lead_candidates').all()
+    expect(rows.every((r) => !String(r.contact_email).endsWith('.invalid'))).toBe(true)
+  })
 })
 
 describe('pushQualifiedToJohn — Yana Rule 4 rolling cap', () => {

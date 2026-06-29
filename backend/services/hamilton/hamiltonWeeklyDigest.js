@@ -213,7 +213,9 @@ export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = fa
     profiles = profileIds.map((id) => ({ id }))
   } else {
     try {
-      profiles = await db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status NOT IN ('deleted','suspended')`).all()
+      // Skip Amy's synthetic profiles (created_by='agent:amy') — they are QA
+      // fixtures, not real clients, and must never receive a digest.
+      profiles = await db.prepare(`SELECT id FROM profiles WHERE (status IS NULL OR status NOT IN ('deleted','suspended')) AND (created_by IS NULL OR created_by <> 'agent:amy')`).all()
     } catch { try { profiles = await db.prepare('SELECT id FROM profiles').all() } catch { profiles = [] } }
   }
 

@@ -301,8 +301,14 @@ export function qualifyScore(scored, { threshold = QUALIFY_THRESHOLD } = {}) {
 async function defaultLoadOrganizations(db, { limit }) {
   if (!db?.prepare) return []
   try {
+    // Exclude non-routable RFC-6761 .invalid addresses. Amy's synthetic profiles
+    // materialize organization rows with amy+<scenario>@synthetic.grantflow.invalid
+    // emails; without this filter Yana ingests them as leads and John drafts
+    // outreach to addresses that can never receive mail. .invalid can never be a
+    // real prospect, so this is the correct choke point (LOWER() so the Postgres
+    // shim, which is case-sensitive for LIKE, matches too).
     return await db
-      .prepare(`SELECT * FROM organizations WHERE email IS NOT NULL AND TRIM(email) <> '' ORDER BY updated_at DESC, created_at DESC LIMIT ?`)
+      .prepare(`SELECT * FROM organizations WHERE email IS NOT NULL AND TRIM(email) <> '' AND LOWER(email) NOT LIKE '%.invalid' ORDER BY updated_at DESC, created_at DESC LIMIT ?`)
       .all(Number(limit) || 200)
   } catch (err) {
     log.warn(`loadOrganizations failed (returning none): ${err?.message || err}`)
