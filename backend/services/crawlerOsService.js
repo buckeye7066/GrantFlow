@@ -148,6 +148,17 @@ export async function runProfileDiscovery(profile, opts = {}) {
 // false positives). Discovery only runs for live profiles.
 const NON_DISCOVERABLE_PROFILE_STATUSES = new Set(['deleted', 'archived', 'removed', 'inactive', 'merged']);
 
+/**
+ * isWebDiscoveryEnabled — gate for the open-web discovery lane. ON by default
+ * (it's the bridge to non-federal funding); set WEB_DISCOVERY_ENABLED=false to
+ * disable (e.g. to cap LLM/search spend). Requires a search backend (SearXNG or
+ * Brave) and an LLM key to actually produce results, but degrades to a no-op
+ * lane otherwise — it never throws.
+ */
+export function isWebDiscoveryEnabled() {
+  return String(process.env.WEB_DISCOVERY_ENABLED ?? 'true').toLowerCase() !== 'false';
+}
+
 function skippedDiscoveryResult(profileId, reason) {
   return {
     run: { skipped: true, reason, profile_id: profileId, planned: 0, stored: 0, rejected: 0, sources: [], zero_result: null },
@@ -175,10 +186,38 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   const effMatchProfiles = Array.isArray(matchProfiles) && matchProfiles.length > 0 ? matchProfiles : [thesis];
   const crossProfile = effMatchProfiles.length > 1;
   const store = createMemoryStore();
+  const liveFetcher = fetcher ?? makeProductionFetcher();
   const run = await runDiscovery(
-    { store, fetcher: fetcher ?? makeProductionFetcher() },
+    { store, fetcher: liveFetcher },
     { thesis, matchProfiles: effMatchProfiles, floor },
   );
+
+  // Open-web discovery lane — the bridge to state/local/foundation/community
+  // funding that has no federal API. Runs profile-keyed web search (SearXNG/Brave)
+  // + LLM extraction, then writes finds into the SAME store through the same
+  // reality gate + matcher, so persistRun flushes them alongside the API finds.
+  // Best-effort and bounded; never blocks or fails the run.
+  if (isWebDiscoveryEnabled()) {
+    try {
+      const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }] = await Promise.all([
+        import('../crawler-os/webLane.js'),
+        import('./shared/webSearchEngine.js'),
+        import('./webGrantExtractor.js'),
+      ]);
+      const web = await runWebDiscoveryLane(
+        { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage },
+        { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id },
+      );
+      const { recommendations: webRecs, ...webTelemetry } = web;
+      run.web_lane = webTelemetry;
+      if (Array.isArray(webRecs) && webRecs.length) {
+        run.recommendations = [...(run.recommendations ?? []), ...webRecs].sort((a, b) => b.match_score - a.match_score);
+      }
+    } catch (err) {
+      run.web_lane = { ok: false, error: String(err?.message ?? err) };
+    }
+  }
+
   if (dryRun) {
     // Read-only preview: report what discovery FOUND/MATCHED in the memory store
     // without touching the live tables. Mirrors persistRun's return shape.
