@@ -9,7 +9,7 @@ import { cohortMetricsAtFloor, sweepFloors } from '../services/amy/crawlerMetric
 import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue } from '../services/amy/crawlerTuner.js'
 import { readCurrentMinScore, applyMinScore, restoreFromBackup, readCurrentWeights, applyWeights, normalizeWeights } from '../services/amy/matchThresholdEditor.js'
 import { allSources } from '../crawler-os/sourceRegistry.js'
-import { setCoverageOverrides, getCoverageOverrides } from '../config/crawlerCoverageOverrides.js'
+import { setCoverageOverrides, getCoverageOverrides } from '../crawler-os/coverageOverrides.js'
 import { runAmyAnyaSamPipeline } from '../services/amy/amyPipeline.js'
 import { saveAmyReport, readLatestAmyReport, readAmyHistory } from '../services/amy/amyReportStore.js'
 import { generateScenarios, planVariantCounts, CATEGORY_IDS } from '../services/amy/syntheticProfileCatalog.js'

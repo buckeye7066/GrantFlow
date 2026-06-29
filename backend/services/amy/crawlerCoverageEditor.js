@@ -13,10 +13,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getCoverageOverrides, setCoverageOverrides } from '../../config/crawlerCoverageOverrides.js'
+import { getCoverageOverrides, setCoverageOverrides } from '../../crawler-os/coverageOverrides.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-export const COVERAGE_FILE = path.resolve(__dirname, '../../config/crawlerCoverageOverrides.js')
+export const COVERAGE_FILE = path.resolve(__dirname, '../../crawler-os/coverageOverrides.js')
 const REPO_ROOT = path.resolve(__dirname, '../../../')
 const BACKUP_DIR = path.join(REPO_ROOT, 'audit-reports', 'amy-coverage-backups')
 

@@ -5,7 +5,7 @@ import { createMemoryStore } from '../store.js';
 import { runDiscovery } from '../pipeline.js';
 import { storage } from '../index.js';
 import { buildThesis } from '../profileIntelligence.js';
-import { makeOpportunity, OPPORTUNITY_KIND, REALITY_STATUS, TRUST_TIER } from '../contract.js';
+import { makeOpportunity, OPPORTUNITY_KIND, REALITY_STATUS, TRUST_TIER, canonicalOpportunityKey } from '../contract.js';
 import { makeOfflineFetcher, grantsGovBody, SAMPLE_VFD_PROFILE } from './fixtures/fakeFetch.mjs';
 
 function deps(fetchOpts = {}) {
@@ -171,7 +171,21 @@ test('existing canonical rows are still matched on a later crawl (no false zero)
 
   const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run_existing_canonical' });
   const matches = storage.getMatchesForProfile(d.store, thesis.profile_id);
-  assert.equal(storage.countOpportunities(d.store), 1, 'repeat crawl must not insert a duplicate catalog row');
+
+  // Dedup invariant: the fresh crawl re-found OPP-7777 via grants.gov but must
+  // NOT insert a SECOND row for it — it folds into the seeded canonical row.
+  // (Other distinct directory resources a VFD profile legitimately surfaces —
+  // e.g. DHS/FEMA program directories — are not duplicates, so we assert on the
+  // canonical opportunity specifically, not the whole-catalog count.)
+  const canonicalKey = canonicalOpportunityKey({ apply_url: applyUrl, external_id: 'OPP-7777' });
+  const canonicalDupes = storage.listCatalog(d.store).filter((o) => o.canonical_opportunity_key === canonicalKey);
+  assert.equal(canonicalDupes.length, 1, 'repeat crawl must not insert a duplicate of the seeded canonical opportunity');
+  assert.equal(canonicalDupes[0].id, canonicalId, 'the crawl folds into the existing canonical row (keeps its id)');
+
+  const grants = r.sources.find((s) => s.source_id === 'grants_gov');
+  assert.equal(grants.stored, 0, 'grants.gov re-find of the seeded opportunity stores no new catalog row');
+  assert.ok(grants.existing >= 1, 'grants.gov telemetry records the existing canonical row it matched');
+
   assert.ok(matches.some((m) => m.opportunity_id === canonicalId), 'existing canonical row is matched for this profile');
   assert.equal(r.zero_result, null, 'matching an existing real opportunity is not a zero-result crawl');
   assert.ok(r.sources.some((s) => s.existing > 0), 'source telemetry records existing canonical rows');

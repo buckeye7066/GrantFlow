@@ -9,9 +9,9 @@
 
 import { TRUST_TIER, OPPORTUNITY_KIND } from './contract.js';
 // Amy-managed additive coverage overrides (broaden an existing source's
-// need_categories/applicant_types). Additive-only + reversible; see
-// backend/config/crawlerCoverageOverrides.js.
-import { mergeSourceCoverage } from '../config/crawlerCoverageOverrides.js';
+// need_categories/applicant_types). Additive-only + reversible; lives inside
+// the OS so the package stays self-contained. See ./coverageOverrides.js.
+import { mergeSourceCoverage } from './coverageOverrides.js';
 
 /**
  * Source row fields:
