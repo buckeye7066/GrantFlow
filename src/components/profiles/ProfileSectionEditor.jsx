@@ -23,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import FieldHelpTip from "@/components/help/FieldHelpTip"
+import { fieldAppliesToProfileType } from "../../../shared/profileSectionApplicability.js"
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object') return false
@@ -100,6 +101,9 @@ function normalizeTextValue(fieldName, value) {
   }
 
   if (typeof value === 'object') {
+    // An empty object carries no editable content — render blank rather than a
+    // literal "{}" leaking into the input (raw {} bug for json fields).
+    if (Object.keys(value).length === 0) return ''
     try {
       return JSON.stringify(value, null, 2)
     } catch (error) {
@@ -1492,6 +1496,7 @@ function fieldConfigFromMetadata(field, existingField) {
     props,
     type: existingField?.type ?? (format === "boolean_tri" ? "boolean" : format === "json" ? "json" : undefined),
     format,
+    applies_to: field.applies_to ?? existingField?.applies_to,
   }
 }
 
@@ -1516,6 +1521,7 @@ export default function ProfileSectionEditor({
   initialData,
   focusField,
   profileId,
+  profileType,
   onClose,
   onSave,
   isSaving,
@@ -1526,6 +1532,13 @@ export default function ProfileSectionEditor({
   const normalizedData = config ? normalizeInitialData(config, initialData) : {}
   const initialValues = config ? { ...defaults, ...(normalizedData ?? {}) } : {}
   const hiddenFields = Array.isArray(config?.hidden_fields) ? config.hidden_fields : []
+  // Field-level profile-type gating: only show fields that apply to this
+  // profile's type (e.g. "Academic status" is student-only). Gated fields are
+  // still registered hidden below so an org never loses a value it once had.
+  const visibilityProfile = { primary_type: profileType }
+  const allFields = Array.isArray(config?.fields) ? config.fields : []
+  const visibleFields = allFields.filter((field) => fieldAppliesToProfileType(field, visibilityProfile))
+  const gatedFields = allFields.filter((field) => !fieldAppliesToProfileType(field, visibilityProfile))
   const metadataFieldNames = new Set((config?.fields ?? []).map((field) => field.name))
   const legacyEntries = Object.entries(initialData ?? {}).filter(([key]) => !metadataFieldNames.has(key))
   const [dropLegacyOnSave, setDropLegacyOnSave] = useState(true)
@@ -1679,8 +1692,8 @@ export default function ProfileSectionEditor({
                 </Alert>
               ) : null}
 
-              {/* Register hidden fields so existing saved values are preserved on save */}
-              {hiddenFields.map((hf) => (
+              {/* Register hidden + type-gated fields so existing saved values are preserved on save */}
+              {[...hiddenFields, ...gatedFields].map((hf) => (
                 <Controller
                   key={hf.name}
                   control={form.control}
@@ -1724,7 +1737,7 @@ export default function ProfileSectionEditor({
                 </details>
               ) : null}
 
-              {config.fields.map((field) => {
+              {visibleFields.map((field) => {
                 if (field.type === 'boolean') {
                   return (
                     <div

@@ -10,10 +10,15 @@ import assert from 'node:assert/strict'
 import {
   isProfileTypeInList,
   sectionAppliesToProfileType,
+  fieldAppliesToProfileType,
+  isOrganizationProfileType,
+  isPersonProfileType,
+  isStudentProfileType,
   ORGANIZATION_DETAILS_TYPES,
   NONPROFIT_COMPLIANCE_TYPES,
   SMALL_BUSINESS_DETAILS_TYPES,
 } from '../../shared/profileSectionApplicability.js'
+import { PROFILE_TYPE_OPTIONS } from '../../shared/profileTypeOptions.js'
 import { SECTION_METADATA } from '../../src/config/sectionMetadata.js'
 
 function isProfileSectionApplicable(sectionKey, profile) {
@@ -61,4 +66,99 @@ test('sectionAppliesToProfileType treats empty applies_to as universal', () => {
 test('isProfileTypeInList returns false when type is missing', () => {
   assert.equal(isProfileTypeInList('', ORGANIZATION_DETAILS_TYPES), false)
   assert.equal(isProfileTypeInList(null, ORGANIZATION_DETAILS_TYPES), false)
+})
+
+// ── Person-only sections are hidden from organizations ──────────────────────
+const PERSON_ONLY_SECTIONS = [
+  'government_assistance',
+  'health_medical',
+  'demographics',
+  'family_life',
+  'military_service',
+  'occupation',
+  'employment',
+  'housing',
+  'family',
+]
+
+test('organizations do not get person-only sections', () => {
+  for (const orgType of ['nonprofit', 'county_government', 'business', 'public_school']) {
+    for (const sectionKey of PERSON_ONLY_SECTIONS) {
+      assert.equal(
+        isProfileSectionApplicable(sectionKey, { primary_type: orgType }),
+        false,
+        `${orgType} should NOT see person section "${sectionKey}"`,
+      )
+    }
+    assert.equal(
+      isProfileSectionApplicable('programs_services', { primary_type: orgType }),
+      true,
+      `${orgType} should see programs_services`,
+    )
+  }
+})
+
+test('people get person-only sections but not programs_services', () => {
+  for (const personType of ['individual', 'veteran', 'family', 'college_student', 'senior']) {
+    for (const sectionKey of PERSON_ONLY_SECTIONS) {
+      assert.equal(
+        isProfileSectionApplicable(sectionKey, { primary_type: personType }),
+        true,
+        `${personType} should see person section "${sectionKey}"`,
+      )
+    }
+    assert.equal(
+      isProfileSectionApplicable('programs_services', { primary_type: personType }),
+      false,
+      `${personType} should NOT see programs_services`,
+    )
+  }
+})
+
+test('explicit "other" sees all sections; a missing type shows only universal ones', () => {
+  for (const sectionKey of [...PERSON_ONLY_SECTIONS, 'programs_services', 'organization_details', 'education']) {
+    // "other" = explicit catch-all → never hide a section it might need.
+    assert.equal(isProfileSectionApplicable(sectionKey, { primary_type: 'other' }), true)
+    // No type yet (mid-onboarding) → type-constrained sections stay hidden.
+    assert.equal(isProfileSectionApplicable(sectionKey, { primary_type: '' }), false)
+  }
+})
+
+// ── Classification helpers ──────────────────────────────────────────────────
+test('classification helpers recognise the full curated type list', () => {
+  assert.equal(isOrganizationProfileType('nonprofit'), true)
+  assert.equal(isOrganizationProfileType('county_government'), true)
+  assert.equal(isOrganizationProfileType('museum'), true)
+  assert.equal(isOrganizationProfileType('individual'), false)
+
+  assert.equal(isPersonProfileType('veteran'), true)
+  assert.equal(isPersonProfileType('college_student'), true)
+  assert.equal(isPersonProfileType('nonprofit'), false)
+
+  assert.equal(isStudentProfileType('graduate_student'), true)
+  assert.equal(isStudentProfileType('individual'), false)
+})
+
+test('every curated profile type is classified as person or organization (no drift)', () => {
+  for (const { id } of PROFILE_TYPE_OPTIONS) {
+    if (id === 'other') continue
+    assert.ok(
+      isOrganizationProfileType(id) || isPersonProfileType(id),
+      `Curated profile type "${id}" is classified as neither person nor organization`,
+    )
+  }
+})
+
+// ── Field-level applicability ───────────────────────────────────────────────
+test('academic_status field is student-only; demographics field is person-only', () => {
+  const academicField = SECTION_METADATA.basic_information.fields.find((f) => f.name === 'academic_status')
+  const demoField = SECTION_METADATA.basic_information.fields.find((f) => f.name === 'demographics')
+  assert.ok(academicField && demoField)
+
+  assert.equal(fieldAppliesToProfileType(academicField, { primary_type: 'college_student' }), true)
+  assert.equal(fieldAppliesToProfileType(academicField, { primary_type: 'nonprofit' }), false)
+  assert.equal(fieldAppliesToProfileType(academicField, { primary_type: 'individual' }), false)
+
+  assert.equal(fieldAppliesToProfileType(demoField, { primary_type: 'individual' }), true)
+  assert.equal(fieldAppliesToProfileType(demoField, { primary_type: 'nonprofit' }), false)
 })
