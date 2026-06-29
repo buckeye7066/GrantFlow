@@ -95,6 +95,7 @@ import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
+import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY, METADATA_SECTION_KEY as AMY_METADATA_SECTION_KEY } from './services/amy/amyConstants.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
 import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
 import servicesRouter from './routes/services.js'
@@ -2292,6 +2293,36 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
   }
 }
 
+/**
+ * The automatic profile de-dupe may MERGE/DELETE a profile ONLY when it was
+ * created by the Amy→Anya→Sam synthetic crawler-training pipeline
+ * (profiles.created_by === 'agent:amy') AND it has been crawled at least once
+ * (amy_metadata.crawled_at present). Real and designated profiles are NEVER
+ * auto-merged — they are left untouched for human review. This is the single
+ * choke point that prevents the auto-dedupe from ever destroying real client
+ * data (root cause of the 2026-06-20 incident where designated client profiles
+ * were merged into UUID rows and tombstoned). On any error it fails SAFE
+ * (returns not-eligible), so an unexpected DB shape can never green-light a
+ * destructive merge of a real profile.
+ */
+async function amyDedupeEligibility(db, profileId) {
+  const out = { synthetic: false, crawled: false }
+  try {
+    const row = await db.prepare('SELECT created_by FROM profiles WHERE id = ? LIMIT 1').get(profileId)
+    out.synthetic = String(row?.created_by || '') === AMY_ORIGIN_CREATED_BY
+    if (!out.synthetic) return out
+    const sec = await db
+      .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ? LIMIT 1')
+      .get(profileId, AMY_METADATA_SECTION_KEY)
+    let meta = {}
+    try { meta = sec?.data ? JSON.parse(sec.data) : {} } catch { meta = {} }
+    out.crawled = Boolean(meta?.crawled_at)
+  } catch {
+    // Fail safe: any error → not eligible → never deleted.
+  }
+  return out
+}
+
 async function scheduleAutoProfileDedupe({ db }) {
   // Goal: delete duplicate profiles automatically without requiring a human to click buttons.
   // This runs once per deployed SHA and is intentionally conservative.
@@ -2344,6 +2375,43 @@ async function scheduleAutoProfileDedupe({ db }) {
       const winner = group?.winner
       const losers = Array.isArray(group?.losers) ? group.losers : []
       if (!winner?.id || losers.length === 0) continue
+
+      // ── MISSION GUARD: only ever auto-merge Amy synthetic, already-crawled profiles ──
+      // Every member of the group (the surviving winner AND every loser that gets
+      // merged away/deleted) must be an Amy→Anya→Sam synthetic profile, and every
+      // loser must have been crawled at least once. If ANY member is a real or
+      // designated profile, skip the whole group and leave it for human review.
+      // This is what stops the auto-dedupe from ever deleting real client data.
+      {
+        const members = [winner, ...losers]
+        const eligibilities = await Promise.all(members.map((m) => amyDedupeEligibility(db, m.id)))
+        const allSynthetic = eligibilities.every((e) => e.synthetic)
+        // Losers are the rows that get destroyed — they must each be crawled ≥ once.
+        const allLosersCrawled = eligibilities.slice(1).every((e) => e.crawled)
+        if (!allSynthetic || !allLosersCrawled) {
+          skippedGroups += 1
+          console.info('[auto-dedupe] skipped group (real/designated data is never auto-merged; synthetic must be crawled first)', {
+            runId, key: group.key, winnerId: winner.id, loserCount: losers.length, allSynthetic, allLosersCrawled,
+          })
+          logAuditEvent(db, {
+            category: AUDIT_CATEGORIES.ADMIN,
+            action: 'auto_profile_dedupe_skipped',
+            severity: SEVERITY.INFO,
+            resourceType: 'profile',
+            resourceId: winner.id,
+            details: {
+              run_id: runId,
+              group_key: group.key,
+              reason: 'not_amy_synthetic_or_not_crawled',
+              all_synthetic: allSynthetic,
+              all_losers_crawled: allLosersCrawled,
+              winner_id: winner.id,
+              loser_ids: losers.map((l) => l.id),
+            },
+          })
+          continue
+        }
+      }
 
       // Safety: skip if multiple distinct non-null users or organizations are involved.
       const userIds = new Set([winner.user_id, ...losers.map((l) => l.user_id)].filter(Boolean).map(String))
