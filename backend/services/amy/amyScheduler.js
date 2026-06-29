@@ -8,9 +8,13 @@
  * Anya handoff report, and cleans up the synthetic profiles.
  *
  * Env:
- *   AMY_ENABLED                 master switch (default false)
+ *   AMY_ENABLED                 master switch. Default: ON in production
+ *                               (NODE_ENV=production), OFF in dev/test so local
+ *                               runs and CI don't fire it. Set AMY_ENABLED=false
+ *                               to force it off even in prod.
  *   AMY_RUN_ON_SCHEDULE         daily run (default true when enabled)
- *   AMY_RUN_ON_STARTUP          one run shortly after boot (default false)
+ *   AMY_RUN_ON_STARTUP          one run shortly after boot (default true, so an
+ *                               enabled deploy actually runs without waiting 24h)
  *   AMY_DAILY_PROFILE_TARGET    profiles per day (default 100)
  *   AMY_PERSIST                 flush discovery to live catalog (default false → dry-run)
  *   AMY_KEEP_PROFILES           leave profiles for Sam instead of auto-clean (default false)
@@ -48,11 +52,15 @@ function bool(v, dflt = false) {
 }
 
 export function getAmyConfig() {
-  const enabled = bool(process.env.AMY_ENABLED, false)
+  // Login-independent background agent. ON by default in production so it runs
+  // autonomously on Railway without extra env config; OFF in dev/test (so local
+  // boots and CI don't trigger it) unless AMY_ENABLED is explicitly set.
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+  const enabled = bool(process.env.AMY_ENABLED, isProd)
   return {
     enabled,
     runOnSchedule: bool(process.env.AMY_RUN_ON_SCHEDULE, true),
-    runOnStartup: bool(process.env.AMY_RUN_ON_STARTUP, false),
+    runOnStartup: bool(process.env.AMY_RUN_ON_STARTUP, true),
     dailyTarget: Math.max(1, Math.min(5000, Number(process.env.AMY_DAILY_PROFILE_TARGET) || 100)),
     persist: bool(process.env.AMY_PERSIST, false),
     keepProfiles: bool(process.env.AMY_KEEP_PROFILES, false),
