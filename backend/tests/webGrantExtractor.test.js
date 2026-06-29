@@ -32,6 +32,8 @@ describe('extractOpportunitiesFromPage', () => {
         { title: 'Nashville Youth Fund Grant', funder: 'Nashville Youth Fund', summary: 'Grants for youth nonprofits', deadline: '2026-09-01', apply_url: 'https://nyf.org/apply', relevant: true, state: 'TN' },
         { title: 'Closed Program', funder: 'X', relevant: false },
         { title: '', funder: 'NoTitle', relevant: true },
+        { title: 'Aggregator Listing', funder: 'Various Funders', relevant: true },
+        { title: 'Mystery', funder: 'Unknown', relevant: true },
       ] },
     })
     const out = await extractOpportunitiesFromPage({ pageUrl: 'https://nyf.org', html: longPage, thesis, query: 'youth grants TN' }, { invoke, openai: null })
