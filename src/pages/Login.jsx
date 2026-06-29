@@ -85,7 +85,7 @@ export default function Login() {
         <AuthErrorBoundary onReset={handleErrorReset}>
                 <AuthShell
                           title="Sign in to GrantFlow"
-                          subtitle="Enter your email or phone number to get started."
+                          subtitle="Enter your email address to get started."
                         >
                         <AuthMethodExpiryNotice />
                         <AuthMethodTabs onComplete={handleComplete} />
@@ -113,9 +113,8 @@ export default function Login() {
 function AuthMethodExpiryNotice() {
     return (
           <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
-                First-time email sign-in uses a one-time link to set your password; returning
-                users sign in with email + password. Prefer your phone? Enter a phone number
-                and we’ll text you a 6-digit code.
+                First-time sign-in uses a one-time email link to set your password.
+                Returning users can sign in with email + password.
           </div>
         )
 }
