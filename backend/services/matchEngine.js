@@ -41,7 +41,6 @@ const log = createLogger('matchEngine')
 const FACET_DEBUG = String(process.env.MATCHING_ENGINE_FACET_DEBUG || '').toLowerCase() === 'true'
 import {
   SCORE_FLOOR,
-  W_NEED, W_ELIGIBILITY, W_GEO, W_CATEGORY,
   DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N,
   ACCEPT_SCORE, REVIEW_SCORE,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
@@ -67,6 +66,10 @@ import {
   POPULATION_MISSION_BOOST_PER_HIT, POPULATION_MISSION_BOOST_MAX,
   NEED_GEO_FIT_BASE, NEED_GEO_FIT_PER_HIT, NEED_GEO_FIT_MAX, NEED_GEO_FIT_MIN_GEO_SUBSCALE,
 } from '../config/matchThresholds.js'
+// Live, DB-persisted scoring tuning (Amy's improvement loop writes these). With
+// no override active these return the matchThresholds.js defaults, so default
+// behavior is unchanged.
+import { getEffectiveWeights, getEffectiveMinScore } from '../config/scoringTuning.js'
 import { assessOpportunityTrust } from './opportunityTrust.js'
 import {
   computePreferenceNudge,
@@ -2249,6 +2252,9 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // pre-round, which used to silently disappear before the depth multiplier
   // ran). The matcher per-section coverage tests rely on these directional
   // signals being visible in the final integer total.
+  // Read the LIVE weights (Amy's tuned values when active; matchThresholds.js
+  // defaults otherwise) so applied improvements take effect immediately.
+  const { W_NEED, W_ELIGIBILITY, W_GEO, W_CATEGORY } = getEffectiveWeights()
   let rawScore =
     need.subscale * W_NEED +
     elig.subscale * W_ELIGIBILITY +
@@ -2686,7 +2692,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
 
   const requestedMin = typeof opts.minScore === 'number' ? opts.minScore : 0
   const strictMinScore = opts.strictMinScore === true
-  const relaxSteps = [DEFAULT_MIN_SCORE, ...RELAX_THRESHOLDS]
+  const relaxSteps = [getEffectiveMinScore(), ...RELAX_THRESHOLDS]
 
   const passesMin = (results, threshold) => results.filter((r) => r.score >= threshold)
 

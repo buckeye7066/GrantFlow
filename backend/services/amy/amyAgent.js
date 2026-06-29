@@ -32,7 +32,7 @@ import { createAmyProfile, cleanupAmyProfiles, markProfileCrawled } from './amyP
 import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations } from './amyReport.js'
 import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMetrics.js'
 import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue } from './crawlerTuner.js'
-import { readCurrentMinScore, applyMinScore, readCurrentWeights, applyWeights as applyWeightsToFile, restoreFromBackup } from './matchThresholdEditor.js'
+import { getEffectiveMinScore, getEffectiveWeights, setScoringTuning, persistScoringTuning } from '../../config/scoringTuning.js'
 import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } from './crawlerCoverageEditor.js'
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
@@ -74,8 +74,37 @@ export async function runAmyTraining(options = {}) {
     samApply = false,
     saveReport = true,
     runPipeline = runAmyAnyaSamPipeline,
-    thresholdEditor = { read: readCurrentMinScore, apply: applyMinScore },
-    weightEditor = { read: readCurrentWeights, apply: applyWeightsToFile, restore: restoreFromBackup },
+    // Default editors apply tuning through the LIVE, DB-persisted scoring store
+    // (backend/config/scoringTuning.js): changes take effect in-process for the
+    // validation re-crawl and survive restarts. Reversible via restore(applied).
+    thresholdEditor = {
+      read: async () => getEffectiveMinScore(),
+      apply: async (to) => {
+        const from = getEffectiveMinScore()
+        setScoringTuning({ minScore: to })
+        await persistScoringTuning(db)
+        return { applied: true, from, to }
+      },
+      restore: async (applied) => {
+        const from = applied?.from
+        if (Number.isFinite(Number(from))) { setScoringTuning({ minScore: Number(from) }); await persistScoringTuning(db) }
+        return true
+      },
+    },
+    weightEditor = {
+      read: async () => getEffectiveWeights(),
+      apply: async (to) => {
+        const from = getEffectiveWeights()
+        setScoringTuning({ weights: to })
+        await persistScoringTuning(db)
+        return { applied: true, from, to }
+      },
+      restore: async (applied) => {
+        const from = applied?.from ?? applied
+        if (from && typeof from === 'object') { setScoringTuning({ weights: from }); await persistScoringTuning(db) }
+        return true
+      },
+    },
     coverageEditor = { read: readLiveOverrides, apply: applyCoverageOverrides, revert: revertCoverageOverrides },
     validationSampleSize = 40,
     tuningOpts = {},
@@ -216,7 +245,7 @@ export async function runAmyTraining(options = {}) {
             after = cohortMetricsAtFloor(rv.evals, operatingFloor)
             logger.info('Amy kept scoring-weight change', { baseline: baselineQuality, after: rv.quality })
           } else {
-            await weightEditor.restore(applied.backup_path)
+            await weightEditor.restore(applied)
             weightTuning.validation = { kept: false, reverted: true, baseline: baselineQuality, after: rv.quality }
             logger.info('Amy reverted scoring-weight change (no improvement)', { baseline: baselineQuality, after: rv.quality })
           }
@@ -236,7 +265,7 @@ export async function runAmyTraining(options = {}) {
       const cp = proposeCoverageOverrides(evaluations, { liveOverrides, opts: tuningOpts.coverage })
       coverageTuning = { change: cp.change, additions: cp.additions, reason: cp.reason, applied: null, validation: null }
       if (cp.change) {
-        const applied = await coverageEditor.apply(cp.next, { now: clock() })
+        const applied = await coverageEditor.apply(cp.next, { now: clock(), db })
         coverageTuning.applied = applied
         if (applied?.applied) {
           const rv = await recrawlQuality()
@@ -245,7 +274,7 @@ export async function runAmyTraining(options = {}) {
             after = cohortMetricsAtFloor(rv.evals, operatingFloor)
             logger.info('Amy kept source-coverage change', { baseline: baselineQuality, after: rv.quality })
           } else {
-            await coverageEditor.revert(applied.from, applied.backup_path)
+            await coverageEditor.revert(applied.from, applied.backup_path, { db })
             coverageTuning.validation = { kept: false, reverted: true, baseline: baselineQuality, after: rv.quality }
             logger.info('Amy reverted source-coverage change (no improvement)', { baseline: baselineQuality, after: rv.quality })
           }

@@ -2774,6 +2774,25 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
       }
     })();
+    // Hydrate Amy's persisted crawler improvements (scoring weights/floor +
+    // source-coverage overrides) from the DB BEFORE anything serves matches, so
+    // prior tuning takes effect immediately and survives restarts/redeploys.
+    // Runs regardless of whether the Amy scheduler is enabled.
+    ;(async () => {
+      try {
+        const [{ hydrateScoringTuning }, { hydrateCoverageOverrides }] = await Promise.all([
+          import('./config/scoringTuning.js'),
+          import('./services/amy/crawlerCoverageEditor.js'),
+        ])
+        const scoring = await hydrateScoringTuning(db)
+        const coverage = await hydrateCoverageOverrides(db)
+        if (scoring || coverage) {
+          console.log('[Server] Amy tuning hydrated:', JSON.stringify({ scoring: scoring || null, coverage_sources: coverage ? Object.keys(coverage).length : 0 }))
+        }
+      } catch (hydErr) {
+        console.warn('[Server] Amy tuning hydrate skipped:', hydErr?.message || hydErr)
+      }
+    })();
     // Amy — synthetic crawler-training agent scheduler. Disabled by default;
     // enable with AMY_ENABLED=true. When on it runs once/day and generates
     // AMY_DAILY_PROFILE_TARGET (default 100) synthetic profiles, runs them

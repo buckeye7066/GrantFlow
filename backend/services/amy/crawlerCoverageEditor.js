@@ -21,17 +21,58 @@ const REPO_ROOT = path.resolve(__dirname, '../../../')
 const BACKUP_DIR = path.join(REPO_ROOT, 'audit-reports', 'amy-coverage-backups')
 
 const BLOCK_RX = /(\/\/ AMY_COVERAGE_OVERRIDES_BEGIN\nexport const COVERAGE_OVERRIDES = )([\s\S]*?)(\n\/\/ AMY_COVERAGE_OVERRIDES_END)/
+const KV_KEY = 'crawler_coverage_overrides'
 
 /** Current live overrides (snapshot copy). */
 export function readLiveOverrides() {
   return JSON.parse(JSON.stringify(getCoverageOverrides() || {}))
 }
 
+async function ensureKv(db) {
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+  } catch {
+    // table may already exist with a richer shape — fine
+  }
+}
+
+/** Persist the live coverage overrides to system_kv so they survive restarts. */
+export async function persistCoverageOverrides(db) {
+  if (!db) return false
+  try {
+    await ensureKv(db)
+    const value = JSON.stringify(getCoverageOverrides() || {})
+    const now = new Date().toISOString()
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, now, KV_KEY)
+    if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(KV_KEY, value, now)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Load persisted coverage overrides into the live store on boot. */
+export async function hydrateCoverageOverrides(db) {
+  if (!db) return null
+  try {
+    await ensureKv(db)
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(KV_KEY)
+    if (!row?.value) return null
+    const parsed = JSON.parse(row.value)
+    setCoverageOverrides(parsed)
+    return parsed
+  } catch {
+    return null
+  }
+}
+
 /**
  * Persist + live-apply a new overrides map. Backs up the file first.
  * @returns {{ applied, from, to, backup_path, reason? }}
  */
-export async function applyCoverageOverrides(next, { filePath = COVERAGE_FILE, now = new Date() } = {}) {
+export async function applyCoverageOverrides(next, { filePath = COVERAGE_FILE, now = new Date(), db = null } = {}) {
   const from = readLiveOverrides()
   const to = next && typeof next === 'object' ? next : {}
 
@@ -65,12 +106,16 @@ export async function applyCoverageOverrides(next, { filePath = COVERAGE_FILE, n
 
   // Live-apply so the next crawl in THIS process sees it.
   setCoverageOverrides(to)
+  // Persist to the DB too so the improvement survives restarts/redeploys (the
+  // file edit is ephemeral on a container filesystem).
+  if (db) await persistCoverageOverrides(db)
   return { applied: true, from, to, backup_path: path.relative(REPO_ROOT, backupPath) }
 }
 
 /** Revert to a previous overrides map (live) and restore the file from backup. */
-export async function revertCoverageOverrides(previousMap, backupPath, { filePath = COVERAGE_FILE } = {}) {
+export async function revertCoverageOverrides(previousMap, backupPath, { filePath = COVERAGE_FILE, db = null } = {}) {
   setCoverageOverrides(previousMap && typeof previousMap === 'object' ? previousMap : {})
+  if (db) await persistCoverageOverrides(db)
   if (backupPath) {
     const abs = path.isAbsolute(backupPath) ? backupPath : path.join(REPO_ROOT, backupPath)
     try {
