@@ -1325,7 +1325,13 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   // the exact bug the user reported. With tools wired in, the LLM either
   // calls the tool (and we surface the real result) or it answers in
   // text without claiming to have done anything.
-  const activeProfileId = user?.activeProfileId || user?.profile_id || null
+  // Prefer the profile the user is actively viewing (sent by the frontend in
+  // pageContext) over the auth-derived active profile, which is null when the
+  // user is browsing a profile page without an "active profile" set in session.
+  // Without this, Anya's profile-scoped tools received a null id and reported
+  // existing profiles as "not found" — the exact grounding bug users hit.
+  const activeProfileId =
+    pageContext?.profileId || user?.activeProfileId || user?.profile_id || null
   let openaiTools
   try {
     const toolMetadata = listToolMetadata(user)

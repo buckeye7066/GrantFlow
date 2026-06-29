@@ -3,7 +3,9 @@ import React from "react"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -47,18 +49,31 @@ export default function ProfileTypeSelect({
       <SelectTrigger id={id} className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
-      <SelectContent>
+      {/*
+        position="popper" + a height bound to the space actually available next
+        to the trigger keeps this long, grouped list inside the viewport: it
+        opens downward when there's room and scrolls otherwise, instead of
+        overflowing above the top of the screen with the first groups
+        unreachable and the rendered rows desynced from their click targets
+        (which silently selected the wrong type). Group headers use the Radix
+        SelectGroup/SelectLabel primitives so they stay out of the interactive
+        item collection.
+      */}
+      <SelectContent
+        position="popper"
+        className="max-h-[min(24rem,var(--radix-select-content-available-height))]"
+      >
         {grouped.map(({ group, options }) => (
-          <React.Fragment key={group}>
-            <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <SelectGroup key={group}>
+            <SelectLabel className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               {group}
-            </div>
+            </SelectLabel>
             {options.map((option) => (
               <SelectItem key={option.id} value={option.id}>
                 {option.label}
               </SelectItem>
             ))}
-          </React.Fragment>
+          </SelectGroup>
         ))}
       </SelectContent>
     </Select>

@@ -221,14 +221,20 @@ function extractDiagnostics(payload) {
 // even before any results exist. Each zone is enriched with live counts + the
 // dominant source from `score_histogram` (buckets are 0-20/20-40/40-60/60-80,
 // matching these zones) when the matching response provides it.
+// Match-score scale upper bound. Aligned to the full 0-100 scale (matching the
+// Smart Matcher control) so the slider can reach the highest matches (85+) and
+// the axis + thumb track the same range. Previously capped at 80, which
+// mislabeled the axis and diverged from Smart Matcher.
+const SCORE_MAX = 100
+
 const GUIDANCE_ZONES = [
-  { min: 0, max: 20, label: 'Broad matches', hint: 'Wide net' },
-  { min: 20, max: 40, label: 'Good matches', hint: 'Worth a look' },
-  { min: 40, max: 60, label: 'Strong matches', hint: 'Solid fit' },
-  { min: 60, max: 80, label: 'Best matches', hint: 'Closest fit' },
+  { min: 0, max: 40, label: 'Broad matches', hint: 'Wide net' },
+  { min: 40, max: 70, label: 'Good matches', hint: 'Worth a look' },
+  { min: 70, max: 85, label: 'Strong matches', hint: 'Solid fit' },
+  { min: 85, max: 100, label: 'Best matches', hint: 'Closest fit' },
 ]
 
-function MatchScoreGuidanceBand({ histogram, max = 80, value }) {
+function MatchScoreGuidanceBand({ histogram, max = SCORE_MAX, value }) {
   const buckets = Array.isArray(histogram) ? histogram : []
   const byMin = new Map(buckets.map((b) => [Number(b?.min) || 0, b]))
   const maxCount = buckets.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
@@ -692,6 +698,29 @@ export default function DiscoverGrants() {
     return Array.isArray(buckets) ? buckets : []
   }, [catalogPayload])
 
+  // Fallback "lower your threshold" hint derived from the score histogram, for
+  // the common case where matches exist BELOW the slider floor but the backend
+  // attached no precise score_hint (that only rides along with crawler results).
+  // Without it the zero-result view was a dead end even though the source list
+  // reported sub-threshold matches.
+  const subThresholdHint = useMemo(() => {
+    let belowCount = 0
+    let suggested = null
+    for (const b of scoreHistogram) {
+      const min = Number(b?.min)
+      const count = Number(b?.count) || 0
+      if (!Number.isFinite(min) || count <= 0) continue
+      if (min < minMatchScore) {
+        belowCount += count
+        // The start of the highest non-empty bucket below the floor reveals the
+        // strongest currently-hidden matches when the user lowers to it.
+        if (suggested === null || min > suggested) suggested = min
+      }
+    }
+    if (belowCount <= 0 || suggested === null) return null
+    return { belowCount, suggested }
+  }, [scoreHistogram, minMatchScore])
+
   // Architecture P1: high-value profile fields that, if filled, would unlock or
   // improve this profile's matches. Surfaced as encouraging prompts (never a
   // gate). Present in both the discovery_pending and the normal response.
@@ -1099,7 +1128,11 @@ export default function DiscoverGrants() {
       const collapseNote = collapsedCount > 0 ? ` Collapsed ${collapsedCount} duplicate variant${collapsedCount === 1 ? '' : 's'}.` : ''
       toast({
         title: 'Search complete',
-        description: `Found ${uniqueOpportunities.length} opportunities.${collapseNote} Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed (from ${attempted} eligible).`,
+        description: `Found ${uniqueOpportunities.length} opportunities.${collapseNote} ${
+          attempted > 0
+            ? `Auto-added the ${attempted} strongest (${AUTO_ADD_SCORE}%+ match): ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed.`
+            : `None reached the ${AUTO_ADD_SCORE}%+ auto-add bar — browse the results below and add any you want.`
+        }`,
       })
     }
 
@@ -1593,12 +1626,12 @@ export default function DiscoverGrants() {
                     <span className="ml-2">({selectedProfile.organization_name})</span>
                   )}
                   {selectedProfile.primary_type && (
-                    <span className="ml-2 text-xs text-muted-foreground">\u2022 {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">{"\u2022"} {selectedProfile.primary_type.replace(/_/g, ' ')}</span>
                   )}
-                  {selectedOrg?.state && <span className="ml-2">\u2022 {selectedOrg.state}</span>}
+                  {selectedOrg?.state && <span className="ml-2">{"\u2022"} {selectedOrg.state}</span>}
                   {isECFProfile && (
                     <span className="block mt-1 font-semibold">
-                      \uD83C\uDFE5 ECF CHOICES Participant
+                      {"\uD83C\uDFE5"} ECF CHOICES Participant
                     </span>
                   )}
                 </AlertDescription>
@@ -1675,14 +1708,15 @@ export default function DiscoverGrants() {
                 </div>
                 {/* Color-coded, notched guidance band (Feature B). Data-driven
                     from score_histogram; degrades gracefully (hidden) when the
-                    backend response predates it. Capped at 80 to match slider. */}
-                <MatchScoreGuidanceBand histogram={scoreHistogram} max={80} value={minMatchScore} />
+                    backend response predates it. Spans the full 0-100 scale to
+                    match the slider and the Smart Matcher control. */}
+                <MatchScoreGuidanceBand histogram={scoreHistogram} max={SCORE_MAX} value={minMatchScore} />
                 <input
                   type="range"
                   min={0}
-                  max={80}
+                  max={SCORE_MAX}
                   step={5}
-                  value={Math.min(80, minMatchScore)}
+                  value={Math.min(SCORE_MAX, minMatchScore)}
                   onChange={(e) => setMinMatchScore(Number(e.target.value))}
                   disabled={isSearching}
                   className="mt-3 w-full"
@@ -1813,6 +1847,25 @@ export default function DiscoverGrants() {
                       onClick={() => { setMinMatchScore(scoreHint.suggestedThreshold); }}
                     >
                       Lower to {scoreHint.suggestedThreshold}% to see ~{scoreHint.countAtSuggested} results
+                    </button>
+                    {' '}then re-run the search.
+                  </div>
+                </div>
+              )}
+
+              {/* Fallback below-threshold hint: no precise score_hint, but the
+                  histogram shows matches under the current floor. */}
+              {!(scoreHint && scoreHint.bestScore > 0) && subThresholdHint && (
+                <div className="flex items-center gap-3 rounded-md bg-blue-50 border border-blue-200 p-3">
+                  <span className="text-blue-600 text-lg">&#x1F50D;</span>
+                  <div className="flex-1 text-sm text-blue-900">
+                    <strong>{subThresholdHint.belowCount}</strong> {subThresholdHint.belowCount === 1 ? 'opportunity' : 'opportunities'} scored below your <strong>{minMatchScore}%</strong> threshold.
+                    {' '}
+                    <button
+                      className="underline font-medium hover:text-blue-700"
+                      onClick={() => { setMinMatchScore(subThresholdHint.suggested); }}
+                    >
+                      Lower to {subThresholdHint.suggested}% to see them
                     </button>
                     {' '}then re-run the search.
                   </div>

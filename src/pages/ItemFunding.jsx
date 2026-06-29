@@ -252,7 +252,7 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Layers className="w-4 h-4" />
             <span>{opportunity.source || "Crawler"}</span>
-            <span className="mx-2">\u2022</span>
+            <span className="mx-2">{"\u2022"}</span>
             <span>{opportunity.sponsor || "Sponsor pending"}</span>
           </div>
         </DialogHeader>
@@ -696,7 +696,7 @@ export default function ItemFunding() {
               Grant-only guardrails
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
-              <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle \u201CShow match/loan results\u201D to review them).</li>
+              <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle &ldquo;Show match/loan results&rdquo; to review them).</li>
               <li>Local crawler searches within 25 miles (or the student&apos;s campus ZIP) for locality-specific aid.</li>
               <li>Scholarship and Geo Crawl augment the list with verified national gift-based funding.</li>
             </ul>
@@ -931,7 +931,7 @@ export default function ItemFunding() {
             <Sparkles className="w-12 h-12 mx-auto text-slate-300" />
             <h3 className="text-xl font-semibold text-slate-900">Search for a specific item or equipment</h3>
             <p className="text-sm text-slate-600">
-              Enter exactly what you\u2019re looking for and we\u2019ll surface grants, endowments, and programs that can fund it \u2013 no
+              Enter exactly what you&rsquo;re looking for and we&rsquo;ll surface grants, endowments, and programs that can fund it &ndash; no
               loans by default, and match-required programs are flagged and hidden unless you opt in.
             </p>
           </CardContent>

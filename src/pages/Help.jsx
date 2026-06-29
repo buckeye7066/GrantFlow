@@ -13,8 +13,8 @@ import { searchHelpRegistry, HELP_REGISTRY } from "@/config/helpRegistry";
 
 const BIG_BUTTONS = [
   {
-    title: "Start here (Set up my organisation)",
-    description: "Add your organisation and profiles.",
+    title: "Start here (Set up my organization)",
+    description: "Add your organization and profiles.",
     links: [
       { label: "Organizations", url: createPageUrl("Organizations") },
       { label: "My Profiles", url: createPageUrl("MyProfiles") },
@@ -72,7 +72,7 @@ const COMMON_TASKS = buildCommonTasks()
 const FAQ_ITEMS = [
   {
     q: "What is a Profile?",
-    a: "A profile describes who you are when applying—like your organisation, or yourself as a student. You need at least one profile to find grants.",
+    a: "A profile describes who you are when applying—like your organization, or yourself as a student. You need at least one profile to find grants.",
   },
   {
     q: "What's the Pipeline?",
@@ -92,7 +92,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Why can't I see Admin tools?",
-    a: "Admin tools are only for account administrators. If you need access, ask your organisation's admin to add you.",
+    a: "Admin tools are only for account administrators. If you need access, ask your organization's admin to add you.",
   },
   {
     q: "How do I find grants?",
@@ -100,7 +100,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "What is a Funder?",
-    a: "A funder is the organisation that gives the money—like a foundation or government agency. The Funder page lets you explore them.",
+    a: "A funder is the organization that gives the money—like a foundation or government agency. The Funder page lets you explore them.",
   },
 ];
 

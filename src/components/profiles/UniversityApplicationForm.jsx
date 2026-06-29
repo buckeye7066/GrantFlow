@@ -719,7 +719,7 @@ export default function UniversityApplicationForm({
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">School theme</h3>
               <p className="text-xs text-muted-foreground">
-                Optional. If set, this card can render using the school\u2019s colors and a cheer line.
+                Optional. If set, this card can render using the school&rsquo;s colors and a cheer line.
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
