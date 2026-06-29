@@ -194,10 +194,31 @@ export async function getProfileFieldPrompts(db, profileId) {
 
     // ── 4. Organization / tax status (orgs only) — EIN / 501(c)(3) / org type ─
     if (isOrg) {
-      const hasOrgType = nonEmpty(orgDetails.organization_type || orgDetails.legal_form || basic.organization_type)
-      const hasTaxId = nonEmpty(orgDetails.ein || orgDetails.uei || nonprofitCompliance.ein)
+      // The org type is already known from the profile's applicant/primary type
+      // (the user picks "Nonprofit", "Business", etc. at creation), so we never
+      // nag for it again — only a genuinely missing tax id / status prompts.
+      const hasOrgType = nonEmpty(
+        applicantType || orgDetails.organization_type || orgDetails.legal_form || basic.organization_type,
+      )
+      // EIN / UEI may be saved under Organization Details OR Nonprofit Compliance.
+      const hasTaxId = nonEmpty(
+        orgDetails.ein || orgDetails.uei || nonprofitCompliance.ein || nonprofitCompliance.uei || basic.ein,
+      )
+      // 501(c)(3) status is captured as boolean toggles (public charity /
+      // private foundation / confirmed) in either section, alongside any
+      // free-form tax-exempt / tax-status text. Check ALL of them so a filled
+      // nonprofit is not told to "add tax details" it already provided.
       const hasTaxStatus = nonEmpty(
-        nonprofitCompliance.tax_exempt_status || orgDetails.tax_status || nonprofitCompliance.is_501c3,
+        nonprofitCompliance.tax_exempt_status ||
+          nonprofitCompliance.tax_status ||
+          nonprofitCompliance.is_501c3 ||
+          nonprofitCompliance.is_501c3_public_charity ||
+          nonprofitCompliance.is_501c3_private_foundation ||
+          orgDetails.tax_exempt_status ||
+          orgDetails.tax_status ||
+          orgDetails.is_501c3 ||
+          orgDetails.is_501c3_public_charity ||
+          orgDetails.is_501c3_private_foundation,
       )
       if (!hasOrgType || !hasTaxId || !hasTaxStatus) {
         prompts.push({

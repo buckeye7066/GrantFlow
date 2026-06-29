@@ -42,6 +42,15 @@ export const useSavedGrantsStore = create((set, get) => ({
   savedIds: loadFromStorage(),
   /** Map of opportunity_id → notes string (populated after sync) */
   notesMap: {},
+  /**
+   * Map of opportunity_id → full opportunity row (populated after sync).
+   * The GET /api/saved-grants response LEFT JOINs funding_opportunities, so
+   * each saved row already carries title/sponsor/amount/deadline/urls. We keep
+   * it here so SavedGrants can render directly — the saved id is a
+   * funding_opportunities id, NOT a grants (pipeline) id, so fetching
+   * /api/grants/{id} with it always 404'd.
+   */
+  opportunitiesMap: {},
   synced: false,
 
   /** Fetch saved IDs from backend (scoped server-side by active profile) and merge with localStorage cache */
@@ -76,12 +85,16 @@ export const useSavedGrantsStore = create((set, get) => ({
         ? [...new Set([...backendIds, ...localIds])]
         : backendIds
       saveToStorage(merged)
-      // Build notes map from backend response
+      // Build notes + opportunity maps from backend response. The saved rows
+      // are LEFT JOINed with funding_opportunities, so they hold the full
+      // opportunity payload SavedGrants needs to render each card.
       const notes = {}
+      const opportunities = {}
       for (const row of (res?.saved ?? [])) {
         if (row.notes) notes[row.opportunity_id] = row.notes
+        if (row.opportunity_id) opportunities[row.opportunity_id] = row
       }
-      set({ savedIds: merged, notesMap: notes, synced: true })
+      set({ savedIds: merged, notesMap: notes, opportunitiesMap: opportunities, synced: true })
     } catch {
       // Offline or not logged in — keep localStorage only
       set({ synced: false })
@@ -93,7 +106,7 @@ export const useSavedGrantsStore = create((set, get) => ({
    * cache so we never display the previous profile's saved set for a frame.
    */
   async resyncForProfile() {
-    set({ savedIds: loadFromStorage(), notesMap: {}, synced: false })
+    set({ savedIds: loadFromStorage(), notesMap: {}, opportunitiesMap: {}, synced: false })
     await get().sync()
   },
 

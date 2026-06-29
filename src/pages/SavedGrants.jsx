@@ -1,7 +1,5 @@
 import React, { useState, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { apiFetch } from '@/api/client'
 import { useSavedGrantsStore } from '@/stores/savedGrantsStore'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -60,44 +58,32 @@ function NoteEditor({ grantId }) {
 
 export default function SavedGrants() {
   const navigate = useNavigate()
-  const { savedIds, removeGrant, sync, synced } = useSavedGrantsStore()
+  const { savedIds, removeGrant, sync, synced, opportunitiesMap } = useSavedGrantsStore()
 
+  // Always sync on mount: freshly-starred items (saved earlier this session,
+  // before the last sync) still need their full opportunity payload pulled in.
+  // sync() is idempotent and merges local + backend saves; `sync` is a stable
+  // zustand action reference, so this effect runs once.
   React.useEffect(() => {
-    if (!synced) sync()
-  }, [synced, sync])
+    sync()
+  }, [sync])
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['savedGrants', savedIds],
-    queryFn: async () => {
-      if (savedIds.length === 0) return { grants: [], missingIds: [] }
-      const settled = await Promise.allSettled(
-        savedIds.map(async (id) => {
-          try {
-            const grant = await apiFetch(`/api/grants/${id}`)
-            return { id, grant }
-          } catch (err) {
-            // A 404 means the saved grant's target no longer exists. Other
-            // errors (network / 5xx) are transient and must NOT be treated as
-            // "permanently gone".
-            return { id, grant: null, missing: err?.status === 404 }
-          }
-        })
-      )
-      const grants = []
-      const missingIds = []
-      for (const r of settled) {
-        if (r.status !== 'fulfilled') continue
-        if (r.value.grant) grants.push(r.value.grant)
-        else if (r.value.missing) missingIds.push(r.value.id)
-      }
-      return { grants, missingIds }
-    },
-    enabled: savedIds.length > 0,
-    staleTime: 30_000,
-  })
+  const isLoading = savedIds.length > 0 && !synced
 
-  const grants = data?.grants ?? []
-  const missingIds = data?.missingIds ?? []
+  // A saved id is a funding_opportunities id. The synced opportunitiesMap holds
+  // the full JOINed row (title/sponsor/amount/deadline/url) for each, so we
+  // render straight from it. (Previously this fetched /api/grants/{id} — a
+  // different table and id space — so every lookup 404'd and nothing showed.)
+  const missingIds = React.useMemo(
+    () =>
+      synced
+        ? savedIds.filter((id) => {
+            const opp = opportunitiesMap?.[id]
+            return !opp || !(opp.title || opp.program_name || opp.name)
+          })
+        : [],
+    [synced, savedIds, opportunitiesMap],
+  )
 
   const removeAllUnavailable = React.useCallback(() => {
     missingIds.forEach((id) => removeGrant(id))
@@ -150,7 +136,8 @@ export default function SavedGrants() {
         {savedIds.length > 0 && !isLoading && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {savedIds.map((id) => {
-              const grant = grants.find((g) => String(g?.id) === String(id))
+              const opp = opportunitiesMap?.[id]
+              const grant = opp && (opp.title || opp.program_name || opp.name) ? opp : null
               return (
                 <div key={id} className="flex flex-col">
                   {grant ? (

@@ -569,7 +569,7 @@ export default function Pipeline() {
     <div className="p-6 md:p-8 space-y-6">
       <div className="max-w-full mx-auto">
         <div className="flex flex-col gap-4 mb-8">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
             <div className="min-w-0 flex-1">
               <p className="money text-xs font-bold uppercase tracking-[0.12em] text-current-emerald">Your funding current</p>
               <h1 className="mt-1 font-display text-3xl font-extrabold tracking-tight text-current-ink">Master Grant Pipeline</h1>
@@ -587,7 +587,7 @@ export default function Pipeline() {
                 </p>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-2 md:justify-end md:shrink-0">
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
               <Filter className="w-4 h-4 text-slate-500" />
               <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                 <SelectTrigger className="w-56">

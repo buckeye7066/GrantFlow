@@ -320,7 +320,7 @@ export const HELP_REGISTRY = [
     navGroup: 'find',
     title: 'Funder',
     description: 'Explore funders and their grant programs.',
-    purpose: 'Research funding organisations — foundations, government agencies, and corporations — and understand their focus areas and giving history.',
+    purpose: 'Research funding organizations — foundations, government agencies, and corporations — and understand their focus areas and giving history.',
     whoCanUse: 'all',
     mainActions: ['Browse funders by type or focus', 'View a funder\'s active programs', 'Add funder opportunities to pipeline'],
     relatedFeatures: ['FundingOpportunities', 'Pipeline'],
