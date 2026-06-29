@@ -54,6 +54,16 @@ router.use(ensureAdmin)
 const MAX_TEXT_LENGTH_FOR_AI = 10000; // Maximum characters to send to OpenAI
 const AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'; // Configurable AI model
 
+// When a *third-party provider key* (OpenAI/Anthropic) submitted or configured by
+// the admin fails the provider's own authentication, that is NOT a failure of the
+// admin's GrantFlow session — so it must NOT be reported as HTTP 401. The frontend
+// API client (src/api/client.js) treats any 401 as "your session expired" and will
+// trigger a token refresh / sign-out and spam the console with red 401s. 422
+// (Unprocessable Entity) correctly says "we authenticated you fine, but the
+// provider credential you gave us is unusable" without tripping that machinery.
+// DO NOT change this back to 401.
+const PROVIDER_AUTH_FAILURE_STATUS = 422;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRootDir = join(__dirname, '..', '..');
@@ -799,7 +809,7 @@ router.get('/openai/verify', async (req, res) => {
     });
   } catch (error) {
     const summary = summarizeOpenAIError(error);
-    res.status(summary.isAuth ? 401 : 500).json({
+    res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
       ok: false,
       error: summary.message,
       status: summary.status ?? null,
@@ -840,7 +850,7 @@ router.post('/openai/verify-key', async (req, res) => {
     const summary = summarizeOpenAIError(error);
     // Diagnostics for the provided key (redacted)
     const { diagnostics } = createOpenAIClient({ allowMissing: true, apiKeyOverride: apiKey });
-    res.status(summary.isAuth ? 401 : 500).json({
+    res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
       ok: false,
       error: summary.message,
       status: summary.status ?? null,
@@ -915,7 +925,7 @@ router.post('/openai/apply-key', async (req, res) => {
     const summary = summarizeOpenAIError(error);
     const { diagnostics } = createOpenAIClient({ allowMissing: true });
 
-    res.status(summary.isAuth ? 401 : 500).json({
+    res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
       ok: false,
       applied: true,
       persisted: persist,
@@ -1402,7 +1412,7 @@ router.post('/openai/persist-current', async (req, res) => {
     })
   } catch (error) {
     const summary = summarizeOpenAIError(error)
-    return res.status(summary.isAuth ? 401 : 500).json({
+    return res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
       ok: false,
       error: summary.message,
       status: summary.status ?? null,

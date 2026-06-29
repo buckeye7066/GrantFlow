@@ -38,6 +38,9 @@ export default function AnyaFloatingButton({ profileId, className }) {
         profileId: detail?.profileId ?? null,
         title: detail?.title ?? null,
         metadata: detail?.metadata ?? null,
+        // Set by the background-reply ping ("Open" action) to resurface the exact
+        // session that holds the finished answer instead of a fresh thread.
+        resumeSessionId: detail?.resumeSessionId ?? null,
       })
       setChatKey((key) => key + 1)
       setIsOpen(true)
@@ -103,7 +106,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
       <Sheet open={isOpen} onOpenChange={setIsOpen}>
         <SheetContent
           side="right"
-          className="h-[100dvh] max-h-[100dvh] w-full sm:w-[540px] md:w-[600px] p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col"
+          className="h-[100dvh] max-h-[100dvh] w-full max-w-[100vw] sm:w-[540px] sm:max-w-[92vw] md:w-[600px] overflow-x-hidden p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col"
         >
           <SheetHeader className="px-6 py-4 border-b border-slate-200">
             <div className="flex items-center justify-between">

@@ -23,6 +23,7 @@ import {
   updateAnyaTask,
 } from "@/lib/anyaClient"
 import { bootstrapAnyaSession } from "./anyaSession"
+import { enqueueAnyaBackgroundRun, subscribeAnyaBackground } from "@/lib/anyaBackgroundQueue"
 import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
 import { createPageUrl } from "@/utils"
 import { useFeatureFlags } from "@/lib/featureFlags"
@@ -394,7 +395,10 @@ const MessageBubble = React.memo(function MessageBubble({ message }) {
   return (
     <div
       className={cn(
-        "rounded-lg border px-3 py-2 text-sm shadow-sm transition",
+        // min-w-0 + overflow-hidden keep a bubble from being widened by a long
+        // unbreakable token; the panel hugs the viewport's right edge, so any
+        // overflow here would be clipped off-screen ("half-readable menu").
+        "min-w-0 max-w-full overflow-hidden rounded-lg border px-3 py-2 text-sm shadow-sm transition",
         isAssistant
           ? "border-blue-200 bg-blue-50/80 text-slate-800"
           : "border-slate-200 bg-white text-slate-700",
@@ -410,15 +414,17 @@ const MessageBubble = React.memo(function MessageBubble({ message }) {
             : "now"}
         </span>
       </div>
-      <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+      {/* break-words wraps long URLs / unbroken tokens so Anya's reply never
+          runs past the right edge of the panel. */}
+      <p className="whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>
       {message.tool_name ? (
         <div className="mt-2 space-y-2 text-xs text-slate-600">
           <div>
             Tool: <span className="font-mono text-xs text-slate-700">{message.tool_name}</span>
           </div>
           {message.tool_payload ? (
-            <div className="max-h-48 overflow-y-auto rounded-md border border-slate-200 bg-white/80 p-2 text-xs text-slate-800">
-              <pre className="whitespace-pre-wrap">
+            <div className="max-h-48 overflow-auto rounded-md border border-slate-200 bg-white/80 p-2 text-xs text-slate-800">
+              <pre className="whitespace-pre-wrap break-words">
                 {JSON.stringify(message.tool_payload, null, 2)}
               </pre>
             </div>
@@ -494,6 +500,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  // A background reply is in flight (Anya is working out of band). Holds the
+  // run_id so an open panel can show a "working…" line and clear it when the
+  // matching reply-ready event arrives.
+  const [awaitingRunId, setAwaitingRunId] = useState(null)
   const [tools, setTools] = useState([])
   const [isLoadingTools, setIsLoadingTools] = useState(false)
   const [isCodeSearchOpen, setIsCodeSearchOpen] = useState(false)
@@ -832,7 +842,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
       setTasks([])
       setInput("")
       setNudgeMessage(null)
+      setAwaitingRunId(null)
       try {
+        // Resume a specific prior session — ONLY when the user explicitly asked
+        // to (e.g. tapped "Open" on a background-reply ping, which sets
+        // resumeSessionId). This is the single sanctioned exception to the
+        // "fresh panel on every open" rule: the user wants to read that exact
+        // answer, so we load that thread instead of minting a new one.
+        const resumeSessionId = initialSessionOptions?.resumeSessionId ?? null
+        if (resumeSessionId) {
+          if (!isMounted) return
+          setSessionId(resumeSessionId)
+          await refreshMessages(resumeSessionId)
+          await refreshTasks(resumeSessionId, { withLoading: true })
+          return
+        }
         // OWNER REQUIREMENT: "Each time Anya is opened, the past conversation
         // needs to be deleted so it doesn't bleed over. It also needs to stay
         // profile aware."
@@ -909,7 +933,19 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     // → creates another session → `isLoading` stays true → the Admin Tools
     // button stays disabled forever (Anya goals 4, 6, 8). Bootstrap only needs
     // to run when the profile identity or admin-ness changes.
-  }, [effectiveProfileId, isAdmin, initialSessionOptions?.metadata, initialSessionOptions?.title])
+  }, [effectiveProfileId, isAdmin, initialSessionOptions?.metadata, initialSessionOptions?.title, initialSessionOptions?.resumeSessionId])
+
+  // Live-update an OPEN panel when a background reply for THIS session lands.
+  // (The toast ping in anyaBackgroundQueue handles the closed-panel case.)
+  useEffect(() => {
+    const unsubscribe = subscribeAnyaBackground((event) => {
+      if (event?.type !== "reply-ready") return
+      if (!sessionId || event.sessionId !== sessionId) return
+      setAwaitingRunId((current) => (current === event.runId ? null : current))
+      refreshMessages(sessionId)
+    })
+    return unsubscribe
+  }, [sessionId, refreshMessages])
 
   useEffect(() => {
     let isMounted = true
@@ -1178,27 +1214,51 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
-      const response = await postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
-      if (Array.isArray(response?.messages) && response.messages.length > 0) {
+      // Send in BACKGROUND mode: the server persists the question, returns a
+      // run_id immediately (202), and finishes the reply out of band. This is
+      // what lets the user fire-and-forget — and it also means the request never
+      // holds open long enough to hit the 60s client/gateway timeout (no 504).
+      const response = await postAnyaMessage(sessionId, trimmed, {
+        currentPage,
+        pageContext: pageContextPayload,
+        background: true,
+      })
+
+      // Replace the optimistic bubble with the server-persisted user message.
+      const persistedUser = Array.isArray(response?.messages) ? response.messages[0] : null
+      if (persistedUser) {
         setMessages((prev) => {
           const withoutOptimistic = prev.filter((m) => m.id !== optimisticId)
+          return [...withoutOptimistic, persistedUser]
+        })
+      }
+
+      if (response?.pending && response?.run_id) {
+        // Hand the run to the background queue (polls + pings even if the panel
+        // is closed) and show a local "working…" line while the panel is open.
+        setAwaitingRunId(response.run_id)
+        enqueueAnyaBackgroundRun({
+          runId: response.run_id,
+          sessionId,
+          profileId: effectiveProfileId ?? null,
+          question: trimmed,
+        })
+      } else if (Array.isArray(response?.messages) && response.messages.length > 1) {
+        // Server answered synchronously (e.g. background disabled) — render it.
+        setMessages((prev) => {
+          const withoutOptimistic = prev.filter((m) => m.id !== optimisticId && m.id !== persistedUser?.id)
           return [...withoutOptimistic, ...response.messages]
         })
+        if (response?.degraded) {
+          toast({
+            variant: "destructive",
+            title: "Anya had trouble reaching the AI service",
+            description: "That last reply is a fallback — please try again in a moment.",
+          })
+        }
       } else {
-        // No structured messages — log the response so a backend anomaly isn't
-        // silently masked, then fall back to a full refresh of the thread.
-        console.warn("[AnyaChat] send returned no messages; falling back to refresh", response)
+        console.warn("[AnyaChat] send returned no actionable response; refreshing", response)
         await refreshMessages(sessionId)
-      }
-      // The backend returns degraded=true when the AI service failed and Anya
-      // replied with a canned fallback. Signal it so the user knows to retry
-      // rather than trusting the fallback as a real answer.
-      if (response?.degraded) {
-        toast({
-          variant: "destructive",
-          title: "Anya had trouble reaching the AI service",
-          description: "That last reply is a fallback — please try again in a moment.",
-        })
       }
     } catch (error) {
       console.error("[AnyaChat] send failed:", error)
@@ -1574,7 +1634,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   const isTaskFormDisabled = !sessionId || isLoading || isSavingTask
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white/80 shadow-sm">
+    <div className="flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 bg-white/80 shadow-sm">
       <div className="border-b border-slate-200 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1965,16 +2025,25 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     ✕
                   </button>
                 </div>
-                <p className="whitespace-pre-wrap leading-relaxed">{nudgeMessage}</p>
+                <p className="whitespace-pre-wrap break-words leading-relaxed">{nudgeMessage}</p>
               </div>
             ) : null}
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
-            {isSending ? (
+            {isSending && !awaitingRunId ? (
               <div className="flex items-center gap-2 text-xs text-slate-600">
                 <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
                 Working…
+              </div>
+            ) : null}
+            {awaitingRunId ? (
+              <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs text-blue-800">
+                <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
+                <span>
+                  Anya is working on this in the background. You can keep using GrantFlow or close
+                  this panel — she’ll ping you the moment the answer is ready.
+                </span>
               </div>
             ) : null}
           </div>
