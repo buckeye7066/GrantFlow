@@ -1,5 +1,5 @@
 /**
- * Yana — fit scoring (legacy filename `larryFitScorer.js`).
+ * Yana — fit scoring (legacy filename `yanaOutreachFitScorer.js`).
  *
  * "Fit" answers the question: how likely is this organization to actually
  * benefit from GrantFlow? GrantFlow's audience is grant-seekers — orgs that
@@ -16,7 +16,7 @@
  * is a measure of confidence, not a hard gate.
  */
 
-import { CONTACT_VERIFICATION_STATUS, FIT_REASON_CODES } from './larryTypes.js'
+import { CONTACT_VERIFICATION_STATUS, FIT_REASON_CODES } from './yanaOutreachTypes.js'
 
 const KNOWN_GRANT_SEEKER_TYPES = new Set([
   'nonprofit',

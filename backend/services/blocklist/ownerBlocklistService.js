@@ -12,7 +12,7 @@
  *                    verify a code; an existing account is marked `banned`.
  *   2. Inbound     — a blocked email/phone is rejected at contact intake.
  *   3. Outreach    — email/domain/phone/organization entries are MIRRORED into
- *                    the John + Larry suppression lists those agents already
+ *                    the John + Yana suppression lists those agents already
  *                    honor before contacting anyone, so we inherit their
  *                    enforcement without touching their pipelines.
  *
@@ -23,7 +23,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { addSuppression as addJohnSuppression } from '../john/johnSuppressionService.js'
-import { addSuppressionEntry as addLarrySuppression } from '../larry/larryRunStore.js'
+import { addSuppressionEntry as addYanaOutreachSuppression } from '../yanaOutreach/yanaOutreachRunStore.js'
 
 /** Canonical match types. Exact types are indexed; fuzzy types are scanned. */
 export const MATCH_TYPE = Object.freeze({
@@ -228,7 +228,7 @@ export async function listEntries(db, { limit = 500 } = {}) {
 // Writes
 // ---------------------------------------------------------------------------
 
-/** Mirror an entry into the John + Larry suppression lists (outreach enforcement). */
+/** Mirror an entry into the John + Yana suppression lists (outreach enforcement). */
 async function mirrorToOutreach(db, { matchType, value, reason }) {
   const johnType = { email: 'email', domain: 'domain', phone: 'phone', organization: 'organization' }[
     matchType
@@ -240,9 +240,9 @@ async function mirrorToOutreach(db, { matchType, value, reason }) {
     console.warn('[ownerBlocklist] John mirror failed:', err?.message || err)
   }
   try {
-    await addLarrySuppression(db, { identifier_type: johnType, identifier_value: value, reason })
+    await addYanaOutreachSuppression(db, { identifier_type: johnType, identifier_value: value, reason })
   } catch (err) {
-    console.warn('[ownerBlocklist] Larry mirror failed:', err?.message || err)
+    console.warn('[ownerBlocklist] Yana mirror failed:', err?.message || err)
   }
 }
 

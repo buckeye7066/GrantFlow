@@ -1,7 +1,7 @@
 /**
  * Yana — Lead Pipeline (public + admin API).
  *
- * Mounted at /api/yana-leads/* (canonical) and /api/larry/* (legacy
+ * Mounted at /api/yana-leads/* (canonical) and /api/yanaOutreach/* (legacy
  * alias, still served for backward compatibility).
  *
  *   GET  /yana-leads/health                    public; only ok+agent+status
@@ -28,8 +28,8 @@
 import express from 'express'
 
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js'
-import { LARRY_AGENT_NAME, LARRY_MODES, LEAD_STATUS, OUTREACH_SEND_STATUS, PROSPECT_STATUS } from '../services/larry/larryTypes.js'
-import { getLarryConfig, maskSecrets } from '../services/larry/larrySafety.js'
+import { YANA_OUTREACH_AGENT_NAME, YANA_OUTREACH_MODES, LEAD_STATUS, OUTREACH_SEND_STATUS, PROSPECT_STATUS } from '../services/yanaOutreach/yanaOutreachTypes.js'
+import { getYanaOutreachConfig, maskSecrets } from '../services/yanaOutreach/yanaOutreachSafety.js'
 import {
   listRuns,
   listProspects,
@@ -40,16 +40,16 @@ import {
   getOutreachAttempt,
   updateOutreachAttempt,
   getProspect,
-} from '../services/larry/larryRunStore.js'
-import { runLarry, getLarryStatus } from '../services/larry/larryAgent.js'
-import { sendOutreachAttempt, buildEmailSenderAdapter } from '../services/larry/larryOutreachSender.js'
-import { markDoNotContact } from '../services/larry/larryRelationshipTracker.js'
+} from '../services/yanaOutreach/yanaOutreachRunStore.js'
+import { runYanaOutreach, getYanaOutreachStatus } from '../services/yanaOutreach/yanaOutreachAgent.js'
+import { sendOutreachAttempt, buildEmailSenderAdapter } from '../services/yanaOutreach/yanaOutreachSender.js'
+import { markDoNotContact } from '../services/yanaOutreach/yanaOutreachRelationshipTracker.js'
 
 const router = express.Router()
 
 function adminOnly(req, res, next) {
   if (!req.ctx?.isAdmin) {
-    return res.status(403).json({ error: 'admin_only', agent: LARRY_AGENT_NAME })
+    return res.status(403).json({ error: 'admin_only', agent: YANA_OUTREACH_AGENT_NAME })
   }
   return next()
 }
@@ -59,7 +59,7 @@ async function audit(db, req, action, details = {}, severity = SEVERITY.INFO) {
   try {
     await logAuditEvent(db, {
       category: AUDIT_CATEGORIES.ADMIN,
-      action: `larry:${action}`,
+      action: `yanaOutreach:${action}`,
       severity,
       userId: req?.ctx?.userId || null,
       details: maskSecrets(details),
@@ -70,10 +70,10 @@ async function audit(db, req, action, details = {}, severity = SEVERITY.INFO) {
 }
 
 router.get('/health', async (_req, res) => {
-  const cfg = getLarryConfig()
+  const cfg = getYanaOutreachConfig()
   res.json({
     ok: true,
-    agent: LARRY_AGENT_NAME,
+    agent: YANA_OUTREACH_AGENT_NAME,
     // Yana's discovery + drafting are always available; "status" reflects that,
     // not the separate manual-send switch. She never sends email herself.
     status: 'ok',
@@ -88,7 +88,7 @@ router.get('/health', async (_req, res) => {
 
 router.get('/status', adminOnly, async (req, res) => {
   try {
-    const status = await getLarryStatus(req.db)
+    const status = await getYanaOutreachStatus(req.db)
     return res.json({ ok: true, ...status })
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || 'status_failed' })
@@ -97,7 +97,7 @@ router.get('/status', adminOnly, async (req, res) => {
 
 async function runWithMode(req, res, mode) {
   try {
-    const result = await runLarry({
+    const result = await runYanaOutreach({
       db: req.db,
       req,
       mode,
@@ -113,18 +113,18 @@ async function runWithMode(req, res, mode) {
 
 router.post('/run', adminOnly, async (req, res) => {
   const requested = req.body?.mode
-  const allowed = new Set(Object.values(LARRY_MODES))
-  const mode = allowed.has(requested) ? requested : LARRY_MODES.OBSERVE
+  const allowed = new Set(Object.values(YANA_OUTREACH_MODES))
+  const mode = allowed.has(requested) ? requested : YANA_OUTREACH_MODES.OBSERVE
   return runWithMode(req, res, mode)
 })
 
-router.post('/discover-prospects', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.DISCOVER_PROSPECTS))
-router.post('/verify-contacts', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.VERIFY_CONTACTS))
-router.post('/score-fit', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.SCORE_FIT))
-router.post('/build-packets', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.BUILD_PACKETS))
-router.post('/qualify', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.QUALIFY))
-router.post('/draft-outreach', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.DRAFT_OUTREACH))
-router.post('/send-outreach', adminOnly, (req, res) => runWithMode(req, res, LARRY_MODES.SEND_OUTREACH))
+router.post('/discover-prospects', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.DISCOVER_PROSPECTS))
+router.post('/verify-contacts', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.VERIFY_CONTACTS))
+router.post('/score-fit', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.SCORE_FIT))
+router.post('/build-packets', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.BUILD_PACKETS))
+router.post('/qualify', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.QUALIFY))
+router.post('/draft-outreach', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.DRAFT_OUTREACH))
+router.post('/send-outreach', adminOnly, (req, res) => runWithMode(req, res, YANA_OUTREACH_MODES.SEND_OUTREACH))
 
 router.get('/runs', adminOnly, async (req, res) => {
   try {

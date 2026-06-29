@@ -1,5 +1,5 @@
 /**
- * Yana — relationship tracker (legacy filename `larryRelationshipTracker.js`).
+ * Yana — relationship tracker (legacy filename `yanaOutreachRelationshipTracker.js`).
  *
  * Tracks the per-prospect lifecycle once Yana starts engaging:
  *   none → contacted → opened → replied → meeting → converted | declined
@@ -8,16 +8,16 @@
  * one switch that supersedes everything else — once flipped, no future send
  * goes out for that prospect, full stop.
  *
- * All functions delegate to `larryRunStore.upsertRelationship` so persistence
+ * All functions delegate to `yanaOutreachRunStore.upsertRelationship` so persistence
  * stays consistent across SQLite and Postgres.
  */
 
-import { RELATIONSHIP_STATE } from './larryTypes.js'
+import { RELATIONSHIP_STATE } from './yanaOutreachTypes.js'
 import {
   upsertRelationship,
   addSuppressionEntry,
   getRelationship,
-} from './larryRunStore.js'
+} from './yanaOutreachRunStore.js'
 
 const DEFAULT_COOLDOWN_DAYS = 14
 

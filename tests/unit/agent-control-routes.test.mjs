@@ -220,7 +220,7 @@ test('per-agent stop endpoint returns 400 for invalid agent', async () => {
   const db = makeDb()
   const server = startApp({ db, user: adminSession() })
   try {
-    const r = await request(server, 'POST', '/api/admin/agent-control/agents/larry/stop', { reason: 'no' })
+    const r = await request(server, 'POST', '/api/admin/agent-control/agents/nonexistent/stop', { reason: 'no' })
     assert.equal(r.status, 400)
   } finally { server.close() }
 })

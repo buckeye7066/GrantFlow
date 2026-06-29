@@ -1,5 +1,5 @@
 /**
- * Yana — prospect discovery orchestrator (legacy filename `larryProspectDiscovery.js`).
+ * Yana — prospect discovery orchestrator (legacy filename `yanaOutreachProspectDiscovery.js`).
  *
  * Discovery is intentionally pluggable: callers (real prod code, tests, the
  * scheduler) inject a `searchAdapter` that knows how to actually fetch a
@@ -19,14 +19,14 @@ import {
   LARRY_PUBLIC_PROSPECT_SOURCES,
   getSourcesForApplicantTypes,
   computeProspectTrustScore,
-} from './larryProspectSources.js'
-import { isPlaceholderUrl, classifyEmail, getLarryConfig } from './larrySafety.js'
+} from './yanaOutreachProspectSources.js'
+import { isPlaceholderUrl, classifyEmail, getYanaOutreachConfig } from './yanaOutreachSafety.js'
 import {
   PROSPECT_REJECTION_REASONS,
   PROSPECT_STATUS,
   makeProspectCandidate,
-} from './larryTypes.js'
-import { checkDomainRateLimit, recordDomainRequest, upsertProspectCandidate } from './larryRunStore.js'
+} from './yanaOutreachTypes.js'
+import { checkDomainRateLimit, recordDomainRequest, upsertProspectCandidate } from './yanaOutreachRunStore.js'
 
 /**
  * Pick a list of sources to fetch from for this run.
@@ -146,7 +146,7 @@ export async function discoverProspects({
   if (typeof searchAdapter !== 'function') {
     throw new Error('discoverProspects requires a searchAdapter function')
   }
-  const cfg = config || getLarryConfig()
+  const cfg = config || getYanaOutreachConfig()
   const plan = planProspectFetches({ applicantTypes, maxSources })
 
   const fetched = []

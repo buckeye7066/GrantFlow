@@ -5,7 +5,7 @@
  *    keeps existing but access is paused. Used both by dunning (one full billing
  *    cycle past due) and by the owner manually from the admin panel.
  *  - A BAN is USER-level and routes through the canonical owner blocklist so the
- *    same machinery that already blocks login + mirrors to John/Larry suppression
+ *    same machinery that already blocks login + mirrors to John/Yana suppression
  *    is reused (no parallel ban system). Banning also suspends the user's
  *    profiles.
  *

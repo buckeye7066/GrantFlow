@@ -1276,7 +1276,7 @@ CREATE TABLE IF NOT EXISTS sam_findings (
 
 -- Yana's downstream hand-off queues (qualified leads forwarded to John).
 -- Note: a separate `yana_larry_queue` table exists for backward compatibility
--- with the legacy Yana lead pipeline (formerly codenamed "Larry").
+-- with the legacy Yana lead pipeline.
 CREATE TABLE IF NOT EXISTS yana_john_queue (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   lead_candidate_id TEXT,

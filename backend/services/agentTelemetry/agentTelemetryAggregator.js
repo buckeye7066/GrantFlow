@@ -609,8 +609,8 @@ export async function aggregateYana(db, range) {
     : ((await tableExists(db, 'hamilton_runs')) ? 'hamilton_runs' : null)
   const leads = await tableExists(db, 'yana_lead_candidates')
   const johnQ = await tableExists(db, 'yana_john_queue')
-  const larryQ = await tableExists(db, 'yana_larry_queue')
-  const installed = !!yanaRunsTable || leads || johnQ || larryQ
+  const legacyQ = await tableExists(db, 'yana_larry_queue')
+  const installed = !!yanaRunsTable || leads || johnQ || legacyQ
   if (!installed) return out
   out.installed = true
   out.enabled = agentEnabled('yana')

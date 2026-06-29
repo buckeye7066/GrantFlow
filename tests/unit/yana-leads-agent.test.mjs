@@ -12,8 +12,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { runLarry, getLarryStatus } from '../../backend/services/larry/larryAgent.js'
-import { LARRY_MODES } from '../../backend/services/larry/larryTypes.js'
+import { runYanaOutreach, getYanaOutreachStatus } from '../../backend/services/yanaOutreach/yanaOutreachAgent.js'
+import { YANA_OUTREACH_MODES } from '../../backend/services/yanaOutreach/yanaOutreachTypes.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('the SEPARATE manual SEND step is refused when its switch is off (honest reason, not "agent disabled")', async () => {
@@ -21,9 +21,9 @@ test('the SEPARATE manual SEND step is refused when its switch is off (honest re
   // Sending is a separate human action, not Yana's job. When its switch is off
   // an explicit send request is refused with an honest `send_disabled` reason —
   // NOT a misleading "agent_disabled" that would imply Yana herself is broken.
-  const send = await runLarry({
+  const send = await runYanaOutreach({
     db,
-    mode: LARRY_MODES.SEND_OUTREACH,
+    mode: YANA_OUTREACH_MODES.SEND_OUTREACH,
     config: { enabled: false, mode: 'observe' },
   })
   assert.equal(send.ok, false)
@@ -35,9 +35,9 @@ test('OBSERVE runs even when the send switch is off (discovery is always on)', a
   const db = createInMemoryDb()
   // The owner asking "have Yana find leads" must never get a bare "agent
   // disabled": discovery/qualify/draft are safe and never send.
-  const result = await runLarry({
+  const result = await runYanaOutreach({
     db,
-    mode: LARRY_MODES.OBSERVE,
+    mode: YANA_OUTREACH_MODES.OBSERVE,
     config: { enabled: false, mode: 'observe' },
   })
   assert.equal(result.ok, true, `disabled OBSERVE should run read-only, got ${JSON.stringify(result)}`)
@@ -60,9 +60,9 @@ test('FULL_CYCLE discovers + drafts to completion and NEVER reaches a send phase
       programs: ['turnout gear replacement'],
     },
   ]
-  const result = await runLarry({
+  const result = await runYanaOutreach({
     db,
-    mode: LARRY_MODES.FULL_CYCLE,
+    mode: YANA_OUTREACH_MODES.FULL_CYCLE,
     options: {
       searchAdapter: async () => ({ records }),
       webChecker: async () => ({ ok: true, status: 200 }),
@@ -92,9 +92,9 @@ test('FULL_CYCLE discovers + drafts to completion and NEVER reaches a send phase
 test('observe mode does not invoke any adapter', async () => {
   const db = createInMemoryDb()
   let adapterCalled = false
-  const result = await runLarry({
+  const result = await runYanaOutreach({
     db,
-    mode: LARRY_MODES.OBSERVE,
+    mode: YANA_OUTREACH_MODES.OBSERVE,
     options: {
       searchAdapter: () => {
         adapterCalled = true
@@ -158,9 +158,9 @@ test('discover-prospects + verify + score + qualify + draft happy path', async (
     fromEmail: 'team@grantflow.app',
   }
 
-  const result = await runLarry({
+  const result = await runYanaOutreach({
     db,
-    mode: LARRY_MODES.FULL_CYCLE,
+    mode: YANA_OUTREACH_MODES.FULL_CYCLE,
     options: {
       searchAdapter: async () => ({ records }),
       webChecker: async () => ({ ok: true, status: 200 }),
@@ -182,9 +182,9 @@ test('discover-prospects + verify + score + qualify + draft happy path', async (
   assert.match(result.status_note, /draft/i, 'a drafting run should report drafts saved for review')
 })
 
-test('getLarryStatus reports the draft-only role honestly (Yana never sends)', async () => {
+test('getYanaOutreachStatus reports the draft-only role honestly (Yana never sends)', async () => {
   const db = createInMemoryDb()
-  const status = await getLarryStatus(db, {
+  const status = await getYanaOutreachStatus(db, {
     config: {
       enabled: false, // send step off — the NORMAL state
       mode: 'observe',

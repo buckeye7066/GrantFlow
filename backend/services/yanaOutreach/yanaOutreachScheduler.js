@@ -1,12 +1,9 @@
 /**
  * Yana — Lead Pipeline scheduler (env-gated, in-process cron).
  *
- * Naming history: this scheduler was originally shipped under the
- * codename "Larry". The user-facing identity is now unified under
- * "Yana" (GrantFlow's canonical lead-discovery agent). Internal
- * filenames and exports keep their `larry`/`Larry` spelling for
- * backward compatibility because there are pinned imports and tests
- * that reference them; renaming them is a separate refactor.
+ * This is the legacy Yana lead/outreach pipeline. Files live under
+ * backend/services/yanaOutreach/ and use the `yanaOutreach`/`YanaOutreach`
+ * identifier spelling. The canonical user-facing identity is "Yana".
  *
  * Two implementations of Yana coexist in the repo:
  *
@@ -16,10 +13,10 @@
  *     (start / pause / cancel / emergency-stop reach it). Enabled by
  *     YANA_ENABLED=true.
  *
- *  2) This LEGACY Yana lead pipeline (the pre-rename "Larry"), kept
- *     for backward compatibility with deployments that still set
- *     LARRY_ENABLED=true (also accepted as YANA_LEADS_ENABLED). It
- *     runs *outside* Mission Control on its own scheduler.
+ *  2) This LEGACY Yana lead pipeline, kept for backward compatibility
+ *     with deployments that set YANA_LEADS_ENABLED=true (legacy alias
+ *     LARRY_ENABLED). It runs *outside* Mission Control on its own
+ *     scheduler.
  *
  * To stop the two from double-discovering the same prospects into
  * different tables (`yana_lead_candidates` vs `larry_*`), this
@@ -28,8 +25,8 @@
  * adapter.
  *
  * Wakes the legacy Yana lead pipeline up periodically when
- * LARRY_ENABLED=true and LARRY_RUN_ON_SCHEDULE=true. Default state is
- * DISABLED. Even when scheduled, the scheduler defaults to
+ * YANA_LEADS_ENABLED=true and YANA_LEADS_RUN_ON_SCHEDULE=true. Default
+ * state is DISABLED. Even when scheduled, the scheduler defaults to
  * discovery+verify+score modes — never auto-send.
  *
  * The scheduler:
@@ -45,9 +42,9 @@
  * keeps us off a third-party cron dep just for one feature flag.
  */
 
-import { getLarryConfig } from './larrySafety.js'
-import { LARRY_MODES, LARRY_TRIGGERS } from './larryTypes.js'
-import { runLarry } from './larryAgent.js'
+import { getYanaOutreachConfig } from './yanaOutreachSafety.js'
+import { YANA_OUTREACH_MODES, YANA_OUTREACH_TRIGGERS } from './yanaOutreachTypes.js'
+import { runYanaOutreach } from './yanaOutreachAgent.js'
 import { runWithSchedulerLock } from '../schedulerLock.js'
 
 const STATE = {
@@ -111,13 +108,13 @@ function isYanaEnabled(env = process.env) {
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
 }
 
-export function startLarryScheduler({
+export function startYanaOutreachScheduler({
   db,
   deps = {},
   logger: externalLogger = null,
   env = process.env,
 } = {}) {
-  const cfg = getLarryConfig()
+  const cfg = getYanaOutreachConfig()
   const log = logger(externalLogger)
 
   if (!cfg.enabled) {
@@ -134,7 +131,7 @@ export function startLarryScheduler({
     const msg =
       '[Yana/leads] refusing to start the legacy lead pipeline because YANA_ENABLED=true. ' +
       'The canonical Yana client-discovery adapter (backend/services/yana/) is the supported path; ' +
-      'this older pipeline (formerly "Larry") would double-discover into different tables. ' +
+      'this older pipeline would double-discover into different tables. ' +
       'Set LARRY_ENABLED=false (alias YANA_LEADS_ENABLED=false) to silence this notice.'
     if (typeof log.warn === 'function') log.warn(msg)
     else log.info?.(msg)
@@ -148,7 +145,7 @@ export function startLarryScheduler({
   // Standalone legacy-Yana boot — still functional, but warn the operator
   // that this is the older code path so it doesn't go unnoticed.
   const deprecationNotice =
-    '[Yana/leads] notice: running the legacy lead pipeline (formerly "Larry"). ' +
+    '[Yana/leads] notice: running the legacy lead pipeline. ' +
     'For unified Mission Control coverage, migrate to YANA_ENABLED + JOHN_ENABLED.'
   if (typeof log.warn === 'function') log.warn(deprecationNotice)
   else log.info?.(deprecationNotice)
@@ -172,9 +169,9 @@ export function startLarryScheduler({
         lockName: 'yana-leads:legacy',
         ttlMs: 60 * 60 * 1000,
         logger: log,
-      }, () => runLarry({
+      }, () => runYanaOutreach({
         db,
-        mode: deps.scheduledMode || LARRY_MODES.SCORE_FIT,
+        mode: deps.scheduledMode || YANA_OUTREACH_MODES.SCORE_FIT,
         trigger,
         options: deps.scheduledOptions || {},
       }))
@@ -195,7 +192,7 @@ export function startLarryScheduler({
 
   if (cfg.runOnStartup) {
     setTimeout(() => {
-      runOnce(LARRY_TRIGGERS.STARTUP).catch(() => {})
+      runOnce(YANA_OUTREACH_TRIGGERS.STARTUP).catch(() => {})
     }, 5000)
   }
 
@@ -204,7 +201,7 @@ export function startLarryScheduler({
     STATE.timer = setTimeout(function tick() {
       try {
         if (isCronMinuteMatch(cfg.schedule, new Date())) {
-          runOnce(LARRY_TRIGGERS.SCHEDULER).catch(() => {})
+          runOnce(YANA_OUTREACH_TRIGGERS.SCHEDULER).catch(() => {})
         }
       } finally {
         STATE.timer = setTimeout(tick, 60_000)
@@ -217,7 +214,7 @@ export function startLarryScheduler({
   return { started: true, scheduledOnStartup: cfg.runOnStartup, scheduledRecurring: cfg.runOnSchedule }
 }
 
-export function stopLarryScheduler() {
+export function stopYanaOutreachScheduler() {
   if (STATE.timer) {
     clearTimeout(STATE.timer)
     STATE.timer = null

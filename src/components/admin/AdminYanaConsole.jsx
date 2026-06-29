@@ -1,11 +1,9 @@
 /**
  * AdminYanaConsole — admin UI for Yana's Lead Discovery & Outreach pipeline.
  *
- * Formerly named AdminLarryConsole. Yana is GrantFlow's canonical
- * lead-discovery agent (see backend/services/agentControl/agentControlTypes.js).
- * The backend service files in backend/services/larry/ implement this
- * pipeline; their filenames are preserved for stability while the
- * user-facing identity is unified under "Yana".
+ * Yana is GrantFlow's canonical lead-discovery agent (see
+ * backend/services/agentControl/agentControlTypes.js). The backend service
+ * files in backend/services/yanaOutreach/ implement this pipeline.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {

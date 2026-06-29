@@ -1,5 +1,5 @@
 /**
- * Yana — durable persistence for runs, prospects, leads, outreach attempts (legacy filename `larryRunStore.js`),
+ * Yana — durable persistence for runs, prospects, leads, outreach attempts (legacy filename `yanaOutreachRunStore.js`),
  * relationships, and suppression list. Every helper is dialect-aware so the
  * same code works against the better-sqlite3-style wrapper and the Postgres
  * pool wrapper. JSON columns are stored as TEXT on SQLite and JSONB on
@@ -9,7 +9,7 @@
 
 import crypto from 'crypto'
 
-import { LARRY_RUN_STATUS } from './larryTypes.js'
+import { YANA_OUTREACH_RUN_STATUS } from './yanaOutreachTypes.js'
 
 const JSON_COLUMNS = Object.freeze({
   larry_runs: ['rejection_reasons_json', 'summary_json'],
@@ -39,7 +39,7 @@ function nowIso() {
 
 function genId() {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-  return `larry-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`
+  return `yanaOutreach-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`
 }
 
 function stringifyJsonColumns(table, row) {
@@ -115,7 +115,7 @@ export async function startRun(db, { mode, trigger = 'manual', created_by_user_i
     INSERT INTO larry_runs (id, mode, trigger, status, started_at, created_by_user_id)
     VALUES ($1, $2, $3, $4, $5, $6)
   `
-  await runSql(db, sqliteSql, pgSql, [id, mode, trigger, LARRY_RUN_STATUS.RUNNING, nowIso(), created_by_user_id])
+  await runSql(db, sqliteSql, pgSql, [id, mode, trigger, YANA_OUTREACH_RUN_STATUS.RUNNING, nowIso(), created_by_user_id])
   return await getRun(db, id)
 }
 
@@ -162,7 +162,7 @@ export async function updateRun(db, id, patch) {
   return await getRun(db, id)
 }
 
-export async function completeRun(db, id, { status = LARRY_RUN_STATUS.COMPLETED, summary = null, error = null } = {}) {
+export async function completeRun(db, id, { status = YANA_OUTREACH_RUN_STATUS.COMPLETED, summary = null, error = null } = {}) {
   return await updateRun(db, id, {
     status,
     completed_at: nowIso(),

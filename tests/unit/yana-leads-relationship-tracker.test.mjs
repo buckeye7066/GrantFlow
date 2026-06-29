@@ -9,8 +9,8 @@ import {
   recordRepliedRelationship,
   markDoNotContact,
   isCooledOff,
-} from '../../backend/services/larry/larryRelationshipTracker.js'
-import { upsertProspectCandidate, getRelationship, findSuppressionsForProspect } from '../../backend/services/larry/larryRunStore.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachRelationshipTracker.js'
+import { upsertProspectCandidate, getRelationship, findSuppressionsForProspect } from '../../backend/services/yanaOutreach/yanaOutreachRunStore.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('contacted bumps contact_count and sets cooldown_until in the future', async () => {

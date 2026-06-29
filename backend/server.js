@@ -2149,12 +2149,10 @@ app.use('/api/blocklist', lazyRouter('./routes/blocklist.js'));
 // Discover. Admin can review/reject ingestions.
 app.use('/api/email-grants', lazyRouter('./routes/emailGrants.js'));
 // Yana Lead Discovery & Outreach pipeline. The router lives at
-// backend/routes/larry.js for filename stability; both paths serve the
-// same handlers. /api/yana-leads is the canonical path the admin UI
-// uses; /api/larry is kept so older clients and bookmarks keep working.
-app.use('/api/yana-leads', lazyRouter('./routes/larry.js'));
+// backend/routes/yanaOutreach.js. /api/yana-leads is the canonical path
+// the admin UI uses.
+app.use('/api/yana-leads', lazyRouter('./routes/yanaOutreach.js'));
 app.use('/api/yana-contacts', lazyRouter('./routes/yanaLeads.js'));
-app.use('/api/larry', lazyRouter('./routes/larry.js'));
 // Robert — Funding Discovery Agent. Disabled by default; the scheduler
 // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
 app.use('/api/robert', lazyRouter('./routes/robert.js'));
@@ -2927,17 +2925,17 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })()
 
-    // Yana — Lead Discovery & Outreach Agent (formerly "Larry"; service files
-    // are still under backend/services/larry/ for filename stability). Off by
-    // default; the scheduler is a no-op unless LARRY_ENABLED=true (also
-    // accepted as YANA_LEADS_ENABLED) and at least one of
-    // LARRY_RUN_ON_STARTUP / LARRY_RUN_ON_SCHEDULE is true. The scheduler
-    // additionally refuses to start when the canonical Yana client-discovery
-    // adapter is enabled (YANA_ENABLED=true) so the two never double-run.
+    // Yana — Lead Discovery & Outreach Agent (service files under
+    // backend/services/yanaOutreach/). Off by default; the scheduler is a
+    // no-op unless YANA_LEADS_ENABLED=true (legacy alias LARRY_ENABLED) and
+    // at least one of YANA_LEADS_RUN_ON_STARTUP / YANA_LEADS_RUN_ON_SCHEDULE
+    // is true. The scheduler additionally refuses to start when the canonical
+    // Yana client-discovery adapter is enabled (YANA_ENABLED=true) so the
+    // two never double-run.
     ;(async () => {
       try {
-        const { startLarryScheduler } = await import('./services/larry/larryScheduler.js')
-        const result = startLarryScheduler({ db })
+        const { startYanaOutreachScheduler } = await import('./services/yanaOutreach/yanaOutreachScheduler.js')
+        const result = startYanaOutreachScheduler({ db })
         if (result?.started) console.log('[Server] Yana lead scheduler started')
         else console.log('[Server] Yana lead scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
