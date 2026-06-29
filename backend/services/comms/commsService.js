@@ -23,6 +23,7 @@
  */
 
 import crypto from 'crypto'
+import { isAdminEmail } from '../../config/constants.js'
 import { sendEmail } from '../email.js'
 import { sendSms, normalizePhone } from '../sms.js'
 import { getProfileLanguage } from './profileLanguage.js'
@@ -171,6 +172,14 @@ export async function resolveProfileContacts(db, profileId) {
   const addEmail = (email, { is_proxy = false, source } = {}) => {
     const e = String(email || '').trim()
     if (!e || seenEmail.has(e.toLowerCase())) return
+    // The operator (admin) is never a recipient of profile-directed mail. Admin
+    // owns/created most profiles, so users.primary_email resolves to the admin
+    // address on nearly every profile — without this guard the weekly digest /
+    // portal reminders CC the operator alongside the real profile owner.
+    if (isAdminEmail(e)) return
+    // Non-routable RFC-6761 .invalid addresses (e.g. Amy synthetic profiles'
+    // amy+<scenario>@synthetic.grantflow.invalid) must never be emailed.
+    if (/\.invalid$/i.test(e)) return
     seenEmail.add(e.toLowerCase())
     out.emails.push({ email: e, is_proxy: Boolean(is_proxy), source })
   }

@@ -154,8 +154,10 @@ export async function runMondayPortalReminder(db, { force = false, profileIds = 
     profiles = profileIds.map((id) => ({ id }))
   } else {
     try {
+      // Skip Amy's synthetic profiles (created_by='agent:amy') — QA fixtures,
+      // not real clients; they must never receive a portal reminder.
       profiles = await db.prepare(
-        `SELECT id FROM profiles WHERE status IS NULL OR status NOT IN ('deleted','suspended')`,
+        `SELECT id FROM profiles WHERE (status IS NULL OR status NOT IN ('deleted','suspended')) AND (created_by IS NULL OR created_by <> 'agent:amy')`,
       ).all()
     } catch {
       try { profiles = await db.prepare('SELECT id FROM profiles').all() } catch { profiles = [] }
