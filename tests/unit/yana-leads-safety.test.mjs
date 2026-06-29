@@ -9,14 +9,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  getLarryConfig,
+  getYanaOutreachConfig,
   classifyEmail,
   classifyPhone,
   isPlaceholderUrl,
   isSearchEngineUrl,
   maskSecrets,
   checkSendIsAllowed,
-} from '../../backend/services/larry/larrySafety.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachSafety.js'
 
 const ENV_KEYS = [
   'YANA_LEADS_ENABLED',
@@ -59,7 +59,7 @@ function withEnv(overrides, fn) {
 }
 
 test('Yana lead pipeline is DISABLED by default', () => {
-  const cfg = withEnv({}, () => getLarryConfig())
+  const cfg = withEnv({}, () => getYanaOutreachConfig())
   assert.equal(cfg.enabled, false, 'YANA_LEADS_ENABLED / LARRY_ENABLED defaults to false')
   assert.equal(cfg.mode, 'observe', 'default mode is observe')
   assert.equal(cfg.allowLiveWeb, false, 'live web is off by default')
@@ -68,7 +68,7 @@ test('Yana lead pipeline is DISABLED by default', () => {
 })
 
 test('canonical YANA_LEADS_ENABLED enables the agent (parity with LARRY_ENABLED)', () => {
-  const cfg = withEnv({ YANA_LEADS_ENABLED: 'true' }, () => getLarryConfig())
+  const cfg = withEnv({ YANA_LEADS_ENABLED: 'true' }, () => getYanaOutreachConfig())
   assert.equal(cfg.enabled, true, 'YANA_LEADS_ENABLED=true must enable the agent')
 })
 
@@ -82,7 +82,7 @@ test('canonical YANA_LEADS_* spellings take precedence over legacy LARRY_* spell
       LARRY_ALLOW_LIVE_WEB: 'false',
       YANA_LEADS_ALLOW_LIVE_WEB: 'true',
     },
-    () => getLarryConfig(),
+    () => getYanaOutreachConfig(),
   )
   assert.equal(cfg.enabled, true, 'YANA_LEADS_ENABLED=true wins over LARRY_ENABLED=false')
   assert.equal(cfg.mode, 'discover-prospects', 'YANA_LEADS_MODE wins over LARRY_MODE')
@@ -92,7 +92,7 @@ test('canonical YANA_LEADS_* spellings take precedence over legacy LARRY_* spell
 test('legacy LARRY_* still honoured when canonical YANA_LEADS_* is unset (back-compat)', () => {
   const cfg = withEnv(
     { LARRY_ENABLED: 'true', LARRY_MODE: 'discover-prospects' },
-    () => getLarryConfig(),
+    () => getYanaOutreachConfig(),
   )
   assert.equal(cfg.enabled, true, 'LARRY_ENABLED=true must still work')
   assert.equal(cfg.mode, 'discover-prospects', 'LARRY_MODE must still work')
@@ -141,7 +141,7 @@ test('checkSendIsAllowed: refuses when agent disabled', () => {
   const verdict = checkSendIsAllowed({
     attempt: { id: 'a1', channel: 'email', approved_by_user_id: 'u1' },
     prospect: { primary_contact_email: 'foo@bar.org' },
-    config: { ...getLarryConfig(), enabled: false, requireApprovalToSend: true, fromEmail: 'a@b.c' },
+    config: { ...getYanaOutreachConfig(), enabled: false, requireApprovalToSend: true, fromEmail: 'a@b.c' },
   })
   assert.equal(verdict?.reason, 'agent_disabled')
 })
@@ -150,7 +150,7 @@ test('checkSendIsAllowed: refuses without approval when required', () => {
   const verdict = checkSendIsAllowed({
     attempt: { id: 'a1', channel: 'email' },
     prospect: { primary_contact_email: 'foo@bar.org' },
-    config: { ...getLarryConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
+    config: { ...getYanaOutreachConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
   })
   assert.equal(verdict?.reason, 'send_not_approved')
 })
@@ -160,7 +160,7 @@ test('checkSendIsAllowed: refuses suppressed recipients', () => {
     attempt: { id: 'a1', channel: 'email', approved_by_user_id: 'u1', sent_to_email: 'foo@bar.org' },
     prospect: { primary_contact_email: 'foo@bar.org' },
     suppressionHits: [{ identifier_type: 'email', identifier_value: 'foo@bar.org' }],
-    config: { ...getLarryConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
+    config: { ...getYanaOutreachConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
   })
   assert.equal(verdict?.reason, 'on_suppression_list')
 })
@@ -170,7 +170,7 @@ test('checkSendIsAllowed: refuses DNC relationship', () => {
     attempt: { id: 'a1', channel: 'email', approved_by_user_id: 'u1', sent_to_email: 'foo@bar.org' },
     prospect: { primary_contact_email: 'foo@bar.org' },
     relationship: { do_not_contact: true, do_not_contact_reason: 'admin' },
-    config: { ...getLarryConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
+    config: { ...getYanaOutreachConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
   })
   assert.equal(verdict?.reason, 'relationship_do_not_contact')
 })
@@ -181,7 +181,7 @@ test('checkSendIsAllowed: refuses cooldown active', () => {
     attempt: { id: 'a1', channel: 'email', approved_by_user_id: 'u1', sent_to_email: 'foo@bar.org' },
     prospect: { primary_contact_email: 'foo@bar.org' },
     relationship: { cooldown_until: future },
-    config: { ...getLarryConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
+    config: { ...getYanaOutreachConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
   })
   assert.equal(verdict?.reason, 'cooldown_active')
 })
@@ -190,7 +190,7 @@ test('checkSendIsAllowed: PASSES on healthy attempt', () => {
   const verdict = checkSendIsAllowed({
     attempt: { id: 'a1', channel: 'email', approved_by_user_id: 'u1', sent_to_email: 'foo@bar.org' },
     prospect: { primary_contact_email: 'foo@bar.org' },
-    config: { ...getLarryConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
+    config: { ...getYanaOutreachConfig(), enabled: true, requireApprovalToSend: true, fromEmail: 'a@b.c' },
   })
   assert.equal(verdict, null, `expected null, got ${JSON.stringify(verdict)}`)
 })

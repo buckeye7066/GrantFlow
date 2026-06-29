@@ -18,6 +18,7 @@ import agentControlApi from '@/api/agentControl'
 import { isAgentControlAdminEmail, AGENT_CONTROL_ADMIN_EMAIL } from '../../../../shared/adminEmail.js'
 import { useAuthStore } from '@/stores/authStore'
 import AgentControlAgentCard from './AgentControlAgentCard.jsx'
+import AnyaAutonomyToggle from './AnyaAutonomyToggle.jsx'
 import AgentControlRunDetails from './AgentControlRunDetails.jsx'
 import AgentControlEventsTimeline from './AgentControlEventsTimeline.jsx'
 
@@ -303,6 +304,9 @@ export default function AgentControlCenter() {
             />
           ))}
         </div>
+
+        {/* Anya is interactive (no start/stop card) — expose her autonomy toggle here */}
+        <AnyaAutonomyToggle />
 
         {/* Run details + events */}
         {activeRun ? (

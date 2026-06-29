@@ -1,5 +1,5 @@
 /**
- * Yana — urgency scoring (legacy filename `larryUrgencyScorer.js`).
+ * Yana — urgency scoring (legacy filename `yanaOutreachUrgencyScorer.js`).
  *
  * Urgency is "why now?". A merely fitting org is interesting; a merely fitting
  * org with an active capital campaign is *urgent*. Urgency surfaces orgs that
@@ -10,7 +10,7 @@
  * news mentions, posted deadlines, and visible campaign pages.
  */
 
-import { URGENCY_REASON_CODES } from './larryTypes.js'
+import { URGENCY_REASON_CODES } from './yanaOutreachTypes.js'
 
 function recentNews(signals) {
   if (!signals?.news_mentions_recent) return []

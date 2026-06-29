@@ -50,6 +50,15 @@ export const agentControlApi = {
     postJson(`${BASE}/runs/${encodeURIComponent(runId)}/emergency-stop`, { reason }),
   cancel: (runId, reason = null) => postJson(`${BASE}/runs/${encodeURIComponent(runId)}/cancel`, { reason }),
 
+  // Anya autonomous-scheduler master toggle (persisted, owner-only).
+  getAnyaAutonomous: () => apiFetch(`${BASE}/anya/autonomous`),
+  setAnyaAutonomous: (enabled) =>
+    apiFetch(`${BASE}/anya/autonomous`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: Boolean(enabled) }),
+    }),
+
   startAgent: (agentName, options = {}) =>
     postJson(`${BASE}/agents/${encodeURIComponent(agentName)}/start`, { options }),
   stopAgent: (agentName, reason = null) =>

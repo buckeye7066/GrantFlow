@@ -14,7 +14,7 @@ import {
   findProspectByIdentifiers,
   listLeads,
   countSendsInWindow,
-} from '../../backend/services/larry/larryRunStore.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachRunStore.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('startRun → completeRun records mode + status', async () => {

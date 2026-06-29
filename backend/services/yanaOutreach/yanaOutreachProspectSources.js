@@ -1,5 +1,5 @@
 /**
- * Yana — registry of public prospect sources (legacy filename `larryProspectSources.js`).
+ * Yana — registry of public prospect sources (legacy filename `yanaOutreachProspectSources.js`).
  *
  * Public, well-known directories where likely GrantFlow CLIENTS can be found.
  * The registry is intentionally read-only data; the actual fetching logic is

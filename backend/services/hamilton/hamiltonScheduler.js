@@ -18,7 +18,7 @@
  * run, so without this scheduler nothing re-attempts deferred portal runs
  * when their window opens — the task just sits at waiting_for_window forever.
  * This tiny poller closes that gap by driving the same adapter on a timer,
- * exactly like robert/yana/john/sam/larry have their own schedulers.
+ * exactly like robert/yana/john/sam have their own schedulers.
  *
  * EVERYTHING IS OFF BY DEFAULT.
  *

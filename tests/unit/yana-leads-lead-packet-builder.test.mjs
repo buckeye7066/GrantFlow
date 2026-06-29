@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildLeadPacket, isPacketQualified } from '../../backend/services/larry/larryLeadPacketBuilder.js'
+import { buildLeadPacket, isPacketQualified } from '../../backend/services/yanaOutreach/yanaOutreachLeadPacketBuilder.js'
 
 const HEALTHY_PROSPECT = {
   id: 'p-1',

@@ -1,8 +1,8 @@
 /**
  * Yana — Lead Discovery & Outreach Agent: shared types, constants, factories.
  *
- * (Internal filenames and exports keep their `larry`/`LARRY_` spelling for
- *  backward compatibility — the user-facing identity is Yana. See
+ * (Internal filenames and exports use the `yanaOutreach`/`YANA_OUTREACH_`
+ *  spelling; the user-facing identity is Yana. See
  *  docs/YANA_LEAD_PIPELINE_AGENT.md.)
  *
  * Yana's mission:
@@ -23,9 +23,9 @@
  *     separate human-approved step, never something Yana triggers on her own.
  */
 
-export const LARRY_AGENT_NAME = 'Yana'
+export const YANA_OUTREACH_AGENT_NAME = 'Yana'
 
-export const LARRY_MODES = Object.freeze({
+export const YANA_OUTREACH_MODES = Object.freeze({
   OBSERVE: 'observe',
   DISCOVER_PROSPECTS: 'discover-prospects',
   VERIFY_CONTACTS: 'verify-contacts',
@@ -38,14 +38,14 @@ export const LARRY_MODES = Object.freeze({
   FULL_CYCLE: 'full-cycle',
 })
 
-export const LARRY_TRIGGERS = Object.freeze({
+export const YANA_OUTREACH_TRIGGERS = Object.freeze({
   MANUAL: 'manual',
   SCHEDULER: 'scheduler',
   STARTUP: 'startup',
   ADMIN_API: 'admin_api',
 })
 
-export const LARRY_RUN_STATUS = Object.freeze({
+export const YANA_OUTREACH_RUN_STATUS = Object.freeze({
   RUNNING: 'running',
   COMPLETED: 'completed',
   FAILED: 'failed',

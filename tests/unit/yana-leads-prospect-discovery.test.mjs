@@ -8,8 +8,8 @@ import {
   planProspectFetches,
   normalizeRawRecord,
   discoverProspects,
-} from '../../backend/services/larry/larryProspectDiscovery.js'
-import { PROSPECT_REJECTION_REASONS } from '../../backend/services/larry/larryTypes.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachProspectDiscovery.js'
+import { PROSPECT_REJECTION_REASONS } from '../../backend/services/yanaOutreach/yanaOutreachTypes.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('planProspectFetches biases toward national high-trust sources', () => {

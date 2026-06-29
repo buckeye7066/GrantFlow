@@ -13,14 +13,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { sendOutreachAttempt } from '../../backend/services/larry/larryOutreachSender.js'
+import { sendOutreachAttempt } from '../../backend/services/yanaOutreach/yanaOutreachSender.js'
 import {
   insertOutreachAttempt,
   upsertProspectCandidate,
   upsertLead,
   addSuppressionEntry,
   upsertRelationship,
-} from '../../backend/services/larry/larryRunStore.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachRunStore.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 async function buildAttemptInDb(db, overrides = {}) {

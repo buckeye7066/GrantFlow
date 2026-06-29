@@ -1,5 +1,5 @@
 /**
- * Yana — public contact-info verification (legacy filename `larryContactVerifier.js`).
+ * Yana — public contact-info verification (legacy filename `yanaOutreachContactVerifier.js`).
  *
  * Verifies an organization's *publicly listed* contact info — website
  * reachable, email format/MX-style classification, phone digit-validity,
@@ -16,15 +16,15 @@
  * classification, which is what observe-mode runs use.
  */
 
-import { CONTACT_VERIFICATION_STATUS, PROSPECT_STATUS } from './larryTypes.js'
-import { classifyEmail, classifyPhone, isPlaceholderUrl, getLarryConfig } from './larrySafety.js'
-import { updateProspect } from './larryRunStore.js'
+import { CONTACT_VERIFICATION_STATUS, PROSPECT_STATUS } from './yanaOutreachTypes.js'
+import { classifyEmail, classifyPhone, isPlaceholderUrl, getYanaOutreachConfig } from './yanaOutreachSafety.js'
+import { updateProspect } from './yanaOutreachRunStore.js'
 
 /**
  * Pure verification: returns {status, reasons}. No DB writes.
  */
 export async function verifyProspectContact(prospect, { webChecker = null, mxChecker = null, config = null } = {}) {
-  const cfg = config || getLarryConfig()
+  const cfg = config || getYanaOutreachConfig()
   const reasons = []
   let scoreableSignals = 0
   let satisfiedSignals = 0

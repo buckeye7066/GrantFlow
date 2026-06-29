@@ -1,7 +1,7 @@
 /**
  * Yana — Lead Pipeline scheduler: env-gated, no-op when disabled, cron parser.
  *
- * Internal symbol names (`startLarryScheduler`, `stopLarryScheduler`,
+ * Internal symbol names (`startYanaOutreachScheduler`, `stopYanaOutreachScheduler`,
  * `LARRY_ENABLED`) are the legacy spellings of the Yana lead pipeline.
  */
 import test from 'node:test'
@@ -10,20 +10,20 @@ import assert from 'node:assert/strict'
 import {
   parseSchedule,
   isCronMinuteMatch,
-  startLarryScheduler,
-  stopLarryScheduler,
-} from '../../backend/services/larry/larryScheduler.js'
+  startYanaOutreachScheduler,
+  stopYanaOutreachScheduler,
+} from '../../backend/services/yanaOutreach/yanaOutreachScheduler.js'
 
 test('scheduler is no-op when LARRY_ENABLED=false', () => {
   const saved = process.env.LARRY_ENABLED
   delete process.env.LARRY_ENABLED
   try {
-    const result = startLarryScheduler({ db: null })
+    const result = startYanaOutreachScheduler({ db: null })
     assert.equal(result.started, false)
     assert.match(result.reason, /LARRY_ENABLED/)
   } finally {
     if (saved) process.env.LARRY_ENABLED = saved
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })
 
@@ -33,11 +33,11 @@ test('scheduler still no-op when enabled but neither schedule flag is set', () =
   delete process.env.LARRY_RUN_ON_SCHEDULE
   delete process.env.LARRY_RUN_ON_STARTUP
   try {
-    const result = startLarryScheduler({ db: null })
+    const result = startYanaOutreachScheduler({ db: null })
     assert.equal(result.started, false)
   } finally {
     Object.assign(process.env, saved)
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })
 
@@ -63,7 +63,7 @@ test('isCronMinuteMatch matches "0 * * * *" only on minute=0', () => {
 // Two implementations of "Yana" exist: the canonical client-discovery
 // adapter wired to the Admin Agent Control Center
 // (agentControlTypes.ALL_AGENTS includes 'yana') and this older lead
-// pipeline (formerly codenamed "Larry"). If both schedulers came up,
+// pipeline (formerly codenamed "YanaOutreach"). If both schedulers came up,
 // they'd double-discover the same prospects into different tables
 // (yana_lead_candidates vs larry_*) and the legacy pipeline runs
 // outside Mission Control. The guard refuses to start the legacy
@@ -81,7 +81,7 @@ test('REGRESSION: legacy Yana lead pipeline refuses to start when canonical Yana
     const log = { warn: (m) => warnings.push(m), info: (m) => warnings.push(m) }
     // Inject env explicitly so the test doesn't depend on
     // process.env.YANA_ENABLED leaking from another test.
-    const result = startLarryScheduler({
+    const result = startYanaOutreachScheduler({
       db: null,
       logger: log,
       env: { YANA_ENABLED: 'true' },
@@ -96,7 +96,7 @@ test('REGRESSION: legacy Yana lead pipeline refuses to start when canonical Yana
     )
   } finally {
     Object.assign(process.env, saved)
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })
 
@@ -106,18 +106,18 @@ test('Yana opt-in tokens (1 / true / yes / on) all trigger the guard', () => {
   process.env.LARRY_RUN_ON_STARTUP = 'true'
   try {
     for (const token of ['1', 'true', 'TRUE', 'yes', 'YES', 'on', 'ON']) {
-      const result = startLarryScheduler({
+      const result = startYanaOutreachScheduler({
         db: null,
         logger: { warn() {}, info() {} },
         env: { YANA_ENABLED: token },
       })
       assert.equal(result.started, false, `YANA_ENABLED=${token} must block the legacy pipeline`)
       assert.equal(result.reason, 'deprecated_superseded_by_yana')
-      stopLarryScheduler()
+      stopYanaOutreachScheduler()
     }
   } finally {
     Object.assign(process.env, saved)
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })
 
@@ -130,7 +130,7 @@ test('standalone legacy-pipeline boot still emits a notice (operator visibility)
   delete process.env.LARRY_RUN_ON_STARTUP
   try {
     const warnings = []
-    startLarryScheduler({
+    startYanaOutreachScheduler({
       db: null,
       logger: { warn: (m) => warnings.push(m), info: (m) => warnings.push(m) },
       env: { YANA_ENABLED: 'false' },
@@ -141,7 +141,7 @@ test('standalone legacy-pipeline boot still emits a notice (operator visibility)
     )
   } finally {
     Object.assign(process.env, saved)
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })
 
@@ -159,7 +159,7 @@ test('canonical YANA_LEADS_ENABLED env-var alias also enables the scheduler (pre
     // *after* honouring the YANA_LEADS_ENABLED master switch — exactly
     // the same behaviour as if LARRY_ENABLED=true had been set with
     // both run flags off.
-    const result = startLarryScheduler({
+    const result = startYanaOutreachScheduler({
       db: null,
       logger: { warn() {}, info() {} },
       env: {},
@@ -175,7 +175,7 @@ test('canonical YANA_LEADS_ENABLED env-var alias also enables the scheduler (pre
     delete process.env.YANA_LEADS_ENABLED
     delete process.env.YANA_LEADS_RUN_ON_SCHEDULE
     delete process.env.YANA_LEADS_RUN_ON_STARTUP
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })
 
@@ -186,7 +186,7 @@ test('Yana NOT enabled (or unset) does NOT trigger the guard — legacy pipeline
   try {
     for (const token of [undefined, '', '0', 'false', 'no', 'off', 'maybe']) {
       const env = token === undefined ? {} : { YANA_ENABLED: token }
-      const result = startLarryScheduler({
+      const result = startYanaOutreachScheduler({
         db: null,
         logger: { warn() {}, info() {} },
         env,
@@ -197,10 +197,10 @@ test('Yana NOT enabled (or unset) does NOT trigger the guard — legacy pipeline
         result.reason, 'deprecated_superseded_by_yana',
         `YANA_ENABLED=${JSON.stringify(token)} must NOT trigger the Yana guard`,
       )
-      stopLarryScheduler()
+      stopYanaOutreachScheduler()
     }
   } finally {
     Object.assign(process.env, saved)
-    stopLarryScheduler()
+    stopYanaOutreachScheduler()
   }
 })

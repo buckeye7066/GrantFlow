@@ -1,5 +1,5 @@
 /**
- * Yana — lead packet builder (legacy filename `larryLeadPacketBuilder.js`).
+ * Yana — lead packet builder (legacy filename `yanaOutreachLeadPacketBuilder.js`).
  *
  * A "lead packet" is the structured handoff Yana produces for each qualified
  * prospect. It carries everything an admin (or a downstream outreach system)
@@ -14,18 +14,18 @@
  *   - recommended outreach channel (email/postal/phone/contact-form)
  *
  * The builder is pure — no DB, no network. Persistence happens via
- * larryRunStore.upsertLead.
+ * yanaOutreachRunStore.upsertLead.
  */
 
-import { computeFitScore } from './larryFitScorer.js'
-import { computeUrgencyScore, computeCompositeScore } from './larryUrgencyScorer.js'
+import { computeFitScore } from './yanaOutreachFitScorer.js'
+import { computeUrgencyScore, computeCompositeScore } from './yanaOutreachUrgencyScorer.js'
 import {
   CONTACT_VERIFICATION_STATUS,
   LEAD_STATUS,
   OUTREACH_CHANNEL,
   QUALIFICATION_THRESHOLDS,
   makeLeadPacket,
-} from './larryTypes.js'
+} from './yanaOutreachTypes.js'
 
 function pickPitch(prospect, fit, urgency) {
   const fitDriver = (fit?.reasons || [])[0]?.detail

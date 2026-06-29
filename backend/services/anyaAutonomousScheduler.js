@@ -28,26 +28,31 @@ function isProdEnv() {
  * a second write-permission env gate once the code crawl loop is enabled.
  */
 const AUTONOMOUS_CONFIG = {
-  // Enable/disable autonomous operations (default: disabled)
-  enabled: process.env.ANYA_AUTONOMOUS_ENABLED === 'true',
+  // Enable/disable autonomous operations.
+  // ON by default (owner directive 2026-06-29). Disable explicitly with
+  // ANYA_AUTONOMOUS_ENABLED=false, or flip the persisted Control-Center toggle
+  // (agent_settings 'anya.autonomous_enabled'), which is loaded at boot and via
+  // setAutonomousEnabled() so it survives restarts.
+  enabled: process.env.ANYA_AUTONOMOUS_ENABLED !== 'false',
 
-  // When to run operations (all default: disabled)
-  runOnStartup: process.env.ANYA_RUN_ON_STARTUP === 'true',
+  // When to run operations.
+  runOnStartup: process.env.ANYA_RUN_ON_STARTUP === 'true',     // off: don't hammer every boot
   runOnAdminLogin: process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true',
-  runOnSchedule: process.env.ANYA_RUN_ON_SCHEDULE === 'true',
+  runOnSchedule: process.env.ANYA_RUN_ON_SCHEDULE !== 'false',  // on: the daily autonomous loop
 
-  // What operations to run (each must be explicitly enabled).
-  // matchScout defaults ON when the scheduler itself is on — the scout is
-  // recommend-only (writes anya_match_suggestions, never auto-adds to
-  // pipelines) so the safety bar is lower than for crawlers/codeCrawl.
-  // Operators can still mute per-user via user_preferences.custom_preferences.
+  // What operations to run. The recommend-only + discovery ops default ON so the
+  // scheduler does real work; the two CODE-SELF-MODIFICATION ops (codeCrawl,
+  // functionTests) stay OFF by default — they edit source / run tests and must
+  // be opted into explicitly. matchScout is recommend-only (writes
+  // anya_match_suggestions, never auto-adds to pipelines). Operators can mute
+  // per-user via user_preferences.custom_preferences.
   operations: {
-    codeCrawl: process.env.ANYA_CODE_CRAWL === 'true',
-    functionTests: process.env.ANYA_FUNCTION_TESTS === 'true',
-    crawlers: process.env.ANYA_CRAWLERS === 'true',
-    itemDiscovery: process.env.ANYA_ITEM_DISCOVERY === 'true',
-    portalChecks: process.env.ANYA_PORTAL_CHECKS === 'true',
-    geoCrawl: process.env.ANYA_GEO_CRAWL === 'true',
+    codeCrawl: process.env.ANYA_CODE_CRAWL === 'true',          // opt-in (edits source)
+    functionTests: process.env.ANYA_FUNCTION_TESTS === 'true',  // opt-in (runs tests)
+    crawlers: process.env.ANYA_CRAWLERS !== 'false',
+    itemDiscovery: process.env.ANYA_ITEM_DISCOVERY !== 'false',
+    portalChecks: process.env.ANYA_PORTAL_CHECKS !== 'false',
+    geoCrawl: process.env.ANYA_GEO_CRAWL !== 'false',
     matchScout: process.env.ANYA_MATCH_SCOUT !== 'false',
   },
   
@@ -586,6 +591,22 @@ export function getBackgroundCodeCrawlState() {
  */
 export function getAutonomousConfig() {
   return AUTONOMOUS_CONFIG
+}
+
+/** Is the autonomous scheduler currently enabled (master switch)? */
+export function isAutonomousEnabled() {
+  return AUTONOMOUS_CONFIG.enabled === true
+}
+
+/**
+ * Set the master enabled switch at runtime. Persistence (so it survives
+ * restarts) is the caller's job — the Control-Center toggle endpoint writes the
+ * `anya.autonomous_enabled` agent_setting AND calls this; boot reads that
+ * setting and calls this to seed the in-memory config.
+ */
+export function setAutonomousEnabled(enabled) {
+  AUTONOMOUS_CONFIG.enabled = Boolean(enabled)
+  return AUTONOMOUS_CONFIG.enabled
 }
 
 /**
