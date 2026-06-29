@@ -59,24 +59,51 @@ export default function AdminAmyConsole() {
   const refresh = useCallback(async () => {
     try {
       const [s, r] = await Promise.all([getAmyStatus().catch(() => null), getAmyLatestReport().catch(() => null)])
-      setStatus(s?.status ?? null)
+      const st = s?.status ?? null
+      setStatus(st)
       setReport(r?.report ?? null)
+      // Reflect an in-flight run (manual OR scheduled, even started by another
+      // admin or the server) so the panel shows progress on load.
+      setBusy(Boolean(st?.running))
+      return st
     } catch (err) {
       toast({ title: 'Failed to load Agent Amy', description: err?.message || 'Unknown error', variant: 'destructive' })
+      return null
     }
   }, [toast])
 
   useEffect(() => { refresh() }, [refresh])
 
+  // Amy runs in the background (minutes): the POST returns 202 immediately, then
+  // we poll /status until the run clears. Caps at ~20 min so a stuck run can't
+  // spin forever.
   const runNow = async () => {
     setBusy(true)
     try {
       const res = await runAmy({ count: 12, improve: true, applyTuning, applyWeights, applyCoverage })
       toast({
-        title: 'Amy run complete',
-        description: `Floor ${res?.tuning?.applied ? `tuned ${res.tuning.from}→${res.tuning.to}` : 'unchanged'} · ${res?.approval_queue_size ?? 0} proposals`,
+        title: res?.already_running ? 'Amy already running' : 'Amy run started',
+        description: res?.already_running
+          ? 'A run is already in progress — watching for results.'
+          : 'Crawling synthetic profiles, then Anya → Sam. This takes a few minutes.',
       })
-      await refresh()
+
+      const deadline = Date.now() + 20 * 60 * 1000
+      // give the server a moment to flip running=true before we poll
+      await new Promise((r) => setTimeout(r, 1500))
+      while (Date.now() < deadline) {
+        const st = await refresh()
+        if (st && st.running === false) {
+          if (st.last_run_error) {
+            toast({ title: 'Amy run failed', description: st.last_run_error, variant: 'destructive' })
+          } else {
+            toast({ title: 'Amy run complete', description: 'Report updated below.' })
+          }
+          return
+        }
+        await new Promise((r) => setTimeout(r, 5000))
+      }
+      toast({ title: 'Amy still running', description: 'Taking longer than expected — use Refresh to check back.' })
     } catch (err) {
       toast({ title: 'Amy run failed', description: err?.message || 'Unknown error', variant: 'destructive' })
     } finally {
@@ -130,12 +157,22 @@ export default function AdminAmyConsole() {
             </Badge>
             <Badge variant="outline">Target {status?.daily_target ?? 100}/day</Badge>
             <Badge variant="outline">Slider floor {report?.slider_floor ?? status?.slider_floor ?? '—'}%</Badge>
+            {status?.running && (
+              <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200">
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Running{status?.running_source ? ` (${status.running_source})` : ''}…
+              </Badge>
+            )}
             <span className="text-muted-foreground">Last run: {fmtDate(report?.completed_at || status?.last_run_at)}</span>
           </div>
 
           {!report && (
             <div className="text-sm text-muted-foreground flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" /> No Amy run yet. Click “Run now” (or enable the daily schedule with AMY_ENABLED=true).
+              <AlertTriangle className="h-4 w-4" />
+              {status?.running
+                ? 'First Amy run in progress — crawling profiles, then Anya → Sam. Results will appear here shortly.'
+                : status?.enabled
+                  ? 'No Amy run recorded yet. The daily run is scheduled; click “Run now” to start one immediately.'
+                  : 'No Amy run yet. Click “Run now” (Amy’s daily schedule is currently disabled).'}
             </div>
           )}
 
