@@ -7,9 +7,9 @@ import assert from 'node:assert/strict'
 import {
   verifyProspectContact,
   verifyAndPersistContact,
-} from '../../backend/services/larry/larryContactVerifier.js'
-import { upsertProspectCandidate } from '../../backend/services/larry/larryRunStore.js'
-import { CONTACT_VERIFICATION_STATUS, PROSPECT_STATUS } from '../../backend/services/larry/larryTypes.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachContactVerifier.js'
+import { upsertProspectCandidate } from '../../backend/services/yanaOutreach/yanaOutreachRunStore.js'
+import { CONTACT_VERIFICATION_STATUS, PROSPECT_STATUS } from '../../backend/services/yanaOutreach/yanaOutreachTypes.js'
 import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('verifyProspectContact returns VERIFIED when website is live and email is org', async () => {

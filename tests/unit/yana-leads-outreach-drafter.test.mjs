@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { draftEmail, inspectDraftQuality } from '../../backend/services/larry/larryOutreachDrafter.js'
+import { draftEmail, inspectDraftQuality } from '../../backend/services/yanaOutreach/yanaOutreachDrafter.js'
 
 function packetFor(overrides = {}) {
   return {

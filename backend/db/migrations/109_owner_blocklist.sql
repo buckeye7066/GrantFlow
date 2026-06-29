@@ -3,7 +3,7 @@
 -- Owner personal blocklist: the single canonical denylist the OWNER feeds from
 -- their phone (Tasker), Gmail filters (Apps Script / OAuth), and manual admin
 -- entries. Enforced at auth (ban accounts), inbound contact (reject), and
--- outreach (mirrored into the John/Larry suppression lists at write time).
+-- outreach (mirrored into the John/Yana suppression lists at write time).
 --
 -- TEXT status/enforcement columns (not BOOLEAN) on purpose: the Postgres shim
 -- only rewrites `col = 1/0` for an allowlist of known boolean columns, so a new

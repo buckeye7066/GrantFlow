@@ -53,17 +53,28 @@ export async function getAnyaMessages(sessionId, { limit, direction } = {}) {
   })
 }
 
-export async function postAnyaMessage(sessionId, message, { currentPage, pageContext } = {}) {
+export async function postAnyaMessage(sessionId, message, { currentPage, pageContext, background } = {}) {
   if (!sessionId) {
     throw new Error("Session id required")
   }
   const payload = { message }
   if (currentPage) payload.current_page = currentPage
   if (pageContext && typeof pageContext === 'object') payload.page_context = pageContext
+  // background=true → the server returns 202 immediately with { pending, run_id }
+  // and finishes the reply out of band. Callers poll getAnyaRun(run_id).
+  if (background) payload.background = true
   return apiFetch(`/api/anya/sessions/${sessionId}/messages`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
+}
+
+// Poll a background reply's run status. Resolves to the run object
+// ({ status, assistant_message_id, assistant_text, degraded, ... }) or null.
+export async function getAnyaRun(sessionId, runId) {
+  if (!sessionId || !runId) return null
+  const response = await apiFetch(`/api/anya/sessions/${sessionId}/runs/${runId}`)
+  return response?.run ?? null
 }
 
 export async function listAnyaTools({ includeAdmin = false } = {}) {

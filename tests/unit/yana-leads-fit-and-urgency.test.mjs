@@ -4,11 +4,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { computeFitScore } from '../../backend/services/larry/larryFitScorer.js'
+import { computeFitScore } from '../../backend/services/yanaOutreach/yanaOutreachFitScorer.js'
 import {
   computeUrgencyScore,
   computeCompositeScore,
-} from '../../backend/services/larry/larryUrgencyScorer.js'
+} from '../../backend/services/yanaOutreach/yanaOutreachUrgencyScorer.js'
 
 test('non-grant-seeker types score 0', () => {
   const result = computeFitScore({ applicant_type: 'federal_agency' })

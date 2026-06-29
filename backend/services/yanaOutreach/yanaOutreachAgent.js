@@ -1,5 +1,5 @@
 /**
- * Yana — Lead Pipeline orchestrator (legacy filename `larryAgent.js`).
+ * Yana — Lead Pipeline orchestrator (legacy filename `yanaOutreachAgent.js`).
  *
  * ARCHITECTURE (authoritative, owner-clarified): **Yana does NOT send email.**
  * Yana's job is lead DISCOVERY + DRAFTING — she finds + qualifies leads and
@@ -26,14 +26,14 @@
  */
 
 import {
-  LARRY_AGENT_NAME,
-  LARRY_MODES,
-  LARRY_RUN_STATUS,
-  LARRY_TRIGGERS,
+  YANA_OUTREACH_AGENT_NAME,
+  YANA_OUTREACH_MODES,
+  YANA_OUTREACH_RUN_STATUS,
+  YANA_OUTREACH_TRIGGERS,
   LEAD_STATUS,
   PROSPECT_STATUS,
-} from './larryTypes.js'
-import { getLarryConfig, maskSecrets } from './larrySafety.js'
+} from './yanaOutreachTypes.js'
+import { getYanaOutreachConfig, maskSecrets } from './yanaOutreachSafety.js'
 import {
   startRun,
   updateRun,
@@ -45,14 +45,14 @@ import {
   insertOutreachAttempt,
   updateOutreachAttempt,
   getProspect,
-} from './larryRunStore.js'
-import { discoverProspects } from './larryProspectDiscovery.js'
-import { verifyAndPersistContact } from './larryContactVerifier.js'
-import { computeFitScore } from './larryFitScorer.js'
-import { computeUrgencyScore, computeCompositeScore } from './larryUrgencyScorer.js'
-import { buildLeadPacket, isPacketQualified } from './larryLeadPacketBuilder.js'
-import { draftEmail, inspectDraftQuality } from './larryOutreachDrafter.js'
-import { sendOutreachAttempt } from './larryOutreachSender.js'
+} from './yanaOutreachRunStore.js'
+import { discoverProspects } from './yanaOutreachProspectDiscovery.js'
+import { verifyAndPersistContact } from './yanaOutreachContactVerifier.js'
+import { computeFitScore } from './yanaOutreachFitScorer.js'
+import { computeUrgencyScore, computeCompositeScore } from './yanaOutreachUrgencyScorer.js'
+import { buildLeadPacket, isPacketQualified } from './yanaOutreachLeadPacketBuilder.js'
+import { draftEmail, inspectDraftQuality } from './yanaOutreachDrafter.js'
+import { sendOutreachAttempt } from './yanaOutreachSender.js'
 
 function logger(req) {
   const reqLog = req?.log || req?.ctx?.log
@@ -184,7 +184,7 @@ async function phaseSend({ db, options, config }) {
   // Only sends outreach attempts that have been explicitly admin-approved.
   // Note: this phase deliberately does NOT auto-approve drafts even when
   // LARRY_REQUIRE_APPROVAL_TO_SEND=false — the operator still has to call
-  // /api/larry/outreach/:id/approve before this phase will pick it up.
+  // /api/yanaOutreach/outreach/:id/approve before this phase will pick it up.
   const leads = await listLeads(db, { approvedForOutreach: true, limit: 500 })
   const sent = []
   const blocked = []
@@ -223,21 +223,21 @@ async function phaseSend({ db, options, config }) {
 
 /**
  * Single-mode runner. The route layer typically calls this directly with
- * `mode = LARRY_MODES.X`. The full-cycle orchestrator just calls each
+ * `mode = YANA_OUTREACH_MODES.X`. The full-cycle orchestrator just calls each
  * phase in sequence and aggregates the report.
  */
-export async function runLarry({
+export async function runYanaOutreach({
   db,
   req = null,
   mode = null,
-  trigger = LARRY_TRIGGERS.MANUAL,
+  trigger = YANA_OUTREACH_TRIGGERS.MANUAL,
   options = {},
   config = null,
 } = {}) {
-  const cfg = config || getLarryConfig()
+  const cfg = config || getYanaOutreachConfig()
   const log = logger(req)
 
-  const requestedMode = mode || cfg.mode || LARRY_MODES.OBSERVE
+  const requestedMode = mode || cfg.mode || YANA_OUTREACH_MODES.OBSERVE
 
   // Yana's real job — finding leads and DRAFTING outreach — never sends email,
   // so it always runs. There is no "agent disabled" wall in front of discovery,
@@ -253,12 +253,12 @@ export async function runLarry({
   // so an operator who explicitly triggers a send while the master switch is off
   // gets an honest reason instead of silent per-attempt blocks. FULL_CYCLE does
   // NOT include the send phase at all — it stops at saved drafts.
-  const SEND_ONLY_MODE = requestedMode === LARRY_MODES.SEND_OUTREACH
+  const SEND_ONLY_MODE = requestedMode === YANA_OUTREACH_MODES.SEND_OUTREACH
   if (!cfg.enabled && SEND_ONLY_MODE) {
     log.info?.('[Yana/leads] send disabled — refusing the manual SEND step', safeMask({ mode: requestedMode }))
     return {
       ok: false,
-      agent: LARRY_AGENT_NAME,
+      agent: YANA_OUTREACH_AGENT_NAME,
       reason: 'send_disabled',
       detail: 'Manual outreach SEND is off. Yana finds leads and saves drafts for review regardless; ' +
         'set YANA_LEADS_ENABLED=true only if you also want the separate human-approved send step enabled.',
@@ -277,7 +277,7 @@ export async function runLarry({
   }
 
   try {
-    if (effectiveMode === LARRY_MODES.OBSERVE) {
+    if (effectiveMode === YANA_OUTREACH_MODES.OBSERVE) {
       // Read-only sanity report. Counts only.
       const [discovered, verified, qualified] = await Promise.all([
         listProspects(db, { status: PROSPECT_STATUS.DISCOVERED, limit: 1 }),
@@ -291,29 +291,29 @@ export async function runLarry({
       }
     }
 
-    if (effectiveMode === LARRY_MODES.DISCOVER_PROSPECTS || effectiveMode === LARRY_MODES.FULL_CYCLE) {
+    if (effectiveMode === YANA_OUTREACH_MODES.DISCOVER_PROSPECTS || effectiveMode === YANA_OUTREACH_MODES.FULL_CYCLE) {
       summary.phases.discover = await phaseDiscover({ db, runId, options, config: cfg })
     }
-    if (effectiveMode === LARRY_MODES.VERIFY_CONTACTS || effectiveMode === LARRY_MODES.FULL_CYCLE) {
+    if (effectiveMode === YANA_OUTREACH_MODES.VERIFY_CONTACTS || effectiveMode === YANA_OUTREACH_MODES.FULL_CYCLE) {
       summary.phases.verify = await phaseVerify({ db, options, config: cfg })
     }
     if (
-      effectiveMode === LARRY_MODES.SCORE_FIT ||
-      effectiveMode === LARRY_MODES.BUILD_PACKETS ||
-      effectiveMode === LARRY_MODES.FULL_CYCLE
+      effectiveMode === YANA_OUTREACH_MODES.SCORE_FIT ||
+      effectiveMode === YANA_OUTREACH_MODES.BUILD_PACKETS ||
+      effectiveMode === YANA_OUTREACH_MODES.FULL_CYCLE
     ) {
       summary.phases.score_and_packet = await phaseScoreAndPacket({ db, runId, options, config: cfg })
     }
-    if (effectiveMode === LARRY_MODES.QUALIFY || effectiveMode === LARRY_MODES.FULL_CYCLE) {
+    if (effectiveMode === YANA_OUTREACH_MODES.QUALIFY || effectiveMode === YANA_OUTREACH_MODES.FULL_CYCLE) {
       summary.phases.qualify = await phaseQualify({ db, options, config: cfg })
     }
-    if (effectiveMode === LARRY_MODES.DRAFT_OUTREACH || effectiveMode === LARRY_MODES.FULL_CYCLE) {
+    if (effectiveMode === YANA_OUTREACH_MODES.DRAFT_OUTREACH || effectiveMode === YANA_OUTREACH_MODES.FULL_CYCLE) {
       summary.phases.draft = await phaseDraft({ db, options, config: cfg })
     }
     // SEND is a SEPARATE, human-approved action — NOT part of Yana's automated
     // cycle. FULL_CYCLE deliberately stops at saved drafts; only an explicit
     // send-outreach request reaches the (self-gating) send phase.
-    if (effectiveMode === LARRY_MODES.SEND_OUTREACH) {
+    if (effectiveMode === YANA_OUTREACH_MODES.SEND_OUTREACH) {
       summary.phases.send = await phaseSend({ db, options, config: cfg })
     }
 
@@ -324,11 +324,11 @@ export async function runLarry({
     // SUCCESS, not a noop. Yana never sends, so "0 sent" is never a failure —
     // the meaningful outputs are leads qualified and drafts saved for review.
     summary.status_note = buildStatusNote(summary, counters)
-    await completeRun(db, runId, { status: LARRY_RUN_STATUS.COMPLETED, summary })
+    await completeRun(db, runId, { status: YANA_OUTREACH_RUN_STATUS.COMPLETED, summary })
 
     return {
       ok: true,
-      agent: LARRY_AGENT_NAME,
+      agent: YANA_OUTREACH_AGENT_NAME,
       mode: effectiveMode,
       run_id: runId,
       status_note: summary.status_note,
@@ -338,13 +338,13 @@ export async function runLarry({
     log.error?.('[Yana/leads] run failed', safeMask({ mode: effectiveMode, error: err?.message || String(err) }))
     summary.error = err?.message || String(err)
     await completeRun(db, runId, {
-      status: LARRY_RUN_STATUS.FAILED,
+      status: YANA_OUTREACH_RUN_STATUS.FAILED,
       summary,
       error: err?.message || String(err),
     })
     return {
       ok: false,
-      agent: LARRY_AGENT_NAME,
+      agent: YANA_OUTREACH_AGENT_NAME,
       mode: effectiveMode,
       run_id: runId,
       summary,
@@ -401,8 +401,8 @@ function collectCountersForRun(summary) {
 /**
  * Cheap, side-effect-free status snapshot used by the admin console.
  */
-export async function getLarryStatus(db, { config = null } = {}) {
-  const cfg = config || getLarryConfig()
+export async function getYanaOutreachStatus(db, { config = null } = {}) {
+  const cfg = config || getYanaOutreachConfig()
   const [prospects, verifiedSample, qualifiedSample, approvedSample] = await Promise.all([
     listProspects(db, { limit: 1 }),
     listProspects(db, { status: PROSPECT_STATUS.CONTACT_VERIFIED, limit: 1 }),
@@ -410,7 +410,7 @@ export async function getLarryStatus(db, { config = null } = {}) {
     listLeads(db, { approvedForOutreach: true, limit: 1 }),
   ])
   return {
-    agent: LARRY_AGENT_NAME,
+    agent: YANA_OUTREACH_AGENT_NAME,
     // Yana's discovery + drafting always run; `enabled` only governs the
     // SEPARATE, human-approved send step. Surface that plainly so the console
     // never reads "Yana disabled" for an agent that is happily finding leads

@@ -12,6 +12,8 @@ import {
   readAmyHistory,
   readAmyApprovalQueue,
 } from '../services/amy/amyReportStore.js'
+import { launchAmyRun, getAmyRunState } from '../services/amy/amyRunner.js'
+import { getAmyConfig } from '../services/amy/amyScheduler.js'
 
 const log = createLogger('route:amy')
 const router = express.Router()
@@ -27,12 +29,17 @@ router.use(adminOnly)
 router.get('/status', async (req, res) => {
   try {
     const latest = await readLatestAmyReport(req.db)
-    const enabled = String(process.env.AMY_ENABLED ?? 'false').toLowerCase() === 'true'
+    // Reflect the REAL effective config (Amy is ON by default) instead of a raw
+    // env read that defaulted to false — otherwise the panel shows "OFF" even
+    // when the daily scheduler is running.
+    const cfg = getAmyConfig()
+    const run = getAmyRunState()
     return res.json({
       ok: true,
       status: {
-        enabled,
-        daily_target: Number(process.env.AMY_DAILY_PROFILE_TARGET) || 100,
+        enabled: cfg.enabled,
+        run_on_schedule: cfg.runOnSchedule,
+        daily_target: cfg.dailyTarget,
         slider_floor: latest?.slider_floor ?? null,
         last_run_at: latest?.completed_at ?? null,
         last_run_id: latest?.run_id ?? null,
@@ -40,6 +47,13 @@ router.get('/status', async (req, res) => {
         cohort: latest?.cohort ?? null,
         tuning: latest?.tuning ? { changed: latest.tuning.change, from: latest.tuning.from, to: latest.tuning.to, applied: latest.tuning.applied?.applied ?? false } : null,
         approval_queue_size: Array.isArray(latest?.approval_queue) ? latest.approval_queue.length : 0,
+        // Live run state so the panel can show progress and poll to completion.
+        running: run.running,
+        running_run_id: run.run_id,
+        running_source: run.source,
+        running_started_at: run.started_at,
+        last_run_ok: run.ok,
+        last_run_error: run.error,
       },
     })
   } catch (err) {
@@ -80,36 +94,42 @@ router.get('/approvals', async (req, res) => {
 })
 
 /**
- * Trigger an on-demand run. Synchronous but small/capped so it returns to the
- * panel. The daily 100-profile run is the scheduler's job.
- *   body: { count?, improve?, applyTuning?, anyaApply?, samApply?, keepProfiles? }
+ * Trigger an on-demand run. FIRE-AND-FORGET: a real run crawls many profiles and
+ * runs the Anya→Sam pipeline (minutes), which would 504 at the edge proxy if we
+ * awaited it. So we start it in the background and return 202 immediately; the
+ * panel polls GET /status (running → false) and GET /report/latest for results.
+ *   body: { count?, improve?, applyTuning?, applyWeights?, applyCoverage?,
+ *           anyaApply?, samApply?, keepProfiles?, persist? }
  */
-router.post('/run', async (req, res) => {
+router.post('/run', (req, res) => {
   try {
     const body = req.body || {}
-    const count = Math.max(1, Math.min(25, Number(body.count) || 8))
-    const { runAmyTraining } = await import('../services/amy/amyAgent.js')
-    const out = await runAmyTraining({
+    const count = Math.max(1, Math.min(100, Number(body.count) || 12))
+    const launch = launchAmyRun({
       db: req.db,
-      targetCount: count,
-      dryRunDiscovery: body.persist !== true,
-      improve: body.improve !== false, // admin runs default to the full improvement loop
-      applyTuning: body.applyTuning === true, // writing the floor change is opt-in from the UI
-      applyWeights: body.applyWeights === true,
-      applyCoverage: body.applyCoverage === true,
-      anyaApply: body.anyaApply === true,
-      samApply: body.samApply === true,
-      keepProfiles: body.keepProfiles === true,
+      logger: log,
+      source: 'admin',
+      opts: {
+        targetCount: count,
+        dryRunDiscovery: body.persist !== true,
+        improve: body.improve !== false, // admin runs default to the full improvement loop
+        applyTuning: body.applyTuning === true, // writing the floor change is opt-in from the UI
+        applyWeights: body.applyWeights === true,
+        applyCoverage: body.applyCoverage === true,
+        anyaApply: body.anyaApply === true,
+        samApply: body.samApply === true,
+        keepProfiles: body.keepProfiles === true,
+      },
     })
-    return res.json({
+    return res.status(202).json({
       ok: true,
-      run_id: out.run_id,
-      summary: out.summary,
-      crawler_events: out.combined?.crawler_events,
-      metrics: out.combined?.metrics ? { before: out.combined.metrics.before, after: out.combined.metrics.after, best: out.combined.metrics.best } : null,
-      tuning: out.combined?.tuning ? { changed: out.combined.tuning.change, from: out.combined.tuning.from, to: out.combined.tuning.to, applied: out.combined.tuning.applied?.applied ?? false, reason: out.combined.tuning.reason } : null,
-      approval_queue_size: out.combined?.approval_queue?.length ?? 0,
-      cleaned: out.cleanup?.deleted ?? 0,
+      accepted: true,
+      running: true,
+      already_running: launch.already_running,
+      run_id: launch.run_id,
+      message: launch.already_running
+        ? 'An Amy run is already in progress; poll /status.'
+        : 'Amy run started in the background; poll /status for completion.',
     })
   } catch (err) {
     log.error(`run failed: ${err?.message}`)

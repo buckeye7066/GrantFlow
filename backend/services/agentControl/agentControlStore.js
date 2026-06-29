@@ -112,6 +112,14 @@ export async function ensureSchema(db) {
       fulfilled_at ${tsType},
       created_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'}
     )`,
+    // Persisted per-agent settings (KV). Holds owner-flipped Control-Center
+    // toggles (e.g. 'anya.autonomous_enabled') so they survive restarts.
+    `CREATE TABLE IF NOT EXISTS agent_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_by_email TEXT,
+      updated_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'}
+    )`,
   ]
   for (const sql of ddl) {
     try {
@@ -160,6 +168,48 @@ export async function ensureSchema(db) {
 
 export function _resetSchemaCache() {
   schemaCache = new WeakMap()
+}
+
+// ---------------------------------------------------------------------------
+// Persisted agent settings (KV) — owner-flipped Control-Center toggles.
+// ---------------------------------------------------------------------------
+
+/** Read a persisted agent setting. Returns the string value, or null if unset. */
+export async function getAgentSetting(db, key) {
+  if (!db || typeof db.prepare !== 'function' || !key) return null
+  await ensureSchema(db)
+  try {
+    const row = await db.prepare('SELECT value FROM agent_settings WHERE key = ?').get(String(key))
+    return row && row.value !== undefined ? (row.value ?? null) : null
+  } catch {
+    return null
+  }
+}
+
+/** Upsert a persisted agent setting (value stored as text). Cross-dialect (no ON CONFLICT). */
+export async function setAgentSetting(db, key, value, { updatedByEmail = null } = {}) {
+  if (!db || typeof db.prepare !== 'function' || !key) return false
+  await ensureSchema(db)
+  const v = value === null || value === undefined ? null : String(value)
+  const email = (updatedByEmail || '').toLowerCase() || null
+  const now = NOW()
+  const result = await db
+    .prepare('UPDATE agent_settings SET value = ?, updated_by_email = ?, updated_at = ? WHERE key = ?')
+    .run(v, email, now, String(key))
+  const changed = Number(result?.changes ?? result?.rowCount ?? 0)
+  if (!changed) {
+    try {
+      await db
+        .prepare('INSERT INTO agent_settings (key, value, updated_by_email, updated_at) VALUES (?, ?, ?, ?)')
+        .run(String(key), v, email, now)
+    } catch {
+      // Lost an insert race on the PK — the row now exists, so update it.
+      await db
+        .prepare('UPDATE agent_settings SET value = ?, updated_by_email = ?, updated_at = ? WHERE key = ?')
+        .run(v, email, now, String(key))
+    }
+  }
+  return true
 }
 
 // ---------------------------------------------------------------------------

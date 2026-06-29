@@ -237,20 +237,24 @@ describe('Amy training run (end-to-end, offline discovery)', () => {
     }
   })
 
-  it('scheduler is gated off by default and targets 100/day when enabled', () => {
+  it('scheduler is ON by default (owner directive) and targets 100/day; opt out with AMY_ENABLED=false', () => {
     const prev = { ...process.env }
     try {
+      // Default (no env): enabled, scheduled runner starts, 100/day.
       delete process.env.AMY_ENABLED
-      expect(startAmyScheduler({ db: null }).started).toBe(false)
+      delete process.env.AMY_RUN_ON_SCHEDULE
+      delete process.env.AMY_RUN_ON_STARTUP
+      expect(getAmyConfig().enabled).toBe(true)
       expect(getAmyConfig().dailyTarget).toBe(100)
-
-      process.env.AMY_ENABLED = 'true'
-      process.env.AMY_RUN_ON_SCHEDULE = 'true'
-      process.env.AMY_RUN_ON_STARTUP = 'false'
-      const res = startAmyScheduler({ db: null, logger: { info() {}, error() {} } })
-      expect(res.started).toBe(true)
-      expect(res.daily_target).toBe(100)
+      const onByDefault = startAmyScheduler({ db: null, logger: { info() {}, error() {} } })
+      expect(onByDefault.started).toBe(true)
+      expect(onByDefault.daily_target).toBe(100)
       stopAmyScheduler()
+
+      // Explicit opt-out still works.
+      process.env.AMY_ENABLED = 'false'
+      expect(getAmyConfig().enabled).toBe(false)
+      expect(startAmyScheduler({ db: null }).started).toBe(false)
     } finally {
       stopAmyScheduler()
       process.env = prev

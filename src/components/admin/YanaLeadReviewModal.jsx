@@ -1,9 +1,7 @@
 /**
  * YanaLeadReviewModal — review modal for Yana's Lead Discovery & Outreach pipeline.
  *
- * Formerly named LarryLeadReviewModal. Backend route paths
- * (/api/larry/*) are still served for backward compatibility, but the
- * UI now calls the canonical /api/yana-leads/* alias.
+ * The UI calls the canonical /api/yana-leads/* routes.
  */
 import React, { useEffect, useState } from "react"
 import { Loader2, Mail, Send, ShieldAlert, X } from "lucide-react"

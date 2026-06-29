@@ -1,17 +1,16 @@
 /**
  * amyScheduler.js
  *
- * Optional background runner for Amy, the synthetic crawler-training agent.
- * Disabled by default (like every sibling agent). When enabled it runs ONCE
+ * Background runner for Amy, the synthetic crawler-training agent.
+ * ON by default (owner directive 2026-06-29); opt out with AMY_ENABLED=false.
+ * When enabled it runs ONCE
  * per day and generates a target number of synthetic profiles — default 100 —
  * across all categories, runs them through Crawler-OS discovery, writes an
  * Anya handoff report, and cleans up the synthetic profiles.
  *
  * Env:
- *   AMY_ENABLED                 master switch. Default: ON in production
- *                               (NODE_ENV=production), OFF in dev/test so local
- *                               runs and CI don't fire it. Set AMY_ENABLED=false
- *                               to force it off even in prod.
+ *   AMY_ENABLED                 master switch (default true — owner directive).
+ *                               Set AMY_ENABLED=false to turn the agent off.
  *   AMY_RUN_ON_SCHEDULE         daily run (default true when enabled)
  *   AMY_RUN_ON_STARTUP          one run shortly after boot (default true, so an
  *                               enabled deploy actually runs without waiting 24h)
@@ -32,17 +31,11 @@
  * pollutes the live catalog.
  */
 
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { runAmyTraining } from './amyAgent.js'
-import { runWithSchedulerLock } from '../schedulerLock.js'
+import { launchAmyRun } from './amyRunner.js'
+import { readLatestAmyReport } from './amyReportStore.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.resolve(__dirname, '../../../')
 const DAY_MS = 24 * 60 * 60 * 1000
 
-let _running = false
 let _interval = null
 let _stopped = false
 
@@ -52,11 +45,11 @@ function bool(v, dflt = false) {
 }
 
 export function getAmyConfig() {
-  // Login-independent background agent. ON by default in production so it runs
-  // autonomously on Railway without extra env config; OFF in dev/test (so local
-  // boots and CI don't trigger it) unless AMY_ENABLED is explicitly set.
-  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
-  const enabled = bool(process.env.AMY_ENABLED, isProd)
+  // ON by default (owner directive 2026-06-29). Amy is a login-independent
+  // background agent: the scheduler starts at server boot (not on any user
+  // login) and runs daily. Discovery stays dry-run (AMY_PERSIST=false) and all
+  // tuning is proven + reversible. Disable explicitly with AMY_ENABLED=false.
+  const enabled = bool(process.env.AMY_ENABLED, true)
   return {
     enabled,
     runOnSchedule: bool(process.env.AMY_RUN_ON_SCHEDULE, true),
@@ -75,60 +68,57 @@ export function getAmyConfig() {
   }
 }
 
-async function makeArtifactWriter() {
-  const dir = path.join(REPO_ROOT, 'audit-reports')
-  await fs.mkdir(dir, { recursive: true })
-  return async (relName, jsonStr) => {
-    const full = path.join(dir, relName)
-    await fs.writeFile(full, jsonStr, 'utf8')
-    return path.relative(REPO_ROOT, full)
-  }
+/**
+ * Kick off the full daily run (target profiles → crawl → Anya analysis → Sam
+ * edits) in the BACKGROUND via the shared single-flight launcher. The launcher
+ * owns the in-memory + DB lock so this never double-runs with a manual run.
+ */
+function kickOff({ db, logger, source = 'scheduler' }) {
+  if (_stopped) return
+  const cfg = getAmyConfig()
+  launchAmyRun({
+    db,
+    logger,
+    source,
+    opts: {
+      targetCount: cfg.dailyTarget,
+      dryRunDiscovery: !cfg.persist,
+      keepProfiles: cfg.keepProfiles,
+      floor: cfg.floor,
+      improve: cfg.improve,
+      applyTuning: cfg.applyTuning,
+      applyWeights: cfg.applyWeights,
+      applyCoverage: cfg.applyCoverage,
+      anyaApply: cfg.anyaApply,
+      samApply: cfg.samApply,
+    },
+  })
 }
 
-async function kickOff({ db, logger }) {
-  if (_stopped || _running) return
-  _running = true
+/**
+ * Startup catch-up: setInterval never fires at t=0 and resets on every redeploy,
+ * so on a service that redeploys more than daily, Amy could run NEVER. Shortly
+ * after boot, if there is no successful report within the daily window, run once.
+ * Gated on "overdue" so a burst of redeploys does not trigger redundant runs.
+ */
+async function runStartupCatchUpIfOverdue({ db, logger, intervalMs }) {
+  if (_stopped) return
   try {
-    await runWithSchedulerLock(db, { lockName: 'amy:training', ttlMs: 2 * 60 * 60 * 1000, logger }, async () => {
-      const cfg = getAmyConfig()
-      let writeArtifact = null
-      try {
-        writeArtifact = await makeArtifactWriter()
-      } catch {
-        writeArtifact = null
-      }
-      const out = await runAmyTraining({
-        db,
-        targetCount: cfg.dailyTarget,
-        dryRunDiscovery: !cfg.persist,
-        keepProfiles: cfg.keepProfiles,
-        floor: cfg.floor,
-        improve: cfg.improve,
-        applyTuning: cfg.applyTuning,
-        applyWeights: cfg.applyWeights,
-        applyCoverage: cfg.applyCoverage,
-        anyaApply: cfg.anyaApply,
-        samApply: cfg.samApply,
-        writeArtifact,
-        logger,
+    const latest = await readLatestAmyReport(db).catch(() => null)
+    const last = latest?.completed_at ? Date.parse(latest.completed_at) : NaN
+    const graceMs = 60 * 60 * 1000 // 1h grace so we don't pre-empt a fresh run
+    const overdue = !Number.isFinite(last) || (Date.now() - last) >= (intervalMs - graceMs)
+    if (overdue) {
+      logger?.info?.('amy.scheduler.startup_catchup', {
+        reason: Number.isFinite(last) ? 'overdue' : 'no_prior_run',
+        last_run_at: latest?.completed_at || null,
       })
-      if (logger?.info) {
-        logger.info('amy.scheduler.run', {
-          run_id: out.run_id,
-          target: cfg.dailyTarget,
-          ...out.summary,
-          tuned: out.combined?.tuning?.applied?.applied ? `${out.combined.tuning.from}->${out.combined.tuning.to}` : 'none',
-          approvals: out.combined?.approval_queue?.length ?? 0,
-          cleaned: out.cleanup?.deleted ?? 0,
-          handoff: out.artifacts?.handoffPath || null,
-        })
-      }
-      return out
-    })
+      kickOff({ db, logger, source: 'startup' })
+    } else {
+      logger?.info?.('amy.scheduler.startup_skip', { last_run_at: latest?.completed_at || null })
+    }
   } catch (err) {
-    if (logger?.error) logger.error('amy.scheduler.error', { message: String(err?.message || err) })
-  } finally {
-    _running = false
+    logger?.error?.('amy.scheduler.startup_catchup_error', { message: String(err?.message || err) })
   }
 }
 
@@ -144,12 +134,19 @@ export function startAmyScheduler({ db, logger = console } = {}) {
   }
 
   if (cfg.runOnStartup) {
-    const initial = setTimeout(() => kickOff({ db, logger }), 60 * 1000)
+    // Explicit "always run on boot" opt-in.
+    const initial = setTimeout(() => kickOff({ db, logger, source: 'startup' }), 60 * 1000)
     if (typeof initial.unref === 'function') initial.unref()
+  } else if (cfg.runOnSchedule) {
+    // Default path: only run on boot if the daily run is actually overdue, so a
+    // freshly-deployed (or frequently-redeployed) service still gets its daily
+    // run without anyone logged in — but redeploy bursts don't pile up runs.
+    const catchUp = setTimeout(() => runStartupCatchUpIfOverdue({ db, logger, intervalMs: cfg.intervalMs }), 90 * 1000)
+    if (typeof catchUp.unref === 'function') catchUp.unref()
   }
   if (cfg.runOnSchedule) {
     if (_interval) clearInterval(_interval)
-    _interval = setInterval(() => kickOff({ db, logger }), cfg.intervalMs)
+    _interval = setInterval(() => kickOff({ db, logger, source: 'scheduler' }), cfg.intervalMs)
     if (typeof _interval.unref === 'function') _interval.unref()
   }
   return { started: true, daily_target: cfg.dailyTarget, interval_ms: cfg.intervalMs, persist: cfg.persist }

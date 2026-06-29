@@ -1,6 +1,6 @@
 /**
  * Yana — safety helpers, env config, and pre-flight predicates
- * (legacy filename `larrySafety.js`).
+ * (legacy filename `yanaOutreachSafety.js`).
  *
  * Everything the Yana lead pipeline does on the open web or against a recipient must pass
  * through one of these gates before more expensive verification, drafting, or
@@ -68,7 +68,7 @@ function readStringPref(canonicalName, legacyName, fallback) {
  * Env-var precedence per setting: `YANA_LEADS_*` (canonical) first, then
  * `LARRY_*` (legacy) as fallback. Both spellings keep working.
  */
-export function getLarryConfig() {
+export function getYanaOutreachConfig() {
   return {
     enabled: readBoolPref('YANA_LEADS_ENABLED', 'LARRY_ENABLED', false),
     runOnStartup: readBoolPref('YANA_LEADS_RUN_ON_STARTUP', 'LARRY_RUN_ON_STARTUP', false),
@@ -286,7 +286,7 @@ export function checkProspectIsDraftable(prospect) {
  * admin console can surface the exact reason a send was blocked.
  */
 export function checkSendIsAllowed({ attempt, prospect, relationship, suppressionHits = [], config = null } = {}) {
-  const cfg = config || getLarryConfig()
+  const cfg = config || getYanaOutreachConfig()
 
   if (!cfg.enabled) {
     return { reason: 'agent_disabled', detail: 'YANA_LEADS_ENABLED/LARRY_ENABLED=false' }

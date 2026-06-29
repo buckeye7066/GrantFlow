@@ -1,9 +1,9 @@
 /**
- * Yana — outreach drafter (legacy filename `larryOutreachDrafter.js`).
+ * Yana — outreach drafter (legacy filename `yanaOutreachDrafter.js`).
  *
  * Pure function that turns a lead packet into a draft email/letter. The
  * output is *only* a draft — sending always requires explicit per-attempt
- * admin approval downstream (see larryOutreachSender).
+ * admin approval downstream (see yanaOutreachSender).
  *
  * Drafts are intentionally short, specific, and respectful. We always
  * include:
@@ -14,7 +14,7 @@
  *   - a hard cap on length so drafts never look like a content farm
  */
 
-import { OUTREACH_CHANNEL, makeOutreachAttempt } from './larryTypes.js'
+import { OUTREACH_CHANNEL, makeOutreachAttempt } from './yanaOutreachTypes.js'
 
 const MAX_BODY_CHARS = 1800
 const MIN_BODY_CHARS = 240

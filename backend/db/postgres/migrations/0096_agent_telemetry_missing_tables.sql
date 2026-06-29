@@ -3,7 +3,7 @@
 --
 --   sam_findings     — Sam's audit findings (severity/status/file_path/...)
 --   yana_john_queue  — qualified leads Yana forwards to John
---   yana_larry_queue — leads Yana forwards to Larry
+--   yana_larry_queue — leads Yana forwards to outreach
 --
 -- Mirrored in backend/db/migrations/100_agent_telemetry_missing_tables.sql and
 -- backend/db/schema.sql, and applied at boot by ensureAgentSubsystemTables.

@@ -1,5 +1,5 @@
 /**
- * Yana — outreach sender (legacy filename `larryOutreachSender.js`).
+ * Yana — outreach sender (legacy filename `yanaOutreachSender.js`).
  *
  * The most safety-critical file in the Yana lead pipeline. Sending real outbound email to a
  * third party MUST be:
@@ -19,16 +19,16 @@
  * sends — admins should always be able to see why a send didn't go out.
  */
 
-import { OUTREACH_SEND_STATUS, SEND_BLOCK_REASONS } from './larryTypes.js'
-import { checkSendIsAllowed, getLarryConfig } from './larrySafety.js'
+import { OUTREACH_SEND_STATUS, SEND_BLOCK_REASONS } from './yanaOutreachTypes.js'
+import { checkSendIsAllowed, getYanaOutreachConfig } from './yanaOutreachSafety.js'
 import {
   countSendsInWindow,
   findSuppressionsForProspect,
   getRelationship,
   upsertRelationship,
   updateOutreachAttempt,
-} from './larryRunStore.js'
-import { recordContactedRelationship } from './larryRelationshipTracker.js'
+} from './yanaOutreachRunStore.js'
+import { recordContactedRelationship } from './yanaOutreachRelationshipTracker.js'
 
 /**
  * Run all gates in order; return the first blocking reason or null.
@@ -38,7 +38,7 @@ async function evaluateSendGates({ db, attempt, prospect, config, dryRun }) {
     return { reason: SEND_BLOCK_REASONS.DRY_RUN, detail: 'dryRun=true' }
   }
 
-  const cfg = config || getLarryConfig()
+  const cfg = config || getYanaOutreachConfig()
 
   if (cfg.requireApprovalToSend && !attempt.approved_by_user_id) {
     return { reason: SEND_BLOCK_REASONS.SEND_NOT_APPROVED, detail: 'admin approval required' }
@@ -94,7 +94,7 @@ export async function sendOutreachAttempt({
 } = {}) {
   if (!attempt?.id) return { sent: false, blocked: { reason: 'invalid_attempt' } }
 
-  const cfg = config || getLarryConfig()
+  const cfg = config || getYanaOutreachConfig()
   const blocked = await evaluateSendGates({ db, attempt, prospect, config: cfg, dryRun })
   if (blocked) {
     if (db) {

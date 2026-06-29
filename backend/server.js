@@ -2149,12 +2149,10 @@ app.use('/api/blocklist', lazyRouter('./routes/blocklist.js'));
 // Discover. Admin can review/reject ingestions.
 app.use('/api/email-grants', lazyRouter('./routes/emailGrants.js'));
 // Yana Lead Discovery & Outreach pipeline. The router lives at
-// backend/routes/larry.js for filename stability; both paths serve the
-// same handlers. /api/yana-leads is the canonical path the admin UI
-// uses; /api/larry is kept so older clients and bookmarks keep working.
-app.use('/api/yana-leads', lazyRouter('./routes/larry.js'));
+// backend/routes/yanaOutreach.js. /api/yana-leads is the canonical path
+// the admin UI uses.
+app.use('/api/yana-leads', lazyRouter('./routes/yanaOutreach.js'));
 app.use('/api/yana-contacts', lazyRouter('./routes/yanaLeads.js'));
-app.use('/api/larry', lazyRouter('./routes/larry.js'));
 // Robert — Funding Discovery Agent. Disabled by default; the scheduler
 // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
 app.use('/api/robert', lazyRouter('./routes/robert.js'));
@@ -2927,17 +2925,17 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })()
 
-    // Yana — Lead Discovery & Outreach Agent (formerly "Larry"; service files
-    // are still under backend/services/larry/ for filename stability). Off by
-    // default; the scheduler is a no-op unless LARRY_ENABLED=true (also
-    // accepted as YANA_LEADS_ENABLED) and at least one of
-    // LARRY_RUN_ON_STARTUP / LARRY_RUN_ON_SCHEDULE is true. The scheduler
-    // additionally refuses to start when the canonical Yana client-discovery
-    // adapter is enabled (YANA_ENABLED=true) so the two never double-run.
+    // Yana — Lead Discovery & Outreach Agent (service files under
+    // backend/services/yanaOutreach/). Off by default; the scheduler is a
+    // no-op unless YANA_LEADS_ENABLED=true (legacy alias LARRY_ENABLED) and
+    // at least one of YANA_LEADS_RUN_ON_STARTUP / YANA_LEADS_RUN_ON_SCHEDULE
+    // is true. The scheduler additionally refuses to start when the canonical
+    // Yana client-discovery adapter is enabled (YANA_ENABLED=true) so the
+    // two never double-run.
     ;(async () => {
       try {
-        const { startLarryScheduler } = await import('./services/larry/larryScheduler.js')
-        const result = startLarryScheduler({ db })
+        const { startYanaOutreachScheduler } = await import('./services/yanaOutreach/yanaOutreachScheduler.js')
+        const result = startYanaOutreachScheduler({ db })
         if (result?.started) console.log('[Server] Yana lead scheduler started')
         else console.log('[Server] Yana lead scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3161,68 +3159,57 @@ if (process.env.NODE_ENV !== 'test') {
   // Start Anya autonomous operations 5 seconds after server is ready.
   if (BACKGROUND_SERVICES_DISABLED) {
     console.log('[Anya] Startup operations disabled for smoke/test startup')
-  } else if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
-    setTimeout(() => {
-      if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
-        import('./services/anyaAutonomousScheduler.js')
-          .then(({ runOnStartup }) => {
-            console.log('[Anya] Starting autonomous operations on server startup...');
-            runWithSchedulerLock(db, {
-              lockName: 'anya:startup',
-              ttlMs: 2 * 60 * 60 * 1000,
-              logger: console,
-            }, () => runOnStartup(db)).catch(err => {
-              console.error('[Anya] Failed to complete autonomous operations:', err);
-            });
-          })
-          .catch((err) => {
-            console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
-          });
-      } else {
-        runWithSchedulerLock(db, {
-          lockName: 'anya:startup-operations',
-          ttlMs: 2 * 60 * 60 * 1000,
-          logger: console,
-        }, () => runStartupOperations(db)).catch(err => {
-          console.error('[Anya] Failed to complete crawler operations:', err);
-        });
-      }
-    }, 5000);
-
-    // Wire up the scheduled runner (e.g. daily at 3 AM).
-    // checkSchedule is a lightweight hour-check; call it every 30 minutes.
-    if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
-      const SCHEDULE_CHECK_MS = 30 * 60 * 1000
-      setInterval(() => {
-        import('./services/anyaAutonomousScheduler.js')
-          .then(({ checkSchedule }) => {
-            runWithSchedulerLock(db, {
-              lockName: 'anya:scheduled-check',
-              ttlMs: 45 * 60 * 1000,
-              logger: console,
-            }, () => checkSchedule(db)).catch(err => {
-              console.error('[Anya] Scheduled check failed:', err?.message || err);
-            });
-          })
-          .catch((err) => {
-            /* intentionally non-fatal: scheduler import failure must not crash the interval */
-            serverLogger.debug('anya.scheduler_import_failed', { error: err?.message || String(err) })
-          });
-      }, SCHEDULE_CHECK_MS);
-      console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
-    }
   } else {
-    // Even without autonomous operations, run basic startup crawlers
-    setTimeout(() => {
-      runWithSchedulerLock(db, {
-        lockName: 'anya:startup-operations',
-        ttlMs: 2 * 60 * 60 * 1000,
-        logger: console,
-      }, () => runStartupOperations(db)).catch(err => {
-        console.error('[Anya] Failed to complete crawler operations:', err);
-      });
-    }, 5000);
-    console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
+    // Resolve + apply the autonomous master toggle: the persisted Control-Center
+    // setting (agent_settings 'anya.autonomous_enabled') wins; otherwise the env
+    // default — ON by default (owner directive 2026-06-29). Seeding the in-memory
+    // config means a later toggle flip takes effect on the next 30-min tick
+    // without a restart.
+    ;(async () => {
+      try {
+        const [{ getAgentSetting }, sched] = await Promise.all([
+          import('./services/agentControl/agentControlStore.js'),
+          import('./services/anyaAutonomousScheduler.js'),
+        ])
+        const persisted = await getAgentSetting(db, 'anya.autonomous_enabled')
+        if (persisted !== null) sched.setAutonomousEnabled(persisted === 'true')
+        const enabled = sched.isAutonomousEnabled()
+        console.log(`[Anya] Autonomous scheduler ${enabled ? 'ENABLED' : 'disabled'} (${persisted !== null ? 'persisted toggle' : 'default'})`)
+
+        // Startup run (5s after ready). Autonomous startup only when enabled AND
+        // run-on-startup is configured; otherwise run basic startup crawlers.
+        setTimeout(() => {
+          if (enabled && sched.getAutonomousConfig().runOnStartup) {
+            console.log('[Anya] Starting autonomous operations on server startup...')
+            runWithSchedulerLock(db, { lockName: 'anya:startup', ttlMs: 2 * 60 * 60 * 1000, logger: console },
+              () => sched.runOnStartup(db)).catch(err => console.error('[Anya] Failed to complete autonomous operations:', err))
+          } else {
+            runWithSchedulerLock(db, { lockName: 'anya:startup-operations', ttlMs: 2 * 60 * 60 * 1000, logger: console },
+              () => runStartupOperations(db)).catch(err => console.error('[Anya] Failed to complete crawler operations:', err))
+          }
+        }, 5000)
+
+        // Scheduled runner: ALWAYS wired (unless background services are off) so
+        // the Control-Center toggle can enable autonomy without a restart.
+        // checkSchedule() + runAllAutonomousOperations() re-check runOnSchedule and
+        // the toggle-able enabled flag on every tick — a no-op when disabled.
+        const SCHEDULE_CHECK_MS = 30 * 60 * 1000
+        setInterval(() => {
+          import('./services/anyaAutonomousScheduler.js')
+            .then(({ checkSchedule }) => {
+              runWithSchedulerLock(db, { lockName: 'anya:scheduled-check', ttlMs: 45 * 60 * 1000, logger: console },
+                () => checkSchedule(db)).catch(err => console.error('[Anya] Scheduled check failed:', err?.message || err))
+            })
+            .catch((err) => {
+              /* intentionally non-fatal: scheduler import failure must not crash the interval */
+              serverLogger.debug('anya.scheduler_import_failed', { error: err?.message || String(err) })
+            })
+        }, SCHEDULE_CHECK_MS)
+        console.log('[Anya] Scheduled runner wired (every 30 min; respects the autonomous toggle)')
+      } catch (err) {
+        console.error('[Anya] autonomous boot seed failed:', err?.message || err)
+      }
+    })()
   }
 
   // Daily profile-aware auto-discovery is now driven by the Crawler OS through
