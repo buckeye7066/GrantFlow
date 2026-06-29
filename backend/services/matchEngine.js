@@ -305,26 +305,39 @@ export function calculateConfidence(opportunity, oppNorm = null) {
 // Eligibility evaluation
 // ---------------------------------------------------------------------------
 
-// A title that names a specific COUNTY or local SCHOOL DISTRICT / education
-// foundation. These are intensely local awards (one district / one county). We
-// match the structural shape only — "<Name> County Schools", "<Name> County
-// Public Schools", "<Name> School District", "<Name> Unified", "<Name>
-// Education Foundation", "<Name> County" — so it works regardless of which US
-// county it is, without needing a county→state lookup table.
+// A title that names an intensely-local single-district / single-county AWARD
+// (one district / one county), matched by structural SHAPE so it works for any
+// US county without a county→state table:
+//   "<Name> County Schools", "<Name> (Unified) School District",
+//   "<Name> Education Foundation".
+// These three are unambiguously single-district award bodies.
 const LOCAL_DISTRICT_TITLE_RX = new RegExp(
   [
     /\b[a-z][a-z.'-]+\s+county\s+(?:public\s+)?schools?\b/i.source,
     /\b[a-z][a-z.'-]+\s+(?:unified\s+)?school\s+district\b/i.source,
     /\b[a-z][a-z.'-]+\s+education\s+foundation\b/i.source,
-    /\b[a-z][a-z.'-]+\s+county\b/i.source,
   ].join('|'),
   'i',
 )
 
+// A bare "<Name> County" is NOT enough on its own — it over-matched any national
+// program merely mentioning a county AND county SERVICE agencies (e.g. "Bradley
+// County Community Action Agency" is a safety-net resource, not a restricted
+// award). So a county NAME only counts as a local award when the title also
+// names an AWARD (scholarship/grant/fund/award) AND is not a county service body.
+const COUNTY_NAME_RX = /\b[a-z][a-z.'-]+\s+county\b/i
+const LOCAL_AWARD_NOUN_RX = /\b(scholarships?|grants?|awards?|fund)\b/i
+const COUNTY_SERVICE_AGENCY_RX =
+  /\b(community action|action agency|health department|department of|human services|social services|sheriff|clerk|trustee|commission|county government|library|food bank|housing authority)\b/i
+
 function titleNamesLocalDistrict(title) {
   const t = String(title || '').trim()
   if (!t) return false
-  return LOCAL_DISTRICT_TITLE_RX.test(t)
+  if (LOCAL_DISTRICT_TITLE_RX.test(t)) return true
+  // County-NAMED award (e.g. "Polk County Scholarship Fund") — but never a
+  // county SERVICE agency, which is a broad safety-net resource, not a
+  // single-county restricted award.
+  return COUNTY_NAME_RX.test(t) && LOCAL_AWARD_NOUN_RX.test(t) && !COUNTY_SERVICE_AGENCY_RX.test(t)
 }
 
 /**
@@ -760,18 +773,22 @@ const _STATE_NAME_ENTRIES = Object.entries(STATE_MAPPING).sort((a, b) => b[0].le
 // Named regex constants for cross-category mismatch detection
 // ---------------------------------------------------------------------------
 
-const RE_UNIVERSITY_PROGRAM = /\b(university\s*[—–-]|college\s*[—–-]|university\s+financial aid|college\s+financial aid|university\s+housing|college\s+housing|institutional scholarship|financial aid.*university|financial aid.*college|off.campus\s+(housing|resources?)|enrolled\s+students?|community college.{0,30}(aid|grant|scholarship))\b/i
+// NOTE: `financial aid.{0,40}university|college` is BOUNDED (was an unbounded
+// `.*` that could match "financial aid" and "university" hundreds of chars apart
+// in a long description, mis-firing the -25 non-student penalty). Bound matches
+// the sibling `community college.{0,30}` convention.
+const RE_UNIVERSITY_PROGRAM = /\b(university\s*[—–-]|college\s*[—–-]|university\s+financial aid|college\s+financial aid|university\s+housing|college\s+housing|institutional scholarship|financial aid.{0,40}university|financial aid.{0,40}college|off.campus\s+(housing|resources?)|enrolled\s+students?|community college.{0,30}(aid|grant|scholarship))\b/i
 const RE_FEMA_DISASTER = /\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|ihp\b|individuals and households program)\b/i
 const RE_FEMA_DISASTER_STRICT = /\b(fema individual assistance|fema disaster (relief|assistance)|disaster relief grant|ihp\b|individuals and households program)\b/i
 const RE_VETERAN_SPECIFIC = /\b(ssvf|supportive services for veteran|boots to business|veteran entrepreneurship|veteran families)\b/i
 const RE_BUSINESS_SBA = /\b(sba\b|small business (administration|development|innovation)|sbir|sttr|entrepreneur(ship)?\s+(training|center|program))\b/i
 const RE_NONPROFIT_ONLY = /\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits)\b/i
-const RE_INSTITUTIONAL_ONLY = /\b(research institution|institutional grant|universities only|colleges only)\b/i
-const RE_VETERAN_ONLY = /\bveterans?\s+only\b|\bfor\s+veterans?\s+only\b/i
-const RE_STUDENT_ONLY = /\bstudents?\s+only\b|\bfor\s+students?\s+only\b|\bfor\s+enrolled\s+students?\b|\benrolled\s+students?\s+(?:at|in|of)\b|\bfor\s+(?:tn\s+|state\s+)?students?\s+(?:with|pursuing|enrolled|attending)\b|\b(?:female|women(?:'s)?)\s+students?\b/i
+// NOTE: the hard-restriction regexes that makeDecision used to own
+// (RE_VETERAN_ONLY / RE_STUDENT_ONLY / RE_WOMEN_ONLY / RE_NONPROFIT_REQUIRED /
+// RE_INSTITUTIONAL_ONLY / RE_BUSINESS_EXCLUSIVE / the loan + pro-bono inline
+// regexes) were removed when makeDecision moved to normalizeOpportunity()'s
+// structured flags as the single source of restriction detection.
 const RE_STUDENT_AID_SIGNAL = /\b(scholarship|scholarships|tuition|fafsa|pell|fseog|work[- ]study|cost of attendance|cost_of_attendance|room and board|student aid|student_aid|hope scholarship|collegepays|undergraduate|community college)\b/i
-const RE_WOMEN_ONLY = /\b(women\s+only|female\s+students?|women(?:'s)?\s+engineers?|for\s+women\b|women\s+in\s+(?:stem|engineering))\b/i
-const RE_NONPROFIT_REQUIRED = /\b(for nonprofits only|nonprofits only|501\(c\)\(3\) required|exclusively\s+(?:for|to)\s+501\(c\)\(3\)|501\(c\)\(3\) organizations)\b/i
 const RE_DISASTER_SIGNAL = /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i
 
 // ---------------------------------------------------------------------------
@@ -2734,13 +2751,21 @@ export async function loadPreferenceSignals(db, profileId) {
  * @param {Object} opportunity - Raw opportunity object
  * @returns {{ decision: string, explanation: string, reasons: string[] }}
  */
-export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null) {
+export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null) {
   const reasons = []
   const opp = opportunity || {}
   const prof = profile || {}
 
+  // SINGLE SOURCE OF TRUTH for restriction detection: normalizeOpportunity()'s
+  // structured flags. makeDecision used to re-derive loan/veteran/student/women/
+  // nonprofit/business/institutional restrictions with its OWN parallel regexes,
+  // which had drifted from the normalizer (e.g. `\bloan\b` wrongly rejected
+  // "loan forgiveness" and missed "microloan"; disease/disaster only checked raw
+  // booleans). computeMatchDecision passes the already-normalized opp; direct
+  // callers get a one-time fallback normalize.
+  const on = oppNorm || normalizeOpportunity(opp)
+
   const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase()
-  const opportunityType = String(opp.opportunity_type || opp.type || '').toLowerCase()
 
   // Prefer normalized profile flags (section-derived) over raw field checks.
   // This ensures veteran status from military_service section, student status
@@ -2760,15 +2785,13 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   const isResearcher = profileType === 'researcher'
   const profNeeds = np?.needCategories ?? safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
 
-  // Hard REJECT conditions — explicit boolean flags take priority over regex
-  const mixedLoanGrantProgram =
-    /\bloan\s+(?:and|&)\s+grant\b/i.test(oppText) ||
-    /\bgrants?\s+(?:and|&)\s+loans?\b/i.test(oppText)
-  if (
-    ['loan', 'loan_program', 'microloan'].includes(opportunityType) ||
-    opp.is_loan ||
-    (!mixedLoanGrantProgram && /\bloan\b/.test(oppText))
-  ) {
+  // ── Categorical restriction gates — all driven by `on` (normalizeOpportunity
+  //    flags), the single source of truth. Order and reason strings preserved.
+
+  // Loan: `on.isLoan` already exempts loan forgiveness / repayment / PSLF and
+  // mixed loan+grant programs, and catches "microloan" — both of which the old
+  // inline `\bloan\b` regex got wrong.
+  if (on.isLoan) {
     reasons.push('Loan program — not a grant')
     return { decision: 'REJECT', explanation: 'Opportunity is a loan program, not a grant.', reasons }
   }
@@ -2778,12 +2801,12 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity requires matching funds which profile cannot provide.', reasons }
   }
 
-  if ((opp.requires_veteran || RE_VETERAN_ONLY.test(oppText)) && !isVeteran) {
+  if (on.requiresVeteran && !isVeteran) {
     reasons.push('Veteran-only program; profile is not a veteran')
     return { decision: 'REJECT', explanation: 'Opportunity requires veteran status.', reasons }
   }
 
-  if ((opp.requires_student || RE_STUDENT_ONLY.test(oppText)) && !isStudentProfile) {
+  if (on.requiresStudent && !isStudentProfile) {
     // Recall guard (mirror evaluateEligibility): hard-REJECT only when the
     // profile affirmatively contradicts student status; otherwise downgrade to
     // REVIEW so a near-student isn't silently denied legitimately relevant aid.
@@ -2799,13 +2822,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
-  if ((opp.requires_women || RE_WOMEN_ONLY.test(oppText)) && profileGenderIsFemale(np) === false) {
+  // Gender exclusivity (mirrors evaluateEligibility): reject only on a KNOWN
+  // mismatch; unknown gender is neutral. `requiresGender` adds the symmetric
+  // men-only case the old women-only-regex path lacked.
+  if ((on.requiresWomen || on.requiresGender === 'female') && profileGenderIsFemale(np) === false) {
     reasons.push('Women-only program; profile is not female')
     return { decision: 'REJECT', explanation: 'Opportunity is for women/female applicants only.', reasons }
   }
+  if (on.requiresGender === 'male' && profileGenderIsFemale(np) === true) {
+    reasons.push('Men-only program; profile is not male')
+    return { decision: 'REJECT', explanation: 'Opportunity is for men/male applicants only.', reasons }
+  }
 
   const profileTypeIsMissingOrGeneric = !profileType || profileType === 'organization'
-  if ((opp.requires_nonprofit || RE_NONPROFIT_REQUIRED.test(oppText)) && !isNonprofit) {
+  if (on.requiresNonprofit && !isNonprofit) {
     if (profileTypeIsMissingOrGeneric) {
       reasons.push('Nonprofit-only program; nonprofit status unconfirmed - review (missing: nonprofit_status)')
       return {
@@ -2818,8 +2848,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity is for nonprofits only.', reasons }
   }
 
-  const RE_BUSINESS_EXCLUSIVE = /\b(exclusively\s+for\s+(?:small\s+)?business|(?:small\s+)?business\s+owners?\s+only|for\s+(?:small\s+)?business\s+owners?\s+and\s+entrepreneurs)\b/i
-  if ((opp.requires_business || RE_BUSINESS_EXCLUSIVE.test(oppText)) && !isBusiness) {
+  if (on.requiresBusiness && !isBusiness) {
     if (profileTypeIsMissingOrGeneric) {
       reasons.push('Business-only program; business status unconfirmed - review (missing: business_or_self_employment)')
       return {
@@ -2832,27 +2861,30 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity requires business ownership.', reasons }
   }
 
-  if ((opp.is_institutional_only || opp.is_research_only || RE_INSTITUTIONAL_ONLY.test(oppText)) && !isNonprofit && !isBusiness && !isResearcher) {
+  // Mirror evaluateEligibility's "ordinary individual" definition exactly:
+  // a generic `organization` profile (like a real research org) is NOT an
+  // ordinary individual and must not be blanket-rejected from research grants.
+  // (The old regex detection was too weak to ever flag open research opps, which
+  // hid this divergence; the structured flag surfaces it.)
+  if ((on.isInstitutionalOnly || on.isResearchOnly) &&
+      !isNonprofit && !isBusiness && !isResearcher && profileType !== 'organization') {
     reasons.push('Research/institutional-only program; profile lacks org/research credentials')
     return { decision: 'REJECT', explanation: 'Opportunity is for research institutions only; profile has no organization credentials.', reasons }
   }
 
-  if (opp.disease_specific && !profNeeds.includes('disability') && !profNeeds.includes('health_medical')) {
+  if (on.diseaseSpecific && !profNeeds.includes('disability') && !profNeeds.includes('health_medical')) {
     reasons.push('Disease-specific program; profile has no matching condition')
     return { decision: 'REJECT', explanation: 'Opportunity is disease-specific; profile has no matching condition.', reasons }
   }
 
-  if (opp.requires_disaster_context && !profNeeds.includes('emergency') && !prof.disaster_affected) {
+  if (on.requiresDisasterContext && !profNeeds.includes('emergency') && !prof.disaster_affected) {
     reasons.push('Disaster-only program; profile is not disaster-affected or in emergency need')
     return { decision: 'REJECT', explanation: 'Opportunity requires disaster context.', reasons }
   }
 
   // Pro bono / in-kind / referral-only: REJECT for nonprofits/businesses (not direct funding)
-  const isProBono = /\bpro\s*bono\b/i.test(oppText)
-  const isInKind = /\bin[- ]kind\b/i.test(oppText)
-  const isReferralOnly = /\breferral\s+only\b/i.test(oppText) || /\bagency\s+referral\s+required\b/i.test(oppText)
-  if (isProBono || isInKind || isReferralOnly) {
-    const label = isProBono ? 'pro bono' : isInKind ? 'in-kind' : 'referral-only'
+  if (on.isProBono || on.isInKind || on.isReferralOnly) {
+    const label = on.isProBono ? 'pro bono' : on.isInKind ? 'in-kind' : 'referral-only'
     if (isIndividualOrCaregiver) {
       reasons.push(`${label} opportunity — still relevant assistance for individuals/caregivers`)
       return { decision: 'REVIEW', explanation: `${label} opportunity may be useful assistance for ${profileType} profile.`, reasons }
@@ -3147,7 +3179,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   }
 
   // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals)
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm)
 
   // Post-decision guards
   const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)
