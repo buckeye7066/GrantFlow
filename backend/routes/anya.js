@@ -15,7 +15,7 @@ import {
   updateTask,
   listProfileTasks,
 } from '../services/anyaOrchestrator.js'
-import { createAnyaRun, appendAnyaRunLog, completeAnyaRun } from '../services/anyaRuns.js'
+import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun } from '../services/anyaRuns.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:anya')
@@ -23,6 +23,29 @@ const routeLogger = createLogger('route:anya')
 const router = express.Router()
 
 const resolveAdminToken = () => process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+
+// Hard ceiling on how long Anya may take to produce a reply for the interactive
+// chat. The frontend API client (src/api/client.js) aborts any request at 60s and
+// the Railway/Vercel gateway can cut it even sooner — an unbounded reply (OpenAI
+// 30s × retries + tool-call loops + Anthropic fallback) blew past that, surfacing
+// as a 504 and a "dead" Anya button. Bounding the work *under* the client window
+// guarantees the endpoint always returns: a real answer if the model is quick, or
+// the graceful degraded fallback below if it is not. Tunable via env.
+const ASSISTANT_REPLY_TIMEOUT_MS = Number(process.env.ANYA_REPLY_TIMEOUT_MS || 45_000)
+
+function withReplyTimeout(promise, ms) {
+  let timeoutId = null
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const err = new Error(`Assistant reply timed out after ${ms}ms`)
+      err.code = 'ASSISTANT_TIMEOUT'
+      reject(err)
+    }, ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId)
+  })
+}
 
 // Cache for the ?test=true status check result (5-minute TTL)
 let _statusTestCache = null
@@ -267,11 +290,59 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   }
 })
 
+// Generate Anya's reply, persist it as an assistant message, and close out the
+// run. Shared by the synchronous and background message paths so both behave
+// identically (same timeout, same degraded fallback, same run bookkeeping).
+async function generateAndStoreReply(db, ctx, sessionId, runId, { content, currentPage, pageContext }, timeoutMs) {
+  let assistantText
+  let degraded = false
+  try {
+    assistantText = await withReplyTimeout(
+      generateAssistantResponse(db, ctx, sessionId, { content, currentPage, pageContext }),
+      timeoutMs,
+    )
+  } catch (assistantError) {
+    const timedOut = assistantError?.code === 'ASSISTANT_TIMEOUT'
+    console.error('[anya] Unable to generate assistant reply:', assistantError)
+    await appendAnyaRunLog(db, runId, 'error', timedOut ? 'assistant_timeout' : 'assistant_generation_failed', {
+      message: assistantError?.message || String(assistantError),
+    })
+    // This is a fallback, NOT a genuine answer. Flag it so the UI can render
+    // an error/retry affordance instead of presenting canned text as if Anya
+    // actually responded (silent-failure / trust violation otherwise).
+    degraded = true
+    assistantText = timedOut
+      ? "That took longer than I allow for a single reply, so I stopped before the page timed out. Ask me again — a shorter, more specific question usually comes back fast."
+      : "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
+  }
+
+  const assistantMessage = await addMessage(db, ctx, sessionId, {
+    role: 'assistant',
+    content: assistantText,
+  })
+
+  await completeAnyaRun(db, runId, {
+    status: 'completed',
+    // assistant_message_id lets the client's background poller pull the exact
+    // reply when the run finishes (panel may be closed by then).
+    response: { assistantText, degraded, assistant_message_id: assistantMessage.id },
+  })
+
+  return { assistantMessage, degraded }
+}
+
 router.post('/sessions/:sessionId/messages', async (req, res) => {
   let runId = null
+  let responded = false
   try {
     const content = req.body?.message ?? req.body?.content
     const mode = (req.body?.mode ?? 'copilot') || 'copilot'
+    // background=true: return immediately and let Anya finish the reply out of
+    // band. The interactive request never holds open long enough to hit the
+    // client's 60s abort or the Vercel/Railway gateway timeout, so the old
+    // "long reply → 504 → dead Anya" failure can't happen. The client polls the
+    // run status (GET .../runs/:runId) and pings the user when it's ready.
+    const background = req.body?.background === true || req.body?.background === 'true'
     const currentPage = (typeof req.body?.current_page === 'string' && req.body.current_page.trim())
       ? req.body.current_page.trim()
       : null
@@ -287,11 +358,14 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
 
     runId = await createAnyaRun(req.db, {
       mode,
+      // Keep `kind` within the table's CHECK constraint
+      // ('assistant_message' | 'tool_invoke'); the background flag rides in the
+      // request payload for observability rather than as a new kind value.
       kind: 'assistant_message',
       sessionId: req.params.sessionId,
       userId: req.ctx?.userId ?? null,
       profileId: req.ctx?.activeProfileId ?? null,
-      request: { content },
+      request: { content, background },
     })
 
     const userMessage = await addMessage(req.db, req.ctx, req.params.sessionId, {
@@ -299,33 +373,48 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       content,
     })
 
-    let assistantText
-    let degraded = false
-    try {
-      assistantText = await generateAssistantResponse(req.db, req.ctx, req.params.sessionId, {
-        content,
-        currentPage,
-        pageContext,
+    if (background) {
+      // Acknowledge now; finish the reply afterwards.
+      res.status(202).json({
+        session_id: req.params.sessionId,
+        messages: [userMessage],
+        run_id: runId,
+        pending: true,
       })
-    } catch (assistantError) {
-      console.error('[anya] Unable to generate assistant reply:', assistantError)
-      await appendAnyaRunLog(req.db, runId, 'error', 'assistant_generation_failed', {
-        message: assistantError?.message || String(assistantError),
+      responded = true
+
+      // Generous ceiling — no client is blocking, so allow slow tool chains to
+      // finish, but still bound it so a wedged provider call can't run forever.
+      const bgTimeout = Number(process.env.ANYA_BG_REPLY_TIMEOUT_MS || 240_000)
+      // Fire-and-forget. req.db is the app's long-lived shared handle (see
+      // server.js), so it stays valid after the response is sent. Never let a
+      // rejection escape as an unhandledRejection — mark the run failed instead.
+      void generateAndStoreReply(
+        req.db,
+        req.ctx,
+        req.params.sessionId,
+        runId,
+        { content, currentPage, pageContext },
+        bgTimeout,
+      ).catch(async (bgError) => {
+        console.error('[anya] Background reply failed:', bgError)
+        try {
+          await completeAnyaRun(req.db, runId, { status: 'failed', error: bgError?.message || String(bgError) })
+        } catch {
+          // ignore — run bookkeeping is best-effort
+        }
       })
-      // This is a fallback, NOT a genuine answer. Flag it so the UI can render
-      // an error/retry affordance instead of presenting canned text as if Anya
-      // actually responded (silent-failure / trust violation otherwise).
-      degraded = true
-      assistantText =
-        "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
+      return
     }
 
-    const assistantMessage = await addMessage(req.db, req.ctx, req.params.sessionId, {
-      role: 'assistant',
-      content: assistantText,
-    })
-
-    await completeAnyaRun(req.db, runId, { status: 'completed', response: { assistantText, degraded } })
+    const { assistantMessage, degraded } = await generateAndStoreReply(
+      req.db,
+      req.ctx,
+      req.params.sessionId,
+      runId,
+      { content, currentPage, pageContext },
+      ASSISTANT_REPLY_TIMEOUT_MS,
+    )
 
     res.status(201).json({
       session_id: req.params.sessionId,
@@ -338,6 +427,25 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     } catch {
       // ignore
     }
+    // If we already sent the 202 ack, the failure was handled in the background
+    // .catch above; don't try to send a second response.
+    if (!responded) handleError(res, error)
+  }
+})
+
+// Poll a single run's status. The client uses this after a background send to
+// learn when Anya's reply is ready (and to pull it). Owner-scoped.
+router.get('/sessions/:sessionId/runs/:runId', async (req, res) => {
+  try {
+    const run = await getAnyaRun(req.db, req.params.runId, {
+      userId: req.ctx?.userId ?? null,
+      sessionId: req.params.sessionId,
+    })
+    if (!run) {
+      return res.status(404).json({ error: 'Run not found' })
+    }
+    res.json({ run })
+  } catch (error) {
     handleError(res, error)
   }
 })

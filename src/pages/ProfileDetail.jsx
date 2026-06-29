@@ -943,6 +943,17 @@ export default function ProfileDetail() {
     }
   }, [pendingScrollTarget, activeTab])
 
+  // Switch the workspace to a tab AND scroll the workspace into view. The
+  // Profile Flow cards live well above the Tabs, so a bare setActiveTab() looked
+  // dead — the content changed below the fold with no visible feedback. Scrolling
+  // to the workspace anchor (id="profile-workspace") gives the click an effect
+  // and lands the user on the section they asked for. The rAF-based scroll effect
+  // keyed on activeTab retries until the (possibly just-mounted) anchor exists.
+  const goToWorkspaceTab = React.useCallback((tab) => {
+    setActiveTab(tab)
+    setPendingScrollTarget("profile-workspace")
+  }, [])
+
   // Deep-link a "Hamilton needs you" item to where the owner fixes it. `where`
   // is a coarse tab hint from the profile-summary endpoint; portals + vault land
   // on the Pipeline tab and scroll to the Portals dashboard anchor.
@@ -1364,20 +1375,20 @@ export default function ProfileDetail() {
               handleOpenSection(nextEmptySection)
               return
             }
-            setActiveTab("profile")
+            goToWorkspaceTab("profile")
           }}
-          onOpenDocuments={() => setActiveTab("documents")}
-          onOpenActionPlan={() => setActiveTab("action-plan")}
+          onOpenDocuments={() => goToWorkspaceTab("documents")}
+          onOpenActionPlan={() => goToWorkspaceTab("action-plan")}
           onFindFunding={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
           onOpenPortals={() => {
             setActiveTab("pipeline")
             setPendingScrollTarget("portal-logins")
           }}
-          onOpenUniversities={() => setActiveTab("universities")}
-          onOpenHealth={() => setActiveTab("health")}
+          onOpenUniversities={() => goToWorkspaceTab("universities")}
+          onOpenHealth={() => goToWorkspaceTab("health")}
         />
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <Tabs id="profile-workspace" value={activeTab} onValueChange={setActiveTab} className="w-full scroll-mt-24">
           <ProfileWorkspaceNav
             activeTab={activeTab}
             isStudentProfile={isStudentProfile}
