@@ -43,6 +43,7 @@ import {
   runWhitelistedCommand,
 } from './samSafeFixes.js'
 import { escalateSamCritical } from './samEscalation.js'
+import { sendSamReportEmail } from './samEmailReport.js'
 import { gitProposeFixes } from './samGit.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -99,6 +100,11 @@ export async function runSam(args = {}) {
     httpProbe = null,
     runCommand = runWhitelistedCommand,
     persist = true,
+    // Explicit override for the heavy code/function sweep (source-tree walks,
+    // ESLint, mission audit). Defaults to gatekeeper-only, but the autonomous
+    // autofix scheduler runs repair-safe AND wants the heavy code scan, so it
+    // passes includeHeavy:true. null === "use the mode default".
+    includeHeavy = null,
   } = args
 
   const mode = isValidMode(requestedMode) ? String(requestedMode).toLowerCase() : DEFAULT_MODE
@@ -152,7 +158,7 @@ export async function runSam(args = {}) {
       checkIds,
       invokeTool,
       httpProbe,
-      includeHeavy: mode === SAM_MODES.GATEKEEPER,
+      includeHeavy: typeof includeHeavy === 'boolean' ? includeHeavy : mode === SAM_MODES.GATEKEEPER,
     })
     findings.push(...diag.findings)
     checkResults.push(...diag.results)
@@ -281,6 +287,15 @@ export async function runSam(args = {}) {
         console.warn('[sam] admin escalation skipped:', escErr?.message || escErr)
       }
 
+      // Owner request: email a per-run report (issues found + corrections made)
+      // whenever a sweep surfaces anything. Fires only on findings>0; clean runs
+      // send nothing. Best-effort — a mail failure never affects the run result.
+      try {
+        out.email_report = await sendSamReportEmail(out)
+      } catch (mailErr) {
+        console.warn('[sam] report email skipped:', mailErr?.message || mailErr)
+      }
+
       // Charter §6: if any safe fixes were applied AND policy allows, put them on
       // a dedicated branch (+ PR) — never on main. Default OFF (auto_commit_allowed
       // false), gated by assertCommitAllowed inside gitProposeFixes. Best-effort.
@@ -320,7 +335,7 @@ export async function runSam(args = {}) {
         qualityLog.error('[sam] failed to persist crash:', persistErr?.message || persistErr)
       }
     }
-    return {
+    const failedOut = {
       ok: false,
       run_id: runId,
       status: SAM_RUN_STATUS.FAILED,
@@ -333,6 +348,13 @@ export async function runSam(args = {}) {
       summary,
       error: maskSecrets(String(err?.message || err)),
     }
+    // A crashed sweep is itself an issue worth surfacing — email it too.
+    try {
+      await sendSamReportEmail(failedOut)
+    } catch (mailErr) {
+      console.warn('[sam] crash report email skipped:', mailErr?.message || mailErr)
+    }
+    return failedOut
   } finally {
     if (runError) console.warn('[sam] run completed with error:', runError?.message || runError)
   }
@@ -405,10 +427,14 @@ export async function getSamStatus({ db } = {}) {
   const allowSafeRepair = readEnvBool('SAM_ALLOW_SAFE_REPAIR', false)
   const runOnSchedule = readEnvBool('SAM_RUN_ON_SCHEDULE', false)
   const runOnStartup = readEnvBool('SAM_RUN_ON_STARTUP', false)
+  const scheduleAutofix = readEnvBool('SAM_SCHEDULE_AUTOFIX', false)
   const mode = (process.env.SAM_MODE || DEFAULT_MODE).toLowerCase()
   const schedule = process.env.SAM_SCHEDULE || '0 4 * * *'
   const maxFixes = parseMaxFixes()
   const failOnCritical = readEnvBool('SAM_FAIL_ON_CRITICAL', true)
+  // SAM_EMAIL_REPORTS defaults ON; only an explicit off-value disables it.
+  const emailReports = !/^(0|false|no|off)$/i.test(String(process.env.SAM_EMAIL_REPORTS ?? '').trim())
+  const reportEmail = (process.env.SAM_REPORT_EMAIL || process.env.ADMIN_OPS_EMAIL || 'dr.johnwhite@axiombiolabs.org').trim()
 
   const status = {
     agent: 'Sam',
@@ -418,7 +444,10 @@ export async function getSamStatus({ db } = {}) {
     allow_safe_repair: allowSafeRepair,
     run_on_startup: runOnStartup,
     run_on_schedule: runOnSchedule,
+    schedule_autofix: scheduleAutofix,
     schedule,
+    email_reports: emailReports,
+    report_email: reportEmail,
     max_fixes_per_run: maxFixes,
     fail_on_critical: failOnCritical,
     running: false,
