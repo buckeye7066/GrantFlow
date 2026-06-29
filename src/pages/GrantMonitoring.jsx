@@ -258,7 +258,7 @@ export default function GrantMonitoring() {
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm text-slate-500">Active Grants</div>
+                  <div className="text-sm text-slate-500">Open Grants</div>
                   <div className="text-3xl font-bold text-slate-900 mt-1">
                     {stats.totalActive}
                   </div>

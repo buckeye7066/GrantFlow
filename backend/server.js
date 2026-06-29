@@ -91,7 +91,7 @@ import { runWithSchedulerLock } from './services/schedulerLock.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
-import { ensureProfileEmailSchema } from './utils/accessControl.js';
+import { ensureProfileEmailSchema, buildGrantScopeFromContext } from './utils/accessControl.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
@@ -2606,11 +2606,16 @@ app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
 // Pipeline stats
 app.get('/api/pipeline/stats', async (req, res) => {
   try {
+    // Scope to what the requester can access (admins → all) so this card
+    // reconciles with the rest of the dashboard instead of leaking DB-wide
+    // totals (the old query was globally unscoped).
+    const scope = buildGrantScopeFromContext(req.ctx);
     const rows = await db.prepare(`
       SELECT status, COUNT(*) as count
       FROM grants
+      WHERE ${scope.sql}
       GROUP BY status
-    `).all();
+    `).all(...scope.params);
 
     // Bucket every grant into the canonical 11 pipeline stages via the single
     // source of truth (shared/pipelineStages.js). This fixes the previous
