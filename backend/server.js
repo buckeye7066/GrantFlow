@@ -2861,11 +2861,12 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[Server] Amy tuning hydrate skipped:', hydErr?.message || hydErr)
       }
     })();
-    // Amy — synthetic crawler-training agent scheduler. Disabled by default;
-    // enable with AMY_ENABLED=true. When on it runs once/day and generates
-    // AMY_DAILY_PROFILE_TARGET (default 100) synthetic profiles, runs them
-    // through Crawler-OS discovery (dry-run by default → no catalog pollution),
-    // writes an Anya handoff report, and cleans up the synthetic profiles.
+    // Amy — synthetic crawler-training agent scheduler. ON by default in prod.
+    // It runs ~daily, generates AMY_DAILY_PROFILE_TARGET (default 100) synthetic
+    // profiles, runs them through Crawler-OS discovery, and STORES the discovered
+    // opportunities in funding_opportunities (AMY_PERSIST=true) so agent Robert
+    // can parse them. The synthetic profiles + their scoped matches are cleaned
+    // up afterward; the real, deduped opportunities are retained for Robert.
     ;(async () => {
       try {
         const { startAmyScheduler } = await import('./services/amy/amyScheduler.js')

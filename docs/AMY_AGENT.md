@@ -118,7 +118,7 @@ defaults to **100 profiles**, distributed evenly across all categories.
 | `AMY_RUN_ON_SCHEDULE` | `true` | Run once per day (when enabled) |
 | `AMY_RUN_ON_STARTUP` | `false` | Also run ~1 min after boot |
 | `AMY_DAILY_PROFILE_TARGET` | `100` | Profiles generated per day |
-| `AMY_PERSIST` | `false` | `true` flushes discovery to the live catalog; default dry-run |
+| `AMY_PERSIST` | `true` | Store discovered opportunities in `funding_opportunities` so agent Robert can parse them (synthetic profiles + scoped matches are still cleaned up). Set `false` for measurement-only dry runs |
 | `AMY_KEEP_PROFILES` | `false` | Leave profiles for Sam instead of auto-clean |
 | `AMY_FLOOR` | `75` | Match-score floor for the crawler event (the slider) |
 | `AMY_IMPROVE` | `true` | Run the Anya→Sam chain + tuning measurement |

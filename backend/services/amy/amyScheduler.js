@@ -15,7 +15,12 @@
  *   AMY_RUN_ON_STARTUP          one run shortly after boot (default true, so an
  *                               enabled deploy actually runs without waiting 24h)
  *   AMY_DAILY_PROFILE_TARGET    profiles per day (default 100)
- *   AMY_PERSIST                 flush discovery to live catalog (default false → dry-run)
+ *   AMY_PERSIST                 store discovered opportunities in the live catalog
+ *                               (funding_opportunities) so agent Robert can parse
+ *                               them (default true). The synthetic profile + its
+ *                               scoped matches are still cleaned up; the real,
+ *                               reality-gated, deduped opportunities are retained.
+ *                               Set AMY_PERSIST=false for measurement-only dry runs.
  *   AMY_KEEP_PROFILES           leave profiles for Sam instead of auto-clean (default false)
  *   AMY_FLOOR                   match score floor for the crawler event (default 75 slider)
  *   AMY_IMPROVE                 run the Anya→Sam chain + tuning measurement (default true)
@@ -55,7 +60,9 @@ export function getAmyConfig() {
     runOnSchedule: bool(process.env.AMY_RUN_ON_SCHEDULE, true),
     runOnStartup: bool(process.env.AMY_RUN_ON_STARTUP, true),
     dailyTarget: Math.max(1, Math.min(5000, Number(process.env.AMY_DAILY_PROFILE_TARGET) || 100)),
-    persist: bool(process.env.AMY_PERSIST, false),
+    // Store discovered opportunities in funding_opportunities so Robert can parse
+    // them. Real, reality-gated, deduped funding sources — not synthetic noise.
+    persist: bool(process.env.AMY_PERSIST, true),
     keepProfiles: bool(process.env.AMY_KEEP_PROFILES, false),
     floor: process.env.AMY_FLOOR !== undefined ? Number(process.env.AMY_FLOOR) : undefined,
     improve: bool(process.env.AMY_IMPROVE, true),
