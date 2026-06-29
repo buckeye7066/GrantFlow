@@ -1782,6 +1782,7 @@ export default function ProfileDetail() {
         initialData={editingSection?.data ?? {}}
         focusField={editingSection?.focusField}
         profileId={profileId}
+        profileType={profile?.primary_type}
         onClose={handleCloseEditor}
         onSave={handleSaveSection}
         isSaving={Boolean(savingSectionKey)}

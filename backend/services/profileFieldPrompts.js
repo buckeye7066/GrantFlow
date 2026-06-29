@@ -23,30 +23,16 @@
  * gracefully rather than failing.
  */
 
-/**
- * Profile types that are organizations (and therefore benefit from
- * org/tax-status fields like EIN, 501(c)(3), org type).
- */
-const ORG_PROFILE_TYPES = new Set([
-  'nonprofit',
-  'small_business',
-  'business',
-  'organization',
-  'government',
-  'church',
-  'ministry',
-  'school',
-  'volunteer_fire_department',
-])
-
-/**
- * Profile types that are (or include) students — they benefit from
- * FAFSA / Pell / enrollment fields that unlock education funding.
- */
-const STUDENT_PROFILE_TYPES = new Set([
-  'student',
-  'individual', // an individual may be a student; surface it as a soft prompt
-])
+// Organization-vs-student classification is derived from the single source of
+// truth in shared/profileSectionApplicability.js, so a new profile type is
+// recognised here the moment it is added to the curated list — no second
+// hardcoded set to drift (the old ORG_PROFILE_TYPES/STUDENT_PROFILE_TYPES only
+// covered ~10 of the 54 types, so org types like county_government got no
+// org-status prompt).
+import {
+  isOrganizationProfileType,
+  isStudentProfileType,
+} from '../../shared/profileSectionApplicability.js'
 
 function normType(value) {
   return String(value || '')
@@ -142,9 +128,8 @@ export async function getProfileFieldPrompts(db, profileId) {
       profile.primary_profile_type ??
       basic.profile_category ??
       null
-    const type = normType(applicantType)
-    const isOrg = ORG_PROFILE_TYPES.has(type)
-    const isStudent = STUDENT_PROFILE_TYPES.has(type) || type === 'parent'
+    const isOrg = isOrganizationProfileType(applicantType)
+    const isStudent = isStudentProfileType(applicantType)
 
     const prompts = []
 
@@ -287,4 +272,4 @@ export async function getProfileFieldPrompts(db, profileId) {
   }
 }
 
-export const __testables = { normType, ORG_PROFILE_TYPES, STUDENT_PROFILE_TYPES }
+export const __testables = { normType, isOrganizationProfileType, isStudentProfileType }

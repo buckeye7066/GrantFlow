@@ -16,6 +16,8 @@ import {
   SMALL_BUSINESS_DETAILS_TYPES,
   STUDENT_TYPES,
   MEDICAL_PROFILE_TYPES,
+  ALL_PERSON_TYPES,
+  ALL_ORG_TYPES,
 } from '../../shared/profileSectionApplicability.js'
 
 export const PROFILE_SCHEMA = {
@@ -140,6 +142,7 @@ export const PROFILE_SCHEMA = {
   },
 
   government_assistance: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Government Assistance',
     description: 'Public benefits (eligibility flags for many assistance programs).',
     fields: {
@@ -178,6 +181,7 @@ export const PROFILE_SCHEMA = {
   },
 
   health_medical: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Health & Medical',
     description: 'Medical/health characteristics frequently used in assistance eligibility.',
     fields: {
@@ -334,6 +338,7 @@ export const PROFILE_SCHEMA = {
     },
   },
   demographics: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Demographics',
     description: 'Demographic identifiers that unlock targeted funds and scholarships.',
     fields: {
@@ -368,6 +373,7 @@ export const PROFILE_SCHEMA = {
   },
 
   family_life: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Family & Life Situation',
     description: 'Life events and family status that drive eligibility for many programs.',
     fields: {
@@ -394,6 +400,7 @@ export const PROFILE_SCHEMA = {
   },
 
   military_service: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Military Status',
     description: 'Military affiliation flags used by veteran-specific and military family programs.',
     fields: {
@@ -409,6 +416,7 @@ export const PROFILE_SCHEMA = {
   },
 
   occupation: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Occupation',
     description: 'Professional roles that unlock job-specific benefits and scholarships.',
     fields: {
@@ -482,6 +490,7 @@ export const PROFILE_SCHEMA = {
   },
 
   employment: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Employment',
     description: 'Employment status and experience used for workforce/training program eligibility.',
     fields: {
@@ -498,6 +507,7 @@ export const PROFILE_SCHEMA = {
   },
 
   housing: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Housing',
     description: 'Housing status and qualifiers relevant to assistance programs.',
     fields: {
@@ -515,6 +525,7 @@ export const PROFILE_SCHEMA = {
   },
 
   family: {
+    applies_to: ALL_PERSON_TYPES,
     title: 'Household Details',
     description: 'Household structure and support system (distinct from eligibility flags).',
     fields: {
@@ -526,6 +537,7 @@ export const PROFILE_SCHEMA = {
   },
 
   programs_services: {
+    applies_to: ALL_ORG_TYPES,
     title: 'Programs & Services',
     description: 'Program focus areas, services, and keywords used for opportunity matching.',
     fields: {

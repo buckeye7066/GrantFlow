@@ -10,6 +10,8 @@ import {
   SMALL_BUSINESS_DETAILS_TYPES,
   STUDENT_TYPES,
   MEDICAL_PROFILE_TYPES,
+  ALL_PERSON_TYPES,
+  ALL_ORG_TYPES,
 } from '../../shared/profileSectionApplicability.js'
 
 export const SECTION_METADATA = {
@@ -75,12 +77,14 @@ export const SECTION_METADATA = {
         "name": "academic_status",
         "label": "Academic status",
         "format": "json",
+        "applies_to": STUDENT_TYPES,
         "help": "Structured academic details extracted from profile intake."
       },
       {
         "name": "demographics",
         "label": "Demographics",
         "format": "json",
+        "applies_to": ALL_PERSON_TYPES,
         "help": "Structured demographic details extracted from profile intake."
       },
       {
@@ -614,6 +618,7 @@ export const SECTION_METADATA = {
     ]
   },
   "government_assistance": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Government Assistance",
     "description": "Track public benefits to strengthen eligibility profiling for specific funds.",
     "fields": [
@@ -770,6 +775,7 @@ export const SECTION_METADATA = {
     ]
   },
   "health_medical": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Health & Medical",
     "description": "Capture relevant health information to highlight eligibility for medical and disability-focused opportunities.",
     "fields": [
@@ -1113,6 +1119,7 @@ export const SECTION_METADATA = {
     ]
   },
   "demographics": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Demographics",
     "description": "Document demographic information that influences funding eligibility and reporting requirements.",
     "fields": [
@@ -1302,6 +1309,7 @@ export const SECTION_METADATA = {
     ]
   },
   "family_life": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Family & Life Situation",
     "description": "Capture household and life events that may trigger eligibility for supportive programs.",
     "fields": [
@@ -1410,6 +1418,7 @@ export const SECTION_METADATA = {
     ]
   },
   "military_service": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Military Status",
     "description": "Record any military service or affiliation to unlock veteran-focused resources.",
     "fields": [
@@ -1464,6 +1473,7 @@ export const SECTION_METADATA = {
     ]
   },
   "occupation": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Occupation",
     "description": "Track professional roles and designations relevant to workforce or training programs.",
     "fields": [
@@ -1766,6 +1776,7 @@ export const SECTION_METADATA = {
     ]
   },
   "employment": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Employment",
     "description": "Employment status and experience used for workforce training and career-change programs.",
     "fields": [
@@ -1805,6 +1816,7 @@ export const SECTION_METADATA = {
     ]
   },
   "housing": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Housing",
     "description": "Housing stability and geographic designations relevant to assistance programs.",
     "fields": [
@@ -1862,6 +1874,7 @@ export const SECTION_METADATA = {
     ]
   },
   "family": {
+    "applies_to": ALL_PERSON_TYPES,
     "title": "Household Details",
     "description": "Household structure and support system details (separate from eligibility flags).",
     "fields": [
@@ -1892,6 +1905,7 @@ export const SECTION_METADATA = {
     ]
   },
   "programs_services": {
+    "applies_to": ALL_ORG_TYPES,
     "title": "Programs & Services",
     "description": "Focus areas, services, and keywords used to match funding opportunities (high-signal for crawlers).",
     "fields": [
