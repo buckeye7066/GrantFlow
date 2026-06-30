@@ -1,14 +1,17 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
   Loader2, Printer, ClipboardList, Clock, FileText, DollarSign,
   Award, Folder, Phone, Target, AlertCircle, ChevronDown, ChevronUp, ArrowRight,
+  CheckSquare, Square, Upload, CheckCircle2,
 } from "lucide-react"
 import { apiFetch } from "@/api/client"
+import { ingestDocument } from "@/api/documents"
+import { useToast } from "@/components/ui/use-toast"
 import { buildProfileSectionLink } from "@/config/missingInfoTargets"
 
 const ICON_MAP = {
@@ -29,6 +32,15 @@ const PRIORITY_STYLES = {
   low: "bg-slate-100 text-slate-700 border-slate-200",
 }
 
+// Stable per-item key so a checked item STAYS checked across "Regenerate".
+// Must match the backend's expectation (it just stores whatever key we send).
+function slug(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ")
+}
+function itemKey(categoryName, item) {
+  return `${slug(categoryName)}::${slug(item?.title)}`
+}
+
 function escapeHtml(value) {
   if (value === null) return ""
   return String(value)
@@ -40,7 +52,7 @@ function escapeHtml(value) {
     .replace(/\//g, "&#x2F;")
 }
 
-function buildPrintHtml(todo, applicantName) {
+function buildPrintHtml(todo, applicantName, completions = {}) {
   const title = escapeHtml(`${applicantName} — Action Plan & Checklist`)
   const date = new Date().toLocaleDateString()
   const summary = escapeHtml(todo.summary || "")
@@ -49,10 +61,12 @@ function buildPrintHtml(todo, applicantName) {
     .map((cat) => {
       const items = (cat.items || [])
         .map(
-          (item, idx) => `
-          <div class="todo-item">
+          (item) => {
+            const done = Boolean(completions[itemKey(cat.name, item)]?.done)
+            return `
+          <div class="todo-item${done ? " done" : ""}">
             <div class="todo-header">
-              <span class="checkbox">&#9744;</span>
+              <span class="checkbox">${done ? "&#9745;" : "&#9744;"}</span>
               <span class="todo-title">${escapeHtml(item.title)}</span>
               <span class="priority priority-${item.priority || "medium"}">${escapeHtml(item.priority || "medium")}</span>
               ${item.deadline ? `<span class="deadline">Due: ${escapeHtml(item.deadline)}</span>` : ""}
@@ -63,6 +77,7 @@ function buildPrintHtml(todo, applicantName) {
               ${item.contact_or_location ? `<div class="detail"><strong>Contact / Where to go:</strong> ${escapeHtml(item.contact_or_location)}</div>` : ""}
             </div>
           </div>`
+          }
         )
         .join("")
       return `
@@ -85,6 +100,8 @@ function buildPrintHtml(todo, applicantName) {
     .category { margin-bottom: 28px; page-break-inside: avoid; }
     .category-title { font-size: 16px; font-weight: 700; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 12px; }
     .todo-item { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; margin-bottom: 10px; page-break-inside: avoid; }
+    .todo-item.done { background: #f0fdf4; border-color: #bbf7d0; }
+    .todo-item.done .todo-title { text-decoration: line-through; color: #64748b; }
     .todo-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
     .checkbox { font-size: 20px; color: #94a3b8; flex-shrink: 0; }
     .todo-title { font-weight: 600; font-size: 14px; flex: 1; }
@@ -116,8 +133,12 @@ function buildPrintHtml(todo, applicantName) {
 </html>`
 }
 
-function TodoItemCard({ item, profileId }) {
+function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUploaded, busy }) {
   const [expanded, setExpanded] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef(null)
+  const { toast } = useToast()
+
   const PriorityBadge = () => (
     <Badge variant="outline" className={`text-xs ${PRIORITY_STYLES[item.priority] || PRIORITY_STYLES.medium}`}>
       {item.priority || "medium"}
@@ -129,56 +150,100 @@ function TodoItemCard({ item, profileId }) {
 
   // Deep-link this todo into the matching ProfileDetail section when the AI
   // tagged it as a profile-field item (field_key preferred, else profile_section).
+  // This is the "add the information manually to the profile" path.
   const profileLink = buildProfileSectionLink(profileId, item.field_key || item.profile_section)
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = "" // allow re-selecting the same file later
+    if (!file) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append("profile_id", profileId)
+      fd.append("document", file)
+      fd.append("enable_ai", "true")
+      fd.append("ocr", "true")
+      fd.append("handwriting", "true")
+      fd.append("ocr_language", "eng")
+      const res = await ingestDocument(fd)
+      const docId = res?.document?.id ?? res?.id ?? null
+      await onUploaded(docId)
+      toast({ title: "Uploaded", description: `“${file.name}” attached to the profile and this task marked done.` })
+    } catch (err) {
+      toast({ variant: "destructive", title: "Upload failed", description: err?.message || "Could not attach the file." })
+    } finally {
+      setUploading(false)
+    }
+  }
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-expanded={expanded}
-      onClick={toggle}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() }
-      }}
-      className={`border rounded-lg p-3 cursor-pointer transition-colors hover:bg-slate-50 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 ${
-        expanded ? 'bg-slate-50 border-blue-200' : ''
-      }`}
+      className={`border rounded-lg p-3 transition-colors ${
+        done ? "bg-emerald-50 border-emerald-200" : "hover:bg-slate-50 hover:border-blue-300"
+      } ${expanded ? "ring-1 ring-blue-200" : ""}`}
     >
       <div className="flex items-start gap-2">
-        <div className="mt-0.5 text-slate-400 text-lg shrink-0">&#9744;</div>
-        <div className="flex-1 min-w-0">
+        {/* Checkbox — click to mark done (does NOT expand the card). */}
+        <button
+          type="button"
+          aria-pressed={done}
+          aria-label={done ? "Mark not done" : "Mark done"}
+          disabled={busy}
+          onClick={(e) => { e.stopPropagation(); onToggleDone(!done) }}
+          className="mt-0.5 shrink-0 text-slate-400 hover:text-emerald-600 disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : done ? (
+            <CheckSquare className="w-5 h-5 text-emerald-600" />
+          ) : (
+            <Square className="w-5 h-5" />
+          )}
+        </button>
+
+        <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={expanded}
+          onClick={toggle}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle() } }}
+          className="flex-1 min-w-0 cursor-pointer focus:outline-none"
+        >
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm text-slate-900">{item.title}</span>
+            <span className={`font-medium text-sm ${done ? "line-through text-slate-500" : "text-slate-900"}`}>
+              {item.title}
+            </span>
             <PriorityBadge />
-            {item.deadline && (
+            {item.deadline && !done && (
               <span className="text-xs text-red-600 font-medium">Due: {item.deadline}</span>
             )}
-            {profileLink && (
-              <Link
-                to={profileLink}
-                onClick={(e) => e.stopPropagation()}
-                className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
-              >
-                Fix in profile
-                <ArrowRight className="w-3 h-3" />
-              </Link>
+            {done && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Done
+              </span>
             )}
           </div>
           {!expanded && hasDetails && (
             <span className="text-xs text-blue-600 mt-1 inline-block">Tap to see step-by-step instructions →</span>
           )}
         </div>
-        {hasDetails && (expanded ? (
-          <ChevronUp className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-        ) : (
-          <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-        ))}
+
+        {hasDetails && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); toggle() }}
+            className="shrink-0 mt-0.5 text-slate-400"
+            aria-label={expanded ? "Collapse" : "Expand"}
+          >
+            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        )}
       </div>
+
       {expanded && hasDetails && (
         <div className="ml-7 mt-2 space-y-2 text-sm">
-          {item.instructions && (
-            <p className="text-slate-700 whitespace-pre-wrap">{item.instructions}</p>
-          )}
+          {item.instructions && <p className="text-slate-700 whitespace-pre-wrap">{item.instructions}</p>}
           {item.resources_needed && (
             <p className="text-slate-600">
               <span className="font-medium text-slate-800">What you need:</span> {item.resources_needed}
@@ -191,14 +256,34 @@ function TodoItemCard({ item, profileId }) {
           )}
         </div>
       )}
+
+      {/* Per-item actions: upload a file, add to the profile, or just mark done. */}
+      <div className="ml-7 mt-2 flex flex-wrap items-center gap-3">
+        <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); fileRef.current?.click() }}
+          disabled={uploading || busy}
+          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline disabled:opacity-50"
+        >
+          {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+          Upload file
+        </button>
+        {profileLink && (
+          <Link
+            to={profileLink}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+          >
+            Add to profile <ArrowRight className="w-3 h-3" />
+          </Link>
+        )}
+      </div>
     </div>
   )
 }
 
 // Lightweight staged status so the ~12-14s generation isn't a bare spinner.
-// These are cosmetic checkpoints timed to the typical request duration — they
-// give the user a sense of progress without claiming to know the exact server
-// stage. The final stage holds until the request resolves.
 const GENERATION_STAGES = [
   { at: 0, label: "Analyzing profile…" },
   { at: 3000, label: "Reviewing your pipeline…" },
@@ -208,8 +293,21 @@ const GENERATION_STAGES = [
 ]
 
 export default function PrintableProfileTodo({ profileId, profileName }) {
-  const [todoData, setTodoData] = useState(null)
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
   const [progressLabel, setProgressLabel] = useState(GENERATION_STAGES[0].label)
+  const planKey = ["profile-todo", profileId]
+
+  // Load the PERSISTED plan + completion state (survives reload + Regenerate).
+  const planQuery = useQuery({
+    queryKey: planKey,
+    queryFn: () => apiFetch(`/api/ai/profile-todo?profile_id=${encodeURIComponent(profileId)}`),
+    enabled: Boolean(profileId),
+    staleTime: 30_000,
+  })
+
+  const todo = planQuery.data?.todo || null
+  const completions = planQuery.data?.completions || {}
 
   const generateMutation = useMutation({
     mutationFn: () =>
@@ -217,17 +315,44 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
         method: "POST",
         body: JSON.stringify({ profile_id: profileId }),
       }),
-    onSuccess: (data) => {
-      if (data?.success && data.todo) {
-        setTodoData(data)
-      }
+    onSuccess: () => {
+      // The server persisted the plan; refetch to pick up plan + completions.
+      queryClient.invalidateQueries({ queryKey: planKey })
     },
+    onError: (err) => {
+      toast({ variant: "destructive", title: "Couldn't generate", description: err?.message || "Please try again." })
+    },
+  })
+
+  // Toggle completion with an optimistic update so the checkbox feels instant.
+  const completeMutation = useMutation({
+    mutationFn: ({ item_key, done, doc_id }) =>
+      apiFetch("/api/ai/profile-todo/complete", {
+        method: "POST",
+        body: JSON.stringify({ profile_id: profileId, item_key, done, doc_id }),
+      }),
+    onMutate: async ({ item_key, done, doc_id }) => {
+      await queryClient.cancelQueries({ queryKey: planKey })
+      const prev = queryClient.getQueryData(planKey)
+      queryClient.setQueryData(planKey, (old) => {
+        const next = { ...(old || {}) }
+        const map = { ...(next.completions || {}) }
+        if (done) map[item_key] = { done: true, doc_id: doc_id || null, at: new Date().toISOString() }
+        else delete map[item_key]
+        next.completions = map
+        return next
+      })
+      return { prev }
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(planKey, ctx.prev)
+      toast({ variant: "destructive", title: "Couldn't update", description: err?.message || "Please try again." })
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: planKey }),
   })
 
   const isGenerating = generateMutation.isPending
 
-  // Advance the staged status text while a generation is in flight; reset to the
-  // first stage whenever a new generation starts.
   useEffect(() => {
     if (!isGenerating) return undefined
     setProgressLabel(GENERATION_STAGES[0].label)
@@ -238,14 +363,12 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
   }, [isGenerating])
 
   const handlePrint = () => {
-    if (!todoData?.todo) return
-    // No "noopener" — it makes window.open() return null, so the document.write
-    // below never runs and the tab opens blank. Same-origin content we own.
+    if (!todo) return
     const win = window.open("", "_blank")
     if (!win) return
     let html
     try {
-      html = buildPrintHtml(todoData.todo, todoData.applicant_name || profileName || "Profile")
+      html = buildPrintHtml(todo, planQuery.data?.applicant_name || profileName || "Profile", completions)
     } catch (err) {
       win.close()
       console.error("[PrintableProfileTodo] buildPrintHtml failed:", err)
@@ -257,12 +380,13 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
     win.onload = () => { win.print() }
   }
 
-  const todo = todoData?.todo
   const categories = todo?.categories || []
-  const computedTotal = categories.reduce((sum, c) => sum + (c.items?.length || 0), 0)
-  const totalItems = (typeof todo?.total_items === "number" && todo.total_items > 0)
-    ? todo.total_items
-    : computedTotal
+  const allItems = categories.flatMap((c) => (c.items || []).map((item) => ({ item, categoryName: c.name })))
+  const computedTotal = allItems.length
+  const totalItems = (typeof todo?.total_items === "number" && todo.total_items > 0) ? todo.total_items : computedTotal
+  const doneCount = allItems.filter(({ item, categoryName }) => completions[itemKey(categoryName, item)]?.done).length
+
+  const isLoadingPlan = planQuery.isLoading
 
   return (
     <Card className="border-slate-200 bg-white">
@@ -273,41 +397,35 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
             Profile Action Plan
           </CardTitle>
           <p className="text-sm text-slate-600 mt-1">
-            Generate a personalized checklist of everything this profile needs to do, with detailed
-            step-by-step instructions for each task. Print it out and check items off as you go.
+            A personalized checklist of everything this profile needs to do. Check items off as you go,
+            upload a file to complete a task, or add the information to the profile. Your progress is saved.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {todo && (
             <>
-              <Badge variant="outline">{totalItems} items</Badge>
+              <Badge variant="outline" className={doneCount === totalItems && totalItems > 0 ? "border-emerald-300 bg-emerald-50 text-emerald-700" : ""}>
+                {doneCount}/{totalItems} done
+              </Badge>
               <Button variant="outline" className="gap-2" onClick={handlePrint}>
                 <Printer className="w-4 h-4" />
                 Print
               </Button>
             </>
           )}
-          <Button
-            className="gap-2"
-            onClick={() => generateMutation.mutate()}
-            disabled={isGenerating}
-          >
-            {isGenerating ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <ClipboardList className="w-4 h-4" />
-            )}
+          <Button className="gap-2" onClick={() => generateMutation.mutate()} disabled={isGenerating}>
+            {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardList className="w-4 h-4" />}
             {isGenerating ? progressLabel : todo ? "Regenerate" : "Generate Checklist"}
           </Button>
         </div>
       </CardHeader>
 
-      {isGenerating && (
+      {(isGenerating || (isLoadingPlan && !todo)) && (
         <CardContent>
           <div className="flex items-center gap-2 text-sm text-slate-600" aria-live="polite">
             <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-            <span>{progressLabel}</span>
-            <span className="text-xs text-slate-400">This usually takes about 10-15 seconds.</span>
+            <span>{isGenerating ? progressLabel : "Loading your plan…"}</span>
+            {isGenerating && <span className="text-xs text-slate-400">This usually takes about 10-15 seconds.</span>}
           </div>
         </CardContent>
       )}
@@ -341,16 +459,28 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
                   </Badge>
                 </h3>
                 <div className="space-y-2">
-                  {(cat.items || []).map((item, itemIdx) => (
-                    <TodoItemCard key={itemIdx} item={item} profileId={profileId} />
-                  ))}
+                  {(cat.items || []).map((item, itemIdx) => {
+                    const key = itemKey(cat.name, item)
+                    return (
+                      <TodoItemCard
+                        key={itemIdx}
+                        item={item}
+                        profileId={profileId}
+                        categoryName={cat.name}
+                        done={Boolean(completions[key]?.done)}
+                        busy={completeMutation.isPending && completeMutation.variables?.item_key === key}
+                        onToggleDone={(done) => completeMutation.mutate({ item_key: key, done })}
+                        onUploaded={async (docId) => { await completeMutation.mutateAsync({ item_key: key, done: true, doc_id: docId }) }}
+                      />
+                    )
+                  })}
                 </div>
               </div>
             )
           })}
 
           <div className="text-center pt-4 border-t text-xs text-slate-400">
-            {totalItems} action items &middot; Click any item to expand details &middot; Use the Print button for a paper copy
+            {doneCount}/{totalItems} done &middot; Check the box, upload a file, or add to the profile &middot; Use Print for a paper copy
           </div>
         </CardContent>
       )}

@@ -2408,6 +2408,21 @@ CREATE INDEX IF NOT EXISTS idx_service_applications_created ON service_applicati
 CREATE INDEX IF NOT EXISTS idx_service_applications_email ON service_applications(email);
 
 -- ----------------------------
+-- Profile Action Plan (Printable To-Do) — persisted plan + per-item completion
+-- so the checklist survives reload/Regenerate and "done" is profile-scoped.
+-- plan + completions are JSON stored as TEXT in both dialects (parsed in app).
+-- completions maps a stable item key (category::title) -> { done, doc_id, at }.
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS profile_todo_plans (
+  profile_id TEXT PRIMARY KEY,
+  plan TEXT,
+  completions TEXT NOT NULL DEFAULT '{}',
+  applicant_name TEXT,
+  generated_at TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ----------------------------
 -- Services Catalog + Stripe (Payment Sheet-driven)
 -- ----------------------------
 CREATE TABLE IF NOT EXISTS service_catalog_items (

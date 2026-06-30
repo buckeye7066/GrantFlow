@@ -316,6 +316,48 @@ export async function ensureMatchingLowCoverageEvents(db, { logger = console } =
 }
 
 /**
+ * profile_todo_plans table (both dialects). Persists the AI-generated Profile
+ * Action Plan checklist AND per-item completion state so it survives reload and
+ * "Regenerate" (the plan used to live only in React state and vanished). One row
+ * per profile. `plan` + `completions` are stored as TEXT JSON in BOTH dialects
+ * (parsed in app code) to avoid JSONB-vs-TEXT read differences across the shim.
+ * `completions` maps a stable item key (category::title) -> { done, doc_id, at }.
+ * Completion is profile-scoped so Anya/Sam can see what's actually finished.
+ */
+export async function ensureProfileTodoPlans(db, { logger = console } = {}) {
+  return runStep(
+    'profile_todo_plans',
+    '[database]',
+    logger,
+    async () => {
+      if (db.dialect === 'postgres') {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS profile_todo_plans (
+            profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+            plan TEXT,
+            completions TEXT NOT NULL DEFAULT '{}',
+            applicant_name TEXT,
+            generated_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+        `)
+      } else {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS profile_todo_plans (
+            profile_id TEXT PRIMARY KEY,
+            plan TEXT,
+            completions TEXT NOT NULL DEFAULT '{}',
+            applicant_name TEXT,
+            generated_at TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+        `)
+      }
+    },
+  )
+}
+
+/**
  * behavior_events table (both dialects). Stores user SAVE / APPLY /
  * DISMISS / IGNORE interactions as SOFT preference signals (architecture
  * #12) consumed by matchEngine to nudge — never hard-filter — future
@@ -704,6 +746,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['crawler_jobs_type_check', ensureCrawlerJobsTypeCheck],
     ['anya_match_suggestions', ensureAnyaMatchSuggestions],
     ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
+    ['profile_todo_plans', ensureProfileTodoPlans],
     ['behavior_events', ensureBehaviorEventsTable],
     ['profile_discovery_column', ensureProfileDiscoveryColumn],
     ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
