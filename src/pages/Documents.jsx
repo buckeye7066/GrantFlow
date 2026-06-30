@@ -437,7 +437,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div className="min-w-0 flex-1">
-            <h1 className="text-3xl font-bold text-slate-900">Document Library</h1>
+            <h1 className="text-3xl font-bold text-foreground">Document Library</h1>
             <p className="text-slate-600 mt-2">
               Upload source material and let AI enrich each profile automatically.
             </p>

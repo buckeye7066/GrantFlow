@@ -957,6 +957,10 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
 
   const db = req.db
+  // Gateway-safe deadline: Vercel drops a proxied /api/* response at ~30s (504).
+  // Everything expensive below (the live crawl + open-web LLM lane) must finish
+  // — or yield partial — under this budget so the client never sees a 504.
+  const startTime = Date.now()
   // Stamp the per-profile "discovery has run" signal (best-effort, never blocks):
   // run-smart is a discovery path for this profile.
   void stampLastDiscoveryAt(db, profile_id)
@@ -1016,12 +1020,39 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   let sourcesUsed = ['crawler-os']
   try {
     routeLogger.info(`[run-smart] profile=${profile_id} engine=crawler-os dispatchProfDev=${dispatchProfDev} (licensed=${profileIsLicensedProfessional}, profDevNeed=${profileHasProfDevNeed}, intent=${intentSignalsProfDev})`)
-    const result = await runProfileCrawlerOs(db, profile_id, {
-      minScore,
-      maxResults: 200,
-      crawlerType: 'crawler-os',
-      profileContext: smartProfileContext,
-    })
+    // Bound the live crawl under the gateway deadline. withCrawlBudget races the
+    // crawl against the remaining budget and returns CRAWL_TIMEOUT if it overruns
+    // — the in-flight crawl is abandoned by the request but keeps running and
+    // persists its results, so a follow-up read picks them up. This is what stops
+    // the "server took too long to respond" 504 the Discover page surfaced.
+    const result = await withCrawlBudget(
+      () => runProfileCrawlerOs(db, profile_id, {
+        minScore,
+        maxResults: 200,
+        crawlerType: 'crawler-os',
+        profileContext: smartProfileContext,
+      }),
+      remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS }),
+    )
+    if (result === CRAWL_TIMEOUT) {
+      routeLogger.warn(`[run-smart] profile=${profile_id} crawl exceeded gateway budget; returning partial (work continues in background)`)
+      // Return whatever the crawler-os has already persisted so the user gets
+      // results instead of a 504; the abandoned crawl finishes + persists the rest.
+      const partial = await loadCrawlerOsProfileResults(db, profile_id, 200).catch(() => [])
+      const partialMapped = Array.isArray(partial) ? partial.map(mapResultToFrontendShape) : []
+      return res.json({
+        success: true,
+        engine: 'crawler-os',
+        partial: true,
+        timed_out: true,
+        count: partialMapped.length,
+        total_found: partialMapped.length,
+        min_match_score: minScore,
+        opportunities: partialMapped,
+        sources_used: ['crawler-os'],
+        message: 'Search is still running in the background — showing results found so far. Check back shortly for more.',
+      })
+    }
     sourcesUsed = Array.isArray(result?.sources) && result.sources.length
       ? [...new Set(result.sources.map((s) => s?.source_id || s?.id).filter(Boolean))]
       : ['crawler-os']

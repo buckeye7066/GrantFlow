@@ -760,7 +760,7 @@ export default function SmartMatcher() {
         <div className="p-6 md:p-8">
               <div className="max-w-7xl mx-auto space-y-6">
                       <div>
-                                <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+                                <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
                                             <Sparkles className="w-8 h-8" /> Smart Matcher
                                 </h1>
                                 <p className="text-slate-600 mt-2">
@@ -791,8 +791,19 @@ export default function SmartMatcher() {
                                                 <Button
                                                   type="button"
                                                   size="sm"
-                                                  onClick={() => interpretMutation.mutate()}
-                                                  disabled={interpretMutation.isPending || !freeTextNeed.trim() || !selectedProfileId || selectedProfileId === "all"}
+                                                  onClick={() => {
+                                                    // Prompt instead of silently doing nothing when no profile is chosen.
+                                                    if (!selectedProfileId || selectedProfileId === "all") {
+                                                      toast({
+                                                        variant: "destructive",
+                                                        title: "Select a profile first",
+                                                        description: "Choose a profile so we can match your request against it.",
+                                                      })
+                                                      return
+                                                    }
+                                                    interpretMutation.mutate()
+                                                  }}
+                                                  disabled={interpretMutation.isPending || !freeTextNeed.trim()}
                                                 >
                                                   {interpretMutation.isPending ? (
                                                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />

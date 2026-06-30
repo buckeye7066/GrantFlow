@@ -948,6 +948,7 @@ export default function DiscoverGrants() {
       // has already been updated and there is nothing to poll for. Polling
       // anyway just adds 12s+ of wasted spinner time before fetchCatalogMatches.
       const synchronous = Boolean(dispatch?.synchronous)
+      const partial = Boolean(dispatch?.partial)
       const stored = Number(dispatch?.stored) || 0
       const matches = Number(dispatch?.matches) || 0
       if (!isCancelled()) {
@@ -981,6 +982,13 @@ export default function DiscoverGrants() {
           // they drained), with a short grace window in case status lags.
           if (running === 0 && (sawRunning || Date.now() - start > 8000)) break
         }
+      } else if (synchronous && partial) {
+        // The crawl hit the gateway time budget and is finishing in the
+        // background. Show what was found so far instead of a 504/empty state.
+        toast({
+          title: 'Search is taking longer than usual',
+          description: 'We’re still searching in the background and have shown the matches found so far. Check back in a minute or run the search again for more.',
+        })
       } else if (synchronous) {
         toast({
           title: 'Searched funding sources matched to your profile',
@@ -1588,7 +1596,10 @@ export default function DiscoverGrants() {
                           <div className="flex items-center gap-2">
                             <User className="w-4 h-4 text-muted-foreground" />
                             {profile.display_name}
-                            {profile.organization_name && (
+                            {/* display_name already falls back to the org name on the
+                                backend, so only show the parenthetical when the org name
+                                actually differs — otherwise it renders "Name (Name)". */}
+                            {profile.organization_name && profile.organization_name !== profile.display_name && (
                               <span className="text-xs text-muted-foreground">
                                 ({profile.organization_name})
                               </span>

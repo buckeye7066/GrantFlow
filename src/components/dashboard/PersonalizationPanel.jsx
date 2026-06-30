@@ -91,7 +91,7 @@ export default function PersonalizationPanel() {
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="appearance" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-3 gap-1">
             <TabsTrigger value="appearance">Appearance</TabsTrigger>
             <TabsTrigger value="widgets">Widgets</TabsTrigger>
             <TabsTrigger value="preferences">Preferences</TabsTrigger>

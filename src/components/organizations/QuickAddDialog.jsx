@@ -14,8 +14,10 @@ import { Loader2, Upload, X } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { canonicalizeProfileTypeId } from '@/services/profileTypes'
 import ProfileTypeSelect from '@/components/shared/ProfileTypeSelect'
+import { useToast } from '@/components/ui/use-toast'
 
 export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
+  const { toast } = useToast()
   const [formData, setFormData] = useState({
     display_name: '',
     primary_type: '',
@@ -23,11 +25,15 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
   const [avatarFile, setAvatarFile] = useState(null)
   const [avatarPreview, setAvatarPreview] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMsg, setErrorMsg] = useState(null)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setErrorMsg(null)
 
-    if (!formData.display_name || !formData.primary_type) {
+    // Visible validation instead of a silently disabled button doing nothing.
+    if (!formData.display_name.trim() || !formData.primary_type) {
+      setErrorMsg('Name and Profile Type are both required.')
       return
     }
 
@@ -43,7 +49,10 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
       setAvatarPreview(null)
       onOpenChange(false)
     } catch (error) {
-      console.error('Failed to create profile:', error)
+      // Surface the failure to the user — don't swallow it to the console.
+      const message = error instanceof Error ? error.message : 'Failed to create profile. Please try again.'
+      setErrorMsg(message)
+      toast({ variant: 'destructive', title: 'Could not create profile', description: message })
     } finally {
       setIsSubmitting(false)
     }
@@ -51,6 +60,7 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
 
   const handleChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
+    if (errorMsg) setErrorMsg(null)
   }
 
   const handleAvatarChange = (e) => {
@@ -136,6 +146,7 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
               </p>
             </div>
           </div>
+          {errorMsg && <p className="text-sm text-red-600 mb-2">{errorMsg}</p>}
           <DialogFooter>
             <Button
               type="button"
@@ -145,9 +156,9 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
             >
               Cancel
             </Button>
-            <Button 
-              type="submit" 
-              disabled={isSubmitting || !formData.display_name || !formData.primary_type}
+            <Button
+              type="submit"
+              disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <>
