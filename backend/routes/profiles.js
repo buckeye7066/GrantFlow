@@ -39,7 +39,7 @@ import { buildAwardSummary } from '../services/awardSummary.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
-import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
+import { guardProfileSectionPayload, SECTION_METADATA } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
@@ -493,11 +493,7 @@ async function enrichProfileWithSummary(db, profile) {
   // "X of 13" — a raw COUNT(*) over profile_sections inflates the number with
   // legacy/duplicate/non-canonical keys (the QA finding: card said "21" while
   // the profile actually has 13 defined sections).
-  let canonicalSectionKeys = []
-  try {
-    const { SECTION_METADATA } = await import('../../src/config/sectionMetadata.js')
-    canonicalSectionKeys = Object.keys(SECTION_METADATA || {})
-  } catch { /* fall back to raw count below */ }
+  const canonicalSectionKeys = Object.keys(SECTION_METADATA || {})
   if (canonicalSectionKeys.length) {
     const placeholders = canonicalSectionKeys.map(() => '?').join(',')
     const sections = await db

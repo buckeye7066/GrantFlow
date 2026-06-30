@@ -1,4 +1,9 @@
 import { SECTION_METADATA } from '../src/config/sectionMetadata.js'
+// Re-export so backend runtime code can read canonical section metadata WITHOUT
+// importing the frontend src/ tree directly (enforced by
+// noBackendFrontendSrcImports.test.js — a direct backend→src import is absent
+// from the prod backend image and hangs). shared/ is the sanctioned bridge.
+export { SECTION_METADATA }
 
 const LONG_TEXT_FIELDS = new Set(['notes', 'personal_statement', 'goals', 'mission', 'needs_description'])
 const HOUSEHOLD_EVIDENCE = /\b(dependent child|household (?:member )?receives|parent gets|parent receives|child of|spouse receives)\b/i
