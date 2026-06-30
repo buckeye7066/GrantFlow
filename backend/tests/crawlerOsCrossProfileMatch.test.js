@@ -86,7 +86,7 @@ describe('cross-profile matching (Robert charter)', () => {
     expect(byProfile['p-a']).toBe('crawler-os')
     // p-b never searched for it but is an eligible nonprofit → cross-match.
     expect(byProfile['p-b']).toBe('crawler-os-xmatch')
-  })
+  }, 20000) // live discovery + cold lazy-imports (zipcodes/matchEngine) can exceed the 5s default under load
 
   it('a single-profile call writes NO cross-matches (back-compat)', async () => {
     const db = makeDb()
@@ -96,5 +96,5 @@ describe('cross-profile matching (Robert charter)', () => {
       `SELECT COUNT(*) AS c FROM profile_opportunity_matches WHERE matcher_version = 'crawler-os-xmatch'`,
     ).get().c
     expect(xmatch).toBe(0)
-  })
+  }, 20000)
 })

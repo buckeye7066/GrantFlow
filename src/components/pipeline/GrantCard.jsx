@@ -51,7 +51,7 @@ function isValidExternalUrl(url) {
   return isRenderableUrl(url);
 }
 
-export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null, profileId = null }) {
+function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null, profileId = null }) {
   const [showMenu, setShowMenu] = useState(false);
   const [showMatchBreakdown, setShowMatchBreakdown] = useState(false);
   const [hamiltonTask, setHamiltonTask] = useState(null);
@@ -274,7 +274,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
         {(onStarToggle || onDelete || hamiltonSelection?.enabled) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-6 w-6">
+              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`More options for ${grant?.title || 'this grant'}`}>
                 <MoreVertical className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -605,3 +605,30 @@ export default function GrantCard({ grant, organization, organizationName, onSta
     </div>
   );
 }
+
+// Memoize: the Pipeline Kanban renders hundreds of cards, and any parent re-render
+// (filter/scroll/sidebar) otherwise re-renders ALL of them — the source of the
+// 30s renderer freeze. Re-render only when this card's own data/visual inputs
+// change; intentionally ignore callback identity (KanbanBoard passes fresh inline
+// callbacks each render, which would defeat memoization). The callbacks act on the
+// passed `grant`, which IS in the comparison, so skipping stale-identity is safe.
+function grantCardPropsEqual(prev, next) {
+  return (
+    prev.grant?.id === next.grant?.id &&
+    prev.grant?.status === next.grant?.status &&
+    prev.grant?.starred === next.grant?.starred &&
+    prev.grant?.match === next.grant?.match &&
+    prev.grant?.match_score === next.grant?.match_score &&
+    prev.grant?.deadline === next.grant?.deadline &&
+    prev.grant?.updated_at === next.grant?.updated_at &&
+    prev.isDragging === next.isDragging &&
+    prev.checklistProgress === next.checklistProgress &&
+    prev.showSummary === next.showSummary &&
+    prev.isInPipeline === next.isInPipeline &&
+    prev.organization?.id === next.organization?.id &&
+    prev.organizationName === next.organizationName &&
+    prev.profileId === next.profileId
+  );
+}
+
+export default React.memo(GrantCard, grantCardPropsEqual);

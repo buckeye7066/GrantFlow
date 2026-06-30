@@ -156,6 +156,35 @@ test('campaign profile is routed to compliance resources, not ordinary grant lan
   assert.match(rendered, /do not treat campaign contributions as grants/);
 });
 
+test('individual with education history is NOT classified as a student plan', () => {
+  // Regression: an Individual profile was getting the student_portal_plan (FAFSA /
+  // college / work-study content) merely because an education section had data —
+  // almost everyone has education history. Explicit non-student person types must
+  // require an explicit student signal, not section presence.
+  const plan = buildProjectReadinessPlan({
+    id: 'individual-edu-history',
+    profile_type: 'individual',
+    display_name: 'QA Individual',
+    description: 'An individual seeking general funding support.',
+    sections: [
+      { section_key: 'education', data: { highest_level: 'high_school_diploma', school_name: 'Central High (2008)' } },
+    ],
+  });
+
+  assert.notEqual(plan.plan_id, 'student_portal_plan');
+  const rendered = renderProjectPlanDocument(plan);
+  assert.doesNotMatch(rendered, /Student funding and portal action plan/);
+});
+
+test('explicit student type still gets the student plan', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'student-still-works',
+    profile_type: 'college_student',
+    sections: [{ section_key: 'education', data: { school_name: 'State U' } }],
+  });
+  assert.equal(plan.plan_id, 'student_portal_plan');
+});
+
 test('empty profile becomes an Anya interview, not a penalty or crash', () => {
   const plan = buildProjectReadinessPlan({ id: 'empty-profile' });
 

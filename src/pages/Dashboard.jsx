@@ -443,7 +443,10 @@ export default function Dashboard() {
         link: createPageUrl("Organizations"),
       },
       {
-        title: "Active Grants",
+        // Subset of the pipeline: grants in active statuses (interested/drafting/
+        // submitted/awarded). Labeled precisely so it reads as a subset of the
+        // Pipeline page's full grant count rather than appearing to disagree with it.
+        title: "Active Pipeline Grants",
         value: displayActiveGrantsCount,
         icon: Target,
         color: "from-emerald-500 to-emerald-600",

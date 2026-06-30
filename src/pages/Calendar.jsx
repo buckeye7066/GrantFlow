@@ -187,11 +187,11 @@ export default function Calendar() {
           <Card className="lg:col-span-2">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <Button variant="ghost" size="sm" onClick={() => setCurrentMonth((m) => subMonths(m, 1))}>
+                <Button variant="ghost" size="sm" aria-label="Previous month" onClick={() => setCurrentMonth((m) => subMonths(m, 1))}>
                   <ChevronLeft className="w-4 h-4" />
                 </Button>
                 <CardTitle className="text-lg">{format(currentMonth, "MMMM yyyy")}</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setCurrentMonth((m) => addMonths(m, 1))}>
+                <Button variant="ghost" size="sm" aria-label="Next month" onClick={() => setCurrentMonth((m) => addMonths(m, 1))}>
                   <ChevronRight className="w-4 h-4" />
                 </Button>
               </div>

@@ -165,7 +165,7 @@ export default function Help() {
   }, [searchQuery]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 md:p-10">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-950 dark:to-slate-900 p-6 md:p-10">
       <div className="max-w-4xl mx-auto space-y-10">
         {/* Header */}
         <div>
