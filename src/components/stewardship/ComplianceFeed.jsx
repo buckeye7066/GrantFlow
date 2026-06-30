@@ -35,7 +35,7 @@ export default function ComplianceFeed({ reports }) {
                 ) : (
                     <ul className="space-y-3">
                         {upcomingReports.map(report => {
-                            const isOverdue = isPast(new Date(report.due_date));
+                            const isOverdue = isValidDate(report.due_date) && isPast(new Date(report.due_date));
                             return (
                                 <li key={report.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                                     <div className="flex items-center gap-3">

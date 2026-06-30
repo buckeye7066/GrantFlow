@@ -626,6 +626,9 @@ export default function SmartMatcher() {
                 qs.set('strict', '1')
                 qs.set('allow_relax', '0')
                 qs.set('relax', '0')
+                // The backend's zero-result recovery checks `no_fallback`; without
+                // it, it relaxes the threshold and wastes work the UI then discards.
+                qs.set('no_fallback', '1')
                 const fromIntent =
                   Array.isArray(parsedSearchTerms) && parsedSearchTerms.length > 0
                     ? parsedSearchTerms.map((t) => String(t).toLowerCase().trim()).filter(Boolean)

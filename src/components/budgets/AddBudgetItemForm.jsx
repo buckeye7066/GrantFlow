@@ -74,11 +74,11 @@ export default function AddBudgetItemForm({ grantId, onSuccess, onCancel }) {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="space-y-1">
           <Label htmlFor="quantity">Quantity</Label>
-          <Input id="quantity" name="quantity" type="number" value={item.quantity} onChange={handleChange} placeholder="1" />
+          <Input id="quantity" name="quantity" type="number" min="0" value={item.quantity} onChange={handleChange} placeholder="1" />
         </div>
         <div className="space-y-1">
           <Label htmlFor="unit_cost">Unit Cost</Label>
-          <Input id="unit_cost" name="unit_cost" type="number" value={item.unit_cost} onChange={handleChange} placeholder="100.00" />
+          <Input id="unit_cost" name="unit_cost" type="number" min="0" step="0.01" value={item.unit_cost} onChange={handleChange} placeholder="100.00" />
         </div>
         <div className="space-y-1">
           <Label htmlFor="total">Total</Label>

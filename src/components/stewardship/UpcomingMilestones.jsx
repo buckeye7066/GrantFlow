@@ -32,7 +32,7 @@ const upcomingMilestones = [...validDated, ...undated].slice(0, 5);
                 ) : (
                     <ul className="space-y-3">
                         {upcomingMilestones.map(milestone => {
-                            const isOverdue = isPast(new Date(milestone.due_date));
+                            const isOverdue = isValidDate(milestone.due_date) && isPast(new Date(milestone.due_date));
                             return (
                                 <li key={milestone.id} className="flex items-center gap-3">
                                     <CheckSquare className="w-5 h-5 text-blue-500" />

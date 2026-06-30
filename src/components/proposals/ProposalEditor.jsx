@@ -103,9 +103,17 @@ export default function ProposalEditor({ grant, organization }) {
   }, [activeSection?.section_key, activeSection?.content])
 
   const upsertSectionMutation = useMutation({
-    mutationFn: ({ sectionKey, title, content }) => saveSection(applicationId, sectionKey, { title, content }),
+    mutationFn: ({ sectionKey, title, content }) => {
+      // Guard: if the application hasn't loaded yet, fail loudly instead of
+      // POSTing a null id (which 404s and silently dropped the user's edit).
+      if (!applicationId) throw new Error('Application is still loading — please wait a moment and try again.')
+      return saveSection(applicationId, sectionKey, { title, content })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['applicationSections', applicationId] })
+    },
+    onError: (error) => {
+      toast({ variant: 'destructive', title: 'Save failed', description: error?.message || 'Your changes could not be saved.' })
     },
   })
 

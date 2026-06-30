@@ -230,7 +230,7 @@ export default function BudgetDetail({ grantId }) {
                     <TableBody>
                       {expenses.map(expense => (
                         <TableRow key={expense.id}>
-                          <TableCell>{expense.date ? format(new Date(expense.date), 'MMM d, yyyy') : 'â'}</TableCell>
+                          <TableCell>{expense.date ? format(new Date(expense.date), 'MMM d, yyyy') : 'N/A'}</TableCell>
                           <TableCell>
                             <p className="font-medium">{expense.vendor}</p>
                             <p className="text-sm text-slate-500">{expense.description}</p>
