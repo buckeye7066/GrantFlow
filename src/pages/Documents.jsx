@@ -215,7 +215,15 @@ export default function Documents() {
   });
 
   const enrichmentMutation = useMutation({
-    mutationFn: () => triggerProfileEnrichment({ profileId: selectedProfileId }),
+    mutationFn: () => {
+      // Enrichment extracts profile details from uploaded files — with no
+      // documents it's a guaranteed no-op. Fail fast with a clear message
+      // instead of silently queueing an empty job (the "nothing happens" bug).
+      if (!documents.length) {
+        throw new Error("Upload at least one document first — enrichment reads your uploaded files to fill in the profile.")
+      }
+      return triggerProfileEnrichment({ profileId: selectedProfileId })
+    },
     onSuccess: (job) => {
       toast({
         title: "Profile enrichment queued",
@@ -459,7 +467,8 @@ const latestDuration = describeDuration(latestEnrichmentJob)
             <Button
               variant="outline"
               onClick={() => enrichmentMutation.mutate()}
-              disabled={!selectedProfileId || enrichmentBusy}
+              disabled={!selectedProfileId || enrichmentBusy || documents.length === 0}
+              title={documents.length === 0 ? "Upload a document first — enrichment reads your uploaded files." : undefined}
               className="gap-2"
             >
               {enrichmentBusy ? (

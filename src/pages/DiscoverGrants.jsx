@@ -935,10 +935,12 @@ export default function DiscoverGrants() {
       // crawlers), and each runs to COMPLETION server-side. No synchronous
       // request to hit the gateway 504, and no time budget that returns partial
       // results \u2014 slow-but-complete, using the full profile.
-      const dispatch = await discoverAllForProfile({ profileId: pid }).catch((bgErr) => {
-        console.warn('[DiscoverGrants] discover-all dispatch failed:', bgErr?.message || bgErr)
-        return null
-      })
+      // NOTE: do NOT swallow errors here. A failed/timed-out discovery must
+      // surface as a "Search failed" toast (handled by the outer catch) instead
+      // of silently falling through to the misleading "we haven't searched yet"
+      // empty state. discoverAllForProfile now runs the live, gateway-budgeted
+      // Crawler OS path which returns a completed synchronous result.
+      const dispatch = await discoverAllForProfile({ profileId: pid })
       const enqueued = Number(dispatch?.jobs_enqueued) || 0
       const crawlerTypes = Array.isArray(dispatch?.crawler_types) ? dispatch.crawler_types : []
       // synchronous=true means the OS shim ran the entire profile discovery

@@ -28,6 +28,17 @@ const OCCUPATION_FLAGS = new Set([
 ])
 
 export const PROFILE_FIELD_ALIASES = Object.freeze({
+  basic_information: {
+    // Legacy forms / quick-fill / AI writes used short keys that don't match the
+    // canonical section schema, so the guard silently dropped them as
+    // "unknown_field" — a real data-loss bug (ZIP especially, which matching
+    // depends on). Route them to the canonical field instead of discarding.
+    zip: 'zip_code',
+    postal_code: 'zip_code',
+    postal: 'zip_code',
+    profile_category: 'profile_type',
+    category: 'profile_type',
+  },
   education: {
     // Older imports used current_school inside education; keep the education section canonical.
     current_school: 'current_institution',

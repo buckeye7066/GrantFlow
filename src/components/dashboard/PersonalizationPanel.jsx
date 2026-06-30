@@ -68,7 +68,7 @@ export default function PersonalizationPanel() {
   }
 
   return (
-    <Card className="relative border border-border/70 shadow-lg bg-card/80 text-card-foreground backdrop-blur">
+    <Card className="relative border border-border/70 shadow-lg bg-card/80 dark:bg-slate-900 text-card-foreground backdrop-blur">
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div>

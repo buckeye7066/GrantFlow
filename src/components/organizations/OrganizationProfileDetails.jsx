@@ -197,7 +197,7 @@ ${organization.assistance_categories ? `Assistance: ${organization.assistance_ca
 PROFILE:
 ${contextInfo}
 
-Return format: ["keyword1", "keyword2", "keyword3", ...]
+Return format: { "keywords": ["keyword1", "keyword2", "keyword3", ...] }
 
 Keywords should be:
 - Specific and actionable
@@ -215,10 +215,40 @@ Keywords should be:
         }
       });
 
-      if (response && Array.isArray(response.keywords)) {
+      // The LLM (or the InvokeLLM transport) may return the keywords in several
+      // shapes: {keywords:[...]}, a bare array, {output:[...]}, or a JSON string.
+      // Accept all of them instead of failing on anything but {keywords:[...]},
+      // which is what produced the "AI didn't return valid keywords" error.
+      const extractKeywordArray = (resp) => {
+        if (!resp) return null;
+        if (Array.isArray(resp)) return resp;
+        if (Array.isArray(resp.keywords)) return resp.keywords;
+        if (Array.isArray(resp.output)) return resp.output;
+        if (Array.isArray(resp.data?.keywords)) return resp.data.keywords;
+        const text = typeof resp === 'string' ? resp : (resp.text ?? resp.content ?? resp.output_text);
+        if (typeof text === 'string') {
+          try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) return parsed;
+            if (Array.isArray(parsed?.keywords)) return parsed.keywords;
+          } catch {
+            const m = text.match(/\[[\s\S]*\]/);
+            if (m) {
+              try {
+                const arr = JSON.parse(m[0]);
+                if (Array.isArray(arr)) return arr;
+              } catch { /* not parseable — fall through to error toast */ }
+            }
+          }
+        }
+        return null;
+      };
+
+      const keywordArray = extractKeywordArray(response);
+      if (keywordArray) {
         // Sanitise: strings only, non-empty, max 60 chars, deduplicate
         const existing = organization.keywords || [];
-        const sanitised = response.keywords
+        const sanitised = keywordArray
           .filter(k => typeof k === 'string' && k.trim().length > 0)
           .map(k => k.trim().slice(0, 60))
           .filter(k => !existing.includes(k));

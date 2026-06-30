@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Target, AlertTriangle, CheckCircle2, Calendar, DollarSign, ExternalLink, Sparkles, User, Plus, Check } from 'lucide-react';
@@ -149,12 +150,7 @@ export default function ProfileMatcher() {
     return 'text-slate-600 bg-slate-50 border-slate-200';
   };
 
-  const getMatchLabel = (score) => {
-    if (score >= 80) return 'Excellent Match';
-    if (score >= 60) return 'Good Match';
-    if (score >= 40) return 'Fair Match';
-    return 'Low Match';
-  };
+  const getMatchLabel = (score) => scoreToMatchLabel(score);
 
   const addableMatches = matches?.filter((m) => m.id && !addedIds.has(m.id)) ?? [];
 
