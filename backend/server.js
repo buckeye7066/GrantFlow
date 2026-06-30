@@ -2000,10 +2000,24 @@ app.get('/api/admin/pipeline-health', ensureAuth, ensureAdmin, (req, res) => {
   res.json(getPipelineHealth())
 })
 
-// Client-reported error sink. Authenticated users' frontend boundaries POST
-// here when the SPA crashes; reportErrorToOwner self-skips for admins/owner and
-// throttles, so this is safe to leave open to any logged-in user. Fire-and-forget.
-app.post('/api/report-client-error', (req, res) => {
+// Client-reported error sink. Frontend error boundaries POST here when the SPA
+// crashes — INCLUDING on pre-auth pages (login/start/landing), which is exactly
+// where the owner most wants crash visibility, so the endpoint stays open rather
+// than requiring auth (which would silently drop those reports). It does NOT trust
+// any client-supplied identity (it reads req.user, never a body field), and
+// reportErrorToOwner self-skips admin/owner + applies a per-signature throttle and
+// an hourly cap. The one residual abuse vector was unauthenticated FLOODING: an
+// attacker varying the message/route can mint distinct signatures and burn the
+// hourly cap with attacker-supplied (HTML-escaped) content. A per-IP rate limit
+// closes that as the first line of defense. Fire-and-forget (returns 204/429).
+const clientErrorReportLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  limit: 30, // generous for a real client (boundaries report rarely); blocks floods
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many error reports, please try again later.' },
+});
+app.post('/api/report-client-error', clientErrorReportLimiter, (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const message = typeof body.message === 'string' ? body.message.slice(0, 4000) : '';
