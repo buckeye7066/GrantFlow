@@ -1568,7 +1568,7 @@ function signAccessToken(user, sessionId, profileId) {
   return jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL })
 }
 
-async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress }) {
+async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress, method = 'session', identifier = null }) {
   const sessionId = crypto.randomUUID()
   const refreshToken = crypto.randomBytes(48).toString('hex')
   const refreshHash = hashValue(refreshToken)
@@ -1601,6 +1601,29 @@ async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddres
     ipAddress ?? null,
     userAgent ?? null,
   )
+
+  // Durable login audit at the SINGLE session-mint choke point. Every fresh
+  // login mints exactly one user_sessions row here (token REFRESH rotates in
+  // place via rotateSessionTokens and is NOT counted), so recording here keeps
+  // the admin login tracker's durable source (audit_logs client_sign_in) in
+  // lock-step with reality. This replaces the per-handler recording that was
+  // scattered, admin-gated inconsistently, and missing entirely from the
+  // password-login path — which is why client_sign_in audits had drifted far
+  // behind user_sessions. Awaited but guarded: a logging failure never blocks
+  // a login (recordClientSignInEvent swallows its own DB errors).
+  try {
+    await recordClientSignInEvent({
+      db,
+      identifier: identifier ?? user?.primary_email ?? null,
+      method,
+      userId: user?.id ?? null,
+      profileId: profileId ?? null,
+      ip: ipAddress ?? null,
+      userAgent,
+    })
+  } catch (auditErr) {
+    console.warn('[auth] sign-in audit record failed:', auditErr?.message || auditErr)
+  }
 
   return {
     accessToken,
@@ -2035,6 +2058,8 @@ router.post('/email/verify', async (req, res) => {
     profileId: activeProfileId,
     userAgent: req.headers['user-agent'],
     ipAddress: req.ip,
+    method: 'email',
+    identifier: email,
   })
 
   // Initialize Anya for every user on login (crawlers scoped to their profile)
@@ -2118,17 +2143,8 @@ router.post('/email/verify', async (req, res) => {
     },
   }).catch(e => console.warn('[background]', e?.message || e))
 
-  // In-app admin notification (best-effort, stored in-memory) + durable audit sink.
-  // Record ALL sign-ins (admins can filter in the UI). This is required for accurate "who logged in" reporting.
-  recordClientSignInEvent({
-    db: req.db,
-    identifier: email,
-    method: 'email',
-    userId: user?.id ?? null,
-    profileId: activeProfileId ?? null,
-    ip: req.ip,
-    userAgent: req.headers['user-agent'],
-  })
+  // Sign-in is recorded durably at the session-mint choke point
+  // (createSessionAndTokens), so the admin login tracker can never drift.
 
   return res.json(response)
 })
@@ -2351,6 +2367,8 @@ router.post('/phone/verify', async (req, res) => {
     profileId: activeProfileId,
     userAgent: req.headers['user-agent'],
     ipAddress: req.ip,
+    method: 'phone',
+    identifier: normalized,
   })
 
   // Initialize Anya for every user on login (crawlers scoped to their profile)
@@ -2418,15 +2436,7 @@ router.post('/phone/verify', async (req, res) => {
     },
   }).catch(e => console.warn('[background]', e?.message || e))
 
-  recordClientSignInEvent({
-    db: req.db,
-    identifier: normalized,
-    method: 'phone',
-    userId: user?.id ?? null,
-    profileId: activeProfileId ?? null,
-    ip: req.ip,
-    userAgent: req.headers['user-agent'],
-  })
+  // Sign-in recorded durably at the session-mint choke point (createSessionAndTokens).
 
   return res.json(response)
 })
@@ -2866,21 +2876,9 @@ router.post('/password/setup/complete', passwordRateLimiter, async (req, res) =>
       profileId: activeProfileId,
       userAgent: req.headers['user-agent'],
       ipAddress: req.ip,
+      method: 'password_setup_complete',
+      identifier: user?.primary_email ?? null,
     })
-
-    // In-app admin notification (best-effort).
-    // Record only non-admin sign-ins so the Admin panel highlights client activity.
-    if (!user?.is_admin) {
-      recordClientSignInEvent({
-        db: req.db,
-        identifier: user?.primary_email ?? null,
-        method: 'password_setup_complete',
-        userId: user?.id ?? null,
-        profileId: activeProfileId ?? null,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
-      })
-    }
 
     return res.json({
       accessToken: session.accessToken,
@@ -2968,6 +2966,8 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
       profileId: activeProfileId,
       userAgent: req.headers['user-agent'],
       ipAddress: req.ip,
+      method: 'password',
+      identifier: user?.primary_email ?? null,
     })
 
     if (user.is_admin || user.role === 'admin') {
@@ -3103,6 +3103,8 @@ router.get('/:provider/callback', async (req, res) => {
       profileId: activeProfileId,
       userAgent: req.headers['user-agent'],
       ipAddress: req.ip,
+      method: `oauth:${provider}`,
+      identifier: profile?.email ? normalizeEmail(profile.email) : `${provider}:${profile?.providerAccountId || 'unknown'}`,
     })
 
     if (user.is_admin || user.role === 'admin') {
@@ -3127,17 +3129,7 @@ router.get('/:provider/callback', async (req, res) => {
       },
     }).catch(e => console.warn('[background]', e?.message || e))
 
-    if (!user?.is_admin) {
-      recordClientSignInEvent({
-      db: req.db,
-        identifier: profile?.email ? normalizeEmail(profile.email) : `${provider}:${profile?.providerAccountId || 'unknown'}`,
-        method: `oauth:${provider}`,
-        userId: user?.id ?? null,
-        profileId: activeProfileId ?? null,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'],
-      })
-    }
+    // Sign-in recorded durably at the session-mint choke point (createSessionAndTokens).
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
     if (activeProfileId) {

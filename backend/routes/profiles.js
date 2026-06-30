@@ -1331,6 +1331,36 @@ router.post('/', createProfileLimiter, async (req, res) => {
     console.warn('[profiles] signup free-period grant failed', { profile_id: profileId, error: err?.message })
   }
 
+  // Surface every real new signup in the admin "Applications" tab. A profile IS
+  // an applicant, but self-serve signups previously created a profile WITHOUT
+  // any service_applications row — so the Applications tab (which only saw the
+  // public contact/intake form) stayed empty even as users joined, and the owner
+  // had no single place to see new clients. We record a 'signup' application
+  // linked to the profile. Synthetic/agent-trained and designated/demo profiles
+  // are skipped so the list stays the owner's real client intake. Best-effort —
+  // never fail profile creation if this write fails.
+  try {
+    const createdBy = String(created_by ?? req.ctx?.email ?? '').toLowerCase()
+    const isSynthetic = createdBy.startsWith('agent:') || isDesignatedProfileId(profileId)
+    if (!isSynthetic) {
+      let applicantEmail = req.ctx?.email ?? null
+      if (!applicantEmail && profileUserId) {
+        try {
+          const u = await req.db.prepare('SELECT primary_email FROM users WHERE id = ?').get(profileUserId)
+          applicantEmail = u?.primary_email ?? null
+        } catch { /* email is best-effort */ }
+      }
+      await req.db
+        .prepare(
+          `INSERT INTO service_applications (id, type, full_name, email, status, profile_id)
+           VALUES (?, 'signup', ?, ?, 'new', ?)`,
+        )
+        .run(crypto.randomUUID(), display_name, applicantEmail, profileId)
+    }
+  } catch (err) {
+    console.warn('[profiles] signup application record failed', { profile_id: profileId, error: err?.message })
+  }
+
   const refreshed = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(profileId)
 
   // Schedule initial crawl jobs for the new profile (best-effort, non-blocking).
