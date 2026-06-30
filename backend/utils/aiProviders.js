@@ -1,6 +1,7 @@
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
 import { createLogger } from './logger.js'
+import { withLLMTimeout, isLLMTimeout, LLM_TIMEOUT_MS } from './llmTimeout.js'
 const qualityLog = createLogger('utils:aiProviders')
 
 let cachedAnthropic = null
@@ -90,49 +91,64 @@ export async function invokeTextWithFallback({
 
   let openaiError = null
   let anthropicError = null
+  let timedOut = false
+
+  // Shared gateway-safe deadline across BOTH providers — a sequential
+  // OpenAI->Anthropic fallback must never sum past the proxy's ~30s cut.
+  const deadlineAt = Date.now() + LLM_TIMEOUT_MS
+  const remainingMs = () => deadlineAt - Date.now()
 
   // 1) OpenAI (optional)
-  if (openai) {
+  if (openai && remainingMs() > 500) {
     try {
-      const completion = await openai.chat.completions.create({
-        model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-      })
+      const completion = await withLLMTimeout(
+        openai.chat.completions.create({
+          model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+        }),
+        { timeoutMs: remainingMs(), label: 'OpenAI text generation' },
+      )
       const text = String(completion?.choices?.[0]?.message?.content ?? '').trim()
       return { ok: true, provider: 'openai', text, raw: text, usage: completion?.usage ?? null, openaiError: null, anthropicError: null }
     } catch (error) {
+      if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
     }
   }
 
-  // 2) Anthropic
-  const anthropic = await getAnthropicClient()
+  // 2) Anthropic (only if budget remains)
+  const anthropic = remainingMs() > 500 ? await getAnthropicClient() : null
   if (anthropic) {
     try {
-      const response = await anthropic.messages.create({
-        model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: maxTokens,
-        temperature,
-        system: system ? String(system) : undefined,
-        messages: [{ role: 'user', content: safePrompt }],
-      })
+      const response = await withLLMTimeout(
+        anthropic.messages.create({
+          model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+          max_tokens: maxTokens,
+          temperature,
+          system: system ? String(system) : undefined,
+          messages: [{ role: 'user', content: safePrompt }],
+        }),
+        { timeoutMs: remainingMs(), label: 'Anthropic text generation' },
+      )
       const text = extractAnthropicText(response)
       return { ok: true, provider: 'anthropic', text, raw: text, usage: null, openaiError, anthropicError: null }
     } catch (error) {
+      if (isLLMTimeout(error)) timedOut = true
       anthropicError = error?.message ?? String(error)
       qualityLog.error('[aiProviders] Anthropic text call failed:', anthropicError)
     }
   }
 
-  // 3) No providers configured
+  // 3) No providers configured / both failed or timed out
   return {
     ok: false,
     provider: 'fallback',
     text: null,
     raw: null,
-    error: new Error('No AI provider configured or provider failure'),
+    timedOut,
+    error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError,
     anthropicError,
   }
@@ -150,20 +166,28 @@ export async function invokeJsonWithFallback({
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   let openaiError = null
   let anthropicError = null
+  let timedOut = false
+
+  // Shared gateway-safe deadline across BOTH providers (see invokeTextWithFallback).
+  const deadlineAt = Date.now() + LLM_TIMEOUT_MS
+  const remainingMs = () => deadlineAt - Date.now()
 
   // 1) OpenAI (optional)
-  if (openai) {
+  if (openai && remainingMs() > 500) {
     try {
-      const completion = await openai.chat.completions.create({
-        model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
-        temperature,
-        max_tokens: maxTokens,
-        response_format: { type: 'json_object' },
-        messages: [
-          ...(system ? [{ role: 'system', content: String(system) }] : []),
-          { role: 'user', content: safePrompt },
-        ],
-      })
+      const completion = await withLLMTimeout(
+        openai.chat.completions.create({
+          model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+          temperature,
+          max_tokens: maxTokens,
+          response_format: { type: 'json_object' },
+          messages: [
+            ...(system ? [{ role: 'system', content: String(system) }] : []),
+            { role: 'user', content: safePrompt },
+          ],
+        }),
+        { timeoutMs: remainingMs(), label: 'OpenAI JSON generation' },
+      )
       const rawText = String(completion?.choices?.[0]?.message?.content ?? '').trim()
       const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
       if (!parsed || typeof parsed !== 'object') {
@@ -171,12 +195,13 @@ export async function invokeJsonWithFallback({
       }
       return { ok: true, provider: 'openai', json: parsed, raw: rawText, usage: completion?.usage ?? null, openaiError: null, anthropicError: null }
     } catch (error) {
+      if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
     }
   }
 
-  // 2) Anthropic
-  const anthropic = await getAnthropicClient()
+  // 2) Anthropic (only if budget remains)
+  const anthropic = remainingMs() > 500 ? await getAnthropicClient() : null
   if (anthropic) {
     try {
       const systemText = [
@@ -186,13 +211,16 @@ export async function invokeJsonWithFallback({
         .filter(Boolean)
         .join('\n\n')
 
-      const response = await anthropic.messages.create({
-        model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: maxTokens,
-        temperature,
-        system: systemText || undefined,
-        messages: [{ role: 'user', content: safePrompt }],
-      })
+      const response = await withLLMTimeout(
+        anthropic.messages.create({
+          model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+          max_tokens: maxTokens,
+          temperature,
+          system: systemText || undefined,
+          messages: [{ role: 'user', content: safePrompt }],
+        }),
+        { timeoutMs: remainingMs(), label: 'Anthropic JSON generation' },
+      )
       const rawText = extractAnthropicText(response)
       const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
       if (!parsed || typeof parsed !== 'object') {
@@ -200,6 +228,7 @@ export async function invokeJsonWithFallback({
       }
       return { ok: true, provider: 'anthropic', json: parsed, raw: rawText, usage: null, openaiError, anthropicError: null }
     } catch (error) {
+      if (isLLMTimeout(error)) timedOut = true
       anthropicError = error?.message ?? String(error)
       qualityLog.error('[aiProviders] Anthropic JSON call failed:', anthropicError)
     }
@@ -210,7 +239,8 @@ export async function invokeJsonWithFallback({
     provider: 'fallback',
     json: null,
     raw: null,
-    error: new Error('No AI provider configured or provider failure'),
+    timedOut,
+    error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError,
     anthropicError,
   }

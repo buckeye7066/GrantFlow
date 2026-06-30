@@ -54,6 +54,8 @@
 
 import { createLogger } from '../utils/logger.js'
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
+import { resolveProfileForId } from '../utils/profileResolver.js'
+import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
@@ -1122,6 +1124,75 @@ export async function enforceProfileIncomeReconciliation(db) {
 }
 
 /**
+ * INVARIANT: PROFILE_ID INTEGRITY (canonical_rules.md — profile-scoped pipeline;
+ * every grant/task binds to a REAL profile, by its canonical id).
+ *
+ * Deferred work (crawler jobs, Hamilton tasks) and older inserts can stamp a
+ * grant/application_task with a DESIGNATED-PROFILE SLUG (e.g. 'profile-brian-client')
+ * instead of the profile's live canonical UUID. The slug is the same person, but
+ * the stale value (a) makes "scored against / save portal login" bind to a slug
+ * the UI can't resolve, and (b) drifts the row out of the canonical-id pipeline.
+ *
+ * REPAIR (normalize, never delete): resolve each known designated slug ONCE to its
+ * live profile id (via the same resolver the dispatcher uses) and rewrite any
+ * grant/application_task carrying the slug to the canonical id. We deliberately do
+ * NOT null/delete dangling-but-unmappable ids here — that would risk a cascade with
+ * enforceProfileScopedPipeline (which purges NULL-profile orphans). Unmappable rows
+ * are scoped to a non-existent profile, so they never surface in a real pipeline;
+ * they're left for human review rather than auto-destroyed (safety posture above).
+ */
+export async function enforceProfileIdIntegrity(db) {
+  return runInvariant('profile_id_integrity', async () => {
+    const slugs = (Array.isArray(DESIGNATED_PROFILES) ? DESIGNATED_PROFILES : [])
+      .map((p) => String(p?.id || '').trim())
+      .filter(Boolean)
+    if (slugs.length === 0) return { repaired: 0, scanned: 0 }
+
+    // Resolve each designated slug to its live canonical id ONCE (read-only — no
+    // reseed during a sweep). Only keep slugs whose canonical id actually differs
+    // (i.e. the profile lives under a UUID, so the slug is stale).
+    const slugToCanonical = new Map()
+    for (const slug of slugs) {
+      let resolved = null
+      try {
+        resolved = await resolveProfileForId(db, slug, { allowReseed: false })
+      } catch {
+        resolved = null
+      }
+      if (resolved && resolved.resolvedId && String(resolved.resolvedId) !== slug) {
+        slugToCanonical.set(slug, String(resolved.resolvedId))
+      }
+    }
+    if (slugToCanonical.size === 0) return { repaired: 0, scanned: slugs.length }
+
+    // Tables that carry a profile_id we should normalize. application_tasks may
+    // not exist on every DB/dialect — guard each UPDATE so a missing table is a
+    // silent skip, not a boot failure.
+    const tables = ['grants', 'application_tasks']
+    let repaired = 0
+    for (const table of tables) {
+      for (const [slug, canonical] of slugToCanonical) {
+        try {
+          const res = await db
+            .prepare(`UPDATE ${table} SET profile_id = ? WHERE profile_id = ?`)
+            .run(canonical, slug)
+          repaired += changesOf(res)
+        } catch {
+          // table absent on this dialect/DB — skip
+        }
+      }
+    }
+    if (repaired > 0) {
+      log.info('normalized stale designated-slug profile_ids to canonical ids', {
+        repaired,
+        slugsMapped: slugToCanonical.size,
+      })
+    }
+    return { repaired, scanned: slugs.length }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -1139,6 +1210,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
 
   const steps = []
   steps.push(await enforceStickyDeletes(db))
+  // Normalize stale designated-slug profile_ids to canonical ids BEFORE the
+  // tenancy/scope sweeps so they operate on real, resolvable profile ids.
+  steps.push(await enforceProfileIdIntegrity(db))
   steps.push(await enforceNoCrossProfileBleed(db))
   // Drop profile-less orphans next: removes rows the duplicate + relevance
   // sweeps would otherwise waste time scanning, and closes the org-scoped PDF
