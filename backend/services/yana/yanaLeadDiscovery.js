@@ -807,11 +807,20 @@ export async function getYanaStatus(db) {
     queueDepth = Number(r?.c || 0)
   } catch { /* table may be absent */ }
   const last = await latestYanaRun(db)
+  // Surface the Brave live-web circuit so Sam/Anya/Mission Control can see when
+  // Yana's enrichment is paused on an exhausted key (and when it resumes).
+  let braveCircuit = { paused: false }
+  try {
+    const { braveCircuitState } = await import('./braveRateLimit.js')
+    braveCircuit = braveCircuitState()
+  } catch { /* module always present; defensive */ }
   return {
     installed: true,
     queue_depth: queueDepth,
     last_run_at: last?.started_at || null,
     last_status: last?.status || null,
+    brave_circuit: braveCircuit,
+    web_search_paused: braveCircuit.paused === true,
     details: last || null,
   }
 }
