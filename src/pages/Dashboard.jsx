@@ -330,8 +330,25 @@ export default function Dashboard() {
   const profileOrganizationId = profileDetail?.organization_id ?? null
 
   const relevantGrants = useMemo(() => {
-    if (currentUser?.role === "admin" || !profileOrganizationId) return grants
-    return grants.filter((grant) => grant.organization_id === profileOrganizationId)
+    const base =
+      currentUser?.role === "admin" || !profileOrganizationId
+        ? grants
+        : grants.filter((grant) => grant.organization_id === profileOrganizationId)
+    // Dedup duplicate pipeline rows for the SAME opportunity (re-discovery can add
+    // a second row). Without this the same grant double-counts in every stat and
+    // shows twice in Urgent Deadlines (the HMIT/Distance-Learning duplicates).
+    // Key on the canonical funding_opportunity_id, falling back to title+funder.
+    const seen = new Set()
+    const deduped = []
+    for (const g of base) {
+      const key = g.funding_opportunity_id
+        ? `fo:${g.funding_opportunity_id}`
+        : `tf:${String(g.title || "").trim().toLowerCase()}|${String(g.funder || g.sponsor || "").trim().toLowerCase()}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      deduped.push(g)
+    }
+    return deduped
   }, [grants, currentUser?.role, profileOrganizationId])
 
   const relevantExpenses = useMemo(() => {
