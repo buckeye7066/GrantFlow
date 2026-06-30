@@ -273,10 +273,17 @@ export default function Calendar() {
                   </h4>
                   {selectedDayEvents.map((ev, i) => (
                     <div key={i} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg text-sm">
-                      <div className="flex-1">
-                        <p className="font-medium text-slate-900">{ev.title}</p>
-                        <p className="text-xs text-slate-500">{ev.sponsor} {ev.amount_max ? `| ${formatCurrency(ev.amount_max)}` : ""}</p>
-                      </div>
+                      {ev.grant_id ? (
+                        <Link to={createPageUrl("GrantDetail", { id: ev.grant_id })} className="flex-1 min-w-0 hover:underline">
+                          <p className="font-medium text-slate-900 truncate">{ev.title}</p>
+                          <p className="text-xs text-slate-500 truncate">{ev.sponsor} {ev.amount_max ? `| ${formatCurrency(ev.amount_max)}` : ""}</p>
+                        </Link>
+                      ) : (
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-slate-900">{ev.title}</p>
+                          <p className="text-xs text-slate-500">{ev.sponsor} {ev.amount_max ? `| ${formatCurrency(ev.amount_max)}` : ""}</p>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <Badge variant={ev.calendar_source === "pipeline" ? "default" : "outline"} className="text-xs">
                           {ev.calendar_source === "pipeline" ? "Pipeline" : "Catalog"}
@@ -310,8 +317,8 @@ export default function Calendar() {
                   upcoming.map((ev, i) => {
                     const evDate = toLocalDate(ev.deadline)
                     const daysLeft = Math.max(0, differenceInDays(evDate, new Date(new Date().setHours(0, 0, 0, 0))))
-                    return (
-                      <div key={i} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                    const row = (
+                      <div className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
                         <Clock className={`w-4 h-4 mt-0.5 flex-shrink-0 ${daysLeft <= 7 ? "text-red-500" : "text-slate-400"}`} />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-slate-900 truncate">{ev.title}</p>
@@ -326,6 +333,14 @@ export default function Calendar() {
                           </div>
                         </div>
                       </div>
+                    )
+                    // Deadlines should open the underlying grant when we know it.
+                    return ev.grant_id ? (
+                      <Link key={i} to={createPageUrl("GrantDetail", { id: ev.grant_id })} className="block hover:opacity-80">
+                        {row}
+                      </Link>
+                    ) : (
+                      <div key={i}>{row}</div>
                     )
                   })
                 )}

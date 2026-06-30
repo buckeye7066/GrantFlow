@@ -81,8 +81,19 @@ export default function ProfileFieldWithAI({
         ...safeFormContext,
       }
       
-      // Request AI suggestion
-      const response = await requestProfileFieldAI(context)
+      // Request AI suggestion, but don't let the shimmer hang toward the 60s
+      // network ceiling — surface a recoverable error at 30s so the user gets
+      // feedback (the recurring backend AI-timeout pattern otherwise looks frozen).
+      const AI_ASSIST_TIMEOUT_MS = 30000
+      const response = await Promise.race([
+        requestProfileFieldAI(context),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('AI is taking longer than expected. Please try again in a moment.')),
+            AI_ASSIST_TIMEOUT_MS,
+          ),
+        ),
+      ])
       
       if (response?.suggestion !== undefined && response.suggestion !== null) {
         const suggestionValue = typeof response.suggestion === 'string'

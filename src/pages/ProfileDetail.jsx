@@ -1329,7 +1329,10 @@ export default function ProfileDetail() {
               Print Profile Packet
             </Button>
             {profile.organization_id && (
-              <Button onClick={() => navigate(createPageUrl("OrganizationProfile", { id: profile.organization_id }))}>
+              // OrganizationProfile looks up by PROFILE id (profiles & orgs are the
+              // same records via two UIs). Pass profile.id, not the stale
+              // organization_id foreign key — that was the "Profile Not Found" link.
+              <Button onClick={() => navigate(createPageUrl("OrganizationProfile", { id: profile.id }))}>
                 View Linked Organization
               </Button>
             )}

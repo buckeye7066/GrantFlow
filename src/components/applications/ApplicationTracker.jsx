@@ -230,8 +230,13 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
     if (form.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contact_email.trim())) {
       nextErrors.contact_email = 'Enter a valid email address (e.g. name@example.org).'
     }
-    if (form.amount_requested !== '' && Number(form.amount_requested) < 0) {
-      nextErrors.amount_requested = 'Amount must be zero or a positive number.'
+    if (form.amount_requested !== '') {
+      const amt = Number(form.amount_requested)
+      if (!Number.isFinite(amt) || amt < 0) {
+        nextErrors.amount_requested = 'Amount must be zero or a positive number.'
+      } else if (amt > 1000000000) {
+        nextErrors.amount_requested = 'Amount looks too large — enter an amount up to $1,000,000,000.'
+      }
     }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors)
@@ -292,6 +297,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
           <input
             type="number"
             min="0"
+            max="1000000000"
             className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             value={form.amount_requested}
             onChange={(e) => set('amount_requested', e.target.value)}

@@ -1635,7 +1635,7 @@ export default function DiscoverGrants() {
                   isECFProfile ? 'text-green-800 dark:text-green-100' : 'text-foreground'
                 }>
                   <strong>Selected:</strong> {selectedProfile.display_name}
-                  {selectedProfile.organization_name && (
+                  {selectedProfile.organization_name && selectedProfile.organization_name !== selectedProfile.display_name && (
                     <span className="ml-2">({selectedProfile.organization_name})</span>
                   )}
                   {selectedProfile.primary_type && (
