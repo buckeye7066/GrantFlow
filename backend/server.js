@@ -15,6 +15,7 @@ import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { safeTokenEqual } from './utils/safeTokenEqual.js';
+import { responseEnvelope } from './utils/responseEnvelope.js';
 import { db } from './db/index.js';
 import { CANONICAL_ADMIN_EMAIL_DEFAULT } from './services/agentControl/agentControlTypes.js';
 
@@ -433,36 +434,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Standardize error envelope for JSON OBJECT responses (backward compatible):
-// - Success responses are NOT modified (avoid changing public success shapes)
-// - Error responses (HTTP >= 400) get `{ ok: false, request_id, ... }` if missing
-app.use((req, res, next) => {
-  const originalJson = res.json.bind(res);
-  res.json = (body) => {
-    const isObject = body && typeof body === 'object' && !Array.isArray(body);
-    if (!isObject) {
-      return originalJson(body);
-    }
-
-    const status = res.statusCode || 200;
-    if (status < 400) {
-      return originalJson(body);
-    }
-
-    const requestId = req.requestId || null;
-
-    const normalized = Object.prototype.hasOwnProperty.call(body, 'ok')
-      ? body
-      : { ok: false, ...body };
-
-    if (requestId && !Object.prototype.hasOwnProperty.call(normalized, 'request_id')) {
-      normalized.request_id = requestId;
-    }
-
-    return originalJson(normalized);
-  };
-  next();
-});
+// Standardized JSON response envelope + double-send guard.
+// See backend/utils/responseEnvelope.js. Single choke point: error objects
+// (HTTP >= 400) get `{ ok: false, request_id, ... }`; success shapes are left
+// untouched; a res.json() after the response is committed is a logged no-op
+// instead of an unhandled "Cannot set headers after they are sent" rejection.
+app.use(responseEnvelope);
 
 // Request timeout middleware - prevent hanging requests from causing 502 errors
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // Default 30 seconds

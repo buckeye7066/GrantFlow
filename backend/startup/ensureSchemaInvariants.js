@@ -384,6 +384,7 @@ export async function ensureFundingOpportunityVerificationColumns(db, { logger =
     logger,
     async () => {
       await db.exec(`
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS url TEXT;
         ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;
         ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verification_method TEXT;
         ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verified_by TEXT;
