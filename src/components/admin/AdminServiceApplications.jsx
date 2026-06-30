@@ -229,6 +229,9 @@ export default function AdminServiceApplications() {
                       {app.type === 'contact_admin' && (
                         <Badge variant="outline">Contact Form</Badge>
                       )}
+                      {app.type === 'signup' && (
+                        <Badge variant="outline">Signup</Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-sm text-muted-foreground">
                       <span className="flex items-center gap-1">
@@ -395,7 +398,7 @@ export default function AdminServiceApplications() {
                     Mark Contacted
                   </Button>
                 )}
-                {selectedApp?.status !== 'converted' && (
+                {selectedApp?.status !== 'converted' && !selectedApp?.profile_id && (
                   <Button
                     variant="default"
                     onClick={() => {
