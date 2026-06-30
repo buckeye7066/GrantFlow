@@ -25,7 +25,11 @@ router.get('/announcements/pending', async (req, res) => {
     try { profileIds = (await getAccessibleProfileIds(req.db, user)) || [] } catch { profileIds = [] }
     const audienceVals = ['all', ...profileIds.map(String)]
     const audiencePh = audienceVals.map(() => '?').join(', ')
-    const activePredicate = req.db?.dialect === 'postgres' ? 'active IS TRUE' : 'active = 1'
+    // `active` has drifted to an INTEGER column on some prod Postgres instances,
+    // so `active IS TRUE` throws "argument of IS TRUE must be type boolean, not
+    // type integer". Cast first so the predicate holds whether the column is a
+    // boolean or an integer (0/1) — and still maps to `active = 1` on SQLite.
+    const activePredicate = req.db?.dialect === 'postgres' ? 'CAST(active AS BOOLEAN) IS TRUE' : 'active = 1'
     const rows = await req.db.prepare(
       `SELECT id, title, body, type, created_at
          FROM announcements
