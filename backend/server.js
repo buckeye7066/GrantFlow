@@ -2641,7 +2641,7 @@ app.get('/api/pipeline/stats', async (req, res) => {
     // re-discovered grants (the "Discovery 188 vs Discovered 11" discrepancy).
     const { dedupePipelineGrants } = await import('../shared/dedupePipelineGrants.js');
     const rawRows = await db.prepare(`
-      SELECT id, status, funding_opportunity_id, title, sponsor, amount_awarded
+      SELECT id, status, funding_opportunity_id, title, funder, amount_awarded
       FROM grants
       WHERE ${scope.sql}
     `).all(...scope.params);
