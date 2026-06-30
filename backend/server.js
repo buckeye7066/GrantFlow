@@ -78,6 +78,7 @@ import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 import { ensureAuth, ensureAdmin } from './middleware/auth.js';
@@ -1998,6 +1999,38 @@ app.use(pipelineMonitor())
 app.get('/api/admin/pipeline-health', ensureAuth, ensureAdmin, (req, res) => {
   res.json(getPipelineHealth())
 })
+
+// Client-reported error sink. Authenticated users' frontend boundaries POST
+// here when the SPA crashes; reportErrorToOwner self-skips for admins/owner and
+// throttles, so this is safe to leave open to any logged-in user. Fire-and-forget.
+app.post('/api/report-client-error', (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const message = typeof body.message === 'string' ? body.message.slice(0, 4000) : '';
+    // Ignore noise / missing payloads — nothing to report without a message.
+    if (!message.trim()) return res.status(204).end();
+
+    const error = new Error(message);
+    error.name = typeof body.name === 'string' && body.name.trim() ? body.name.slice(0, 200) : 'ClientError';
+    if (typeof body.stack === 'string') error.stack = body.stack.slice(0, 8000);
+    if (typeof body.componentStack === 'string' && body.componentStack.trim()) {
+      error.stack = `${error.stack || ''}\n\nComponent stack:\n${body.componentStack.slice(0, 8000)}`;
+    }
+
+    reportErrorToOwner({
+      error,
+      source: 'frontend',
+      user: req.user,
+      route: typeof body.route === 'string' ? body.route.slice(0, 500) : null,
+      method: 'CLIENT',
+      requestId: req.requestId || req.id || req.request_id || null,
+      statusCode: Number(body.statusCode) || 500,
+    });
+  } catch (err) {
+    console.error('[report-client-error]', err?.message || err);
+  }
+  return res.status(204).end();
+});
 
 // API routes
 app.use('/api/auth', authRouter);

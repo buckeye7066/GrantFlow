@@ -11,8 +11,11 @@ import { registerQueryClient } from '@/stores/authStore'
 import { migrateLegacyProfileScopedKeys } from '@/utils/profileScopedStorage'
 import { maybeReloadForStaleChunk } from '@/utils/lazyWithRetry'
 import { captureFrontendException, initFrontendObservability } from '@/utils/observability.js'
+import { initClientErrorReporting } from '@/utils/reportClientError.js'
 
 initFrontendObservability()
+// Register global window error / unhandledrejection -> owner-email reporting (once).
+initClientErrorReporting()
 
 // Global stale-chunk recovery. After a deploy, the open tab still references
 // chunk hashes that no longer exist; a dynamic import() then fails. lazyWithRetry
