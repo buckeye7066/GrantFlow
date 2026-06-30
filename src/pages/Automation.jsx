@@ -2049,7 +2049,7 @@ export default function Automation() {
     <div className="p-6 md:p-10 space-y-8">
       <header className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-3">
-          <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
             <Bot className="h-8 w-8 text-blue-600" />
             Automation Control Center
           </h1>

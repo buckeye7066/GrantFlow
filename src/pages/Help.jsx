@@ -143,6 +143,18 @@ export default function Help() {
     });
   }, [searchQuery]);
 
+  // The "Get started" cards must respond to the search box too — previously they
+  // rendered unfiltered, so a search like "deadline" appeared to do nothing.
+  const filteredBigButtons = useMemo(() => {
+    if (!searchQuery.trim()) return BIG_BUTTONS;
+    const q = searchQuery.trim().toLowerCase();
+    return BIG_BUTTONS.filter((btn) =>
+      (btn.title || "").toLowerCase().includes(q) ||
+      (btn.description || "").toLowerCase().includes(q) ||
+      (Array.isArray(btn.links) && btn.links.some((link) => (link.label || "").toLowerCase().includes(q)))
+    );
+  }, [searchQuery]);
+
   const filteredFaqs = useMemo(() => {
     if (!searchQuery.trim()) return FAQ_ITEMS;
     const q = searchQuery.trim().toLowerCase();
@@ -179,10 +191,11 @@ export default function Help() {
         </div>
 
         {/* Big Buttons */}
+        {filteredBigButtons.length > 0 && (
         <section>
           <h2 className="text-2xl font-bold text-slate-900 mb-4">Get started</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {BIG_BUTTONS.map((btn) => (
+            {filteredBigButtons.map((btn) => (
               <Card
                 key={btn.title}
                 className="border-2 hover:border-primary/50 hover:shadow-md transition-all"
@@ -205,6 +218,7 @@ export default function Help() {
             ))}
           </div>
         </section>
+        )}
 
         {/* Common Tasks */}
         <section>

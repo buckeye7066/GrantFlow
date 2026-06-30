@@ -213,15 +213,32 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
     status: initialValues?.status ?? 'draft',
   }))
 
+  const [errors, setErrors] = useState({})
+
   function set(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }))
+    // Clear a field's error as soon as the user edits it.
+    setErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev))
   }
 
   function handleSubmit(e) {
     e.preventDefault()
-    if (!form.grant_name.trim()) return
-    if (!form.profile_id) return
+    // Validate with visible, field-level feedback instead of a silent no-op.
+    const nextErrors = {}
+    if (!form.grant_name.trim()) nextErrors.grant_name = 'Grant name is required.'
+    if (!form.profile_id) nextErrors.profile_id = 'Select a profile for this application.'
+    if (form.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contact_email.trim())) {
+      nextErrors.contact_email = 'Enter a valid email address (e.g. name@example.org).'
+    }
+    if (form.amount_requested !== '' && Number(form.amount_requested) < 0) {
+      nextErrors.amount_requested = 'Amount must be zero or a positive number.'
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors)
+      return
+    }
 
+    setErrors({})
     const payload = {
       ...form,
       amount_requested: form.amount_requested !== '' ? Number(form.amount_requested) : null,
@@ -240,6 +257,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
           required
           placeholder="e.g. Community Development Block Grant"
         />
+        {errors.grant_name && <p className="mt-1 text-xs text-red-600">{errors.grant_name}</p>}
       </div>
 
       <div>
@@ -256,6 +274,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
             ))}
           </SelectContent>
         </Select>
+        {errors.profile_id && <p className="mt-1 text-xs text-red-600">{errors.profile_id}</p>}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -278,6 +297,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
             onChange={(e) => set('amount_requested', e.target.value)}
             placeholder="0"
           />
+          {errors.amount_requested && <p className="mt-1 text-xs text-red-600">{errors.amount_requested}</p>}
         </div>
       </div>
 
@@ -335,6 +355,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
             value={form.contact_email}
             onChange={(e) => set('contact_email', e.target.value)}
           />
+          {errors.contact_email && <p className="mt-1 text-xs text-red-600">{errors.contact_email}</p>}
         </div>
       </div>
 
@@ -342,7 +363,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
           Cancel
         </Button>
-        <Button type="submit" disabled={isSaving || !form.grant_name.trim() || !form.profile_id}>
+        <Button type="submit" disabled={isSaving}>
           {isSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : 'Save'}
         </Button>
       </DialogFooter>
@@ -492,7 +513,7 @@ export default function ApplicationTracker() {
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="min-w-0 flex-1">
-          <h1 className="text-3xl font-bold text-slate-900">Application Tracker</h1>
+          <h1 className="text-3xl font-bold text-foreground">Application Tracker</h1>
           <p className="text-slate-600 mt-1">
             Track every application from draft to outcome — {apps.length} total
           </p>

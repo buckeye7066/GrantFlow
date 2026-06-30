@@ -572,7 +572,7 @@ export default function Pipeline() {
           <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
             <div className="min-w-0 flex-1">
               <p className="money text-xs font-bold uppercase tracking-[0.12em] text-current-emerald">Your funding current</p>
-              <h1 className="mt-1 font-display text-3xl font-extrabold tracking-tight text-current-ink">Master Grant Pipeline</h1>
+              <h1 className="mt-1 font-display text-3xl font-extrabold tracking-tight text-foreground">Master Grant Pipeline</h1>
               <p className="money mt-2 text-sm text-current-ink/60">
                 Track all your grants across every profile • {filteredGrants.length} of {scopedGrants.length} grants
               </p>

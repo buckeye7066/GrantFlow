@@ -162,7 +162,9 @@ export default function MyProfiles() {
   };
   
   const handleCreateProfile = () => {
-    navigate(createPageUrl("Organizations"));
+    // Land directly in the Quick Add create flow on Organizations rather than
+    // just dropping the user on the list (Organizations reads ?quickAdd=1).
+    navigate(createPageUrl("Organizations", { quickAdd: 1 }));
   };
   
   // Loading state

@@ -1,6 +1,6 @@
-import React, { Suspense, useMemo, useState } from "react"
+import React, { Suspense, useEffect, useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AlertCircle, Loader2 } from "lucide-react"
@@ -59,6 +59,13 @@ export default function Organizations() {
   const user = useAuthStore((state) => state.user)
   const isAdmin = user?.is_admin ?? false
   const log = React.useMemo(() => createLogger("OrganizationsPage"), [])
+
+  // Open the Quick Add create flow directly when arrived here via "Create
+  // Profile" on My Profiles (navigate adds ?quickAdd=1).
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    if (searchParams.get("quickAdd") === "1") setQuickAddOpen(true)
+  }, [searchParams])
 
   const {
     data: profiles = [],
@@ -307,7 +314,7 @@ const matchesSearch =
       <div className="max-w-7xl mx-auto">
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">Organizations</h1>
+            <h1 className="text-3xl font-bold text-foreground">Organizations</h1>
             <p className="text-slate-600 mt-2">
               Manage organizations, students, and individuals seeking funding.
             </p>
