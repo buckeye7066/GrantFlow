@@ -94,3 +94,25 @@ export function freeWeekSignupGrant(env = {}, now = Date.now()) {
   const days = SIGNUP_GRANT_DAYS[period]
   return { period, days, until: new Date(now + days * 86400000).toISOString() }
 }
+
+/**
+ * The always-on NEW-USER free trial — independent of the Free Week promo. Every
+ * newly-created profile gets its own free period starting at signup (the timer
+ * runs from account creation via billing_accounts.free_until, self-expiring).
+ * ON by default: only an explicit falsey value turns it off, so a fresh deploy
+ * gives every new user 7 free days with no env config required.
+ *
+ *   SIGNUP_TRIAL_ENABLED = 'true' (default) | 'false'/'off'/'0'/'no' to disable
+ *   SIGNUP_TRIAL_PERIOD  = 'week' (default, 7 days) | 'month' (30) | 'none'/off
+ *
+ * Returns { period, days, until } or null when disabled.
+ */
+export function signupTrialGrant(env = {}, now = Date.now()) {
+  const enabled = String(env.SIGNUP_TRIAL_ENABLED ?? 'true').trim().toLowerCase()
+  if (['false', 'off', '0', 'no', 'none'].includes(enabled)) return null
+  const raw = String(env.SIGNUP_TRIAL_PERIOD ?? 'week').trim().toLowerCase()
+  if (['none', 'off', 'false', '0', 'no'].includes(raw)) return null
+  const period = SIGNUP_GRANT_DAYS[raw] ? raw : 'week'
+  const days = SIGNUP_GRANT_DAYS[period]
+  return { period, days, until: new Date(now + days * 86400000).toISOString() }
+}

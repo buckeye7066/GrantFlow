@@ -7,7 +7,7 @@
  * deterministic and never touches the wall clock.
  */
 import { describe, it, expect } from 'vitest'
-import { computeFreeWeekStatus, isFreeWeekActive, freeWeekSignupGrant } from '../../shared/freeWeek.js'
+import { computeFreeWeekStatus, isFreeWeekActive, freeWeekSignupGrant, signupTrialGrant } from '../../shared/freeWeek.js'
 
 const T0 = Date.parse('2026-06-24T12:00:00Z')
 
@@ -82,5 +82,35 @@ describe('freeWeekSignupGrant (per-signup full period)', () => {
   it('is null once the window has closed', () => {
     const env = { FREE_WEEK_ENABLED: 'true', FREE_WEEK_END: '2026-06-01T00:00:00Z' }
     expect(freeWeekSignupGrant(env, T0)).toBe(null)
+  })
+})
+
+describe('signupTrialGrant (always-on new-user trial)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+
+  it('grants a 7-day week BY DEFAULT, with no env at all (promo off)', () => {
+    const g = signupTrialGrant({}, T0)
+    expect(g).toMatchObject({ period: 'week', days: 7 })
+    expect(Date.parse(g.until)).toBe(T0 + 7 * DAY)
+  })
+
+  it('is independent of the Free Week promo (still grants when FREE_WEEK is off)', () => {
+    expect(isFreeWeekActive({}, T0)).toBe(false)
+    expect(signupTrialGrant({}, T0)).toMatchObject({ period: 'week', days: 7 })
+  })
+
+  it('can be disabled with SIGNUP_TRIAL_ENABLED=false', () => {
+    expect(signupTrialGrant({ SIGNUP_TRIAL_ENABLED: 'false' }, T0)).toBe(null)
+    expect(signupTrialGrant({ SIGNUP_TRIAL_ENABLED: 'off' }, T0)).toBe(null)
+    expect(signupTrialGrant({ SIGNUP_TRIAL_ENABLED: '0' }, T0)).toBe(null)
+  })
+
+  it('honors SIGNUP_TRIAL_PERIOD=month and =none', () => {
+    expect(signupTrialGrant({ SIGNUP_TRIAL_PERIOD: 'month' }, T0)).toMatchObject({ period: 'month', days: 30 })
+    expect(signupTrialGrant({ SIGNUP_TRIAL_PERIOD: 'none' }, T0)).toBe(null)
+  })
+
+  it('falls back to a week for an unrecognized period', () => {
+    expect(signupTrialGrant({ SIGNUP_TRIAL_PERIOD: 'decade' }, T0)).toMatchObject({ period: 'week', days: 7 })
   })
 })
