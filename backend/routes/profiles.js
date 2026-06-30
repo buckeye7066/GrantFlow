@@ -1302,26 +1302,33 @@ router.post('/', createProfileLimiter, async (req, res) => {
 
   await linkProfileToAdmin(req.db, profileId)
 
-  // Free Week promotion: a profile created while the window is open gets its OWN
-  // full free period from now (self-expiring via billing_accounts.free_until),
-  // so someone who joins on the last day of the promo still gets a complete
-  // trial after the shared window closes. Best-effort — never fail profile
-  // creation if the grant write fails.
+  // New-user free trial: every newly-created profile gets its OWN free period
+  // starting now (self-expiring via billing_accounts.free_until, timer from
+  // signup). The always-on signup trial (signupTrialGrant) is ON by default; a
+  // concurrently-active Free Week promo can grant a LONGER period. We grant the
+  // longer of the two ONCE — grantFreePeriod extends from any existing window,
+  // so two calls would stack. Best-effort — never fail profile creation.
   try {
-    const { freeWeekSignupGrant } = await import('../../shared/freeWeek.js')
-    const signupGrant = freeWeekSignupGrant(process.env)
-    if (signupGrant) {
+    const { freeWeekSignupGrant, signupTrialGrant } = await import('../../shared/freeWeek.js')
+    const trial = signupTrialGrant(process.env)
+    const promo = freeWeekSignupGrant(process.env)
+    const candidates = [
+      trial && { period: trial.period, days: trial.days, reason: 'signup_trial', grantedBy: 'signup_trial' },
+      promo && { period: promo.period, days: promo.days, reason: 'free_week_signup', grantedBy: 'free_week_promo' },
+    ].filter(Boolean)
+    if (candidates.length) {
+      const best = candidates.sort((a, b) => b.days - a.days)[0]
       const { grantFreePeriod } = await import('../services/billing/invoiceService.js')
       await grantFreePeriod(req.db, {
         profileId,
-        kind: signupGrant.period,
-        reason: 'free_week_signup',
-        grantedBy: 'free_week_promo',
+        kind: best.period,
+        reason: best.reason,
+        grantedBy: best.grantedBy,
         announce: false,
       })
     }
   } catch (err) {
-    console.warn('[profiles] free-week signup grant failed', { profile_id: profileId, error: err?.message })
+    console.warn('[profiles] signup free-period grant failed', { profile_id: profileId, error: err?.message })
   }
 
   const refreshed = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(profileId)
