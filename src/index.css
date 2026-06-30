@@ -315,6 +315,22 @@ button:focus-visible {
   .dark :is(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50) {
     background-color: hsl(var(--card)) !important;
   }
+  /* Extend coverage to the lighter tints that remained faint: 400/300 text,
+     light non-white surfaces (slate/gray 50/100), and the app's custom ink token
+     used with an opacity modifier (text-current-ink/60 on Pipeline). Keep these
+     muted-but-readable rather than full white so hierarchy survives. */
+  .dark :is(.text-slate-400, .text-slate-300, .text-gray-400, .text-gray-300) {
+    color: rgb(148 163 184) !important; /* slate-400 — readable muted on dark */
+  }
+  .dark :is(.text-muted-foreground) {
+    color: rgb(148 163 184) !important;
+  }
+  .dark :is(.text-current-ink\/60, .text-current-ink\/70, .text-current-ink\/50) {
+    color: rgb(148 163 184) !important;
+  }
+  .dark :is(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-gray-100) {
+    background-color: hsl(var(--card)) !important;
+  }
 
   .high-contrast :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600, .text-muted-foreground) {
     color: hsl(var(--foreground)) !important;

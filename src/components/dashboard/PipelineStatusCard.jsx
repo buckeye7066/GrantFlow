@@ -37,7 +37,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
                 ? "Unable to sync pipeline metrics. Showing default workflow guidance."
                 : isLoading
                   ? "Syncing latest data…"
-                  : `Tracking ${total} active opportunities across stages.`}
+                  : `Tracking ${total} pipeline grants across stages.`}
             </p>
           </div>
           <Link to={createPageUrl("Pipeline")}>

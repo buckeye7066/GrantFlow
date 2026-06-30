@@ -1771,7 +1771,7 @@ export default function DiscoverGrants() {
             discovery run, so the backend returned discovery_pending and an empty
             list. Prompt the user to run discovery rather than implying "no
             matches". Suppressed while searching or once any results exist. */}
-        {discoveryPending && !isSearching && combinedOpportunities.length === 0 && (
+        {discoveryPending && !hasSearched && !isSearching && combinedOpportunities.length === 0 && (
           <Card className="mb-8 border-blue-200 bg-blue-50/50">
             <CardContent className="p-6 space-y-4 text-center">
               <Sparkles className="h-8 w-8 mx-auto text-blue-600" />
@@ -1813,7 +1813,7 @@ export default function DiscoverGrants() {
         )}
 
         {/* Zero-result recovery card: shown after a search completes with no results */}
-        {!discoveryPending && hasSearched && combinedOpportunities.length === 0 && !isSearching && (
+        {hasSearched && combinedOpportunities.length === 0 && !isSearching && (
           <Card className="mb-8 border-amber-200 bg-amber-50/50">
             <CardContent className="p-6 space-y-5">
               <div className="flex items-start gap-3">

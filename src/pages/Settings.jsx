@@ -43,16 +43,17 @@ export default function Settings() {
 
   const handleSave = async () => {
     setSaveStatus('saving')
-    try {
-      // updatePreferences is called on every change; re-trigger a final flush
-      // (no-op if store persists eagerly, but catches any pending writes)
-      await updatePreferences(preferences)
+    // updatePreferences resolves to true on success, false on failure (it never
+    // throws). Only show "Saved" when the backend actually accepted the write —
+    // otherwise the button would lie while the error banner/toast say it failed.
+    const ok = await updatePreferences(preferences)
+    if (ok) {
       setSaveStatus('saved')
       setHasChanges(false)
       setTimeout(() => setSaveStatus(null), 2000)
-    } catch (_err) {
+    } else {
       setSaveStatus(null)
-      // error state is already surfaced via the store's error field rendered above
+      // Failure is surfaced via the store's error banner + toast (rendered above).
     }
   }
 

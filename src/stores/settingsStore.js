@@ -182,6 +182,7 @@ export const useSettingsStore = create((set, get) => ({
       const merged = { ...DEFAULT_PREFERENCES, ...data }
       set({ preferences: merged, error: null })
       saveCachedPreferences(merged)
+      return true
     } catch (error) {
       console.error('Failed to update preferences:', error)
       // Revert on error and notify user so they know the change didn't save
@@ -197,6 +198,10 @@ export const useSettingsStore = create((set, get) => ({
       } catch {
         // toast may not be mounted in all contexts
       }
+      // Signal failure so callers (e.g. Settings "Save Changes") reflect the real
+      // outcome instead of showing success. We deliberately do NOT throw — many
+      // callers are fire-and-forget and an unhandled rejection would be noise.
+      return false
     }
   },
 

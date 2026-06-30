@@ -134,7 +134,19 @@ function detectMilitaryStatus(profile, sections, blob) {
 function detectArchetype(profile, thesis, sections, blob) {
   const primary = lc(profile?.primary_type ?? profile?.profile_type ?? profile?.type);
   const needText = lc([profile?.needs, profile?.need_categories].flat().join(' '));
-  const isStudent = thesis.is_student || primary.includes('student') || hasValue(sections.education) || hasValue(sections.university_applications);
+  // An explicit non-student person (individual/family/senior/veteran/etc.) must NOT
+  // be classified as a "student" just because an education section has data — almost
+  // everyone has education history. Inferring student-ness from section presence is
+  // only allowed when the primary type isn't an explicit non-student person type;
+  // otherwise require an explicit student signal (thesis.is_student or a *_student
+  // primary type). This stopped Individual profiles getting FAFSA/college content
+  // and the "Student funding and portal action plan".
+  const NON_STUDENT_PERSON_TYPES = ['individual', 'family', 'senior', 'veteran', 'disabled_adult', 'medical_need', 'individual_need'];
+  const isExplicitNonStudentPerson = NON_STUDENT_PERSON_TYPES.includes(primary);
+  const isStudent =
+    thesis.is_student ||
+    primary.includes('student') ||
+    (!isExplicitNonStudentPerson && (hasValue(sections.education) || hasValue(sections.university_applications)));
   const isFoodTruck = /\bfood truck|mobile food|food trailer\b/.test(blob);
   const isStartup = thesis.needs?.includes('startup') || /\b(startup|start a business|starting a business|entrepreneur|launch)\b/.test(`${blob} ${needText}`);
   const applicantHas = (types) => types.some((type) => thesis.applicant_types?.includes(type));

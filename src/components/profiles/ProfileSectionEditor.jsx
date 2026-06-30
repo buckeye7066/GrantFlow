@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
+import { isValidPhone } from "@/utils/validators"
 import {
   Dialog,
   DialogContent,
@@ -144,7 +145,7 @@ const basicInfoSchema = z.object({
   middle_name: z.string().optional().or(z.literal("")),
   last_name: z.string().optional().or(z.literal("")),
   email: z.string().email("Enter a valid email address").optional().or(z.literal("")),
-  phone: z.string().optional().or(z.literal("")),
+  phone: z.string().refine((v) => !v || isValidPhone(v), "Enter a valid phone number").optional().or(z.literal("")),
   website: z.string().url("Enter a valid URL").optional().or(z.literal("")),
   address: z.string().optional().or(z.literal("")),
   city: z.string().optional().or(z.literal("")),
