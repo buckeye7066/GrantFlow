@@ -311,6 +311,10 @@ export default function NOFOParser() {
           errorMsg = err.response.data;
         } else if (err.response.data.message) {
           errorMsg = err.response.data.message;
+        } else if (err.response.data.warning) {
+          // The backend surfaces a provider-unavailable 503 in `warning`; show it
+          // so the user sees "AI provider unavailable" instead of a vague error.
+          errorMsg = err.response.data.warning;
         } else if (err.response.data.details) {
           errorMsg = err.response.data.details;
         }

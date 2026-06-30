@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import client from '@/api/client';
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,14 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
     },
     enabled: !!grantId,
   });
+
+  // Populate organization_id from the grant once it loads. Without this the
+  // submit button stayed permanently disabled (organization_id never left "").
+  useEffect(() => {
+    if (grant?.organization_id) {
+      setFormData((prev) => ({ ...prev, organization_id: grant.organization_id }));
+    }
+  }, [grant]);
 
   const mutation = useMutation({
     mutationFn: (data) => {
@@ -95,7 +103,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
       </div>
       <div className="space-y-2">
         <Label>Amount</Label>
-        <Input type="number" value={formData.amount} onChange={(e) => setFormData({...formData, amount: parseFloat(e.target.value) || 0})} required />
+        <Input type="number" min="0" step="0.01" value={formData.amount} onChange={(e) => setFormData({...formData, amount: parseFloat(e.target.value) || 0})} required />
       </div>
        <div className="space-y-2">
         <Label>Payment Method</Label>
@@ -109,7 +117,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
         </Select>
       </div>
       <div className="flex justify-end">
-        <Button type="submit" disabled={mutation.isPending || !formData.organization_id}>
+        <Button type="submit" disabled={mutation.isPending || !formData.grant_id || !formData.vendor || !formData.category || !(formData.amount > 0)}>
           {mutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
           Add Expense
         </Button>

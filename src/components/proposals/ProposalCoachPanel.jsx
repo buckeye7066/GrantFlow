@@ -366,7 +366,11 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication,
 
     const getStatusText = () => {
         if (ai_status === 'ready' && grant.ai_updated_at) {
-            return `Last analyzed: ${new Date(grant.ai_updated_at).toLocaleString()}`;
+            const analyzedAt = new Date(grant.ai_updated_at);
+            if (!isNaN(analyzedAt.getTime())) {
+                return `Last analyzed: ${analyzedAt.toLocaleString()}`;
+            }
+            return 'Analysis ready';
         }
         if (loading) return 'Analyzing...';
         return 'Ready to analyze';

@@ -3,6 +3,7 @@ import React, { useState, useMemo } from "react";
 import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { daysUntilLocal } from "@/components/shared/dateUtils";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -65,7 +66,10 @@ export default function Proposals() {
     if (!grant.deadline) return false;
     if (grant.deadline.toLowerCase() === 'rolling') return false;
     if (!isValidDate(grant.deadline)) return false;
-    return new Date(grant.deadline) < new Date();
+    // Expired only once the deadline DAY has passed in the user's local calendar
+    // (daysUntilLocal < 0). Avoids the UTC off-by-one that flagged a still-open
+    // deadline as expired for users in negative-offset zones.
+    return daysUntilLocal(grant.deadline) < 0;
   };
 
   // Apply all filters
