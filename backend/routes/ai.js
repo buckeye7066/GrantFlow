@@ -1629,16 +1629,103 @@ Return ONLY valid JSON:
       parsed = sanitizeTodoPlan(parsed, { today: now, completeSectionKeys });
     }
 
+    // Persist the plan so it survives reload + Regenerate, PRESERVING any
+    // existing per-item completion (keyed by category::title). The plan used to
+    // live only in browser state and vanished on refresh, which made "mark done"
+    // impossible to keep. Best-effort: still return the plan if the write fails.
+    let completions = {};
+    try {
+      const existing = await db.prepare('SELECT completions FROM profile_todo_plans WHERE profile_id = ?').get(profile_id);
+      try { completions = existing?.completions ? JSON.parse(existing.completions) : {}; } catch { completions = {}; }
+      const nowSql = db.dialect === 'postgres' ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+      await db.prepare(`
+        INSERT INTO profile_todo_plans (profile_id, plan, applicant_name, generated_at, updated_at)
+        VALUES (?, ?, ?, ${nowSql}, ${nowSql})
+        ON CONFLICT (profile_id) DO UPDATE SET
+          plan = EXCLUDED.plan,
+          applicant_name = EXCLUDED.applicant_name,
+          generated_at = EXCLUDED.generated_at,
+          updated_at = EXCLUDED.updated_at
+      `).run(profile_id, JSON.stringify(parsed || { raw: rawText }), applicantName);
+    } catch (persistErr) {
+      console.warn('[generate-profile-todo] persist failed (returning plan anyway):', persistErr?.message || persistErr);
+    }
+
     res.json({
       success: true,
       profile_id,
       applicant_name: applicantName,
       pipeline_count: activeGrants.length,
       todo: parsed || { raw: rawText },
+      completions,
     });
   } catch (error) {
     console.error('[generate-profile-todo] Error:', error);
     res.status(500).json(formatError(error));
+  }
+});
+
+/**
+ * GET /api/ai/profile-todo?profile_id=...
+ * Returns the persisted Profile Action Plan + per-item completion map so the
+ * checklist (and what's checked off) survives reloads.
+ */
+router.get('/profile-todo', async (req, res) => {
+  try {
+    const profile_id = String(req.query.profile_id || '');
+    if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
+    if (!(await ensureProfileAccess(req, res, profile_id))) return;
+    const row = await req.db.prepare(
+      'SELECT plan, completions, applicant_name, generated_at FROM profile_todo_plans WHERE profile_id = ?',
+    ).get(profile_id);
+    const parseSafe = (v, fb) => { try { return v ? JSON.parse(v) : fb; } catch { return fb; } };
+    return res.json({
+      success: true,
+      profile_id,
+      todo: parseSafe(row?.plan, null),
+      completions: parseSafe(row?.completions, {}),
+      applicant_name: row?.applicant_name ?? null,
+      generated_at: row?.generated_at ?? null,
+    });
+  } catch (error) {
+    console.error('[profile-todo:get] Error:', error);
+    return res.status(500).json(formatError(error));
+  }
+});
+
+/**
+ * POST /api/ai/profile-todo/complete
+ * Body: { profile_id, item_key, done, doc_id? }
+ * Toggles a checklist item's completion in the persisted plan. `item_key` is a
+ * stable category::title hash from the client so a checked item stays checked
+ * after Regenerate. `doc_id` links an uploaded document that fulfilled the item.
+ */
+router.post('/profile-todo/complete', async (req, res) => {
+  try {
+    const { profile_id, item_key, done, doc_id } = req.body || {};
+    if (!profile_id || !item_key) return res.status(400).json({ error: 'profile_id and item_key are required' });
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return;
+    const db = req.db;
+    const row = await db.prepare('SELECT completions FROM profile_todo_plans WHERE profile_id = ?').get(profile_id);
+    let map = {};
+    try { map = row?.completions ? JSON.parse(row.completions) : {}; } catch { map = {}; }
+    if (done) {
+      map[String(item_key)] = { done: true, doc_id: doc_id || null, at: new Date().toISOString() };
+    } else {
+      delete map[String(item_key)];
+    }
+    const mapJson = JSON.stringify(map);
+    const nowSql = db.dialect === 'postgres' ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+    if (row) {
+      await db.prepare(`UPDATE profile_todo_plans SET completions = ?, updated_at = ${nowSql} WHERE profile_id = ?`).run(mapJson, profile_id);
+    } else {
+      // Allow checking an item even if no plan row exists yet (defensive).
+      await db.prepare(`INSERT INTO profile_todo_plans (profile_id, completions, updated_at) VALUES (?, ?, ${nowSql})`).run(profile_id, mapJson);
+    }
+    return res.json({ success: true, profile_id, item_key: String(item_key), done: Boolean(done), completions: map });
+  } catch (error) {
+    console.error('[profile-todo:complete] Error:', error);
+    return res.status(500).json(formatError(error));
   }
 });
 
