@@ -621,7 +621,16 @@ router.get('/', async (req, res) => {
       }
     });
 
-    res.json(parsed);
+    // Collapse duplicate pipeline rows for the same opportunity so lists (and the
+    // counts derived from them) never double-show a grant. Skipped when paging or
+    // filtering by url (those callers want exact rows). Opt out with ?dedupe=0.
+    let result = parsed;
+    if (String(req.query.dedupe ?? '') !== '0' && !urlFilter) {
+      const { dedupePipelineGrants } = await import('../../shared/dedupePipelineGrants.js');
+      result = dedupePipelineGrants(parsed);
+    }
+
+    res.json(result);
   } catch (error) {
     console.error('Error listing grants:', error);
     res.status(500).json(formatError(error));

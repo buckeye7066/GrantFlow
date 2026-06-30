@@ -2635,12 +2635,17 @@ app.get('/api/pipeline/stats', async (req, res) => {
     // reconciles with the rest of the dashboard instead of leaking DB-wide
     // totals (the old query was globally unscoped).
     const scope = buildGrantScopeFromContext(req.ctx);
-    const rows = await db.prepare(`
-      SELECT status, COUNT(*) as count
+    // Fetch the rows (not a raw COUNT) and dedup duplicate pipeline entries for
+    // the same opportunity BEFORE bucketing — using the SAME dedup as /api/grants
+    // — so the funnel total matches the deduped lists instead of double-counting
+    // re-discovered grants (the "Discovery 188 vs Discovered 11" discrepancy).
+    const { dedupePipelineGrants } = await import('../shared/dedupePipelineGrants.js');
+    const rawRows = await db.prepare(`
+      SELECT id, status, funding_opportunity_id, title, sponsor, amount_awarded
       FROM grants
       WHERE ${scope.sql}
-      GROUP BY status
     `).all(...scope.params);
+    const rows = dedupePipelineGrants(rawRows);
 
     // Bucket every grant into the canonical 11 pipeline stages via the single
     // source of truth (shared/pipelineStages.js). canonicalStage() resolves every
@@ -2649,7 +2654,7 @@ app.get('/api/pipeline/stats', async (req, res) => {
     rows.forEach((row) => {
       const stage = canonicalStage(row.status);
       if (stage && canonical[stage] !== undefined) {
-        canonical[stage] += Number(row.count ?? 0);
+        canonical[stage] += 1;
       }
     });
 

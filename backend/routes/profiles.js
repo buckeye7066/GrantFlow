@@ -625,6 +625,12 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     let isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
     const includeSummary = req.query.summary === 'true'
     const includeDeleted = req.query.includeDeleted === 'true'
+    // Hide Amy's synthetic crawler-training profiles (created_by 'agent:amy') from
+    // the owner-facing profile list — they are not real applicants and reading
+    // "Amy Synthetic — College Student #3" in the list makes prod look like
+    // staging. Internal tooling can opt back in with ?include_synthetic=1.
+    const includeSynthetic = req.query.include_synthetic === '1'
+    const excludeSyntheticSql = includeSynthetic ? '' : " AND COALESCE(p.created_by, '') <> 'agent:amy'"
     const scopeMine = req.query.scope === 'mine' || req.query.mine === 'true'
     const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
 
@@ -748,7 +754,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
 
       const rows = await req.db
         .prepare(
-          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted}${excludeSyntheticSql} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
         )
         .all(...idList, limit, offset)
 
@@ -779,7 +785,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       // Get all accessible profiles (with pagination)
       const rows = await req.db
         .prepare(
-          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted} ORDER BY p.created_at ASC LIMIT ? OFFSET ?`,
+          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted}${excludeSyntheticSql} ORDER BY p.created_at ASC LIMIT ? OFFSET ?`,
         )
         .all(...ids, limit, offset)
 
@@ -797,7 +803,12 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // boolean `includeDeleted`; no user-supplied values flow into the
     // string, so the template-literal interpolation below is safe. The
     // `safeAdminWhere` name makes that visible to the auditor.
-    const safeAdminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+    let safeAdminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+    if (!includeSynthetic) {
+      safeAdminWhere = safeAdminWhere
+        ? `${safeAdminWhere} AND COALESCE(p.created_by, '') <> 'agent:amy'`
+        : "WHERE COALESCE(p.created_by, '') <> 'agent:amy'"
+    }
     const stmt = req.db.prepare(`${profileSelect} ${safeAdminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`) // audit:allow dynamic-sql
     const profiles = (await stmt.all(limit, offset)).map(mapProfile)
 
