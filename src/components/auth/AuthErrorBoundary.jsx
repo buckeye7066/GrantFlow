@@ -2,6 +2,7 @@ import { Component } from 'react'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { captureFrontendException } from '@/utils/observability.js'
+import { reportClientError } from '@/utils/reportClientError.js'
 
 /**
  * Error boundary component for catching authentication-related errors
@@ -28,7 +29,10 @@ class AuthErrorBoundary extends Component {
       area: 'auth_boundary',
       componentStack: errorInfo?.componentStack,
     })
-    
+    // Also email the owner an analyzed report (non-admin users only; self-skips
+    // for admins server-side). Fire-and-forget, swallows all failures.
+    reportClientError(error, { componentStack: errorInfo?.componentStack })
+
     this.setState({
       error,
       errorInfo

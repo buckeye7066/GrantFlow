@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
 import { maybeReloadForStaleChunk } from "@/utils/lazyWithRetry"
 import { captureFrontendException } from "@/utils/observability.js"
+import { reportClientError } from "@/utils/reportClientError.js"
 
 const MAX_RETRIES = 3
 
@@ -59,6 +60,10 @@ export default class RouteErrorBoundary extends React.Component {
       requestId: error?.requestId ?? error?.request_id ?? null,
       componentStack: info?.componentStack,
     })
+
+    // Also email the owner an analyzed report (non-admin users only; self-skips
+    // for admins server-side). Fire-and-forget, swallows all failures.
+    reportClientError(error, { componentStack: info?.componentStack })
 
     console.error("[RouteErrorBoundary] route crash", {
       route: this.props.routeName ?? null,

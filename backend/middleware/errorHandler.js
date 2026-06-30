@@ -4,6 +4,7 @@
 
 import { recordRequestError } from '../services/requestIdErrorStore.js'
 import { captureException } from '../utils/observability.js'
+import { reportErrorToOwner } from '../services/errorReporter.js'
 
 /**
  * Format error response based on environment
@@ -95,6 +96,21 @@ export function errorHandler(err, req, res, next) {
     statusCode,
     retryable,
   })
+
+  // Fire-and-forget: when a non-admin user hits a genuine server fault (>= 500),
+  // email the owner an analyzed report. NEVER awaited (must not delay or alter
+  // the response), never throws (internally guarded), and self-skips for admins.
+  if (statusCode >= 500 && !retryable) {
+    reportErrorToOwner({
+      error: err,
+      source: 'backend',
+      user: req.user,
+      route: req.originalUrl || req.path,
+      method: req.method,
+      requestId: req.id || req.request_id || requestId,
+      statusCode,
+    })
+  }
 
   if (retryable) {
     // Transient — warn, don't error-spam, and omit the stack (it's a timeout,
