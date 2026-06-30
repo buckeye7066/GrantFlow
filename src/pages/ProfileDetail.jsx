@@ -581,16 +581,16 @@ export default function ProfileDetail() {
 
   const handleThemeChange = React.useCallback(
     (theme) => {
-      // Update both local and backend preferences
-      preferencesDispatch({ type: "SET_COLOR_THEME", theme })
+      // Accent color is owned by settingsStore (single source of truth) — write
+      // only there; it applies the CSS vars and persists to the backend.
       updatePreference("accent_color", theme)
-      
+
       toast({
         title: "Theme updated",
         description: "Your color theme preference has been saved.",
       })
     },
-    [preferencesDispatch, updatePreference, toast],
+    [updatePreference, toast],
   )
 
   const handleLayoutChange = React.useCallback(
@@ -1809,7 +1809,7 @@ export default function ProfileDetail() {
             <div className="space-y-2">
               <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Color theme</Label>
               <RadioGroup
-                value={dashboardPrefs.colorTheme}
+                value={preferences?.accent_color}
                 onValueChange={handleThemeChange}
                 className="grid gap-3 sm:grid-cols-2"
               >
@@ -1818,7 +1818,7 @@ export default function ProfileDetail() {
                     key={option.value}
                     htmlFor={`theme-${option.value}`}
                     className={`flex cursor-pointer items-center gap-3 rounded-xl border bg-white px-3 py-2 shadow-sm transition ${
-                      dashboardPrefs.colorTheme === option.value
+                      preferences?.accent_color === option.value
                         ? "border-blue-500 ring-2 ring-blue-200"
                         : "border-slate-200 hover:border-slate-300"
                     }`}

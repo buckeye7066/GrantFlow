@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import { useSettingsStore } from "@/stores/settingsStore"
 import { cn } from "@/lib/utils"
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 
@@ -34,6 +35,16 @@ const WIDGET_LABELS = {
 
 export default function PersonalizationPanel() {
   const { state, dispatch } = useDashboardPreferences()
+  // Theme (dark mode / accent / font size) is owned by settingsStore — the single
+  // source of truth — so this panel, the header toggle, and Settings never desync.
+  const preferences = useSettingsStore((s) => s.preferences)
+  const updatePreference = useSettingsStore((s) => s.updatePreference)
+  const isDarkMode =
+    preferences?.theme === 'dark' ||
+    (preferences?.theme === 'system' &&
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches)
 
   const fields = useMemo(
     () =>
@@ -105,9 +116,9 @@ export default function PersonalizationPanel() {
               description="Reduce eye strain with a softer contrast palette."
             >
               <Switch
-                checked={state.darkMode}
+                checked={isDarkMode}
                 onCheckedChange={(checked) =>
-                  dispatch({ type: "SET_DARK_MODE", enabled: checked })
+                  updatePreference('theme', checked ? 'dark' : 'light')
                 }
               />
             </SettingRow>
@@ -122,11 +133,11 @@ export default function PersonalizationPanel() {
                   <button
                     key={theme.value}
                     type="button"
-                    onClick={() => dispatch({ type: "SET_COLOR_THEME", theme: theme.value })}
+                    onClick={() => updatePreference('accent_color', theme.value)}
                     className={cn(
                       "w-8 h-8 rounded-full transition-all",
                       theme.color,
-                      state.colorTheme === theme.value
+                      preferences?.accent_color === theme.value
                         ? "ring-2 ring-ring ring-offset-2 ring-offset-background scale-110"
                         : "opacity-60 hover:opacity-100"
                     )}
@@ -181,8 +192,8 @@ export default function PersonalizationPanel() {
               description="Adjust the base font size for dashboards."
             >
               <Select
-                value={state.fontSize}
-                onValueChange={(value) => dispatch({ type: "SET_FONT", font: value })}
+                value={preferences?.font_size}
+                onValueChange={(value) => updatePreference('font_size', value)}
               >
                 <SelectTrigger className="w-36">
                   <SelectValue placeholder="Select size" />

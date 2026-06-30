@@ -27,7 +27,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
-import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx";
 // OnboardingFlow / FirstRunOnboardingGate were the previous duplicated
 // onboarding gates. They are intentionally removed in favour of the single
 // /start conversational quiz with Anya — see src/pages/Start.jsx. Existing
@@ -122,7 +121,6 @@ export default function Layout({ children, currentPageName }) {
   const { t } = useLanguage();
   const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen();
   const [showAdvancedTools, setShowAdvancedToolsState] = useState(getShowAdvancedTools);
-  const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences();
   const { user, profiles, activeProfileId, setActiveProfileId, logout } = useAuthStore((state) => ({
     user: state.user,
     profiles: state.profiles,
@@ -140,12 +138,21 @@ export default function Layout({ children, currentPageName }) {
     setShowAdvancedToolsState(next);
   }, []);
 
+  // Dark mode is owned by settingsStore (single source of truth). The header
+  // button reflects the effective theme and writes it back there, so it can never
+  // disagree with the Settings tab or the Personalize panel.
+  const preferences = useSettingsStore((state) => state.preferences);
+  const updatePreference = useSettingsStore((state) => state.updatePreference);
+  const isDarkActive =
+    preferences?.theme === 'dark' ||
+    (preferences?.theme === 'system' &&
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches)
+
   const toggleDarkMode = React.useCallback(() => {
-    preferencesDispatch({
-      type: "SET_DARK_MODE",
-      enabled: !dashboardPrefs.darkMode,
-    })
-  }, [dashboardPrefs.darkMode, preferencesDispatch])
+    updatePreference('theme', isDarkActive ? 'light' : 'dark')
+  }, [isDarkActive, updatePreference])
 
   const displayName = user?.display_name || user?.full_name || 'User';
   const displayEmail = user?.primary_email || user?.email || undefined;
@@ -340,9 +347,9 @@ export default function Layout({ children, currentPageName }) {
               variant="outline"
               size="icon"
               onClick={toggleDarkMode}
-              title={dashboardPrefs.darkMode ? t('layout.switchToLight') : t('layout.switchToDark')}
+              title={isDarkActive ? t('layout.switchToLight') : t('layout.switchToDark')}
             >
-              {dashboardPrefs.darkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+              {isDarkActive ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </Button>
               <Button variant="ghost" className="flex items-center gap-2 px-2">
                 <Avatar className="w-8 h-8">

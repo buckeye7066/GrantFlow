@@ -47,6 +47,7 @@ import {
 import { normalizeTargetColleges } from "@/utils/targetCollegesSync"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import { useSettingsStore } from "@/stores/settingsStore"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
 import { isRealProfileId } from "@/api/profileIdGuards"
@@ -1015,7 +1016,10 @@ export default function ProfileOverview({
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState("")
   const { state: dashboardPrefs } = useDashboardPreferences()
-  const theme = THEME_PRESETS[dashboardPrefs.colorTheme] ?? THEME_PRESETS.blue
+  // Accent comes from settingsStore (single source of truth); layout stays on the
+  // dashboard-preferences context.
+  const accentColor = useSettingsStore((s) => s.preferences?.accent_color)
+  const theme = THEME_PRESETS[accentColor] ?? THEME_PRESETS.blue
   const columnMap = {
     1: "md:grid-cols-1",
     2: "md:grid-cols-2",
