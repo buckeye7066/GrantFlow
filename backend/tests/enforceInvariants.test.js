@@ -34,6 +34,7 @@ import {
   enforceProfileScopedPipeline,
   enforceProfileDisplayNameNotDoubled,
   enforceProfileIncomeReconciliation,
+  enforceProfileIdIntegrity,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -41,6 +42,7 @@ import {
   __testables,
 } from '../startup/enforceInvariants.js'
 import { recordDismissal } from '../services/pipelineDismissals.js'
+import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 
 function makeDb() {
   const raw = new Database(':memory:')
@@ -63,7 +65,10 @@ function makeDb() {
     );
     CREATE TABLE profiles (
       id TEXT PRIMARY KEY,
-      organization_id TEXT
+      organization_id TEXT,
+      display_name TEXT,
+      status TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `)
   // better-sqlite3 is synchronous; the enforcement module awaits results,
@@ -722,10 +727,11 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(7)
+    expect(summary.ran).toBe(8)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
+      'profile_id_integrity',
       'no_cross_profile_bleed',
       'profile_scoped_pipeline',
       'no_duplicate_grants',
@@ -832,5 +838,58 @@ describe('enforceProfileDisplayNameNotDoubled', () => {
     const r = await enforceProfileDisplayNameNotDoubled(raw)
     expect(r.ok).toBe(true)
     expect(r.repaired).toBe(0)
+  })
+})
+
+describe('enforceInvariants — profile_id integrity', () => {
+  // A real designated profile (slug id + display_name) to drive slug->UUID resolution.
+  const designated = (Array.isArray(DESIGNATED_PROFILES) ? DESIGNATED_PROFILES : [])
+    .find((p) => p?.id && p?.display_name)
+
+  it('normalizes a grant carrying a designated slug to the live canonical id', async () => {
+    expect(designated).toBeTruthy() // config must define at least one designated profile
+    const db = makeDb()
+    const liveId = 'uuid-live-1'
+    // Seed the live profile under a UUID with the designated display_name, so the
+    // resolver maps the slug -> this id (the real "slug re-keyed to UUID" case).
+    db.prepare('INSERT INTO profiles (id, organization_id, display_name) VALUES (?, ?, ?)')
+      .run(liveId, 'org1', designated.display_name)
+    const gid = insertGrant(db, { profile_id: designated.id, organization_id: 'org1', title: 'Slug grant', match_score: 80 })
+
+    const res = await enforceProfileIdIntegrity(db)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(1)
+    expect(db.prepare('SELECT profile_id FROM grants WHERE id = ?').get(gid).profile_id).toBe(liveId)
+  })
+
+  it('leaves a grant with a valid (direct) profile_id untouched', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'OK', match_score: 80 })
+    const res = await enforceProfileIdIntegrity(db)
+    expect(res.repaired).toBe(0)
+    expect(db.prepare('SELECT profile_id FROM grants WHERE id = ?').get(gid).profile_id).toBe('p1')
+  })
+
+  it('does NOT null/delete a dangling-but-unmappable profile_id (safety: no cascade)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'totally-unknown-id', organization_id: 'org1', title: 'Dangling', match_score: 80 })
+    const res = await enforceProfileIdIntegrity(db)
+    expect(res.ok).toBe(true)
+    // Unmappable id is left as-is (scoped to a non-existent profile → invisible, not destroyed).
+    expect(db.prepare('SELECT profile_id FROM grants WHERE id = ?').get(gid).profile_id).toBe('totally-unknown-id')
+  })
+
+  it('is idempotent — a second pass repairs nothing', async () => {
+    expect(designated).toBeTruthy()
+    const db = makeDb()
+    db.prepare('INSERT INTO profiles (id, organization_id, display_name) VALUES (?, ?, ?)')
+      .run('uuid-live-2', 'org1', designated.display_name)
+    insertGrant(db, { profile_id: designated.id, organization_id: 'org1', title: 'Slug grant', match_score: 80 })
+    const first = await enforceProfileIdIntegrity(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforceProfileIdIntegrity(db)
+    expect(second.repaired).toBe(0)
   })
 })

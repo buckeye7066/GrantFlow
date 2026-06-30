@@ -205,6 +205,10 @@ export const useSettingsStore = create((set, get) => ({
       cyan: '#06b6d4',
       amber: '#f59e0b',
       pink: '#ec4899',
+      // ProfileDetail "Customize profile view" uses these names; without them the
+      // selection silently fell back to blue.
+      emerald: '#10b981',
+      violet: '#8b5cf6',
     }
     const accentHex = colorMap[accent_color] || colorMap.blue
     root.style.setProperty('--accent-color', accentHex)

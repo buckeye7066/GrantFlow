@@ -11,6 +11,7 @@ import { PROFILE_SCHEMA, getDefaultSectionData, getFlatFieldToSectionMap } from 
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
 import { extractCompletionText } from '../utils/openai.js'
+import { withLLMTimeout, isLLMTimeout, LLM_TIMEOUT_MS } from '../utils/llmTimeout.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
@@ -3377,16 +3378,23 @@ async function handleProfileSectionAi(req, res) {
     }
 
     const openai = getOpenAIOptional()
+    let sectionAiTimedOut = false
+    // Shared gateway-safe deadline across both providers (see /fields/ai).
+    const sectionAiDeadlineAt = Date.now() + LLM_TIMEOUT_MS
+    const sectionAiRemainingMs = () => sectionAiDeadlineAt - Date.now()
 
     // Provider order: OpenAI -> Anthropic -> deterministic empty fallback (never hard-fail the UI).
-    if (openai) {
+    if (openai && sectionAiRemainingMs() > 500) {
       try {
-        const completion = await openai.chat.completions.create({
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          messages: [{ role: 'user', content: promptPayload.prompt }],
-          temperature: 0.2,
-          max_tokens: 4000,
-        })
+        const completion = await withLLMTimeout(
+          openai.chat.completions.create({
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            messages: [{ role: 'user', content: promptPayload.prompt }],
+            temperature: 0.2,
+            max_tokens: 4000,
+          }),
+          { timeoutMs: sectionAiRemainingMs(), label: 'Section AI (OpenAI)' },
+        )
 
         const raw = extractCompletionText(completion)
         const suggestion = extractJsonObjectLoose(raw)
@@ -3413,20 +3421,24 @@ async function handleProfileSectionAi(req, res) {
         })
         }
       } catch (openaiError) {
+        if (isLLMTimeout(openaiError)) sectionAiTimedOut = true
         const summary = summarizeOpenAIError(openaiError)
         console.warn('[profiles/sections/ai] OpenAI failed, will try Anthropic:', summary?.message || openaiError?.message || openaiError)
       }
     }
 
-    const anthropic = await createAnthropicClient()
+    const anthropic = sectionAiRemainingMs() > 500 ? await createAnthropicClient() : null
     if (anthropic) {
       try {
-        const response = await anthropic.messages.create({
-          model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-          max_tokens: 4000,
-          temperature: 0.2,
-          messages: [{ role: 'user', content: promptPayload.prompt }],
-        })
+        const response = await withLLMTimeout(
+          anthropic.messages.create({
+            model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+            max_tokens: 4000,
+            temperature: 0.2,
+            messages: [{ role: 'user', content: promptPayload.prompt }],
+          }),
+          { timeoutMs: sectionAiRemainingMs(), label: 'Section AI (Anthropic)' },
+        )
 
         const raw = extractAnthropicText(response)
         const suggestion = extractJsonObjectLoose(raw)
@@ -3450,8 +3462,17 @@ async function handleProfileSectionAi(req, res) {
         }
         console.warn('[profiles/sections/ai] Anthropic output unparseable; returning graceful fallback')
       } catch (anthropicError) {
+        if (isLLMTimeout(anthropicError)) sectionAiTimedOut = true
         console.warn('[profiles/sections/ai] Anthropic failed:', anthropicError?.message || anthropicError)
       }
+    }
+
+    if (sectionAiTimedOut) {
+      return res.status(503).json({
+        error: 'ai_timeout',
+        section_key: sectionKey,
+        message: 'AI is taking longer than usual. Please try again in a moment.',
+      })
     }
 
     return res.json({
@@ -3567,15 +3588,24 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
 
     const openai = getOpenAIOptional()
     let suggestion
-    
-    if (openai) {
+    let aiTimedOut = false
+    // Shared gateway-safe deadline across BOTH providers so the sequential
+    // OpenAI->Anthropic fallback can't sum past the proxy's ~30s cut (the cause
+    // of the "Assist with AI" hang/504). On timeout we return a clean 503.
+    const aiDeadlineAt = Date.now() + LLM_TIMEOUT_MS
+    const aiRemainingMs = () => aiDeadlineAt - Date.now()
+
+    if (openai && aiRemainingMs() > 500) {
       try {
-        const completion = await openai.chat.completions.create({
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 400,
-        })
+        const completion = await withLLMTimeout(
+          openai.chat.completions.create({
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: 400,
+          }),
+          { timeoutMs: aiRemainingMs(), label: 'Field AI (OpenAI)' },
+        )
         suggestion = extractCompletionText(completion).trim()
         return res.json({
           field: fieldName,
@@ -3584,21 +3614,25 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
           ai_provider: 'openai',
         })
       } catch (error) {
+        if (isLLMTimeout(error)) aiTimedOut = true
         const summary = summarizeOpenAIError(error)
         console.warn('[Field AI] OpenAI request failed:', summary?.message || error?.message || error)
         // fall through to Anthropic / fallback (do not hard-fail the UI)
       }
     }
 
-    const anthropic = await createAnthropicClient()
+    const anthropic = aiRemainingMs() > 500 ? await createAnthropicClient() : null
     if (anthropic) {
       try {
-        const response = await anthropic.messages.create({
-          model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-          max_tokens: 400,
-          temperature: 0.3,
-          messages: [{ role: 'user', content: prompt }],
-        })
+        const response = await withLLMTimeout(
+          anthropic.messages.create({
+            model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+            max_tokens: 400,
+            temperature: 0.3,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          { timeoutMs: aiRemainingMs(), label: 'Field AI (Anthropic)' },
+        )
         suggestion = extractAnthropicText(response).trim()
         return res.json({
           field: fieldName,
@@ -3607,10 +3641,21 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
           ai_provider: 'anthropic',
         })
       } catch (anthropicError) {
+        if (isLLMTimeout(anthropicError)) aiTimedOut = true
         console.warn('[Field AI] Anthropic request failed:', anthropicError?.message || anthropicError)
       }
     }
-    
+
+    if (aiTimedOut) {
+      // Clean, fast 503 so the client shows "try again" instead of a 504.
+      return res.status(503).json({
+        error: 'ai_timeout',
+        message: 'AI is taking longer than usual. Please try again in a moment.',
+        field: fieldName,
+        suggestion: typeof currentValue === 'string' ? currentValue : '',
+      })
+    }
+
     res.json({
       field: fieldName,
       suggestion: typeof currentValue === 'string' ? currentValue : '',
