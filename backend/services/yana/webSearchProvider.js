@@ -20,6 +20,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
+import { isBravePaused, noteBrave429, noteBraveSuccess, braveCircuitState } from './braveRateLimit.js'
 
 const log = createLogger('yanaWebSearch')
 
@@ -60,7 +61,18 @@ export function makeBraveSearchProvider({
   return async function search({ query } = {}) {
     const q = String(query || '').trim()
     if (!q) return []
+    // Circuit breaker: if the key is rate-limited/quota-exhausted, skip the call
+    // entirely (no network, no throttle wait) until it refills. This is what
+    // makes Yana PAUSE her live-web work instead of firing doomed requests.
+    if (isBravePaused()) {
+      const s = braveCircuitState()
+      log.info(`Brave paused (${s.reason}) — skipping "${q}"; resumes in ~${s.resumes_in_minutes} min`)
+      return []
+    }
     return throttle(async () => {
+      // Re-check inside the serialized chain: an earlier queued call may have
+      // tripped the breaker while this one waited its turn.
+      if (isBravePaused()) return []
       const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(q)}&count=${count}`
       let res
       try {
@@ -76,7 +88,15 @@ export function makeBraveSearchProvider({
         return []
       }
       if (res.status === 429) {
-        log.warn(`Brave search rate-limited (429) for "${q}" — backing off`)
+        // Classify the 429 (transient per-second vs. monthly quota gone) from the
+        // rate-limit headers and pause Brave for the right duration.
+        const kind = noteBrave429({ headers: res.headers })
+        if (kind === 'quota_exhausted' || kind === 'sustained') {
+          const s = braveCircuitState()
+          log.warn(`Brave ${kind} for "${q}" — pausing Brave until ${s.resumes_at}`)
+        } else {
+          log.warn(`Brave rate-limited (429) for "${q}" — transient backoff`)
+        }
         return []
       }
       if (!res.ok) {
@@ -85,6 +105,7 @@ export function makeBraveSearchProvider({
       }
       let json
       try { json = await res.json() } catch { return [] }
+      noteBraveSuccess()
       const results = json?.web?.results || []
       return results
         .map((r) => ({ url: r?.url || '', title: r?.title || '', snippet: r?.description || '' }))
