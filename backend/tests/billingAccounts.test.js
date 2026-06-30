@@ -4,11 +4,20 @@ import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
 import billingRouter from '../routes/billing.js'
 
-// Minimal profile tables the rich /accounts query joins against.
+// Tables the rich /accounts query joins against — shaped like the REAL
+// schema.sql, NOT a convenient fiction. `applicant_type` lives on
+// `organizations` (reached via profiles.organization_id); `profiles` has
+// `primary_type`/`status` but NO `applicant_type`. A prior fixture invented a
+// `profiles.applicant_type` column, so the rich query passed in tests while
+// throwing `column p.applicant_type does not exist` in prod (silent fallback).
 function baseSchema(sqlite) {
   sqlite.exec(`
     CREATE TABLE profiles (
-      id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT, primary_type TEXT, applicant_type TEXT
+      id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT,
+      display_name TEXT, primary_type TEXT, status TEXT
+    );
+    CREATE TABLE organizations (
+      id TEXT PRIMARY KEY, name TEXT, applicant_type TEXT
     );
     CREATE TABLE profile_sections (
       id TEXT PRIMARY KEY, profile_id TEXT, section_key TEXT, data TEXT
@@ -77,8 +86,11 @@ describe('GET /api/billing/accounts', () => {
       // First call creates + seeds the billing schema (tiers include 'foundation').
       await request(app).get('/api/billing/accounts')
 
-      sqlite.prepare("INSERT INTO profiles (id, display_name, primary_type) VALUES (?, ?, ?)")
-        .run('p1', 'Acme Org', 'nonprofit')
+      // applicant_type comes from the linked organization, not the profile.
+      sqlite.prepare("INSERT INTO organizations (id, name, applicant_type) VALUES (?, ?, ?)")
+        .run('o1', 'Acme Org', 'nonprofit')
+      sqlite.prepare("INSERT INTO profiles (id, organization_id, display_name, primary_type, status) VALUES (?, ?, ?, ?, ?)")
+        .run('p1', 'o1', 'Acme Org', 'nonprofit', 'active')
       sqlite.prepare("INSERT INTO billing_accounts (id, profile_id, tier_id, discount_type) VALUES (?, ?, ?, ?)")
         .run('acct1', 'p1', 'foundation', 'none')
 
@@ -86,6 +98,9 @@ describe('GET /api/billing/accounts', () => {
       expect(res.status).toBe(200)
       expect(res.body).toHaveLength(1)
       expect(res.body[0].profile_name).toBe('Acme Org')
+      // profile_status is ONLY selected by the rich query — proves the rich
+      // path executed (the org JOIN resolved) instead of the resilient fallback.
+      expect(res.body[0].profile_status).toBe('active')
     } finally {
       sqlite.close()
     }
