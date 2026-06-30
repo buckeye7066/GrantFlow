@@ -69,7 +69,12 @@ export async function runHealthCheck(db) {
     status.expire_stale = { error: err.message }
   }
 
-  // 2. Detect profile bleed — global catalog entries that are exact duplicates of profile-scoped records
+  // 2. Catalog/pipeline overlap audit — global catalog entries (profile_id NULL)
+  // that share title+sponsor with a profile-scoped row. This is a BENIGN overlap
+  // by design (the global row is the shared catalog entry; the profile-scoped row
+  // is a user's matched/pipeline copy), NOT cross-tenant leakage — the real
+  // cross-profile invariant (org-mismatch) is enforced in enforceInvariants.js.
+  // Report-only + low-noise so it never reads as a privacy alarm.
   try {
     const bleedRows = await db
       .prepare(
@@ -87,7 +92,7 @@ export async function runHealthCheck(db) {
       .all()
     status.profile_bleed_check = { count: bleedRows.length, sample_ids: bleedRows.slice(0, 5).map((r) => r.id) }
     if (bleedRows.length > 0) {
-      console.warn(`[AnyaHealth] Detected ${bleedRows.length} potential profile-bleed entries in global catalog`)
+      log.info(`[AnyaHealth] catalog/pipeline overlap audit: ${bleedRows.length} global catalog row(s) also exist as a profile-scoped copy (benign overlap, report-only)`)
     }
   } catch (err) {
     log.error('[AnyaHealth] profile_bleed_check error:', err.message)

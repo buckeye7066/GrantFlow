@@ -590,7 +590,7 @@ export default function SavedLoginsCard({ profileId }) {
               Have Hamilton pick a strong password
             </DialogTitle>
             <DialogDescription>
-              Tell Hamilton the portal and the username you want to use — or let Hamilton auto-fill what he already
+              Tell Hamilton the portal and the username you want to use — or let Hamilton auto-fill what she already
               knows. He'll pick a strong, random password, save it encrypted in this vault, and show it to you exactly
               once so you can also store it elsewhere.
             </DialogDescription>

@@ -574,6 +574,19 @@ router.get('/', async (req, res) => {
       }
     }
 
+    // Fundability filter: directories (locators), government BENEFIT entitlements
+    // (SNAP/Medicaid/SSA — you enroll, you don't write a proposal), and
+    // PAST_AWARD_INTEL are reference-only and must NOT pollute the proposal
+    // pipeline or the AI Grant Scorer dropdown (which reads this endpoint). Exclude
+    // by canonical opportunity_kind, NULL-safe so legacy grants without a linked
+    // opportunity still appear. A resources view can opt back in with
+    // ?include_directories=true.
+    if (String(req.query.include_directories ?? '') !== 'true') {
+      const { NON_PROPOSAL_KINDS } = await import('../../shared/opportunityFundability.js')
+      query += ` AND (fo.opportunity_kind IS NULL OR UPPER(fo.opportunity_kind) NOT IN (${NON_PROPOSAL_KINDS.map(() => '?').join(',')}))`
+      params.push(...NON_PROPOSAL_KINDS)
+    }
+
     // Back-compat for older UI duplicate-checks: they pass `url=<opportunityUrl>`.
     // In our schema, the canonical URL lives in `application_url`.
     if (urlFilter) {

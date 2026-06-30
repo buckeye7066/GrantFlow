@@ -11,6 +11,7 @@ import {
 import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2, FileEdit, Link2Off, UserCheck } from 'lucide-react';
 import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
 import { format, isPast } from 'date-fns';
+import { parseLocalDate } from '@/components/shared/dateUtils';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import HelpTip from '@/components/help/HelpTip';
@@ -69,7 +70,7 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
     ? hamiltonSelection.isSelected(hamiltonSelectionSource)
     : false;
 
-  const deadlineDate = grant.deadline ? new Date(grant.deadline) : null;
+  const deadlineDate = grant.deadline ? parseLocalDate(grant.deadline) : null;
   const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime());
   const isRolling = grant.deadline !== null && grant.deadline !== undefined && String(grant.deadline).toLowerCase() === 'rolling';
   const isExpired = isDeadlineValid && isPast(deadlineDate) && !isRolling;
@@ -323,10 +324,10 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
       <Link to={getGrantDetailUrl(grant, showSummary)}>
         <div className="p-3 space-y-2 cursor-pointer">
           <h4 className="font-semibold text-slate-900 text-sm line-clamp-2 leading-tight">
-            {grant.title}
+            {grant.title || "Untitled grant"}
           </h4>
-          
-          <p className="text-xs text-slate-600 truncate">{grant.funder || grant.sponsor}</p>
+
+          <p className="text-xs text-slate-600 truncate">{grant.funder || grant.sponsor || "Funder not listed"}</p>
           
           {/* Match Reasons (if available) - support both match_reasons (API) and matchReasons (legacy) */}
           {(showSummary || showMatchBreakdown) && matchReasons.length > 0 && (

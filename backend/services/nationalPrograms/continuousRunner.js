@@ -3,10 +3,70 @@ import { dispatchCrawlerJob } from '../crawlerDispatcher.js'
 import { auditLog } from './audit.js'
 import { createLogger } from '../../utils/logger.js'
 import { runWithSchedulerLock, reportBackgroundError } from '../schedulerLock.js'
+import { maybeCleanupStaleRunningJobs } from '../crawlerConcurrencyGuard.js'
 const qualityLog = createLogger('services:nationalPrograms:continuousRunner')
 
 function minutes(ms) {
   return Math.round(ms / 60000)
+}
+
+// A national job that has sat 'queued'/'running' longer than this is presumed
+// dead (the process was redeployed/killed before dispatch transitioned or
+// finished it). The overlap guard below treats ANY queued/running national job
+// as a live run, so a stranded one wedges the crawler forever — which is exactly
+// how the canonical catalog ends up with 0 national_programs rows despite the
+// crawler being ENABLED. We reclaim past this age and proceed. A real national
+// crawl (maxUrls≈200, maxDepth≈2) finishes in minutes; 45 min is generous.
+const NATIONAL_JOB_WEDGE_MS = parseInt(process.env.NATIONAL_PROGRAMS_JOB_WEDGE_MS || String(45 * 60 * 1000), 10)
+
+/** Parse a DB timestamp (ISO or 'YYYY-MM-DD HH:MM:SS' UTC) to age in ms, or null. */
+export function ageMsFrom(ts, now = Date.now()) {
+  if (!ts) return null
+  const raw = ts instanceof Date ? ts.toISOString() : String(ts)
+  // SQLite CURRENT_TIMESTAMP has no zone and is UTC — make that explicit so the
+  // local runtime doesn't misread it as local time.
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(raw) ? raw : raw.replace(' ', 'T') + 'Z'
+  const t = Date.parse(normalized)
+  return Number.isFinite(t) ? now - t : null
+}
+
+/**
+ * Decide what to do with an in-flight national job found by the overlap guard.
+ * A job stranded 'queued'/'running' past NATIONAL_JOB_WEDGE_MS (process killed
+ * by a redeploy before dispatch finished) wedges the crawler forever, starving
+ * the canonical catalog. We reclaim it (mark failed) so a fresh run can proceed.
+ *
+ * Returns `{ skip }`: skip=true means a genuinely-live job is running → bail;
+ * skip=false means either no blocker or the blocker was reclaimed → proceed.
+ * Exported for unit testing.
+ */
+export async function reclaimWedgedNationalJob(db, existing, { now = Date.now() } = {}) {
+  if (!existing) return { skip: false, reclaimed: false }
+  const ageMs = ageMsFrom(existing.created_at, now)
+  const wedged = ageMs !== null && ageMs > NATIONAL_JOB_WEDGE_MS
+  if (!wedged) {
+    await auditLog({
+      action: 'continuous_skip',
+      reason: 'existing_job_in_progress',
+      job_id: existing.id,
+      status: existing.status,
+    })
+    return { skip: true, reclaimed: false, ageMs }
+  }
+  try {
+    await db
+      .prepare("UPDATE crawler_jobs SET status = 'failed', error = ? WHERE id = ? AND status IN ('queued', 'running')")
+      .run('reclaimed: stale national-programs job wedged the continuous crawler', existing.id)
+  } catch (reclaimError) {
+    reportBackgroundError(reclaimError, { lockName: 'national-programs-crawler', phase: 'reclaim_wedged_job' })
+  }
+  await auditLog({
+    action: 'continuous_reclaim_wedged',
+    job_id: existing.id,
+    status: existing.status,
+    age_minutes: minutes(ageMs),
+  })
+  return { skip: false, reclaimed: true, ageMs }
 }
 
 export function startNationalProgramsCrawler({
@@ -24,6 +84,15 @@ export function startNationalProgramsCrawler({
   const tickUnlocked = async () => {
     const startedAt = Date.now()
     try {
+      // Self-heal first: reclaim dead 'running' jobs (heartbeat/started-at aware)
+      // across all crawler types so a worker killed by a deploy doesn't hold a
+      // lock. Best-effort — never block the tick on cleanup.
+      try {
+        await maybeCleanupStaleRunningJobs(db)
+      } catch (cleanupError) {
+        reportBackgroundError(cleanupError, { lockName: 'national-programs-crawler', phase: 'stale_cleanup' })
+      }
+
       // Avoid overlapping runs
       let existing;
       try {
@@ -53,13 +122,10 @@ export function startNationalProgramsCrawler({
       }
 
       if (existing) {
-        await auditLog({
-          action: 'continuous_skip',
-          reason: 'existing_job_in_progress',
-          job_id: existing.id,
-          status: existing.status,
-        })
-        return
+        // Reclaim a stranded job (or bail if a genuinely-live run is in flight).
+        const { skip } = await reclaimWedgedNationalJob(db, existing)
+        if (skip) return
+        // otherwise fall through to enqueue a fresh run below
       }
 
       const jobId = crypto.randomUUID()

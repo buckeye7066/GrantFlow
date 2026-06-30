@@ -126,10 +126,30 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
     }
   }
 
-  let decision = computeMatchDecision(rawProfile, opportunity, {
-    profileSections,
-    signals,
-  })
+  // Perf: when the caller already has an authoritative, stored match decision
+  // (crawler-os pre-scores every profile↔opportunity pair into
+  // profile_opportunity_matches), re-running computeMatchDecision() for EVERY
+  // row at query time is the dominant cost of a slow search (~24s) AND is
+  // redundant — the stored score is what we sort by. Reuse it; only fall back to
+  // a live recompute when no stored decision is present.
+  const hasStoredDecision =
+    opts.useStoredDecision === true &&
+    (Boolean(opportunity.match_decision) || Number.isFinite(Number(opportunity.match_score)))
+  let decision = hasStoredDecision
+    ? {
+        decision: opportunity.match_decision ?? 'REVIEW',
+        score: Number(opportunity.match_score ?? 0),
+        explanation: opportunity.match_explanation ?? null,
+        confidence: Number.isFinite(Number(opportunity.match_confidence)) ? Number(opportunity.match_confidence) : null,
+        matched_profile_facts: Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : [],
+        matchedNeeds: Array.isArray(opportunity.matched_needs) ? opportunity.matched_needs : [],
+        ineligibilityReasons: Array.isArray(opportunity.ineligibility_reasons) ? opportunity.ineligibility_reasons : [],
+        matcherVersion: opportunity.matcher_version ?? 'crawler-os',
+      }
+    : computeMatchDecision(rawProfile, opportunity, {
+        profileSections,
+        signals,
+      })
 
   if (decision?.decision === 'REJECT') {
     if (directory && preserveDirectories) {

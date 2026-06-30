@@ -89,6 +89,18 @@ describe('discovery.nationalProgramsCatalog', () => {
     expect(findings).toHaveLength(0)
   })
 
+  it('reports healthy (ok:true) when enabled + 0 rows but the legacy lane is superseded by Crawler OS', async () => {
+    process.env[KEY] = 'true'
+    const db = makeDb({
+      'national_programs_crawler': () => ({ c: 0 }),       // 0 catalog rows
+      'superseded_by_crawler_os': () => ({ x: 1 }),         // legacy national job was superseded
+    })
+    const { results, findings } = await runDiagnostics({ db, ctx: null, checkIds: ['discovery.nationalProgramsCatalog'] })
+    expect(results[0]).toMatchObject({ ok: true })
+    expect(/superseded by Crawler OS/i.test(results[0].summary || '')).toBe(true)
+    expect(findings).toHaveLength(0)
+  })
+
   it('fails open (ok:true) when funding_opportunities is not queryable', async () => {
     process.env[KEY] = 'true'
     const db = {

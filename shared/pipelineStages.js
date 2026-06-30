@@ -57,6 +57,21 @@ export const TERMINAL_STAGES = Object.freeze([
   PIPELINE_STAGE.ARCHIVED,
 ])
 
+// THE single definition of an "active" (in-progress, non-terminal) pipeline
+// grant. Every "active grants" count — dashboard sidebar, Reports, stats — must
+// use this set via canonicalStage() so they can never disagree again. (Before
+// this, three places hand-rolled different lists: 4 vs 14 vs 7 statuses.)
+export const ACTIVE_PIPELINE_STAGES = Object.freeze(
+  PIPELINE_STAGES.filter((s) => !TERMINAL_STAGES.includes(s)),
+)
+const ACTIVE_SET = new Set(ACTIVE_PIPELINE_STAGES)
+
+/** True iff a raw/legacy status resolves to an active (non-terminal) stage. */
+export function isActiveStage(raw) {
+  const c = canonicalStage(raw)
+  return c !== null && ACTIVE_SET.has(c)
+}
+
 // Legacy stage name → canonical stage. Used by readers (UI bucketing, Anya
 // summaries, pipeline-totals tools) so historical rows render correctly even
 // before any backfill.

@@ -111,11 +111,11 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
   if (dateStr) t.push(dateStr)
   t.push('')
   t.push(`Sam's overnight sweep: health ${run?.health_score ?? 'n/a'}/100, ${findings.length} finding(s) total.`)
-  t.push(`  • ${autoFixing.length} being auto-corrected (eslint/safe fixes → PR → production)`)
-  t.push(`  • ${needsHuman.length} need a human: ${counts.critical} critical, ${counts.high} high, ${counts.medium} medium, ${counts.low} low`)
+  t.push(`  • ${autoFixing.length} fixed automatically overnight by Sam's CI (safe eslint/fixes → shipped to production when the test gate passed; left as an open PR if it didn't)`)
+  t.push(`  • ${needsHuman.length} still need you: ${counts.critical} critical, ${counts.high} high, ${counts.medium} medium, ${counts.low} low`)
   t.push('')
   if (clean) {
-    t.push('Nothing needs your attention today. Everything Sam flagged is either clean or already being auto-corrected.')
+    t.push('Nothing needs your attention today. Everything Sam flagged is either clean or was auto-corrected overnight.')
   } else {
     t.push('NEEDS YOUR ATTENTION')
     t.push('====================')
@@ -131,7 +131,7 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
   }
   if (autoFixing.length) {
     t.push('')
-    t.push(`AUTO-CORRECTING (no action needed): ${autoFixing.map((f) => maskSecrets(f?.title || 'fix')).slice(0, 10).join('; ')}`)
+    t.push(`FIXED AUTOMATICALLY OVERNIGHT (no action needed): ${autoFixing.map((f) => maskSecrets(f?.title || 'fix')).slice(0, 10).join('; ')}`)
   }
   t.push('')
   t.push(`— Anya · from Sam's run ${run?.id || 'n/a'}`)
@@ -139,7 +139,7 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
 
   // ----- HTML ---------------------------------------------------------------
   const needsHumanHtml = clean
-    ? '<p style="color:#16a34a;font-size:14px;">✅ Nothing needs your attention today. Everything Sam flagged is clean or already being auto-corrected.</p>'
+    ? '<p style="color:#16a34a;font-size:14px;">✅ Nothing needs your attention today. Everything Sam flagged is clean or was auto-corrected overnight.</p>'
     : `<table style="width:100%;border-collapse:collapse;font-size:13px;">${
         needsHuman.map((f) => {
           const color = SEVERITY_COLOR[f?.severity] || '#475569'
@@ -163,7 +163,7 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
 
   const autoHtml = autoFixing.length
     ? `<div style="margin-top:18px;padding:12px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:13px;color:#166534;">
-         <strong>Auto-correcting (${autoFixing.length}) — no action needed.</strong> Sam's CI job is fixing these and shipping them to production:
+         <strong>Fixed automatically overnight (${autoFixing.length}) — no action needed.</strong> Sam's CI corrected these and shipped them to production (or left an open PR if the test gate failed):
          <div style="margin-top:6px;color:#15803d;">${esc(autoFixing.map((f) => maskSecrets(f?.title || 'fix')).slice(0, 10).join(' · '))}</div>
        </div>`
     : ''
@@ -181,7 +181,7 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
           <td style="padding:6px 0;font-weight:700;color:${scoreColor};">${esc(run?.health_score ?? 'n/a')}/100</td>
         </tr>
         <tr>
-          <td style="padding:6px 14px 6px 0;color:#64748b;">Auto-correcting</td>
+          <td style="padding:6px 14px 6px 0;color:#64748b;">Fixed automatically overnight</td>
           <td style="padding:6px 0;font-weight:600;color:#16a34a;">${autoFixing.length}</td>
         </tr>
         <tr>
@@ -202,7 +202,7 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
 
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
-        corrected by CI and shipped to production automatically; the items above need a human eye.
+        corrected by Sam's CI and shipped to production overnight (before this email); the items above need a human eye.
         To stop this email set <code>ANYA_DAILY_REPORT_ENABLED=false</code>.
       </p>
     </div>`

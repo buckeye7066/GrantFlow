@@ -521,15 +521,8 @@ export async function discoverProspects(db, {
   const bySource = { ...(sharedArgs.bySource || {}) }
   delete sharedArgs.bySource
 
-  // Build the discovery GEOGRAPHY for Google Maps from the operator's own org
-  // footprint (city/state) when the caller didn't pin one. This focuses the
-  // Maps text search on the same locales the operator already serves, instead
-  // of a national sweep. Harmless when Maps isn't keyed (provider NOOPs).
-  if (sourceNames.includes('google_maps') && !bySource.google_maps?.location) {
-    const geo = await loadOwnGeography(db)
-    if (geo) bySource.google_maps = { ...(bySource.google_maps || {}), location: geo }
-  }
-  // OpenStreetMap (free, keyless) anchors on the same own-org geography.
+  // OpenStreetMap (free, keyless) anchors geo-local discovery on the operator's
+  // own org footprint (city/state) when the caller didn't pin a location.
   if (sourceNames.includes('openstreetmap') && !bySource.openstreetmap?.location) {
     const geo = await loadOwnGeography(db)
     if (geo) bySource.openstreetmap = { ...(bySource.openstreetmap || {}), location: geo }

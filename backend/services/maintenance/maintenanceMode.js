@@ -109,6 +109,53 @@ export async function endMaintenance(db, { by = 'admin' } = {}) {
   return { phase: 'open', active: false }
 }
 
+// A window is auto-reopened only this long past its declared end, so a still-in-
+// progress sweep that slightly overran isn't yanked open mid-fix.
+const STALE_BUFFER_MIN = () => Number(process.env.MAINTENANCE_STALE_BUFFER_MINUTES) || 30
+// Hard safety net: ANY window (even a human-scheduled deploy) open this far past
+// its estimate is treated as abandoned and reopened — users are never stranded.
+const STALE_HARD_MAX_MIN = () => Number(process.env.MAINTENANCE_STALE_HARD_MAX_MINUTES) || 360
+
+/**
+ * Self-healing reopen. The nightly sweep enters maintenance and is supposed to
+ * reopen when green; if Sam crashes mid-sweep (criticals unknown) or the process
+ * dies before `endMaintenance`, the window is left DOWN forever and every
+ * non-admin user is locked out. This net reopens such a stranded window.
+ *
+ *   - Automated windows (nightly_sweep / by sam_nightly|system): reopened once
+ *     `now` is past `estimated_end_at + STALE_BUFFER_MIN`.
+ *   - Any window at all: reopened once past `estimated_end_at + STALE_HARD_MAX_MIN`.
+ *
+ * Idempotent + safe to call on every boot and on the nightly tick. Returns
+ * `{ reopened: boolean, reason?: string }`.
+ */
+export async function reopenStaleMaintenance(db, { now = new Date() } = {}) {
+  const state = await readRaw(db)
+  if (!state || !state.active) return { reopened: false }
+  const estEnd = state.estimated_end_at ? new Date(state.estimated_end_at).getTime() : null
+  if (!estEnd || Number.isNaN(estEnd)) return { reopened: false }
+
+  const overdueMs = now.getTime() - estEnd
+  const automated =
+    state.reason === 'nightly_sweep' ||
+    state.scheduled_by === 'sam_nightly' ||
+    state.scheduled_by === 'system'
+
+  const pastSoftLimit = automated && overdueMs > STALE_BUFFER_MIN() * 60000
+  const pastHardLimit = overdueMs > STALE_HARD_MAX_MIN() * 60000
+  if (!pastSoftLimit && !pastHardLimit) return { reopened: false }
+
+  await endMaintenance(db, { by: 'stale_window_autoheal' })
+  const reason = pastHardLimit ? 'past_hard_max' : 'automated_window_overdue'
+  log.warn('reopened stranded maintenance window (self-heal)', {
+    reason,
+    scheduled_by: state.scheduled_by || null,
+    window_reason: state.reason || null,
+    overdue_minutes: Math.round(overdueMs / 60000),
+  })
+  return { reopened: true, reason }
+}
+
 /**
  * Express guard: when the window is DOWN, non-admin API calls get 503 so the
  * frontend can log users out and show the maintenance screen. Admin/owner pass

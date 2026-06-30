@@ -138,7 +138,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.LOW,
-    description: 'Lists funding/discovery sources inactive because an optional API key is unset (e.g. CareerOneStop scholarships, Google-Maps geo-local prospects). Informational — provisioning each key widens coverage; none blocks a core goal.',
+    description: 'Lists funding/discovery sources inactive because an optional API key is unset (e.g. CareerOneStop scholarships). Informational — provisioning each key widens coverage; none blocks a core goal.',
     async run() {
       const inactive = []
       try {
@@ -148,10 +148,6 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           if (missing.length) inactive.push({ source: s.source_id, missing_env: missing })
         }
       } catch { /* registry load issue is benign for this check */ }
-      // Yana's geo-local prospect source (not a crawler-os registry source).
-      if (!process.env.GOOGLE_MAPS_API_KEY || !String(process.env.GOOGLE_MAPS_API_KEY).trim()) {
-        inactive.push({ source: 'google_maps (Yana geo-local prospects)', missing_env: ['GOOGLE_MAPS_API_KEY'] })
-      }
       if (inactive.length === 0) return { ok: true, summary: 'all funding sources have their required credentials' }
       return {
         ok: false, // surfaced as a LOW (informational) finding, not a real failure
@@ -514,14 +510,39 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         // Catalog table not migrated yet — environment gap, not a defect.
         return { ok: true, summary: `funding_opportunities not queryable yet (${err?.message || 'unknown'})`, evidence: { enabled } }
       }
-      // When the crawler is enabled but NOTHING from it has ever reached the
-      // canonical catalog, the bridge is the prime suspect — surface it. When
-      // it is disabled, zero rows is expected (just report the dormant engine).
+      // Crawler-OS cutover awareness: legacy grant-discovery crawlers (job
+      // type 'national' included) are intentionally superseded by the Crawler OS
+      // — every legacy national job is marked completed with a
+      // 'superseded_by_crawler_os' note and the catalogBridge never runs. After
+      // that cutover, 0 rows under source='national_programs_crawler' is the
+      // EXPECTED state, not a broken bridge. Detect the supersede so we don't
+      // raise a false MEDIUM for a deliberate architectural decision.
+      let superseded = false
+      try {
+        const sup = await db
+          .prepare(
+            "SELECT 1 AS x FROM crawler_jobs WHERE type = 'national' AND error LIKE 'superseded_by_crawler_os%' ORDER BY created_at DESC LIMIT 1",
+          )
+          .get()
+        superseded = Boolean(sup)
+      } catch { /* table/column absent — treat as not-superseded */ }
+
+      if (superseded) {
+        return {
+          ok: true,
+          summary: `national-programs legacy bridge superseded by Crawler OS (expected after cutover); discovery is owned by Crawler OS. ${catalogRows} legacy catalog row(s).`,
+          evidence: { enabled, catalog_rows: catalogRows, superseded_by_crawler_os: true },
+        }
+      }
+
+      // Not superseded AND enabled AND nothing reached the catalog → the bridge
+      // is the prime suspect (genuine defect). When disabled, zero rows is
+      // expected (just report the dormant engine).
       if (enabled && catalogRows === 0) {
         return {
           ok: false,
-          summary: 'National-programs crawler is ENABLED but 0 of its discoveries reached the canonical catalog (funding_opportunities). The catalogBridge may be rejecting/erroring.',
-          evidence: { enabled, catalog_rows: catalogRows, source: 'national_programs_crawler' },
+          summary: 'National-programs crawler is ENABLED (not superseded) but 0 of its discoveries reached the canonical catalog (funding_opportunities). The catalogBridge may be rejecting/erroring.',
+          evidence: { enabled, catalog_rows: catalogRows, source: 'national_programs_crawler', superseded_by_crawler_os: false },
         }
       }
       return {

@@ -46,7 +46,7 @@ describe('buildOwnerReport', () => {
     // info finding not in the needs-human list
     expect(text).not.toMatch(/Optional key missing/)
     // auto-fix note present
-    expect(html).toMatch(/Auto-correcting/i)
+    expect(html).toMatch(/Fixed automatically overnight/i)
     expect(html).toMatch(/console\.log left in App\.jsx/)
     // repair-plan patch_summary used as suggested fix
     expect(text).toMatch(/Remove the import line/)

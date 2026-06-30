@@ -14,7 +14,7 @@ export default function OrganizationEmptyState({ hasFilters, onCreateFirst }) {
     <Card className="p-12 text-center shadow-lg border-0">
       <Building2 className="w-16 h-16 mx-auto text-slate-300 mb-4" />
       <h3 className="text-xl font-semibold text-slate-900 mb-2">
-        {hasFilters ? "No Matching Profiles" : "No Profiles Yet"}
+        {hasFilters ? "No Matching Organizations" : "No Organizations Yet"}
       </h3>
       <p className="text-slate-600 mb-6">
         {hasFilters

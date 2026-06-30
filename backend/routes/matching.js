@@ -483,6 +483,9 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       const canonical = canonicalizeOpportunityList(profileContext, rawMapped, {
         preserveDirectories: true,
         rejectHardIneligible: true,
+        // These rows already carry crawler-os's stored match decision/score;
+        // reuse it instead of re-scoring every row (the slow-search root cause).
+        useStoredDecision: true,
       })
       let mapped = canonical.kept
 

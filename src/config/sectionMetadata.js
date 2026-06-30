@@ -500,19 +500,26 @@ export const SECTION_METADATA = {
         "name": "annual_income",
         "label": "Annual income (USD)",
         "format": "currency_usd",
+        "min": 0,
+        "max": 100000000,
         "help": "Annual individual income (USD) if known."
       },
       {
         "name": "household_income",
         "label": "Household income (USD)",
         "format": "currency_usd",
+        "min": 0,
+        "max": 100000000,
         "help": "Annual household income (USD) if known."
       },
       {
         "name": "household_size",
         "label": "Household size",
         "format": "text",
-        "help": "Number of people in the household (integer)."
+        "integer": true,
+        "min": 1,
+        "max": 30,
+        "help": "Number of people in the household (whole number)."
       },
       {
         "name": "financial_need_level",

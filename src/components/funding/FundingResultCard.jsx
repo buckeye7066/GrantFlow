@@ -23,6 +23,7 @@
 
 import React from 'react'
 import PropTypes from 'prop-types'
+import { humanizeMatchReason } from '@/utils/reasonText'
 
 // canonicalResultShape() lives in ./canonicalResultShape.js so this file
 // can stay components-only (Vite Fast Refresh requirement).
@@ -225,7 +226,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
           </p>
           <ul className="mt-1 list-disc pl-5 text-sm text-slate-700 space-y-0.5">
             {facts.slice(0, 5).map((fact, i) => (
-              <li key={i}>{fact}</li>
+              <li key={i}>{humanizeMatchReason(fact)}</li>
             ))}
           </ul>
         </section>

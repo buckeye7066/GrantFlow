@@ -12,7 +12,7 @@ import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { groupBy, countBy, sumBy } from "lodash";
 import { format, subMonths, isPast, differenceInDays } from 'date-fns';
-import { canonicalStage } from '../../shared/pipelineStages.js';
+import { canonicalStage, isActiveStage } from '../../shared/pipelineStages.js';
 import { useToast } from "@/components/ui/use-toast";
 import {
   Dialog,
@@ -209,7 +209,7 @@ export default function Reports() {
     { title: "Total Awarded", value: totalAwarded, icon: Award, color: "text-emerald-600", subtitle: "From recorded award outcomes" },
     { title: "Grants Submitted", value: submittedCount, icon: Target, color: "text-blue-600", subtitle: "Submitted, awarded or declined" },
     { title: "Success Rate", value: `${successRate.toFixed(1)}%`, icon: Percent, color: "text-purple-600", subtitle: "Awarded ÷ decided applications" },
-    { title: "Active Grants", value: filteredGrants.filter(g => ['saved', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'submitted', 'follow_up'].includes(canonicalStage(g.status))).length, icon: TrendingUp, color: "text-amber-600", subtitle: "In-progress pipeline stages" },
+    { title: "Active Grants", value: filteredGrants.filter(g => isActiveStage(g.status)).length, icon: TrendingUp, color: "text-amber-600", subtitle: "In-progress pipeline stages" },
   ];
 
   // Filter compliance reports by selected org

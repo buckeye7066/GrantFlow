@@ -119,3 +119,38 @@ export function formatReasonList(values) {
   }
   return values.map((entry) => formatReasonText(entry)).filter((s) => s.length > 0)
 }
+
+// Friendly labels for the known matching-reason CODES the backend emits
+// (backend/services/matching/reasons.js). formatReasonText() only guarantees a
+// string; this turns raw snake_case codes like `keyword_match` into
+// human-readable text so search cards never show internal identifiers.
+const MATCH_REASON_LABELS = Object.freeze({
+  keyword_match: 'Matches your keywords',
+  geographic_match: 'In your geographic area',
+  applicant_type_match: 'Fits your applicant type',
+  amount_fit: 'Funding amount fits your needs',
+  review_score: 'Strong overall fit',
+  eligibility_match: 'You meet the eligibility',
+  focus_area_match: 'Matches your focus areas',
+  deadline_open: 'Deadline is still open',
+})
+
+/**
+ * Humanize a single match-reason value. Known codes map to a friendly label;
+ * any other snake_case/identifier is title-cased (keyword_match → "Keyword
+ * match"). Already-human sentences (containing a space) pass through unchanged.
+ */
+export function humanizeMatchReason(value) {
+  const text = formatReasonText(value).trim()
+  if (!text) return ''
+  const key = text.toLowerCase()
+  if (Object.prototype.hasOwnProperty.call(MATCH_REASON_LABELS, key)) {
+    return MATCH_REASON_LABELS[key]
+  }
+  // Looks like a raw identifier (no spaces, snake/camel) → prettify.
+  if (!/\s/.test(text) && /[_a-z]/.test(text)) {
+    const spaced = text.replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim()
+    return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+  }
+  return text
+}

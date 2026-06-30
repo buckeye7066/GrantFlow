@@ -2630,6 +2630,7 @@ app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
 // Pipeline stats
 app.get('/api/pipeline/stats', async (req, res) => {
   try {
+    const { PIPELINE_STAGES, canonicalStage } = await import('../shared/pipelineStages.js');
     // Scope to what the requester can access (admins → all) so this card
     // reconciles with the rest of the dashboard instead of leaking DB-wide
     // totals (the old query was globally unscoped).
@@ -2642,11 +2643,8 @@ app.get('/api/pipeline/stats', async (req, res) => {
     `).all(...scope.params);
 
     // Bucket every grant into the canonical 11 pipeline stages via the single
-    // source of truth (shared/pipelineStages.js). This fixes the previous
-    // hand-rolled map that (a) mislabeled `archived`/`closed` grants as
-    // `rejected` and (b) had a dead `submission_ready` bucket that nothing
-    // mapped into. canonicalStage() resolves every legacy alias.
-    const { PIPELINE_STAGES, canonicalStage } = await import('../shared/pipelineStages.js');
+    // source of truth (shared/pipelineStages.js). canonicalStage() resolves every
+    // legacy alias so the funnel sums to the same total the rest of the app shows.
     const canonical = Object.fromEntries(PIPELINE_STAGES.map((s) => [s, 0]));
     rows.forEach((row) => {
       const stage = canonicalStage(row.status);
@@ -2655,9 +2653,7 @@ app.get('/api/pipeline/stats', async (req, res) => {
       }
     });
 
-    // Backward-compatible aliases for existing dashboard cards (legacy keys map
-    // to the right canonical counts — `rejected` now means declined ONLY, so
-    // archived grants are no longer miscounted as rejected).
+    // Backward-compatible aliases for existing dashboard cards.
     res.json({
       ...canonical,
       app_prep: canonical.gathering_documents,
@@ -3712,6 +3708,18 @@ if (process.env.NODE_ENV !== 'test') {
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
+        // Self-heal a stranded maintenance window FIRST, before the once-per-day
+        // marker check — the stuck case is precisely "already swept today but the
+        // sweep crashed before reopening", so this must run even when the marker
+        // says today is done. Reopens an overdue automated window so users aren't
+        // locked out. Best-effort.
+        try {
+          const { reopenStaleMaintenance } = await import('./services/maintenance/maintenanceMode.js')
+          const healed = await reopenStaleMaintenance(dbInstance)
+          if (healed?.reopened) console.warn('[nightly-maintenance] self-healed stranded window:', healed.reason)
+        } catch (healErr) {
+          console.warn('[nightly-maintenance] stale-window self-heal failed:', healErr?.message)
+        }
         const dayKey = eligibleDayKey(nowEt())
         const last = await kvGet(dbInstance, MARKER)
         if (last === dayKey) return // already swept for this ET day
@@ -3855,6 +3863,14 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleNightlyMaintenanceSweep(db)
     scheduleSamDailyCodeSweep(db)
     scheduleAnyaDailyOwnerReport(db)
+
+    // Immediate boot-time net: if a previous nightly sweep crashed and left the
+    // app stuck in a DOWN maintenance window, reopen it now rather than waiting
+    // for the first hourly tick (~2 min) so a redeploy un-strands users at once.
+    import('./services/maintenance/maintenanceMode.js')
+      .then(({ reopenStaleMaintenance }) => reopenStaleMaintenance(db))
+      .then((r) => { if (r?.reopened) console.warn('[startup] reopened stranded maintenance window:', r.reason) })
+      .catch((err) => console.warn('[startup] maintenance self-heal failed:', err?.message || err));
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
     startHealthService(db);
