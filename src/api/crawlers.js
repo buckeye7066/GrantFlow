@@ -220,8 +220,34 @@ export async function discoverAllForProfile({ profileId }) {
   if (!pid) {
     throw new Error('profile_id is required to discover funding. Select a profile first.')
   }
-  return apiFetch('/api/real-crawlers/discover-all', {
+  // Crawler OS cutover: the legacy /discover-all endpoint enqueues background
+  // crawler jobs whose types are now SUPERSEDED by the Crawler OS — the
+  // dispatcher marks them "completed" with zero results, so discover-all can
+  // never surface new funding (and frequently 504s while enqueuing, which the UI
+  // mis-rendered as "never searched"). Route discovery to the LIVE, in-process
+  // path (/run-smart → runProfileDiscoveryLive): it runs the full profile-aware
+  // discovery (federal APIs + open-web lane) under a gateway-safe time budget
+  // and PERSISTS matches before responding. Shape the result so the existing
+  // DiscoverGrants handler treats it as a completed synchronous run and pulls
+  // the freshly-persisted matches via its final fetchCatalogMatches pass.
+  const res = await apiFetch('/api/real-crawlers/run-smart', {
     method: 'POST',
     body: JSON.stringify({ profile_id: pid }),
   })
+  const stored = Number(res?.count ?? res?.stored ?? res?.inserted ?? res?.total_found) || 0
+  const sources = Array.isArray(res?.sources_used)
+    ? res.sources_used
+    : Array.isArray(res?.sources)
+      ? res.sources
+      : []
+  return {
+    success: res?.success !== false,
+    profile_id: pid,
+    synchronous: true,
+    jobs_enqueued: 0,
+    stored,
+    matches: Number(res?.matches ?? res?.count) || stored,
+    crawler_types: sources,
+    partial: Boolean(res?.partial || res?.timed_out),
+  }
 }

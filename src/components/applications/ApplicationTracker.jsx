@@ -204,7 +204,10 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
   const [form, setForm] = useState(() => ({
     ...EMPTY_FORM,
     ...(initialValues || {}),
-    amount_requested: initialValues?.amount_requested !== null ? String(initialValues.amount_requested) : '',
+    // initialValues is undefined on the "New Application" path — guard the whole
+    // chain (optional chaining + nullish default) so we never read a property off
+    // undefined. `?? ''` also covers null (DB default) and keeps 0 as "0".
+    amount_requested: String(initialValues?.amount_requested ?? ''),
     // Ensure Select-bound fields are always strings (DB may return null)
     profile_id: initialValues?.profile_id ?? '',
     status: initialValues?.status ?? 'draft',

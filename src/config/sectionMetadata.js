@@ -118,6 +118,12 @@ export const SECTION_METADATA = {
         "help": "Date of birth (YYYY-MM-DD) for age-based eligibility programs."
       },
       {
+        "name": "age",
+        "label": "Age",
+        "format": "text",
+        "help": "Age in years when captured directly (intake/quick-fill). date_of_birth is preferred for age-based eligibility; this is accepted so directly-entered age is never silently dropped."
+      },
+      {
         "name": "gender",
         "label": "Gender",
         "format": "text",

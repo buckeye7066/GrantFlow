@@ -269,7 +269,15 @@ function LayoutRoutes() {
     return (
         <Suspense fallback={<RouteLoading />}>
             <Layout currentPageName={currentPage}>
-                <Routes>
+                {/* key on pathname: in this nested-<Routes> setup, navigating
+                    between two pages wrapped in structurally-identical boundaries
+                    (withBoundary/withGate → Suspense → lazy) could reconcile in
+                    place and leave the previous page mounted even though the URL
+                    changed (the "Create Profile → /Organizations but view stays on
+                    Profiles" bug). Keying on pathname forces a clean remount per
+                    page. It does NOT key on search params, so query-driven in-page
+                    state (Discover slider, ?id=, ?tab=) is preserved. */}
+                <Routes key={location.pathname}>
 
                 <Route path="/" element={withGate(<Dashboard />, "Dashboard")} />
 
@@ -362,7 +370,6 @@ function LayoutRoutes() {
                 <Route path="/SourceDirectory" element={withGate(<SourceDirectory />, "SourceDirectory")} />
 
                 <Route path="/FundingOpportunities" element={withGate(<FundingOpportunities />, "FundingOpportunities")} />
-                <Route path="/FundingOpportunities" element={withBoundary(<FundingOpportunities />, "FundingOpportunities")} />
                 <Route path="/FundingLibrary" element={withBoundary(<FundingLibrary />, "FundingLibrary")} />
 
                 <Route path="/GrantMonitoring" element={withGate(<GrantMonitoring />, "GrantMonitoring")} />

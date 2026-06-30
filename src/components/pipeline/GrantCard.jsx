@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2, FileEdit, Link2Off, UserCheck } from 'lucide-react';
+import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
 import { format, isPast } from 'date-fns';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -96,11 +97,12 @@ export default function GrantCard({ grant, organization, organizationName, onSta
 
   // Get match score color and label
   const getMatchScoreColor = (score) => {
-    if (score >= 80) return { bg: 'bg-emerald-500', text: 'text-white', label: 'Excellent Match' };
-    if (score >= 65) return { bg: 'bg-green-500', text: 'text-white', label: 'Good Match' };
-    if (score >= 50) return { bg: 'bg-blue-500', text: 'text-white', label: 'Fair Match' };
-    if (score >= 35) return { bg: 'bg-amber-500', text: 'text-white', label: 'Potential Match' };
-    return { bg: 'bg-slate-400', text: 'text-white', label: 'Low Match' };
+    const label = scoreToMatchLabel(score);
+    if (score >= 80) return { bg: 'bg-emerald-500', text: 'text-white', label };
+    if (score >= 65) return { bg: 'bg-green-500', text: 'text-white', label };
+    if (score >= 50) return { bg: 'bg-blue-500', text: 'text-white', label };
+    if (score >= 35) return { bg: 'bg-amber-500', text: 'text-white', label };
+    return { bg: 'bg-slate-400', text: 'text-white', label };
   };
 
   const matchColor = getMatchScoreColor(matchScore);

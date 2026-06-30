@@ -22,7 +22,11 @@ test('project readiness document loading avoids SELECT DISTINCT over document pa
 
 test('login announcements use a dialect-specific boolean predicate', () => {
   const src = readRepoFile('backend/routes/announcements.js')
-  assert.match(src, /activePredicate\s*=\s*req\.db\?\.dialect === 'postgres' \? 'active IS TRUE' : 'active = 1'/)
+  // Postgres: `active` has drifted to INTEGER on some prod instances, so a bare
+  // `active IS TRUE` throws "argument of IS TRUE must be type boolean". The
+  // canonical predicate CASTs first (PR#701) so it holds for boolean OR integer
+  // columns. Accept the CAST form (and tolerate the older bare form).
+  assert.match(src, /activePredicate\s*=\s*req\.db\?\.dialect === 'postgres' \? '(?:CAST\(active AS BOOLEAN\) IS TRUE|active IS TRUE)' : 'active = 1'/)
   assert.doesNotMatch(
     src,
     /WHERE\s+active\s*=\s*1/,

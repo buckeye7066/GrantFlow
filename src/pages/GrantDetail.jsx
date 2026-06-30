@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { formatReasonText } from '@/utils/reasonText';
+import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
 import { Button } from '@/components/ui/button';
 import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock, FileText, Target, Link2Off, AlertTriangle, CalendarClock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -59,11 +60,12 @@ function MatchIntelligenceBanner({ grant }) {
   const isPast = daysUntil !== null && daysUntil < 0
 
   const getScoreStyle = (s) => {
-    if (s >= 80) return { bg: 'bg-emerald-500', label: 'Excellent Match' }
-    if (s >= 65) return { bg: 'bg-green-500', label: 'Good Match' }
-    if (s >= 50) return { bg: 'bg-blue-500', label: 'Fair Match' }
-    if (s >= 35) return { bg: 'bg-amber-500', label: 'Potential Match' }
-    return { bg: 'bg-slate-400', label: 'Low Match' }
+    const label = scoreToMatchLabel(s)
+    if (s >= 80) return { bg: 'bg-emerald-500', label }
+    if (s >= 65) return { bg: 'bg-green-500', label }
+    if (s >= 50) return { bg: 'bg-blue-500', label }
+    if (s >= 35) return { bg: 'bg-amber-500', label }
+    return { bg: 'bg-slate-400', label }
   }
 
   const hasAnything = matchScore > 0 || matchReasons.length > 0 || linkStatus === 'broken' || (daysUntil !== null && daysUntil <= 14)
@@ -650,7 +652,7 @@ export default function GrantDetail() {
               <ArrowLeft className="w-4 h-4" /> Back to Pipeline
             </Button>
             <h1 className="text-2xl font-bold text-slate-900 truncate" title={grant.title}>{grant.title}</h1>
-            <p className="text-slate-600">from {grant.funder}</p>
+            {grant.funder ? <p className="text-slate-600">from {grant.funder}</p> : null}
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {(() => {

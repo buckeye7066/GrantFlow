@@ -48,6 +48,26 @@ describe("backend profileSuggestionGuards", () => {
     expect(result.data.ssdi_recipient_household).toBe(true)
   })
 
+  it("normalizes legacy basic_information field aliases instead of silently dropping them", () => {
+    // Regression: ZIP / Profile category were sent under short keys (zip,
+    // profile_category) that the section schema didn't recognize, so the guard
+    // dropped them as unknown_field — silent data loss (ZIP especially, which
+    // matching depends on). They must now route to the canonical field, and
+    // directly-entered age must be accepted rather than discarded.
+    const result = guardProfileSectionPayload(
+      { zip: "37201", profile_category: "veteran", age: "45" },
+      { sectionKey: "basic_information", profile: { primary_type: "individual" } },
+    )
+
+    expect(result.data.zip_code).toBe("37201")
+    expect(result.data.profile_type).toBe("veteran")
+    expect(result.data.age).toBe("45")
+    // Aliased/routed fields are not genuine drops (they carry routedTo); nothing
+    // should be dropped as unknown_field here.
+    const dropped = result.rejected.filter((r) => !r.routedTo)
+    expect(dropped).toEqual([])
+  })
+
   it("dedupes near-duplicate long text", () => {
     const result = guardProfileSectionPayload(
       { mission: "Student needs scholarship support for college applications." },

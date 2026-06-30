@@ -743,10 +743,15 @@ export default function ProfileDetail() {
         setSavingSectionKey(key)
         const guarded = guardProfileSectionSuggestion(editingSection.data ?? {}, values, { sectionKey: key, profile })
         const guardedValues = deriveEmploymentStatusForSave(key, guarded.data, profile)
-        if (guarded.rejected.length > 0) {
+        // Only warn about fields that were genuinely DROPPED. Items carrying a
+        // `routedTo` (alias normalization, household-evidence routing) were saved
+        // to a canonical field, not skipped — surfacing them as "skipped" is the
+        // misleading message users saw for ZIP / Profile category.
+        const droppedFields = guarded.rejected.filter((item) => !item.routedTo)
+        if (droppedFields.length > 0) {
           toast({
             title: "Skipped unsupported fields",
-            description: guarded.rejected
+            description: droppedFields
               .slice(0, 3)
               .map((item) => `Skipped ${formatFieldLabel(key, item.key)}: ${formatRejectReason(item.reason)}`)
               .join("; "),

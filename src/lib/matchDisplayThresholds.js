@@ -24,6 +24,31 @@ export function scoreToLabel(score) {
 }
 
 /**
+ * Canonical "<Tier> Match" label used on grant cards, the grant detail header,
+ * the AI Match Score card, and the profile matcher. These were four divergent
+ * copies (e.g. 59% read "Good Match" on the detail card but "Fair Match" in the
+ * header) — this is the single source so the same score always reads the same
+ * label everywhere. Tiers are display-only and intentionally finer-grained than
+ * the matching/auto-add thresholds above.
+ */
+export const MATCH_DISPLAY_TIERS = Object.freeze({
+  excellent: 80,
+  good: 65,
+  fair: 50,
+  potential: 35,
+})
+
+export function scoreToMatchLabel(score) {
+  const s = Number(score)
+  if (!Number.isFinite(s)) return 'Low Match'
+  if (s >= MATCH_DISPLAY_TIERS.excellent) return 'Excellent Match'
+  if (s >= MATCH_DISPLAY_TIERS.good) return 'Good Match'
+  if (s >= MATCH_DISPLAY_TIERS.fair) return 'Fair Match'
+  if (s >= MATCH_DISPLAY_TIERS.potential) return 'Potential Match'
+  return 'Low Match'
+}
+
+/**
  * Check if a URL is renderable (not a placeholder).
  * Single source for frontend URL validation — mirrors backend urlRules.js.
  */

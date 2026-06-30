@@ -1371,10 +1371,10 @@ export default function ProfileOverview({
               <Sparkles className="w-4 h-4" />
             </span>
             <div>
-              <p className="font-semibold">Comprehensive application parity in progress</p>
+              <p className="font-semibold">Keep your profile complete and current</p>
               <p className="text-sm mt-1 text-blue-800">
-                Each section below maps to the application schema. Edit manually or use AI assistance in the section editor to keep
-                data synced between local and production deployments.
+                Each section below maps to what funders ask for. Edit manually or use AI assistance to fill gaps — a more
+                complete profile means stronger, more accurate grant matches.
               </p>
             </div>
           </div>
@@ -1543,18 +1543,6 @@ export default function ProfileOverview({
             />
           ) : null}
         </div>
-      </section>
-
-      <section className="rounded-3xl border border-slate-200 bg-white/70 p-6 space-y-3 text-sm text-slate-600">
-        <div className="flex items-center gap-2 text-slate-800 font-semibold uppercase tracking-wide text-xs">
-          <PenSquare className="w-4 h-4" />
-          Editing roadmap
-        </div>
-        <ul className="list-disc list-inside space-y-1">
-          <li>Autosave each section directly to `/api/profiles/:id/sections/:key` with validation feedback.</li>
-          <li>Surface AI suggestions per section seeded by uploaded documents and existing profile context.</li>
-          <li>Introduce audit history, reviewer assignments, and collaborative comments ahead of grants intake.</li>
-        </ul>
       </section>
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
