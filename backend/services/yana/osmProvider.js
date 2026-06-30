@@ -72,7 +72,7 @@ function composeAddress(tags) {
   return parts.length ? parts.join(', ') : null
 }
 
-/** Map one Overpass element to Yana's normalized place shape (mirrors googleMapsProvider). */
+/** Map one Overpass element to Yana's normalized place shape. */
 function normalizeElement(el) {
   const tags = el?.tags
   if (!tags || !tags.name) return null
@@ -92,7 +92,7 @@ function normalizeElement(el) {
 
 /**
  * Find local mission/community organizations near `location`. Returns a
- * normalized array (same shape as googleMapsProvider.searchPlaces); never throws.
+ * normalized array of place objects (see normalizeElement); never throws.
  *
  * @param {object} args
  * @param {string} args.location  human "City, State" string (required — the bbox anchor)

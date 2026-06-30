@@ -176,8 +176,22 @@ const _STATIC_PROMPT_BASE = [
   '- If it\'s a portal, walk them through the portal step by step',
   '- Help advance pipeline items: discovered → interested → drafting → application_prep → portal/submitted',
   '',
-  'Housing & Living Expense Funding Knowledge:',
-  '- Many students and individuals need help with off-campus living expenses (rent, utilities, food) but don\'t realize some funding can be used for this.',
+  'Link Verification Awareness:',
+  '- Opportunities have a link_status field: "ok", "broken", "redirect", "unverified", or "skipped".',
+  '- When presenting an opportunity with link_status "broken", warn the user: "Note: our last check found the application link may be broken. Try the URL, and if it doesn\'t work, contact the funder directly."',
+  '- When link_status is "redirect", mention that the URL may have moved but should still work.',
+  '- Do NOT warn about "ok", "unverified", or "skipped" links — only flag broken or redirect.',
+  '',
+].join('\n')
+
+// Student-specific funding knowledge (refunds, COA adjustments, RA positions,
+// Pell/HOPE, campus scholarships). This is ONLY relevant to students, so it is
+// appended to the system prompt for student-type profiles only — otherwise an
+// "individual"/nonprofit/business user gets FAFSA/work-study guidance that
+// doesn't apply to them (the QA finding).
+const _STUDENT_HOUSING_PROMPT = [
+  'Housing & Living Expense Funding Knowledge (student-specific):',
+  '- Many students need help with off-campus living expenses (rent, utilities, food) but don\'t realize some funding can be used for this.',
   '- Funding categories that can help with housing:',
   '  • refund_eligible: Scholarships/grants that exceed tuition produce a refund check disbursed to the student for living expenses.',
   '  • stipend: Programs that provide monthly stipends or living allowances.',
@@ -186,25 +200,25 @@ const _STATIC_PROMPT_BASE = [
   '  • faith_based: Church and denominational scholarships — often overlooked, can be used for any educational expense including housing.',
   '  • talent_based: Music, art, athletic scholarships — many disburse to student accounts and excess is refunded.',
   '- When explaining funding to users, ALWAYS explain HOW the funding can be used for housing when usable_for_housing is true.',
-  '- Example explanations:',
-  '  "This scholarship can generate a refund that can be used toward rent and utilities."',
-  '  "You can request a Cost of Attendance adjustment to include your actual rent — this may increase your financial aid eligibility."',
-  '  "This stipend covers living expenses directly — you can use it for rent, food, and utilities."',
   '- Actionable suggestions to prioritize:',
   '  • "Request a COA adjustment from your financial aid office"',
   '  • "Apply for an RA position for free housing"',
   '  • "Stack HOPE with Pell Grant to maximize your refund"',
   '  • "Apply for church scholarships — they\'re less competitive and can cover housing"',
-  '  • "Your music talent qualifies you for scholarships that refund excess to you"',
   '- When showing funding results, highlight ones with usable_for_housing = true and explain the housing angle.',
   '',
-  'Link Verification Awareness:',
-  '- Opportunities have a link_status field: "ok", "broken", "redirect", "unverified", or "skipped".',
-  '- When presenting an opportunity with link_status "broken", warn the user: "Note: our last check found the application link may be broken. Try the URL, and if it doesn\'t work, contact the funder directly."',
-  '- When link_status is "redirect", mention that the URL may have moved but should still work.',
-  '- Do NOT warn about "ok", "unverified", or "skipped" links — only flag broken or redirect.',
-  '',
 ].join('\n')
+
+// Profile types for which the student funding knowledge above is appended.
+const _STUDENT_PROFILE_TYPES = new Set([
+  'student', 'high_school_student', 'college_student', 'graduate_student',
+])
+
+/** True when a profile's type should receive student-specific funding guidance. */
+function isStudentProfileType(profile) {
+  const t = String(profile?.primary_type ?? profile?.type ?? profile?.profile_type ?? '').toLowerCase().trim()
+  return _STUDENT_PROFILE_TYPES.has(t)
+}
 
 const _STATIC_PROMPT_ADMIN_SECTION = [
   'Admin Access:',
@@ -1177,6 +1191,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   // v4: Pre-load active profile summary so Anya has context for the FIRST response
   // without requiring a tool invocation. This eliminates generic advice on initial messages.
   let profileContextSection = ''
+  let studentFundingApplies = false
   try {
     const activeProfileId = user?.activeProfileId || user?.profile_id
     if (activeProfileId && db) {
@@ -1204,6 +1219,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
             return row?.total_matches ?? 0
           } catch { return 0 }
         })()
+        studentFundingApplies = isStudentProfileType(profile)
         profileContextSection = [
           '',
           '## Active Profile Summary',
@@ -1316,7 +1332,8 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     console.warn('[anya] Could not resolve preferred language:', langErr?.message)
   }
 
-  const systemPrompt = dynamicHeader + languageDirective + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  const studentSection = studentFundingApplies ? ('\n' + _STUDENT_HOUSING_PROMPT) : ''
+  const systemPrompt = dynamicHeader + languageDirective + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + studentSection + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
   // Build the OpenAI tool schema for the chat-time whitelist. Without
   // this, the LLM had no way to actually run profile.updateSection /

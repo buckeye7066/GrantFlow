@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, Brain, Sparkles, AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import ScoringResultCard from "../components/scoring/ScoringResultCard";
+import { isProposalEligibleOpportunity } from "../../shared/opportunityFundability.js";
 
 export default function AIGrantScorer() {
   const [selectedGrantId, setSelectedGrantId] = useState("");
@@ -129,9 +130,12 @@ Return a JSON object with your complete analysis.`;
                   <SelectValue placeholder="Select a grant from your pipeline..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {grants.filter(g => ['interested', 'drafting'].includes(g.status)).map(grant => (
+                  {grants
+                    .filter(g => ['interested', 'drafting'].includes(g.status))
+                    .filter(isProposalEligibleOpportunity)
+                    .map(grant => (
                     <SelectItem key={grant.id} value={grant.id}>
-                      {grant.title}
+                      {grant.title || "Untitled grant"}
                     </SelectItem>
                   ))}
                 </SelectContent>

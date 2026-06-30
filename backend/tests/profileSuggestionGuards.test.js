@@ -25,6 +25,31 @@ describe("backend profileSuggestionGuards", () => {
     expect(result.rejected).toEqual([])
   })
 
+  it("rejects negative income, absurd values, and fractional household size on the financial section", () => {
+    const result = guardProfileSectionPayload(
+      { annual_income: -5000, household_income: 99999999999, household_size: 3.7 },
+      { sectionKey: "financial_information", profile: { primary_type: "individual" } },
+    )
+    // All three garbage values are rejected at the choke point, not persisted.
+    expect(result.data.annual_income).toBeUndefined()
+    expect(result.data.household_income).toBeUndefined()
+    expect(result.data.household_size).toBeUndefined()
+    expect(result.rejected.map((r) => r.key).sort()).toEqual(
+      ["annual_income", "household_income", "household_size"].sort(),
+    )
+  })
+
+  it("accepts valid financial values (coerces strings to numbers)", () => {
+    const result = guardProfileSectionPayload(
+      { annual_income: "45000", household_income: 60000, household_size: "4" },
+      { sectionKey: "financial_information", profile: { primary_type: "individual" } },
+    )
+    expect(result.data.annual_income).toBe(45000)
+    expect(result.data.household_income).toBe(60000)
+    expect(result.data.household_size).toBe(4)
+    expect(result.rejected).toEqual([])
+  })
+
   it("rejects occupation flags contradicted by student academic notes", () => {
     const result = guardProfileSectionPayload(
       { nonprofit_employee: true, notes: "student focused on academics" },

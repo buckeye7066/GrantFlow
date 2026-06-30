@@ -17,7 +17,7 @@ import { getHamiltonProfileSummary, statusLabel } from '@/api/hamilton'
  *
  * A single profile-page button + dialog answering two owner questions:
  *   1. "What is Hamilton working on for this profile?"  → working_on
- *   2. "Where do I need to add information so he can finish?" → needs_you
+ *   2. "Where do I need to add information so she can finish?" → needs_you
  *
  * Data comes from GET /api/hamilton/automation/profile-summary (read-only,
  * profile-access scoped). Each "needs you" item carries a `where` hint; the
@@ -71,7 +71,7 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
 
   return (
     <>
-      <Button variant="outline" onClick={() => setOpen(true)} title="See what Hamilton is doing and what he needs from you">
+      <Button variant="outline" onClick={() => setOpen(true)} title="See what Hamilton is doing and what she needs from you">
         <Sparkles className="mr-2 h-4 w-4 text-emerald-600" />
         Hamilton
         {needsCount > 0 && (
@@ -98,7 +98,7 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
               </Button>
             </DialogTitle>
             <DialogDescription>
-              What Hamilton is working on, and anywhere he needs you to add information to finish.
+              What Hamilton is working on, and anywhere she needs you to add information to finish.
             </DialogDescription>
           </DialogHeader>
 
@@ -118,7 +118,7 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
                 {needsCount === 0 ? (
                   <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-700">
                     <CheckCircle2 className="h-4 w-4" />
-                    Nothing needed from you right now — Hamilton has everything he needs.
+                    Nothing needed from you right now — Hamilton has everything she needs.
                   </div>
                 ) : (
                   <ul className="space-y-2">
@@ -165,7 +165,7 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
                 </h3>
                 {workingOn.length === 0 ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
-                    Hamilton has no active work on this profile. Select funding sources in the Pipeline and start automation to put him to work.
+                    Hamilton has no active work on this profile. Select funding sources in the Pipeline and start automation to put her to work.
                   </div>
                 ) : (
                   <ul className="space-y-2">

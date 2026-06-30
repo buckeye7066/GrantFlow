@@ -6,6 +6,23 @@ import { useToast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/api/client'
 import { Bell, RefreshCw } from 'lucide-react'
 
+// Privacy-conscious default for the admin audit log: show enough of the IP to
+// spot a suspicious network/pattern, but mask the host portion so we're not
+// displaying full plaintext addresses of users (and so a shared screenshot
+// doesn't leak them). IPv4 → last octet hidden; IPv6 → last segment hidden.
+function maskIp(ip) {
+  const s = String(ip || '').trim()
+  if (!s) return '—'
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) {
+    return s.replace(/\.\d{1,3}$/, '.•')
+  }
+  if (s.includes(':')) {
+    const parts = s.split(':')
+    if (parts.length > 1) { parts[parts.length - 1] = '•'; return parts.join(':') }
+  }
+  return s
+}
+
 function formatWhen(iso) {
   try {
     return new Date(iso).toLocaleString()
@@ -206,7 +223,7 @@ export default function AdminLoginNotifications() {
                           <span className="text-slate-500">—</span>
                         )}
                       </td>
-                      <td className="p-2 text-slate-600">{e.ip || '—'}</td>
+                      <td className="p-2 text-slate-600" title="Host portion masked for privacy">{maskIp(e.ip)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -256,7 +273,7 @@ export default function AdminLoginNotifications() {
                         <div className="font-medium text-slate-900">{v.path || '—'}</div>
                         {v.title ? <div className="text-xs text-slate-500">{v.title}</div> : null}
                       </td>
-                      <td className="p-2 text-slate-600">{v.ip || '—'}</td>
+                      <td className="p-2 text-slate-600" title="Host portion masked for privacy">{maskIp(v.ip)}</td>
                     </tr>
                   ))}
                 </tbody>

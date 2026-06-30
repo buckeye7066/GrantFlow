@@ -18,6 +18,7 @@ import client, { apiFetch } from '@/api/client'
 import { getPipelineStats, getReminders } from "@/api/dashboard"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { parseDateSafe } from "@/components/shared/dateUtils"
+import { isActiveStage } from "../../shared/pipelineStages.js"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
@@ -344,8 +345,9 @@ export default function Dashboard() {
   }, [milestones, currentUser?.role, profileOrganizationId])
 
   const activeGrants = useMemo(
-    () =>
-      relevantGrants.filter((g) => ["interested", "drafting", "submitted", "awarded"].includes(g.status)),
+    // ONE definition of "active" (shared/pipelineStages.js isActiveStage) so the
+    // sidebar count agrees with Reports and the pipeline funnel.
+    () => relevantGrants.filter((g) => isActiveStage(g.status)),
     [relevantGrants],
   )
 

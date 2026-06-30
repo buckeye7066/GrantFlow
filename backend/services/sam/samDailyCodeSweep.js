@@ -45,6 +45,12 @@ export async function runSamDailyCodeSweep(db, { force = false, runSam = default
       dryRun: true,
       trigger: 'scheduled',
       persist: true,
+      // Sam is the DETECTION half only. The owner gets exactly ONE email per day:
+      // Anya's 09:00 ET digest (what Sam found, what CI auto-fixed, what's left).
+      // Suppress Sam's own per-run email here so the scheduled sweep never
+      // double-notifies — even if SAM_EMAIL_REPORTS is left on globally. Findings
+      // are still persisted to sam_runs for Anya + the sam-autofix Action to read.
+      emailReport: false,
     })
   } catch (err) {
     log.warn('daily code sweep failed', { error: err?.message })

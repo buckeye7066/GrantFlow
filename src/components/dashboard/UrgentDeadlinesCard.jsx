@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, Calendar as CalendarIcon, ArrowRight } from "lucide-react";
-import { format, differenceInDays } from "date-fns";
+import { daysUntilLocal } from "@/components/shared/dateUtils";
 
 export default function UrgentDeadlinesCard({ urgentDeadlines }) {
   const getDeadlineInfo = (grant) => {
@@ -16,11 +16,18 @@ export default function UrgentDeadlinesCard({ urgentDeadlines }) {
       };
     }
 
-    const deadline = new Date(grant.deadline);
-    if (isNaN(deadline.getTime())) return null;
+    // Local-calendar day math so "Due today" matches the user's wall clock
+    // (see dateUtils.daysUntilLocal — fixes the UTC off-by-one).
+    const daysLeft = daysUntilLocal(grant.deadline);
+    if (daysLeft === null) return null;
 
-    const daysLeft = differenceInDays(deadline, new Date());
-    
+    if (daysLeft < 0) {
+      return {
+        text: daysLeft === -1 ? 'Due yesterday' : `${Math.abs(daysLeft)} days overdue`,
+        color: "bg-red-500/10 text-red-800 border-red-500/20 dark:bg-red-500/15 dark:text-red-200 dark:border-red-500/30"
+      };
+    }
+
     if (daysLeft === 0) {
       return {
         text: 'Due today',

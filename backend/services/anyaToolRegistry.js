@@ -4197,14 +4197,30 @@ registerTool({
     const { profileId, sectionKey, data } = params || {}
     if (!profileId || !sectionKey || typeof data !== 'object') throw new Error('profileId, sectionKey, and object data are required')
     const userId = context?.ctx?.userId ?? 'anya_owner'
-    const json = JSON.stringify(data)
+
+    // Route Anya's direct edits through the SAME validation choke point the HTTP
+    // PUT path uses, so the agent can't write negative income / fractional
+    // household size / unknown fields that the form would reject.
+    let toSave = data
+    let rejected = []
+    try {
+      const { guardProfileSectionPayload } = await import('../../shared/profileSuggestionGuards.js')
+      const profileRow = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(String(profileId))
+      const guarded = guardProfileSectionPayload(data, { profile: profileRow || {}, sectionKey, sections: { [sectionKey]: data } })
+      toSave = guarded?.data ?? data
+      rejected = guarded?.rejected ?? []
+    } catch (guardErr) {
+      console.warn('[anya owner.edit_profile_section] guard failed, saving raw:', guardErr?.message)
+    }
+
+    const json = JSON.stringify(toSave)
     const existing = await db.prepare(`SELECT 1 AS x FROM profile_sections WHERE profile_id = ? AND section_key = ?`).get(String(profileId), String(sectionKey))
     if (existing) {
       await db.prepare(`UPDATE profile_sections SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ? AND section_key = ?`).run(json, userId, String(profileId), String(sectionKey))
     } else {
       await db.prepare(`INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, ?, ?, ?)`).run(String(profileId), String(sectionKey), json, userId)
     }
-    return { ok: true, profile_id: profileId, section_key: sectionKey, saved: true }
+    return { ok: true, profile_id: profileId, section_key: sectionKey, saved: true, rejected_fields: rejected.map((r) => r.key) }
   },
 })
 

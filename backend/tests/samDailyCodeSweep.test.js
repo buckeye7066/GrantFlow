@@ -48,6 +48,8 @@ describe('runSamDailyCodeSweep', () => {
     expect(args.includeHeavy).toBe(true)
     expect(args.dryRun).toBe(true)
     expect(args.persist).toBe(true)
+    // Sam must NOT email directly — Anya's 09:00 digest is the single owner email.
+    expect(args.emailReport).toBe(false)
     expect(res).toMatchObject({
       ran: true,
       run_id: 'sam-zzz',

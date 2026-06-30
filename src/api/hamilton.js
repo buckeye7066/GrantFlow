@@ -52,8 +52,8 @@ export function getApplicationTask(taskId) {
   return apiFetch(`/api/application-tasks/${encodeURIComponent(taskId)}`)
 }
 
-// Profile-page "Hamilton" summary: what he is working on + everywhere the owner
-// must add information for him to finish. Read-only, profile-access scoped.
+// Profile-page "Hamilton" summary: what she is working on + everywhere the owner
+// must add information for her to finish. Read-only, profile-access scoped.
 // Returns { ok, working_on:[...], needs_you:[...], next_run_at, counts }.
 export function getHamiltonProfileSummary(profileId) {
   if (!profileId) return Promise.reject(new Error('profileId required'))

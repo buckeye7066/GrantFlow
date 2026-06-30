@@ -256,7 +256,6 @@ It enumerates environment variables referenced in code and/or present in example
 | `GMAIL_OAUTH_CLIENT_SECRET` | Yes | No | Backend/Node |
 | `GMAIL_OAUTH_REFRESH_TOKEN` | Yes | No | Backend/Node |
 | `GOOGLE_API_KEY` | Yes | No | Backend/Node |
-| `GOOGLE_MAPS_API_KEY` | Yes | No | Backend/Node |
 | `GOOGLE_SEARCH_CX` | Yes | No | Backend/Node |
 | `GRANTFLOW_ADMIN_TOKEN` | Yes | No | Backend/Node |
 | `GRANTFLOW_API` | Yes | No | Backend/Node |
@@ -2407,12 +2406,6 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/services/countyFundingCrawler.js:L84` (process.env)
-
-### `GOOGLE_MAPS_API_KEY`
-
-- **Templates**: (not present)
-- **Code references**:
-  - `backend/services/sam/samRegistry.js:L152–L152` (process.env)
 
 ### `GOOGLE_SEARCH_CX`
 

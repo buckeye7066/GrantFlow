@@ -488,11 +488,29 @@ async function enrichProfileWithSummary(db, profile) {
   const billingAccount = await ensureBillingAccount(db, profile.id)
   profile.billing = mapAccountRow(billingAccount)
   
-  // Get section completion stats
-  const sections = await db
-    .prepare('SELECT COUNT(*) as total FROM profile_sections WHERE profile_id = ?')
-    .get(profile.id)
-  profile.sections_complete = sections?.total ?? 0
+  // Get section completion stats. Count ONLY canonical sections (intersect with
+  // SECTION_METADATA) so the profile card agrees with the detail page's
+  // "X of 13" — a raw COUNT(*) over profile_sections inflates the number with
+  // legacy/duplicate/non-canonical keys (the QA finding: card said "21" while
+  // the profile actually has 13 defined sections).
+  let canonicalSectionKeys = []
+  try {
+    const { SECTION_METADATA } = await import('../../src/config/sectionMetadata.js')
+    canonicalSectionKeys = Object.keys(SECTION_METADATA || {})
+  } catch { /* fall back to raw count below */ }
+  if (canonicalSectionKeys.length) {
+    const placeholders = canonicalSectionKeys.map(() => '?').join(',')
+    const sections = await db
+      .prepare(`SELECT COUNT(DISTINCT section_key) as total FROM profile_sections WHERE profile_id = ? AND section_key IN (${placeholders})`)
+      .get(profile.id, ...canonicalSectionKeys)
+    profile.sections_complete = sections?.total ?? 0
+    profile.sections_total = canonicalSectionKeys.length
+  } else {
+    const sections = await db
+      .prepare('SELECT COUNT(*) as total FROM profile_sections WHERE profile_id = ?')
+      .get(profile.id)
+    profile.sections_complete = sections?.total ?? 0
+  }
   
   // Get pipeline funds total
   // Prefer profile-scoped totals when grants.profile_id exists; fall back to organization totals.

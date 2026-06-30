@@ -96,7 +96,7 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
     <Card className="mb-3 shadow-sm hover:shadow-md transition-shadow">
       <CardContent className="pt-4 pb-3 px-4">
         <div className="flex items-start justify-between gap-2 mb-1">
-          <p className="text-sm font-semibold text-slate-900 leading-tight line-clamp-2">{app.grant_name}</p>
+          <p className="text-sm font-semibold text-slate-900 leading-tight line-clamp-2">{app.grant_name || app.grant_title || "Untitled application"}</p>
         </div>
         {app.funder_name && (
           <p className="text-xs text-slate-500 mb-1">{app.funder_name}</p>

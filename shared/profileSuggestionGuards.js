@@ -235,12 +235,33 @@ function coerceFieldValue(value, field) {
     const coerced = coerceBooleanTri(value)
     return coerced === undefined ? { ok: false } : { ok: true, value: coerced }
   }
+  // Integer-constrained fields (e.g. household_size). Validated regardless of the
+  // display `format` so a field declared `integer` is ALWAYS whole-number +
+  // range checked at the single server choke point — fractional (3.7), negative,
+  // and non-numeric values are rejected, not silently persisted.
+  if (field?.integer) {
+    const num = typeof value === 'number' ? value : Number(String(value).replace(/[,\s]/g, ''))
+    if (!Number.isFinite(num) || !Number.isInteger(num)) return { ok: false }
+    if (Number.isFinite(field.min) && num < field.min) return { ok: false }
+    if (Number.isFinite(field.max) && num > field.max) return { ok: false }
+    return { ok: true, value: num }
+  }
   if (format === 'currency_usd' || format === 'currency_cents_usd' || format === 'percent') {
-    if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value }
-    if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value.replace(/[$,%]/g, '')))) {
-      return { ok: true, value: Number(value.replace(/[$,%]/g, '')) }
+    // Money/percent can never be negative; enforce a floor (field.min, default 0)
+    // and an optional ceiling (field.max; percent defaults to 100). This rejects
+    // -5000 income and absurd 99,999,999,999 values at the data layer for EVERY
+    // write path, not just the form.
+    const min = Number.isFinite(field?.min) ? field.min : 0
+    const max = Number.isFinite(field?.max) ? field.max : (format === 'percent' ? 100 : null)
+    let num = null
+    if (typeof value === 'number' && Number.isFinite(value)) num = value
+    else if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value.replace(/[$,%]/g, '')))) {
+      num = Number(value.replace(/[$,%]/g, ''))
     }
-    return { ok: false }
+    if (num === null) return { ok: false }
+    if (num < min) return { ok: false }
+    if (Number.isFinite(max) && num > max) return { ok: false }
+    return { ok: true, value: num }
   }
   if (format === 'string_array') {
     if (Array.isArray(value)) return { ok: true, value: value.map((entry) => String(entry)).filter(Boolean) }

@@ -183,8 +183,9 @@ export default function Calendar() {
         {effectiveProfileId ? <HamiltonReadinessBanner profileId={effectiveProfileId} /> : null}
 
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Calendar Grid */}
-          <Card className="lg:col-span-2">
+          {/* Calendar Grid — min-w-0 lets this column shrink within the grid
+              instead of forcing horizontal overflow that clips the Sat column. */}
+          <Card className="lg:col-span-2 min-w-0">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <Button variant="ghost" size="sm" aria-label="Previous month" onClick={() => setCurrentMonth((m) => subMonths(m, 1))}>
@@ -203,12 +204,12 @@ export default function Calendar() {
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-7 gap-px mb-1">
+                  <div className="grid grid-cols-7 gap-px mb-1 w-full">
                     {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-                      <div key={d} className="text-center text-xs font-medium text-slate-500 py-1">{d}</div>
+                      <div key={d} className="text-center text-xs font-medium text-slate-500 py-1 min-w-0">{d}</div>
                     ))}
                   </div>
-                  <div className="grid grid-cols-7 gap-px bg-slate-200 rounded-lg overflow-hidden">
+                  <div className="grid grid-cols-7 gap-px bg-slate-200 rounded-lg overflow-hidden w-full">
                     {/* Empty cells for start offset */}
                     {Array.from({ length: startDayOfWeek }).map((_, i) => (
                       <div key={`empty-${i}`} className="bg-slate-50 min-h-[80px] p-1" />
@@ -223,7 +224,7 @@ export default function Calendar() {
                         <button
                           key={key}
                           onClick={() => setSelectedDay(day)}
-                          className={`min-h-[80px] p-1 text-left transition-colors ${
+                          className={`min-h-[80px] min-w-0 p-1 text-left transition-colors ${
                             isSelected
                               ? "bg-blue-50 ring-2 ring-blue-500"
                               : today

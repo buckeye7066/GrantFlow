@@ -112,13 +112,19 @@ function GlobalFreePeriodPanel({ onGrantGlobal, onRevokeGlobal, busy }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" disabled={busy} onClick={() => onGrantGlobal('week')}>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => {
+          if (window.confirm('Give EVERY account a free WEEK right now? This starts the timer for all profiles and suppresses their invoices for 7 days.')) onGrantGlobal('week')
+        }}>
           Give ALL 1 week free
         </Button>
-        <Button variant="outline" size="sm" disabled={busy} onClick={() => onGrantGlobal('month')}>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => {
+          if (window.confirm('Give EVERY account a free MONTH right now? This starts the timer for all profiles and suppresses their invoices for ~30 days.')) onGrantGlobal('month')
+        }}>
           Give ALL 1 month free
         </Button>
-        <Button variant="ghost" size="sm" className="text-rose-600" disabled={busy} onClick={onRevokeGlobal}>
+        <Button variant="ghost" size="sm" className="text-rose-600" disabled={busy} onClick={() => {
+          if (window.confirm('End the free period for EVERY account now? Accounts currently on a free week/month will resume normal billing immediately.')) onRevokeGlobal()
+        }}>
           End all free periods
         </Button>
       </CardContent>

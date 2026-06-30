@@ -291,31 +291,51 @@ const organizationDetailsSchema = z.object({
 })
 
 
+// Inline validation so the user gets an immediate error instead of garbage
+// silently saving. The server guard (shared/profileSuggestionGuards.js) enforces
+// the same rules authoritatively for every write path.
+const nonNegativeMoneyField = z
+  .union([z.number(), z.string()])
+  .optional()
+  .transform((value, ctx) => {
+    if (value === "" || value === undefined || value === null) return ""
+    const parsed = Number(String(value).replace(/[$,]/g, ""))
+    if (!Number.isFinite(parsed)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid number" })
+      return z.NEVER
+    }
+    if (parsed < 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Cannot be negative" })
+      return z.NEVER
+    }
+    if (parsed > 100000000) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "That value looks too large — please check it" })
+      return z.NEVER
+    }
+    return parsed
+  })
+
+const householdSizeField = z
+  .union([z.number(), z.string()])
+  .optional()
+  .transform((value, ctx) => {
+    if (value === "" || value === undefined || value === null) return ""
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a whole number" })
+      return z.NEVER
+    }
+    if (parsed < 1 || parsed > 30) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Must be between 1 and 30" })
+      return z.NEVER
+    }
+    return parsed
+  })
+
 const financialInformationSchema = z.object({
-  annual_income: z
-    .union([z.number(), z.string()])
-    .optional()
-    .transform((value) => {
-      if (value === "" || value === undefined || value === null) return ""
-      const parsed = Number(value)
-      return Number.isFinite(parsed) ? parsed : ""
-    }),
-  household_income: z
-    .union([z.number(), z.string()])
-    .optional()
-    .transform((value) => {
-      if (value === "" || value === undefined || value === null) return ""
-      const parsed = Number(value)
-      return Number.isFinite(parsed) ? parsed : ""
-    }),
-  household_size: z
-    .union([z.number(), z.string()])
-    .optional()
-    .transform((value) => {
-      if (value === "" || value === undefined || value === null) return ""
-      const parsed = Number(value)
-      return Number.isFinite(parsed) ? parsed : ""
-    }),
+  annual_income: nonNegativeMoneyField,
+  household_income: nonNegativeMoneyField,
+  household_size: householdSizeField,
   financial_need_level: z.string().optional().or(z.literal("")),
   low_income: booleanField,
   unemployed: booleanField,
