@@ -483,6 +483,29 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
       db.close()
     }
   })
+
+  it('respects the crawled grace window so an in-flight run is never reaped', async () => {
+    const db = createDb()
+    try {
+      const { profileId } = await createAmyProfile(db, generateScenarios({ runId: 'amy-g' })[0], { runId: 'amy-g', ttlHours: 48 })
+      // Crawled 2 minutes ago — its run could still be mid-flight.
+      await markProfileCrawled(db, profileId, { now: new Date(Date.now() - 2 * 60 * 1000) })
+
+      // 1h grace → too recent → skipped with the explicit reason.
+      const skip = await cleanupAmyProfiles(db, { requireCrawled: true, minCrawledAgeMs: 60 * 60 * 1000 })
+      expect(skip.deleted).toBe(0)
+      expect(skip.skipped_ids.some((s) => s.reasons.includes('crawled_too_recently'))).toBe(true)
+      expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId)).toBeTruthy()
+
+      // No grace → old enough → reaped (expiry-independent; works even if
+      // expires_at were missing/corrupted).
+      const del = await cleanupAmyProfiles(db, { requireCrawled: true, minCrawledAgeMs: 0 })
+      expect(del.deleted).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId)).toBeFalsy()
+    } finally {
+      db.close()
+    }
+  })
 })
 
 describe('scoring-weight editor + tuner', () => {

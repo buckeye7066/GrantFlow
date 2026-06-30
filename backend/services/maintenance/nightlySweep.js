@@ -81,14 +81,24 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
   }
 
   // Sam cleanup sweep for Amy's synthetic crawler-training profiles. Amy tags
-  // every profile it creates as synthetic + allow_sam_cleanup with an expiry,
-  // so the system never clogs with training records. Gated OFF by default
-  // (AMY_AUTO_CLEANUP=true to enable); only ever deletes EXPIRED Amy-owned rows,
-  // guarded inside cleanupAmyProfiles. Best-effort — never blocks the sweep.
-  if (String(process.env.AMY_AUTO_CLEANUP ?? 'false').toLowerCase() === 'true') {
+  // every profile it creates as synthetic + allow_sam_cleanup, marks it crawled
+  // once discovery runs, and improves the crawler weights/coverage from the
+  // cohort at run end. This is the STANDING NET that reaps profiles whose run
+  // already finished but whose inline cleanup didn't (crashed run, pre-net rows)
+  // — otherwise synthetic profiles accumulate forever.
+  //
+  // Policy: reap synthetic + allow_sam_cleanup profiles that have been CRAWLED
+  // (their training + learning ran) and were crawled long enough ago that the
+  // run is definitely complete (grace window). This is expiry-INDEPENDENT, so it
+  // also clears legacy rows whose expires_at is missing/corrupted. Never-crawled
+  // profiles are left alone (they may still get crawled). ON by default; set
+  // AMY_AUTO_CLEANUP=false to disable, AMY_CLEANUP_GRACE_HOURS to tune the grace.
+  // Best-effort — never blocks the sweep.
+  if (String(process.env.AMY_AUTO_CLEANUP ?? 'true').toLowerCase() !== 'false') {
     try {
       const { cleanupAmyProfiles } = await import('../amy/amyProfileStore.js')
-      const amy = await cleanupAmyProfiles(db, { expiredOnly: true })
+      const graceMs = Math.max(0, Number(process.env.AMY_CLEANUP_GRACE_HOURS || 2)) * 60 * 60 * 1000
+      const amy = await cleanupAmyProfiles(db, { requireCrawled: true, minCrawledAgeMs: graceMs, now })
       if (amy?.deleted > 0) log.info('nightly Amy synthetic-profile cleanup', { deleted: amy.deleted, scanned: amy.scanned })
     } catch (err) {
       log.warn('nightly Amy cleanup failed (non-fatal)', { error: err?.message })
