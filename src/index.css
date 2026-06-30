@@ -298,6 +298,24 @@ button:focus-visible {
     color: rgb(71 85 105) !important; /* slate-600 */
   }
 
+  /* Dark-mode contrast hardening — the inverse of the light-mode shim above.
+     Most screens were built light-first and hardcode Tailwind colors with no dark
+     variant (text-slate-900/800/700 for headings/card titles/body, bg-white for
+     card surfaces). In dark mode that leaves near-black text on the near-black
+     page/card background (invisible). Remap globally so dark mode is readable
+     without per-component edits. IMPORTANT: text and surface are remapped TOGETHER
+     — remapping text to light without darkening bg-white would make text vanish on
+     the white-opacity cards some pages use (e.g. Automation's bg-white/80). */
+  .dark :is(.text-slate-900, .text-slate-800, .text-slate-700, .text-gray-900, .text-gray-800, .text-gray-700) {
+    color: rgb(226 232 240) !important; /* slate-100 — headings, card titles, body */
+  }
+  .dark :is(.text-slate-600, .text-slate-500, .text-gray-600, .text-gray-500) {
+    color: rgb(148 163 184) !important; /* slate-400 — keep muted but readable */
+  }
+  .dark :is(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50) {
+    background-color: hsl(var(--card)) !important;
+  }
+
   .high-contrast :is(.text-slate-400, .text-slate-500, .text-slate-600, .text-gray-400, .text-gray-500, .text-gray-600, .text-muted-foreground) {
     color: hsl(var(--foreground)) !important;
   }

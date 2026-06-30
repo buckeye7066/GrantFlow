@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
 import { useAuthStore } from "@/stores/authStore"
+import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { getLastVisitedPath } from "@/lib/lastVisitedPreferences"
 
 import StatCard from "@/components/dashboard/StatCard"
@@ -184,6 +185,14 @@ function LJWMonogram({ className = "" }) {
 export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
   const logout = useAuthStore((state) => state.logout)
+  // "Dashboard Columns" personalization (1/2/3) now actually drives the stat grid.
+  // Default (2) keeps the original responsive layout so existing users see no change.
+  const { state: dashboardPrefs } = useDashboardPreferences()
+  const statGridCols = dashboardPrefs?.layoutColumns === 1
+    ? 'md:grid-cols-1'
+    : dashboardPrefs?.layoutColumns === 3
+      ? 'md:grid-cols-3 xl:grid-cols-3'
+      : 'md:grid-cols-2 xl:grid-cols-4'
   const [showOnboarding, setShowOnboarding] = useState(false)
   const queryClient = useQueryClient()
   
@@ -591,7 +600,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className={`grid gap-4 ${statGridCols}`}>
           {stats.map((stat) => (
             <StatCard key={stat.title} {...stat} />
           ))}

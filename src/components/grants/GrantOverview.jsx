@@ -101,6 +101,18 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
         return (profiles || []).find((p) => String(p?.id) === id) || null;
     }, [profiles, activeProfileId]);
 
+    // The grant was scored against ITS OWN profile_id — attribute to that, not the
+    // UI's activeProfileId, which (e.g. opening a grant from the general pipeline)
+    // can fall back to a designated default profile and mislabel "scored against".
+    const scoredAgainstProfile = useMemo(() => {
+        const gid = grant?.profile_id ? String(grant.profile_id) : null;
+        if (gid) {
+            const match = (profiles || []).find((p) => String(p?.id) === gid);
+            if (match) return match;
+        }
+        return activeProfile;
+    }, [profiles, grant?.profile_id, activeProfile]);
+
     const updateGrantMutation = useMutation({
         mutationFn: (data) => client.entities.Grant.update(grant.id, data),
         onSuccess: () => {
@@ -293,17 +305,14 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 <p className="text-sm opacity-80 max-w-2xl">
                                     This opportunity was scored based on alignment with{' '}
                                     <span className="font-semibold">
-                                        {activeProfile?.display_name || organization?.name || 'your selected profile'}
+                                        {scoredAgainstProfile?.display_name || organization?.name || 'your selected profile'}
                                     </span>
                                     ’s mission, eligibility, location, and key focus areas.
                                 </p>
                                 <p className="text-xs opacity-75 mt-2">
                                     Scored against profile:{' '}
                                     <span className="font-semibold">
-                                        {activeProfile?.display_name
-                                            || (activeProfileId && !String(activeProfileId).startsWith('__')
-                                                ? String(activeProfileId)
-                                                : 'your selected profile')}
+                                        {scoredAgainstProfile?.display_name || 'your selected profile'}
                                     </span>
                                 </p>
                                 {(() => {

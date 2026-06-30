@@ -680,6 +680,8 @@ export default function GrantDetail() {
               <Star className={`w-4 h-4 ${grant.starred ? 'text-yellow-400 fill-yellow-400' : ''}`} /> 
               {grant.starred ? 'Starred' : 'Star'} 
             </Button>
+            <Button variant="outline" onClick={() => setIsPortalAssistantOpen(true)}><Sparkles className="w-4 h-4 mr-2" /> Portal Assistant</Button>
+            <Button variant="outline" onClick={() => setIsPrintableAppOpen(true)}><FileText className="w-4 h-4 mr-2" /> Print Application</Button>
             <Button variant="outline" onClick={() => setIsEditing(true)}><Edit className="w-4 h-4 mr-2" /> Edit</Button>
             <Button variant="destructive" onClick={() => setIsDeleting(true)}><Trash2 className="w-4 h-4 mr-2" /> Delete</Button>
           </div>
@@ -689,22 +691,17 @@ export default function GrantDetail() {
       {/* Match Intelligence Banner */}
       <MatchIntelligenceBanner grant={grant} />
 
-      <main className="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+        <div className="space-y-6">
           <GrantOverview grant={grant} organization={organization} onOpenPrintApp={() => setIsPrintableAppOpen(true)} />
           <Tabs value={activeTab} onValueChange={setActiveTab} className="bg-white rounded-xl shadow-sm border">
+            {/* Portal Assistant + Print Application are MODAL openers, not tab
+                panels — they must live OUTSIDE TabsList. Having non-TabsTrigger
+                children inside TabsList broke Radix's tab selection so Workflow/
+                Checklist/Budget/Time Logs never switched. They now render as
+                header actions (see the page header above). */}
             <TabsList className="p-2 m-2">
                 <TabsTrigger value="coach"><Brain className="w-4 h-4 mr-2"/>AI Coach</TabsTrigger>
-                <Button
-  variant="ghost"
-  className="inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium"
-  onClick={() => setIsPortalAssistantOpen(true)}
-><Sparkles className="w-4 h-4 mr-2"/>Portal Assistant</Button>
-<Button
-  variant="ghost"
-  className="inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium"
-  onClick={() => setIsPrintableAppOpen(true)}
-><FileText className="w-4 h-4 mr-2"/>Print Application</Button>
                 <TabsTrigger value="workflow"><Target className="w-4 h-4 mr-2"/>Workflow</TabsTrigger>
                 <TabsTrigger value="checklist"><CheckSquare className="w-4 h-4 mr-2"/>Checklist</TabsTrigger>
                 <TabsTrigger value="budget"><DollarSign className="w-4 h-4 mr-2"/>Budget</TabsTrigger>
@@ -776,7 +773,6 @@ export default function GrantDetail() {
             )}
           </Tabs>
         </div>
-        <div className="lg:col-span-1 space-y-6"></div>
       </main>
 
       <SimilarGrants grant={grant} />
