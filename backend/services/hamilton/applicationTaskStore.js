@@ -160,6 +160,7 @@ export async function ensureApplicationTaskSchema(db) {
       output_document_id TEXT,
       output_pdf_document_id TEXT,
       output_docx_document_id TEXT,
+      output_proposal_document_id TEXT,
       mailing_instructions_json ${jsonbType} NOT NULL DEFAULT ${emptyJsonObject},
       audit_summary_json ${jsonbType} NOT NULL DEFAULT ${emptyJsonObject},
       missing_fields_json TEXT NOT NULL DEFAULT '[]',
@@ -266,6 +267,12 @@ export async function ensureApplicationTaskSchema(db) {
   await ensureColumn('output_document_id', 'TEXT')
   await ensureColumn('output_pdf_document_id', 'TEXT')
   await ensureColumn('output_docx_document_id', 'TEXT')
+  // Full MBA-level proposal doc (hamiltonFullProposalGenerator) attached to
+  // the task alongside the submission packet. Ensured here at the single
+  // application_tasks schema choke point (re-run on boot by
+  // ensureSchemaInvariants → ensureApplicationTaskCheck), so both dialects
+  // gain it without a separate migration.
+  await ensureColumn('output_proposal_document_id', 'TEXT')
   await ensureColumn('mailing_instructions_json', isPostgres ? 'JSONB' : 'TEXT', isPostgres ? `'{}'::jsonb` : `'{}'`)
   await ensureColumn('audit_summary_json', isPostgres ? 'JSONB' : 'TEXT', isPostgres ? `'{}'::jsonb` : `'{}'`)
   await ensureColumn('allow_auto_submit', boolType, defFalse)
@@ -311,6 +318,7 @@ function rowToTask(row) {
     output_document_id: row.output_document_id ?? null,
     output_pdf_document_id: row.output_pdf_document_id ?? null,
     output_docx_document_id: row.output_docx_document_id ?? null,
+    output_proposal_document_id: row.output_proposal_document_id ?? null,
     mailing_instructions: safeJson(row.mailing_instructions_json, {}),
     audit_summary: safeJson(row.audit_summary_json, {}),
     missing_fields: safeJson(row.missing_fields_json, []),
@@ -528,6 +536,7 @@ export async function updateApplicationTask(db, taskId, {
   outputDocumentId,
   outputPdfDocumentId,
   outputDocxDocumentId,
+  outputProposalDocumentId,
   mailingInstructions,
   auditSummary,
   startedAt,
@@ -567,6 +576,7 @@ export async function updateApplicationTask(db, taskId, {
   if (outputDocumentId !== undefined) { sets.push('output_document_id = ?'); params.push(outputDocumentId ?? null) }
   if (outputPdfDocumentId !== undefined) { sets.push('output_pdf_document_id = ?'); params.push(outputPdfDocumentId ?? null) }
   if (outputDocxDocumentId !== undefined) { sets.push('output_docx_document_id = ?'); params.push(outputDocxDocumentId ?? null) }
+  if (outputProposalDocumentId !== undefined) { sets.push('output_proposal_document_id = ?'); params.push(outputProposalDocumentId ?? null) }
   if (mailingInstructions !== undefined) { sets.push('mailing_instructions_json = ?'); params.push(JSON.stringify(mailingInstructions ?? {})) }
   if (auditSummary !== undefined) { sets.push('audit_summary_json = ?'); params.push(JSON.stringify(auditSummary ?? {})) }
   if (startedAt !== undefined) { sets.push('started_at = ?'); params.push(startedAt ?? null) }
