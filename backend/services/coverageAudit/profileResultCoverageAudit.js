@@ -34,7 +34,11 @@
 
 import { DEFAULT_MIN_SCORE } from '../../config/matchThresholds.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../../config/matchSurfacing.js'
+import { isStudentAidOpportunity } from '../matchEngine.js'
 import { createLogger } from '../../utils/logger.js'
+
+/** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
+const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
 
 const log = createLogger('coverage:resultAudit')
 
@@ -113,8 +117,26 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   const low_results = qualifying.length < MIN_HEALTHY_SURFACED
   if (low_results) gaps.push(`low_results:${qualifying.length}`)
 
+  // 5. Ineligible surfaced match — a student-aid opportunity (TN HOPE, FAFSA,
+  //    Pell, TSAA, foundation scholarships…) surfacing to a NON-student profile
+  //    that does not declare a student-aid need. This is the "senior widow with
+  //    student scholarships" defect: the engine already caps these below the
+  //    floor for a fresh score, but a STALE persisted ACCEPT (e.g. a web-llm row
+  //    the reconcile never re-scores) keeps them visible. Like a surfacing
+  //    regression it is NOT crawl-remediable — the `student_aid_eligibility` boot
+  //    invariant demotes them; here we OBSERVE so Sam/Anya can see the class and
+  //    confirm the heal. Condition mirrors the engine's own cap arm.
+  const wantsStudentAid = Array.isArray(thesis.needs) && thesis.needs.some((n) => STUDENT_AID_NEEDS.includes(String(n)))
+  const ineligibleAidRows = (!thesis.is_student && !wantsStudentAid)
+    ? qualifying.filter((r) => !r.is_directory && isStudentAidOpportunity({ title: r.title, description: r.description, categories: r.categories }, null))
+    : []
+  const ineligible_surfaced_match = ineligibleAidRows.length > 0
+  if (ineligible_surfaced_match) {
+    gaps.push(`ineligible_surfaced_match:student_aid_on_nonstudent:${ineligibleAidRows.length}`)
+  }
+
   // Re-discovery can only fix acquisition gaps (2-4), never a code-level
-  // surfacing regression.
+  // surfacing regression or a stale-decision eligibility defect (5).
   const needs_rediscovery = institution_gap || hyperlocal_gap || low_results
 
   return {
@@ -127,6 +149,8 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
     missing_schools,
     hyperlocal_gap,
     low_results,
+    ineligible_surfaced_match,
+    ineligible_aid_count: ineligibleAidRows.length,
     needs_rediscovery,
     gaps,
     has_gap: gaps.length > 0,
@@ -144,7 +168,7 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
 
   const surfacedRows = await db
     .prepare(
-      `SELECT m.match_score, m.match_decision, o.title, o.sponsor,
+      `SELECT m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
               (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory
          FROM profile_opportunity_matches m
          JOIN funding_opportunities o ON o.id = m.opportunity_id
@@ -240,6 +264,7 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     institution_gaps: audits.filter((a) => a.institution_gap).length,
     hyperlocal_gaps: audits.filter((a) => a.hyperlocal_gap).length,
     low_results: audits.filter((a) => a.low_results).length,
+    ineligible_surfaced_matches: audits.filter((a) => a.ineligible_surfaced_match).length,
     needs_rediscovery: audits.filter((a) => a.needs_rediscovery).length,
   }
   return { audits, summary }
@@ -295,6 +320,23 @@ export function isCoverageAutohealEnabled() {
  * @param {number}  [opts.limit]     profiles to scan.
  */
 export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohealEnabled(), maxHeal = Number(process.env.COVERAGE_AUTOHEAL_MAX) || 5, limit = 500 } = {}) {
+  // Heal the ineligible-surfaced-match class (student-aid on a non-student) FIRST,
+  // via the same choke-point invariant boot uses, so the audit below reflects the
+  // post-heal state and Sam/Anya see a clean count. This is a decision-staleness
+  // defect a re-crawl can't fix, so it is demoted here rather than re-discovered.
+  let eligibilityHeal = null
+  try {
+    const { enforceStudentAidEligibility } = await import('../../startup/enforceInvariants.js')
+    eligibilityHeal = await enforceStudentAidEligibility(db)
+    if (eligibilityHeal?.repaired > 0) {
+      log.info('coverage sweep demoted student-aid matches on non-student profiles', {
+        repaired: eligibilityHeal.repaired, profilesAffected: eligibilityHeal.profilesAffected,
+      })
+    }
+  } catch (err) {
+    log.warn('student-aid eligibility heal unavailable in coverage sweep (non-fatal)', { error: err?.message })
+  }
+
   const { audits, summary } = await auditAllProfilesResultCoverage(db, { limit })
 
   // Telemetry for zero/low-result profiles (reuses the existing low-coverage table).
@@ -345,6 +387,9 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
     autoheal: Boolean(autoheal),
     healed_count: healed.length,
     healed,
+    eligibility_heal: eligibilityHeal
+      ? { demoted: eligibilityHeal.repaired ?? 0, profilesAffected: eligibilityHeal.profilesAffected ?? 0 }
+      : null,
     top_gaps: audits.filter((a) => a.has_gap).slice(0, 25).map((a) => ({ id: a.profile_id, name: a.display_name, gaps: a.gaps })),
   }
   await recordCoverageSweep(db, result)

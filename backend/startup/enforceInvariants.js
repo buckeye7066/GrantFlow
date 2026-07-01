@@ -1350,6 +1350,213 @@ export async function enforceProfileIdIntegrity(db) {
 }
 
 /**
+ * Return the column names on `profile_opportunity_matches` for the active
+ * dialect. Same dialect-agnostic / defensive contract as listGrantColumns.
+ */
+async function listMatchColumns(db) {
+  try {
+    if ((db?.dialect || 'sqlite') === 'postgres') {
+      const rows = await db
+        .prepare(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'profile_opportunity_matches'`,
+        )
+        .all()
+      return new Set((rows || []).map((r) => String(r.column_name)))
+    }
+    const cols = await db.prepare('PRAGMA table_info(profile_opportunity_matches)').all()
+    return new Set((cols || []).map((c) => String(c.name)))
+  } catch {
+    return new Set()
+  }
+}
+
+/** Score a demoted match is forced BELOW the display floor to so it stops surfacing. */
+const STUDENT_AID_DEMOTE_SCORE = 40
+
+/**
+ * INVARIANT: STUDENT-AID OPPORTUNITIES DO NOT SURFACE TO A NON-STUDENT PROFILE
+ * (canonical_rules.md eligibility realism — a person is only matched to funding
+ * they can actually apply for).
+ *
+ * THE BUG THIS CLOSES
+ * -------------------
+ * A `profile_opportunity_matches` row carries a PERSISTED decision + score. The
+ * canonical match engine already caps a student-aid opportunity (TN HOPE, FAFSA,
+ * Pell, TSAA, foundation scholarships…) BELOW the display floor for a non-student
+ * profile (services/matchEngine.js — STUDENT_AID_NONSTUDENT_CAP + REJECT), so a
+ * FRESH score never surfaces one. But two facts combine into a live defect:
+ *   1. The decision is persisted and never re-scored when the engine improves
+ *      (matching logic is versioned, the stored row is not).
+ *   2. `web-llm` rows are DELIBERATELY excluded from the crawler-os reconcile
+ *      DELETE + xmatch cleanup (so real web scholarships are never wiped), which
+ *      means a stale `web-llm` ACCEPT is NEVER recomputed.
+ * Result: a senior widow (Liubov Samoylenko, `individual`, is_student=false) kept
+ * surfacing 13 stale `web-llm` scholarship ACCEPTs (81/accept, computed a week
+ * earlier under older logic) even though the CURRENT engine REJECTs/caps every
+ * one of them. `qualifiesForDisplay` surfaces any ACCEPT regardless of score, so
+ * the stale ACCEPT alone kept them visible.
+ *
+ * WHY THE OTHER NETS MISS IT
+ * --------------------------
+ *   - This lives in `profile_opportunity_matches` (the DISCOVERY/surface table),
+ *     not `grants` (the pipeline) — the relevance-floor / orphan / amount sweeps
+ *     only touch `grants`.
+ *   - pipelineEligibilitySweep uses the applicant-type gate, which treats
+ *     student == individual (a scholarship stamped applicant_types=['individual']
+ *     is NOT an applicant-type mismatch), so it cannot detect this class.
+ *
+ * THE RULE (re-assert the engine's OWN decision at the persisted layer)
+ * --------------------------------------------------------------------
+ * A surfaced student-aid match is demoted (decision→reject, score→below floor)
+ * when — and ONLY when — the profile is one the engine's cap already fires for:
+ *   - the opportunity is a student-aid opportunity (same predicate the engine
+ *     uses: isStudentAidOpportunity), AND
+ *   - the profile is NOT a student (thesis.is_student false), AND
+ *   - the profile does NOT declare a student-aid NEED (scholarship / student_aid
+ *     / cost_of_attendance) — this mirrors the engine's `!wantsStudentAid` arm,
+ *     so an adult learner who genuinely wants aid is preserved.
+ * A real student (Anastasia White) and an aid-seeking adult are NEVER touched, so
+ * this raises PRECISION without lowering recall. Directory/referral rows (mission
+ * rule: directories always survive) are exempt.
+ *
+ * REPAIR is a DEMOTION, not a delete: the row is kept (reversible — a future
+ * legitimate re-crawl re-scores it) but forced below the display floor so
+ * `qualifiesForDisplay` hides it. Idempotent: a demoted row no longer qualifies,
+ * so a re-run is a no-op.
+ *
+ * OVERRIDE: ON by default. Set ENFORCE_STUDENT_AID_ELIGIBILITY=0 for count-only.
+ */
+export async function enforceStudentAidEligibility(db, { resolveThesis = null } = {}) {
+  return runInvariant('student_aid_eligibility', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('match_score') || !matchCols.has('match_decision')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+
+    // Lazy imports so a boot-time module cycle can never abort the sweep, and so
+    // the SAME predicate/floor the live engine + surfacing paths use is reused
+    // here (no re-encoding → no drift). All are already loaded in a running app.
+    // resolveThesis is injectable for tests (default: the live thesis builder).
+    let DEFAULT_MIN_SCORE, SURFACED_MATCHER_VERSIONS_SQL, isStudentAidOpportunity, buildThesisForProfile
+    try {
+      ;({ DEFAULT_MIN_SCORE } = await import('../config/matchThresholds.js'))
+      ;({ SURFACED_MATCHER_VERSIONS_SQL } = await import('../config/matchSurfacing.js'))
+      ;({ isStudentAidOpportunity } = await import('../services/matchEngine.js'))
+      if (!resolveThesis) ({ buildThesisForProfile } = await import('../services/crawlerOsService.js'))
+    } catch (err) {
+      log.warn('student_aid_eligibility: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const floor = Number(DEFAULT_MIN_SCORE) || 75
+
+    // Candidate SURFACED student-aid-ish matches. A cheap SQL prefilter narrows to
+    // scholarship/student/tuition/FAFSA/Pell titles (or student-aid categories);
+    // isStudentAidOpportunity refines in JS. Only rows that WOULD surface
+    // (qualifiesForDisplay = ACCEPT decision OR score >= floor) are candidates —
+    // a buried REVIEW is already hidden. Directories are exempt (always survive).
+    let rows
+    try {
+      rows = await db
+        .prepare(
+          `SELECT m.id AS match_id, m.profile_id, m.match_score, m.match_decision,
+                  o.title, o.description, o.categories
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+            WHERE m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+              AND (UPPER(COALESCE(m.match_decision,'')) = 'ACCEPT' OR m.match_score >= ?)
+              AND UPPER(COALESCE(o.opportunity_kind,'')) NOT IN ('DIRECTORY','PAST_AWARD_INTEL')
+              AND (
+                lower(COALESCE(o.title,'')) LIKE '%scholar%'
+                OR lower(COALESCE(o.title,'')) LIKE '%student%'
+                OR lower(COALESCE(o.title,'')) LIKE '%tuition%'
+                OR lower(COALESCE(o.title,'')) LIKE '%fafsa%'
+                OR lower(COALESCE(o.title,'')) LIKE '%pell%'
+                OR lower(COALESCE(o.title,'')) LIKE '%financial aid%'
+                OR lower(COALESCE(o.categories,'')) LIKE '%scholar%'
+                OR lower(COALESCE(o.categories,'')) LIKE '%student_aid%'
+                OR lower(COALESCE(o.categories,'')) LIKE '%cost_of_attendance%'
+              )`,
+        )
+        .all(floor)
+    } catch (err) {
+      // profile_opportunity_matches / funding_opportunities absent on a minimal
+      // test DB, or opportunity_kind/description/categories missing — degrade to 0.
+      log.warn('student_aid_eligibility: candidate query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    // Refine to genuine student-aid opportunities and group by profile.
+    const byProfile = new Map()
+    for (const r of rows || []) {
+      if (!isStudentAidOpportunity({ title: r.title, description: r.description, categories: r.categories }, null)) continue
+      if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+      byProfile.get(r.profile_id).push(r)
+    }
+    if (byProfile.size === 0) return { scanned: 0, repaired: 0, enforced: true, profilesAffected: 0 }
+
+    // Decide per profile using the thesis (drift-free: same is_student the
+    // discovery/matching path derives). A student, or a non-student who declares
+    // a student-aid need, is exempt — mirroring the engine's cap condition.
+    const disabled = _parseBoolEnv(process.env.ENFORCE_STUDENT_AID_ELIGIBILITY) === false
+    const STUDENT_AID_NEEDS = new Set(['student_aid', 'cost_of_attendance', 'scholarship'])
+    const hasExplanationCol = matchCols.has('match_explanation')
+    const hasUpdatedAtCol = matchCols.has('updated_at')
+
+    let scanned = 0
+    let repaired = 0
+    const affected = []
+    const getThesis = resolveThesis || buildThesisForProfile
+    for (const [profileId, matchRows] of byProfile) {
+      let thesis = null
+      try { thesis = await getThesis(db, profileId) } catch { thesis = null }
+      if (!thesis) continue // can't establish student status → do not touch (safe)
+      const isStudent = Boolean(thesis.is_student)
+      const wantsAid = Array.isArray(thesis.needs) && thesis.needs.some((n) => STUDENT_AID_NEEDS.has(String(n)))
+      if (isStudent || wantsAid) continue // legitimately eligible — leave alone
+      scanned += matchRows.length
+      if (disabled) continue
+
+      for (const r of matchRows) {
+        const cur = Number(r.match_score)
+        const newScore = Number.isFinite(cur) ? Math.min(cur, STUDENT_AID_DEMOTE_SCORE) : STUDENT_AID_DEMOTE_SCORE
+        const sets = ['match_decision = ?', 'match_score = ?']
+        const args = ['reject', newScore]
+        if (hasExplanationCol) {
+          sets.push('match_explanation = ?')
+          args.push('Demoted by student_aid_eligibility invariant: student-aid opportunity surfaced to a non-student profile (engine caps these below the display floor).')
+        }
+        if (hasUpdatedAtCol) {
+          sets.push('updated_at = ?')
+          args.push(new Date().toISOString())
+        }
+        args.push(r.match_id)
+        try {
+          const res = await db.prepare(`UPDATE profile_opportunity_matches SET ${sets.join(', ')} WHERE id = ?`).run(...args)
+          repaired += changesOf(res) || 1
+        } catch (err) {
+          log.warn('student_aid_eligibility: demote failed for match (non-fatal)', { match: r.match_id, error: String(err?.message || err) })
+        }
+      }
+      affected.push({ profileId, demoted: matchRows.length })
+    }
+
+    if (disabled) {
+      if (scanned > 0) log.warn('student-aid matches on non-student profiles present (demote DISABLED via ENFORCE_STUDENT_AID_ELIGIBILITY=0)', { scanned, profiles: affected.length })
+      return { scanned, repaired: 0, enforced: false, profilesAffected: affected.length }
+    }
+    if (repaired > 0) {
+      log.info('demoted student-aid matches surfaced to non-student profiles', {
+        repaired,
+        profilesAffected: affected.length,
+        sample: affected.slice(0, 10),
+      })
+    }
+    return { scanned, repaired, enforced: true, profilesAffected: affected.length }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -1382,6 +1589,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Runs after the relevance floor because those below-floor rows are cheaper to
   // drop first; orgs/businesses and user-progressed work are never touched.
   steps.push(await enforceIndividualAmountCeiling(db))
+  // Surface-table eligibility net: demote persisted student-aid matches that are
+  // surfacing to a NON-student profile (stale ACCEPTs the live engine already
+  // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
+  // Operates on profile_opportunity_matches, so it complements the grants sweeps.
+  steps.push(await enforceStudentAidEligibility(db))
   // Profile-level data repair (not pipeline): collapse any doubled display_name
   // (e.g. "Jordan Lane Jordan Michael Lane") back to a single name.
   steps.push(await enforceProfileDisplayNameNotDoubled(db))
@@ -1432,7 +1644,9 @@ export const __testables = {
   enforceProfileScopedPipeline,
   enforceProfileIncomeReconciliation,
   enforceIndividualAmountCeiling,
+  enforceStudentAidEligibility,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,
+  STUDENT_AID_DEMOTE_SCORE,
 }

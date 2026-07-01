@@ -912,7 +912,7 @@ function profileContradictsStudent(profileNorm, rawProfile = null) {
   return nonStudentEntity.includes(String(profileNorm.entityType ?? ''))
 }
 
-function isStudentAidOpportunity(opportunity, oppNorm) {
+export function isStudentAidOpportunity(opportunity, oppNorm) {
   if (oppNorm?.requiresStudent) return true
   const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''}`.toLowerCase()
   if (RE_STUDENT_AID_SIGNAL.test(oppText)) return true
