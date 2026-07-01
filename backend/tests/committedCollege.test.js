@@ -172,7 +172,12 @@ describe('buildCollegeAidWorkspace', () => {
     const ws = buildCollegeAidWorkspace({
       sections,
       matchedFunding: [{ title: 'Local Scholarship', amount: 2000 }],
-      hamiltonTasks: [{ id: 't1', status: 'in_progress' }, { id: 't2', status: 'blocked_login_required', blocker_type: 'login_required' }],
+      hamiltonTasks: [
+        { id: 't1', status: 'in_progress' },
+        { id: 't2', status: 'blocked_login_required' },
+        { id: 't3', status: 'blocked', last_agent_message: 'Hamilton Autopilot stopped at preflight: Profile is missing first name; add it to continue.' },
+        { id: 't4', status: 'blocked', last_agent_message: 'Hamilton Autopilot stopped at preflight: Profile is missing first name; add it to continue.' },
+      ],
     })
     expect(ws.committed).toBe(true)
     expect(ws.college).toMatchObject({ id: '1', name: 'State U', state: 'OH' })
@@ -181,8 +186,16 @@ describe('buildCollegeAidWorkspace', () => {
     expect(ws.matched_funding).toMatchObject({ count: 1, total: 2000 })
     expect(ws.unmet_need).toBe(12000) // 22000 - 8000 - 2000
     expect(ws.fafsa.completed).toBe(true)
-    expect(ws.hamilton).toMatchObject({ total: 2, in_progress: 1, blocked: 1 })
-    expect(ws.hamilton.blockers[0]).toMatchObject({ task_id: 't2', blocker_type: 'login_required' })
+    expect(ws.hamilton).toMatchObject({ total: 4, in_progress: 1, blocked: 3 })
+    // Blocked tasks are grouped by a human-readable reason with counts, so the UI
+    // shows a few meaningful lines instead of N identical "blocked" rows. The two
+    // "missing first name" tasks collapse into one grouped reason (count: 2).
+    const firstNameGroup = ws.hamilton.blockers.find((b) => /missing first name/i.test(b.reason))
+    expect(firstNameGroup).toBeTruthy()
+    expect(firstNameGroup.count).toBe(2)
+    expect(ws.hamilton.blockers.find((b) => /login/i.test(b.reason))).toBeTruthy()
+    // No group should be the useless bare "blocked" when a real message exists.
+    expect(ws.hamilton.blockers.every((b) => typeof b.reason === 'string' && b.reason.length > 0)).toBe(true)
     expect(ws.archived_colleges).toEqual([{ id: '2', name: 'Other', previous_status: 'accepted' }])
   })
 

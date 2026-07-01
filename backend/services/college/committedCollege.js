@@ -270,15 +270,56 @@ export function resolveStudentFundingLocation(uniSection) {
   return null
 }
 
+// Map the coarse blocked_* task statuses to a short, human label. The most
+// specific reason usually lives in last_agent_message; this is the fallback
+// when a task only carries a generic status.
+const BLOCKED_STATUS_LABELS = {
+  blocked: 'Blocked',
+  blocked_login_required: 'Needs portal login',
+  blocked_2fa: 'Needs two-factor code',
+  blocked_captcha: 'Blocked by CAPTCHA',
+  blocked_missing_info: 'Missing required info',
+  blocked_terms_or_policy: 'Portal forbids automation',
+}
+
+// Turn a raw agent message into a concise, deduplicable reason. Preflight/engine
+// messages are long and per-source; we keep the meaningful head so identical
+// causes (e.g. "Profile is missing first name") collapse into one grouped line.
+export function resolveBlockerReason(task = {}) {
+  const raw = String(task?.last_agent_message || '').trim()
+  if (raw) {
+    // Strip the common "Hamilton Autopilot stopped at preflight: " prefix and
+    // take the first clause so the same root cause groups together.
+    const cleaned = raw
+      .replace(/^Hamilton(\s+Autopilot)?\s+(stopped at preflight:|could not|)/i, (m) => m).trim()
+    const head = cleaned.split(/[.;]\s|\s—\s/)[0].trim()
+    return head.length > 90 ? `${head.slice(0, 87)}…` : head
+  }
+  return BLOCKED_STATUS_LABELS[String(task?.status || '')] || task?.current_step || 'Blocked'
+}
+
 function summarizeHamiltonTasks(tasks = []) {
   const list = Array.isArray(tasks) ? tasks : []
   const blocked = list.filter((t) => String(t?.status || '').includes('blocked'))
+
+  // Group blocked tasks by their resolved human reason so the UI shows a few
+  // meaningful lines with counts instead of N identical "blocked" rows.
+  const groups = new Map()
+  for (const t of blocked) {
+    const reason = resolveBlockerReason(t)
+    const g = groups.get(reason) || { reason, count: 0, task_ids: [] }
+    g.count += 1
+    if (g.task_ids.length < 25) g.task_ids.push(t.id)
+    groups.set(reason, g)
+  }
+  const blockers = [...groups.values()].sort((a, b) => b.count - a.count)
+
   return {
     total: list.length,
     in_progress: list.filter((t) => ['in_progress', 'running', 'queued'].includes(String(t?.status))).length,
     completed: list.filter((t) => ['completed', 'submitted'].includes(String(t?.status))).length,
     blocked: blocked.length,
-    blockers: blocked.map((t) => ({ task_id: t.id, status: t.status, blocker_type: t.blocker_type || null })),
+    blockers,
   }
 }
 

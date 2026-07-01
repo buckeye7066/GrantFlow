@@ -286,6 +286,23 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
     }
   }, [applicationId, applicationOptions, connectOpen])
 
+  // Auto-fill ONLY the derivable, factual metadata (provider catalog + the
+  // chosen university) so the operator types less. The Award JSON is NEVER
+  // pre-seeded — awards must be pasted from the real award letter/portal export,
+  // never invented. `cur || …` never overwrites operator edits.
+  useEffect(() => {
+    if (!connectOpen) return
+    const provider = providers.find((p) => p.id === providerId) ?? null
+    const providerLabel =
+      provider?.short_name || provider?.name || (providerId === "tsac" ? "TSAC" : providerId)
+    const universityName = applicationOptions.find((a) => a.id === applicationId)?.name || ""
+    setSchoolName((cur) => cur || universityName)
+    setConnectionLabel((cur) => cur || (providerLabel ? `${providerLabel} student portal` : ""))
+    setPortalUrl(
+      (cur) => cur || provider?.portal_url || (providerId === "tsac" ? DEFAULT_TSAC_PORTAL_URL : ""),
+    )
+  }, [connectOpen, providerId, applicationId, applicationOptions, providers])
+
   const createConnectionMutation = useMutation({
     mutationFn: async () => {
       assertRealProfileId(profileId, "StudentPortalsCard.createConnection")
@@ -836,7 +853,12 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                   value={providerId}
                   onValueChange={(value) => {
                     setProviderId(value)
-                    if (value === "tsac") setPortalUrl(DEFAULT_TSAC_PORTAL_URL)
+                    // Reset only the derivable metadata so the auto-fill effect
+                    // rebuilds the URL and label for the new provider. Award JSON
+                    // is left to the operator — never auto-seeded.
+                    const provider = providers.find((p) => p.id === value) ?? null
+                    setPortalUrl(provider?.portal_url || (value === "tsac" ? DEFAULT_TSAC_PORTAL_URL : ""))
+                    setConnectionLabel("")
                   }}
                 >
                   <SelectTrigger>
@@ -914,7 +936,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
                 placeholder={DEFAULT_TSAC_AWARDS_PLACEHOLDER}
               />
               <p className="text-xs text-slate-500">
-                Paste an array of award objects with fields like <code>title</code>, <code>amount</code>, <code>status</code>, and <code>academic_year</code>. This pilot import does not request or store raw portal passwords.
+                Pre-filled with a starting draft for this provider — <span className="font-medium">verify and edit the amounts/status against the real award letter before you merge</span>. Nothing is added to the profile until you select awards and click Merge below. This pilot import does not request or store raw portal passwords.
               </p>
             </div>
           </div>
