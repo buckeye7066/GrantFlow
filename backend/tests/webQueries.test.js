@@ -66,6 +66,27 @@ describe('buildWebQueries', () => {
     expect(qs.some((q) => /area agency on aging|vocational rehabilitation|benefits\.gov/i.test(q))).toBe(false)
   })
 
+  it('targets a LEARNED institution gap by forcing the missing school queries', () => {
+    const thesis = {
+      applicant_types: ['student'], is_student: true, needs: [],
+      location: { state: 'TN', county: 'Bradley' },
+      learned_gaps: { classes: ['institution_gap'], missing_schools: ['Middle Tennessee State University'] },
+    }
+    const qs = buildWebQueries(thesis, { year: 2026, max: 14 })
+    expect(qs.some((q) => /Middle Tennessee State University scholarships/i.test(q))).toBe(true)
+    expect(qs.some((q) => /Middle Tennessee State University foundation scholarships/i.test(q))).toBe(true)
+  })
+
+  it('targets a LEARNED low_results gap with broader national fallbacks', () => {
+    const thesis = {
+      applicant_types: ['individual'], needs: ['disability'], location: { state: 'TN' },
+      learned_gaps: { classes: ['low_results'], missing_schools: [] },
+    }
+    const qs = buildWebQueries(thesis, { year: 2026, max: 30 })
+    expect(qs.some((q) => /disability grant funding/i.test(q))).toBe(true)
+    expect(qs.some((q) => /TN assistance programs/i.test(q))).toBe(true)
+  })
+
   it('gives a sparse low-income individual the universal safety-net locators', () => {
     const qs = buildWebQueries(
       { applicant_types: ['individual'], needs: [], location: { state: 'TN' } },

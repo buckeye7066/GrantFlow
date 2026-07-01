@@ -253,6 +253,36 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     }
   }
 
+  // ── Closed-loop gap targeting ───────────────────────────────────────────────
+  // If a PRIOR crawl learned a coverage gap for this profile (recorded by
+  // liveCrawlGapLearning into Anya's brain, attached to the thesis by
+  // buildThesisForProfile), steer THIS run to fill it — so the crawlers evolve
+  // from what they learn instead of repeating the same misses.
+  const learned = thesis.learned_gaps || null;
+  if (learned) {
+    const classes = Array.isArray(learned.classes) ? learned.classes : [];
+    const missingSchools = (Array.isArray(learned.missing_schools) ? learned.missing_schools : [])
+      .map(cleanInstitution).filter(Boolean);
+    // institution_gap → force the still-missing school names (endowed / foundation
+    // scholarships are reachable ONLY by the institution's name).
+    if (classes.includes('institution_gap') || missingSchools.length) {
+      for (const s of missingSchools.slice(0, 3)) {
+        add(core, `${s} scholarships`);
+        add(core, `${s} foundation scholarships`);
+      }
+    }
+    // hyperlocal_gap → re-emit county-scoped queries even if a prior run tried them.
+    if (classes.includes('hyperlocal_gap') && county) {
+      add(core, isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
+      add(extra, `community foundation grants ${county}`);
+    }
+    // low_results → broaden with national + state fallbacks keyed to the needs.
+    if (classes.includes('low_results')) {
+      for (const need of needs.slice(0, 3)) add(extra, `${need} grant funding ${word}`);
+      if (state) add(extra, `${state} assistance programs`);
+    }
+  }
+
   // Last resort: a sparse profile still searches something useful.
   if (core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
 
