@@ -280,6 +280,107 @@ function hostMatches(a, b) {
   return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`)
 }
 
+// Prepend https:// when the owner pastes a bare host ("mtsu.edu") so both the URL
+// parser below and the secure-login window get a well-formed address.
+function normalizeUrl(raw) {
+  const v = String(raw || "").trim()
+  if (!v) return ""
+  return /^https?:\/\//i.test(v) ? v : `https://${v}`
+}
+
+// Derive a clean host from whatever the owner pasted — a bare host or a full URL.
+// Returns "" when it isn't a plausible web address (no dot / unparseable) so the
+// caller can prompt for a real one instead of starting a login to nowhere.
+function deriveHostFromUrl(raw) {
+  const normalized = normalizeUrl(raw)
+  if (!normalized) return ""
+  try {
+    const host = new URL(normalized).hostname.toLowerCase()
+    return host.includes(".") ? host : ""
+  } catch {
+    return ""
+  }
+}
+
+// Inline "add this school's login" affordance for a tile whose school we know but
+// whose portal host we never resolved. The old UI rendered a dead-end note ("add
+// it under Advanced") that pointed at a section with no per-school field — a
+// literal dead end. Here the owner pastes the school's login page; we derive the
+// host and hand a fully-formed portal to the SAME secure-login flow every other
+// tile uses (onStart → startLogin), so one paste both names the portal and opens
+// the sign-in window. No new endpoint, no separate "add portal" step.
+function AddSchoolLoginInline({ schoolLabel, busy, onStart }) {
+  const [open, setOpen] = React.useState(false)
+  const [url, setUrl] = React.useState("")
+  const [error, setError] = React.useState("")
+
+  const submit = () => {
+    const host = deriveHostFromUrl(url)
+    if (!host) {
+      setError("Enter the school's login web address, e.g. mtsu.edu")
+      return
+    }
+    setError("")
+    onStart({ portalHost: host, loginUrl: normalizeUrl(url), label: schoolLabel })
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className={BTN_CORAL}
+        onClick={() => setOpen(true)}
+        title="Add this school's login page and sign in once through the secure window"
+      >
+        <Globe className="h-4 w-4" /> Add this school&rsquo;s login
+      </button>
+    )
+  }
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <label className="space-y-1">
+        <span className="money text-[11.5px] font-bold uppercase tracking-[0.06em] text-current-ink/60">
+          School login web address
+        </span>
+        <input
+          type="url"
+          inputMode="url"
+          autoFocus
+          className="w-full rounded-[10px] border border-current-line bg-transparent px-3 py-2 text-sm text-current-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current-amber"
+          placeholder="mtsu.edu or https://portal.mtsu.edu/login"
+          value={url}
+          onChange={(e) => { setUrl(e.target.value); if (error) setError("") }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit() } }}
+        />
+      </label>
+      {error && <p className="text-[11.5px] font-semibold text-current-coral">{error}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={BTN_CORAL}
+          disabled={busy || !url.trim()}
+          onClick={submit}
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Globe className="h-4 w-4" />}
+          Log in once &rarr;
+        </button>
+        <button
+          type="button"
+          className={BTN_BASE}
+          onClick={() => { setOpen(false); setUrl(""); setError("") }}
+        >
+          Cancel
+        </button>
+      </div>
+      <p className="text-[11.5px] text-current-ink/60">
+        Paste the page where you sign in to {schoolLabel || "this school"}. Hamilton opens a secure window so you
+        sign in once, then remembers it.
+      </p>
+    </div>
+  )
+}
+
 export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -903,9 +1004,15 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               <ExternalLink className="h-4 w-4" /> Open
             </a>
           ) : (
-            // The student's own school with no resolved portal yet — still
-            // listed so it's not forgotten; no login to set up.
-            <span className="text-xs text-current-ink/60">Add this school&rsquo;s login under Advanced</span>
+            // The student's own school with no resolved portal host/URL yet.
+            // Instead of a dead-end note, let the owner paste the school's login
+            // page right here and start the same secure sign-in every other tile
+            // uses. On completion we refetch, so the tile flips to green.
+            <AddSchoolLoginInline
+              schoolLabel={portal.label || host || "this school"}
+              busy={loginMutation.isPending}
+              onStart={startLogin}
+            />
           )}
         </div>
 
