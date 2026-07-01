@@ -337,6 +337,24 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
     log.warn('student-aid eligibility heal unavailable in coverage sweep (non-fatal)', { error: err?.message })
   }
 
+  // General eligibility net: re-score every currently-surfacing match through the
+  // FAITHFUL crawler-os path and demote the ones the engine hard-rejects (catches
+  // every ineligibility class — applicant-type, geo/entity, family-shown-student-
+  // aid, institution-exclusive — beyond the student-aid predicate). Only genuine
+  // rejects are demoted; REVIEW-band rows are left alone (recall).
+  let surfacedEligHeal = null
+  try {
+    const { reScoreSurfacedIneligible } = await import('./surfacedEligibility.js')
+    surfacedEligHeal = await reScoreSurfacedIneligible(db, { limit })
+    if (surfacedEligHeal?.demoted > 0) {
+      log.info('coverage sweep demoted stale ineligible surfaced matches (faithful re-score)', {
+        demoted: surfacedEligHeal.demoted, profilesAffected: surfacedEligHeal.profilesAffected,
+      })
+    }
+  } catch (err) {
+    log.warn('surfaced-eligibility re-score unavailable in coverage sweep (non-fatal)', { error: err?.message })
+  }
+
   const { audits, summary } = await auditAllProfilesResultCoverage(db, { limit })
 
   // Telemetry for zero/low-result profiles (reuses the existing low-coverage table).
@@ -389,6 +407,9 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
     healed,
     eligibility_heal: eligibilityHeal
       ? { demoted: eligibilityHeal.repaired ?? 0, profilesAffected: eligibilityHeal.profilesAffected ?? 0 }
+      : null,
+    surfaced_eligibility_heal: surfacedEligHeal
+      ? { demoted: surfacedEligHeal.demoted ?? 0, profilesAffected: surfacedEligHeal.profilesAffected ?? 0 }
       : null,
     top_gaps: audits.filter((a) => a.has_gap).slice(0, 25).map((a) => ({ id: a.profile_id, name: a.display_name, gaps: a.gaps })),
   }

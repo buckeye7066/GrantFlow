@@ -1,0 +1,114 @@
+/**
+ * Tests for surfacedEligibility.reScoreSurfacedIneligible — the general net that
+ * demotes currently-surfacing matches the FAITHFUL engine hard-rejects, while
+ * leaving REVIEW-band (below-floor) matches alone (recall preservation).
+ *
+ * Deps (context/thesis/scorer) are injected so the test needs no real
+ * loadProfileContext schema or engine.
+ */
+import { describe, it, expect } from 'vitest'
+import Database from 'better-sqlite3'
+import { reScoreSurfacedIneligible, liveOppToOs } from '../services/coverageAudit/surfacedEligibility.js'
+
+function makeDb() {
+  const raw = new Database(':memory:')
+  raw.exec(`
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, status TEXT, deleted_at TEXT);
+    CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY, title TEXT, description TEXT, sponsor TEXT, categories TEXT,
+      applicant_types TEXT, opportunity_kind TEXT, is_active INTEGER DEFAULT 1,
+      is_national INTEGER, state TEXT, amount_min NUMERIC, amount_max NUMERIC
+    );
+    CREATE TABLE profile_opportunity_matches (
+      id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
+      match_score REAL, match_decision TEXT, match_explanation TEXT, matcher_version TEXT
+    );
+  `)
+  raw.prepare("INSERT INTO profiles (id, display_name, status) VALUES ('p1','Test Profile','active')").run()
+  return raw
+}
+
+let seq = 0
+function addMatch(db, { title, kind = 'DIRECT_GRANT', score, decision, matcher = 'web-llm' }) {
+  seq += 1
+  const oid = `o${seq}`; const mid = `m${seq}`
+  db.prepare('INSERT INTO funding_opportunities (id,title,opportunity_kind) VALUES (?,?,?)').run(oid, title, kind)
+  db.prepare('INSERT INTO profile_opportunity_matches (id,profile_id,opportunity_id,match_score,match_decision,matcher_version) VALUES (?,?,?,?,?,?)')
+    .run(mid, 'p1', oid, score, decision, matcher)
+  return mid
+}
+
+const deps = {
+  loadContext: () => ({ profile: { id: 'p1' }, sections: {} }),
+  resolveThesis: () => ({ profile_id: 'p1', applicant_types: ['individual'], needs: [], is_student: false }),
+}
+// Faithful scorer stub: reject titles containing "REJECTME", else review at 68.
+const scoreOpp = (osOpp) => ({
+  decision: /rejectme/i.test(osOpp.title || '') ? 'reject' : 'review',
+  match_score: /rejectme/i.test(osOpp.title || '') ? 0 : 68,
+})
+
+describe('reScoreSurfacedIneligible', () => {
+  it('demotes a surfacing match the faithful engine rejects', async () => {
+    const db = makeDb()
+    const mid = addMatch(db, { title: 'Grant REJECTME Program', score: 89, decision: 'accept' })
+    const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
+    expect(res.demoted).toBe(1)
+    const row = db.prepare('SELECT match_decision, match_score FROM profile_opportunity_matches WHERE id=?').get(mid)
+    expect(row.match_decision).toBe('reject')
+    expect(row.match_score).toBeLessThan(75)
+  })
+
+  it('leaves a REVIEW-band (below-floor) match ALONE — recall preserved', async () => {
+    const db = makeDb()
+    // Surfacing only because of a stale ACCEPT; faithful engine says review@68 (not reject).
+    const mid = addMatch(db, { title: 'Legit Community Grant', score: 80, decision: 'accept' })
+    const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
+    expect(res.demoted).toBe(0)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(mid).match_decision).toBe('accept')
+  })
+
+  it('never demotes a directory (directories always survive)', async () => {
+    const db = makeDb()
+    const mid = addMatch(db, { title: 'REJECTME Scholarship Directory', kind: 'DIRECTORY', score: 90, decision: 'accept' })
+    const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
+    expect(res.demoted).toBe(0)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(mid).match_decision).toBe('accept')
+  })
+
+  it('ignores a match that is NOT currently surfacing (review below floor already hidden)', async () => {
+    const db = makeDb()
+    // decision review + score 50 => not surfacing => not a candidate even though scorer would reject.
+    addMatch(db, { title: 'REJECTME Buried', score: 50, decision: 'review' })
+    const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
+    expect(res.demoted).toBe(0)
+  })
+
+  it('count-only when apply:false (no mutation)', async () => {
+    const db = makeDb()
+    const mid = addMatch(db, { title: 'REJECTME Program', score: 88, decision: 'accept' })
+    const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp, apply: false })
+    expect(res.enforced).toBe(false)
+    expect(res.scanned).toBe(1)
+    expect(res.demoted).toBe(0)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(mid).match_decision).toBe('accept')
+  })
+
+  it('is idempotent — a second pass demotes nothing', async () => {
+    const db = makeDb()
+    addMatch(db, { title: 'REJECTME Program', score: 88, decision: 'accept' })
+    const first = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
+    expect(first.demoted).toBe(1)
+    const second = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
+    expect(second.demoted).toBe(0)
+  })
+
+  it('liveOppToOs maps geography, needs, and funding faithfully', () => {
+    const os = liveOppToOs({ id: 'x', title: 'T', description: 'D', categories: '["housing"]', is_national: 0, state: 'TN', amount_min: 100, amount_max: 500 })
+    expect(os.geography.states).toEqual(['TN'])
+    expect(os.geography.national).toBe(false)
+    expect(os.need_categories).toEqual(['housing'])
+    expect(os.funding.amount_max).toBe(500)
+  })
+})
