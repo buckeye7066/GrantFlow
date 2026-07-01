@@ -576,7 +576,14 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   if (allowedTypes.length > 0 && !allowedTypes.includes('individual')) {
     const profileType = profileNorm.entityType
     if (profileType && !allowedTypes.includes(profileType)) {
-      const qualifiesByTrait = (
+      // Data-derived FACETS grant eligibility the clicked entityType would miss:
+      // a "family"-typed profile whose data shows a disabled senior individual
+      // qualifies for senior/disability/individual-restricted opportunities. This
+      // is additive (it only ADMITS more, never rejects), so a mis-selected type
+      // can no longer wrongly gate a person out of funding they qualify for.
+      const facets = Array.isArray(profileNorm.effectiveFacets) ? profileNorm.effectiveFacets : []
+      const qualifiesByFacet = facets.some((f) => allowedTypes.includes(String(f)))
+      const qualifiesByTrait = qualifiesByFacet || (
         (allowedTypes.includes('veteran') && profileNorm.isVeteran) ||
         (allowedTypes.includes('student') && profileNorm.isStudent) ||
         (allowedTypes.includes('nonprofit') && profileNorm.isNonprofit) ||
