@@ -50,7 +50,7 @@ const log = createLogger('yana-lead-discovery')
 // and advance it each run so successive runs pull NEW pages of prospects. Wrap
 // so the cursor never chases permanently-empty high pages.
 const PROSPECT_PAGE_KEY = 'yana.propublica_page'
-const PROSPECT_PAGE_STEP = 2   // pages consumed (and advanced) per run
+const PROSPECT_PAGE_STEP = 1   // pages consumed (and advanced) per run — read every page sequentially, no skips
 const PROSPECT_PAGE_WRAP = 20  // cursor wraps back to 0 here
 
 export const YANA_AGENT_NAME = 'yana'

@@ -237,15 +237,16 @@ describe('discoverProspects rotates + persists the ProPublica page cursor', () =
 
     const run1 = await discoverProspects(db, { allowLiveWeb: true, sources: ['propublica_990'], limit: 5 })
     expect(run1.prospect_page).toBe(0)
-    expect(run1.next_prospect_page).toBe(2) // 0 + PROSPECT_PAGE_STEP
-    expect(await getAgentSetting(db, 'yana.propublica_page')).toBe('2')
+    expect(run1.next_prospect_page).toBe(1) // 0 + PROSPECT_PAGE_STEP (1)
+    expect(await getAgentSetting(db, 'yana.propublica_page')).toBe('1')
 
     const run2 = await discoverProspects(db, { allowLiveWeb: true, sources: ['propublica_990'], limit: 5 })
-    expect(run2.prospect_page).toBe(2)
-    expect(run2.next_prospect_page).toBe(4)
+    expect(run2.prospect_page).toBe(1)
+    expect(run2.next_prospect_page).toBe(2)
 
-    // The source was asked for page 0 on run 1 and page 2 on run 2 — new orgs each run.
+    // The source was asked for page 0 on run 1 and page 1 on run 2 — a new,
+    // sequential page (no skips) each run.
     expect(pagesSeen).toContain(0)
-    expect(pagesSeen).toContain(2)
+    expect(pagesSeen).toContain(1)
   })
 })
