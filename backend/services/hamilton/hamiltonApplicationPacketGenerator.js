@@ -492,11 +492,62 @@ function getPacketStorageDir() {
   return base
 }
 
+// Update an existing generated-document row IN PLACE (idempotent regeneration —
+// keeps the row id + its links). Mirrors insertDocumentRecord's graceful
+// column fallback (file_bytes may be absent on legacy schemas) and only
+// overwrites the stored bytes when a fresh buffer is supplied, so a failed
+// re-render never wipes a good copy with NULL.
+async function updateGeneratedDocument(db, id, { grantId, filePath, mimeType, fileSize, extractedText, notes, bytes }) {
+  const base = 'grant_id = ?, file_path = ?, file_size = ?, mime_type = ?, extracted_text = ?, processing_status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP'
+  const baseVals = [grantId || null, filePath, fileSize || null, mimeType || null, extractedText || null, 'completed', notes || null]
+  const variants = []
+  if (bytes) variants.push({ set: `file_bytes = ?, ${base}`, vals: [bytes, ...baseVals, id] })
+  variants.push({ set: base, vals: [...baseVals, id] })
+  let lastErr = null
+  for (const v of variants) {
+    try {
+      await db.prepare(`UPDATE documents SET ${v.set} WHERE id = ?`).run(...v.vals)
+      return
+    } catch (err) {
+      const msg = String(err?.message || '').toLowerCase()
+      if (msg.includes('no column named') || /file_bytes|column/.test(msg)) { lastErr = err; continue }
+      throw err
+    }
+  }
+  if (lastErr) throw lastErr
+}
+
 async function insertDocumentRecord(db, {
   profileId, grantId, opportunityId, name, type, filePath, mimeType, fileSize, notes, extractedText, fileBytes = null,
 }) {
-  const id = crypto.randomUUID()
   const bytes = Buffer.isBuffer(fileBytes) && fileBytes.length > 0 ? fileBytes : null
+
+  // IDEMPOTENCY SAFEGUARD (owner rule: Hamilton must never duplicate). Hamilton
+  // regenerates the same source's DOCX/PDF/HTML on every automation pass; a bare
+  // INSERT piled up hundreds of duplicate rows across repeated runs. Reuse the
+  // existing document for this (profile, type, name, mime) and UPDATE it in
+  // place — preserving its id and its profile_documents / task-output links —
+  // instead of inserting a new row. One doc per source+format, regardless of how
+  // many times Hamilton runs. Best-effort: any lookup/update failure (legacy
+  // schema) falls through to a normal insert.
+  if (profileId && name && type) {
+    try {
+      const existing = await db.prepare(
+        `SELECT id FROM documents
+          WHERE profile_id = ? AND type = ? AND name = ?
+            AND COALESCE(mime_type, '') = COALESCE(?, '')
+          ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      ).get(profileId, type, name, mimeType || null)
+      if (existing?.id) {
+        await updateGeneratedDocument(db, String(existing.id), {
+          grantId, filePath, mimeType, fileSize, extractedText, notes, bytes,
+        })
+        return String(existing.id)
+      }
+    } catch { /* fall through to a fresh insert */ }
+  }
+
+  const id = crypto.randomUUID()
 
   // Persist the packet BYTES in Postgres (documents.file_bytes) so a saved
   // packet always downloads even after Railway's ephemeral filesystem drops the
