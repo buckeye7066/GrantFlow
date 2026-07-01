@@ -772,27 +772,42 @@ export async function ensureSmsConsentColumns(db, { logger = console } = {}) {
   )
 }
 
+/**
+ * The canonical, ordered registry of schema-invariant steps.
+ *
+ * SINGLE SOURCE OF TRUTH: this is the only place a step is declared. The boot
+ * orchestrator iterates it, and the guard test imports its names via
+ * `__testables.SCHEMA_INVARIANT_STEP_NAMES` — so adding a step is a ONE-line
+ * change here and can never again drift a hand-copied list in the test.
+ * Order matters (dependency-ordered): the sqlite/dialect-agnostic table
+ * creations run first because downstream agent code paths depend on them.
+ */
+const SCHEMA_INVARIANT_STEPS = [
+  ['agent_subsystem', ensureAgentSubsystem],
+  ['funding_opportunity_reality_gate', ensureFundingOpportunityRealityGate],
+  ['application_task_check', ensureApplicationTaskCheck],
+  ['organizations_soft_delete', ensureOrganizationsSoftDeleteColumns],
+  ['crawler_jobs_type_check', ensureCrawlerJobsTypeCheck],
+  ['anya_match_suggestions', ensureAnyaMatchSuggestions],
+  ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
+  ['profile_todo_plans', ensureProfileTodoPlans],
+  ['behavior_events', ensureBehaviorEventsTable],
+  ['profile_discovery_column', ensureProfileDiscoveryColumn],
+  ['profile_preferred_language_column', ensureProfilePreferredLanguageColumn],
+  ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
+  ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
+  ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
+  ['profile_portal_status', ensurePortalCompletionStatusTable],
+  ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
+  ['sms_consent_columns', ensureSmsConsentColumns],
+  ['perf_indexes', ensurePerfIndexes],
+]
+
+/** Ordered canonical step names, derived from the registry (never hand-typed). */
+export const SCHEMA_INVARIANT_STEP_NAMES = SCHEMA_INVARIANT_STEPS.map(([name]) => name)
+
 export async function ensureSchemaInvariants(db, { logger = console } = {}) {
-  const steps = [
-    ['agent_subsystem', ensureAgentSubsystem],
-    ['funding_opportunity_reality_gate', ensureFundingOpportunityRealityGate],
-    ['application_task_check', ensureApplicationTaskCheck],
-    ['organizations_soft_delete', ensureOrganizationsSoftDeleteColumns],
-    ['crawler_jobs_type_check', ensureCrawlerJobsTypeCheck],
-    ['anya_match_suggestions', ensureAnyaMatchSuggestions],
-    ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
-    ['profile_todo_plans', ensureProfileTodoPlans],
-    ['behavior_events', ensureBehaviorEventsTable],
-    ['profile_discovery_column', ensureProfileDiscoveryColumn],
-    ['profile_preferred_language_column', ensureProfilePreferredLanguageColumn],
-    ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
-    ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
-    ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
-    ['profile_portal_status', ensurePortalCompletionStatusTable],
-    ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
-    ['sms_consent_columns', ensureSmsConsentColumns],
-    ['perf_indexes', ensurePerfIndexes],
-  ]
+  const steps = SCHEMA_INVARIANT_STEPS
 
   const results = []
   for (const [name, fn] of steps) {
@@ -811,4 +826,4 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
   return { steps: results, ran: results.length, failed }
 }
 
-export const __testables = { CRAWLER_JOB_TYPES }
+export const __testables = { CRAWLER_JOB_TYPES, SCHEMA_INVARIANT_STEP_NAMES }
