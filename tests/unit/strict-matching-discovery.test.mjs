@@ -357,7 +357,11 @@ test('discovery (G): searchOpportunities uses Crawler OS before any raw catalog 
     osHelperIdx < rawCatalogIdx,
     'profile search must return Crawler OS results before the raw funding_opportunities catalog path',
   )
-  assert.match(text, /m\.profile_id = \? AND m\.matcher_version = 'crawler-os'/)
+  // Profile-scoped, surfaced-matcher query. The matcher_version allowlist is
+  // centralized in config/matchSurfacing.js (SURFACED_MATCHER_VERSIONS_SQL —
+  // crawler-os + crawler-os-xmatch + web-llm) so read paths can't drift; the old
+  // inlined `= 'crawler-os'` literal dropped real web-llm matches (#754).
+  assert.match(text, /m\.profile_id = \? AND m\.matcher_version IN \$\{SURFACED_MATCHER_VERSIONS_SQL\}/)
   assert.match(text, /admin_global_catalog/)
   assert.match(text, /profile_id_required/)
 })
