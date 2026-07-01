@@ -65,6 +65,27 @@ function isGenericTitle(title) {
   return GENERIC_TITLE_RX.test(String(title ?? ''))
 }
 
+function normLower(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+// Acronym of significant words ("Cleveland State Community College" -> "cscc")
+// so a school referenced only by acronym still counts as recalled.
+const RECALL_STOP = new Set(['of', 'the', 'and', 'at', 'for', 'a', 'an'])
+function schoolAcronym(name) {
+  const w = normLower(name).split(' ').filter((x) => x && !RECALL_STOP.has(x))
+  return w.length >= 2 ? w.map((x) => x[0]).join('') : ''
+}
+
+/** True if any normalized title/sponsor references the school (full name or acronym). */
+function titlesReference(normalizedTitles, school) {
+  const n = normLower(school)
+  if (!n || n.length < 3) return false
+  const acr = schoolAcronym(school)
+  const acrRx = acr && acr.length >= 2 ? new RegExp(`\\b${acr}\\b`) : null
+  return normalizedTitles.some((t) => t.includes(n) || (acrRx && acrRx.test(t)))
+}
+
 /**
  * Evaluate one discovery result against a scenario. Pure function; no I/O.
  *
@@ -170,6 +191,38 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
         message: `Expected geographic state ${scenario.expected.state} did not reach the thesis location.`,
         excerpt: `expected_state=${scenario.expected.state} thesis_state=null`,
         evidence: { ...baseEvidence, expected_state: scenario.expected.state },
+      }),
+    )
+  }
+
+  // ── Institution / hyperlocal RECALL (crawler-intelligence signal) ──────────
+  // The goal of the pipeline is smarter crawlers. A student committed to a named
+  // school should get institution-specific scholarships; a profile with a county
+  // should get hyperlocal awards. If the crawler stored results but NONE of them
+  // reference the school / county, the open-web query breadth is the weakness —
+  // route the finding at buildWebQueries so Anya/Sam evolve it. Only fires when
+  // discovery actually produced candidates (else ZERO_RESULT already covers it).
+  const recTitles = recommendations.map((r) => normLower(`${r.title || ''} ${r.sponsor || ''}`))
+  const thesisSchools = Array.isArray(thesis.schools) ? thesis.schools.filter(Boolean) : []
+  if (thesis.is_student && thesisSchools.length > 0 && recommendations.length > 0) {
+    const missingSchools = thesisSchools.filter((s) => !titlesReference(recTitles, s))
+    if (missingSchools.length === thesisSchools.length) {
+      findings.push(
+        makeFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, {
+          message: `${scenario.label}: student committed to ${thesisSchools.join(', ')} but 0 of ${recommendations.length} results reference the school (no institution-specific scholarships found).`,
+          excerpt: `schools=[${thesisSchools.join(' | ')}] field=${thesis.field_of_study || 'n/a'}`,
+          evidence: { ...baseEvidence, schools: thesisSchools, field_of_study: thesis.field_of_study || null, results: recommendations.length },
+        }),
+      )
+    }
+  }
+  const thesisCounty = thesis?.location?.county ? normLower(thesis.location.county).replace(/\b(county|parish|borough)\b/g, '').trim() : ''
+  if (thesisCounty && recommendations.length > 0 && !recTitles.some((t) => t.includes(thesisCounty))) {
+    findings.push(
+      makeFinding(FINDING_TYPES.HYPERLOCAL_RECALL_MISS, {
+        message: `${scenario.label}: profile in ${thesis.location.county} but 0 of ${recommendations.length} results are county/hyperlocal.`,
+        excerpt: `county=${thesis.location.county}`,
+        evidence: { ...baseEvidence, county: thesis.location.county, results: recommendations.length },
       }),
     )
   }

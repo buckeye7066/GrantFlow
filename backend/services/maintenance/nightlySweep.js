@@ -80,6 +80,29 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     selfHeal = { ok: false, error: err?.message }
   }
 
+  // Per-profile RESULT-coverage self-audit + bounded self-heal. This is the
+  // check the pipeline was missing: it detects profiles that are returning too
+  // few / no funding, students with a named school but no institution-specific
+  // matches, county profiles with no hyperlocal matches, AND surfacing
+  // regressions (matches persisted in a matcher_version the reads don't surface).
+  // Remediable acquisition gaps are healed by re-running discovery (bounded +
+  // gated by COVERAGE_AUTOHEAL_ENABLED); surfacing regressions are logged for a
+  // human/Sam. Best-effort — never blocks the sweep.
+  let coverage = null
+  try {
+    const { runProfileCoverageSweep } = await import('../coverageAudit/profileResultCoverageAudit.js')
+    coverage = await runProfileCoverageSweep(db)
+    log.info('nightly coverage audit complete', {
+      scanned: coverage?.summary?.scanned ?? 0,
+      needs_rediscovery: coverage?.summary?.needs_rediscovery ?? 0,
+      surfacing_regressions: coverage?.summary?.surfacing_regressions ?? 0,
+      healed: coverage?.healed_count ?? 0,
+    })
+  } catch (err) {
+    log.warn('nightly coverage audit failed (non-fatal)', { error: err?.message })
+    coverage = { ok: false, error: err?.message }
+  }
+
   // Sam cleanup sweep for Amy's synthetic crawler-training profiles. Amy tags
   // every profile it creates as synthetic + allow_sam_cleanup, marks it crawled
   // once discovery runs, and improves the crawler weights/coverage from the
@@ -204,6 +227,15 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
           ok: selfHeal.ok !== false && !selfHeal.error,
           total_repaired: selfHeal.totalRepaired ?? 0,
           failures: selfHeal.failures?.length ?? (selfHeal.error ? 1 : 0),
+        }
+      : null,
+    coverage: coverage
+      ? {
+          ok: coverage.ok !== false && !coverage.error,
+          scanned: coverage.summary?.scanned ?? 0,
+          needs_rediscovery: coverage.summary?.needs_rediscovery ?? 0,
+          surfacing_regressions: coverage.summary?.surfacing_regressions ?? 0,
+          healed: coverage.healed_count ?? 0,
         }
       : null,
     at: now.toISOString(),

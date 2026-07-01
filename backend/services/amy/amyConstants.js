@@ -75,6 +75,8 @@ export const FINDING_TYPES = Object.freeze({
   POLICY_REJECTION: 'policy_rejection',
   URL_INVALID: 'url_invalid',
   GEO_RADIUS_ISSUE: 'geo_radius_issue',
+  INSTITUTION_RECALL_MISS: 'institution_recall_miss',
+  HYPERLOCAL_RECALL_MISS: 'hyperlocal_recall_miss',
 })
 
 export const SEVERITY = Object.freeze({
@@ -170,6 +172,18 @@ export const CODE_TARGETS = Object.freeze({
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'Geographic scoping looks wrong for this profile location — review geo expansion (city→county→state→national).',
+  },
+  [FINDING_TYPES.INSTITUTION_RECALL_MISS]: {
+    file: 'backend/crawler-os/webQueries.js',
+    line: 1,
+    severity: SEVERITY.HIGH,
+    hint: 'A student with a named/committed school got NO result referencing that school — the open-web lane is not searching institution-specific scholarships (endowed/departmental/foundation). Confirm buildWebQueries emits "<school> scholarships" / "<school> <field> scholarship" / "<school> foundation scholarships" and that the school reaches the thesis.',
+  },
+  [FINDING_TYPES.HYPERLOCAL_RECALL_MISS]: {
+    file: 'backend/crawler-os/webQueries.js',
+    line: 1,
+    severity: SEVERITY.MEDIUM,
+    hint: 'A profile with a county got NO county/hyperlocal result — confirm buildWebQueries emits county-level queries ("scholarships <county>", "community foundation <county>") and that thesis.location.county is populated.',
   },
 })
 

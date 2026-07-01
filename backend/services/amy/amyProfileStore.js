@@ -118,9 +118,20 @@ export async function createAmyProfile(db, scenario, { runId, ttlHours, now = ne
  * is created_by === ORIGIN_CREATED_BY.
  */
 export async function listAmyProfiles(db) {
-  const rows = await db
-    .prepare(`SELECT id, display_name, primary_type, status, tags, created_by, created_at FROM profiles WHERE created_by = ?`)
-    .all(ORIGIN_CREATED_BY)
+  // Include last_discovery_at so the reaper can treat "discovery actually ran"
+  // (any path stamps profiles.last_discovery_at) as a valid crawled signal — not
+  // just Amy's own amy_metadata.crawled_at. Tolerant: older/test schemas without
+  // the column fall back to the basic SELECT.
+  let rows
+  try {
+    rows = await db
+      .prepare(`SELECT id, display_name, primary_type, status, tags, created_by, created_at, last_discovery_at FROM profiles WHERE created_by = ?`)
+      .all(ORIGIN_CREATED_BY)
+  } catch {
+    rows = await db
+      .prepare(`SELECT id, display_name, primary_type, status, tags, created_by, created_at FROM profiles WHERE created_by = ?`)
+      .all(ORIGIN_CREATED_BY)
+  }
   const out = []
   for (const row of Array.isArray(rows) ? rows : []) {
     let metadata = null
@@ -234,11 +245,21 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
     if (!meta || meta.allow_sam_cleanup !== true) reasonsToSkip.push('not_allow_sam_cleanup')
     // Guard 3: must be marked synthetic (defense in depth).
     if (!meta || meta.synthetic !== true) reasonsToSkip.push('not_synthetic')
+    // The "has been crawled" signal is EITHER Amy's own marker
+    // (amy_metadata.crawled_at, set by markAmyProfileCrawled) OR the profile's
+    // real discovery stamp (profiles.last_discovery_at, set by EVERY discovery
+    // path — cross-profile matching, login discovery, manual Discover, Robert's
+    // cycle). Keying only off crawled_at leaked synthetics that were genuinely
+    // crawled by a non-Amy path but never marked in amy_metadata: they showed
+    // last_discovery_at set yet crawled_at null, so requireCrawled skipped them
+    // and they lingered until the 96h never-crawled cutoff. Treating either as
+    // proof-of-crawl closes that leak.
+    const crawledSignalIso = meta?.last_crawled_at || meta?.crawled_at || row.last_discovery_at || null
     // Guard 4 (mission rule): do NOT delete until crawled at least once — with a
     // bounded escape hatch so never-crawled synthetics (skipped/errored discovery
     // or a crashed run) don't accumulate forever. A never-crawled profile is
     // reapable only once it is far past its TTL (neverCrawledMaxAgeMs elapsed).
-    if (requireCrawled && !meta?.crawled_at) {
+    if (requireCrawled && !crawledSignalIso) {
       const maxAge = Number(neverCrawledMaxAgeMs) || 0
       let reapNeverCrawled = false
       if (maxAge > 0) {
@@ -252,9 +273,8 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
     }
     // Guard 4b (race safety): don't reap a profile crawled so recently its run
     // could still be mid-flight / pre-learning. Expiry-independent.
-    if (minCrawledAgeMs > 0) {
-      const crawledIso = meta?.last_crawled_at || meta?.crawled_at
-      const crawledMs = crawledIso ? Date.parse(crawledIso) : NaN
+    if (minCrawledAgeMs > 0 && crawledSignalIso) {
+      const crawledMs = Date.parse(crawledSignalIso)
       if (Number.isFinite(crawledMs) && Number.isFinite(nowMs) && (nowMs - crawledMs) < minCrawledAgeMs) {
         reasonsToSkip.push('crawled_too_recently')
       }
