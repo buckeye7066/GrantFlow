@@ -272,7 +272,7 @@ export function createOutlookProvider({
    *
    * Never sends — PATCH only mutates the draft in place.
    */
-  async function updateDraftBody({ messageId, subject, bodyText, bodyHtml }) {
+  async function updateDraftBody({ messageId, subject, bodyText, bodyHtml, from, replyTo: replyToOverride }) {
     if (!ready) {
       const err = new Error(`Outlook provider not configured (missing ${missing || 'fetch'})`)
       err.code = 'JOHN_OUTLOOK_NOT_CONFIGURED'
@@ -295,6 +295,21 @@ export function createOutlookProvider({
         content: bodyHtml || bodyText || '',
       }
     }
+    // Re-apply the sender identity so a refreshed draft picks up the CURRENT
+    // from-alias + display name (e.g. Ellie) instead of keeping whatever it was
+    // created with. `from` here is the alias address; the display name comes from
+    // config.displayName. replyTo defaults to the configured reply address.
+    const fromAddr = from || config.fromAlias
+    if (fromAddr) {
+      patch.from = {
+        emailAddress: {
+          address: String(fromAddr),
+          name: config.displayName ? String(config.displayName).slice(0, 200) : undefined,
+        },
+      }
+    }
+    const replyAddr = replyToOverride || config.replyTo
+    if (replyAddr) patch.replyTo = [{ emailAddress: { address: String(replyAddr) } }]
 
     const res = await fetchImpl(url, {
       method: 'PATCH',
