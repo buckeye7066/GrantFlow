@@ -305,13 +305,51 @@ export function getCloudLoginStatus() {
   return apiFetch(`/api/hamilton/automation/sessions/cloud-login/status`)
 }
 
+// Proactively refresh the access token when it's expired / about to expire.
+// The cloud-login "start" POST is fired from a fresh user gesture (often right
+// after a popup opens) where the access token may have just lapsed. Plain
+// apiFetch (client.fetch) will NOT refresh-and-retry a non-idempotent POST, so a
+// stale token would surface as a hard `Authentication required` 401 and the
+// secure-login window dies with a "timed out"/blank screen. Mirrors the same
+// guard streamCloudLogin() already uses for the live-view stream.
+async function ensureFreshAccessToken() {
+  try {
+    if (typeof window !== 'undefined' && client.getRefreshToken?.()) {
+      const expiryRaw = window.localStorage.getItem('grantflow:access-expiry')
+      const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
+      if (!Number.isFinite(expiryMs) || expiryMs <= Date.now() + 60_000) {
+        await client.refreshTokens?.()
+      }
+    }
+  } catch {
+    /* fall through; the reactive 401 retry below is the net */
+  }
+}
+
 // Start a cloud login; returns { liveSessionId, liveUrl } the user opens to log in.
-export function startCloudLogin(profileId, { portalHost, loginUrl = null, label = null, captureRequestId = null } = {}) {
-  if (!profileId) return Promise.reject(new Error('profileId required'))
-  return apiFetch(`/api/hamilton/automation/sessions/cloud-login/start`, {
-    method: 'POST',
-    body: JSON.stringify({ profileId, portal_host: portalHost, login_url: loginUrl, label, capture_request_id: captureRequestId }),
-  })
+// Starting a session creates no side effect until AFTER auth succeeds (the route
+// returns 401 before any session is built), so it is safe to refresh + retry once
+// on an auth failure — no risk of a duplicated side effect.
+export async function startCloudLogin(profileId, { portalHost, loginUrl = null, label = null, captureRequestId = null } = {}) {
+  if (!profileId) throw new Error('profileId required')
+  const call = () =>
+    apiFetch(`/api/hamilton/automation/sessions/cloud-login/start`, {
+      method: 'POST',
+      body: JSON.stringify({ profileId, portal_host: portalHost, login_url: loginUrl, label, capture_request_id: captureRequestId }),
+    })
+
+  await ensureFreshAccessToken()
+  try {
+    return await call()
+  } catch (err) {
+    // Reactive net: the token lapsed mid-gesture and the proactive refresh above
+    // didn't cover it. Refresh once and retry the (side-effect-free) start.
+    if (err?.status === 401 && client.refreshTokens) {
+      await client.refreshTokens()
+      return call()
+    }
+    throw err
+  }
 }
 
 // Finish a cloud login: capture + import the authenticated session (profile-bound).

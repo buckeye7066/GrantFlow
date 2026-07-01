@@ -788,6 +788,24 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   </button>
                 </>
               )}
+              {/* A portal that's signed in but that Hamilton still can't auto-merge
+                  (2FA/CAPTCHA/identity-proof each visit) must offer the live
+                  side-by-side co-browse RIGHT HERE — the "Ready" tile's autopilot
+                  label promises it, so the button has to exist in this branch too,
+                  not only in the "needs login" branch below. Clicking it opens the
+                  Hamilton live-login window (startLogin → secure co-browse). */}
+              {offerCobrowse && (
+                <button
+                  type="button"
+                  className={BTN_CORAL}
+                  disabled={isLoggingIn}
+                  onClick={() => startLogin(portal)}
+                  title="Open the side-by-side login — Hamilton helps you answer the portal's questions live"
+                >
+                  {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <PanelsTopLeft className="h-4 w-4" />}
+                  Open side-by-side login
+                </button>
+              )}
               <button
                 type="button"
                 className={BTN_BASE}
