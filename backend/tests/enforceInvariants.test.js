@@ -1095,6 +1095,15 @@ describe('enforceStudentAidEligibility — student-aid on non-student profiles',
     expect(row.match_score).toBeLessThan(75) // below the display floor → no longer surfaces
   })
 
+  it('demotes a TN HOPE-family award whose title has no generic student-aid word ("HOPE Access Grant")', async () => {
+    const db = makeMatchDb()
+    // Title carries neither "scholarship" nor "tuition" — only the program brand.
+    const { mid } = insertMatch(db, { profileId: 'p-senior', title: 'Tennessee HOPE Access Grant', description: 'TN lottery-funded aid program', score: 87, decision: 'accept' })
+    const res = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(res.repaired).toBe(1)
+    expect(String(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id = ?').get(mid).match_decision).toLowerCase()).toBe('reject')
+  })
+
   it('does NOT touch the SAME scholarship for a real student (recall preserved)', async () => {
     const db = makeMatchDb()
     const { mid } = insertMatch(db, { profileId: 'p-student', title: 'Tennessee HOPE Scholarship', description: 'Lottery scholarship for enrolled TN undergraduates', score: 81, decision: 'accept' })

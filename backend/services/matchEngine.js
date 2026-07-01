@@ -791,7 +791,14 @@ const RE_NONPROFIT_ONLY = /\b(for nonprofits|philanthropy for nonprofits|grants?
 // RE_INSTITUTIONAL_ONLY / RE_BUSINESS_EXCLUSIVE / the loan + pro-bono inline
 // regexes) were removed when makeDecision moved to normalizeOpportunity()'s
 // structured flags as the single source of restriction detection.
-const RE_STUDENT_AID_SIGNAL = /\b(scholarship|scholarships|tuition|fafsa|pell|fseog|work[- ]study|cost of attendance|cost_of_attendance|room and board|student aid|student_aid|hope scholarship|collegepays|undergraduate|community college)\b/i
+// Student-aid signal. Covers the generic tokens PLUS the named state/lottery
+// student-aid PROGRAMS whose title carries none of the generic words (e.g. the
+// TN HOPE family — "HOPE Access Grant", "HOPE Grant" — and TN Promise/Reconnect/
+// Aspire/Student Assistance Award). Without the program names, a title like
+// "Tennessee HOPE Access Grant" reads as a plain "grant" and the non-student cap
+// never fires, so it leaks to a non-student profile (found on Gilbert McCosh /
+// John White). These are unambiguous student-aid program brands.
+const RE_STUDENT_AID_SIGNAL = /\b(scholarship|scholarships|tuition|fafsa|pell|fseog|work[- ]study|cost of attendance|cost_of_attendance|room and board|student aid|student_aid|student assistance|hope (?:scholarship|access grant|grant)|tennessee promise|tn promise|tennessee reconnect|tn reconnect|aspire award|dual enrollment grant|collegepays|undergraduate|community college)\b/i
 const RE_DISASTER_SIGNAL = /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i
 
 // ---------------------------------------------------------------------------
