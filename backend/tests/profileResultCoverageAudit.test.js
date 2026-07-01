@@ -109,6 +109,66 @@ describe('profileResultCoverageAudit — detection', () => {
     expect(a.surfaced_qualifying).toBe(2)
   })
 
+  it('flags low_results when the count is padded ONLY by templated geo-stubs', () => {
+    // 3 qualifying rows, but every one is a "United Way near X" locator stub — a
+    // client can apply to none of them. Old behaviour: qualifying=3 → "healthy".
+    const a = auditProfileResultCoverageFromData({
+      profileId: 'p-geostub',
+      surfacedRows: [
+        accept('United Way near Antioch, TN'),
+        accept('Community Action Agency near Brentwood, TN'),
+        accept('Food Bank resources near Chattanooga, TN'),
+      ],
+      unsurfacedCount: 0,
+      thesis: student([]),
+    })
+    expect(a.surfaced_qualifying).toBe(3)
+    expect(a.surfaced_actionable).toBe(0)
+    expect(a.geo_stub_count).toBe(3)
+    expect(a.low_results).toBe(true)
+    expect(a.needs_rediscovery).toBe(true)
+  })
+
+  it('excludes deadline-passed rows from the actionable count', () => {
+    const past = { match_score: 80, match_decision: 'accept', title: 'Expired Grant', deadline_at: '2020-01-01T00:00:00Z' }
+    const a = auditProfileResultCoverageFromData({
+      profileId: 'p-expired',
+      surfacedRows: [past, past, accept('Live Grant')],
+      unsurfacedCount: 0,
+      thesis: student([]),
+    })
+    expect(a.surfaced_qualifying).toBe(3)
+    expect(a.deadline_passed_count).toBe(2)
+    expect(a.surfaced_actionable).toBe(1)
+    expect(a.low_results).toBe(true)
+  })
+
+  it('treats a rolling/ongoing deadline in the past as still open (actionable)', () => {
+    const rolling = { match_score: 80, match_decision: 'accept', title: 'Rolling Grant', deadline: '2020-01-01', deadline_type: 'rolling' }
+    const a = auditProfileResultCoverageFromData({
+      profileId: 'p-rolling',
+      surfacedRows: [rolling, accept('B'), accept('C')],
+      unsurfacedCount: 0,
+      thesis: student([]),
+    })
+    expect(a.surfaced_actionable).toBe(3)
+    expect(a.low_results).toBe(false)
+  })
+
+  it('a county geo-stub does NOT clear the hyperlocal gap', () => {
+    const a = auditProfileResultCoverageFromData({
+      profileId: 'p-geo-county',
+      surfacedRows: [
+        accept('Community Action Agency near Bradley County'),
+        accept('State Grant'),
+        accept('Federal Aid'),
+      ],
+      unsurfacedCount: 0,
+      thesis: student(['Some College'], 'Bradley County'),
+    })
+    expect(a.hyperlocal_gap).toBe(true)
+  })
+
   it('a healthy profile has no gaps', () => {
     const a = auditProfileResultCoverageFromData({
       profileId: 'p8',
