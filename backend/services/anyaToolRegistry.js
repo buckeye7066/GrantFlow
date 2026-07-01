@@ -4971,3 +4971,54 @@ registerTool({
     }
   },
 })
+
+// ── Anya deletes Amy's synthetic crawler-training profiles (owner-gated) ──────
+// Amy's create→crawl→learn→DELETE loop is supposed to reap its own synthetic
+// profiles, and the nightly reaper is the standing net — but the owner may want
+// Anya to purge them ON DEMAND (e.g. leftovers accumulated). This is that
+// capability. It delegates to the SAME guarded cleanupAmyProfiles used by Sam's
+// sweep, so the safety invariants are identical: it ONLY ever deletes rows with
+// created_by='agent:amy' AND amy_metadata.allow_sam_cleanup===true AND
+// synthetic===true, and NEVER a designated/system profile. By default it purges
+// ALL synthetic profiles (crawled or not); pass onlyCrawled:true to keep
+// never-crawled ones, or dryRun:true to preview.
+registerTool({
+  name: 'owner.cleanup_synthetic_profiles',
+  description:
+    'OWNER ONLY. Delete the synthetic crawler-training profiles created by agent Amy (created_by "agent:amy"). Use when the owner asks Anya to "delete Amy\'s test profiles", "clean up the synthetic profiles", or "remove the test profiles Amy created". By default deletes ALL of them (crawled or not); set onlyCrawled=true to keep never-crawled ones, or dryRun=true to preview the count without deleting. Safe: only ever removes Amy\'s own tagged synthetic rows, never a real/designated profile.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      onlyCrawled: { type: 'boolean', description: 'Only delete profiles Amy has already crawled/discovered (keep never-crawled ones). Default false = delete all.' },
+      dryRun: { type: 'boolean', description: 'Preview how many WOULD be deleted without deleting.' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { cleanupAmyProfiles } = await import('./amy/amyProfileStore.js')
+    const onlyCrawled = params?.onlyCrawled === true
+    const dryRun = params?.dryRun === true
+    // force:true purges regardless of TTL/expiry; requireCrawled gates on the
+    // crawl signal only when the owner asked to keep never-crawled ones.
+    const result = await cleanupAmyProfiles(db, {
+      force: true,
+      requireCrawled: onlyCrawled,
+      dryRun,
+    })
+    return {
+      ok: true,
+      created_by: 'agent:amy',
+      dry_run: dryRun,
+      only_crawled: onlyCrawled,
+      scanned: result.scanned,
+      deleted: result.deleted,
+      skipped: result.skipped,
+      skipped_reasons: (result.skipped_ids || []).map((s) => s.reasons?.[0]).filter(Boolean),
+      message: dryRun
+        ? `${result.deleted} synthetic profile(s) would be deleted (${result.skipped} skipped).`
+        : `Deleted ${result.deleted} synthetic profile(s) Amy created (${result.skipped} skipped).`,
+    }
+  },
+})
