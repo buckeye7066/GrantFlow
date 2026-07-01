@@ -130,7 +130,9 @@ async function _seedProfilesAsync(tx) {
       INSERT INTO profiles (id, display_name, primary_type, status, tags, updated_at)
       VALUES (@id, @display_name, @primary_type, @status, @tags, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
-        display_name = excluded.display_name,
+        -- PRESERVE an admin/real display_name already in the DB (see sync path).
+        -- Keeps real client names out of source control + un-reverts on re-seed.
+        display_name = COALESCE(NULLIF(profiles.display_name, ''), excluded.display_name),
         primary_type = excluded.primary_type,
         status = excluded.status,
         tags = excluded.tags,
