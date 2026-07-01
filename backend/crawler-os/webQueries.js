@@ -38,40 +38,121 @@ function geoPhrase(location = {}) {
   return state || city || '';
 }
 
+// Turn an internal need/interest token (e.g. "medical_bills", "first_gen") into
+// human search language ("medical bills", "first gen"). Bounded + lowercased.
+function humanize(term) {
+  return String(term || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// Rotate an array left by `offset` (deterministic given the seed). A rotated
+// pool means that when the caller caps to `max`, successive runs (different
+// seeds) sample a DIFFERENT slice of the broadening queries — so re-runs explore
+// new ground instead of repeating the identical set. The CORE queries are never
+// rotated, so the highest-signal searches always run and match quality is never
+// traded away for breadth.
+function rotate(arr, offset) {
+  if (!Array.isArray(arr) || arr.length <= 1) return Array.isArray(arr) ? arr.slice() : [];
+  const k = ((Math.trunc(offset) % arr.length) + arr.length) % arr.length;
+  return arr.slice(k).concat(arr.slice(0, k));
+}
+
 /**
- * buildWebQueries — produce up to ~6 deduped, profile-relevant funding queries.
+ * buildWebQueries — produce deduped, profile-relevant open-web funding queries.
  *
- * @param {object} thesis  crawler-os thesis (applicant_types, needs, location, keywords)
- * @param {{ year?:number, max?:number }} [opts]
+ * Two tiers:
+ *   - CORE  : the highest-signal queries, ALWAYS emitted (never rotated). These
+ *             guarantee the strongest searches run every time.
+ *   - EXTRA : a broadening pool (more needs, alternate phrasings, student
+ *             scholarship templates, field-of-study/interest queries). Rotated by
+ *             `seed` so re-runs explore NEW queries instead of the same set.
+ *
+ * For sparse student profiles this is the main breadth lever: grants.gov/SAM
+ * don't serve individuals, so the open-web lane is where a student's real
+ * scholarship coverage comes from.
+ *
+ * @param {object} thesis  crawler-os thesis (applicant_types, needs, location,
+ *                          keywords, interest_terms, is_student)
+ * @param {{ year?:number, max?:number, seed?:number }} [opts]
+ *   seed — rotation offset for the EXTRA pool; default 0 (deterministic). The
+ *   live web lane passes a per-run seed so successive discoveries diversify.
  * @returns {string[]}
  */
 export function buildWebQueries(thesis = {}, opts = {}) {
   const max = Number.isFinite(opts.max) ? opts.max : 6;
   const year = Number.isFinite(opts.year) ? opts.year : new Date().getFullYear();
+  const seed = Number.isFinite(opts.seed) ? opts.seed : 0;
   const word = typeWord(thesis.applicant_types);
   const geo = geoPhrase(thesis.location);
-  const needs = (Array.isArray(thesis.needs) ? thesis.needs : []).filter(Boolean).slice(0, 4);
+  const state = thesis.location?.state ? String(thesis.location.state).trim() : '';
+  const isStudent =
+    Boolean(thesis.is_student) ||
+    (Array.isArray(thesis.applicant_types) && thesis.applicant_types.includes('student'));
+  const needs = (Array.isArray(thesis.needs) ? thesis.needs : []).map(humanize).filter(Boolean);
+  // Free-text field-of-study / career-goal / interest seeds the applicant entered.
+  // Distinct from needs: these do NOT affect matching — they only widen the query
+  // set so a student reaches field-specific scholarships (e.g. "nursing").
+  const interests = (Array.isArray(thesis.interest_terms) ? thesis.interest_terms : [])
+    .map(humanize)
+    .filter((t) => t && t.length > 2 && t.length < 40)
+    .slice(0, 8);
 
-  const out = [];
-  const push = (q) => {
+  const seen = new Set();
+  const add = (list, q) => {
     const s = String(q || '').replace(/\s+/g, ' ').trim();
-    if (s.length > 6 && !out.includes(s)) out.push(s);
+    if (s.length <= 6) return;
+    const k = s.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    list.push(s);
   };
 
-  // Need-specific funding searches (the highest-signal queries).
-  for (const need of needs) {
-    push(`${need} grants for ${word} ${geo}`);
-  }
-  // Geo + type funding, current cycle.
-  if (geo) push(`${word} grants ${geo} ${year}`);
-  // Community/place-based philanthropy (where most local money lives).
-  if (geo) push(`community foundation grants ${geo}`);
-  // Federal/national fallback keyed to the strongest need (no-geo profiles too).
-  if (needs[0]) push(`${needs[0]} grant funding ${word}`.trim());
-  // Last resort if the profile is sparse: still search something useful.
-  if (out.length === 0) push(`grants for ${word} ${geo || year}`);
+  const core = [];
+  const extra = [];
 
-  return out.slice(0, max);
+  // ── CORE (always emitted, highest signal) ──
+  // The two strongest need-specific searches.
+  for (const need of needs.slice(0, 2)) add(core, `${need} grants for ${word} ${geo}`);
+  // Geo + type funding, current cycle.
+  if (geo) add(core, `${word} grants ${geo} ${year}`);
+  // Community/place-based philanthropy (where most local money lives).
+  if (geo) add(core, `community foundation grants ${geo}`);
+  // Students: the single best scholarship query is core (federal APIs skip them).
+  if (isStudent) add(core, `scholarships for students ${geo} ${year}`);
+
+  // ── EXTRA (broadening pool, rotated by seed) ──
+  // Remaining needs + an alternate phrasing for each need.
+  for (const need of needs.slice(2)) add(extra, `${need} grants for ${word} ${geo}`);
+  for (const need of needs) add(extra, `${need} assistance program ${geo}`);
+  // Alternate geo phrasings so a run reaches pages the core phrasing misses.
+  if (geo) {
+    add(extra, `local grants ${word} ${geo}`);
+    add(extra, `${word} funding opportunities ${geo} ${year}`);
+  }
+  // National fallback keyed to each need (also covers no-geo profiles).
+  for (const need of needs) add(extra, `${need} grant funding ${word}`);
+
+  // Student-specific scholarship breadth.
+  if (isStudent) {
+    add(extra, `need-based scholarships ${geo}`);
+    add(extra, `merit scholarships ${geo} ${year}`);
+    add(extra, `local scholarships ${geo}`);
+    add(extra, `${geo} college grants for students`);
+    add(extra, `community foundation scholarships ${geo}`);
+    if (state) add(extra, `${state} state scholarship programs`);
+    // Field-of-study / career-goal keyed scholarships.
+    for (const term of interests) {
+      add(extra, `${term} scholarships ${geo}`);
+      add(extra, `${term} scholarships ${year}`);
+    }
+  } else {
+    // Non-student interest/keyword-keyed grant searches.
+    for (const term of interests) add(extra, `${term} grants for ${word} ${geo}`);
+  }
+
+  // Last resort: a sparse profile still searches something useful.
+  if (core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
+
+  return [...core, ...rotate(extra, seed)].slice(0, max);
 }
 
 export default { buildWebQueries };

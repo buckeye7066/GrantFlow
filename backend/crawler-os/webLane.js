@@ -119,14 +119,21 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   const thesis = opts.thesis ?? {};
   const matchProfiles = (opts.matchProfiles && opts.matchProfiles.length) ? opts.matchProfiles : [thesis];
   const runId = opts.runId ?? null;
-  const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries : 5;
-  const resultsPerQuery = Number.isFinite(opts.resultsPerQuery) ? opts.resultsPerQuery : 6;
-  const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages : 14;
+  // Breadth caps (bounded to respect search rate limits / the Brave breaker,
+  // which makes searchWeb return [] when paused). Raised from 5/6/14 to widen the
+  // candidate pool per run without hammering the provider.
+  const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries : 8;
+  const resultsPerQuery = Number.isFinite(opts.resultsPerQuery) ? opts.resultsPerQuery : 8;
+  const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages : 20;
+  // Per-run rotation seed: successive discoveries sample DIFFERENT broadening
+  // queries (the CORE queries always run) so a profile stops getting the same
+  // set every time. Injectable for deterministic tests; defaults to wall-clock.
+  const seed = Number.isFinite(opts.seed) ? opts.seed : Date.now();
 
   upsertSource(store, WEB_SOURCE);
 
   // 1) Search → collect unique candidate pages (bounded).
-  const queries = buildWebQueries(thesis, { max: maxQueries });
+  const queries = buildWebQueries(thesis, { max: maxQueries, seed });
   result.queries = queries;
   const seen = new Set();
   const pages = [];

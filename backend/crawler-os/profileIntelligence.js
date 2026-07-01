@@ -842,6 +842,23 @@ export function buildThesis(profile = {}) {
   const isOrg = applicant_types.some((t) =>
     ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal'].includes(t));
 
+  // Free-text interest / field-of-study / career-goal / talent seeds the applicant
+  // entered (major, intended career, demographic scholarship tags). These do NOT
+  // affect matching — they are ONLY searchable seeds for the open-web query
+  // builder, so a student reaches field-specific scholarships (e.g. "nursing
+  // scholarships") instead of only generic ones. Deduped against needs/types and
+  // bounded so a verbose profile can't explode the query set.
+  const interest_terms = [...new Set(
+    []
+      .concat(profile?.tags ?? [])
+      .concat(profile?.interests ?? [])
+      .concat(profile?.keywords ?? [])
+      .map((t) => String(t ?? '').trim().toLowerCase())
+      .filter(Boolean)
+      .filter((t) => t.length > 2 && t.length < 40)
+      .filter((t) => !needs.includes(t) && !applicant_types.includes(t)),
+  )].slice(0, 12);
+
   return {
     profile_id: profile?.id ?? profile?.profile_id ?? null,
     applicant_types,
@@ -859,6 +876,9 @@ export function buildThesis(profile = {}) {
       : (isOrg ? 60 : 55),
     // Searchable keyword seeds (deduped) for the planner's query builders.
     keywords: [...new Set([...needs, ...applicant_types])],
+    // Field-of-study / interest seeds for the open-web query builder (breadth
+    // only; never used for scoring). See buildWebQueries.
+    interest_terms,
     // Which high-precision identity phrases (if any) pulled in an applicant
     // bucket from free text — surfaced so the crawler-plan explainer / Anya can
     // show WHY a source fired (e.g. "FEMA AFG fired because the mission text
