@@ -32,7 +32,19 @@ function resolveNotificationTarget(notification) {
   const profileId = data.profile_id || data.profileId || notification?.profile_id || null
   if (!profileId) return null
 
-  if (/login_required|2fa_required|captcha_required|portal_blocked/.test(type)) {
+  // A wall only a human can clear live (2FA push/SMS/hardware, CAPTCHA, identity
+  // proofing) → the Portals tab with the exact portal flagged, so it shows a
+  // clickable "Open side-by-side login" card.
+  if (/2fa_required|captcha_required|identity_proof/.test(type)) {
+    const raw = data.portal_host || data.host || data.portal_url || data.login_url || ''
+    let host = ''
+    try { host = raw ? new URL(String(raw).startsWith('http') ? raw : `https://${raw}`).hostname : '' } catch { host = String(raw).replace(/^https?:\/\//, '').split('/')[0] }
+    const params = { id: profileId, tab: 'pipeline' }
+    if (host) params.cobrowse = host
+    return createPageUrl('ProfileDetail', params)
+  }
+
+  if (/login_required|portal_blocked/.test(type)) {
     return createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline', focus: 'portal-logins' })
   }
 
