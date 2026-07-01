@@ -58,6 +58,7 @@ import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
 import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
 import PortalSyncCard from "@/components/hamilton/PortalSyncCard.jsx"
 import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard.jsx"
+import HamiltonAutopilotConsentCard from "@/components/hamilton/HamiltonAutopilotConsentCard.jsx"
 import HamiltonWorkPanel from "@/components/hamilton/HamiltonWorkPanel.jsx"
 import ProfileFundingSourcesCard from "@/components/funding/ProfileFundingSourcesCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
@@ -1451,6 +1452,11 @@ export default function ProfileDetail() {
                   red = click to log in once. No explainer clutter - the card
                   speaks for itself. Power-user manual entry lives under Advanced. */}
               <ProfileFundingSourcesCard profileId={profileId} />
+              {/* One-time, profile-level consent: grant Hamilton standing
+                  permission to use this profile's saved logins across every
+                  portal (scope:'profile' authorization) instead of authorizing
+                  each funding source. */}
+              <HamiltonAutopilotConsentCard profileId={profileId} />
               <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
               {/* The manual portal-host/URL entry forms are de-emphasized: kept
                   for power users under a disclosure, since the dashboard above is
