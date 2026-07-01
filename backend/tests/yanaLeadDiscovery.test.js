@@ -185,3 +185,67 @@ describe('pushQualifiedToJohn — Yana Rule 4 rolling cap', () => {
     expect(res.cap).toBe(DAILY_LEAD_CAP)
   })
 })
+
+import { discoverProspects } from '../services/yana/yanaLeadDiscovery.js'
+import {
+  makePropublica990Source,
+  registerProspectSource,
+} from '../services/yana/yanaProspectSources.js'
+import { getAgentSetting } from '../services/agentControl/agentControlStore.js'
+
+describe('ProPublica prospect pagination (frozen-universe fix)', () => {
+  it('honors the page window: passes advancing page numbers to the 990 search', async () => {
+    const calls = []
+    const fakeSearch = async ({ page }) => {
+      calls.push(page)
+      return { organizations: [] }
+    }
+    const src = makePropublica990Source({ searchOrganizations: fakeSearch })
+    await src.discover({ limit: 10000, page: 3, pages: 2 })
+    const pages = [...new Set(calls)].sort((a, b) => a - b)
+    expect(pages).toEqual([3, 4]) // only pages 3 and 4 were requested
+  })
+
+  it('defaults to page 0 / one page when no page is given (back-compat)', async () => {
+    const calls = []
+    const src = makePropublica990Source({
+      searchOrganizations: async ({ page }) => { calls.push(page); return { organizations: [] } },
+    })
+    await src.discover({ limit: 10000 })
+    expect([...new Set(calls)]).toEqual([0])
+  })
+})
+
+describe('discoverProspects rotates + persists the ProPublica page cursor', () => {
+  it('starts at page 0, advances the persisted cursor each run, and feeds the new page to the source', async () => {
+    const db = makeDb()
+    const pagesSeen = []
+    // Fake 990 source that records which page it was asked for and returns one org.
+    registerProspectSource('propublica_990', {
+      name: 'propublica_990',
+      async discover({ page = 0 }) {
+        pagesSeen.push(page)
+        return [{
+          organization_name: `Prospect p${page}`,
+          external_id: `ein-${page}`,
+          source: 'propublica_990',
+          email: `p${page}@example.org`,
+          website_url: `https://p${page}.example.org`,
+        }]
+      },
+    })
+
+    const run1 = await discoverProspects(db, { allowLiveWeb: true, sources: ['propublica_990'], limit: 5 })
+    expect(run1.prospect_page).toBe(0)
+    expect(run1.next_prospect_page).toBe(2) // 0 + PROSPECT_PAGE_STEP
+    expect(await getAgentSetting(db, 'yana.propublica_page')).toBe('2')
+
+    const run2 = await discoverProspects(db, { allowLiveWeb: true, sources: ['propublica_990'], limit: 5 })
+    expect(run2.prospect_page).toBe(2)
+    expect(run2.next_prospect_page).toBe(4)
+
+    // The source was asked for page 0 on run 1 and page 2 on run 2 — new orgs each run.
+    expect(pagesSeen).toContain(0)
+    expect(pagesSeen).toContain(2)
+  })
+})

@@ -140,29 +140,38 @@ export function makePropublica990Source(deps = {}) {
     : realSearchOrganizations
   return {
     name: 'propublica_990',
-    async discover({ limit = 100, states = null, queries = null } = {}) {
+    // `page`/`pages` let the caller PAGINATE ProPublica results. The scheduler
+    // advances a persisted page cursor across runs (see discoverProspects) so
+    // each run surfaces NEW orgs instead of re-scanning page 0 forever — the
+    // "frozen universe" bug where every run re-found the same ~40 orgs (all
+    // already pushed to John) and thus pushed 0 new leads.
+    async discover({ limit = 100, states = null, queries = null, page = 0, pages = 1 } = {}) {
       const plans = Array.isArray(queries) && queries.length ? queries : DEFAULT_PROSPECT_QUERIES
       const stateList = Array.isArray(states) && states.length ? states : [null]
+      const startPage = Number.isInteger(page) && page >= 0 ? page : 0
+      const pageCount = Number.isInteger(pages) && pages > 0 ? pages : 1
       const out = []
       const seen = new Set()
       outer:
       for (const state of stateList) {
-        for (const plan of plans) {
-          if (out.length >= limit) break outer
-          let result
-          try {
-            result = await search({ q: plan.q, ntee: plan.ntee, state: state || undefined })
-          } catch (err) {
-            log.warn(`990 search failed for q="${plan.q}" state=${state || 'all'}: ${err?.message || err}`)
-            continue
-          }
-          for (const org of result?.organizations || []) {
-            if (out.length >= limit) break
-            const prospect = mapNonprofitToProspect(org)
-            if (!prospect) continue
-            if (seen.has(prospect.external_id)) continue
-            seen.add(prospect.external_id)
-            out.push(prospect)
+        for (let p = startPage; p < startPage + pageCount; p += 1) {
+          for (const plan of plans) {
+            if (out.length >= limit) break outer
+            let result
+            try {
+              result = await search({ q: plan.q, ntee: plan.ntee, state: state || undefined, page: p })
+            } catch (err) {
+              log.warn(`990 search failed for q="${plan.q}" state=${state || 'all'} page=${p}: ${err?.message || err}`)
+              continue
+            }
+            for (const org of result?.organizations || []) {
+              if (out.length >= limit) break
+              const prospect = mapNonprofitToProspect(org)
+              if (!prospect) continue
+              if (seen.has(prospect.external_id)) continue
+              seen.add(prospect.external_id)
+              out.push(prospect)
+            }
           }
         }
       }
