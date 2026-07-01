@@ -18,6 +18,7 @@ import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pip
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
+import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -440,7 +441,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
                     m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
                FROM profile_opportunity_matches m
                JOIN funding_opportunities o ON o.id = m.opportunity_id
-              WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+              WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
               ORDER BY m.match_score DESC`,
           )
           .all(profileId)
@@ -509,7 +510,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // ── Score floor ─────────────────────────────────────────────────────
       // Directories always survive (mission rule). Everything else must clear
       // the requested min_score (default 75).
-      let qualified = mapped.filter((o) => o.is_directory || Number(o.match_score) >= osMin)
+      let qualified = mapped.filter((o) => qualifiesForDisplay(o, osMin))
 
       // ── Zero-result recovery ladder (mission rule) ──────────────────────
       // Zero results is a FAILURE state, not an acceptable outcome. When the

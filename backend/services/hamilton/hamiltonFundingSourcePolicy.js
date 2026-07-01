@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { assessOpportunityTrust } from '../opportunityTrust.js'
+import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 
 const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
 const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
@@ -57,7 +58,7 @@ async function loadProfileMatch(db, profileId, opportunityId) {
       FROM profile_opportunity_matches
       WHERE profile_id = ?
         AND opportunity_id = ?
-        AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+        AND matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
       ORDER BY
         CASE matcher_version
           WHEN 'crawler-os' THEN 0

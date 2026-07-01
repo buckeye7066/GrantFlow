@@ -2,6 +2,8 @@
 // after the Crawler OS cutover. The old bulk grant-crawl engine is retired:
 // profile-facing discovery routes delegate to runProfileDiscoveryLive, and
 // non-profile bulk crawl endpoints return an explicit retired/OS response.
+import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+
 const SUPERSEDED = Object.freeze({
   retired: true,
   superseded: true,
@@ -46,7 +48,7 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
       FROM profile_opportunity_matches m
       JOIN funding_opportunities fo ON fo.id = m.opportunity_id
      WHERE m.profile_id = ?
-       AND m.matcher_version IN ('crawler-os', 'crawler-os-xmatch')
+       AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
        AND lower(COALESCE(m.match_decision, '')) IN ('accept', 'review')
        ${activeClause}
      ORDER BY m.match_score DESC

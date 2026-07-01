@@ -12,6 +12,7 @@ import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoC
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:discovery')
@@ -127,7 +128,7 @@ async function loadProfileOsResults(req, profileId, {
               m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
          FROM profile_opportunity_matches m
          JOIN funding_opportunities o ON o.id = m.opportunity_id
-        WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+        WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
           AND ${activeClause}
           AND ${hiddenClause}
         ORDER BY m.match_score DESC`,
@@ -183,7 +184,7 @@ async function loadProfileOsResults(req, profileId, {
     if (Number.isFinite(max)) mapped = mapped.filter((opp) => opp.amount_min === null || opp.amount_min === undefined || Number(opp.amount_min) <= max)
   }
 
-  mapped = mapped.filter((opp) => opp.is_directory || Number(opp.match_score) >= Number(minScore))
+  mapped = mapped.filter((opp) => qualifiesForDisplay(opp, minScore))
   mapped = deduplicateOpportunities(mapped).map(formatProfileSearchResult)
 
   let excludedAlreadyInPipeline = 0
@@ -412,7 +413,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
                     m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
                FROM profile_opportunity_matches m
                JOIN funding_opportunities o ON o.id = m.opportunity_id
-              WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+              WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
                 AND (o.is_active IS NULL OR o.is_active = 1)
                 AND (o.is_hidden IS NULL OR o.is_hidden = 0)
               ORDER BY m.match_score DESC`,
@@ -455,7 +456,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
         mapped = (await filterOutPipelineMembers(req.db, matchProfileId, mapped)).results
       }
-      const qualified = mapped.filter((o) => o.is_directory || Number(o.match_score) >= osMin)
+      const qualified = mapped.filter((o) => qualifiesForDisplay(o, osMin))
       return res.json({
         success: true,
         engine: 'crawler-os',
