@@ -269,6 +269,17 @@ function OneTimePasswordModal({ value, onClose }) {
   )
 }
 
+// Strict host match for the ?cobrowse deep-link: equal, or a true subdomain on a
+// dot boundary (so "mtsu.edu.evil.com" never matches "mtsu.edu"). Used to gate a
+// user-controlled URL param against the profile's real portals.
+function hostMatches(a, b) {
+  const norm = (v) => String(v || "").toLowerCase().trim().replace(/^https?:\/\//, "").split("/")[0]
+  const x = norm(a)
+  const y = norm(b)
+  if (!x || !y) return false
+  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`)
+}
+
 export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -296,9 +307,11 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
 
   // Deep-link from a 2FA / CAPTCHA / identity-proof notification: it lands here
-  // with ?cobrowse=<host>. Surface a prominent, clickable "Open side-by-side
-  // login" card for that portal (the click opens the co-browse window — the
-  // popup must open inside a real user gesture) and scroll to it.
+  // with ?cobrowse=<host> and surfaces a clickable "Open side-by-side login" card.
+  // SECURITY: the param is USER-CONTROLLED, so we only ever honor it when it
+  // resolves to a portal ALREADY on this profile — we never launch a co-browse to
+  // an arbitrary host from the URL (open-redirect / phishing guard). An unknown
+  // host resolves to null and renders nothing.
   const [cobrowseHost, setCobrowseHost] = React.useState("")
   const cobrowseRef = React.useRef(null)
   React.useEffect(() => {
@@ -307,11 +320,15 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       if (h) setCobrowseHost(h)
     } catch { /* ignore */ }
   }, [])
+  const cobrowsePortal = cobrowseHost
+    ? portals.find((p) => hostMatches(p.portalHost || p.host, cobrowseHost)) || null
+    : null
+  const cobrowseTargetHost = cobrowsePortal ? (cobrowsePortal.portalHost || cobrowsePortal.host || "") : ""
   React.useEffect(() => {
-    if (cobrowseHost && cobrowseRef.current) {
+    if (cobrowseTargetHost && cobrowseRef.current) {
       cobrowseRef.current.scrollIntoView({ behavior: "smooth", block: "center" })
     }
-  }, [cobrowseHost, isLoading])
+  }, [cobrowseTargetHost])
 
   // Track the popup-close poll so we never leak it / accumulate multiple.
   const loginPollRef = React.useRef(null)
@@ -1019,28 +1036,22 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
         {/* Co-browse call-to-action: Hamilton hit a wall only a human can clear
             (2FA approval, CAPTCHA, identity proofing). Deep-linked from the
             notification; one click opens the side-by-side window. */}
-        {cobrowseHost && (
+        {cobrowsePortal && (
           <div ref={cobrowseRef} className="rounded-2xl border-2 border-current-coral bg-current-coral/10 p-4">
             <div className="flex items-start gap-3">
               <PanelsTopLeft className="h-5 w-5 shrink-0 text-current-coral" />
               <div className="min-w-0 flex-1">
                 <p className="font-display font-bold text-current-ink">Hamilton needs you to finish signing in</p>
                 <p className="mt-1 text-[13px] text-current-ink/75">
-                  <span className="money">{cobrowseHost}</span> hit a step only you can clear — a 2FA approval,
-                  a CAPTCHA, or identity verification. Open the side-by-side window and Hamilton will guide you
-                  through it, then keep going on its own.
+                  <span className="money">{cobrowsePortal.label || cobrowseTargetHost}</span> hit a step only you
+                  can clear — a 2FA approval, a CAPTCHA, or identity verification. Open the side-by-side window and
+                  Hamilton will guide you through it, then keep going on its own.
                 </p>
                 <button
                   type="button"
                   className={`${BTN_CORAL} mt-3`}
                   disabled={loginMutation.isPending}
-                  onClick={() => {
-                    const match = portals.find((p) => {
-                      const ph = p.portalHost || p.host
-                      return ph && (ph === cobrowseHost || String(ph).includes(cobrowseHost) || String(cobrowseHost).includes(ph))
-                    })
-                    startLogin(match || { portalHost: cobrowseHost, loginUrl: null, label: cobrowseHost })
-                  }}
+                  onClick={() => startLogin(cobrowsePortal)}
                 >
                   {loginMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
