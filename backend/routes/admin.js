@@ -121,6 +121,7 @@ const countiesByStatePath = resolveCountiesDatasetPath();
 let zipCoordinatesCache = null;
 let zipStateIndexCache = null;
 let countiesByStateCache = null;
+let countiesByStateFromFile = false;
 let zipCoordinatesMissing = false;
 // Some deployments accidentally package a tiny `zip_coordinates.json` (hundreds of ZIPs).
 // Geo Crawl must support the full US ZIP set; treat undersized datasets as "missing" and fall back to `zipcodes`.
@@ -441,17 +442,24 @@ function buildZipStateIndex() {
 }
 
 function loadCountiesByState() {
-  if (countiesByStateCache) return countiesByStateCache;
-  if (!fs.existsSync(countiesByStatePath)) {
-    countiesByStateCache = {};
-    return countiesByStateCache;
+  // Reuse a real, file-backed dataset once we've loaded one.
+  if (countiesByStateFromFile && countiesByStateCache) return countiesByStateCache;
+  // Re-resolve the path each call WHILE we lack file data, so a dataset written
+  // AFTER boot (e.g. by the warmCountyCache startup task on Railway's ephemeral
+  // FS) is picked up without a restart.
+  const datasetPath = resolveCountiesDatasetPath();
+  if (fs.existsSync(datasetPath)) {
+    try {
+      countiesByStateCache = JSON.parse(fs.readFileSync(datasetPath, 'utf8'));
+      countiesByStateFromFile = true;
+      return countiesByStateCache;
+    } catch (err) {
+      console.warn('[admin] Failed to parse counties data:', err.message);
+    }
   }
-  try {
-    countiesByStateCache = JSON.parse(fs.readFileSync(countiesByStatePath, 'utf8'));
-  } catch (err) {
-    console.warn('[admin] Failed to parse counties data:', err.message);
-    countiesByStateCache = {};
-  }
+  // No file yet — keep a persistent object so per-state computed results still
+  // cache across requests within this process (do NOT cache a negative result).
+  if (!countiesByStateCache) countiesByStateCache = {};
   return countiesByStateCache;
 }
 

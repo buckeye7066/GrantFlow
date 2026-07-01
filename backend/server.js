@@ -2814,6 +2814,24 @@ if (process.env.NODE_ENV !== 'test') {
       })()
     }, 25_000);
 
+    // County cache warm — regenerate the counties-by-state dataset that the admin
+    // geo endpoints read. It lives under backend/data/ (gitignored + ephemeral on
+    // Railway), so a fresh boot has no cache and county enumeration recomputes per
+    // request. Rebuild it once from the app's own ZIP->county resolver (real data,
+    // no network). Best-effort + non-blocking; requests keep the on-demand
+    // fallback if this fails or is still running.
+    setTimeout(() => {
+      ;(async () => {
+        try {
+          const { warmCountyCache } = await import('./startup/warmCountyCache.js')
+          const result = await warmCountyCache()
+          console.log('[county-cache] warm:', JSON.stringify(result))
+        } catch (err) {
+          console.warn('[county-cache] warm skipped:', err?.message || err)
+        }
+      })()
+    }, 30_000);
+
     // Robert — funding-discovery agent scheduler. Disabled by default; only
     // starts if ROBERT_ENABLED and one of ROBERT_RUN_ON_SCHEDULE/STARTUP or
     // ROBERT_AUTOSEED_ON_SCHEDULE (funding-trace weak-coverage sweep) is true.
