@@ -43,6 +43,7 @@ import {
   setMissingInfo,
 } from './applicationTaskStore.js'
 import { generateAndSavePacket } from './hamiltonApplicationPacketGenerator.js'
+import { generateMbaProposal, saveProposalDocument } from './hamiltonFullProposalGenerator.js'
 import {
   emitHamiltonNotificationToProfileAndAdmins,
   emitHamiltonLifecycleAlerts,
@@ -412,6 +413,68 @@ async function runDocumentPathway(db, {
     actorRole: 'agent',
   })
 
+  // ── Full MBA-level proposal (best-effort, never breaks the pathway) ──
+  // Before the submission packet, Hamilton drafts a complete narrative
+  // proposal (need statement, SMART objectives, methods, evaluation,
+  // budget narrative, capacity, sustainability — adapted to the profile
+  // type and aligned to the funder's requirements), saves it to the
+  // profile's Documents, attaches it to the task, and records any evidence
+  // gaps as missing-info. Any failure falls back silently to the packet.
+  let proposalResult = null
+  let proposalGaps = []
+  try {
+    const proposal = await generateMbaProposal(db, {
+      profile, opportunity, grant, taskId: task.id,
+    })
+    if (proposal?.ok && proposal.sections.length > 0) {
+      proposalResult = await saveProposalDocument(db, {
+        profile, opportunity, grant, proposal, taskId: task.id, userId,
+      })
+      proposalGaps = Array.isArray(proposal.evidence_gaps) ? proposal.evidence_gaps : []
+      await updateApplicationTask(db, task.id, {
+        outputProposalDocumentId: proposalResult.proposal_document_id,
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'progress',
+        status: 'generating_documents',
+        step: 'full_proposal_drafted',
+        message: `Hamilton drafted a full ${proposal.kind} grant proposal (${proposal.sections.length} sections, ${proposal.meta?.provider || 'ai'}) and saved it to Documents.${proposalGaps.length ? ` Flagged ${proposalGaps.length} evidence gap(s).` : ''}`,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: {
+          proposal_document_id: proposalResult.proposal_document_id,
+          section_keys: proposal.meta?.section_keys || [],
+          evidence_gap_count: proposalGaps.length,
+          funder_alignment_count: proposal.funder_alignment?.alignment?.length || 0,
+        },
+      })
+    } else if (proposal && !proposal.ok) {
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'note',
+        status: 'generating_documents',
+        step: 'full_proposal_skipped',
+        message: `Hamilton could not draft the full narrative proposal (${proposal.error || 'no groundable sections'}); proceeding with the submission packet.`,
+        actorUserId: userId,
+        actorRole: 'agent',
+      })
+    }
+  } catch (err) {
+    // Drafting is additive — a failure must never break document generation.
+    console.warn(`[hamiltonOrchestrator] full proposal draft failed (non-fatal): ${err?.message || err}`)
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'note',
+      status: 'generating_documents',
+      step: 'full_proposal_error',
+      message: 'Hamilton hit an error drafting the full narrative proposal; proceeding with the submission packet.',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { error: String(err?.message || err).slice(0, 300) },
+    }).catch(() => {})
+  }
+
   const generatePdf = options?.generate_pdf !== false
   const generateDocx = options?.generate_docx !== false
   if (!generatePdf && !generateDocx) {
@@ -428,19 +491,26 @@ async function runDocumentPathway(db, {
     userId,
   })
 
+  // Combine the packet's missing-info with the proposal's evidence gaps so a
+  // single review surface covers both. Proposal gap keys are prefixed
+  // `proposal_` (see hamiltonFullProposalGenerator.normalizeGap), so they
+  // never collide with packet field keys under the (task, kind, key) unique.
+  const combinedMissing = [...result.missing, ...proposalGaps]
+
   // Persist outputs + missing info.
   await updateApplicationTask(db, task.id, {
     status: 'saving_documents',
     outputDocxDocumentId: result.docx_document_id,
     outputPdfDocumentId: result.pdf_document_id || null,
     outputDocumentId: result.pdf_document_id || result.docx_document_id,
+    ...(proposalResult ? { outputProposalDocumentId: proposalResult.proposal_document_id } : {}),
     mailingInstructions: result.mailing_instructions,
-    missingFields: result.missing.filter((m) => m.kind === 'field'),
-    missingDocuments: result.missing.filter((m) => m.kind === 'document'),
+    missingFields: combinedMissing.filter((m) => m.kind === 'field'),
+    missingDocuments: combinedMissing.filter((m) => m.kind === 'document'),
   })
 
-  if (result.missing.length > 0) {
-    await setMissingInfo(db, task.id, result.missing)
+  if (combinedMissing.length > 0) {
+    await setMissingInfo(db, task.id, combinedMissing)
   }
 
   await appendTaskEvent(db, {
@@ -448,13 +518,14 @@ async function runDocumentPathway(db, {
     eventType: 'progress',
     status: 'saving_documents',
     step: 'documents_saved',
-    message: `Hamilton saved the generated packet to the profile's Documents (DOCX${result.pdf_document_id ? ' + PDF' : ''}).`,
+    message: `Hamilton saved the generated packet to the profile's Documents (DOCX${result.pdf_document_id ? ' + PDF' : ''})${proposalResult ? ' plus a full narrative proposal' : ''}.`,
     actorUserId: userId,
     actorRole: 'agent',
     details: {
       docx_document_id: result.docx_document_id,
       pdf_document_id: result.pdf_document_id,
-      missing_count: result.missing.length,
+      proposal_document_id: proposalResult?.proposal_document_id || null,
+      missing_count: combinedMissing.length,
     },
   })
 
@@ -462,7 +533,7 @@ async function runDocumentPathway(db, {
   await updateApplicationTask(db, task.id, {
     status: finalStatus,
     lastAgentMessage:
-      `Hamilton saved the ${automationType.toUpperCase()} packet under your profile's Documents and prepared submission instructions. ${result.missing.length > 0 ? `Hamilton flagged ${result.missing.length} item(s) that need human input.` : 'Review the draft, then mark it submitted when you are ready.'}`,
+      `Hamilton saved the ${automationType.toUpperCase()} packet${proposalResult ? ' and a full MBA-level narrative proposal' : ''} under your profile's Documents and prepared submission instructions. ${combinedMissing.length > 0 ? `Hamilton flagged ${combinedMissing.length} item(s) that need human input.` : 'Review the draft, then mark it submitted when you are ready.'}`,
   })
 
   // Precise, field-deep-linking alert when the draft flagged things the user
@@ -472,7 +543,7 @@ async function runDocumentPathway(db, {
     profileId: task.profile_id,
     profileUserId: task.user_id,
     taskId: task.id,
-    missing: result.missing,
+    missing: combinedMissing,
     fundingSourceTitle: result.title,
   })
   if (draftInfoAlertIds.length === 0) {
@@ -480,15 +551,16 @@ async function runDocumentPathway(db, {
       profileId: task.profile_id,
       profileUserId: task.user_id,
       type: notificationTypeForAutomation(automationType),
-      title: result.missing.length > 0
+      title: combinedMissing.length > 0
         ? 'Hamilton drafted your application — review needed'
         : 'Hamilton drafted your application',
-      message: `Hamilton saved a ${automationType.toUpperCase()} packet for "${result.title}" under your profile's Documents.${result.missing.length > 0 ? ` ${result.missing.length} item(s) flagged for review.` : ''}`,
-      severity: result.missing.length > 0 ? 'warning' : 'success',
+      message: `Hamilton saved a ${automationType.toUpperCase()} packet${proposalResult ? ' and a full narrative proposal' : ''} for "${result.title}" under your profile's Documents.${combinedMissing.length > 0 ? ` ${combinedMissing.length} item(s) flagged for review.` : ''}`,
+      severity: combinedMissing.length > 0 ? 'warning' : 'success',
       data: {
         task_id: task.id,
         docx_document_id: result.docx_document_id,
         pdf_document_id: result.pdf_document_id,
+        proposal_document_id: proposalResult?.proposal_document_id || null,
       },
     })
   }
@@ -499,7 +571,7 @@ async function runDocumentPathway(db, {
     await maybeUpdateGrantStage(db, grant.id, newStage)
   }
 
-  return { task: await reload(db, task.id), classification, packet: result }
+  return { task: await reload(db, task.id), classification, packet: result, proposal: proposalResult }
 }
 
 async function runActionPacketPathway(db, {
