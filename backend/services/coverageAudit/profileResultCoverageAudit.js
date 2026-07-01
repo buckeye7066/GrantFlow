@@ -35,6 +35,7 @@
 import { DEFAULT_MIN_SCORE } from '../../config/matchThresholds.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../../config/matchSurfacing.js'
 import { isStudentAidOpportunity } from '../matchEngine.js'
+import { isTemplatedGeoStub } from '../relevanceFilterRules.js'
 import { createLogger } from '../../utils/logger.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
@@ -82,6 +83,37 @@ function countyToken(county) {
 }
 
 /**
+ * Is this surfaced row's deadline in the past? A row only counts as "passed" when
+ * it carries a concrete deadline that is BEFORE now — rolling/ongoing/unknown
+ * deadline types (and null deadlines) are never "passed" because they stay open.
+ * `nowMs` is injectable so the pure function stays deterministic under test.
+ */
+function isDeadlinePassed(row, nowMs = Date.now()) {
+  if (!row) return false
+  const type = String(row.deadline_type || '').toLowerCase()
+  if (type === 'rolling' || type === 'ongoing') return false
+  const raw = row.deadline_at || row.deadline || null
+  if (!raw) return false
+  const t = Date.parse(raw)
+  if (Number.isNaN(t)) return false
+  return t < nowMs
+}
+
+/**
+ * A surfaced row is ACTIONABLE when a client could still realistically apply to
+ * it: it qualifies for display AND is neither a templated geo-stub ("Food Bank
+ * resources near <town>", "United Way near <town>" — locator noise, not a grant)
+ * NOR past its deadline. `low_results` and the acquisition-gap checks are driven
+ * off this count so a pipeline padded with expired rows or geo-stubs no longer
+ * masks an empty result set and skips the nightly self-heal.
+ */
+function isActionableRow(row, nowMs = Date.now()) {
+  if (isTemplatedGeoStub(row)) return false
+  if (isDeadlinePassed(row, nowMs)) return false
+  return true
+}
+
+/**
  * auditProfileResultCoverageFromData — PURE. Given the already-fetched rows +
  * thesis + counts, compute the coverage gaps. No I/O; unit-testable.
  *
@@ -92,30 +124,40 @@ function countyToken(county) {
  * @param {object} input.thesis            { is_student, schools[], location:{county} }
  * @param {number} [input.floor]
  */
-export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE }) {
+export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [], unsurfacedCount = 0, thesis = {}, floor = DEFAULT_MIN_SCORE, nowMs = Date.now() }) {
   const qualifying = surfacedRows.filter((r) => qualifiesForDisplay(r, floor))
+  // ACTIONABLE = qualifying rows a client could still apply to: not a templated
+  // geo-stub and not past deadline. Acquisition gaps (institution / hyperlocal /
+  // low_results) are judged against these, so expired or geo-stub padding can no
+  // longer mask an empty result set (the exact way Avanell's 12 deadline_passed
+  // geo-stubs made her look "covered").
+  const actionable = qualifying.filter((r) => isActionableRow(r, nowMs))
+  const geo_stub_count = qualifying.filter((r) => isTemplatedGeoStub(r)).length
+  const deadline_passed_count = qualifying.filter((r) => isDeadlinePassed(r, nowMs)).length
   const gaps = []
 
   // 1. Surfacing regression (CODE bug — not crawl-remediable).
   const surfacing_gap = Number(unsurfacedCount) > 0
   if (surfacing_gap) gaps.push(`surfacing_regression:${unsurfacedCount}_matches_in_unsurfaced_version`)
 
-  // 2. Institution gap (students with named schools).
+  // 2. Institution gap (students with named schools). Judge against ACTIONABLE
+  //    rows so a school named only inside a geo-stub doesn't mask a real gap.
   const schools = Array.isArray(thesis.schools) ? thesis.schools.filter(Boolean) : []
   const missing_schools = thesis.is_student
-    ? schools.filter((s) => !anyRowReferences(qualifying, s))
+    ? schools.filter((s) => !anyRowReferences(actionable, s))
     : []
   const institution_gap = thesis.is_student && schools.length > 0 && missing_schools.length === schools.length
   if (institution_gap) gaps.push(`institution_gap:${missing_schools.slice(0, 3).join('|')}`)
 
-  // 3. Hyperlocal gap (county present, no county/local match).
+  // 3. Hyperlocal gap (county present, no ACTIONABLE county/local match — a
+  //    "Community Action Agency near <county>" geo-stub must not satisfy this).
   const countyTok = thesis.location?.county ? countyToken(thesis.location.county) : ''
-  const hyperlocal_gap = Boolean(countyTok) && !qualifying.some((r) => norm(`${r.title || ''} ${r.sponsor || ''}`).includes(countyTok))
+  const hyperlocal_gap = Boolean(countyTok) && !actionable.some((r) => norm(`${r.title || ''} ${r.sponsor || ''}`).includes(countyTok))
   if (hyperlocal_gap) gaps.push(`hyperlocal_gap:${countyTok}`)
 
-  // 4. Low / zero results.
-  const low_results = qualifying.length < MIN_HEALTHY_SURFACED
-  if (low_results) gaps.push(`low_results:${qualifying.length}`)
+  // 4. Low / zero results — measured on ACTIONABLE sources, not padded totals.
+  const low_results = actionable.length < MIN_HEALTHY_SURFACED
+  if (low_results) gaps.push(`low_results:${actionable.length}`)
 
   // 5. Ineligible surfaced match — a student-aid opportunity (TN HOPE, FAFSA,
   //    Pell, TSAA, foundation scholarships…) surfacing to a NON-student profile
@@ -142,6 +184,9 @@ export function auditProfileResultCoverageFromData({ profileId, surfacedRows = [
   return {
     profile_id: profileId,
     surfaced_qualifying: qualifying.length,
+    surfaced_actionable: actionable.length,
+    geo_stub_count,
+    deadline_passed_count,
     surfaced_total: surfacedRows.length,
     unsurfaced_count: Number(unsurfacedCount) || 0,
     surfacing_gap,
@@ -169,6 +214,7 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
   const surfacedRows = await db
     .prepare(
       `SELECT m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
+              o.opportunity_kind, o.deadline, o.deadline_at, o.deadline_type,
               (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory
          FROM profile_opportunity_matches m
          JOIN funding_opportunities o ON o.id = m.opportunity_id
@@ -266,6 +312,10 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     low_results: audits.filter((a) => a.low_results).length,
     ineligible_surfaced_matches: audits.filter((a) => a.ineligible_surfaced_match).length,
     needs_rediscovery: audits.filter((a) => a.needs_rediscovery).length,
+    // Padding signals: profiles whose displayed count is inflated by expired rows
+    // or geo-stubs (so a human/Sam can see WHY a "healthy" total wasn't actionable).
+    padded_by_deadline: audits.filter((a) => (a.deadline_passed_count || 0) > 0).length,
+    padded_by_geo_stub: audits.filter((a) => (a.geo_stub_count || 0) > 0).length,
   }
   return { audits, summary }
 }
@@ -361,7 +411,7 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
   try {
     const { recordLowCoverageEvent } = await import('../matching/professionalDevelopmentPolicy.js')
     for (const a of audits.filter((x) => x.low_results)) {
-      await recordLowCoverageEvent(db, { profileId: a.profile_id, qualifiedCount: a.surfaced_qualifying, minScore: DEFAULT_MIN_SCORE })
+      await recordLowCoverageEvent(db, { profileId: a.profile_id, qualifiedCount: a.surfaced_actionable ?? a.surfaced_qualifying, minScore: DEFAULT_MIN_SCORE })
     }
   } catch { /* best-effort telemetry */ }
 
@@ -377,7 +427,7 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
   // Bounded self-heal of the worst acquisition gaps (institution/hyperlocal/low).
   const healQueue = audits
     .filter((a) => a.needs_rediscovery)
-    .sort((x, y) => x.surfaced_qualifying - y.surfaced_qualifying)
+    .sort((x, y) => (x.surfaced_actionable ?? x.surfaced_qualifying) - (y.surfaced_actionable ?? y.surfaced_qualifying))
     .slice(0, Math.max(0, maxHeal))
   const healed = []
   if (autoheal && healQueue.length) {
@@ -385,11 +435,11 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
       const { runProfileDiscoveryLive } = await import('../crawlerOsService.js')
       for (const a of healQueue) {
         try {
-          const before = a.surfaced_qualifying
+          const before = a.surfaced_actionable ?? a.surfaced_qualifying
           await runProfileDiscoveryLive({ db, profileId: a.profile_id })
           const after = await auditProfileResultCoverage(db, a.profile_id)
-          healed.push({ profile_id: a.profile_id, before, after: after.surfaced_qualifying, gaps_before: a.gaps })
-          log.info('coverage self-heal re-discovered profile', { profile: a.profile_id, before, after: after.surfaced_qualifying })
+          healed.push({ profile_id: a.profile_id, before, after: after.surfaced_actionable ?? after.surfaced_qualifying, gaps_before: a.gaps })
+          log.info('coverage self-heal re-discovered profile', { profile: a.profile_id, before, after: after.surfaced_actionable ?? after.surfaced_qualifying })
         } catch (err) {
           log.warn('coverage self-heal failed for profile (non-fatal)', { profile: a.profile_id, error: err?.message })
         }
