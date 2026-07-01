@@ -2320,6 +2320,33 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
 
   // (housingClass / effectiveOpp / oppNorm were computed once above.)
 
+  // Individual + benefit-program alignment: a real person with a benefit need
+  // (disability, senior, housing, food, energy, medical, emergency) matched to an
+  // assistance/benefit program is a genuine fit that the GRANT-tuned base model
+  // systematically under-scores — the reason low-income individuals like Kathy see
+  // thin results. A modest post-weight boost makes the SCORE reflect that real
+  // alignment. It does NOT relax the surfacing bar; competitive grants are
+  // untouched. Facets are data-derived (see profileNormalizer.effectiveFacets).
+  {
+    const facets = Array.isArray(profileNorm?.effectiveFacets) ? profileNorm.effectiveFacets : []
+    const benefitNeeds = ['disability', 'housing', 'food', 'energy', 'utility', 'medical', 'health', 'emergency', 'basic_needs', 'aging', 'senior']
+    const profileNeedList = Array.isArray(profileNorm?.needCategories)
+      ? profileNorm.needCategories.map((n) => String(n).toLowerCase()) : []
+    const profileIsIndividualBenefit = facets.includes('individual') &&
+      (facets.includes('disabled') || facets.includes('senior') || facets.includes('caregiver') ||
+        profileNeedList.some((n) => benefitNeeds.some((b) => n.includes(b))))
+    const oppIsBenefit =
+      ['benefit', 'assistance', 'directory', 'referral'].includes(String(effectiveOpp?.funding_category || '').toLowerCase()) ||
+      ['benefit', 'assistance', 'directory', 'referral', 'benefit_program'].includes(String(opportunity?.opportunity_type || '').toLowerCase()) ||
+      /\b(benefit|assistance|liheap|snap|medicaid|medicare|utility assistance|rent(?:al)? assistance|food bank|community action|211|area agency on aging|vocational rehab|meals on wheels|energy assistance|emergency assistance)\b/i.test(oppText)
+    if (profileIsIndividualBenefit && oppIsBenefit) {
+      const needHits = profileNeedList.filter((n) => benefitNeeds.some((b) => n.includes(b))).length
+      const boost = Math.min(12, 6 + needHits * 2)
+      rawScore = Math.min(100, rawScore + boost)
+      housingBonusReasons.push(`Individual + benefit-program alignment (+${boost})`)
+    }
+  }
+
   // GPA merit boost: if profile has GPA ≥ 3.0 and opportunity is merit/scholarship, boost
   const profileGpa = profileNorm?.academics?.gpa ?? null
   if (profileGpa !== null && profileGpa >= 3.0) {
