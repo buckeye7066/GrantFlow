@@ -484,6 +484,30 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
     }
   })
 
+  it('reaps a never-crawled synthetic ONLY once it is far past its TTL (bounded escape hatch)', async () => {
+    const db = createDb()
+    try {
+      // Created 100h ago, never crawled (its run crashed / discovery kept skipping).
+      const oldNow = new Date(Date.now() - 100 * 60 * 60 * 1000)
+      const { profileId: stale } = await createAmyProfile(db, generateScenarios({ runId: 'amy-stale' })[0], { runId: 'amy-stale', ttlHours: 48, now: oldNow })
+      // Created 1h ago, never crawled — still young.
+      const { profileId: fresh } = await createAmyProfile(db, generateScenarios({ runId: 'amy-fresh' })[0], { runId: 'amy-fresh', ttlHours: 48, now: new Date(Date.now() - 60 * 60 * 1000) })
+
+      // Default (no neverCrawledMaxAgeMs): strict — never-crawled is never reaped.
+      const strict = await cleanupAmyProfiles(db, { requireCrawled: true })
+      expect(strict.deleted).toBe(0)
+
+      // 96h cutoff: the 100h-old never-crawled one is reaped; the 1h-old is kept.
+      const reap = await cleanupAmyProfiles(db, { requireCrawled: true, neverCrawledMaxAgeMs: 96 * 60 * 60 * 1000 })
+      expect(reap.deleted).toBe(1)
+      expect(reap.ids).toContain(stale)
+      expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(stale)).toBeFalsy()
+      expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(fresh)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
   it('respects the crawled grace window so an in-flight run is never reaped', async () => {
     const db = createDb()
     try {

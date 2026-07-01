@@ -4113,12 +4113,12 @@ registerTool({
 // Run any of the other agents on demand.
 registerTool({
   name: 'owner.run_agent',
-  description: 'OWNER ONLY. Run another agent: Yana (find leads/clients), John (draft outreach), Hamilton (work the application pipeline), or Robert (funding discovery). Use when the owner asks Anya to "have <agent> do X".',
+  description: 'OWNER ONLY. Run another agent: Yana (find leads/clients), John (draft outreach), Hamilton (work the application pipeline), Robert (funding discovery), Sam (diagnostics), or Amy (synthetic crawler-training: create→crawl→learn→delete). Use when the owner asks Anya to "have <agent> do X".',
   requiresOwner: true,
   schema: {
     type: 'object',
     properties: {
-      agent: { type: 'string', enum: ['yana', 'john', 'hamilton', 'robert', 'sam'], description: 'Which agent to run' },
+      agent: { type: 'string', enum: ['yana', 'john', 'hamilton', 'robert', 'sam', 'amy'], description: 'Which agent to run' },
       profileId: { type: 'string', description: 'Profile to act on (Hamilton/Robert)' },
       mode: { type: 'string', description: 'Run mode where applicable (e.g. observe|execute)' },
     },
@@ -4169,6 +4169,15 @@ registerTool({
         // every-agent-usable-by-Anya rule. Default to observe (read-only audit).
         const { runSam } = await import('./sam/samAgent.js')
         return { agent, result: await runSam({ db, mode: params?.mode || 'observe', trigger: 'anya_owner', createdByUserId: userId }) }
+      }
+      if (agent === 'amy') {
+        // Amy runs in the BACKGROUND (crawls up to 100 synthetic profiles live +
+        // the Anya→Sam improvement pipeline — minutes of work), so we launch and
+        // return the run id immediately; the panel/owner polls status via
+        // getAmyRunState. This closes the create→crawl→learn→delete loop on demand.
+        const { launchAmyRun } = await import('./amy/amyRunner.js')
+        const launched = launchAmyRun({ db, source: 'anya_owner', logger: console })
+        return { agent, result: { started: !launched.already_running, already_running: launched.already_running, run_id: launched.run_id } }
       }
       throw new Error(`Unknown agent "${agent}"`)
     } catch (err) {
@@ -4889,6 +4898,76 @@ registerTool({
       applied: apply,
       preview: !apply,
       ...result,
+    }
+  },
+})
+
+// ── Amy synthetic crawler-training profiles (owner-gated observability) ───────
+// The owner-facing /api/profiles list HIDES created_by='agent:amy' profiles (they
+// are not real applicants). That hide is correct for humans but blinds Anya to
+// Amy's work — she previously reported she "cannot locate any profiles created by
+// agent Amy". This tool is the INTERNAL/agent window into that same cohort: it
+// reads Amy's authoritative created_by='agent:amy' rows + amy_metadata and reports
+// each profile's crawl lifecycle (crawled_at / crawl_count / floor), age, and
+// expiry, plus rollup counts. It never mutates anything.
+registerTool({
+  name: 'owner.list_synthetic_profiles',
+  description:
+    'OWNER ONLY. List the synthetic crawler-training profiles created by agent Amy (created_by "agent:amy"), which are intentionally hidden from the normal profile list. Returns each profile with its crawl status (crawled_at, crawl_count, last floor), age, and TTL/expiry, plus rollup counts (total, crawled, never_crawled, expired). Use when the owner or Anya asks "which profiles did Amy create", "show Amy\'s synthetic profiles", or wants Amy\'s create→crawl→delete lifecycle status.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      onlyNeverCrawled: { type: 'boolean', description: 'Only return profiles Amy created but never successfully crawled.' },
+      limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Max profiles to return (default 100).' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { listAmyProfiles } = await import('./amy/amyProfileStore.js')
+    const nowMs = Date.now()
+    const rows = await listAmyProfiles(db)
+    const mapped = rows.map((row) => {
+      const meta = row.metadata || {}
+      const createdAt = meta.created_at || row.created_at || null
+      const createdMs = createdAt ? Date.parse(createdAt) : NaN
+      const expiresMs = meta.expires_at ? Date.parse(meta.expires_at) : NaN
+      return {
+        id: row.id,
+        display_name: row.display_name,
+        primary_type: row.primary_type,
+        status: row.status,
+        created_by: row.created_by,
+        amy_run_id: meta.amy_run_id || null,
+        scenario_id: meta.scenario_id || null,
+        crawled: Boolean(meta.crawled_at),
+        crawled_at: meta.crawled_at || null,
+        last_crawled_at: meta.last_crawled_at || null,
+        crawl_count: Number(meta.crawl_count || 0),
+        last_crawl_floor: meta.last_crawl_floor ?? null,
+        created_at: createdAt,
+        expires_at: meta.expires_at || null,
+        age_hours: Number.isFinite(createdMs) ? Math.round(((nowMs - createdMs) / 3_600_000) * 10) / 10 : null,
+        expired: Number.isFinite(expiresMs) ? expiresMs <= nowMs : null,
+      }
+    })
+    const filtered = params?.onlyNeverCrawled ? mapped.filter((p) => !p.crawled) : mapped
+    // Never-crawled first, then oldest first, so the accumulation risks surface.
+    filtered.sort((a, b) => (Number(a.crawled) - Number(b.crawled)) || ((b.age_hours ?? 0) - (a.age_hours ?? 0)))
+    const limit = Math.max(1, Math.min(Number(params?.limit) || 100, 500))
+    const summary = {
+      total: mapped.length,
+      crawled: mapped.filter((p) => p.crawled).length,
+      never_crawled: mapped.filter((p) => !p.crawled).length,
+      expired: mapped.filter((p) => p.expired === true).length,
+    }
+    return {
+      ok: true,
+      created_by: 'agent:amy',
+      summary,
+      count: Math.min(filtered.length, limit),
+      profiles: filtered.slice(0, limit),
     }
   },
 })

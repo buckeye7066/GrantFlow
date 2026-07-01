@@ -119,7 +119,7 @@ export async function createAmyProfile(db, scenario, { runId, ttlHours, now = ne
  */
 export async function listAmyProfiles(db) {
   const rows = await db
-    .prepare(`SELECT id, display_name, primary_type, status, tags, created_by FROM profiles WHERE created_by = ?`)
+    .prepare(`SELECT id, display_name, primary_type, status, tags, created_by, created_at FROM profiles WHERE created_by = ?`)
     .all(ORIGIN_CREATED_BY)
   const out = []
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -205,10 +205,19 @@ async function hardDeleteAmyProfile(db, profileId) {
  *        still be mid-flight, before its learning step). Expiry-independent, so a
  *        crawled profile with a corrupted/missing expires_at is still reapable
  *        once it's old enough. Use with requireCrawled for the standing sweep.
+ * @param {number} [opts.neverCrawledMaxAgeMs=0] - bounded far-past-TTL escape hatch
+ *        for the requireCrawled path: a synthetic profile that was created but
+ *        NEVER successfully crawled (discovery skipped/errored, or its run crashed
+ *        mid-flight) would otherwise accumulate forever, because the normal reap
+ *        only touches crawled profiles. When this is > 0, such a profile becomes
+ *        reapable ONLY once its age (now - created_at, falling back to expires_at
+ *        or the profiles.created_at column) exceeds this many ms — i.e. it is far
+ *        past its TTL and is never going to be crawled. The crawled+learned path
+ *        is unchanged; default 0 preserves the strict "never delete un-crawled".
  * @param {Date} [opts.now]
  * @returns {Promise<{ scanned, deleted, skipped, dry_run, ids, skipped_ids }>}
  */
-export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false, force = false, dryRun = false, onlyIds = null, requireCrawled = false, minCrawledAgeMs = 0, now = new Date() } = {}) {
+export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false, force = false, dryRun = false, onlyIds = null, requireCrawled = false, minCrawledAgeMs = 0, neverCrawledMaxAgeMs = 0, now = new Date() } = {}) {
   if (!db) throw new Error('cleanupAmyProfiles: db is required')
   const candidates = await listAmyProfiles(db)
   const onlyIdSet = Array.isArray(onlyIds) ? new Set(onlyIds.map(String)) : null
@@ -225,8 +234,22 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
     if (!meta || meta.allow_sam_cleanup !== true) reasonsToSkip.push('not_allow_sam_cleanup')
     // Guard 3: must be marked synthetic (defense in depth).
     if (!meta || meta.synthetic !== true) reasonsToSkip.push('not_synthetic')
-    // Guard 4 (mission rule): do NOT delete until crawled at least once.
-    if (requireCrawled && !meta?.crawled_at) reasonsToSkip.push('not_crawled')
+    // Guard 4 (mission rule): do NOT delete until crawled at least once — with a
+    // bounded escape hatch so never-crawled synthetics (skipped/errored discovery
+    // or a crashed run) don't accumulate forever. A never-crawled profile is
+    // reapable only once it is far past its TTL (neverCrawledMaxAgeMs elapsed).
+    if (requireCrawled && !meta?.crawled_at) {
+      const maxAge = Number(neverCrawledMaxAgeMs) || 0
+      let reapNeverCrawled = false
+      if (maxAge > 0) {
+        const createdIso = meta?.created_at || meta?.expires_at || row.created_at
+        const createdMs = createdIso ? Date.parse(createdIso) : NaN
+        if (Number.isFinite(createdMs) && Number.isFinite(nowMs) && (nowMs - createdMs) >= maxAge) {
+          reapNeverCrawled = true
+        }
+      }
+      if (!reapNeverCrawled) reasonsToSkip.push('not_crawled')
+    }
     // Guard 4b (race safety): don't reap a profile crawled so recently its run
     // could still be mid-flight / pre-learning. Expiry-independent.
     if (minCrawledAgeMs > 0) {

@@ -91,14 +91,26 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
   // (their training + learning ran) and were crawled long enough ago that the
   // run is definitely complete (grace window). This is expiry-INDEPENDENT, so it
   // also clears legacy rows whose expires_at is missing/corrupted. Never-crawled
-  // profiles are left alone (they may still get crawled). ON by default; set
-  // AMY_AUTO_CLEANUP=false to disable, AMY_CLEANUP_GRACE_HOURS to tune the grace.
-  // Best-effort — never blocks the sweep.
+  // profiles are normally left alone (they may still get crawled) — but a
+  // never-crawled profile that is FAR past its TTL (default 96h; TTL max is 72h)
+  // is never going to be crawled (its run crashed / discovery kept skipping), so
+  // it is reaped too, on a bounded age gate, to stop synthetics accumulating
+  // forever. ON by default; set AMY_AUTO_CLEANUP=false to disable,
+  // AMY_CLEANUP_GRACE_HOURS to tune the crawled grace, and
+  // AMY_NEVER_CRAWLED_MAX_AGE_HOURS to tune the never-crawled cutoff (0 disables
+  // the never-crawled reap while keeping the crawled reap). Best-effort.
   if (String(process.env.AMY_AUTO_CLEANUP ?? 'true').toLowerCase() !== 'false') {
     try {
       const { cleanupAmyProfiles } = await import('../amy/amyProfileStore.js')
       const graceMs = Math.max(0, Number(process.env.AMY_CLEANUP_GRACE_HOURS || 2)) * 60 * 60 * 1000
-      const amy = await cleanupAmyProfiles(db, { requireCrawled: true, minCrawledAgeMs: graceMs, now })
+      const neverCrawledMaxAgeMs =
+        Math.max(0, Number(process.env.AMY_NEVER_CRAWLED_MAX_AGE_HOURS ?? 96)) * 60 * 60 * 1000
+      const amy = await cleanupAmyProfiles(db, {
+        requireCrawled: true,
+        minCrawledAgeMs: graceMs,
+        neverCrawledMaxAgeMs,
+        now,
+      })
       if (amy?.deleted > 0) log.info('nightly Amy synthetic-profile cleanup', { deleted: amy.deleted, scanned: amy.scanned })
     } catch (err) {
       log.warn('nightly Amy cleanup failed (non-fatal)', { error: err?.message })
