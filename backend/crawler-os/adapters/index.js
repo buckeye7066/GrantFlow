@@ -28,6 +28,9 @@ const FACTORIES = Object.freeze({
   liheap: officialDirectory('liheap'),
   snap: officialDirectory('snap'),
   medicaid: officialDirectory('medicaid'),
+  area_agency_on_aging: officialDirectory('area_agency_on_aging'),
+  state_vocational_rehab: officialDirectory('state_vocational_rehab'),
+  community_211: officialDirectory('community_211'),
   pell_grant: officialDirectory('pell_grant'),
   // Sibling federal need-based student aid (full federal-aid family beyond Pell).
   fseog: officialDirectory('fseog'),
