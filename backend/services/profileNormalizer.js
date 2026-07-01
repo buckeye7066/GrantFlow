@@ -787,6 +787,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     if (fa && typeof fa === 'object') {
       isCaregiverFromSections =
         Boolean(fa.is_caregiver) ||
+        Boolean(fa.caregiver) ||
         Boolean(fa.provides_care) ||
         Boolean(fa.has_dependents) ||
         Boolean(fa.cares_for_family_member) ||
@@ -833,8 +834,33 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     }
   }
 
-  const hasDisabilityNeed = needCategories.includes('disability') || hasChronicIllnessFromSections
-  const hasChronicIllness = hasChronicIllnessFromSections || needCategories.includes('disability')
+  // Disability is also commonly captured on the DEMOGRAPHICS section
+  // (`disability_status: "Has disability"` / boolean), not only on health_medical.
+  // Read it here so a profile like Avanell (disability declared in demographics)
+  // still surfaces the disability facet + need.
+  let hasDisabilityFromDemographics = false
+  {
+    const demoSec = profileSections?.demographics ?? null
+    const da = demoSec?.answers ?? demoSec
+    if (da && typeof da === 'object') {
+      const status = String(da.disability_status ?? '').trim().toLowerCase()
+      const negative = ['', 'no', 'none', 'no disability', 'n/a', 'na', 'false', 'not disabled']
+      hasDisabilityFromDemographics =
+        da.disability_status === true ||
+        Boolean(da.has_disability) ||
+        (status.length > 0 && !negative.includes(status) &&
+          (status.includes('disab') || status === 'yes' || status === 'true' || status.includes('has')))
+    }
+  }
+
+  const hasDisabilityNeed = needCategories.includes('disability') || hasChronicIllnessFromSections || hasDisabilityFromDemographics
+  const hasChronicIllness = hasChronicIllnessFromSections || needCategories.includes('disability') || hasDisabilityFromDemographics
+
+  // Ensure 'disability' is in needCategories when demographics declares it, so
+  // need alignment + the disabled facet both fire.
+  if (hasDisabilityFromDemographics && !needCategories.includes('disability')) {
+    needCategories.push('disability')
+  }
 
   // When chronic illness / disability is section-derived, ensure 'disability' appears in needCategories
   // so need alignment can match against opportunity needTypesSupported.
@@ -1643,9 +1669,39 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     _str(_orgDetailsSection.country) ??
     'US'
 
+  // ── Effective profile FACETS (data-derived) ────────────────────────────────
+  // The clicked primary_type is ADVISORY; a profile's real eligibility comes from
+  // its DATA. We derive a UNION of facets from the section-derived flags computed
+  // above, so a person who is (e.g.) a disabled senior individual is eligible for
+  // disability AND senior AND individual funding — regardless of the type they
+  // selected, or mis-selected. The matcher consumes these ADDITIVELY: a facet can
+  // GRANT eligibility the clicked type would have missed; it never removes a match
+  // (recall-safe, per canonical rule G4). When the data is silent, we fall back to
+  // the clicked entityType so an empty/new profile still has one eligibility signal.
+  const _ageNum = Number(age)
+  const _seniorSignal =
+    (Number.isFinite(_ageNum) && _ageNum >= 60) ||
+    /\b(senior|elder|older adult|6[0-9]\s*\+|7[0-9]\s*\+|8[0-9]\s*\+|retire)\b/i.test(String(resolvedAgeGroup ?? ''))
+  const _orgLikeEntity = isNonprofit || isBusiness ||
+    ['organization', 'nonprofit', 'business', 'government', 'institution', 'research', 'researcher', 'school'].includes(String(entityType))
+  const effectiveFacets = []
+  const _addFacet = (facet, on) => { if (on && !effectiveFacets.includes(facet)) effectiveFacets.push(facet) }
+  _addFacet('individual', !_orgLikeEntity)
+  _addFacet('student', isStudent)
+  _addFacet('veteran', isVeteran)
+  _addFacet('nonprofit', isNonprofit)
+  _addFacet('business', isBusiness)
+  _addFacet('caregiver', isCaregiver)
+  _addFacet('senior', _seniorSignal)
+  _addFacet('disabled', hasDisabilityNeed)
+  _addFacet('disaster_survivor', hasEmergencyNeed)
+  if (effectiveFacets.length === 0 && entityType) effectiveFacets.push(String(entityType))
+
   const normalized = {
     id: profile.id,
     entityType,
+    // Data-derived eligibility facets (union of facts); see comment above.
+    effectiveFacets,
     state,
     // ALL of the profile's states (primary-first, deduped, 2-letter). A
     // single-address profile yields exactly [state]; a multi-address /
