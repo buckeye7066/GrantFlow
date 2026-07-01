@@ -156,6 +156,34 @@ test('campaign profile is routed to compliance resources, not ordinary grant lan
   assert.match(rendered, /do not treat campaign contributions as grants/);
 });
 
+test('student mentioning a school "election"/"campaign" is NOT classified as a political campaign', () => {
+  // Regression: Anya asked a student (Anastasia) about political campaign committee
+  // and campaign-finance filings. Root cause: the bare need words 'campaign'/'election'
+  // in a free-text blob flagged 'campaign', and detectArchetype short-circuited to
+  // campaign_compliance_plan on that need keyword alone. A stray theme word must never
+  // reclassify a declared student/individual into election-law filing questions.
+  const plan = buildProjectReadinessPlan({
+    id: 'student-council-election',
+    profile_type: 'college_student',
+    display_name: 'Anastasia',
+    description: 'Ran a student council election campaign and needs help with tuition and scholarships.',
+    sections: [
+      { section_key: 'education', data: { committed_college: 'Middle Tennessee State University' } },
+    ],
+  });
+
+  assert.notEqual(plan.plan_id, 'campaign_compliance_plan');
+  assert.equal(plan.plan_id, 'student_portal_plan');
+  assert.ok(
+    !plan.checklist.some((item) => item.id === 'campaign_committee'),
+    'must not ask about a campaign committee/treasurer',
+  );
+  assert.ok(
+    !plan.interview_questions.some((q) => /campaign|committee|treasurer|election/i.test(q.prompt)),
+    'no campaign-finance filing questions for a student',
+  );
+});
+
 test('individual with education history is NOT classified as a student plan', () => {
   // Regression: an Individual profile was getting the student_portal_plan (FAFSA /
   // college / work-study content) merely because an education section had data —

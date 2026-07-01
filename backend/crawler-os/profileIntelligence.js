@@ -30,7 +30,7 @@ const APPLICANT_TYPE_SYNONYMS = {
   farm: ['farm', 'farmer', 'agriculture', 'ranch'],
   government: ['government', 'municipal', 'municipality', 'county', 'parks department', 'federal agency'],
   tribal: ['tribal', 'tribe', 'indian tribe', 'native nation', 'reservation'],
-  candidate: ['candidate', 'politician', 'campaign', 'local election'],
+  candidate: ['candidate', 'politician', 'political candidate', 'running for office'],
   veteran: ['veteran', 'former service member', 'prior service', 'ex military'],
   active_duty: ['active duty', 'currently serving', 'service member', 'servicemember', 'military member'],
   guard_reserve: ['national guard', 'reserve', 'reservist', 'guard member'],
@@ -95,7 +95,11 @@ const NEED_KEYWORDS = {
   public_safety: ['public safety', 'law enforcement', 'police', 'sheriff', 'border patrol', 'security'],
   recreation: ['parks', 'recreation', 'parks recreation', 'parks and recreation', 'baseball', 'sports', 'summer program', 'athletics', 'youth sports'],
   legal: ['legal', 'attorney', 'lawyer', 'law firm', 'law practice', 'legal aid'],
-  campaign: ['campaign', 'campaign finance', 'election', 'candidate filing', 'political committee'],
+  // HIGH-PRECISION only: the bare words 'campaign' (marketing/awareness/fundraising
+  // campaigns) and 'election' (school-council elections, "election year", history
+  // essays) are common theme words that falsely flagged students/individuals as
+  // political candidates. Keep unambiguous, multi-word political-finance phrases.
+  campaign: ['campaign finance', 'candidate filing', 'political committee', 'political campaign', 'running for office', 'run for office', 'campaign committee', 'ballot measure'],
   caregiving: ['caregiver', 'caregiving', 'respite', 'memory care', 'long term care', 'home care', 'dementia care', 'elder care', 'aging services'],
   survivor_benefits: ['survivor benefits', 'surviving spouse', 'widow benefits', 'widower benefits', 'death benefit'],
   cancer_support: ['cancer', 'oncology', 'chemotherapy', 'breast cancer', 'stage 4', 'metastatic'],

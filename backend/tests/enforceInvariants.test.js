@@ -31,6 +31,8 @@ import {
   enforceNoCrossProfileBleed,
   enforceNoDuplicateGrants,
   enforceRelevanceFloor,
+  enforceIndividualAmountCeiling,
+  resolveIndividualAmountCeiling,
   enforceProfileScopedPipeline,
   enforceProfileDisplayNameNotDoubled,
   enforceProfileIncomeReconciliation,
@@ -58,6 +60,7 @@ function makeDb() {
       status TEXT DEFAULT 'discovered',
       match_score INTEGER,
       amount_awarded NUMERIC,
+      amount_requested NUMERIC,
       fingerprint TEXT,
       url TEXT,
       application_url TEXT,
@@ -67,6 +70,8 @@ function makeDb() {
       id TEXT PRIMARY KEY,
       organization_id TEXT,
       display_name TEXT,
+      primary_type TEXT,
+      applicant_type TEXT,
       status TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -77,15 +82,17 @@ function makeDb() {
   return raw
 }
 
-function insertProfile(db, { id, orgId }) {
-  db.prepare('INSERT INTO profiles (id, organization_id) VALUES (?, ?)').run(id, orgId)
+function insertProfile(db, { id, orgId, primaryType = null, applicantType = null }) {
+  db.prepare(
+    'INSERT INTO profiles (id, organization_id, primary_type, applicant_type) VALUES (?, ?, ?, ?)',
+  ).run(id, orgId, primaryType, applicantType)
 }
 
 function insertGrant(db, g) {
   const id = g.id || crypto.randomUUID()
   db.prepare(
-    `INSERT INTO grants (id, created_at, organization_id, profile_id, funding_opportunity_id, title, funder, status, match_score, amount_awarded, fingerprint, url)
-     VALUES (?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO grants (id, created_at, organization_id, profile_id, funding_opportunity_id, title, funder, status, match_score, amount_awarded, amount_requested, fingerprint, url)
+     VALUES (?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     g.created_at ?? null,
@@ -97,6 +104,7 @@ function insertGrant(db, g) {
     g.status ?? 'discovered',
     g.match_score ?? null,
     g.amount_awarded ?? null,
+    g.amount_requested ?? null,
     g.fingerprint ?? null,
     g.url ?? null,
   )
@@ -470,6 +478,143 @@ describe('enforceInvariants — relevance floor', () => {
   })
 })
 
+describe('enforceInvariants — individual amount ceiling', () => {
+  beforeEach(() => {
+    delete process.env.ENFORCE_INDIVIDUAL_AMOUNT_CEILING
+    delete process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_INDIVIDUAL_AMOUNT_CEILING
+    delete process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING
+  })
+
+  it('resolves the default ceiling ($100k) and honors the env override', () => {
+    expect(resolveIndividualAmountCeiling()).toBe(100000)
+    process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING = '250000'
+    expect(resolveIndividualAmountCeiling()).toBe(250000)
+    process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING = 'garbage'
+    expect(resolveIndividualAmountCeiling()).toBe(100000)
+  })
+
+  it('purges an institutional-scale grant mis-matched into a STUDENT pipeline (the >$3M bug)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    // A $650k NSF institutional research grant, NULL match_score (funding_api),
+    // in an early status — exactly the row that inflated Robert's total.
+    insertGrant(db, {
+      id: 'nsf',
+      profile_id: 'p1',
+      organization_id: 'org1',
+      title: 'RUI: Protein-Protein Interactions of Protein Kinase C',
+      funder: 'NSF',
+      status: 'interested',
+      match_score: null,
+      amount_requested: 650000,
+    })
+    // A realistic student scholarship — must survive.
+    insertGrant(db, {
+      id: 'schol',
+      profile_id: 'p1',
+      organization_id: 'org1',
+      title: 'NAEMT EMS Scholarship',
+      status: 'interested',
+      amount_requested: 5000,
+    })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.ok).toBe(true)
+    expect(res.enforced).toBe(true)
+    expect(res.repaired).toBe(1)
+    expect(ids(db)).toEqual(['schol'])
+  })
+
+  it('NEVER touches an organization/business profile (large grant asks are legitimate)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'org', orgId: 'org1', primaryType: 'nonprofit' })
+    insertGrant(db, { id: 'big', profile_id: 'org', organization_id: 'org1', title: 'Capacity Building Grant', status: 'interested', amount_requested: 650000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
+  it('never touches user-progressed (protected-status) grants even above the ceiling', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    insertGrant(db, { id: 'sub', profile_id: 'p1', organization_id: 'org1', title: 'Big submitted', status: 'submitted', amount_requested: 650000 })
+    insertGrant(db, { id: 'awd', profile_id: 'p1', organization_id: 'org1', title: 'Big awarded', status: 'awarded', amount_requested: 650000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(2)
+  })
+
+  it('preserves a row that records a real AWARD (amount_awarded > 0) even if large', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    insertGrant(db, { id: 'realmoney', profile_id: 'p1', organization_id: 'org1', title: 'Big but real', status: 'interested', amount_requested: 650000, amount_awarded: 650000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.repaired).toBe(0)
+    expect(ids(db)).toEqual(['realmoney'])
+  })
+
+  it('never deletes an at/below-ceiling grant (boundary)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    insertGrant(db, { id: 'atceil', profile_id: 'p1', organization_id: 'org1', title: 'At ceiling', status: 'interested', amount_requested: 100000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
+  it('never touches MTSU/portal-named rows even above the ceiling', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    insertGrant(db, { id: 'mtsu', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Portal Award', status: 'interested', amount_requested: 650000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
+  it('does NOT purge when ENFORCE_INDIVIDUAL_AMOUNT_CEILING=0 (explicit disable → count-only)', async () => {
+    process.env.ENFORCE_INDIVIDUAL_AMOUNT_CEILING = '0'
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    insertGrant(db, { id: 'nsf', profile_id: 'p1', organization_id: 'org1', title: 'Big NSF', status: 'interested', amount_requested: 650000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.enforced).toBe(false)
+    expect(res.scanned).toBe(1)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
+  it('does not touch an unknown-type profile (conservative: not individual)', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: null })
+    insertGrant(db, { id: 'x', profile_id: 'p1', organization_id: 'org1', title: 'Big unknown', status: 'interested', amount_requested: 650000 })
+
+    const res = await enforceIndividualAmountCeiling(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
+  it('is idempotent — a second pass removes nothing', async () => {
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1', primaryType: 'student' })
+    insertGrant(db, { id: 'nsf', profile_id: 'p1', organization_id: 'org1', title: 'Big NSF', status: 'interested', amount_requested: 650000 })
+
+    const first = await enforceIndividualAmountCeiling(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforceIndividualAmountCeiling(db)
+    expect(second.repaired).toBe(0)
+    expect(count(db)).toBe(0)
+  })
+})
+
 describe('enforceInvariants — profile-scoped pipeline (orphan purge)', () => {
   beforeEach(() => {
     delete process.env.ENFORCE_PROFILE_SCOPED_PIPELINE
@@ -727,7 +872,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(8)
+    expect(summary.ran).toBe(9)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -736,6 +881,7 @@ describe('enforceInvariants — runner', () => {
       'profile_scoped_pipeline',
       'no_duplicate_grants',
       'relevance_floor',
+      'individual_amount_ceiling',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
     ])

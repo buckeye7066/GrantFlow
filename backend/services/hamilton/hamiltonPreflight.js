@@ -104,12 +104,43 @@ function deepFindByKeys(root, keys) {
   return undefined
 }
 
-// Find a single full-name string anywhere on the profile (basic_information.
-// full_name, profiles.display_name mirrored to the top level, or any aliased
-// key at any depth), so first/last name can be DERIVED instead of demanded.
+// Identity-name keys ONLY. Deliberately EXCLUDES the bare `name` key: a profile
+// carries many nested `name` fields (a university_applications entry's school
+// name, a scholarship's name, an org's name). A deep scan that accepted `name`
+// returned an unrelated org-like string (e.g. "Middle Tennessee State
+// University"), which looksLikeOrganization then rejected — raising a FALSE
+// "missing first name" hard stop for a student who clearly has a name on file
+// (display_name). Keeping this list identity-specific is the loader-independent
+// net that actually holds when the profile also carries school/scholarship data.
+const IDENTITY_NAME_KEYS = Object.freeze([
+  'full_name', 'fullname', 'display_name', 'displayname',
+  'legal_name', 'legalname', 'applicant_name', 'student_name',
+])
+
+// Find the profile OWNER's full name so first/last can be DERIVED instead of
+// demanded. Prefer explicit identity paths; only then fall back to a deep scan
+// restricted to identity-name keys (never the generic `name`, which collides
+// with nested university/scholarship names).
 function findFullName(profile) {
-  const v = deepFindByKeys(profile, ['full_name'])
-  return nonEmpty(v) ? String(v) : null
+  const explicit = pickFirst(profile, [
+    'basic_information.full_name', 'basic_information.legal_name',
+    'full_name', 'display_name', 'legal_name', 'name',
+  ])
+  if (nonEmpty(explicit)) return String(explicit)
+
+  const seen = new Set()
+  const stack = [profile]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object' || seen.has(node)) continue
+    seen.add(node)
+    if (Array.isArray(node)) { for (const item of node) stack.push(item); continue }
+    for (const [k, v] of Object.entries(node)) {
+      if (IDENTITY_NAME_KEYS.includes(normKey(k)) && nonEmpty(v) && typeof v !== 'object') return String(v)
+      if (v && typeof v === 'object') stack.push(v)
+    }
+  }
+  return null
 }
 
 // Derive a first/last name part from whatever full name the profile carries.

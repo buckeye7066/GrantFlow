@@ -155,7 +155,14 @@ function detectArchetype(profile, thesis, sections, blob) {
     applicantHas(['business']) &&
     /\b(attorney|lawyer|law firm|law practice|legal practice)\b/.test(`${primary} ${blob}`);
 
-  if (applicantHas(['candidate']) || needHas(['campaign'])) return 'campaign_compliance_plan';
+  // Political-campaign compliance is a fundamentally different plan (election law,
+  // not grants/portals), so it must fire ONLY on a genuine CANDIDATE IDENTITY —
+  // the declared profile type, or the 'candidate' applicant bucket derived from
+  // that declared type. A stray free-text need keyword (an "awareness campaign",
+  // a school "election" in a narrative) must NEVER reclassify a student's or
+  // individual's whole plan into campaign-finance filing questions.
+  const CANDIDATE_PRIMARY_TYPES = ['candidate', 'political_candidate', 'local_candidate', 'politician', 'campaign_committee'];
+  if (applicantHas(['candidate']) || CANDIDATE_PRIMARY_TYPES.includes(primary)) return 'campaign_compliance_plan';
   if (isStudent) return 'student_portal_plan';
   if (isFoodTruck) return 'food_truck_startup';
   if (isLegalPractice) return 'professional_practice_startup';

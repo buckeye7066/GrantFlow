@@ -68,4 +68,28 @@ describe('hamiltonPreflight - name derivation', () => {
     })
     expect(missingKeys(report)).toContain('first_name')
   })
+
+  it('derives from display_name even when university_applications carry school names (Anastasia regression)', async () => {
+    // Prod regression: a student with a display_name AND 19 university_applications
+    // (each entry.name = a university, an org-like string) was flagged "missing
+    // first name" on 28 sources because the deep name scan matched a nested school
+    // `name` first and looksLikeOrganization rejected it. The owner's display_name
+    // must win so first/last derive correctly.
+    const profile = {
+      id: 'p5',
+      display_name: 'Anastasia Nicole White',
+      basic_information: { email: 'anastasia@example.com' },
+      university_applications: {
+        applications: [
+          { id: 'u1', name: 'Middle Tennessee State University', status: 'committed' },
+          { id: 'u2', name: 'University of Tennessee', status: 'planning' },
+        ],
+      },
+    }
+    const report = await preflightSingleSource(db, {
+      profile, profileId: 'p5', source: { opportunity_id: 'opp1' }, opportunity: NON_STUDENT_OPP,
+    })
+    expect(missingKeys(report)).not.toContain('first_name')
+    expect(missingKeys(report)).not.toContain('last_name')
+  })
 })

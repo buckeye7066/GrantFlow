@@ -125,8 +125,12 @@ async function loadMatchedFunding(db, profileId) {
 /** Best-effort: Hamilton/application tasks for this profile. Never throws. */
 async function loadHamiltonTasks(db, profileId) {
   try {
+    // Select the fields that carry the human-readable blocker reason so the
+    // workspace can show WHY a task is blocked (not a bare "blocked"). The real
+    // reason lives in last_agent_message / current_step on the task row.
     const rows = await db
-      .prepare(`SELECT id, status FROM application_tasks WHERE profile_id = ? ORDER BY updated_at DESC LIMIT 200`)
+      .prepare(`SELECT id, status, last_agent_message, current_step, automation_type
+                FROM application_tasks WHERE profile_id = ? ORDER BY updated_at DESC LIMIT 200`)
       .all(String(profileId))
     return rows || []
   } catch {

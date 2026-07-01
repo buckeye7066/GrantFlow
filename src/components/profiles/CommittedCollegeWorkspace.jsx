@@ -652,7 +652,9 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
               </div>
               {ham.blockers?.length ? (
                 <ul className="mt-1 space-y-0.5 text-xs text-amber-700">
-                  {ham.blockers.map((b) => <li key={b.task_id}>• Blocked: {b.blocker_type || b.status}</li>)}
+                  {ham.blockers.map((b) => (
+                    <li key={b.reason}>• {b.reason}{b.count > 1 ? ` — ${b.count} sources` : ''}</li>
+                  ))}
                 </ul>
               ) : null}
             </div>
