@@ -205,6 +205,60 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Global crawler-gap learning: every LIVE discovery call folds its result-
+    // coverage gaps into a rolling store (system_kv `crawler_gap_learning`). Sam
+    // reads it here so a systemic acquisition regression (a rising share of real
+    // crawls surfacing low-results / institution / hyperlocal / eligibility gaps)
+    // is caught from PRODUCTION traffic, not just Amy's synthetic cohort or the
+    // nightly sweep. Anya learns the same signal per-profile via anya_brain_memory.
+    id: 'crawler.gapLearning',
+    label: 'Crawler gap learning (live discovery coverage)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the rolling crawler-gap learning store (updated on every live discovery call) and flags when a meaningful share of recent real crawls surfaced coverage gaps.',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; gap-learning read skipped' }
+      let store
+      try {
+        const { getCrawlerGapLearning } = await import('../coverageAudit/liveCrawlGapLearning.js')
+        store = await getCrawlerGapLearning(db)
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `gap-learning store unavailable: ${err?.message || err}` }
+      }
+      const calls = Number(store?.totals?.calls) || 0
+      if (!store || calls === 0) {
+        return { ok: true, summary: 'No live crawler-gap telemetry yet.' }
+      }
+      const withGap = Number(store.totals.with_gap) || 0
+      const byClass = store.totals.by_class || {}
+      const gapRate = calls > 0 ? withGap / calls : 0
+      const topClasses = Object.entries(byClass)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ')
+      // Alert only with a real sample AND a high gap share — a systemic signal,
+      // not the occasional legitimately-narrow profile.
+      if (calls >= 5 && gapRate > 0.4) {
+        return {
+          ok: false,
+          summary: `${Math.round(gapRate * 100)}% of the last ${calls} live crawls surfaced coverage gaps (${withGap}/${calls}). Top classes: ${topClasses || 'n/a'}.`,
+          evidence: {
+            calls,
+            with_gap: withGap,
+            gap_rate: Number(gapRate.toFixed(3)),
+            by_class: byClass,
+            recent_examples: Array.isArray(store.recent) ? store.recent.slice(0, 5) : [],
+          },
+          recommended_fix: 'Inspect system_kv `crawler_gap_learning` + Anya brain (memory_key crawler_gap). Widen buildWebQueries for institution/hyperlocal/low_results gaps, and confirm the coverage self-heal + student-aid eligibility invariant are running for the ineligible/surfacing classes.',
+          confidence: 0.85,
+        }
+      }
+      return { ok: true, summary: `${withGap}/${calls} recent live crawls had gaps${topClasses ? ` (${topClasses})` : ''}.` }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,

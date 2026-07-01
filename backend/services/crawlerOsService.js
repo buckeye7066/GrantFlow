@@ -245,6 +245,27 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // table does NOT persist those matching fields, so they can only be matched
   // in-memory while the run objects are alive.
   const opportunities = storage.listCatalog(store);
+
+  // ── Global crawler-gap learning ────────────────────────────────────────────
+  // On EVERY live (non-dry-run) discovery call, audit this profile's RESULT
+  // coverage and record any gaps into the shared learning store so Sam
+  // (diagnostics) and Anya (brain) get smarter from REAL crawls — not just Amy's
+  // synthetic cohort or the offline nightly sweep. Synthetic Amy profiles are
+  // skipped (they have their own evaluation loop and get reaped, not remediated).
+  // Best-effort and fully guarded: learning is observability, never a blocker.
+  try {
+    if (String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+      const { learnFromCrawlGaps } = await import('./coverageAudit/liveCrawlGapLearning.js');
+      await learnFromCrawlGaps(db, {
+        profileId,
+        thesis,
+        displayName: ctx?.profile?.display_name ?? null,
+      });
+    }
+  } catch {
+    /* crawler-gap learning must never fail the crawl */
+  }
+
   return { run, persisted, thesis, opportunities };
 }
 
