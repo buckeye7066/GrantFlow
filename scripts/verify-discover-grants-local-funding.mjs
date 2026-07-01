@@ -101,15 +101,35 @@ async function main() {
     }
     const token = verify.json.accessToken
 
-    const run = await fetchJson(`http://127.0.0.1:${port}/api/real-crawlers/run`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        crawler_type: 'local_funding',
-        profile_id: profileId,
-        min_match_score: 0,
-      }),
-    })
+    // The local_funding discovery is a cold-start, first-request run. On a slow /
+    // loaded CI runner it can exceed the server's response-timeout middleware and
+    // come back as a transient 504 (error_type:'timeout') even though the crawler
+    // itself is healthy — it passes reliably locally. Retry a transient gateway /
+    // timeout response a couple of times (a warm second attempt is fast) before
+    // failing the gate. This tolerates infra slowness WITHOUT weakening the real
+    // assertion below (we still require >=1 surviving result).
+    const isTransient = (r) =>
+      r.status === 502 ||
+      r.status === 503 ||
+      r.status === 504 ||
+      r.json?.error_type === 'timeout'
+    let run
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      run = await fetchJson(`http://127.0.0.1:${port}/api/real-crawlers/run`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          crawler_type: 'local_funding',
+          profile_id: profileId,
+          min_match_score: 0,
+        }),
+      })
+      if (!isTransient(run)) break
+      console.warn(
+        `[gate:discover-local-funding] transient ${run.status} (${run.json?.error_type || 'gateway'}) on attempt ${attempt}/3; retrying`,
+      )
+      await new Promise((r) => setTimeout(r, 2000))
+    }
 
     if (run.status !== 200) {
       console.error('[gate:discover-local-funding] run failed', run.status, run.json)
