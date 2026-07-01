@@ -65,3 +65,63 @@ test('the CORE set is never dropped even when max is small', () => {
   // First two are always core (need-specific + geo/type), never rotated extras.
   assert.ok(/grants for student|scholarships for students/i.test(qs[0]));
 });
+
+// ── Institution- / employer- / county-specific recall (the acquisition gap) ──
+// Endowed/departmental/foundation scholarships and employer & hyperlocal awards
+// are findable ONLY by name — generic geo/type/need queries cannot reach them.
+
+const NAMED_STUDENT = {
+  applicant_types: ['student', 'individual'],
+  is_student: true,
+  needs: ['tuition', 'textbooks'],
+  location: { state: 'TN', city: 'Cleveland', county: 'Bradley County', zip: '37312' },
+  interest_terms: ['emergency medical services'],
+  schools: ['Cleveland State Community College', 'Chattanooga State Community College'],
+  field_of_study: 'Paramedic',
+};
+
+test('a named school produces institution-specific scholarship queries (CORE)', () => {
+  const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 14, seed: 0 });
+  assert.ok(qs.includes('Cleveland State Community College scholarships'), 'school scholarships query');
+  assert.ok(
+    qs.includes('Cleveland State Community College Paramedic scholarship'),
+    'primary school + field-of-study (departmental endowment) query',
+  );
+  assert.ok(
+    qs.includes('Cleveland State Community College foundation scholarships'),
+    'university foundation (where named endowments live) query',
+  );
+  // A second declared school is also searched.
+  assert.ok(qs.includes('Chattanooga State Community College scholarships'), 'second school searched');
+});
+
+test('institution queries survive even at a small max (they are CORE, not rotated)', () => {
+  const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 3, seed: 777 });
+  assert.ok(qs[0].startsWith('Cleveland State Community College'), 'primary institution leads CORE');
+});
+
+test('county-level hyperlocal queries are emitted from the county signal', () => {
+  const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 14, seed: 0 });
+  assert.ok(qs.includes('scholarships Bradley County, TN'), 'county scholarship query');
+  assert.ok(qs.includes('community foundation Bradley County, TN'), 'county community foundation query');
+});
+
+test('a bare county string is normalized to "<County> County"', () => {
+  const qs = buildWebQueries(
+    { ...NAMED_STUDENT, location: { state: 'TN', county: 'Bradley' } },
+    { year: 2026, max: 14, seed: 0 },
+  );
+  assert.ok(qs.some((q) => /Bradley County, TN/.test(q)), 'bare county gets a "County" suffix');
+});
+
+test('a declared employer produces employer education-program queries', () => {
+  const worker = {
+    applicant_types: ['individual'],
+    needs: ['tuition'],
+    location: { state: 'TN', city: 'Cleveland' },
+    employer: 'Bradley County EMS',
+  };
+  const qs = buildWebQueries(worker, { year: 2026, max: 14, seed: 0 });
+  assert.ok(qs.includes('Bradley County EMS scholarship'), 'employer scholarship query');
+  assert.ok(qs.includes('Bradley County EMS tuition assistance'), 'employer tuition-assistance query');
+});

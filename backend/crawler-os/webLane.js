@@ -122,9 +122,12 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // Breadth caps (bounded to respect search rate limits / the Brave breaker,
   // which makes searchWeb return [] when paused). Raised from 5/6/14 to widen the
   // candidate pool per run without hammering the provider.
-  const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries : 8;
+  // Breadth raised 8/8/20 -> 14/8/26 so the new institution- / employer- /
+  // county-specific CORE queries (buildWebQueries) run ALONGSIDE the need /
+  // interest / field-of-study queries in one pass, instead of crowding them out.
+  const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries : 14;
   const resultsPerQuery = Number.isFinite(opts.resultsPerQuery) ? opts.resultsPerQuery : 8;
-  const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages : 20;
+  const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages : 26;
   // Per-run rotation seed: successive discoveries sample DIFFERENT broadening
   // queries (the CORE queries always run) so a profile stops getting the same
   // set every time. Injectable for deterministic tests; defaults to wall-clock.

@@ -38,6 +38,23 @@ function geoPhrase(location = {}) {
   return state || city || '';
 }
 
+// County-level phrase ("Bradley County, TN"). Hyperlocal awards (community
+// foundations, county scholarships, local civic clubs) are keyed to the COUNTY,
+// not the city — and the city phrase never reaches them.
+function countyPhrase(location = {}) {
+  let county = location?.county ? String(location.county).trim() : '';
+  if (!county) return '';
+  if (!/county|parish|borough/i.test(county)) county = `${county} County`;
+  const state = location?.state ? String(location.state).trim() : '';
+  return state ? `${county}, ${state}` : county;
+}
+
+// Normalize a school/employer name for query text (drop trailing punctuation).
+function cleanInstitution(v) {
+  const s = String(v || '').replace(/\s+/g, ' ').replace(/[.,;]+$/, '').trim();
+  return s.length >= 3 && s.length <= 90 ? s : '';
+}
+
 // Turn an internal need/interest token (e.g. "medical_bills", "first_gen") into
 // human search language ("medical bills", "first gen"). Bounded + lowercased.
 function humanize(term) {
@@ -83,7 +100,14 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   const seed = Number.isFinite(opts.seed) ? opts.seed : 0;
   const word = typeWord(thesis.applicant_types);
   const geo = geoPhrase(thesis.location);
+  const county = countyPhrase(thesis.location);
   const state = thesis.location?.state ? String(thesis.location.state).trim() : '';
+  const schools = (Array.isArray(thesis.schools) ? thesis.schools : [])
+    .map(cleanInstitution)
+    .filter(Boolean)
+    .slice(0, 2);
+  const field = cleanInstitution(thesis.field_of_study);
+  const employer = cleanInstitution(thesis.employer);
   const isStudent =
     Boolean(thesis.is_student) ||
     (Array.isArray(thesis.applicant_types) && thesis.applicant_types.includes('student'));
@@ -110,10 +134,37 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   const extra = [];
 
   // ── CORE (always emitted, highest signal) ──
+  // Institution-specific funding FIRST — endowed / departmental / foundation
+  // scholarships are findable ONLY by the school's name; no geo/type/need query
+  // can reach them. This is the single biggest recall gap for a named student.
+  if (isStudent) {
+    schools.forEach((school, i) => {
+      add(core, `${school} scholarships`);
+      // Departmental / field-of-study endowment at the primary institution.
+      if (i === 0 && field) add(core, `${school} ${field} scholarship`);
+      // The university FOUNDATION is where most named endowments live.
+      if (i === 0) add(core, `${school} foundation scholarships`);
+    });
+    // Field-of-study scholarships (major), independent of any one school.
+    if (field) add(core, `${field} scholarships ${year}`);
+  }
+  // Employer education programs (tuition assistance / employer scholarships) —
+  // a real funding class for a working applicant, reachable only by employer name.
+  if (employer) {
+    add(core, `${employer} scholarship`);
+    add(core, `${employer} tuition assistance`);
+  }
   // The two strongest need-specific searches.
   for (const need of needs.slice(0, 2)) add(core, `${need} grants for ${word} ${geo}`);
-  // Geo + type funding, current cycle.
-  if (geo) add(core, `${word} grants ${geo} ${year}`);
+  // Hyperlocal, COUNTY-level awards (community foundations, county scholarships,
+  // local civic clubs) — keyed to the county, which the city phrase never reaches.
+  if (county) {
+    add(core, isStudent ? `scholarships ${county}` : `grants for ${word} ${county}`);
+    add(core, `community foundation ${county}`);
+  }
+  // Geo + type funding, current cycle (orgs/individuals; a student's best geo
+  // query is the scholarship one below, so skip the weak "student grants" phrase).
+  if (geo && !isStudent) add(core, `${word} grants ${geo} ${year}`);
   // Community/place-based philanthropy (where most local money lives).
   if (geo) add(core, `community foundation grants ${geo}`);
   // Students: the single best scholarship query is core (federal APIs skip them).
