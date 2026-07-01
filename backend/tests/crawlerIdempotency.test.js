@@ -91,7 +91,7 @@ describe("crawlerIdempotency — profile content in idempotency key (GF-AUDIT-01
       state: "NY",
     })
 
-    const type = "local"
+    const type = "profile_enrichment"
     const parameters = { zip: "10001" }
 
     const digest = await computeProfileDigest(db, profileId)
@@ -135,7 +135,7 @@ describe("crawlerIdempotency — profile content in idempotency key (GF-AUDIT-01
     const digestBefore = await computeProfileDigest(db, profileId)
 
     const result1 = await createCrawlerJob(db, {
-      type: "local",
+      type: "profile_enrichment",
       profileId,
       parameters: {},
       requestedBy: "test",
@@ -155,7 +155,7 @@ describe("crawlerIdempotency — profile content in idempotency key (GF-AUDIT-01
     expect(digestBefore).not.toBe(digestAfter)
 
     const result2 = await createCrawlerJob(db, {
-      type: "local",
+      type: "profile_enrichment",
       profileId,
       parameters: {},
       requestedBy: "test",
@@ -181,7 +181,7 @@ describe("crawlerIdempotency — profile content in idempotency key (GF-AUDIT-01
     const digestBefore = await computeProfileDigest(db, profileId)
 
     const result1 = await createCrawlerJob(db, {
-      type: "local",
+      type: "profile_enrichment",
       profileId,
       parameters: {},
       requestedBy: "test",
@@ -202,7 +202,7 @@ describe("crawlerIdempotency — profile content in idempotency key (GF-AUDIT-01
     expect(digestBefore).toBe(digestAfter)
 
     const result2 = await createCrawlerJob(db, {
-      type: "local",
+      type: "profile_enrichment",
       profileId,
       parameters: {},
       requestedBy: "test",
@@ -230,7 +230,7 @@ describe("crawlerIdempotency — profile content in idempotency key (GF-AUDIT-01
 
     // And job creation must not throw
     const result = await createCrawlerJob(db, {
-      type: "local",
+      type: "profile_enrichment",
       profileId,
       parameters: {},
       requestedBy: "test",
