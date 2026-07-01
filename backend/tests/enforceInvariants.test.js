@@ -32,6 +32,7 @@ import {
   enforceNoDuplicateGrants,
   enforceRelevanceFloor,
   enforceIndividualAmountCeiling,
+  enforceStudentAidEligibility,
   resolveIndividualAmountCeiling,
   enforceProfileScopedPipeline,
   enforceProfileDisplayNameNotDoubled,
@@ -872,7 +873,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(9)
+    expect(summary.ran).toBe(10)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -882,6 +883,7 @@ describe('enforceInvariants — runner', () => {
       'no_duplicate_grants',
       'relevance_floor',
       'individual_amount_ceiling',
+      'student_aid_eligibility',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
     ])
@@ -1036,6 +1038,118 @@ describe('enforceInvariants — profile_id integrity', () => {
     const first = await enforceProfileIdIntegrity(db)
     expect(first.repaired).toBe(1)
     const second = await enforceProfileIdIntegrity(db)
+    expect(second.repaired).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// INVARIANT 8: student-aid opportunities do not surface to a non-student profile
+// (the "senior widow with student scholarships" defect — stale web-llm ACCEPTs).
+// ---------------------------------------------------------------------------
+
+function makeMatchDb() {
+  const raw = new Database(':memory:')
+  raw.exec(`
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY, title TEXT, description TEXT, categories TEXT,
+      opportunity_kind TEXT
+    );
+    CREATE TABLE profile_opportunity_matches (
+      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+      match_score REAL, match_decision TEXT, match_explanation TEXT,
+      matcher_version TEXT, updated_at TEXT
+    );
+  `)
+  return raw
+}
+
+let _oppSeq = 0
+function insertMatch(db, { profileId, title, description = '', categories = '', kind = 'DIRECT_GRANT', score, decision, matcher = 'web-llm' }) {
+  _oppSeq += 1
+  const oid = `opp-${_oppSeq}`
+  const mid = `m-${_oppSeq}`
+  db.prepare('INSERT INTO funding_opportunities (id, title, description, categories, opportunity_kind) VALUES (?, ?, ?, ?, ?)')
+    .run(oid, title, description, categories, kind)
+  db.prepare('INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(mid, profileId, oid, score, decision, matcher)
+  return { mid, oid }
+}
+
+describe('enforceStudentAidEligibility — student-aid on non-student profiles', () => {
+  // Inject the thesis resolver so we don't need the full loadProfileContext schema.
+  const theses = {
+    'p-senior': { profile_id: 'p-senior', is_student: false, needs: ['education', 'tuition', 'professional_development', 'medical'] },
+    'p-student': { profile_id: 'p-student', is_student: true, needs: ['scholarship', 'tuition', 'education'] },
+    'p-adult-aid': { profile_id: 'p-adult-aid', is_student: false, needs: ['scholarship', 'education'] },
+  }
+  const resolveThesis = (_db, pid) => theses[pid] ?? null
+
+  it('demotes a stale student-aid ACCEPT on a non-student individual (Liubov class)', async () => {
+    const db = makeMatchDb()
+    const { mid } = insertMatch(db, { profileId: 'p-senior', title: 'Tennessee HOPE Scholarship', description: 'Lottery scholarship for enrolled TN undergraduates', score: 81, decision: 'accept' })
+    const res = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(1)
+    const row = db.prepare('SELECT match_decision, match_score FROM profile_opportunity_matches WHERE id = ?').get(mid)
+    expect(String(row.match_decision).toLowerCase()).toBe('reject')
+    expect(row.match_score).toBeLessThan(75) // below the display floor → no longer surfaces
+  })
+
+  it('does NOT touch the SAME scholarship for a real student (recall preserved)', async () => {
+    const db = makeMatchDb()
+    const { mid } = insertMatch(db, { profileId: 'p-student', title: 'Tennessee HOPE Scholarship', description: 'Lottery scholarship for enrolled TN undergraduates', score: 81, decision: 'accept' })
+    const res = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(res.repaired).toBe(0)
+    const row = db.prepare('SELECT match_decision, match_score FROM profile_opportunity_matches WHERE id = ?').get(mid)
+    expect(String(row.match_decision).toLowerCase()).toBe('accept')
+    expect(row.match_score).toBe(81)
+  })
+
+  it('does NOT touch a non-student who declares a student-aid NEED (adult learner)', async () => {
+    const db = makeMatchDb()
+    const { mid } = insertMatch(db, { profileId: 'p-adult-aid', title: 'Federal Pell Grant', description: 'Need-based federal student aid', score: 80, decision: 'accept' })
+    const res = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(res.repaired).toBe(0)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id = ?').get(mid).match_decision).toBe('accept')
+  })
+
+  it('leaves a non-student\'s NON-student-aid match alone (e.g. a food-bank grant)', async () => {
+    const db = makeMatchDb()
+    const { mid } = insertMatch(db, { profileId: 'p-senior', title: 'Cleveland Emergency Food Assistance', description: 'Groceries for seniors', score: 82, decision: 'accept' })
+    const res = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(res.repaired).toBe(0)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id = ?').get(mid).match_decision).toBe('accept')
+  })
+
+  it('does NOT demote a directory/referral scholarship platform (directories always survive)', async () => {
+    const db = makeMatchDb()
+    const { mid } = insertMatch(db, { profileId: 'p-senior', title: 'Fastweb Scholarship Search', description: 'Scholarship directory', kind: 'DIRECTORY', score: 78, decision: 'accept' })
+    const res = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(res.repaired).toBe(0)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id = ?').get(mid).match_decision).toBe('accept')
+  })
+
+  it('count-only when ENFORCE_STUDENT_AID_ELIGIBILITY=0 (no mutation)', async () => {
+    const db = makeMatchDb()
+    const { mid } = insertMatch(db, { profileId: 'p-senior', title: 'HOPE Lottery Scholarship (TELS)', description: 'TN student aid', score: 81, decision: 'accept' })
+    process.env.ENFORCE_STUDENT_AID_ELIGIBILITY = '0'
+    try {
+      const res = await enforceStudentAidEligibility(db, { resolveThesis })
+      expect(res.enforced).toBe(false)
+      expect(res.scanned).toBe(1)
+      expect(res.repaired).toBe(0)
+      expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id = ?').get(mid).match_decision).toBe('accept')
+    } finally {
+      delete process.env.ENFORCE_STUDENT_AID_ELIGIBILITY
+    }
+  })
+
+  it('is idempotent — a second pass demotes nothing (demoted row no longer surfaces)', async () => {
+    const db = makeMatchDb()
+    insertMatch(db, { profileId: 'p-senior', title: 'Tennessee Student Assistance Award', description: 'TSAA student aid', score: 81, decision: 'accept' })
+    const first = await enforceStudentAidEligibility(db, { resolveThesis })
+    expect(first.repaired).toBe(1)
+    const second = await enforceStudentAidEligibility(db, { resolveThesis })
     expect(second.repaired).toBe(0)
   })
 })
