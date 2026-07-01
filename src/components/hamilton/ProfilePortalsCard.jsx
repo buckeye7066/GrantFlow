@@ -660,6 +660,44 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
 
   const busyAutopilotHost = autopilotRunMutation.isPending ? autopilotRunMutation.variables?.portalHost : null
 
+  // ── One button: start Hamilton on EVERYTHING for this profile ──────────────
+  // "Do all of this profile's portals and packets." Fans out to the two bulk
+  // primitives already wired above:
+  //   • Portal Autopilot for the WHOLE profile (every login Hamilton can set up)
+  //   • an application packet for EVERY mail/fax funder (no manual selection)
+  // Portal autopilot needs the vault unlocked (it wraps the generated logins);
+  // packets don't. So we run whatever is possible and tell the owner plainly if
+  // the vault must be unlocked to include the portal logins. Co-browse-only
+  // portals (2FA/CAPTCHA/ID) still need the human — those keep their own
+  // "Open side-by-side login" tiles.
+  const startingEverything = autopilotRunMutation.isPending || bulkPacketMutation.isPending
+  const startHamiltonEverything = () => {
+    const canPortals = vaultStatus.is_unlocked
+    const hasPackets = mailFaxSources.length > 0
+
+    if (!canPortals && !hasPackets) {
+      showErrorToast(
+        toast,
+        "Unlock the vault to start",
+        "Set or unlock Hamilton's master passphrase under Advanced below so he can sign in to the portals, then press this again.",
+      )
+      return
+    }
+
+    if (canPortals) autopilotRunMutation.mutate({})
+    if (hasPackets) bulkPacketMutation.mutate(mailFaxSources)
+
+    const parts = []
+    if (canPortals) parts.push("setting up every portal login he can")
+    if (hasPackets) parts.push(`making ${mailFaxSources.length} application packet${mailFaxSources.length === 1 ? "" : "s"}`)
+    const tail = canPortals ? "" : " Unlock the vault under Advanced to include the portal logins."
+    showSuccessToast(
+      toast,
+      "Hamilton is on it",
+      `${parts.join(" and ")}. Watch each tile and this profile's Documents for results.${tail}`,
+    )
+  }
+
   const busyLoginHost = loginMutation.isPending ? loginMutation.variables?.portal?.portalHost : null
   const busyReadHost = readMutation.isPending ? readMutation.variables?.portalHost : null
   const busyWriteHost = writeMutation.isPending ? writeMutation.variables?.portalHost : null
@@ -1050,6 +1088,32 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       <CardContent className="space-y-7">
         {/* One-time provisioned password modal (secret never goes through a toast). */}
         <OneTimePasswordModal value={oneTimePassword} onClose={() => setOneTimePassword(null)} />
+
+        {/* ONE button to start Hamilton on everything for this profile: every
+            portal login he can auto-set-up + a packet for every mail/fax funder. */}
+        {!isLoading && !isError && (portals.length > 0 || mailFaxSources.length > 0) && (
+          <div className="flex flex-col gap-3 rounded-2xl border border-[#bfe0cd] bg-current-emeraldSoft p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="font-display text-[15px] font-bold text-current-ink">
+                Let Hamilton do it all for {profileName || "this profile"}
+              </p>
+              <p className="mt-0.5 text-[13px] text-current-ink/70">
+                One click: sets up every portal login Hamilton can, and makes an application packet for each mail/fax funder.
+                {!vaultStatus.is_unlocked && " Unlock the vault below to include the portal logins."}
+              </p>
+            </div>
+            <button
+              type="button"
+              className={`${BTN_EMERALD} shrink-0`}
+              disabled={startingEverything}
+              onClick={startHamiltonEverything}
+              title="Start Hamilton on every portal and packet for this profile"
+            >
+              {startingEverything ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Wand2 className="h-4 w-4" />}
+              {startingEverything ? "Hamilton is working…" : "Do all portals & packets"}
+            </button>
+          </div>
+        )}
 
         {/* Co-browse call-to-action: Hamilton hit a wall only a human can clear
             (2FA approval, CAPTCHA, identity proofing). Deep-linked from the
