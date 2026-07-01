@@ -33,6 +33,34 @@ const LOCATIONS = [
 
 const FUNDING_BANDS = ['$5,000', '$15,000', '$25,000', '$50,000', '$100,000', '$250,000']
 
+// REAL, public institutions (not PII — public names, like the real cities above)
+// so the crawlers are genuinely EXERCISED on institution-specific recall
+// (endowed/departmental/foundation scholarships are findable only by name). A
+// synthetic student with a real committed school lets Amy MEASURE whether the
+// open-web lane actually finds institution-specific funding.
+const REAL_INSTITUTIONS = [
+  'Middle Tennessee State University',
+  'Cleveland State Community College',
+  'The Ohio State University',
+  'California State University, Fresno',
+  'University at Buffalo',
+  'Montana State University Billings',
+  'Albany State University',
+  'West Virginia University',
+  'University of West Florida',
+  'University of New Mexico',
+]
+
+// Real employers (public institutions/large systems) so employer-specific
+// education-benefit / scholarship recall is exercised too.
+const REAL_EMPLOYERS = [
+  'HCA Healthcare',
+  'Vanderbilt University Medical Center',
+  'Ascension Saint Thomas',
+  'Erlanger Health System',
+  'Ballad Health',
+]
+
 function pick(rng, arr) {
   return arr[Math.floor(rng() * arr.length) % arr.length]
 }
@@ -150,73 +178,102 @@ export const CATEGORY_CATALOG = Object.freeze({
     label: 'High School Student',
     primary_type: 'high_school_student',
     kind: 'individual',
-    build: () => ({
-      education: {
-        highest_level: 'high school (in progress)',
-        intended_major: 'Computer Science',
-        gpa: 3.6,
-        pell_grant_eligible: true,
-        fafsa_completed: false,
-      },
-      narrative: {
-        mission: 'First-generation student pursuing a STEM degree.',
-        primary_goal: 'Scholarships for college tuition.',
-      },
-      programs_services: {
-        focus_areas: ['scholarship', 'education'],
-        interests: ['scholarship', 'tuition', 'STEM'],
-        keywords: ['high school scholarship', 'college tuition', 'STEM'],
-      },
-    }),
+    build: ({ location, rng }) => {
+      const school = pick(rng, REAL_INSTITUTIONS)
+      return {
+        basic_information: {
+          current_school: school,
+          location: { city: location.city, state: location.state, county: `${location.county} County`, zip_code: location.zip },
+        },
+        education: {
+          highest_level: 'high school (in progress)',
+          intended_major: 'Computer Science',
+          gpa: 3.6,
+          pell_grant_eligible: true,
+          fafsa_completed: false,
+          // Committed institution — exercises institution-specific crawler recall.
+          target_colleges: [school],
+        },
+        university_applications: { applications: [{ name: school, status: 'committed' }] },
+        narrative: {
+          mission: 'First-generation student pursuing a STEM degree.',
+          primary_goal: 'Scholarships for college tuition.',
+        },
+        programs_services: {
+          focus_areas: ['scholarship', 'education'],
+          interests: ['scholarship', 'tuition', 'STEM'],
+          keywords: ['high school scholarship', 'college tuition', 'STEM'],
+        },
+      }
+    },
   },
 
   college_student: {
     label: 'College Student',
     primary_type: 'college_student',
     kind: 'individual',
-    build: () => ({
-      education: {
-        highest_level: 'undergraduate (in progress)',
-        current_institution: 'State University',
-        intended_major: 'Nursing',
-        gpa: 3.4,
-        pell_grant_eligible: true,
-        fafsa_completed: true,
-      },
-      narrative: {
-        mission: 'Undergraduate nursing student.',
-        primary_goal: 'Scholarships and emergency tuition aid.',
-      },
-      programs_services: {
-        focus_areas: ['scholarship', 'nursing'],
-        interests: ['scholarship', 'tuition', 'nursing'],
-        keywords: ['college scholarship', 'nursing', 'tuition assistance'],
-      },
-    }),
+    build: ({ location, rng }) => {
+      const school = pick(rng, REAL_INSTITUTIONS)
+      return {
+        basic_information: {
+          current_school: school,
+          location: { city: location.city, state: location.state, county: `${location.county} County`, zip_code: location.zip },
+        },
+        education: {
+          highest_level: 'undergraduate (in progress)',
+          current_institution: school,
+          intended_major: 'Nursing',
+          gpa: 3.4,
+          pell_grant_eligible: true,
+          fafsa_completed: true,
+        },
+        university_applications: { applications: [{ name: school, status: 'committed' }] },
+        // A working student — exercises employer education-benefit recall.
+        occupation: { healthcare_worker: true },
+        employment: { current_status: 'Part-time', employer: pick(rng, REAL_EMPLOYERS) },
+        narrative: {
+          mission: 'Undergraduate nursing student.',
+          primary_goal: 'Scholarships and emergency tuition aid.',
+        },
+        programs_services: {
+          focus_areas: ['scholarship', 'nursing'],
+          interests: ['scholarship', 'tuition', 'nursing'],
+          keywords: ['college scholarship', 'nursing', 'tuition assistance'],
+        },
+      }
+    },
   },
 
   graduate_student: {
     label: 'Graduate Student',
     primary_type: 'graduate_student',
     kind: 'individual',
-    build: () => ({
-      education: {
-        highest_level: "master's (in progress)",
-        current_institution: 'State University',
-        intended_major: 'Public Health',
-        gpa: 3.8,
-        fafsa_completed: true,
-      },
-      narrative: {
-        mission: 'Graduate researcher in public health.',
-        primary_goal: 'Fellowships and research stipends.',
-      },
-      programs_services: {
-        focus_areas: ['fellowship', 'research'],
-        interests: ['fellowship', 'research stipend', 'public health'],
-        keywords: ['graduate fellowship', 'research grant', 'stipend'],
-      },
-    }),
+    build: ({ location, rng }) => {
+      const school = pick(rng, REAL_INSTITUTIONS)
+      return {
+        basic_information: {
+          current_school: school,
+          location: { city: location.city, state: location.state, county: `${location.county} County`, zip_code: location.zip },
+        },
+        education: {
+          highest_level: "master's (in progress)",
+          current_institution: school,
+          intended_major: 'Public Health',
+          gpa: 3.8,
+          fafsa_completed: true,
+        },
+        university_applications: { applications: [{ name: school, status: 'committed' }] },
+        narrative: {
+          mission: 'Graduate researcher in public health.',
+          primary_goal: 'Fellowships and research stipends.',
+        },
+        programs_services: {
+          focus_areas: ['fellowship', 'research'],
+          interests: ['fellowship', 'research stipend', 'public health'],
+          keywords: ['graduate fellowship', 'research grant', 'stipend'],
+        },
+      }
+    },
   },
 
   homeschool_family: {
