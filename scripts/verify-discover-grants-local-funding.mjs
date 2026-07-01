@@ -23,6 +23,15 @@ function startServer() {
       DB_AUTO_MIGRATE: 'true',
       AUTH_JWT_SECRET: 'test-secret',
       LIVE_CRAWL_TIMEOUT_MS: '1',
+      // The server's default request/response timeout (30s) is tuned for
+      // user-facing requests. This gate fires a COLD-START local_funding
+      // discovery on a fresh DB; on a slow/loaded CI runner that first run can
+      // take longer than 30s and trip the response-timeout middleware (504
+      // error_type:'timeout') even though it finishes in seconds locally and is
+      // otherwise healthy. Give the gate server generous headroom so a cold run
+      // isn't cut off. (LIVE_CRAWL_TIMEOUT_MS=1 already disables live web crawls,
+      // so this can't hang on the network — it only absorbs cold-start latency.)
+      REQUEST_TIMEOUT_MS: '120000',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
