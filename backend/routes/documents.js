@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
 import net from 'net';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import { createOpenAIClient } from '../utils/openaiClient.js';
@@ -719,6 +719,20 @@ router.get('/:id/download', async (req, res) => {
 
     const resolved = resolveDocumentFilePath({ req, doc })
     if (!resolved.ok) {
+      // Durable fallback: generated packets (and any doc stored via the BYTEA
+      // pattern) keep their bytes in documents.file_bytes so a download still
+      // works when the disk copy is gone (ephemeral fs / pruned temp). This is
+      // also what lets us safely prune regenerable on-disk packet copies.
+      if (doc?.file_bytes) {
+        const buf = Buffer.isBuffer(doc.file_bytes) ? doc.file_bytes : Buffer.from(doc.file_bytes)
+        if (buf.length > 0) {
+          const fileName = String(doc?.file_name || doc?.name || '').trim() || 'document'
+          const mimeType = String(doc?.mime_type || '').trim() || 'application/octet-stream'
+          res.setHeader('Content-Type', mimeType)
+          res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`)
+          return res.send(buf)
+        }
+      }
       console.warn('[documents] missing file for download', {
         requestId: req.requestId || null,
         documentId: String(req.params.id),
@@ -1225,6 +1239,28 @@ router.delete('/:id', async (req, res) => {
     await req.db
       .prepare('DELETE FROM documents WHERE id = ? AND (profile_id = ? OR profile_id IS NULL)')
       .run(req.params.id, existing.profile_id ?? null);
+
+    // Also remove the backing file on disk so deleted documents don't leave
+    // orphaned bytes accumulating on the persistent volume (/data/uploads).
+    // Path-guarded to the uploads dirs and best-effort — a failed unlink must
+    // not fail the delete (the nightly orphan sweep is the net).
+    try {
+      const resolved = resolveDocumentFilePath({ req, doc: existing });
+      if (resolved.ok && resolved.path) {
+        const target = String(resolved.path);
+        const uploadsDir = getUploadsDir(req);
+        const legacyUploadsDir = getLegacyUploadsDir(req);
+        const insideUploads = [uploadsDir, legacyUploadsDir]
+          .filter(Boolean)
+          .some((base) => target === base || target.startsWith(base + sep));
+        if (insideUploads) {
+          await fs.promises.unlink(target).catch(() => { /* best-effort */ });
+        }
+      }
+    } catch {
+      // Never fail a document delete on disk cleanup.
+    }
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

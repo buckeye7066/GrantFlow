@@ -492,43 +492,57 @@ function getPacketStorageDir() {
 }
 
 async function insertDocumentRecord(db, {
-  profileId, grantId, opportunityId, name, type, filePath, mimeType, fileSize, notes, extractedText,
+  profileId, grantId, opportunityId, name, type, filePath, mimeType, fileSize, notes, extractedText, fileBytes = null,
 }) {
   const id = crypto.randomUUID()
-  const insertSql = `
-    INSERT INTO documents (
-      id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
-      file_url, file_path, file_size, mime_type,
-      extracted_text, processing_status, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `
-  try {
-    await db.prepare(insertSql).run(
-      id, null, grantId || null, profileId, null, null, name, type,
-      null, filePath, fileSize || null, mimeType || null,
-      extractedText || null, 'completed', notes || null,
-    )
-  } catch (err) {
-    // Some legacy SQLite schemas omit `university_application_*` columns.
-    // Retry with the minimal column set used by the runtime ensure-schema.
-    const msg = String(err?.message || '').toLowerCase()
-    if (msg.includes('no column named university_application')) {
-      const fallbackSql = `
-        INSERT INTO documents (
-          id, organization_id, grant_id, profile_id, name, type,
-          file_url, file_path, file_size, mime_type,
-          extracted_text, processing_status, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `
-      await db.prepare(fallbackSql).run(
-        id, null, grantId || null, profileId, name, type,
-        null, filePath, fileSize || null, mimeType || null,
-        extractedText || null, 'completed', notes || null,
-      )
-    } else {
+  const bytes = Buffer.isBuffer(fileBytes) && fileBytes.length > 0 ? fileBytes : null
+
+  // Persist the packet BYTES in Postgres (documents.file_bytes) so a saved
+  // packet always downloads even after Railway's ephemeral filesystem drops the
+  // on-disk copy or the nightly sweep prunes it. Mirrors the BYTEA pattern used
+  // by routes/profilePortals.js persistPacketDocument. Try the richest column
+  // set first, then degrade gracefully on schemas missing optional columns
+  // (`university_application_*` on legacy SQLite; `file_bytes` before migration
+  // 0121).
+  const variants = []
+  if (bytes) {
+    variants.push({
+      cols: 'id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type, file_url, file_path, file_size, mime_type, file_bytes, extracted_text, processing_status, notes',
+      vals: [id, null, grantId || null, profileId, null, null, name, type, null, filePath, fileSize || null, mimeType || null, bytes, extractedText || null, 'completed', notes || null],
+    })
+    variants.push({
+      cols: 'id, organization_id, grant_id, profile_id, name, type, file_url, file_path, file_size, mime_type, file_bytes, extracted_text, processing_status, notes',
+      vals: [id, null, grantId || null, profileId, name, type, null, filePath, fileSize || null, mimeType || null, bytes, extractedText || null, 'completed', notes || null],
+    })
+  }
+  variants.push({
+    cols: 'id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type, file_url, file_path, file_size, mime_type, extracted_text, processing_status, notes',
+    vals: [id, null, grantId || null, profileId, null, null, name, type, null, filePath, fileSize || null, mimeType || null, extractedText || null, 'completed', notes || null],
+  })
+  variants.push({
+    cols: 'id, organization_id, grant_id, profile_id, name, type, file_url, file_path, file_size, mime_type, extracted_text, processing_status, notes',
+    vals: [id, null, grantId || null, profileId, name, type, null, filePath, fileSize || null, mimeType || null, extractedText || null, 'completed', notes || null],
+  })
+
+  let lastErr = null
+  let inserted = false
+  for (const v of variants) {
+    const placeholders = v.vals.map(() => '?').join(', ')
+    try {
+      await db.prepare(`INSERT INTO documents (${v.cols}) VALUES (${placeholders})`).run(...v.vals)
+      inserted = true
+      break
+    } catch (err) {
+      const msg = String(err?.message || '').toLowerCase()
+      // Only fall through to a poorer variant for a missing-column mismatch.
+      if (msg.includes('no column named') || /file_bytes|university_application|column/.test(msg)) {
+        lastErr = err
+        continue
+      }
       throw err
     }
   }
+  if (!inserted) throw lastErr || new Error('documents insert failed')
   if (profileId) {
     try {
       await db.prepare(
@@ -582,6 +596,7 @@ export async function generateAndSavePacket(db, {
     fileSize: docxBuf.length,
     notes,
     extractedText: content.sections.map((s) => `## ${s.heading}\n${s.body}`).join('\n\n'),
+    fileBytes: docxBuf,
   })
 
   let pdfId = null
@@ -596,6 +611,7 @@ export async function generateAndSavePacket(db, {
       mimeType: 'application/pdf',
       fileSize: pdfBuf.length,
       notes,
+      fileBytes: pdfBuf,
     })
   }
 

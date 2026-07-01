@@ -389,6 +389,17 @@ try {
 
 app.locals.uploads = { uploadsDir, legacyUploadsDir, storageStatus }
 
+// Disk-usage observability: log volume usage at boot and WARN when the
+// persistent volume (/data) crosses the threshold. The volume filling to 100%
+// previously crashed prod on every restart; this makes the next fill visible
+// BEFORE it crashes. Best-effort — never blocks boot.
+try {
+  const { checkAndLogDiskUsage } = await import('./services/maintenance/diskUsage.js')
+  await checkAndLogDiskUsage({ label: 'boot' })
+} catch (diskErr) {
+  console.warn('[storage] disk-usage check failed (non-fatal):', diskErr?.message)
+}
+
 // Security headers (must run early, before routes).
 // Keep CSP behavior unchanged (some deployments may already set CSP at a proxy/CDN layer).
 // Allow cross-origin resource loading (e.g., Vercel frontend loading /uploads from Railway API origin).
