@@ -206,6 +206,64 @@ export const SOURCES = Object.freeze([
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 67,
   },
   {
+    // Seniors + their caregivers: the Eldercare Locator connects older adults to
+    // their local Area Agency on Aging (meals, transportation, in-home support,
+    // caregiver respite). An authoritative national locator — surfaced as an
+    // honest DIRECTORY so it reaches senior/caregiver profiles the grant sources miss.
+    source_id: 'area_agency_on_aging',
+    name: 'Area Agencies on Aging (Eldercare Locator)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://eldercare.acl.gov',
+    sponsor_name: 'Administration for Community Living',
+    resource_title: 'Area Agency on Aging & Eldercare Locator',
+    resource_summary: 'Find your local Area Agency on Aging for senior services: meals, transportation, in-home care, benefits counseling, and caregiver respite support.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'senior', 'caregiver'],
+    need_categories: ['aging', 'senior', 'housing', 'food', 'medical', 'caregiving', 'transportation'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 66,
+  },
+  {
+    // People with disabilities: state Vocational Rehabilitation agencies fund
+    // assistive technology, job training, and employment support. Reachable only
+    // by the state agency locator, so individuals never find them via grant search.
+    source_id: 'state_vocational_rehab',
+    name: 'State Vocational Rehabilitation agencies',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://rsa.ed.gov/about/states',
+    sponsor_name: 'Rehabilitation Services Administration',
+    resource_title: 'State Vocational Rehabilitation (disability employment & assistive tech)',
+    resource_summary: 'State VR agencies help people with disabilities get assistive technology, job training, and employment support. Find your state agency to apply.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'disabled'],
+    need_categories: ['disability', 'employment', 'assistive_technology', 'education', 'equipment'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 66,
+  },
+  {
+    // Universal local safety net: 211 connects anyone to nearby help for rent,
+    // utilities, food, and emergencies. The single best locator for a low-income
+    // individual (works even for a sparse profile), so it is a national DIRECTORY.
+    source_id: 'community_211',
+    name: '211 local community resources',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.211.org',
+    sponsor_name: 'United Way / 211',
+    resource_title: '211 - Local help with rent, utilities, food & emergencies',
+    resource_summary: 'Dial 211 or search 211.org to connect with local programs for rent and utility assistance, food, healthcare, and emergency needs in your area.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'senior', 'veteran', 'caregiver'],
+    need_categories: ['housing', 'energy', 'utility', 'food', 'emergency', 'medical', 'basic_needs'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 67,
+  },
+  {
     source_id: 'pell_grant',
     name: 'Federal Pell Grant',
     source_type: 'html',
