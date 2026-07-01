@@ -204,6 +204,31 @@ export function revokeHamiltonAuthorization(id, reason = null) {
   })
 }
 
+// Master-vault autonomous unlock: the "stay signed in without me" control. Status
+// reports has_passphrase + autonomous_unlock (never the secret material). Enabling
+// unlocks once with the passphrase and escrows the key so background runs unlock
+// on their own; disabling drops the escrow.
+export function getPortalVaultStatus(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot`)
+}
+
+export function enableAutonomousUnlock(profileId, passphrase) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/unlock`, {
+    method: 'POST',
+    body: JSON.stringify({ passphrase, autonomous_unlock: true }),
+  })
+}
+
+export function disableAutonomousUnlock(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portal-autopilot/autonomous-unlock/disable`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 // "✨ Auto-fill with Hamilton": ask the backend to suggest the portal host,
 // login URL, and username for a profile so the user only has to type their
 // password (+ optional 2FA). Returns { portalHost, loginUrl, username, label,

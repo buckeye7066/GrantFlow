@@ -54,6 +54,7 @@ import {
   setAutopilotIdentity,
   unlockVault,
   lockVault,
+  clearEscrow,
   hasPassphrase,
 } from '../services/hamilton/hamiltonPortalMasterVault.js'
 import { purgeMasterWrappedCredentials } from '../services/hamilton/hamiltonPortalCredentialService.js'
@@ -536,9 +537,11 @@ router.post('/profiles/:id/portal-autopilot/passphrase', async (req, res) => {
     // records. User-entered / server-vault-only logins are untouched.
     const wasReset = await hasPassphrase(req.db, profileId).catch(() => false)
     const identityEmail = req.body?.identityEmail ?? req.body?.identity_email
+    const autonomousUnlock = req.body?.autonomous_unlock === true || req.body?.autonomousUnlock === true
     const { status } = await setMasterPassphrase(req.db, {
       profileId, passphrase,
       identityEmail: identityEmail === undefined ? undefined : identityEmail,
+      autonomousUnlock,
     })
     let purged = 0
     if (wasReset) {
@@ -564,8 +567,9 @@ router.post('/profiles/:id/portal-autopilot/unlock', async (req, res) => {
   }
   const passphrase = String(req.body?.passphrase || '')
   if (!passphrase) return res.status(400).json({ error: 'passphrase required' })
+  const autonomousUnlock = req.body?.autonomous_unlock === true || req.body?.autonomousUnlock === true
   try {
-    const result = await unlockVault(req.db, { profileId, passphrase })
+    const result = await unlockVault(req.db, { profileId, passphrase, autonomousUnlock })
     if (!result.ok) {
       // ROOT CAUSE FIX: a failed vault unlock is a DOMAIN authorization failure
       // (wrong / unset passphrase), NOT an HTTP-session auth failure — so it must
@@ -584,6 +588,27 @@ router.post('/profiles/:id/portal-autopilot/unlock', async (req, res) => {
     return res.json({ ok: true, vault: status })
   } catch (err) {
     return res.status(500).json({ error: 'unlock_failed', detail: err?.message })
+  }
+})
+
+// Turn OFF autonomous unlock: drop the escrowed key so background runs can no
+// longer auto-unlock (also locks the in-memory key). The passphrase still works
+// for a manual unlock. To turn autonomous unlock ON, unlock with
+// { passphrase, autonomous_unlock: true }.
+router.post('/profiles/:id/portal-autopilot/autonomous-unlock/disable', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return undefined
+  const profileId = String(req.params?.id || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile id required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  try {
+    await clearEscrow(req.db, profileId)
+    const status = await getMasterVaultStatus(req.db, profileId)
+    return res.json({ ok: true, vault: status })
+  } catch (err) {
+    return res.status(500).json({ error: 'disable_failed', detail: err?.message })
   }
 })
 
