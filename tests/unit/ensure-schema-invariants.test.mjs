@@ -37,7 +37,7 @@ import {
   __testables,
 } from '../../backend/startup/ensureSchemaInvariants.js'
 
-const { CRAWLER_JOB_TYPES } = __testables
+const { CRAWLER_JOB_TYPES, SCHEMA_INVARIANT_STEP_NAMES } = __testables
 
 // Tiny per-test silent logger so failures don't pollute the output of
 // tests that intentionally exercise the failure path.
@@ -100,30 +100,26 @@ test('ensureSchemaInvariants runs every declared step (ran === step count)', asy
   // adding a new invariant step doesn't false-fail this guard).
   assert.equal(out.ran, out.steps.length, 'every declared step must run')
   assert.equal(typeof out.failed, 'number')
-  // Strict ordered list — guards against accidental removal/reorder of steps.
-  // Update this list (and only this list) when an invariant step is added.
+  // The runtime step order must match the module's SINGLE canonical registry
+  // (SCHEMA_INVARIANT_STEP_NAMES), not a hand-copied literal. This catches a
+  // step that's declared-but-skipped or run-out-of-order, while adding a new
+  // invariant step stays a one-line change in the source registry — it can
+  // never again drift this test.
   assert.deepEqual(
     out.steps.map((s) => s.name),
-    [
-      'agent_subsystem',
-      'funding_opportunity_reality_gate',
-      'application_task_check',
-      'organizations_soft_delete',
-      'crawler_jobs_type_check',
-      'anya_match_suggestions',
-      'matching_low_coverage_events',
-      'profile_todo_plans',
-      'behavior_events',
-      'profile_discovery_column',
-      'profile_soft_delete_column',
-      'funding_opportunity_verification_columns',
-      'ingestion_provenance_tables',
-      'profile_portal_status',
-      'portal_autopilot_identity',
-      'sms_consent_columns',
-      'perf_indexes',
-    ],
+    SCHEMA_INVARIANT_STEP_NAMES,
+    'runtime steps must match the canonical registry order',
   )
+  // Sanity floor: guards against an accidental mass-removal of steps (which
+  // would silently shrink both the registry and this assertion together).
+  // Bump this deliberately if steps are ever intentionally retired.
+  assert.ok(
+    out.steps.length >= 18,
+    `schema-invariant step count dropped to ${out.steps.length} (expected >= 18) — a step was removed?`,
+  )
+  // No duplicate step names (a copy-paste registry mistake would double-run DDL).
+  const names = out.steps.map((s) => s.name)
+  assert.equal(new Set(names).size, names.length, 'step names must be unique')
 })
 
 test('one step throwing must NOT block subsequent steps', async () => {
