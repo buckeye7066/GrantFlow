@@ -73,6 +73,22 @@ class APIClient {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('grantflow:active-profile-id')
       this.activeProfileId = stored && String(stored).trim() ? String(stored).trim() : null
+
+      // Keep this window's in-memory token cache coherent with other tabs/windows.
+      // A separate window (e.g. the Hamilton live-login popup) shares this origin's
+      // localStorage but has its OWN APIClient instance. When it rotates or clears
+      // tokens, we must observe that here instead of clinging to a now-dead
+      // in-memory copy. The `storage` event fires only in the OTHER windows, which
+      // is exactly the cross-window sync we need.
+      try {
+        window.addEventListener('storage', (e) => {
+          if (e.key === 'grantflow:access-token') this.token = e.newValue || null
+          else if (e.key === 'grantflow:refresh-token') this.refreshToken = e.newValue || null
+        })
+      } catch {
+        // addEventListener unavailable — getToken()/getRefreshToken() read
+        // localStorage directly anyway, so cross-window reads still stay fresh.
+      }
     }
   }
 
@@ -130,19 +146,40 @@ class APIClient {
   }
 
   getToken() {
-    if (this.token) return this.token;
+    // localStorage is the cross-window source of truth: another tab or the
+    // Hamilton live-login popup (a separate window with its own APIClient) may
+    // have rotated the access token, leaving our in-memory copy stale. Prefer
+    // the stored value and keep our cache in sync; fall back to memory only when
+    // storage is unavailable (SSR / tests / private-mode failures).
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('grantflow:access-token');
+      try {
+        const stored = localStorage.getItem('grantflow:access-token');
+        if (stored) {
+          this.token = stored;
+          return stored;
+        }
+      } catch {
+        // localStorage read failed — fall back to the in-memory copy below.
+      }
     }
-    return null;
+    return this.token;
   }
 
   getRefreshToken() {
-    if (this.refreshToken) return this.refreshToken;
+    // Same rotation hazard as getToken(): prefer the shared localStorage value so
+    // we never refresh with an in-memory token another window already rotated.
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('grantflow:refresh-token');
+      try {
+        const stored = localStorage.getItem('grantflow:refresh-token');
+        if (stored) {
+          this.refreshToken = stored;
+          return stored;
+        }
+      } catch {
+        // localStorage read failed — fall back to the in-memory copy below.
+      }
     }
-    return null;
+    return this.refreshToken;
   }
 
   clearToken() {
@@ -238,62 +275,128 @@ class APIClient {
    * @returns {Promise<{accessToken: string, refreshToken?: string}>} The new tokens.
    */
   async refreshTokens() {
-    // Reuse any in-flight refresh so concurrent callers share one rotation.
+    // Reuse any in-flight refresh so concurrent callers in THIS window share one
+    // rotation (single-flight). Cross-WINDOW serialization is handled separately
+    // via the Web Locks API inside _runRefresh().
     if (this.refreshPromise) {
       log.debug('refreshTokens: reusing in-flight refresh promise')
       return this.refreshPromise
     }
 
-    // Start a new single-flight refresh.
+    // Snapshot the refresh token we believe is current BEFORE we (possibly) wait
+    // on the cross-window lock. If a peer window rotates while we wait, the stored
+    // token will differ and we can adopt its result instead of rotating again.
+    const expected = this.getRefreshToken()
+
     log.debug('refreshTokens: starting new refresh')
-    this.refreshPromise = (async () => {
-      try {
-        // Re-read the refresh token inside the single-flight body so that a
-        // just-completed back-to-back rotation is observed before we fetch,
-        // avoiding sending a now-invalid (rotated) refresh token.
-        const refreshToken = this.getRefreshToken()
-        if (!refreshToken) {
-          this.clearToken()
-          throw this.createAuthError('Authentication required')
-        }
-
-        const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            // Hint for server-side CSRF protections that this is a same-origin
-            // programmatic request (not a cross-site form post).
-            'X-Requested-With': 'XMLHttpRequest',
-          },
-          credentials: 'include',
-          body: JSON.stringify({ refreshToken }),
-        })
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
-          if (response.status === 401) {
-            this.clearToken()
-          }
-          throw new Error(errorData.error || `Refresh failed with status ${response.status}`)
-        }
-
-        const data = await response.json()
-        if (data?.accessToken) this.setToken(data.accessToken)
-        if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
-        return data
-      } catch (error) {
-        this.clearToken()
-        // Do NOT call onAuthFailure here — callers (handleUnauthorized) already
-        // call it when appropriate. Having refreshTokens() also call it would
-        // fire it twice and trigger a markSessionExpired() state thrash during
-        // bootstrap, causing the Login page flash loop.
-        throw error
-      } finally {
-        this.refreshPromise = null
-      }
-    })()
-
+    this.refreshPromise = this._runRefresh(expected).finally(() => {
+      this.refreshPromise = null
+    })
     return this.refreshPromise
+  }
+
+  // Serialize refreshes ACROSS same-origin windows/tabs. The refresh token is
+  // single-use (the server rotates refresh_token_hash on every call), so two
+  // windows refreshing at once — the app tab and the Hamilton live-login popup,
+  // each with its OWN APIClient instance — would race: one rotates, the other's
+  // call 401s and (previously) wiped the shared tokens, logging BOTH windows out
+  // and 401-ing the live-login SSE stream. navigator.locks lets only one window
+  // refresh at a time; the others wait and reuse the freshly-stored token.
+  async _runRefresh(expected) {
+    const run = () => this._refreshTokenNetwork(expected)
+    try {
+      if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+        return await navigator.locks.request('grantflow:auth-refresh', run)
+      }
+    } catch (error) {
+      // Web Locks unavailable or the request was rejected — fall back to an
+      // unlocked refresh. The adopt-don't-clear net below still prevents a lost
+      // race from nuking a peer window's session.
+      log.debug('web lock refresh unavailable; running unlocked', error?.message)
+    }
+    return run()
+  }
+
+  async _refreshTokenNetwork(expected) {
+    // Re-read inside the lock: a peer window may have already rotated the token
+    // while we waited to acquire it.
+    const current = this.getRefreshToken()
+    if (!current) {
+      this.clearToken()
+      throw this.createAuthError('Authentication required')
+    }
+
+    // A peer refreshed while we waited — adopt its result instead of rotating the
+    // (already fresh) token a second time, which would needlessly invalidate it.
+    if (expected && current !== expected) {
+      log.debug('refreshTokens: peer window already rotated; adopting stored tokens')
+      return this._adoptStoredTokens(current)
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Hint for server-side CSRF protections that this is a same-origin
+        // programmatic request (not a cross-site form post).
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ refreshToken: current }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+      if (response.status === 401) {
+        // Belt-and-suspenders for the no-Web-Locks / cross-process race: another
+        // window may have rotated the token out from under us and stored a fresh
+        // one. Adopt it rather than clearing shared auth for every window.
+        const latest = this._readStored('grantflow:refresh-token')
+        if (latest && latest !== current) {
+          log.debug('refreshTokens: 401 but a peer stored a newer token; adopting it')
+          return this._adoptStoredTokens(latest)
+        }
+        // A genuine dead refresh token: clear so the app routes to sign-in. Do
+        // NOT call onAuthFailure here — callers (handleUnauthorized) already do
+        // when appropriate; firing it twice thrashes markSessionExpired().
+        this.clearToken()
+      }
+      // Non-401 (network blip / 5xx): DON'T clear — a transient failure must not
+      // log the user out. The caller surfaces the error and may retry.
+      throw new Error(errorData.error || `Refresh failed with status ${response.status}`)
+    }
+
+    const data = await response.json()
+    if (data?.accessToken) this.setToken(data.accessToken)
+    if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
+    return data
+  }
+
+  // Read a localStorage value defensively (private-mode / SSR safe).
+  _readStored(key) {
+    if (typeof window === 'undefined') return null
+    try {
+      return window.localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  }
+
+  // Adopt tokens a peer window already stored in shared localStorage. We include
+  // the peer's persisted access expiry so the caller (authStore.refreshSession)
+  // reschedules THIS window's refresh timer instead of silently dropping it.
+  _adoptStoredTokens(refreshToken) {
+    const accessToken = this._readStored('grantflow:access-token')
+    if (accessToken) this.token = accessToken
+    if (refreshToken) this.refreshToken = refreshToken
+    const rawExpiry = this._readStored('grantflow:access-expiry')
+    const accessExpires = rawExpiry ? Number(rawExpiry) : NaN
+    return {
+      accessToken: accessToken || this.token,
+      refreshToken,
+      ...(Number.isFinite(accessExpires) ? { accessExpires } : {}),
+      adoptedFromPeer: true,
+    }
   }
 
   // HTTP method shims.
