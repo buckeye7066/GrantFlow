@@ -16,6 +16,7 @@ import { isTemplatedGeoStub } from '../services/relevanceFilterRules.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:funding-sources')
@@ -56,7 +57,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
               pom.match_score, pom.match_decision, pom.match_explanation, pom.match_reasons
          FROM profile_opportunity_matches pom
          JOIN funding_opportunities fo ON fo.id = pom.opportunity_id
-        WHERE pom.profile_id = ? AND pom.matcher_version = 'crawler-os'
+        WHERE pom.profile_id = ? AND pom.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
           AND (fo.is_active IS NULL OR fo.is_active = 1)
           AND (fo.is_hidden IS NULL OR fo.is_hidden = 0)
         ORDER BY pom.match_score DESC, fo.updated_at DESC`,

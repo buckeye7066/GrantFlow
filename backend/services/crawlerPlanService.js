@@ -11,6 +11,7 @@
 import { explainCrawlerPlan } from '../crawler-os/crawlerPlanExplainer.js';
 import { loadProfileContext } from './profileHelpers.js';
 import { profileContextToThesisInput } from './crawlerOsPersistence.js';
+import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js';
 
 /**
  * @param {object} db
@@ -162,7 +163,7 @@ export async function getProfileCoverage(db, profileId) {
         `SELECT DISTINCT o.source AS source
            FROM profile_opportunity_matches m
            JOIN funding_opportunities o ON o.id = m.opportunity_id
-          WHERE m.profile_id = ? AND m.matcher_version = 'crawler-os'
+          WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
             AND o.source IS NOT NULL`,
       )
       .all(profileId);
