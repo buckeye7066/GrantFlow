@@ -538,6 +538,41 @@ export async function ensureProfileDiscoveryColumn(db, { logger = console } = {}
 }
 
 /**
+ * profiles.preferred_language — the profile's chosen language (BCP-47-ish
+ * short code, e.g. 'ru', 'es'). NULL / 'en' means English-only.
+ *
+ * Drives the GLOBAL bilingual-documents rule: every packet Hamilton generates
+ * is saved in English AND, when this is a non-English language, a translated
+ * copy in that language (see hamiltonApplicationPacketGenerator.generateAndSavePacket).
+ * Enforced at boot so the packet generator can rely on the column existing
+ * regardless of migrate-on-boot timing.
+ */
+export async function ensureProfilePreferredLanguageColumn(db, { logger = console } = {}) {
+  return runStep(
+    'profiles.preferred_language',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS preferred_language TEXT')
+        return
+      }
+      // sqlite: add only if missing.
+      let hasColumn = false
+      try {
+        const cols = await db.prepare('PRAGMA table_info(profiles)').all()
+        hasColumn = Array.isArray(cols) && cols.some((c) => c?.name === 'preferred_language')
+      } catch {
+        hasColumn = false
+      }
+      if (!hasColumn) {
+        await db.exec('ALTER TABLE profiles ADD COLUMN preferred_language TEXT')
+      }
+    },
+  )
+}
+
+/**
  * profiles.deleted_at column (both dialects).
  *
  * Older production databases can predate this column even though fresh schemas
@@ -749,6 +784,7 @@ export async function ensureSchemaInvariants(db, { logger = console } = {}) {
     ['profile_todo_plans', ensureProfileTodoPlans],
     ['behavior_events', ensureBehaviorEventsTable],
     ['profile_discovery_column', ensureProfileDiscoveryColumn],
+    ['profile_preferred_language_column', ensureProfilePreferredLanguageColumn],
     ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
     ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
     ['ingestion_provenance_tables', ensureIngestionProvenanceTables],

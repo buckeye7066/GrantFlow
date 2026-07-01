@@ -1100,6 +1100,10 @@ CREATE TABLE IF NOT EXISTS profiles (
   display_name TEXT NOT NULL,
   status TEXT DEFAULT 'active',
   tags TEXT DEFAULT '[]',
+  -- Chosen language for this profile (short code, e.g. 'ru', 'es'). NULL/'en'
+  -- means English-only. Drives the global bilingual-documents rule: Hamilton
+  -- packets are saved in English AND, when non-English, a translated copy.
+  preferred_language TEXT,
   -- Timestamp of the most recent discovery RUN for this profile. NULL until
   -- discovery has ever been triggered. The matching endpoint uses this as a
   -- gate: NOTHING is shown from the global catalog until discovery has run
