@@ -30,6 +30,7 @@ import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
 import JSZip from 'jszip'
+import { translatePacketContent, normalizeLanguage, languageNativeLabel, languageDisplayName } from './packetTranslation.js'
 
 const PERSONA = 'Hamilton — MBA-level grant writer with 20 years of experience'
 
@@ -607,12 +608,41 @@ async function insertDocumentRecord(db, {
 }
 
 /**
+ * Resolve the profile's chosen language for the global bilingual-documents
+ * rule. Prefers an explicit override, then the language carried on the profile
+ * object, then a direct DB read of profiles.preferred_language (so the rule
+ * holds regardless of how the caller assembled `profile`). Returns a normalized
+ * short code, or null for English-only (no translated copy).
+ */
+async function resolveProfileLanguage(db, profile, override) {
+  const fromOverride = normalizeLanguage(override)
+  if (fromOverride) return fromOverride
+  const fromProfile = normalizeLanguage(profile?.preferred_language ?? profile?.language)
+  if (fromProfile) return fromProfile
+  if (db && profile?.id) {
+    try {
+      const row = await db.prepare('SELECT preferred_language FROM profiles WHERE id = ?').get(profile.id)
+      return normalizeLanguage(row?.preferred_language)
+    } catch {
+      // Column may not exist yet on a legacy schema — treat as English-only.
+    }
+  }
+  return null
+}
+
+/**
  * Generate the packet, save DOCX + (when possible) PDF to disk under
  * HAMILTON_PACKET_STORAGE_DIR, insert document rows, and return the
  * resulting metadata.
+ *
+ * GLOBAL bilingual-documents rule: when the profile's preferred_language names a
+ * non-English language, an additional translated DOCX/PDF copy is saved so the
+ * packet exists in English AND the profile's chosen language. Translation is
+ * best-effort — the English packet is always saved regardless.
  */
 export async function generateAndSavePacket(db, {
   profile, opportunity = null, grant = null, automationType = 'pdf_docx', taskId = null, userId = null,
+  preferredLanguage = null, translateContent = translatePacketContent,
 } = {}) {
   if (!db) throw new Error('db required')
   if (!profile?.id) throw new Error('profile required')
@@ -667,6 +697,80 @@ export async function generateAndSavePacket(db, {
     })
   }
 
+  // ── GLOBAL bilingual-documents rule ────────────────────────────────
+  // Save a translated copy in the profile's chosen language (in addition to
+  // the English packet above). Best-effort: any failure leaves the English
+  // packet intact and is surfaced via translation_error.
+  const translation = {
+    language: null,
+    docx_document_id: null,
+    pdf_document_id: null,
+    docx_path: null,
+    pdf_path: null,
+    error: null,
+  }
+  const targetLang = await resolveProfileLanguage(db, profile, preferredLanguage)
+  if (targetLang) {
+    translation.language = targetLang
+    try {
+      const translated = await translateContent(
+        { title: content.title, sections: content.sections, instructions: mailingInstructions.instructions || [] },
+        targetLang,
+      )
+      const tMailing = { ...mailingInstructions, instructions: translated.instructions }
+      const tHtml = buildHtml({ title: translated.title, sections: translated.sections, mailingInstructions: tMailing })
+      const tDocxBuf = await buildDocxBuffer({ title: translated.title, sections: translated.sections, mailingInstructions: tMailing })
+      const tPdfBuf = await tryBuildPdfFromHtml(tHtml)
+
+      const label = languageNativeLabel(targetLang) || languageDisplayName(targetLang)
+      const tStamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const tDocxPath = path.join(storageDir, `${baseSlug}_${targetLang}_${tStamp}.docx`)
+      const tHtmlPath = path.join(storageDir, `${baseSlug}_${targetLang}_${tStamp}.html`)
+      const tPdfPath = tPdfBuf ? path.join(storageDir, `${baseSlug}_${targetLang}_${tStamp}.pdf`) : null
+      await fs.promises.writeFile(tDocxPath, tDocxBuf)
+      await fs.promises.writeFile(tHtmlPath, tHtml)
+      if (tPdfBuf) await fs.promises.writeFile(tPdfPath, tPdfBuf)
+
+      const tNotes = `${notes} language=${targetLang}.`
+      // Doc NAME keeps the stable English title + a language label so EN/translated
+      // copies are distinct, dedup-stable rows (see insertDocumentRecord).
+      translation.docx_document_id = await insertDocumentRecord(db, {
+        profileId,
+        grantId: grant?.id || null,
+        opportunityId: opportunity?.id || null,
+        name: `${content.title} — DOCX (${label})`,
+        type: 'hamilton_generated_application',
+        filePath: tDocxPath,
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        fileSize: tDocxBuf.length,
+        notes: tNotes,
+        extractedText: translated.sections.map((s) => `## ${s.heading}\n${s.body}`).join('\n\n'),
+        fileBytes: tDocxBuf,
+      })
+      translation.docx_path = tDocxPath
+      if (tPdfBuf) {
+        translation.pdf_document_id = await insertDocumentRecord(db, {
+          profileId,
+          grantId: grant?.id || null,
+          opportunityId: opportunity?.id || null,
+          name: `${content.title} — PDF (${label})`,
+          type: 'hamilton_generated_application',
+          filePath: tPdfPath,
+          mimeType: 'application/pdf',
+          fileSize: tPdfBuf.length,
+          notes: tNotes,
+          fileBytes: tPdfBuf,
+        })
+        translation.pdf_path = tPdfPath
+      }
+    } catch (err) {
+      translation.error = err?.message || String(err)
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(`[hamiltonPacket] ${targetLang} translation skipped: ${translation.error}`)
+      }
+    }
+  }
+
   return {
     docx_document_id: docxId,
     pdf_document_id: pdfId,
@@ -677,6 +781,7 @@ export async function generateAndSavePacket(db, {
     missing: content.missing,
     sections: content.sections,
     title: content.title,
+    translation,
   }
 }
 
