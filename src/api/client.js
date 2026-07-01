@@ -381,12 +381,16 @@ class APIClient {
     const {
       _isRetry: _internalIsRetry,
       _noCacheRetry: _internalNoCacheRetry,
+      _gatewayRetried: _internalGatewayRetried,
       ...requestOptions
     } = options || {};
-    
+
     // Track if this is a retry attempt to prevent infinite loops
     const isRetry = _internalIsRetry || false;
     const noCacheRetry = _internalNoCacheRetry || false;
+    // Whether we've already retried this request through a transient
+    // gateway/restart blip (502/503/504 or a dropped connection). One retry only.
+    const gatewayRetried = _internalGatewayRetried || false;
     const requestId = this.getRequestId();
     const method = String(requestOptions.method || 'GET').toUpperCase();
 
@@ -457,6 +461,23 @@ class APIClient {
       }
       
       clearTimeout(timeoutId);
+
+      // Transient gateway / restart blips: Railway returns 502/503/504 while the
+      // backend container is briefly unavailable (e.g. a deploy or an OOM
+      // restart). For safe, idempotent reads, ride through a short blip with ONE
+      // backoff retry instead of surfacing a scary error to the UI (which would
+      // otherwise cascade into "heartbeat stale" / spurious auth failures during
+      // the few seconds the server is coming back up).
+      const isIdempotentMethod = method === 'GET' || method === 'HEAD';
+      if (
+        (response.status === 502 || response.status === 503 || response.status === 504) &&
+        isIdempotentMethod &&
+        !gatewayRetried
+      ) {
+        log.debug(`transient ${response.status} on ${endpoint}; retrying once after backoff`);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        return this._doFetch(endpoint, { ...options, _gatewayRetried: true });
+      }
 
       if (response.status === 401) {
         // IMPORTANT:
@@ -579,6 +600,15 @@ class APIClient {
       // fetch() throws TypeError before an HTTP response exists, so this is not a
       // server 500 and should be surfaced distinctly to callers/UI.
       if (error instanceof TypeError && /failed to fetch/i.test(String(error.message || ''))) {
+        // A backend restart can drop an in-flight connection: for safe idempotent
+        // reads, retry once after a short backoff before treating the server as
+        // truly unreachable — this rides through restart blips transparently.
+        const canRetryMethod = method === 'GET' || method === 'HEAD';
+        if (canRetryMethod && !gatewayRetried) {
+          log.debug(`transport failure on ${endpoint}; retrying once after backoff`);
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          return this._doFetch(endpoint, { ...options, _gatewayRetried: true });
+        }
         const networkErr = new Error(
           'Network request failed before the server responded. Check backend availability, API URL/proxy, and CORS.',
         );
