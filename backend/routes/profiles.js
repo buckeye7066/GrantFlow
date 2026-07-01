@@ -41,6 +41,8 @@ import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from 
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { guardProfileSectionPayload, SECTION_METADATA } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
+import { normalizeProfile } from '../services/profileNormalizer.js'
+import { buildProfileGapPlan } from '../services/profileGapInterview.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
 import { fetchOrgLogo } from '../services/orgLogoFetcher.js'
@@ -3830,6 +3832,37 @@ router.get('/:id/completeness', async (req, res) => {
   } catch (error) {
     console.error('Error checking profile completeness:', error)
     res.status(500).json(formatError(error))
+  }
+})
+
+// GET /:id/gap-plan — the backend for Anya's opening interview + the login gap
+// gate + the gap-explanation email. Returns whether the profile is complete
+// enough to match well, the ordered (mostly yes/no) questions Anya should ask to
+// fill the gaps, and — when incomplete — a ready-to-send gap-explanation email.
+// The dichotomous questions write the exact fields the matcher reads to derive
+// the profile's type, so the user never picks a type; their answers determine it.
+router.get('/:id/gap-plan', async (req, res) => {
+  const { id } = req.params
+  if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
+  try {
+    const profile = await req.db.prepare('SELECT id, display_name, primary_type, state, city, zip FROM profiles WHERE id = ?').get(id)
+    if (!profile) return res.status(404).json({ error: 'Profile not found' })
+
+    const sectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+    const sections = {}
+    for (const s of sectionRows) sections[s.section_key] = safeParseJSON(s.data, {})
+
+    const normalized = normalizeProfile(profile, sections)
+    const firstName = String(profile.display_name || '').trim().split(/\s+/)[0] || 'there'
+    const plan = buildProfileGapPlan(normalized, sections, {
+      displayName: firstName,
+      minCoverage: Number.isFinite(Number(req.query.min_coverage)) ? Number(req.query.min_coverage) : 0.5,
+    })
+    return res.json({ ok: true, profile_id: id, ...plan })
+  } catch (error) {
+    return res.status(500).json(formatError(error))
   }
 })
 
