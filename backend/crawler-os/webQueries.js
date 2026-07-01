@@ -200,6 +200,59 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     for (const term of interests) add(extra, `${term} grants for ${word} ${geo}`);
   }
 
+  // ── Individual / benefit-need breadth (NON-students) ──
+  // Students get a rich, scholarship-specific query set above. Individuals and
+  // families seeking assistance (disability, senior, housing, food, energy,
+  // medical, caregiver) were previously served by only 1-2 generic "need grants"
+  // phrases — the single biggest recall gap for real people. People in need
+  // qualify for PROGRAMS/BENEFITS/referral services (benefits.gov, 211, Area
+  // Agencies on Aging, state HHS, community action, vocational rehab), not
+  // competitive "grants", so emit the searches that actually reach them.
+  if (!isStudent) {
+    const needSet = needs.map((n) => n.toLowerCase());
+    const kw = (Array.isArray(thesis.keywords) ? thesis.keywords : []).join(' ').toLowerCase();
+    const signal = (re) => re.test(kw) || needSet.some((n) => re.test(n));
+
+    // Universal safety-net locators — apply to ANY low-income individual, so they
+    // surface even for a sparse profile (the Kathy-class empty profile).
+    if (state || geo) {
+      add(core, `benefits.gov ${state || geo}`);
+      add(core, `211 community resources ${state || geo}`);
+      add(extra, `community action agency ${county || geo}`);
+    }
+    // Per-need ASSISTANCE PROGRAMS (distinct from the "need grants" phrase above).
+    for (const need of needs.slice(0, 3)) {
+      add(core, `${need} assistance programs ${state || geo}`);
+      if (county) add(extra, `local ${need} support services ${county}`);
+    }
+    // State benefit programs by name (where individuals actually apply).
+    if (state) {
+      add(extra, `${state} emergency assistance program`);
+      add(extra, `${state} LIHEAP energy assistance`);
+      add(extra, `${state} Medicaid application`);
+      add(extra, `${state} SNAP food assistance`);
+    }
+    // Senior-specific safety net.
+    if (signal(/senior|aging|elder|\b6[25]\+|older adult/)) {
+      if (state) add(core, `Area Agency on Aging ${state}`);
+      add(extra, `senior services ${county || geo}`);
+      add(extra, `Meals on Wheels ${geo}`);
+      add(extra, `senior housing assistance ${state || geo}`);
+    }
+    // Disability-specific.
+    if (signal(/disab|blind|deaf|wheelchair|adaptive|assistive|mobility/)) {
+      if (state) add(core, `${state} vocational rehabilitation services`);
+      add(extra, `disability assistance grants ${state || geo}`);
+      add(extra, `assistive technology funding ${state || geo}`);
+      add(extra, `disability employment support ${geo}`);
+    }
+    // Caregiver-specific.
+    if (signal(/caregiv|respite|kinship|foster/)) {
+      if (state) add(core, `caregiver support program ${state}`);
+      add(extra, `respite care assistance ${geo}`);
+    }
+  }
+
   // Last resort: a sparse profile still searches something useful.
   if (core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
 
