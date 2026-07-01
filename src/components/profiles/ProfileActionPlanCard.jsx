@@ -19,33 +19,10 @@ import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useToast } from "@/components/ui/use-toast"
 import { openAnyaPanel } from "@/lib/anyaPanel"
+import { buildAnyaPrefill } from "@/components/profiles/anyaInterviewPrefill"
 
 function countKnown(checklist) {
   return checklist.filter((item) => item?.status === "known").length
-}
-
-function buildAnyaPrefill(plan, profileName) {
-  const checklist = (plan?.checklist ?? [])
-    .slice(0, 12)
-    .map((item) => {
-      const known = item?.known_value ? ` Known: ${item.known_value}.` : ""
-      return `- ${item.title}: ${item.status}.${known} ${item.why}`
-    })
-    .join("\n")
-  const questions = (plan?.interview_questions ?? [])
-    .slice(0, 8)
-    .map((q) => `- ${q.prompt} Why: ${q.why}`)
-    .join("\n")
-
-  return [
-    `Anya, please start the project-readiness interview for ${profileName || "this profile"}.`,
-    `Open warmly with: "Good job! Now that you've gotten this far, I have a few questions to narrow down your needs."`,
-    "Use the profile fields and uploaded document text GrantFlow already has. Do not ask for facts already marked known. Ask one practical question at a time. If a PDF, DOCX, screenshot, or note already answers something, use it as evidence and ask only for confirmation.",
-    "For official IDs, tax identifiers, SSNs, EINs, license numbers, military IDs, account numbers, or medical/benefit proof, ask the user to upload the official document to the profile instead of typing sensitive numbers into chat. Keep the request practical, explain that the upload creates the profile audit trail, and never quote full sensitive identifiers back to the user.",
-    `Plan: ${plan?.title ?? "Project readiness plan"} (${plan?.plan_id ?? "general"}).`,
-    `Checklist:\n${checklist || "- No checklist items were generated yet."}`,
-    `Questions:\n${questions || "- No required questions right now."}`,
-  ].join("\n\n")
 }
 
 function buildAnyaSessionMetadata(plan, profileId) {
