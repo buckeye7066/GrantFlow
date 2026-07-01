@@ -143,7 +143,11 @@ export function composeWithTemplate(lead, opts = {}) {
   const physical = String(config.physicalAddress || '').trim()
 
   const prospectLink = String(config.prospectLink || '').trim()
-  const salutation = interpretation.salutation || DEFAULT_SALUTATION
+  // Prefer Yana's real contact greeting (name/role); when none is known a bare
+  // "Hello," reads cold, so fall back to a warm, org-specific greeting.
+  const salutation = (interpretation.salutation && interpretation.salutation !== DEFAULT_SALUTATION)
+    ? interpretation.salutation
+    : (orgName && orgName !== 'your organization' ? `Hello ${orgName} team,` : 'Hello there,')
 
   const body_text = fillTemplate(TEMPLATES.default.body, {
     SALUTATION: salutation,
