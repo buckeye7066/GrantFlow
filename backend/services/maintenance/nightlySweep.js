@@ -117,6 +117,28 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     }
   }
 
+  // Disk-volume hygiene: prune unbounded on-disk artifacts (Hamilton
+  // screenshots + packet copies, orphaned uploads left by failed ingests or
+  // deletes) and log a WARN when the persistent volume crosses the usage
+  // threshold. The volume filling to 100% previously crashed prod; this keeps
+  // growth bounded and makes the next fill visible BEFORE it crashes.
+  // Best-effort — never blocks the sweep.
+  let disk = null
+  try {
+    const { pruneAllDiskArtifacts } = await import('./pruneDiskArtifacts.js')
+    const prune = await pruneAllDiskArtifacts(db, { now: now.getTime() })
+    const { checkAndLogDiskUsage } = await import('./diskUsage.js')
+    const usage = await checkAndLogDiskUsage({ label: 'nightly' })
+    disk = { prune, usage }
+    const deleted =
+      (prune?.screenshots?.deleted ?? 0) +
+      (prune?.packets?.deleted ?? 0) +
+      (prune?.orphan_uploads?.deleted ?? 0)
+    if (deleted > 0) log.info('nightly disk-artifact prune', { deleted, used_pct: usage?.usedPct ?? null })
+  } catch (err) {
+    log.warn('nightly disk maintenance failed (non-fatal)', { error: err?.message })
+  }
+
   let sam = null
   let criticals = 0
   try {
@@ -167,6 +189,15 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     criticals,
     used_window: useWindow,
     reopened: useWindow ? green : false,
+    disk: disk
+      ? {
+          used_pct: disk.usage?.usedPct ?? null,
+          pruned:
+            (disk.prune?.screenshots?.deleted ?? 0) +
+            (disk.prune?.packets?.deleted ?? 0) +
+            (disk.prune?.orphan_uploads?.deleted ?? 0),
+        }
+      : null,
     applied_fixes: sam?.appliedFixes?.length ?? sam?.fixes?.length ?? 0,
     self_heal: selfHeal
       ? {
