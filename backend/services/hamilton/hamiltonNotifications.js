@@ -46,6 +46,10 @@ export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   'hamilton_failed',
   'hamilton_2fa_required',
   'hamilton_captcha_required',
+  // Hamilton created a brand-new portal account but the portal still needs the
+  // email verified — the user's ONE step (click the link in the email we
+  // triggered). Once verified, Hamilton auto-resumes and finishes.
+  'hamilton_email_verification_required',
   // A portal needs a saved login the owner hasn't added yet (sent to the student
   // and admins, with a deep link to add it).
   'hamilton_missing_credential',
@@ -533,9 +537,53 @@ export async function emitMissingInfoAlert(db, {
       task_id: taskId,
       // The toast bridge deep-links missing_info to the exact field via this key.
       field: primary?.kind === 'field' ? (primary?.key || null) : null,
+      // Human label for the primary item so the client can open a precise Anya
+      // conversation ("Hamilton needs your <label>") without re-deriving it.
+      field_label: primary?.label || null,
       missing_key: primary?.key || null,
       missing_keys: items.map((m) => m.key).filter(Boolean),
+      // Full item list (key + label + kind) so the client can prefill Anya to ask
+      // for exactly these — and Anya saves each answer to the profile.
+      missing_items: items.map((m) => ({ key: m.key || null, label: m.label || null, kind: m.kind || 'field' })),
       missing_count: count,
+      funding_source_title: fundingSourceTitle || null,
+      // Marks this alert as one the client should resolve CONVERSATIONALLY: open
+      // Anya prefilled to gather the field, save it to the profile, then Hamilton
+      // auto-resumes (resumeTaskAfterMissingInfo). Falls back to the field editor
+      // deep-link when the Anya panel is unavailable.
+      open_anya: true,
+    },
+  })
+}
+
+/**
+ * "Your ONE step" email-verification alert. Hamilton created a brand-new portal
+ * account; the only thing she needs from the user is a click on the verification
+ * link in the email that was triggered to them. Once verified, Hamilton
+ * auto-resumes and finishes (no further human step). Fans out to the profile
+ * owner + admins so whoever has the mailbox sees it.
+ *
+ * @returns {Promise<string[]>} created notification ids
+ */
+export async function emitEmailVerificationAlert(db, {
+  profileId, profileUserId = null, taskId = null,
+  portalHost = null, loginUrl = null, portalLabel = null,
+} = {}) {
+  if (!db) return []
+  const label = portalLabel || portalHost || 'your new account'
+  return emitHamiltonNotificationToProfileAndAdmins(db, {
+    profileId,
+    profileUserId,
+    type: 'hamilton_email_verification_required',
+    title: `Verify your ${label} email — that's the only step we need`,
+    message: `Hamilton created your ${label} account. Click the verification link in the email we just triggered to you. That's the only step we need — the moment it's verified Hamilton resumes and finishes on her own.`,
+    severity: 'warning',
+    data: {
+      task_id: taskId,
+      portal_host: portalHost || null,
+      login_url: loginUrl || null,
+      // The user's single action is in their inbox — no in-app field to fill.
+      email_verification: true,
     },
   })
 }

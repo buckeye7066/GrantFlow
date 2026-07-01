@@ -53,6 +53,16 @@ describe('planAuthBackup', () => {
     assert.equal(planAuthBackup({ blockerKind: 'sso' }).status, 'waiting_for_login')
     assert.equal(planAuthBackup({ blockerKind: '2fa' }).status, 'waiting_for_2fa')
     assert.equal(planAuthBackup({ blockerKind: 'captcha' }).status, 'waiting_for_captcha')
+    // Email verification is treated as an auth backup (auto-resuming), not a wall.
+    assert.equal(planAuthBackup({ blockerKind: 'email_verification' }).status, 'waiting_for_email_verification')
+    assert.equal(planAuthBackup({ blockerKind: 'verification_pending' }).status, 'waiting_for_email_verification')
+    assert.equal(isAuthBlocker('email_verification'), true)
+  })
+
+  it('email-verification message is the "your one step" copy', () => {
+    const p = planAuthBackup({ blockerKind: 'email_verification', retryCount: 0 })
+    assert.equal(p.status, 'waiting_for_email_verification')
+    assert.match(p.message, /verification link/i)
   })
 
   it('schedules exponential backoff and increments the attempt', () => {
@@ -87,6 +97,17 @@ describe('application_tasks retry persistence', () => {
     assert.equal(got.next_retry_at, when)
     assert.equal(got.retry_count, 2)
   })
+
+  it('accepts the waiting_for_email_verification status (in TASK_STATUSES)', async () => {
+    const db = makeDb()
+    await ensureApplicationTaskSchema(db)
+    const t = await ensureApplicationTask(db, { profileId: 'pv', opportunityId: 'oppv', userId: 'u1' })
+    const when = new Date(Date.now() + 60_000).toISOString()
+    // Would throw "invalid status" if the status weren't registered.
+    await updateApplicationTask(db, t.id, { status: 'waiting_for_email_verification', nextRetryAt: when })
+    const got = await getApplicationTask(db, t.id)
+    assert.equal(got.status, 'waiting_for_email_verification')
+  })
 })
 
 describe('runner due-retry selection', () => {
@@ -94,7 +115,7 @@ describe('runner due-retry selection', () => {
   const DUE_QUERY = `
     SELECT id, status FROM application_tasks
      WHERE status IN ('queued','ready','analyzing','ready_to_start')
-        OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha')
+        OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_email_verification')
             AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
      ORDER BY updated_at ASC`
 

@@ -22,7 +22,8 @@ const Database = (await import('better-sqlite3')).default
 const adapter = await import('../services/hamilton/hamiltonPortalSignupAdapter.js')
 const {
   registerOnPortal, genericSignupAdapter, resolveHostAdapter, HOST_ADAPTERS,
-  buildSignupIdentity, completeEmailVerification, extractConfirmationLink, _internal,
+  buildSignupIdentity, completeEmailVerification, recheckEmailVerification,
+  extractConfirmationLink, _internal,
 } = adapter
 
 const masterVault = await import('../services/hamilton/hamiltonPortalMasterVault.js')
@@ -31,10 +32,13 @@ const {
 } = masterVault
 
 const credService = await import('../services/hamilton/hamiltonPortalCredentialService.js')
-const { _resetCredentialSchemaCache } = credService
+const {
+  _resetCredentialSchemaCache, saveAutoProvisionedCredential,
+  markCredentialAwaitingVerification, listCredentialsAwaitingVerification,
+} = credService
 
 const {
-  runAutopilotIdentityForPortal, AUTOPILOT_STATE,
+  runAutopilotIdentityForPortal, AUTOPILOT_STATE, recheckDuePortalVerifications,
 } = await import('../services/hamilton/hamiltonPortalAutopilotIdentity.js')
 
 function makeDb() { return new Database(':memory:') }
@@ -415,7 +419,7 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
     disableBrowser()
   })
 
-  it('verification_pending → brain routes to needs_user (email verify)', async () => {
+  it('verification_pending → brain enters WAITING_FOR_EMAIL_VERIFICATION (user\'s one step), not co-browse', async () => {
     enableBrowser()
     await setMasterPassphrase(db, { profileId: 'pVer', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
     const page = makeFakePage({
@@ -428,15 +432,81 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
       afterSubmit: { bodyText: 'Check your inbox to verify your email.', url: 'https://communityforce.com/check-email' },
     })
     const { launchBrowser } = makeFakeBrowser(page)
-    // Mailbox returns no verification link → stays pending.
+    // Mailbox returns no verification link → stays pending (inline poll).
     const outlookProvider = { notConfigured: false, listInboxMessages: vi.fn(async () => ({ messages: [] })) }
     const r = await runAutopilotIdentityForPortal(db, {
       profileId: 'pVer', userId: 'u1', portalHost: 'communityforce.com',
       loginUrl: 'https://communityforce.com/register', launchBrowser, outlookProvider,
       verifyWaitMs: 0, verifyPollMs: 1, // don't poll the mailbox in a unit test
     })
-    expect(r.state).toBe(AUTOPILOT_STATE.NEEDS_USER)
+    expect(r.state).toBe(AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION)
     expect(r.blocker).toBe('verification_pending')
+    expect(r.next_retry_at).toBeTruthy()
+    // NOT a co-browse terminal — automation will finish once verified.
+    expect(r.resolution).toBeNull()
+    // The credential is flagged awaiting verification (still pending_registration).
+    const cred = await db.prepare(
+      `SELECT verification_status, pending_registration, verification_next_retry_at
+         FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ?`,
+    ).get('pVer', 'communityforce.com')
+    expect(cred.verification_status).toBe('pending')
+    expect(Boolean(cred.pending_registration)).toBe(true)
+    expect(cred.verification_next_retry_at).toBeTruthy()
+    // A "verify your email" notification was emitted (the user's one step).
+    const notif = await db.prepare(
+      `SELECT COUNT(*) AS n FROM notifications WHERE type = 'hamilton_email_verification_required'`,
+    ).get()
+    expect(Number(notif.n)).toBeGreaterThan(0)
+    disableBrowser()
+  })
+
+  it('re-run RE-CHECKS a pending account and auto-resumes when the link is now verified', async () => {
+    enableBrowser()
+    await setMasterPassphrase(db, { profileId: 'pRe', passphrase: 'a-strong-passphrase', identityEmail: 'auto@vault.example' })
+    // 1) Initial signup → verification_pending (no link yet).
+    const signupPage = makeFakePage({
+      selectors: {
+        'input[type="email"]:not([disabled])': fillHandle(),
+        'input[type="password"]:not([disabled])': fillHandle(),
+        'button[type="submit"]:not([disabled])': {},
+      },
+      bodyText: 'Sign up',
+      afterSubmit: { bodyText: 'Check your inbox to verify your email.', url: 'https://communityforce.com/check-email' },
+    })
+    const first = makeFakeBrowser(signupPage)
+    const emptyMailbox = { notConfigured: false, listInboxMessages: vi.fn(async () => ({ messages: [] })) }
+    const r1 = await runAutopilotIdentityForPortal(db, {
+      profileId: 'pRe', userId: 'u1', portalHost: 'communityforce.com',
+      loginUrl: 'https://communityforce.com/register', launchBrowser: first.launchBrowser,
+      outlookProvider: emptyMailbox, verifyWaitMs: 0, verifyPollMs: 1,
+    })
+    expect(r1.state).toBe(AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION)
+    // Clear the just-set next_retry so the re-check is due immediately.
+    await db.prepare(`UPDATE hamilton_portal_credentials SET verification_next_retry_at = NULL WHERE profile_id = ?`).run('pRe')
+
+    // 2) Re-run: the verification email has now arrived; the re-check clicks the
+    // link and the account is verified → HAS_EXISTING_CREDENTIALS (auto-resume).
+    const verifyPage = makeFakePage({ bodyText: 'Your email has been verified. Success!', url: 'https://communityforce.com/dashboard' })
+    const second = makeFakeBrowser(verifyPage)
+    const mailbox = { notConfigured: false, listInboxMessages: vi.fn(async () => ({
+      messages: [{
+        from: { emailAddress: { address: 'no-reply@communityforce.com' } },
+        subject: 'Verify your email',
+        body: { content: '<a href="https://communityforce.com/verify?token=t9">Confirm your email</a>' },
+      }],
+    })) }
+    const r2 = await runAutopilotIdentityForPortal(db, {
+      profileId: 'pRe', userId: 'u1', portalHost: 'communityforce.com',
+      loginUrl: 'https://communityforce.com/register', launchBrowser: second.launchBrowser,
+      outlookProvider: mailbox, verifyWaitMs: 100, verifyPollMs: 1,
+    })
+    expect(r2.state).toBe(AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS)
+    // Verification cleared + account is real now.
+    const cred = await db.prepare(
+      `SELECT verification_status, pending_registration FROM hamilton_portal_credentials WHERE profile_id = ?`,
+    ).get('pRe')
+    expect(cred.verification_status === null || cred.verification_status === undefined).toBe(true)
+    expect(Boolean(cred.pending_registration)).toBe(false)
     disableBrowser()
   })
 
@@ -467,6 +537,70 @@ describe('autopilot brain ↔ signup adapter wiring', () => {
     expect(launchBrowser).not.toHaveBeenCalled()
     const rows = await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE profile_id = ?').all('pDry')
     expect(rows.length).toBe(1) // credential record provisioned (no browser run)
+    disableBrowser()
+  })
+})
+
+// ── email-verification re-check driver (auto-resume) ─────────────────────────────
+
+describe('recheckEmailVerification + recheckDuePortalVerifications', () => {
+  let db
+  beforeEach(() => {
+    db = makeDb()
+    _resetMasterVaultSchemaCache()
+    _resetCredentialSchemaCache()
+    _resetUnlockCache()
+    disableBrowser()
+  })
+
+  it('recheckEmailVerification refuses to launch when browser automation is off', async () => {
+    const launchBrowser = vi.fn()
+    const res = await recheckEmailVerification(db, {
+      portalHost: 'communityforce.com', identityEmail: 'auto@vault.example', launchBrowser,
+    })
+    expect(res.status).toBe('failed')
+    expect(res.automation_disabled).toBe(true)
+    expect(launchBrowser).not.toHaveBeenCalled()
+  })
+
+  it('driver verifies a DUE pending account and clears it; skips future ones', async () => {
+    enableBrowser()
+    const { key } = await setMasterPassphrase(db, { profileId: 'pDrv', passphrase: 'a-strong-passphrase' })
+    // A pending-verification account whose re-check is due (no next_retry).
+    const prov = await saveAutoProvisionedCredential(db, {
+      userId: 'u1', profileId: 'pDrv', portalHost: 'communityforce.com',
+      username: 'auto@vault.example', masterKey: key,
+    })
+    await markCredentialAwaitingVerification(db, prov.credential.id, { nextRetryAt: null, attempts: 0 })
+    // A second account scheduled far in the future — must NOT be picked.
+    const prov2 = await saveAutoProvisionedCredential(db, {
+      userId: 'u1', profileId: 'pDrv', portalHost: 'mykaleidoscope.com',
+      username: 'auto@vault.example', masterKey: key,
+    })
+    await markCredentialAwaitingVerification(db, prov2.credential.id, {
+      nextRetryAt: new Date(Date.now() + 3_600_000).toISOString(), attempts: 0,
+    })
+
+    const due = await listCredentialsAwaitingVerification(db, {})
+    expect(due.map((r) => r.portal_host)).toContain('communityforce.com')
+    expect(due.map((r) => r.portal_host)).not.toContain('mykaleidoscope.com')
+
+    // Mailbox has the link; the verify page confirms success.
+    const verifyPage = makeFakePage({ bodyText: 'Your email has been verified. Success!', url: 'https://communityforce.com/dashboard' })
+    const { launchBrowser } = makeFakeBrowser(verifyPage)
+    const mailbox = { notConfigured: false, listInboxMessages: vi.fn(async () => ({
+      messages: [{
+        from: { emailAddress: { address: 'no-reply@communityforce.com' } },
+        subject: 'Verify your email',
+        body: { content: '<a href="https://communityforce.com/verify?token=zz">Confirm your email</a>' },
+      }],
+    })) }
+    const summary = await recheckDuePortalVerifications(db, { limit: 25, launchBrowser, outlookProvider: mailbox })
+    expect(summary.checked).toBe(1)
+    expect(summary.verified).toBe(1)
+    // The verified account no longer carries a pending verification.
+    const stillPending = await listCredentialsAwaitingVerification(db, {})
+    expect(stillPending.map((r) => r.portal_host)).not.toContain('communityforce.com')
     disableBrowser()
   })
 })

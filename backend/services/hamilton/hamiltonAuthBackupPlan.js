@@ -35,6 +35,15 @@ const AUTH_STATUS_BY_KIND = Object.freeze({
   mfa: 'waiting_for_2fa',
   captcha: 'waiting_for_captcha',
   captcha_required: 'waiting_for_captcha',
+  // Account created but the portal still needs the email verified. This is NOT a
+  // hard wall — it's the user's ONE step (click the link in the email that was
+  // triggered to them). We defer on the same backoff so that once the link is
+  // clicked (or Hamilton auto-confirms it from John's mailbox) the next retry
+  // finds the account verified and continues. Never auto-enters 2FA codes.
+  email_verification: 'waiting_for_email_verification',
+  email_verification_required: 'waiting_for_email_verification',
+  verification_pending: 'waiting_for_email_verification',
+  verify_email: 'waiting_for_email_verification',
 })
 
 // Backoff schedule (minutes) indexed by prior retry count: 15m, 1h, 4h, 12h,
@@ -90,10 +99,15 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now() }
       retryInMinutes: null,
       attempt: priorAttempts,
       maxAttempts: AUTH_MAX_ATTEMPTS,
-      message: 'Hamilton retried this login several times without success and needs you to complete the sign-in (and save the session) before she can continue.',
+      message: waitingStatus === 'waiting_for_email_verification'
+        ? 'Hamilton created the account and re-checked several times but the email still is not verified. Please click the verification link (or finish the sign-in in a side-by-side login) so she can continue.'
+        : 'Hamilton retried this login several times without success and needs you to complete the sign-in (and save the session) before she can continue.',
     }
   }
   const mins = AUTH_BACKOFF_MINUTES[priorAttempts]
+  const message = waitingStatus === 'waiting_for_email_verification'
+    ? `Hamilton created your account — the only step we need from you is to click the verification link in the email we triggered. She'll keep working other applications and automatically re-check in ~${humanizeMinutes(mins)}; the moment the email is verified she resumes and finishes on her own.`
+    : `Hamilton needs you to sign in to this portal once. She'll keep working other applications and automatically retry in ~${humanizeMinutes(mins)} — log in (and save the session) whenever you can and she'll resume on her own.`
   return {
     isAuth: true,
     status: waitingStatus,
@@ -102,6 +116,6 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now() }
     retryInMinutes: mins,
     attempt: priorAttempts + 1,
     maxAttempts: AUTH_MAX_ATTEMPTS,
-    message: `Hamilton needs you to sign in to this portal once. She'll keep working other applications and automatically retry in ~${humanizeMinutes(mins)} — log in (and save the session) whenever you can and she'll resume on her own.`,
+    message,
   }
 }

@@ -12,10 +12,13 @@
 // toast stays (base 3.5s, +2s per level) — see use-toast.jsx. An explicit
 // `duration` in options still overrides.
 function build(base, options = {}) {
-  const { navigateTo = null, flash = null, duration } = options || {};
+  const { navigateTo = null, flash = null, duration, onActivate = null } = options || {};
   const toastArgs = { ...base };
   if (navigateTo) toastArgs.navigateTo = navigateTo;
   if (flash) toastArgs.flash = flash;
+  // A click handler that runs instead of (or before) navigation — e.g. open the
+  // Anya panel to gather a missing field conversationally.
+  if (typeof onActivate === "function") toastArgs.onActivate = onActivate;
   if (typeof duration === "number") toastArgs.duration = duration;
   return toastArgs;
 }

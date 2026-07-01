@@ -18,11 +18,15 @@ const AUTH_NOTIFICATION_TYPES = Object.freeze([
   // A portal needs a saved login the owner hasn't added yet — surfaced at the
   // next login of the student and the admin so either can add it.
   'hamilton_missing_credential',
+  // A portal account Hamilton created still needs the email verified (the user's
+  // one click) before she can finish — surfaced so the priming toast can point
+  // the user at the verification email.
+  'hamilton_email_verification_required',
   // admin recipient variants
   'hamilton_admin_login_required',
 ])
 
-const WAITING_STATUSES = Object.freeze(['waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha'])
+const WAITING_STATUSES = Object.freeze(['waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha', 'waiting_for_email_verification'])
 
 function hostFromUrl(u) {
   if (!u) return null

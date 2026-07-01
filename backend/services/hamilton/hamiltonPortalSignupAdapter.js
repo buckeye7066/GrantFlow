@@ -447,6 +447,10 @@ export async function completeEmailVerification({
   identityEmail, portalHost, browserContext = null,
   outlookProvider = null, now = () => Date.now(),
   waitMs = VERIFY_WAIT_MS, pollMs = VERIFY_POLL_MS,
+  // How far back to look for the verification email. Short for the inline
+  // post-signup attempt (the mail just arrived); much longer for a later
+  // re-check, where the email may have landed hours ago.
+  lookbackMs = 10 * 60 * 1000,
 } = {}) {
   if (!identityEmail) {
     return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
@@ -464,7 +468,7 @@ export async function completeEmailVerification({
 
   const wantHost = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
   const deadline = now() + Math.max(0, waitMs)
-  const sinceIso = new Date(now() - 10 * 60 * 1000).toISOString() // look back 10 min
+  const sinceIso = new Date(now() - Math.max(60 * 1000, lookbackMs)).toISOString()
   let link = null
   // Poll the inbox a few times within the window. We do NOT sleep below the poll
   // interval more than once past the deadline.
@@ -521,6 +525,100 @@ export async function completeEmailVerification({
     }
   } catch (err) {
     return ok('verification_pending', { message: 'Could not visit the verification link.', evidence: { link, error: err?.message } })
+  }
+}
+
+/**
+ * Open a browser context for signup / verification. Tests inject `launchBrowser`;
+ * prod imports Playwright. Returns { browser, context } or { error } (an ok(...)
+ * failure result) so the caller can bail with a structured status. Shared by
+ * registerOnPortal and recheckEmailVerification so the launch/guard logic lives
+ * in one place.
+ */
+async function openBrowserContext(launchBrowser) {
+  let browser = null
+  let context = null
+  if (typeof launchBrowser === 'function') {
+    const launched = await launchBrowser()
+    browser = launched?.browser || launched || null
+    context = launched?.context || (browser?.newContext ? await browser.newContext() : null)
+  } else {
+    let chromium
+    try { ({ chromium } = await import('playwright')) }
+    catch (err) {
+      return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: `Playwright unavailable: ${err?.message || err}`, automation_disabled: true }) }
+    }
+    const exe = chromium.executablePath?.()
+    if (!exe || !fs.existsSync(exe)) {
+      return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', automation_disabled: true }) }
+    }
+    browser = await chromium.launch({ headless: true })
+    context = await browser.newContext()
+  }
+  if (!context) {
+    return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'No browser context available' }) }
+  }
+  return { browser, context }
+}
+
+async function closeBrowserContext({ browser, context } = {}) {
+  try { if (context && context.close) await context.close() } catch { /* ignore */ }
+  try { if (browser && browser.close) await browser.close() } catch { /* ignore */ }
+}
+
+/**
+ * RE-CHECK an account that was created but left unverified: open a fresh browser,
+ * poll John's Graph mailbox (a longer lookback than the inline post-signup poll,
+ * since the email may have arrived earlier), and click the confirmation link.
+ * Returns:
+ *   { status: 'registered' }           — the account is now verified/active
+ *   { status: 'verification_pending' } — still not verified (mailbox/link absent)
+ *   { status: 'failed', automation_disabled }  — automation off / no browser
+ *
+ * Honors the same identity-proof + ToS + browser-automation gates as
+ * registerOnPortal (defense in depth). Never throws.
+ */
+export async function recheckEmailVerification(db, {
+  portalHost, loginUrl = null, identityEmail,
+  launchBrowser = null, outlookProvider = null,
+  waitMs = VERIFY_POLL_MS, pollMs = VERIFY_POLL_MS,
+  lookbackMs = 24 * 60 * 60 * 1000, // look back 24h for an already-delivered email
+} = {}) {
+  const host = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
+  const url = loginUrl || (host ? `https://${host}` : null)
+  if (!identityEmail) return ok('verification_pending', { message: 'No autopilot identity email to verify.' })
+  // Identity-proofed hosts are never auto-driven.
+  if (isIdentityProofedHost(host)) {
+    return ok('verification_pending', { message: 'Identity-proofed portal — verification is not auto-driven.' })
+  }
+  try {
+    const policy = await getPolicyFor(db, host).catch(() => null)
+    if (policy && (policy.identity_proofed || policy.automation_allowed === false)) {
+      return ok('verification_pending', { message: 'Portal policy forbids auto-driving verification.' })
+    }
+  } catch { /* permissive default */ }
+  if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts: [] })) {
+    return ok('failed', {
+      blocker_kind: 'no_browser',
+      blocker_detail: isBrowserAutomationEnabled()
+        ? 'Portal host is not on the browser-automation allowlist.'
+        : 'Browser automation is disabled (HAMILTON_ENABLE_BROWSER_AUTOMATION).',
+      automation_disabled: true,
+      message: 'Browser automation not permitted; verification re-check not attempted.',
+    })
+  }
+  let handle = null
+  try {
+    handle = await openBrowserContext(launchBrowser)
+    if (handle.error) return handle.error
+    const verify = await completeEmailVerification({
+      identityEmail, portalHost: host,
+      browserContext: handle.context, outlookProvider,
+      waitMs, pollMs, lookbackMs,
+    }).catch((err) => ok('verification_pending', { message: `Verification re-check failed: ${err?.message || err}` }))
+    return verify
+  } finally {
+    await closeBrowserContext(handle)
   }
 }
 
@@ -628,26 +726,10 @@ export async function registerOnPortal(db, {
   let browser = null
   let context = null
   try {
-    if (typeof launchBrowser === 'function') {
-      const launched = await launchBrowser()
-      browser = launched?.browser || launched || null
-      context = launched?.context || (browser?.newContext ? await browser.newContext() : null)
-    } else {
-      let chromium
-      try { ({ chromium } = await import('playwright')) }
-      catch (err) {
-        return ok('failed', { blocker_kind: 'no_browser', blocker_detail: `Playwright unavailable: ${err?.message || err}`, automation_disabled: true })
-      }
-      const exe = chromium.executablePath?.()
-      if (!exe || !fs.existsSync(exe)) {
-        return ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', automation_disabled: true })
-      }
-      browser = await chromium.launch({ headless: true })
-      context = await browser.newContext()
-    }
-    if (!context) {
-      return ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'No browser context available' })
-    }
+    const handle = await openBrowserContext(launchBrowser)
+    if (handle.error) return handle.error
+    browser = handle.browser
+    context = handle.context
     const page = await context.newPage()
     try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }) }
     catch (err) {
@@ -679,8 +761,7 @@ export async function registerOnPortal(db, {
     }
     return result
   } finally {
-    try { if (context && context.close) await context.close() } catch { /* ignore */ }
-    try { if (browser && browser.close) await browser.close() } catch { /* ignore */ }
+    await closeBrowserContext({ browser, context })
   }
 }
 
@@ -697,5 +778,6 @@ export default {
   HOST_ADAPTERS,
   buildSignupIdentity,
   completeEmailVerification,
+  recheckEmailVerification,
   extractConfirmationLink,
 }

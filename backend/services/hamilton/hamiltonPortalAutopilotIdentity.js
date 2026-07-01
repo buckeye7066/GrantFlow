@@ -48,6 +48,10 @@ import {
   getDecryptedCredentialWithFallback,
   saveAutoProvisionedCredential,
   markCredentialRegistered,
+  markCredentialAwaitingVerification,
+  recordVerificationRecheck,
+  clearVerificationPending,
+  listCredentialsAwaitingVerification,
   registrableDomain,
 } from './hamiltonPortalCredentialService.js'
 import { findValidSession } from './hamiltonCredentialSessionService.js'
@@ -64,7 +68,9 @@ import {
 } from './hamiltonAutomationOrchestrator.js'
 import { suggestPortalLogin } from './hamiltonPortalLoginSuggester.js'
 import { hostOfUrl } from './hamiltonMissingCredential.js'
-import { registerOnPortal, buildSignupIdentity } from './hamiltonPortalSignupAdapter.js'
+import { registerOnPortal, buildSignupIdentity, recheckEmailVerification } from './hamiltonPortalSignupAdapter.js'
+import { planAuthBackup } from './hamiltonAuthBackupPlan.js'
+import { emitEmailVerificationAlert } from './hamiltonNotifications.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:hamilton-portal-autopilot-identity')
@@ -77,6 +83,12 @@ export const AUTOPILOT_STATE = Object.freeze({
   VAULT_LOCKED: 'vault_locked',
   NEEDS_USER: 'needs_user',
   AUTOMATION_DISABLED: 'automation_disabled',
+  // Account created on the portal but the email still needs verifying — the
+  // user's ONE step (click the link in the email we triggered). NOT a co-browse
+  // terminal: Hamilton re-checks (auto-clicking the link from John's mailbox, or
+  // on the backoff cadence once the user clicks it) and finishes on her own. Only
+  // after the backoff is exhausted does it fall back to needs_user (co-browse).
+  WAITING_FOR_EMAIL_VERIFICATION: 'waiting_for_email_verification',
 })
 
 // The resolution path offered to the OWNER for a terminal/blocked state. The
@@ -175,6 +187,93 @@ async function queueHandoff(db, { userId, profileId, portalHost, loginUrl, reaso
 }
 
 /**
+ * Enter (or refresh) the WAITING_FOR_EMAIL_VERIFICATION state for a newly-created
+ * account: flag the credential as awaiting verification with the first backoff
+ * re-check time, and notify the user their ONE step is to click the verification
+ * link. Returns the terminal-shaped result the brain hands back. Best-effort on
+ * the side effects — a notification/flag failure never throws.
+ */
+async function enterWaitingForEmailVerification(db, {
+  userId, profileId, host, loginUrl, credential, registration, portalLabel = null,
+} = {}) {
+  const plan = planAuthBackup({ blockerKind: 'email_verification', retryCount: 0 })
+  if (credential?.id) {
+    await markCredentialAwaitingVerification(db, credential.id, { nextRetryAt: plan.nextRetryAt, attempts: 0 }).catch(() => {})
+  }
+  await emitEmailVerificationAlert(db, {
+    profileId, profileUserId: userId && userId !== 'system_admin_token' ? userId : null,
+    portalHost: host, loginUrl, portalLabel,
+  }).catch(() => {})
+  return {
+    state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, host,
+    detail: `We created your ${portalLabel || host} account. The only step we need from you is to click the verification link in the email we triggered — the moment it's verified Hamilton resumes and finishes on her own.`,
+    credential, registration, next_retry_at: plan.nextRetryAt, blocker: 'verification_pending',
+  }
+}
+
+/**
+ * Re-check ONE account that is awaiting email verification. Auto-completes it by
+ * polling John's Graph mailbox for the confirmation link and clicking it; if the
+ * user has clicked the link themselves, the account is already active and the
+ * re-check confirms it. Advances the backoff on each unconfirmed attempt and,
+ * once exhausted, falls back to a side-by-side login (co-browse). Returns the
+ * brain-shaped terminal result. Never throws.
+ *
+ * @param {object} cred  { id, portal_host|portalHost, login_url|loginUrl, username, verification_attempts }
+ */
+async function performVerificationRecheck(db, {
+  userId = 'system_admin_token', profileId, cred,
+  loginUrl = null, launchBrowser = null, outlookProvider = null,
+  verifyWaitMs = undefined, verifyPollMs = undefined,
+} = {}) {
+  const host = registrableDomain(cred?.portal_host || cred?.portalHost) || hostOfUrl(cred?.portal_host || cred?.portalHost) || String(cred?.portal_host || cred?.portalHost || '').toLowerCase()
+  const resolvedLoginUrl = loginUrl || cred?.login_url || cred?.loginUrl || (host ? `https://${host}` : null)
+  const identityEmail = cred?.username || null
+  const attempts = Number(cred?.verification_attempts) || 0
+
+  let verify = null
+  try {
+    verify = await recheckEmailVerification(db, {
+      portalHost: host, loginUrl: resolvedLoginUrl, identityEmail,
+      launchBrowser, outlookProvider,
+      ...(verifyWaitMs !== undefined ? { waitMs: verifyWaitMs } : {}),
+      ...(verifyPollMs !== undefined ? { pollMs: verifyPollMs } : {}),
+    })
+  } catch (err) {
+    verify = { status: 'verification_pending', message: err?.message || String(err) }
+  }
+
+  // Confirmed → the account is real now; clear the pending flag + verification.
+  if (verify && verify.status === 'registered') {
+    if (cred?.id) await markCredentialRegistered(db, cred.id).catch(() => {})
+    log.info('email_verification_confirmed', { profileId: String(profileId), host })
+    return {
+      state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, host,
+      detail: 'Email verified — Hamilton will log in with the saved credentials and continue.',
+      registration: verify,
+    }
+  }
+
+  // Not yet verified → advance the backoff. Exhausted → side-by-side login.
+  const plan = planAuthBackup({ blockerKind: 'email_verification', retryCount: attempts })
+  if (plan.exhausted) {
+    if (cred?.id) await clearVerificationPending(db, cred.id).catch(() => {})
+    await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'email verification pending' })
+    return {
+      state: AUTOPILOT_STATE.NEEDS_USER, host,
+      detail: 'Hamilton created the account and re-checked several times but the email still is not verified; finish it in a side-by-side login.',
+      blocker: 'verification_pending',
+    }
+  }
+  if (cred?.id) await recordVerificationRecheck(db, cred.id, { nextRetryAt: plan.nextRetryAt }).catch(() => {})
+  return {
+    state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, host,
+    detail: `Still waiting on the email verification for your ${host} account — click the link in the email we sent and Hamilton finishes automatically.`,
+    next_retry_at: plan.nextRetryAt, blocker: 'verification_pending',
+  }
+}
+
+/**
  * Decide and execute the autopilot-identity outcome for ONE portal. Pure of HTTP;
  * the route / orchestrator passes a resolved login URL. Never throws — any error
  * degrades to a needs_user handoff with the error captured in `detail`.
@@ -243,6 +342,21 @@ async function _runAutopilotIdentityForPortal(db, {
     // provisioned password. A captured session (hasSession) means the user did
     // finish signing in, so that still counts as a real account.
     if (existingCred && existingCred.pending_registration && !hasSession) {
+      // AWAITING EMAIL VERIFICATION: instead of dead-ending at a side-by-side
+      // handoff, re-check now — poll John's mailbox for the confirmation link and
+      // click it (or detect the user already clicked it). This is the auto-resume:
+      // the moment the email is verified the account becomes real and Hamilton
+      // continues. Backoff-exhausted re-checks fall back to co-browse. A dry run
+      // never launches a browser.
+      if (existingCred.verification_status === 'pending' && !dryRun) {
+        return await performVerificationRecheck(db, {
+          userId, profileId, cred: existingCred, loginUrl: resolvedLoginUrl,
+          launchBrowser, outlookProvider, verifyWaitMs, verifyPollMs,
+        })
+      }
+      if (existingCred.verification_status === 'pending') {
+        return { state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, host, detail: 'Hamilton created this account; it is awaiting the email verification link (the only step we need from you).', blocker: 'verification_pending', next_retry_at: existingCred.verification_next_retry_at || null }
+      }
       return { state: AUTOPILOT_STATE.NEEDS_USER, host, detail: 'Hamilton provisioned a login here but the account registration was not completed; finish it in a side-by-side login.', blocker: 'pending_registration' }
     }
     if (existingCred || hasSession) {
@@ -365,14 +479,17 @@ async function _runAutopilotIdentityForPortal(db, {
         }
       }
       if (registration.status === 'verification_pending') {
-        // Account created but the portal still needs the email verified and we
-        // couldn't auto-confirm → graceful handoff to co-browse / the user.
-        await queueHandoff(db, { userId, profileId, portalHost: host, loginUrl: resolvedLoginUrl, reason: 'email verification pending' })
-        return {
-          state: AUTOPILOT_STATE.NEEDS_USER, host,
-          detail: 'Hamilton created the account but the portal needs the email verified; finish it in a side-by-side login.',
-          credential: result.credential, registration, blocker: 'verification_pending',
-        }
+        // Account created but the portal still needs the email verified and the
+        // inline post-signup poll didn't auto-confirm it yet. This is the user's
+        // ONE step (click the link in the email we triggered) — NOT a co-browse
+        // handoff. Enter waiting_for_email_verification: notify the user, flag the
+        // credential for re-check on the backoff cadence, and auto-resume the
+        // moment it's verified. Co-browse is only the fallback after the backoff
+        // is exhausted (see performVerificationRecheck).
+        return await enterWaitingForEmailVerification(db, {
+          userId, profileId, host, loginUrl: resolvedLoginUrl,
+          credential: result.credential, registration,
+        })
       }
       // 'blocked' / 'failed' → route to a side-by-side handoff. automation_disabled
       // maps to a queued (not co-browse) state; other blockers hand off.
@@ -467,6 +584,46 @@ export async function runAutopilotIdentityForProfile(db, { profileId, userId = '
 }
 
 /**
+ * Periodic driver: re-check every account that is AWAITING EMAIL VERIFICATION and
+ * whose backoff re-check is due. Auto-completes each by polling John's mailbox for
+ * the confirmation link and clicking it (or detecting the user already clicked
+ * it), advancing the backoff otherwise and falling back to co-browse once
+ * exhausted. This is what makes "the user clicks the verify link → Hamilton
+ * resumes and finishes" hands-off — it is driven from the Hamilton scheduler tick
+ * on the same cadence that re-picks auth-blocked tasks. Best-effort; never throws.
+ *
+ * @returns {Promise<{ checked, verified, still_pending, exhausted, results }>}
+ */
+export async function recheckDuePortalVerifications(db, { limit = 25, launchBrowser = null, outlookProvider = null } = {}) {
+  const out = { checked: 0, verified: 0, still_pending: 0, exhausted: 0, results: [] }
+  if (!db) return out
+  let rows = []
+  try {
+    rows = await listCredentialsAwaitingVerification(db, { nowIso: new Date().toISOString(), limit })
+  } catch { rows = [] }
+  for (const row of rows || []) {
+    if (!row?.profile_id || !row?.portal_host) continue
+    out.checked += 1
+    let r
+    try {
+      r = await performVerificationRecheck(db, {
+        userId: row.user_id || 'system_admin_token',
+        profileId: row.profile_id,
+        cred: row,
+        launchBrowser, outlookProvider,
+      })
+    } catch (err) {
+      r = { state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, detail: err?.message || String(err) }
+    }
+    if (r.state === AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS) out.verified += 1
+    else if (r.state === AUTOPILOT_STATE.NEEDS_USER) out.exhausted += 1
+    else out.still_pending += 1
+    out.results.push({ profile_id: row.profile_id, portal_host: row.portal_host, state: r.state })
+  }
+  return out
+}
+
+/**
  * READ-ONLY autopilot state for ONE portal — no registration, no handoff queued,
  * no credential written. Used to annotate the portals dashboard (GET) so the
  * green/red tiles reflect the autopilot lifecycle without side effects. A tile
@@ -510,8 +667,12 @@ async function _describeAutopilotStateForPortal(db, { profileId, portalHost, has
       }
       // A provisioned-but-unregistered login is not a working account (unless the
       // user has since captured a session) — report it as awaiting the side-by-side
-      // login so the tile doesn't render a false green "ready".
+      // login so the tile doesn't render a false green "ready". When it's awaiting
+      // email verification, surface that specific (auto-resuming) state instead.
       if (cred && cred.pending_registration && !hasSession) {
+        if (cred.verification_status === 'pending') {
+          return { state: AUTOPILOT_STATE.WAITING_FOR_EMAIL_VERIFICATION, detail: 'Account created — awaiting the email verification link (the only step we need from you). Hamilton finishes automatically once verified.' }
+        }
         return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Login provisioned, but registration was not completed; finish it in a side-by-side login.' }
       }
       return { state: AUTOPILOT_STATE.HAS_EXISTING_CREDENTIALS, detail: 'An account already exists.' }
@@ -660,6 +821,15 @@ export async function scanPortalAutopilotReadiness(db, { limit = 500 } = {}) {
       else registration.blocked_awaiting_cobrowse += n
     }
   } catch { /* table may be absent */ }
+  // Accounts actively awaiting email verification (the auto-resuming state) live
+  // on the credential row now, not as a session-capture handoff — count them so
+  // Sam + Anya report "N awaiting email verification" accurately.
+  try {
+    const ver = await db.prepare(
+      `SELECT COUNT(*) AS n FROM hamilton_portal_credentials WHERE verification_status = 'pending'`,
+    ).get().catch(() => null)
+    registration.verification_pending += Number(ver?.n || 0)
+  } catch { /* table may be absent */ }
   out.registration = registration
 
   const cobrowseNote = out.awaiting_cobrowse
@@ -677,6 +847,7 @@ export default {
   RESOLUTION,
   runAutopilotIdentityForPortal,
   runAutopilotIdentityForProfile,
+  recheckDuePortalVerifications,
   describeAutopilotStateForPortal,
   scanPortalAutopilotReadiness,
 }

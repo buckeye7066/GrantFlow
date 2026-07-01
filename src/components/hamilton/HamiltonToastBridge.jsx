@@ -20,6 +20,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showWarningToast, showErrorToast, showSuccessToast } from '@/components/shared/toastHelpers'
 import { createPageUrl } from '@/utils'
 import { buildProfileSectionLink } from '@/config/missingInfoTargets'
+import { openAnyaPanel } from '@/lib/anyaPanel'
+import { buildMissingInfoAnyaOpen } from '@/lib/hamiltonMissingInfoAnya'
 
 /**
  * Turn a Hamilton notification into a click target: where in the app to go, and
@@ -57,12 +59,22 @@ function resolveNotificationTarget(n) {
   if (/login_required/.test(type)) {
     return { navigateTo: createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline' }), flash: 'saved-logins' }
   }
-  // Missing profile info → deep-link to the exact field's section editor.
+  // Missing profile info → open Anya prefilled to gather the exact field(s)
+  // conversationally and save them to the profile (Hamilton then auto-resumes).
+  // Falls back to the exact field's section editor when we can't build the Anya
+  // conversation (e.g. no resolvable key).
   if (/missing_info/.test(type)) {
+    const anyaOpen = buildMissingInfoAnyaOpen(n)
+    if (anyaOpen) return { onActivate: () => openAnyaPanel(anyaOpen) }
     const key = d.field || d.missing_info_key || d.key || d.missing_field
     const link = key ? buildProfileSectionLink(profileId, key) : null
     if (link) return { navigateTo: link, flash: 'profile-section-editor' }
     return { navigateTo: createPageUrl('ProfileDetail', { id: profileId, tab: 'profile' }) }
+  }
+  // Email verification needed → the Portals tab (the action is in the user's
+  // inbox; Hamilton auto-resumes once verified).
+  if (/email_verification/.test(type)) {
+    return { navigateTo: createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline' }), flash: 'saved-logins' }
   }
   // A document is needed → the Documents tab.
   if (/document_required/.test(type)) {
@@ -109,6 +121,7 @@ const HAMILTON_TYPES = new Set([
   'hamilton_failed',
   'hamilton_2fa_required',
   'hamilton_captcha_required',
+  'hamilton_email_verification_required',
 ])
 
 function loadSeenSet() {
@@ -163,6 +176,7 @@ function severityForType(type) {
     case 'hamilton_attestation_required':
     case 'hamilton_2fa_required':
     case 'hamilton_captcha_required':
+    case 'hamilton_email_verification_required':
     case 'hamilton_admin_missing_info':
     case 'hamilton_admin_login_required':
     case 'hamilton_admin_document_required':

@@ -113,6 +113,29 @@ async function tick({ db, logger = console } = {}) {
       })
     })
     if (result?.skipped) return result
+
+    // Auto-resume portal accounts that are AWAITING EMAIL VERIFICATION: re-check
+    // each due one (poll John's mailbox for the confirmation link + click it, or
+    // detect the user already clicked it) so a brand-new account finishes the
+    // moment its email is verified — no human "resume" step. Best-effort; a
+    // failure here never fails the tick. Only runs when browser automation is on
+    // (recheckEmailVerification refuses to launch otherwise).
+    let verificationSummary = null
+    try {
+      const { recheckDuePortalVerifications } = await import('./hamiltonPortalAutopilotIdentity.js')
+      verificationSummary = await recheckDuePortalVerifications(db, { limit: resolveBatchSize() })
+      if (verificationSummary?.checked > 0) {
+        logger?.info?.('[hamilton:scheduler] email-verification re-check', {
+          checked: verificationSummary.checked,
+          verified: verificationSummary.verified,
+          still_pending: verificationSummary.still_pending,
+          exhausted: verificationSummary.exhausted,
+        })
+      }
+    } catch (err) {
+      logger?.warn?.('[hamilton:scheduler] verification re-check failed:', err?.message || err)
+    }
+
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
       logger?.info?.('[hamilton:scheduler] tick', {
@@ -122,7 +145,7 @@ async function tick({ db, logger = console } = {}) {
         blocked: summary.blocked,
       })
     }
-    return { ran: true, result }
+    return { ran: true, result, verification: verificationSummary }
   } catch (err) {
     logger?.warn?.('[hamilton:scheduler] tick failed:', err?.message || err)
     return { ran: false, error: err?.message || String(err) }

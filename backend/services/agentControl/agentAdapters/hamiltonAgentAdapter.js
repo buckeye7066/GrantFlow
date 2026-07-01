@@ -160,7 +160,7 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
                  status, current_pipeline_stage, selected_from_stage
             FROM application_tasks
            WHERE status IN ('queued','ready','analyzing','ready_to_start')
-              OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_window')
+              OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_email_verification','waiting_for_window')
                   AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
            ORDER BY updated_at ASC
            LIMIT ?

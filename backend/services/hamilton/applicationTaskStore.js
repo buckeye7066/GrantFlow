@@ -47,6 +47,13 @@ export const TASK_STATUSES = Object.freeze([
   'waiting_for_login',
   'waiting_for_2fa',
   'waiting_for_captcha',
+  // Account created on a portal but the email still needs verifying. The user's
+  // ONE step (click the link in the email); Hamilton auto-resumes once verified.
+  // Re-picked by hamiltonAgentAdapter on the auth-backoff cadence, exactly like
+  // the other waiting_for_* auth states. The Postgres status CHECK constraint is
+  // driven from THIS list by ensureApplicationTaskSchema, so adding it here also
+  // syncs the boot self-heal (no separate migration needed).
+  'waiting_for_email_verification',
   'waiting_for_window',
   'waiting_for_missing_info',
   'filling_portal',
