@@ -67,10 +67,18 @@ export function buildAmyTags({ runId, scenarioId }) {
 
 /** True if a metadata block marks a profile as expired (past expires_at). */
 export function isMetadataExpired(meta, now = new Date()) {
-  if (!meta || !meta.expires_at) return false
-  const exp = Date.parse(meta.expires_at)
+  if (!meta) return false
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
+  let exp = meta.expires_at ? Date.parse(meta.expires_at) : NaN
+  // Defensive: a MISSING or CORRUPTED expires_at (e.g. a malformed/multi-value
+  // string) must never make a synthetic profile immortal. Fall back to
+  // created_at + ttl_hours so the cleanup sweep can still expire it.
+  if (!Number.isFinite(exp) && meta.created_at) {
+    const createdMs = Date.parse(meta.created_at)
+    if (Number.isFinite(createdMs)) exp = createdMs + clampTtlHours(meta.ttl_hours) * 60 * 60 * 1000
+  }
   if (!Number.isFinite(exp)) return false
-  return exp <= (now instanceof Date ? now.getTime() : Date.parse(now))
+  return exp <= nowMs
 }
 
 /**
