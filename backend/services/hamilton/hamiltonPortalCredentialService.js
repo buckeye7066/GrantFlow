@@ -91,6 +91,16 @@ async function ensureSchema(db) {
       -- dashboard + a merge re-run must NOT report such a row as a working login
       -- ("merged only when truly merged").
       pending_registration ${isPostgres ? 'BOOLEAN' : 'INTEGER'} NOT NULL DEFAULT ${isPostgres ? 'FALSE' : '0'},
+      -- Email-verification lifecycle for an auto-provisioned account. When the
+      -- portal created the account but still needs the email verified,
+      -- verification_status='pending' and Hamilton re-checks (polling John's
+      -- mailbox to auto-click the link, or on the backoff cadence) until the
+      -- user clicks the link. Cleared to NULL once the account is verified /
+      -- registered. verification_attempts + verification_next_retry_at drive the
+      -- exponential backoff, and exhaustion falls back to a side-by-side login.
+      verification_status TEXT,
+      verification_attempts INTEGER NOT NULL DEFAULT 0,
+      verification_next_retry_at ${tsType},
       status TEXT NOT NULL DEFAULT 'active',
       last_used_at ${tsType},
       generated_by TEXT,
@@ -132,6 +142,9 @@ async function ensureSchema(db) {
       ['wrapped_iv', 'TEXT'],
       ['wrapped_tag', 'TEXT'],
       ['pending_registration', 'INTEGER'],
+      ['verification_status', 'TEXT'],
+      ['verification_attempts', 'INTEGER'],
+      ['verification_next_retry_at', tsType],
     ]
     for (const [name, type] of wanted) {
       if (have.has(name)) continue
@@ -154,6 +167,9 @@ async function ensureSchema(db) {
       'wrapped_iv TEXT',
       'wrapped_tag TEXT',
       'pending_registration BOOLEAN NOT NULL DEFAULT FALSE',
+      'verification_status TEXT',
+      'verification_attempts INTEGER NOT NULL DEFAULT 0',
+      `verification_next_retry_at ${tsType}`,
     ]) {
       try { await db.exec(`ALTER TABLE hamilton_portal_credentials ADD COLUMN IF NOT EXISTS ${col};`) }
       catch { /* benign */ }
@@ -547,6 +563,12 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
     // Provisioned-but-not-yet-registered: the engine uses this to avoid claiming
     // a working account when only the vault password exists.
     pending_registration: Boolean(match.pending_registration),
+    // Email-verification lifecycle (see markCredentialAwaitingVerification). The
+    // autopilot brain uses these to re-check + backoff rather than jumping to a
+    // side-by-side handoff on the first verify-email wall.
+    verification_status: match.verification_status || null,
+    verification_attempts: Number(match.verification_attempts) || 0,
+    verification_next_retry_at: match.verification_next_retry_at || null,
   }
 }
 
@@ -683,11 +705,106 @@ export async function markCredentialRegistered(db, id) {
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   const falseVal = db?.dialect === 'postgres' ? 'FALSE' : '0'
   try {
+    // Clearing pending_registration also ends any email-verification wait — the
+    // account is now real, so verification_status/next_retry are reset.
     const res = await db.prepare(
-      `UPDATE hamilton_portal_credentials SET pending_registration = ${falseVal}, updated_at = ${nowFn} WHERE id = ?`,
+      `UPDATE hamilton_portal_credentials
+         SET pending_registration = ${falseVal},
+             verification_status = NULL, verification_next_retry_at = NULL,
+             updated_at = ${nowFn}
+       WHERE id = ?`,
     ).run(String(id))
     return (res?.changes ?? res?.rowCount ?? 0) > 0
   } catch { return false }
+}
+
+/**
+ * Mark an auto-provisioned login as AWAITING EMAIL VERIFICATION: the account was
+ * created on the portal but the portal still needs the email verified (the
+ * user's one click). Sets verification_status='pending' and the first re-check
+ * time. pending_registration stays true (it is not a working account until
+ * verified). Optionally seeds the attempt count. Best-effort.
+ */
+export async function markCredentialAwaitingVerification(db, id, { nextRetryAt = null, attempts = null } = {}) {
+  if (!db || !id) return false
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const sets = [`verification_status = 'pending'`, `verification_next_retry_at = ?`, `updated_at = ${nowFn}`]
+  const params = [nextRetryAt ?? null]
+  if (attempts !== null && Number.isFinite(Number(attempts))) {
+    sets.push('verification_attempts = ?'); params.push(Number(attempts))
+  }
+  params.push(String(id))
+  try {
+    const res = await db.prepare(
+      `UPDATE hamilton_portal_credentials SET ${sets.join(', ')} WHERE id = ?`,
+    ).run(...params)
+    return (res?.changes ?? res?.rowCount ?? 0) > 0
+  } catch { return false }
+}
+
+/**
+ * Record one email-verification RE-CHECK that did not yet confirm: bumps
+ * verification_attempts and schedules the next re-check. Returns the new attempt
+ * count (0 on failure). Best-effort.
+ */
+export async function recordVerificationRecheck(db, id, { nextRetryAt = null } = {}) {
+  if (!db || !id) return 0
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  try {
+    await db.prepare(
+      `UPDATE hamilton_portal_credentials
+         SET verification_attempts = COALESCE(verification_attempts, 0) + 1,
+             verification_next_retry_at = ?, updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(nextRetryAt ?? null, String(id))
+    const row = await db.prepare('SELECT verification_attempts FROM hamilton_portal_credentials WHERE id = ?').get(String(id))
+    return Number(row?.verification_attempts) || 0
+  } catch { return 0 }
+}
+
+/**
+ * Give up on auto-verifying an account (backoff exhausted): clears the pending
+ * verification wait so the brain routes to a side-by-side login. Keeps
+ * pending_registration=true (the account is still unverified). Best-effort.
+ */
+export async function clearVerificationPending(db, id) {
+  if (!db || !id) return false
+  await ensureSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  try {
+    const res = await db.prepare(
+      `UPDATE hamilton_portal_credentials
+         SET verification_status = NULL, verification_next_retry_at = NULL, updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(String(id))
+    return (res?.changes ?? res?.rowCount ?? 0) > 0
+  } catch { return false }
+}
+
+/**
+ * Rows awaiting email verification whose re-check is due (or unscheduled). Used
+ * by the periodic re-check driver so accounts finish the moment the user clicks
+ * the verification link (or Hamilton auto-clicks it from John's mailbox).
+ * Returns raw rows (id, profile_id, portal_host, login_url, username,
+ * verification_attempts). Best-effort — returns [] on any error.
+ */
+export async function listCredentialsAwaitingVerification(db, { nowIso = new Date().toISOString(), limit = 50 } = {}) {
+  if (!db) return []
+  await ensureSchema(db)
+  const cap = Math.max(1, Math.min(500, Number(limit) || 50))
+  try {
+    const rows = await db.prepare(
+      `SELECT id, user_id, profile_id, portal_host, login_url, username, verification_attempts
+         FROM hamilton_portal_credentials
+        WHERE verification_status = 'pending'
+          AND (verification_next_retry_at IS NULL OR verification_next_retry_at <= ?)
+        ORDER BY verification_next_retry_at ASC
+        LIMIT ${cap}`,
+    ).all(nowIso)
+    return Array.isArray(rows) ? rows : []
+  } catch { return [] }
 }
 
 /**

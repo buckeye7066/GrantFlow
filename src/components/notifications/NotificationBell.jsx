@@ -5,6 +5,8 @@ import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
 import { createPageUrl } from '@/utils'
 import { buildProfileSectionLink } from '@/config/missingInfoTargets'
+import { openAnyaPanel } from '@/lib/anyaPanel'
+import { buildMissingInfoAnyaOpen } from '@/lib/hamiltonMissingInfoAnya'
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
@@ -45,6 +47,12 @@ function resolveNotificationTarget(notification) {
   }
 
   if (/login_required|portal_blocked/.test(type)) {
+    return createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline', focus: 'portal-logins' })
+  }
+
+  // Email verification needed → the Portals tab (the user's step is in their
+  // inbox; the tab shows the account's status and auto-resumes once verified).
+  if (/email_verification/.test(type)) {
     return createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline', focus: 'portal-logins' })
   }
 
@@ -145,10 +153,19 @@ export default function NotificationBell() {
   const handleNotificationOpen = useCallback(
     async (notification) => {
       if (!notification) return
-      const target = resolveNotificationTarget(notification)
       if (!notification.read) {
         await handleMarkRead(notification.id)
       }
+      // Conversational missing-info: open Anya prefilled to gather the exact
+      // field(s) and save them to the profile (Hamilton then auto-resumes),
+      // instead of dropping the user on the raw section editor.
+      const anyaOpen = buildMissingInfoAnyaOpen(notification)
+      if (anyaOpen) {
+        setOpen(false)
+        openAnyaPanel(anyaOpen)
+        return
+      }
+      const target = resolveNotificationTarget(notification)
       if (target) {
         setOpen(false)
         navigate(target)

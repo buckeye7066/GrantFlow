@@ -32,7 +32,7 @@ export function Toaster() {
 
   return (
     <ToastProvider>
-      {toasts.map(function ({ id, title, description, action, navigateTo, flash, originRoute, ...props }) {
+      {toasts.map(function ({ id, title, description, action, navigateTo, flash, originRoute, onActivate, ...props }) {
         // Destination: an explicit navigateTo wins; otherwise fall back to the
         // route the toast was fired from (so it can take you back to where it's
         // relevant). A toast is clickable when there's somewhere meaningful to
@@ -40,15 +40,21 @@ export function Toaster() {
         // are now. Pure same-page confirmations stay non-clickable.
         const dest = navigateTo || originRoute || null;
         const destElsewhere = dest && stripFlash(dest) !== here;
-        const clickable = Boolean(navigateTo || flash || destElsewhere);
+        const clickable = Boolean(navigateTo || flash || destElsewhere || onActivate);
 
         const handleActivate = (event) => {
           // Don't hijack clicks on the toast's own action buttons / close (X).
           if (event?.target?.closest?.("[data-toast-noclick],button,a")) return;
-          if (dest) {
+          // A custom activation (e.g. open the Anya panel) takes precedence over
+          // navigation so a missing-info toast opens the conversation in place.
+          if (typeof onActivate === "function") {
+            onActivate();
+          } else if (navigateTo) {
             navigate(withFlashParam(dest, flash));
           } else if (flash) {
             flashHighlight(flash);
+          } else if (dest) {
+            navigate(withFlashParam(dest, flash));
           }
           props.onOpenChange?.(false);
         };
