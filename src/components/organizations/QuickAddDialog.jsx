@@ -12,15 +12,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Loader2, Upload, X } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { canonicalizeProfileTypeId } from '@/services/profileTypes'
-import ProfileTypeSelect from '@/components/shared/ProfileTypeSelect'
 import { useToast } from '@/components/ui/use-toast'
 
 export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
   const { toast } = useToast()
   const [formData, setFormData] = useState({
     display_name: '',
-    primary_type: '',
   })
   const [avatarFile, setAvatarFile] = useState(null)
   const [avatarPreview, setAvatarPreview] = useState(null)
@@ -32,8 +29,11 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
     setErrorMsg(null)
 
     // Visible validation instead of a silently disabled button doing nothing.
-    if (!formData.display_name.trim() || !formData.primary_type) {
-      setErrorMsg('Name and Profile Type are both required.')
+    // Profile TYPE is no longer collected here — it is determined from the
+    // profile's own information (Anya's opening interview + the data-derived
+    // facets), never a manual pick that a user could get wrong.
+    if (!formData.display_name.trim()) {
+      setErrorMsg('Please enter a name.')
       return
     }
 
@@ -41,10 +41,9 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
     try {
       await onSubmit({
         ...formData,
-        primary_type: canonicalizeProfileTypeId(formData.primary_type),
         avatarFile,
       })
-      setFormData({ display_name: '', primary_type: '' })
+      setFormData({ display_name: '' })
       setAvatarFile(null)
       setAvatarPreview(null)
       onOpenChange(false)
@@ -101,15 +100,10 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
                 required
               />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="primary_type">Profile Type *</Label>
-              <ProfileTypeSelect
-                id="primary_type"
-                value={formData.primary_type}
-                onChange={(value) => handleChange('primary_type', value)}
-                required
-              />
-            </div>
+            <p className="text-sm text-slate-500">
+              No need to pick a profile type. Anya figures out the right fit — and
+              the funding you qualify for — from your own information as you go.
+            </p>
             <div className="grid gap-2">
               <Label htmlFor="avatar">Profile Picture (optional)</Label>
               <div className="flex items-center gap-4">
