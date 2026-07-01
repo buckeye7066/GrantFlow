@@ -48,6 +48,7 @@
  */
 
 import fs from 'node:fs'
+import { CHROMIUM_CONTAINER_ARGS } from './browserLaunch.js'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
 import { browserAutomationPermittedForUrl, isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
 import { isIdentityProofedHost, getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
@@ -552,7 +553,7 @@ async function openBrowserContext(launchBrowser) {
     if (!exe || !fs.existsSync(exe)) {
       return { error: ok('failed', { blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', automation_disabled: true }) }
     }
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] })
     context = await browser.newContext()
   }
   if (!context) {

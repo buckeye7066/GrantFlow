@@ -25,6 +25,7 @@
  */
 
 import fs from 'node:fs'
+import { CHROMIUM_CONTAINER_ARGS } from './browserLaunch.js'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
@@ -463,7 +464,7 @@ async function tryBuildPdfFromHtml(html) {
     const { chromium } = await import('playwright')
     const exe = chromium.executablePath?.()
     if (!exe || !fs.existsSync(exe)) return null
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] })
     try {
       const ctx = await browser.newContext()
       const page = await ctx.newPage()
