@@ -513,6 +513,7 @@ export async function runAutopilot({
   loginCredential = null,
   headless = true,
   screenshotsDir = null,
+  sessionSink = null,
 } = {}) {
   if (!url) throw new Error('url required')
   if (!profile) throw new Error('profile required')
@@ -737,6 +738,16 @@ export async function runAutopilot({
   } catch (err) {
     return { status: 'failed', blocker_kind: 'engine_error', blocker_detail: err?.message || String(err), filled_fields: filled, pages_visited: 0, trace }
   } finally {
+    // Persist the authenticated session so the NEXT run reuses it instead of
+    // re-logging-in. Portal logins must survive across runs AND container
+    // restarts; the orchestrator encrypts this storageState into the DB. Only
+    // capture when a login actually succeeded, and never let a capture failure
+    // break the run (best-effort). Runs on every exit path via finally.
+    try {
+      if (loggedIn && sessionSink && context) {
+        sessionSink.storageState = await context.storageState()
+      }
+    } catch { /* capture is best-effort; ignore */ }
     try { await context.close() } catch { /* ignore */ }
     try { await browser.close() } catch { /* ignore */ }
   }
