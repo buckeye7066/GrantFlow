@@ -16,6 +16,7 @@ import {
   cleanupStaleCrawlers,
   cleanupStaleQueuedJobs,
 } from '../services/crawlerConcurrencyGuard.js';
+import { SUPERSEDED_CRAWLER_JOB_TYPES } from '../../shared/supersededCrawlerTypes.js';
 
 export function runQueueRecovery({ db, uploadsDir }) {
   // ── 1. Reset stuck running jobs ────────────────────────────────────────────
@@ -81,8 +82,22 @@ export function runQueueRecovery({ db, uploadsDir }) {
   })();
 
   // ── 2. Re-queue concurrency-exhausted jobs ─────────────────────────────────
+  // Bounded: never resurrect retired discovery types, and never resurrect a job
+  // older than 24h. Without these caps a failed job could be re-queued on every
+  // boot forever, re-orphan, and flood the panel with failures.
   ;(async () => {
     try {
+      const isPostgres = db?.dialect === 'postgres';
+      const supersededPlaceholders =
+        SUPERSEDED_CRAWLER_JOB_TYPES.length > 0
+          ? SUPERSEDED_CRAWLER_JOB_TYPES.map(() => '?').join(', ')
+          : null;
+      const supersededClause = supersededPlaceholders
+        ? `AND type NOT IN (${supersededPlaceholders})`
+        : '';
+      const ageClause = isPostgres
+        ? `AND created_at > (NOW() - INTERVAL '24 hours')`
+        : `AND datetime(created_at) > datetime('now', '-24 hours')`;
       const r = await db
         .prepare(
           `
@@ -94,9 +109,11 @@ export function runQueueRecovery({ db, uploadsDir }) {
                 completed_at = NULL
             WHERE status = 'failed'
               AND error = 'Crawler dispatch exhausted due to concurrency limits'
+              ${supersededClause}
+              ${ageClause}
           `,
         )
-        .run();
+        .run(...SUPERSEDED_CRAWLER_JOB_TYPES);
       const count = Number(r?.changes ?? r?.rowCount ?? 0);
       if (count > 0) {
         console.log(

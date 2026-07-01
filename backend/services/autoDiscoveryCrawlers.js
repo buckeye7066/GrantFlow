@@ -1,6 +1,7 @@
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
 import { buildProfileSignals, computeProfileDigest, resolveEffectiveProfileType } from './profileHelpers.js'
+import { isSupersededCrawlerType } from '../../shared/supersededCrawlerTypes.js'
 
 /**
  * Check if a profile has student indicators
@@ -578,18 +579,26 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
           })
         }
 
-    // Insert all jobs into database
+    // CUTOVER GUARD: partition relevance-selected jobs into REAL automations vs
+    // retired discovery crawlers. The relevance gating above still runs (so the
+    // selection contract is preserved + observable), but retired types are NEVER
+    // persisted — the Crawler OS (Robert) owns grant discovery now, and legacy
+    // job rows were pure Automation Control Center noise.
+    const activeJobs = jobs.filter((job) => !isSupersededCrawlerType(job.type))
+    const supersededJobs = jobs.filter((job) => isSupersededCrawlerType(job.type))
+
+    // Insert only the real (non-retired) jobs.
     const insertStmt = db.prepare(`
       INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
       VALUES (?, ?, 'queued', ?, ?, ?)
     `)
 
-    for (const job of jobs) {
+    for (const job of activeJobs) {
       await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters), requestedBy)
     }
 
-    // Dispatch jobs asynchronously (fire and forget)
-    for (const job of jobs) {
+    // Dispatch real jobs asynchronously (fire and forget)
+    for (const job of activeJobs) {
       dispatchCrawlerJob({
         db,
         jobId: job.id,
@@ -606,19 +615,22 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     // block the summary on a stamping failure.
     await stampLastDiscoveryAt(db, profileId)
 
-    // Return an honest summary so on-demand callers (and tests) can report
-    // exactly which relevant crawlers were enqueued for this profile. The
-    // crawler_types list preserves enqueue order but de-duplicates so the UI
-    // can show distinct types fired.
-    const crawlerTypes = [...new Set(jobs.map((job) => job.type))]
+    // Return an honest summary. `crawler_types` / `jobs_enqueued` reflect the
+    // REAL automations actually enqueued. `superseded_types` reports which
+    // relevance-selected discovery crawlers were intentionally skipped (retired
+    // by the Crawler OS cutover) — this preserves the relevance-gating contract
+    // for observability + tests without persisting any legacy job rows.
+    const crawlerTypes = [...new Set(activeJobs.map((job) => job.type))]
+    const supersededTypes = [...new Set(supersededJobs.map((job) => job.type))]
     return {
-      jobs_enqueued: jobs.length,
+      jobs_enqueued: activeJobs.length,
       crawler_types: crawlerTypes,
-      job_ids: jobs.map((job) => job.id),
+      superseded_types: supersededTypes,
+      job_ids: activeJobs.map((job) => job.id),
     }
   } catch (error) {
     console.error('[auto-discovery] Failed to trigger crawlers:', error)
     // Don't throw - we don't want to block login if auto-discovery fails
-    return { jobs_enqueued: 0, crawler_types: [], job_ids: [], error: error?.message || String(error) }
+    return { jobs_enqueued: 0, crawler_types: [], superseded_types: [], job_ids: [], error: error?.message || String(error) }
   }
 }

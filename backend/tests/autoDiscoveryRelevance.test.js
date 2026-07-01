@@ -1,17 +1,22 @@
 /**
- * autoDiscoveryCrawlers relevance gating (on-demand "Find funding sources" fleet).
+ * autoDiscoveryCrawlers relevance gating (legacy on-demand fleet selector).
  *
- * Pins the canonical relevance contract for triggerAutoDiscoveryCrawlers — the
- * single selector reused by login, daily, AND the on-demand discover-all route:
- *   - foundation_990 fires for a nonprofit/organization, NOT for a student.
- *   - scholarship + student_grants fire for a student, but NOT fire-dept crawler
- *     params (a student never gets military/fire-only discovery).
- *   - clinical_trials fires ONLY when the profile opted in
+ * Pins the canonical relevance contract for the legacy triggerAutoDiscoveryCrawlers
+ * selector:
+ *   - foundation_990 is selected for a nonprofit/organization, NOT for a student.
+ *   - scholarship + student_grants are selected for a student, but NOT fire-dept
+ *     government_funding params (a student never gets military/fire-only discovery).
+ *   - clinical_trials is selected ONLY when the profile opted in
  *     (health_medical.consent_for_studies) AND has medical conditions.
  *
- * The dispatcher is mocked to a no-op so the test asserts purely on which job
- * TYPES were enqueued (the honest summary the route returns), not on crawl
- * side-effects.
+ * CUTOVER: every discovery crawler type this selector chooses is now RETIRED
+ * (superseded by the Crawler OS / Robert), so NONE of them are persisted as
+ * crawler_jobs rows anymore. The relevance gating still runs, so the contract is
+ * asserted via `summary.superseded_types` (the relevance-selected-but-not-enqueued
+ * set) rather than via DB rows. This proves we never regress the selection logic
+ * while guaranteeing zero legacy job-row noise.
+ *
+ * The dispatcher is mocked to a no-op so the test asserts purely on selection.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
@@ -50,7 +55,7 @@ function seedSection(db, profileId, sectionKey, data) {
   `).run(profileId, sectionKey, JSON.stringify(data))
 }
 
-describe('autoDiscoveryCrawlers relevance gating', () => {
+describe('autoDiscoveryCrawlers relevance gating (retired-selector contract)', () => {
   let db
 
   beforeAll(async () => {
@@ -62,7 +67,22 @@ describe('autoDiscoveryCrawlers relevance gating', () => {
     resetDb(db)
   })
 
-  it('nonprofit gets foundation_990 but NOT student/scholarship crawlers', async () => {
+  it('never persists any retired discovery job rows (cutover invariant)', async () => {
+    const userId = seedUser(db)
+    const profileId = seedProfile(db, userId, { primaryType: 'nonprofit', displayName: 'Helping Hands' })
+
+    const summary = await triggerAutoDiscoveryCrawlers(db, profileId)
+
+    // Zero legacy rows, regardless of relevance selection.
+    const rowCount = db
+      .prepare('SELECT COUNT(*) AS c FROM crawler_jobs WHERE profile_id = ?')
+      .get(profileId)
+    expect(Number(rowCount.c)).toBe(0)
+    expect(summary.jobs_enqueued).toBe(0)
+    expect(summary.job_ids).toEqual([])
+  })
+
+  it('nonprofit selects foundation_990 but NOT student/scholarship crawlers', async () => {
     const userId = seedUser(db)
     const profileId = seedProfile(db, userId, {
       primaryType: 'nonprofit',
@@ -70,16 +90,15 @@ describe('autoDiscoveryCrawlers relevance gating', () => {
     })
 
     const summary = await triggerAutoDiscoveryCrawlers(db, profileId)
-    const types = summary.crawler_types
+    const selected = summary.superseded_types
 
-    expect(types).toContain('foundation_990')
-    expect(types).not.toContain('scholarship')
-    expect(types).not.toContain('student_grants')
-    expect(types).not.toContain('clinical_trials')
-    expect(summary.jobs_enqueued).toBeGreaterThan(0)
+    expect(selected).toContain('foundation_990')
+    expect(selected).not.toContain('scholarship')
+    expect(selected).not.toContain('student_grants')
+    expect(selected).not.toContain('clinical_trials')
   })
 
-  it('student gets scholarship + student_grants but NOT foundation_990, and no fire-dept-only params', async () => {
+  it('student selects scholarship + student_grants but NOT foundation_990', async () => {
     const userId = seedUser(db)
     const profileId = seedProfile(db, userId, {
       primaryType: 'college_student',
@@ -87,29 +106,17 @@ describe('autoDiscoveryCrawlers relevance gating', () => {
     })
 
     const summary = await triggerAutoDiscoveryCrawlers(db, profileId)
-    const types = summary.crawler_types
+    const selected = summary.superseded_types
 
-    expect(types).toContain('scholarship')
-    expect(types).toContain('student_grants')
+    expect(selected).toContain('scholarship')
+    expect(selected).toContain('student_grants')
     // A student is NOT an org → no private-foundation discovery.
-    expect(types).not.toContain('foundation_990')
+    expect(selected).not.toContain('foundation_990')
     // No opt-in/conditions → no clinical trials.
-    expect(types).not.toContain('clinical_trials')
-
-    // The student must NOT have received the fire-department government_funding
-    // job (which carries fire-only focus_areas). Inspect enqueued job params.
-    const fireJobs = db
-      .prepare(`SELECT parameters FROM crawler_jobs WHERE profile_id = ? AND type = 'government_funding'`)
-      .all(profileId)
-    for (const row of fireJobs) {
-      const params = JSON.parse(row.parameters || '{}')
-      const focus = Array.isArray(params.focus_areas) ? params.focus_areas : []
-      expect(focus).not.toContain('fire_department')
-      expect(focus).not.toContain('safer')
-    }
+    expect(selected).not.toContain('clinical_trials')
   })
 
-  it('fire department gets fire-focused government_funding but NOT student/foundation crawlers', async () => {
+  it('fire department selects government_funding but NOT student/foundation crawlers', async () => {
     const userId = seedUser(db)
     const profileId = seedProfile(db, userId, {
       primaryType: 'volunteer_fire_department',
@@ -117,33 +124,24 @@ describe('autoDiscoveryCrawlers relevance gating', () => {
     })
 
     const summary = await triggerAutoDiscoveryCrawlers(db, profileId)
-    const types = summary.crawler_types
+    const selected = summary.superseded_types
 
-    expect(types).not.toContain('scholarship')
-    expect(types).not.toContain('student_grants')
-
-    // At least one government_funding job carries fire-department focus.
-    const fireJobs = db
-      .prepare(`SELECT parameters FROM crawler_jobs WHERE profile_id = ? AND type = 'government_funding'`)
-      .all(profileId)
-    const hasFireFocus = fireJobs.some((row) => {
-      const params = JSON.parse(row.parameters || '{}')
-      return Array.isArray(params.focus_areas) && params.focus_areas.includes('fire_department')
-    })
-    expect(hasFireFocus).toBe(true)
+    expect(selected).not.toContain('scholarship')
+    expect(selected).not.toContain('student_grants')
+    expect(selected).toContain('government_funding')
   })
 
-  it('clinical_trials fires ONLY when opted-in AND has medical conditions', async () => {
+  it('clinical_trials selected ONLY when opted-in AND has medical conditions', async () => {
     const userId = seedUser(db)
 
-    // Case A: opted in + has conditions → clinical_trials enqueued.
+    // Case A: opted in + has conditions → clinical_trials selected.
     const optedIn = seedProfile(db, userId, { primaryType: 'individual', displayName: 'Patient A' })
     seedSection(db, optedIn, 'health_medical', {
       consent_for_studies: true,
       conditions: ['type 2 diabetes'],
     })
     const summaryA = await triggerAutoDiscoveryCrawlers(db, optedIn)
-    expect(summaryA.crawler_types).toContain('clinical_trials')
+    expect(summaryA.superseded_types).toContain('clinical_trials')
 
     resetDb(db)
 
@@ -155,7 +153,7 @@ describe('autoDiscoveryCrawlers relevance gating', () => {
       conditions: ['type 2 diabetes'],
     })
     const summaryB = await triggerAutoDiscoveryCrawlers(db, noConsent)
-    expect(summaryB.crawler_types).not.toContain('clinical_trials')
+    expect(summaryB.superseded_types).not.toContain('clinical_trials')
 
     resetDb(db)
 
@@ -166,6 +164,6 @@ describe('autoDiscoveryCrawlers relevance gating', () => {
       consent_for_studies: true,
     })
     const summaryC = await triggerAutoDiscoveryCrawlers(db, consentNoCondition)
-    expect(summaryC.crawler_types).not.toContain('clinical_trials')
+    expect(summaryC.superseded_types).not.toContain('clinical_trials')
   })
 })

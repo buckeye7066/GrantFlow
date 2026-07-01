@@ -11,6 +11,7 @@ import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES, CRAWLER_JOB_STATUSES } from '../config/constants.js'
+import { SUPERSEDED_CRAWLER_JOB_TYPES, keepActiveCrawlerTypes } from '../../shared/supersededCrawlerTypes.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/entitlements.js'
@@ -50,9 +51,19 @@ function gateAndStampReality(opp) {
   }
 }
 
-const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
+// Retired discovery crawlers are excluded from the Automation Control Center:
+// they can no longer be created, and existing/legacy rows are hidden from the
+// panel (queue list, metric cards, running/failed panels, and counts).
+const ALLOWED_TYPES = new Set(keepActiveCrawlerTypes(CRAWLER_JOB_TYPES))
 const ALLOWED_STATUS = new Set(CRAWLER_JOB_STATUSES)
 const MAX_LINEAGE_DEPTH = 15
+
+// Prebuilt "hide retired types" SQL fragment reused by every panel query so
+// superseded-type rows never leak into counts, queue, or failures.
+const SUPERSEDED_TYPE_EXCLUSION_SQL =
+  SUPERSEDED_CRAWLER_JOB_TYPES.length > 0
+    ? `type NOT IN (${SUPERSEDED_CRAWLER_JOB_TYPES.map(() => '?').join(', ')})`
+    : null
 
 function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
@@ -173,6 +184,14 @@ function buildJobFilter(ctx, { profileId, organizationId, type, status, accessib
   if (status && ALLOWED_STATUS.has(status)) {
     clauses.push('status = ?')
     params.push(status)
+  }
+
+  // Hide retired discovery-crawler rows from every panel surface (queue list,
+  // metric cards, running/failed panels, and the total-failures count). This is
+  // the single choke point both /jobs and /jobs/metrics route through.
+  if (SUPERSEDED_TYPE_EXCLUSION_SQL) {
+    clauses.push(SUPERSEDED_TYPE_EXCLUSION_SQL)
+    params.push(...SUPERSEDED_CRAWLER_JOB_TYPES)
   }
 
   return {

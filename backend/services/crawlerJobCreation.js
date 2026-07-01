@@ -9,6 +9,7 @@ import crypto from 'crypto'
 import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 import { CRAWLER_JOB_TYPES } from '../config/constants.js'
+import { isSupersededCrawlerType } from '../../shared/supersededCrawlerTypes.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('crawlerJobCreation')
 
@@ -111,6 +112,23 @@ export async function createCrawlerJob(db, options) {
   } = options
 
   const createdAtIso = new Date().toISOString()
+
+  // CUTOVER GUARD: never persist a retired discovery-crawler row. The Crawler OS
+  // (Robert) is the single grant-discovery authority; legacy types are handled
+  // synchronously by the compat shim, so callers keep working — they just must
+  // not create a crawler_jobs row that the dispatcher would immediately mark
+  // superseded (that is exactly the Automation Control Center noise we removed).
+  if (isSupersededCrawlerType(type)) {
+    log.info('[createCrawlerJob] Skipped retired discovery crawler type (superseded by Crawler OS)', { type, profileId })
+    return {
+      jobId: null,
+      created: false,
+      existing: false,
+      superseded: true,
+      skipped: true,
+      job: null,
+    }
+  }
 
   // Validate job type — single source of truth is CRAWLER_JOB_TYPES (config/constants.js),
   // which must match crawlerDispatcher HANDLERS and the DB CHECK (postgres migrations).

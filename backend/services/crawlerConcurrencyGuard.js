@@ -8,6 +8,7 @@
 import crypto from 'crypto'
 import { logFailedJob } from './deadLetterQueue.js'
 import { jobHasMeaningfulProgress, markJobPartial } from './crawlerJobState.js'
+import { isSupersededCrawlerType } from '../../shared/supersededCrawlerTypes.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('crawlerConcurrencyGuard')
 
@@ -21,6 +22,46 @@ const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWL
  * Set to 0 to disable auto-retry.
  */
 const MAX_ORPHAN_AUTO_RETRIES = parseInt(process.env.MAX_ORPHAN_AUTO_RETRIES || '2', 10)
+
+/**
+ * Hard age cap for orphan auto-retry. An orphaned job older than this is
+ * terminally failed and NEVER requeued, regardless of retry_count. Without this
+ * bound a job could be resurrected across many process restarts and pile up
+ * thousands of "heartbeat stale / worker presumed dead" failures — the exact
+ * runaway the Automation Control Center cleanup was created to kill.
+ * Default: 24 hours.
+ */
+const MAX_ORPHAN_RETRY_AGE_MS = parseInt(
+  process.env.MAX_ORPHAN_RETRY_AGE_MS || String(24 * 60 * 60 * 1000),
+  10,
+)
+
+/**
+ * Decide whether an orphaned crawler job may be auto-requeued. Terminal (no
+ * retry) when: the type is a retired discovery crawler, the retry budget is
+ * exhausted, or the job is older than the hard age cap. Centralised so the
+ * heartbeat sweep and the started-at sweep apply identical caps.
+ *
+ * @param {{ type?: string, retry_count?: number, created_at?: string, started_at?: string }} job
+ * @returns {{ retry: boolean, reason?: string }}
+ */
+export function shouldAutoRetryOrphan(job) {
+  if (!job) return { retry: false, reason: 'no_job' }
+  if (MAX_ORPHAN_AUTO_RETRIES <= 0) return { retry: false, reason: 'auto_retry_disabled' }
+  if (isSupersededCrawlerType(job.type)) return { retry: false, reason: 'superseded_type' }
+
+  const retryCount = typeof job.retry_count === 'number' ? job.retry_count : 0
+  if (retryCount >= MAX_ORPHAN_AUTO_RETRIES) return { retry: false, reason: 'retry_budget_exhausted' }
+
+  const ageAnchor = job.created_at || job.started_at
+  if (ageAnchor) {
+    const anchorMs = new Date(ageAnchor).getTime()
+    if (Number.isFinite(anchorMs) && Date.now() - anchorMs > MAX_ORPHAN_RETRY_AGE_MS) {
+      return { retry: false, reason: 'too_old' }
+    }
+  }
+  return { retry: true }
+}
 
 /**
  * Stale running-job cleanup
@@ -485,8 +526,19 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         })
       }
 
-      // Auto-retry if below the configured threshold and the error is retryable.
-      if (!isNonRetryable && MAX_ORPHAN_AUTO_RETRIES > 0 && currentRetryCount < MAX_ORPHAN_AUTO_RETRIES) {
+      // Hard caps: retired discovery types are NEVER retried; a job that has
+      // exhausted its retry budget or exceeded the age cap is terminally failed.
+      // This is what stops the "worker presumed dead → requeue → orphan again"
+      // runaway that flooded the panel with thousands of failures.
+      const retryDecision = shouldAutoRetryOrphan(job)
+      if (!isNonRetryable && !retryDecision.retry) {
+        console.warn('[crawler-concurrency] Not auto-retrying orphaned job (terminal)', {
+          jobId: job.id, type: job.type, profileId: job.profile_id, reason: retryDecision.reason,
+        })
+      }
+
+      // Auto-retry only when retryable AND all hard caps pass.
+      if (!isNonRetryable && retryDecision.retry) {
         try {
           // parameters is already in the SELECT result — no extra query needed.
           let originalParameters = {}

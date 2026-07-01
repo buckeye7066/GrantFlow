@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
+import { isSupersededCrawlerType } from '../../shared/supersededCrawlerTypes.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('anyaLoginTrigger')
 
@@ -47,8 +48,15 @@ async function createAnyaSession(db, userId, profileId, title) {
  * Create a crawler job
  */
 async function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
+  // CUTOVER GUARD: never enqueue a retired discovery crawler. Discovery now runs
+  // synchronously through the Crawler OS; these rows were pure panel noise.
+  if (isSupersededCrawlerType(crawlerType)) {
+    log.info('[anyaLoginTrigger] Skipped retired discovery crawler (superseded by Crawler OS)', { crawlerType, profileId })
+    return null
+  }
+
   const jobId = randomUUID()
-  
+
   const stmt = db.prepare(`
     INSERT INTO crawler_jobs (
       id,
@@ -180,9 +188,14 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
       )
     }
 
-    const entries = await Promise.all(
-      coreDefs.map(async ([type, params]) => [type, await createCrawlerJob(db, profileId, type, params)])
-    )
+    // Drop retired discovery crawlers up front — only real automations
+    // (e.g. profile_enrichment) still enqueue a job row. Discovery itself runs
+    // synchronously via the Crawler OS elsewhere.
+    const activeDefs = coreDefs.filter(([type]) => !isSupersededCrawlerType(type))
+
+    const entries = (await Promise.all(
+      activeDefs.map(async ([type, params]) => [type, await createCrawlerJob(db, profileId, type, params)])
+    )).filter(([, jobId]) => Boolean(jobId))
     const jobIds = Object.fromEntries(entries)
 
     // Dispatch + welcome message in background — do NOT block login response

@@ -10,11 +10,9 @@ import {
   Loader2,
   MapPin,
   RefreshCw,
-  Rocket,
   School,
   ShoppingCart,
   Sparkles,
-  Target,
   UserCircle2,
   Workflow,
   Zap,
@@ -23,7 +21,6 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
@@ -32,7 +29,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Separator } from "@/components/ui/separator"
 import { format, formatDistanceToNow } from "date-fns"
 import { useToast } from "@/components/ui/use-toast"
-import { apiFetch } from "@/api/client"
 import {
   listCrawlerJobs,
   createCrawlerJob,
@@ -51,6 +47,7 @@ import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { getApplicableSectionKeys } from "@/utils/profileCompletion"
 import { formatReasonText } from "@/utils/reasonText"
+import { isSupersededCrawlerType } from "../../shared/supersededCrawlerTypes.js"
 
 /**
  * Safely build a Date and validate it. Returns a valid Date instance or null
@@ -84,35 +81,12 @@ function safeFormat(value, pattern, fallback = "") {
   return format(d, pattern)
 }
 
-async function startGeoCrawl(payload) {
-  // Defensively catch and rethrow so that callers (mutations) always receive a
-  // proper Error, and any accidental fire-and-forget usage does not surface as
-  // an unhandled promise rejection at the global level.
-  try {
-    const response = await apiFetch("/api/geo-crawl/start", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    })
-    // Defensive guard: surface unexpected/empty responses as errors instead of
-    // letting them silently succeed. The geo-crawl start endpoint is expected
-    // to return an object (typically including a run_id); a null/undefined or
-    // non-object response indicates an upstream failure that should not be
-    // treated as success.
-    if (response === null || response === undefined) {
-      throw new Error("Geo crawl did not return a response.")
-    }
-    return response
-  } catch (error) {
-    throw error instanceof Error ? error : new Error(String(error))
-  }
-}
-
+// Only REAL automations get panel tiles/labels. Retired discovery crawlers
+// (local, scholarship, comprehensive, item_search, …) are handled by the
+// Crawler OS (Robert) and must never surface in the Automation Control Center.
+// The canonical retired list lives in shared/supersededCrawlerTypes.js.
 const JOB_LABELS = {
-  local: "Local 25-mile sweep",
   portal_check: "Portal award check",
-  scholarship: "Scholarship intelligence",
-  comprehensive: "Comprehensive match",
-  item_search: "Item funding search",
   avatar_lookup: "AI avatar lookup",
   document_ingest: "Document enrichment",
   pipeline_automation: "Pipeline automation",
@@ -234,31 +208,6 @@ function deriveZipFromProfile(profileDetail) {
     const m = v.trim().match(/\b(\d{5})\b/)
     if (m) return m[1]
   }
-  return null
-}
-
-function deriveStateFromProfile(profileDetail) {
-  const sections = Array.isArray(profileDetail?.sections) ? profileDetail.sections : []
-  const basic = sections.find((s) => s?.section_key === "basic_information")?.data ?? null
-  const location = sections.find((s) => s?.section_key === "location_focus")?.data ?? null
-
-  const candidates = [
-    basic?.state,
-    basic?.address_state,
-    location?.state,
-    location?.primary_state,
-    location?.geographic_focus,
-    basic?.address,
-  ]
-
-  for (const v of candidates) {
-    if (typeof v !== "string") continue
-    const m = v.trim().match(/\b([A-Za-z]{2})\b/)
-    if (!m) continue
-    const code = m[1].toUpperCase()
-    if (/^[A-Z]{2}$/.test(code)) return code
-  }
-
   return null
 }
 
@@ -1642,7 +1591,6 @@ export default function Automation() {
     return activeProfileId || "none"
   })
   const [selectedJob, setSelectedJob] = useState(null)
-  const [itemQuery, setItemQuery] = useState("15 passenger van")
   const [selectedSections, setSelectedSections] = useState(["basic_information"])
   const [enrichmentPrompt, setEnrichmentPrompt] = useState("")
 
@@ -1767,62 +1715,6 @@ export default function Automation() {
       })
     },
   })
-
-  const geoCrawlMutation = useMutation({
-    mutationFn: (payload) => startGeoCrawl(payload),
-    onSuccess: (res) => {
-      const runId = res?.run_id ? String(res.run_id) : null
-      if (runId) {
-        try {
-          window.localStorage.setItem("gf_geo_crawl_last_run_id_v2", runId)
-        } catch {
-          // ignore
-        }
-      }
-      toast({
-        title: "Geo crawl started",
-        description: runId ? `Run ${runId.slice(0, 8)}… is live. Open Admin → Geo Crawl to monitor.` : "Geo crawl queued.",
-      })
-    },
-    onError: (error) => {
-      toast({
-        variant: "destructive",
-        title: "Unable to start geo crawl",
-        description: error instanceof Error ? error.message : "Try again shortly.",
-      })
-    },
-  })
-
-  const handleStartGeoCrawl = () => {
-    if (!isAdmin) {
-      toast({
-        variant: "destructive",
-        title: "Admin access required",
-        description: "Geo Crawl is an admin-only operation.",
-      })
-      return
-    }
-    const state = deriveStateFromProfile(profileDetailQuery.data)
-    if (!state) {
-      toast({
-        variant: "destructive",
-        title: "Missing profile state",
-        description: "Select a profile with a valid US state (Basic Information) to run a scoped Geo Crawl.",
-      })
-      return
-    }
-    const geoCrawlProfileId = isAdmin
-      ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : null)
-      : activeProfileId || null
-
-    geoCrawlMutation.mutate({
-      state,
-      zip_limit: 25,
-      min_sources_per_zip: 3,
-      discover_local_resources: true,
-      profile_id: geoCrawlProfileId,
-    })
-  }
 
   // jobDetailsMutation + handleInspectJob declared above retryJobMutation so
   // its onSuccess closure can call them without a temporal-dead-zone read.
@@ -2003,11 +1895,20 @@ export default function Automation() {
   }
 
   const metricsLoading = metricsQuery.isLoading && !metricsQuery.data
-  const metricsData = metricsQuery.data?.types ?? []
+  const metricsData = (metricsQuery.data?.types ?? []).filter(
+    (metric) => !isSupersededCrawlerType(metric?.type),
+  )
   const metricsForDisplay = metricsLoading ? METRIC_TYPE_ORDER.map((type) => ({ type })) : metricsData
   const overallMetrics = metricsQuery.data?.overall ?? null
-  const runningJobs = metricsQuery.data?.running_jobs ?? []
-  const recentFailures = metricsQuery.data?.recent_failures ?? []
+  // Defensive: the backend already excludes retired types from every panel
+  // query, but filter here too so a stale cache / older API can never surface
+  // legacy jobs in the live queue or recent-failures panels.
+  const runningJobs = (metricsQuery.data?.running_jobs ?? []).filter(
+    (job) => !isSupersededCrawlerType(job?.type),
+  )
+  const recentFailures = (metricsQuery.data?.recent_failures ?? []).filter(
+    (job) => !isSupersededCrawlerType(job?.type),
+  )
   const inspectionState = {
     isLoading: jobDetailsMutation.isPending,
     jobId: jobDetailsMutation.variables ?? null,
@@ -2016,7 +1917,7 @@ export default function Automation() {
   const retryingJobId = retryJobMutation.isPending ? retryJobMutation.variables ?? null : null
   const cancellingJobId = cancelJobMutation.isPending ? cancelJobMutation.variables?.jobId ?? null : null
 
-  const jobs = jobsQuery.data ?? []
+  const jobs = (jobsQuery.data ?? []).filter((job) => !isSupersededCrawlerType(job?.type))
   const hasJobs = jobs.length > 0
   const tasksForPanel = tasksQuery.data ?? []
   const automationProfileName =
@@ -2102,36 +2003,12 @@ export default function Automation() {
 
       <section className="grid gap-4 lg:grid-cols-3">
         <QuickActionCard
-          icon={Rocket}
-          title="Launch local sweep"
-          description="Search within 25 miles of the profile’s ZIP for non-repayable opportunities."
-          onClick={() => handleQueueJob("local")}
-          disabled={!isAdmin && !activeProfileId}
-          loading={createJobMutation.isPending && createJobMutation.variables?.type === "local"}
-        />
-        <QuickActionCard
-          icon={Sparkles}
-          title="Scholarship & endowment match"
-          description="Match students to scholarships using FAFSA, Common App, and campus portals."
-          onClick={() => handleQueueJob("scholarship")}
-          disabled={!isAdmin && !activeProfileId}
-          loading={createJobMutation.isPending && createJobMutation.variables?.type === "scholarship"}
-        />
-        <QuickActionCard
           icon={School}
           title="Portal award check"
           description="Proactively check financial aid and scholarship portals for new award notifications and sync them to the student's profile."
           onClick={() => handleQueueJob("portal_check", { check_type: "manual", max_portals: 20 })}
           disabled={!isAdmin && !activeProfileId}
           loading={createJobMutation.isPending && createJobMutation.variables?.type === "portal_check"}
-        />
-        <QuickActionCard
-          icon={Target}
-          title="Geo Crawl"
-          description="Populate the Funding Opportunities catalog with at least three grants per ZIP."
-          onClick={handleStartGeoCrawl}
-          disabled={geoCrawlMutation.isPending || !isAdmin}
-          loading={geoCrawlMutation.isPending}
         />
         <QuickActionCard
           icon={Sparkles}
@@ -2433,48 +2310,6 @@ export default function Automation() {
                   disabled={!canPipelineAutomation}
                   disabledReason="This profile’s tier does not include pipeline automation. Ask an admin to upgrade the tier in Admin → Billing."
                 />
-            </CardContent>
-          </Card>
-
-          <Card className="border border-slate-200 bg-white/80 shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Target className="h-4 w-4 text-blue-600" />
-                Item funding lookup
-              </CardTitle>
-              <CardDescription>Queue the item crawler to research funding for specific equipment or purchases.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Input
-                value={itemQuery}
-                onChange={(event) => setItemQuery(event.target.value)}
-                placeholder='e.g. "STEM lab laptops"'
-              />
-              <Button
-                className="w-full bg-blue-600 hover:bg-blue-700 gap-2"
-                onClick={() =>
-                  handleQueueJob("item_search", {
-                    item: itemQuery,
-                  })
-                }
-                disabled={!itemQuery.trim() || (!isAdmin && !activeProfileId) || !canItemFunding}
-              >
-                {createJobMutation.isPending && createJobMutation.variables?.type === "item_search" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Zap className="h-4 w-4" />
-                )}
-                Run item search
-              </Button>
-              <p className="text-xs text-slate-500">
-                Uses profile demographics, assistance flags, and location to prioritise relevant funding. Results appear
-                under Funding Opportunities.
-              </p>
-              {!canItemFunding ? (
-                <p className="text-xs text-amber-700">
-                  Item funding lookups are gated by tier. Upgrade the profile tier to enable this crawler.
-                </p>
-              ) : null}
             </CardContent>
           </Card>
 

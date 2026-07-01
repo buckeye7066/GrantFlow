@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { requireAuthenticatedUser, isAdminUserWithDb, getAuthUserId } from '../utils/accessControl.js'
 import { createGeoCrawlRun, getGeoCrawlRunWithBackfill, listGeoCrawlEvents } from '../services/geoCrawlRunStore.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
+import { isSupersededCrawlerType } from '../../shared/supersededCrawlerTypes.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:geoCrawl')
@@ -25,6 +26,20 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
     try {
       const isAuthorized = await requireAdmin(req, res)
       if (!isAuthorized) return
+
+      // CUTOVER: geo crawl ran as a `comprehensive` crawler_jobs row, now a retired
+      // discovery type (no dispatcher handler; short-circuited as superseded).
+      // Crawler OS (Robert) owns catalog population, so this endpoint no longer
+      // enqueues a dead job — it reports retired so the UI can show an honest state.
+      if (isSupersededCrawlerType('comprehensive')) {
+        return res.status(200).json({
+          ok: false,
+          retired: true,
+          run_id: null,
+          message:
+            'Geo Crawl is retired. Crawler OS (Robert) is the single grant-discovery engine; use per-profile discovery or Robert automation.',
+        })
+      }
 
       const incoming = req.body && typeof req.body === 'object' ? req.body : {}
       const state = incoming.state ? String(incoming.state).toUpperCase() : null

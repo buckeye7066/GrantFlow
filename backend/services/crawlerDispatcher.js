@@ -14,8 +14,13 @@ import { processAnyaMatchScoutJob } from './anyaMatchScout.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
 import { runPortalCheck } from './portalCheckService.js'
+import { isSupersededCrawlerType, SUPERSEDED_CRAWLER_JOB_TYPES, SUPERSEDED_REASON } from '../../shared/supersededCrawlerTypes.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('crawlerDispatcher')
+
+// Back-compat re-export: some callers/tests referenced this name. The canonical
+// list now lives in shared/supersededCrawlerTypes.js.
+export const DISCOVERY_CRAWL_JOB_TYPES = new Set(SUPERSEDED_CRAWLER_JOB_TYPES)
 import {
   WORKER_ID,
   claimJob as claimJobState,
@@ -343,20 +348,15 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // needed.
     // Grant-DISCOVERY crawl job types — superseded by the Crawler OS. Everything
     // NOT in this set (document_ingest, avatar_lookup, pipeline_automation,
-    // profile_enrichment, anya_match_scout, portal_check, …) still runs.
-    const DISCOVERY_CRAWL_JOB_TYPES = new Set([
-      'live_search', 'clinical_trials', 'local', 'scholarship', 'curated_benefits',
-      'health_resources', 'comprehensive', 'national', 'item_search', 'item_gift_search',
-      'student_bridge_funding', 'government_funding', 'student_grants', 'ecf_benefits',
-      'ecf_hcbs', 'special_needs', 'local_funding', 'item_matching', 'foundation_990',
-      'church', 'faith_based', 'ministry', 'family', 'school', 'k12', 'charter_school',
-    ])
-    if (DISCOVERY_CRAWL_JOB_TYPES.has(job.type)) {
+    // profile_enrichment, anya_match_scout, portal_check, …) still runs. The
+    // canonical list lives in shared/supersededCrawlerTypes.js so every enqueue
+    // choke point and the panel UI stay in sync.
+    if (isSupersededCrawlerType(job.type)) {
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'completed', completed_at = CURRENT_TIMESTAMP, error = ?
         WHERE id = ?
-      `).run('superseded_by_crawler_os: legacy grant-discovery is handled by the Crawler OS (Robert)', jobId)
+      `).run(SUPERSEDED_REASON, jobId)
       logJobEvent('superseded_by_crawler_os', 'legacy grant-discovery superseded by Crawler OS', { jobId, type: job.type })
       return
     }

@@ -45,8 +45,16 @@ function defaultUploadDir() {
  */
 export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
   if (!db || !isAdmin(user)) return { scheduled: false, reason: 'not_admin' }
-  if (!envEnabled('ANYA_ADMIN_GEO_ON_LOGIN', true)) {
-    return { scheduled: false, reason: 'disabled_by_env' }
+
+  // CUTOVER: the admin nationwide geo sweep ran as a `comprehensive` crawler_jobs
+  // row, which is now a retired discovery type (no dispatcher handler; short-
+  // circuited as superseded). Enqueuing it only produced dead "superseded" rows
+  // in the Automation Control Center on every admin login. Crawler OS (Robert)
+  // owns catalog population now, so this is OFF by default. Kept behind an env
+  // flag (default off) so the login / background-service / scheduler call-sites
+  // keep working and it can be revived deliberately if the geo path ever returns.
+  if (!envEnabled('ANYA_ADMIN_GEO_ON_LOGIN', false)) {
+    return { scheduled: false, reason: 'superseded_by_crawler_os' }
   }
 
   const marker = 'anya_admin_login_sweep'
