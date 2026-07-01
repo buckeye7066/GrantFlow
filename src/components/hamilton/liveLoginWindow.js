@@ -25,6 +25,8 @@
  *   // onError(err,  { popup }) → popup.fail(err?.message)
  */
 
+import { env } from '@/config/env.js'
+
 const NOOP_HANDLE = {
   blocked: false,
   navigate() {},
@@ -145,15 +147,37 @@ export function openPendingLoginWindow({ title = "Secure login" } = {}) {
 
 /**
  * Resolve the URL the popup should navigate to from a startCloudLogin response.
- * Prefer the backend-built absolute liveUrl; otherwise build the same-origin
- * /HamiltonLiveLogin route from the returned session id. Returns null when the
- * response carries neither (caller should treat that as a failure).
+ *
+ * CRITICAL — the popup MUST open on THIS app's origin. The live-login page reads
+ * the signed-in GrantFlow session from localStorage, which the browser
+ * partitions per origin. The backend builds its `liveUrl` from req.get('host'),
+ * which behind the Vercel→Railway proxy is the API/proxy host — a DIFFERENT
+ * origin. Because the backend also serves the SPA, that URL still renders the
+ * overlay, but on an origin whose localStorage has NO session, so the live-view
+ * SSE stream 401s immediately (stream_http_401) and the page prompts a fresh
+ * GrantFlow sign-in. So we IGNORE the backend origin and always anchor to
+ * window.location.origin + the app base.
+ *
+ * The URL must be ABSOLUTE (not relative): the popup starts on about:blank, so a
+ * relative URL passed to window.location.replace() wouldn't resolve. Returns
+ * null only when we have no session id AND no backend fallback.
  */
 export function resolveLiveLoginUrl(res) {
-  if (res?.liveUrl) return res.liveUrl
   const sessionId = res?.liveSessionId || res?.id
-  if (!sessionId) return null
+  if (!sessionId) {
+    // No id to build our own URL — fall back to the backend value (may be
+    // cross-origin, but it's better than nothing). This path is not expected:
+    // a successful start always returns a liveSessionId.
+    return res?.liveUrl || null
+  }
   const params = new URLSearchParams({ session: sessionId })
   if (res?.portalHost) params.set("host", res.portalHost)
-  return `/HamiltonLiveLogin?${params.toString()}`
+  const base = env.appBase && env.appBase !== "/" ? String(env.appBase).replace(/\/+$/, "") : ""
+  const path = `${base}/HamiltonLiveLogin?${params.toString()}`
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}${path}`
+  }
+  // SSR/no-window fallback: a relative path (resolved against the app origin
+  // when navigated in a real browser).
+  return path
 }
