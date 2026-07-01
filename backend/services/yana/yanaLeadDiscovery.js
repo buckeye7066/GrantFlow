@@ -35,6 +35,7 @@ import { isValidEmail } from '../john/johnOutreachSafety.js'
 import { createLogger } from '../../utils/logger.js'
 import { listProspectSources, getProspectSource } from './yanaProspectSources.js'
 import { getDefaultContactEnricher } from './yanaContactEnrichment.js'
+import { getAgentSetting, setAgentSetting } from '../agentControl/agentControlStore.js'
 import {
   recordEnrichmentRequest,
   getOpenRequestForCandidate,
@@ -42,6 +43,15 @@ import {
 } from './yanaEnrichmentRequests.js'
 
 const log = createLogger('yana-lead-discovery')
+
+// Rotating ProPublica page cursor. Runs fire on startup and the process
+// restarts often, so an in-memory counter would reset to page 0 every boot and
+// re-scan the same first-page orgs forever. Persist the cursor in agent_settings
+// and advance it each run so successive runs pull NEW pages of prospects. Wrap
+// so the cursor never chases permanently-empty high pages.
+const PROSPECT_PAGE_KEY = 'yana.propublica_page'
+const PROSPECT_PAGE_STEP = 2   // pages consumed (and advanced) per run
+const PROSPECT_PAGE_WRAP = 20  // cursor wraps back to 0 here
 
 export const YANA_AGENT_NAME = 'yana'
 export const QUALIFY_THRESHOLD = Number(process.env.YANA_QUALIFY_THRESHOLD || 70)
@@ -521,6 +531,20 @@ export async function discoverProspects(db, {
   const bySource = { ...(sharedArgs.bySource || {}) }
   delete sharedArgs.bySource
 
+  // Rotate the persisted ProPublica page cursor so each run pulls NEW pages of
+  // prospects instead of re-scanning page 0 (the frozen-universe bug: every run
+  // re-discovered the same ~40 orgs, all already pushed_to_john, so 0 new leads
+  // reached John). Only when the caller didn't pin a page explicitly.
+  const usesPropublica = sourceNames.includes('propublica_990')
+  let prospectPage = null
+  if (usesPropublica && sharedArgs.page === undefined && !(Number(bySource.propublica_990?.page) >= 0)) {
+    const raw = await getAgentSetting(db, PROSPECT_PAGE_KEY)
+    const parsed = Number.parseInt(raw, 10)
+    prospectPage = Number.isInteger(parsed) && parsed >= 0 ? parsed : 0
+    sharedArgs.page = prospectPage
+    sharedArgs.pages = PROSPECT_PAGE_STEP
+  }
+
   // OpenStreetMap (free, keyless) anchors geo-local discovery on the operator's
   // own org footprint (city/state) when the caller didn't pin a location.
   if (sourceNames.includes('openstreetmap') && !bySource.openstreetmap?.location) {
@@ -590,6 +614,21 @@ export async function discoverProspects(db, {
       else result.unqualified += 1
     }
   }
+
+  // Advance + persist the ProPublica page cursor for the NEXT run (wrap so it
+  // never runs off into permanently-empty pages). Best-effort: a persistence
+  // failure must not fail discovery.
+  if (prospectPage !== null) {
+    const next = (prospectPage + PROSPECT_PAGE_STEP) % PROSPECT_PAGE_WRAP
+    try {
+      await setAgentSetting(db, PROSPECT_PAGE_KEY, next)
+    } catch (err) {
+      log.warn(`failed to persist prospect page cursor: ${err?.message || err}`)
+    }
+    result.prospect_page = prospectPage
+    result.next_prospect_page = next
+  }
+
   return result
 }
 
