@@ -869,6 +869,15 @@ export function buildThesis(profile = {}) {
     is_student: isStudent,
     is_org: isOrg,
     school: profile?.school ?? null,
+    // Concrete institution / field-of-study / employer seeds — the highest-signal
+    // way to reach institution-specific endowments/departmental scholarships and
+    // employer education programs (findable ONLY by name). Breadth seeds for the
+    // open-web query builder; never used for scoring. See buildWebQueries.
+    schools: Array.isArray(profile?.schools)
+      ? profile.schools.map((s) => String(s ?? '').trim()).filter(Boolean).slice(0, 3)
+      : [],
+    field_of_study: profile?.field_of_study ? String(profile.field_of_study).trim() : null,
+    employer: profile?.employer ? String(profile.employer).trim() : null,
     // Match floor / slider. Individuals get a slightly lower floor so they are
     // not starved; the planner/match engine can override per-run.
     min_match_score: Number.isFinite(profile?.min_match_score)

@@ -131,6 +131,78 @@ function asList(v) {
   return [String(v)];
 }
 
+/** Coerce a section's data to a plain object (it may be an object or JSON string). */
+function sectionObj(v) {
+  if (!v) return {};
+  if (typeof v === 'string') return jparse(v, {}) || {};
+  if (typeof v === 'object') return v;
+  return {};
+}
+
+/** Clean a free-text institution / employer name for use as a search seed. */
+function cleanName(v) {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
+  // Reject empties, "none"/"n/a" placeholders, and absurdly long blobs.
+  if (!s || s.length < 3 || s.length > 90) return null;
+  if (/^(none|n\/a|na|unknown|tbd|null)$/i.test(s)) return null;
+  return s;
+}
+
+/**
+ * extractEducationEmployment — pull the concrete SCHOOL name(s), field of study,
+ * and employer from a profile's sections. These are the highest-signal seeds for
+ * institution-specific and employer-specific funding (endowed/departmental
+ * scholarships, employer tuition programs) which are findable ONLY by name — the
+ * generic geo/type/need queries structurally cannot reach them.
+ *
+ * Priority for schools: the CURRENT / COMMITTED institution first (that's where a
+ * student's real institutional aid lives), then declared/target colleges. Bounded
+ * to keep the query set small.
+ */
+function extractEducationEmployment(sections = {}) {
+  const edu = sectionObj(sections.education);
+  const basic = sectionObj(sections.basic_information);
+  const spp = sectionObj(sections.student_portal_plan);
+  const uapps = sectionObj(sections.university_applications);
+  const occ = sectionObj(sections.occupation);
+  const emp = sectionObj(sections.employment);
+  const orgd = sectionObj(sections.organization_details);
+
+  // Schools — current/committed first, then declared, then targets.
+  const committed = Array.isArray(uapps.applications)
+    ? uapps.applications
+        .filter((a) => String(a?.status ?? '').toLowerCase() === 'committed')
+        .map((a) => a?.name)
+    : [];
+  const otherApps = Array.isArray(uapps.applications) ? uapps.applications.map((a) => a?.name) : [];
+  const ordered = [
+    edu.current_institution,
+    basic.current_school,
+    ...committed,
+    edu?.schools?.name,
+    ...otherApps,
+    ...(Array.isArray(edu.target_colleges) ? edu.target_colleges : []),
+  ];
+  const schools = [];
+  for (const raw of ordered) {
+    const name = cleanName(raw);
+    if (name && !schools.some((s) => s.toLowerCase() === name.toLowerCase())) schools.push(name);
+    if (schools.length >= 3) break;
+  }
+
+  // Field of study / major (breadth seed only — never used for scoring).
+  const field_of_study = cleanName(edu.intended_major || spp.major || edu.major || '');
+
+  // Employer — for a worker profile, employer-specific tuition/education programs
+  // are a real funding class. Only use a concrete declared employer; never mine
+  // narrative free-text (fabrication/junk risk).
+  const employer = cleanName(
+    emp.employer || occ.employer || emp.current_employer || occ.employer_name || orgd.name || '',
+  );
+
+  return { schools, field_of_study: field_of_study || null, employer };
+}
+
 /**
  * profileContextToThesisInput — map a loadProfileContext() result into the shape
  * buildThesis() understands. buildThesis is tolerant (it gathers free text and
@@ -166,9 +238,16 @@ export function profileContextToThesisInput(ctx = {}) {
 
   const location = signals.location ?? {};
 
+  // Concrete school / field-of-study / employer seeds for institution- and
+  // employer-specific funding (endowments, departmental & employer scholarships).
+  const { schools, field_of_study, employer } = extractEducationEmployment(sections);
+
   return {
     id: profile.id ?? ctx.profileId ?? null,
     profile_type: profile.primary_type ?? profile.applicant_type ?? null,
+    schools,
+    field_of_study,
+    employer,
     applicant_types: Array.isArray(signals.applicantTypes) ? signals.applicantTypes
       : (signals.applicantTypes ? [...signals.applicantTypes] : []),
     name: profile.display_name ?? null,
