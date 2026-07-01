@@ -72,7 +72,7 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
   profile({
     id: 'profile-axiom-biolabs-2',
-    display_name: 'Axiom BioLabs',
+    display_name: 'Demo Research Organization',
     primary_type: 'organization',
     tags: ['organization', 'research'],
     cityState: 'Tennessee',
@@ -104,7 +104,7 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
   profile({
     id: 'profile-avanell-leamon',
-    display_name: 'Avanell Leamon',
+    display_name: 'Designated Family Support Profile',
     primary_type: 'family',
     tags: ['family_assistance', 'caregiver', 'appalachian'],
     cityState: 'Cleveland, Tennessee',
@@ -119,7 +119,7 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
   profile({
     id: 'profile-gilbert-mccosh',
-    display_name: 'Gilbert McCosh',
+    display_name: 'Designated Disability Support Profile',
     primary_type: 'individual',
     tags: ['disability', 'assistive_technology', 'appalachian'],
     cityState: 'Cleveland, Tennessee',
@@ -169,7 +169,7 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
   profile({
     id: 'profile-focus-forward-ministries',
-    display_name: 'Focus Forward Ministries',
+    display_name: 'Demo Faith-Based Nonprofit',
     primary_type: 'nonprofit',
     tags: ['faith_based', 'human_services', 'food_security'],
     cityState: 'Tennessee',
@@ -183,7 +183,7 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
   profile({
     id: 'profile-john-white',
-    display_name: 'Dr. John White',
+    display_name: 'Demo Health Education Profile',
     primary_type: 'individual',
     tags: ['health_education', 'food_security', 'community_health'],
     cityState: 'Tennessee',
