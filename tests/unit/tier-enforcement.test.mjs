@@ -229,17 +229,20 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     })
     assert.ok([200, 201].includes(pipelineAdmin.status))
 
-    const itemAdmin = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
+    // Second active crawler type to prove admin tier-bypass isn't specific to one
+    // type. (Was 'item_search', retired in the Crawler-OS cutover; profile_enrichment
+    // is an active type with no required parameters.)
+    const enrichAdmin = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
-        type: 'item_search',
+        type: 'profile_enrichment',
         profile_id: profileId,
-        parameters: { item: 'wheelchair ramp' },
+        parameters: {},
         force: true,
       }),
     })
-    assert.ok([200, 201].includes(itemAdmin.status))
+    assert.ok([200, 201].includes(enrichAdmin.status))
 
     const aiAdmin = await fetchJson(`http://127.0.0.1:${port}/api/ai/invoke`, {
       method: 'POST',

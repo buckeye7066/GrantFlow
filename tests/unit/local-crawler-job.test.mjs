@@ -5,6 +5,19 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+/**
+ * Retired-crawler HTTP-layer guard.
+ *
+ * The legacy per-type discovery crawlers (including 'local') were retired in the
+ * Crawler-OS cutover — see shared/supersededCrawlerTypes.js. Profile discovery
+ * now runs synchronously through the Crawler OS; the old 'local' job path is
+ * gone. This test used to drive that retired path end-to-end (expecting a job to
+ * be created + completed); it now asserts the CURRENT contract at the HTTP edge:
+ * POST /api/crawlers/jobs with a superseded type is rejected with 400
+ * invalid_crawler_type and never enqueues a job. (The service-layer retirement
+ * contract is covered by backend/tests/supersededCrawlerRetirement.test.js.)
+ */
+
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-local-job-test-'))
   const dbPath = path.join(tmp, 'test.db')
@@ -47,7 +60,9 @@ function startServer(extraEnv = {}) {
 
     const onData = () => {
       if (resolved) return
-      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
+      // ANSI-tolerant: match the port from the "Ready on port N" banner regardless
+      // of any color escape codes around the [Server] prefix.
+      const match = stdout.match(/Ready on port\s+(\d+)/)
       if (match) {
         resolved = true
         clearInterval(readyPoll)
@@ -82,27 +97,7 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-// 90s budget: the local crawl does real work (now multi-state + county/city
-// expansion) and can run slowly under full-suite concurrency. It completes well
-// under this standalone; the larger budget only prevents load-flakiness.
-// Load-tolerant default: a cold-cache / loaded-CI full-server crawl can exceed
-// 90s even though the job completes. Override via CRAWLER_JOB_TIMEOUT_MS.
-async function waitForJob({ port, accessToken, jobId, timeoutMs = Number(process.env.CRAWLER_JOB_TIMEOUT_MS) || 180_000 }) {
-  const started = Date.now()
-  while (Date.now() - started < timeoutMs) {
-    const res = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs/${jobId}`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    })
-    assert.equal(res.status, 200)
-    const status = res.json?.status
-    if (status === 'completed' || status === 'failed' || status === 'cancelled') return res.json
-    await new Promise((r) => setTimeout(r, 250))
-  }
-  throw new Error(`timed out waiting for job ${jobId}`)
-}
-
-test('queued crawler: local job completes even with legacy keyword formats and derives state from ZIP signals', async () => {
+test('retired "local" crawler type is rejected at the HTTP layer (superseded by Crawler OS)', async () => {
   const srv = startServer()
   const { port } = await srv.ready
 
@@ -112,7 +107,6 @@ test('queued crawler: local job completes even with legacy keyword formats and d
     const credentialId = '00000000-0000-0000-0000-00000000bbb2'
     const orgId = '00000000-0000-0000-0000-00000000bbb3'
     const profileId = '00000000-0000-0000-0000-00000000bbb4'
-    const oppId = '00000000-0000-0000-0000-00000000bbb5'
 
     const Database = (await import('better-sqlite3')).default
     const db = new Database(srv.dbPath)
@@ -123,29 +117,11 @@ test('queued crawler: local job completes even with legacy keyword formats and d
       INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
       VALUES ('${credentialId}', '${userId}', 'email_otp', '${email}', 0);
 
-      -- Intentionally omit state so the crawler must derive it from ZIP via signals.
       INSERT INTO organizations (id, name, city, state, zip)
-      VALUES ('${orgId}', 'Test Org', 'Nashville', NULL, '37209');
+      VALUES ('${orgId}', 'Test Org', 'Nashville', 'TN', '37209');
 
       INSERT INTO profiles (id, user_id, organization_id, display_name, primary_type, status, tags)
       VALUES ('${profileId}', '${userId}', '${orgId}', 'Local Job Profile', 'individual_need', 'active', '["education"]');
-
-      -- Legacy keyword formats (not JSON) previously crashed JSON.parse in the local job.
-      INSERT INTO funding_opportunities (
-        id, title, sponsor, source, description, is_active, state, requires_match, keywords, categories, eligibility_bullets
-      ) VALUES (
-        '${oppId}',
-        'Education Microgrant',
-        'Local Foundation',
-        'local_seed',
-        'Support for education-related needs.',
-        1,
-        'TN',
-        0,
-        'education, youth, community',
-        '["community"]',
-        'veterans; students'
-      );
     `)
     db.close()
 
@@ -166,6 +142,8 @@ test('queued crawler: local job completes even with legacy keyword formats and d
     assert.equal(verify.status, 200)
     assert.ok(verify.json?.accessToken)
 
+    // A retired discovery type must be rejected at the route before any job row
+    // is enqueued — the Crawler OS owns discovery now.
     const create = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${verify.json.accessToken}` },
@@ -175,20 +153,8 @@ test('queued crawler: local job completes even with legacy keyword formats and d
         parameters: { match_threshold: 60, max_results: 10 },
       }),
     })
-    assert.equal(create.status, 201)
-    assert.ok(create.json?.id)
-
-    const finalJob = await waitForJob({
-      port,
-      accessToken: verify.json.accessToken,
-      jobId: create.json.id,
-    })
-
-    assert.equal(finalJob.status, 'completed')
-    assert.equal(finalJob.type, 'local')
-    assert.equal(finalJob.profile_id, profileId)
-    assert.equal(typeof finalJob.result_count, 'number')
-    assert.ok(finalJob.result_count >= 0)
+    assert.equal(create.status, 400)
+    assert.equal(create.json?.error, 'invalid_crawler_type')
   } finally {
     await srv.stop()
   }

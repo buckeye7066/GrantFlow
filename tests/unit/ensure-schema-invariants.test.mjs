@@ -112,6 +112,7 @@ test('ensureSchemaInvariants runs every declared step (ran === step count)', asy
       'crawler_jobs_type_check',
       'anya_match_suggestions',
       'matching_low_coverage_events',
+      'profile_todo_plans',
       'behavior_events',
       'profile_discovery_column',
       'profile_soft_delete_column',
