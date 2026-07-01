@@ -199,6 +199,31 @@ router.post('/create-test-draft', adminAuth, async (_req, res) => {
   }
 })
 
+// Admin: draft "a few quick questions" gap emails for incomplete profiles into the
+// owner's mailbox (dr.johnwhite@…) for review. DRAFT-ONLY, never sends. Gated by
+// GAP_EMAIL_DRAFTS_ENABLED unless { force:true }; supports { dry_run:true }.
+router.post('/gap-emails/draft', adminAuth, async (req, res) => {
+  try {
+    assertDraftOnly()
+    const body = req.body || {}
+    const dryRun = body.dry_run === true || body.dryRun === true
+    const force = body.force === true
+    const { draftGapEmailsForIncompleteProfiles } = await import('../services/profileGapEmailDrafts.js')
+    const provider = dryRun ? null : createOutlookProvider({ config: getJohnConfig(), logger: log })
+    if (!dryRun && !provider.ready) {
+      return res.status(503).json({ ok: false, reason: 'provider_not_configured', missing: provider.missing })
+    }
+    const result = await draftGapEmailsForIncompleteProfiles(db, {
+      provider, dryRun, force,
+      limit: Number.isFinite(Number(body.limit)) ? Number(body.limit) : 200,
+      minCoverage: Number.isFinite(Number(body.min_coverage)) ? Number(body.min_coverage) : 0.5,
+    })
+    return res.json(result)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message, code: err?.code })
+  }
+})
+
 router.post('/draft-from-yana', adminAuth, async (req, res) => {
   try {
     assertDraftOnly()
