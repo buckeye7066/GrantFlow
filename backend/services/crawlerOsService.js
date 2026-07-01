@@ -297,7 +297,24 @@ export async function buildThesisForProfile(db = getDb(), profileId) {
   const ctx = await loadProfileContext(db, profileId);
   const status = String(ctx?.profile?.status ?? '').trim().toLowerCase();
   if (NON_DISCOVERABLE_PROFILE_STATUSES.has(status) || ctx?.profile?.deleted_at) return null;
-  return buildThesis(profileContextToThesisInput(ctx));
+  const thesis = buildThesis(profileContextToThesisInput(ctx));
+  // ── Close the learning loop ────────────────────────────────────────────────
+  // liveCrawlGapLearning RECORDS this profile's coverage gaps into Anya's brain
+  // after each crawl. Load the most recent record and attach it so buildWebQueries
+  // can TARGET those gaps on the next run — the crawlers don't just observe what
+  // they miss, they evolve their queries to go find it. Best-effort; never blocks.
+  try {
+    const { getMemory } = await import('./anyaBrainService.js');
+    const mem = await getMemory(db, { scope: 'profile', scopeId: String(profileId), memoryKey: 'crawler_gap' });
+    const c = mem?.content;
+    if (c && (c.needs_rediscovery || (Array.isArray(c.classes) && c.classes.length))) {
+      thesis.learned_gaps = {
+        classes: Array.isArray(c.classes) ? c.classes : [],
+        missing_schools: Array.isArray(c.missing_schools) ? c.missing_schools : [],
+      };
+    }
+  } catch { /* learned-gap load is best-effort observability, never a blocker */ }
+  return thesis;
 }
 
 export default {
