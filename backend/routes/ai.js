@@ -1715,12 +1715,15 @@ router.post('/profile-todo/complete', async (req, res) => {
       delete map[String(item_key)];
     }
     const mapJson = JSON.stringify(map);
-    const nowSql = db.dialect === 'postgres' ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+    // Bind the timestamp as a parameter (portable across SQLite/Postgres) rather
+    // than interpolating a dialect `now` expression — keeps this fully
+    // parameterized so the safe-sql release gate stays green.
+    const nowIso = new Date().toISOString();
     if (row) {
-      await db.prepare(`UPDATE profile_todo_plans SET completions = ?, updated_at = ${nowSql} WHERE profile_id = ?`).run(mapJson, profile_id);
+      await db.prepare('UPDATE profile_todo_plans SET completions = ?, updated_at = ? WHERE profile_id = ?').run(mapJson, nowIso, profile_id);
     } else {
       // Allow checking an item even if no plan row exists yet (defensive).
-      await db.prepare(`INSERT INTO profile_todo_plans (profile_id, completions, updated_at) VALUES (?, ?, ${nowSql})`).run(profile_id, mapJson);
+      await db.prepare('INSERT INTO profile_todo_plans (profile_id, completions, updated_at) VALUES (?, ?, ?)').run(profile_id, mapJson, nowIso);
     }
     return res.json({ success: true, profile_id, item_key: String(item_key), done: Boolean(done), completions: map });
   } catch (error) {
