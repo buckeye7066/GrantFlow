@@ -98,18 +98,22 @@ function buildFooter(config, organizationName) {
   const physical = String(config.physicalAddress || '').trim()
   const link = String(config.prospectLink || '').trim()
   const org = String(organizationName || '').trim() || 'your organization'
+  // ONE sender identity: Ellie. The email appears to come from Ellie and the
+  // single reply/return address is Ellie@axiombiolabs.org — no competing
+  // Dr. John White / GrantFlow@ / Axiom addresses to confuse the recipient.
+  const ellieAddress = String(config.replyTo || 'Ellie@axiombiolabs.org').trim()
   return [
     '',
-    `Rather than just describe it, I’d like you to see it for yourself. You can talk through your work with Anya, our assistant, and she’ll pull a live scan of funding sources that fit ${org}, with no account or commitment needed. If what comes back is useful, you can choose to create an account from there:`,
+    `The best way to see whether it is worth your time is to try it, so I would rather show you than keep describing it. If you follow the link below, you can talk through your work with Anya, our assistant, and she will run a live scan of funding that fits ${org}, no account or commitment needed just to look. If what comes back is useful, you can take it from there:`,
     ...(link ? ['', link] : []),
     '',
-    'Respectfully,',
+    'Warmly,',
     '',
-    'Dr. John White',
-    'GrantFlow / Axiom BioLabs',
-    String(config.replyTo || 'Ellie@axiombiolabs.org'),
+    'Ellie',
+    'GrantFlow (founded by Dr. John White at Axiom BioLabs)',
+    ellieAddress,
     '',
-    'If this is not relevant, you can reply "no thanks" and I will not follow up.',
+    'If this is not the right fit, just reply "no thanks" and I will not follow up.',
     ...(physical ? ['', physical] : []),
   ].join('\n')
 }
@@ -145,7 +149,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     recipient_salutation_name: salutationMatch ? salutationMatch[1] : null,
   }
   const system = [
-    'You are Dr. John White, founder of GrantFlow, MBA, and a working scientist who has had to raise money for his own lab. You are writing a short, personable cold-outreach email to an organization you have NOT spoken with before. Write the way a sharp, generous peer writes: warm, plain-spoken, specific, and a little human. Never like a marketing template.',
+    'You are Ellie, a warm, thoughtful person on the GrantFlow team who reaches out to organizations on behalf of the founder, Dr. John White. You are writing a short, personable note to an organization you have NOT spoken with before. Write the way a sharp, generous, well-read person writes one real human a genuine note: warm, plain-spoken, specific, and a little human. Never like a marketing template. You write as "I" (Ellie); when you mention the founder or GrantFlow’s origin, refer to Dr. John White in the third person.',
     '',
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',
@@ -153,7 +157,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     '',
     'The email body MUST, in this order:',
     '1. LEAD WITH THEM. Spend the FIRST ONE TO TWO PARAGRAPHS genuinely on what THIS organization (and this person) is doing: their mission, the specific programs/work/population they serve, and why it matters, drawn from the supplied facts and web_research (what we found about them on the public web). This is the heart of the email and must make it unmistakable the note was written for them, not blasted to a list. Be specific and warm, like someone who actually looked into their work and respects it. Use ONLY facts present in the supplied data (including web_research snippets); NEVER invent achievements, dollar figures, programs, names, or events, and do not treat a web_research snippet as more certain than it is. If the facts are genuinely thin, write honestly and specifically about their sector and the kind of work they appear to do, rather than padding with vague praise.',
-    '2. BRIDGE. Transition naturally from their work into who you are and what GrantFlow is, with its honest origin in 1-2 sentences: you first built GrantFlow to find funding for your own research lab (Axiom BioLabs), then found the same engine helped the mission and nonprofit work you care about, and even helped you find scholarships and college funding for your own children. A touch of self-deprecation is welcome ("I did not set out to build software").',
+    '2. BRIDGE. Transition naturally from their work into what GrantFlow is and its honest origin, told about the founder in 1-2 sentences (third person): Dr. John White did not set out to build software. He first built GrantFlow to find funding for his own research lab, Axiom BioLabs, then found the same engine helped the mission and nonprofit work he cares about, and even helped him find scholarships and college funding for his own children. Keep it human and a little self-aware, not a sales boast.',
     '3. Explain concretely how GrantFlow can help THIS organization given the specific mission/work/needs you named in step 1. Tie it directly back to them. Be specific, never generic.',
     '',
     'Voice and craft (warm, MBA-level peer outreach):',
@@ -269,7 +273,13 @@ export async function composeEmailWithAI(lead, opts = {}) {
   const aiBody = stripDashes(String(parsed.body).trim())
   const personalizedBody = stripOpeningSalutation(aiBody)
 
-  const salutation = interpretation.salutation || DEFAULT_SALUTATION
+  // Prefer a real, personalized greeting from Yana's contact (name/role). When
+  // none is known, a bare "Hello," reads cold — fall back to a warm, org-specific
+  // greeting instead so the note still feels addressed to them.
+  const orgForGreeting = String(interpretation.organization_name || '').trim()
+  const salutation = (interpretation.salutation && interpretation.salutation !== DEFAULT_SALUTATION)
+    ? interpretation.salutation
+    : (orgForGreeting ? `Hello ${orgForGreeting} team,` : 'Hello there,')
   const composedBody = `${salutation}\n\n${personalizedBody}` + '\n' + buildFooter(config, interpretation.organization_name)
 
   // Pre-validate against the SAME gates the draft service enforces, so we never

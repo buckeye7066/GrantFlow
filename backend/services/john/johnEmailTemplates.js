@@ -8,7 +8,7 @@
  *
  * All templates explicitly include:
  *   - opt-out language ("If this is not relevant, you can reply 'no thanks'…")
- *   - Dr. John White / GrantFlow signature
+ *   - Ellie / GrantFlow signature (Ellie@axiombiolabs.org)
  *   - {{PHYSICAL_ADDRESS}} placeholder for the configured postal address
  *
  * Subject templates are also enumerated so we can map each lead to an
@@ -44,7 +44,7 @@ const DEFAULT_BODY_TEMPLATE = [
   '',
   '{{OPENING_LINE}}',
   '',
-  'I\u2019m Dr. John White, the founder of GrantFlow, and I\u2019ll be honest about where it came from. I didn\u2019t set out to build software. I built it to fund my own research lab, Axiom BioLabs. When it actually worked, I started pointing the same engine at the nonprofit and ministry work I care about, and later at scholarships and college funding for my own kids. Every time, the lesson was the same: the work was never the hard part. Paying for it was. That\u2019s the gap GrantFlow was built to close.',
+  'I\u2019m Ellie, and I help share GrantFlow with organizations doing work like yours. I\u2019ll be honest about where it came from. Our founder, Dr. John White, didn\u2019t set out to build software. He built it to fund his own research lab, Axiom BioLabs. When it actually worked, he started pointing the same engine at the nonprofit and ministry work he cares about, and later at scholarships and college funding for his own kids. Every time, the lesson was the same: the work was never the hard part. Paying for it was. That\u2019s the gap GrantFlow was built to close.',
   '',
   '{{ATTENTION_LINE}}Here is the short version: GrantFlow builds a funding profile of an organization (its mission, location, focus areas, and eligibility) and matches that against grants, foundation programs, scholarships, and other funding that genuinely fits. Then it keeps every deadline, document, and application moving in one place, so nothing slips through the cracks.',
   '',
@@ -52,10 +52,10 @@ const DEFAULT_BODY_TEMPLATE = [
   '',
   '{{PROSPECT_LINK}}',
   '',
-  'Respectfully,',
+  'Warmly,',
   '',
-  'Dr. John White',
-  'Founder, GrantFlow / Axiom BioLabs',
+  'Ellie',
+  'GrantFlow (founded by Dr. John White at Axiom BioLabs)',
   'Ellie@axiombiolabs.org',
   '',
   '{{OPT_OUT_LINE}}',
