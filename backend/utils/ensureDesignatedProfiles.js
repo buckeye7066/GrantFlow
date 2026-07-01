@@ -56,7 +56,11 @@ function _seedProfilesSync(tx) {
     INSERT INTO profiles (id, display_name, primary_type, status, tags, updated_at)
     VALUES (@id, @display_name, @primary_type, @status, @tags, CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO UPDATE SET
-      display_name = excluded.display_name,
+      -- PRESERVE an admin/real display_name already in the DB (seed only sets it
+      -- on first INSERT). This keeps real client names OUT of source control (the
+      -- config carries generic placeholders) while letting the app show the real
+      -- name — and stops the boot re-seed from reverting an admin rename.
+      display_name = COALESCE(NULLIF(profiles.display_name, ''), excluded.display_name),
       primary_type = excluded.primary_type,
       status = excluded.status,
       tags = excluded.tags,
