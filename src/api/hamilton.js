@@ -180,6 +180,30 @@ export function listPortalCredentials(profileId) {
   return apiFetch(`/api/hamilton/automation/credentials?profileId=${encodeURIComponent(profileId)}`)
 }
 
+// Standing (profile-level) Hamilton authorizations — the "grant once, Hamilton
+// does the rest" consent. A scope:'profile' grant covers every portal/task for
+// the profile, so the user authorizes once instead of per funding source.
+export function getHamiltonAuthorizations(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/authorizations?profile_id=${encodeURIComponent(profileId)}`)
+}
+
+export function grantHamiltonAuthorization({ profileId, authorizationTypes, scope = 'profile' }) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch('/api/hamilton/automation/authorize', {
+    method: 'POST',
+    body: JSON.stringify({ profile_id: profileId, scope, authorization_types: authorizationTypes }),
+  })
+}
+
+export function revokeHamiltonAuthorization(id, reason = null) {
+  if (!id) return Promise.reject(new Error('authorization id required'))
+  return apiFetch(`/api/hamilton/automation/authorizations/${encodeURIComponent(id)}/revoke`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
 // "✨ Auto-fill with Hamilton": ask the backend to suggest the portal host,
 // login URL, and username for a profile so the user only has to type their
 // password (+ optional 2FA). Returns { portalHost, loginUrl, username, label,
