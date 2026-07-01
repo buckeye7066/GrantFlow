@@ -42,6 +42,7 @@
  */
 
 import http from 'node:http'
+import { CHROMIUM_CONTAINER_ARGS } from './browserLaunch.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
 
@@ -181,7 +182,7 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       // --disable-blink-features=AutomationControlled hides the navigator.webdriver
       // automation flag, which bot-detection (e.g. studentaid.gov / FAFSA behind
       // Akamai) uses to serve a BLANK page to an obviously-automated browser.
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
+      args: [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled'],
     })
     // A realistic UA + locale further reduces "this is a bot" blank-page blocks
     // on hardened portals. The user still drives the page; we only soften the

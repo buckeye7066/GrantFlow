@@ -40,6 +40,7 @@
  */
 
 import fs from 'node:fs'
+import { CHROMIUM_CONTAINER_ARGS } from './browserLaunch.js'
 import path from 'node:path'
 import os from 'node:os'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -534,7 +535,7 @@ export async function runAutopilot({
     return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  const browser = await chromium.launch({ headless })
+  const browser = await chromium.launch({ headless, args: [...CHROMIUM_CONTAINER_ARGS] })
   // Prefer an in-memory storageState OBJECT (the durable, DB-backed session a
   // user imported after clearing 2FA themselves) — it survives Railway's
   // ephemeral filesystem, unlike an on-disk path. Fall back to a path if given.
