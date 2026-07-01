@@ -82,7 +82,7 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-emerald-600" />
@@ -125,30 +125,42 @@ export default function HamiltonWorkPanel({ profileId, onNavigate }) {
                     {needsYou.map((item) => {
                       const Icon = needIcon(item.kind)
                       const actionLabel = WHERE_LABEL[item.where] || 'Open'
+                      // The WHOLE row is the button: clicking (or Enter/Space on)
+                      // anywhere navigates to where the owner fixes it. This is the
+                      // durable fix for the report that these items "should be
+                      // clickable" — it no longer matters if the trailing action
+                      // button gets clipped; the row itself always navigates.
                       return (
                         <li
                           key={item.id}
-                          className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleNavigate(item)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              handleNavigate(item)
+                            }
+                          }}
+                          className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left transition-colors hover:border-rose-300 hover:bg-rose-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
                         >
                           <Icon className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" />
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-slate-900">
+                            <div className="text-sm font-medium text-slate-900 break-words">
                               {item.title}
                               {item.required && (
                                 <span className="ml-2 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rose-600">required</span>
                               )}
                             </div>
-                            {item.detail && <p className="mt-0.5 text-xs text-slate-500">{item.detail}</p>}
+                            {item.detail && <p className="mt-0.5 text-xs text-slate-500 break-words">{item.detail}</p>}
                           </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="shrink-0"
-                            onClick={() => handleNavigate(item)}
+                          <span
+                            aria-hidden="true"
+                            className="inline-flex shrink-0 items-center gap-1 self-center rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600"
                           >
                             {actionLabel}
-                            <ArrowRight className="ml-1 h-3.5 w-3.5" />
-                          </Button>
+                            <ArrowRight className="h-3.5 w-3.5" />
+                          </span>
                         </li>
                       )
                     })}
