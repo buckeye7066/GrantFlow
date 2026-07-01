@@ -90,6 +90,21 @@ describe('getProfilePortals', () => {
     expect(derived[0].sources[0]).toMatchObject({ title: 'Gates Grant', grantId: 'g1' })
   })
 
+  it('routes a direct_url online aid program to a portal tile, NOT a mail/fax packet', async () => {
+    // FAFSA/TSAC-style aid programs carry application_method 'direct_url' and NO
+    // mailing address or fax — they apply ONLINE. Regression: they used to fall
+    // through classifyCandidate's "ambiguous" branch to nonportal and were shown
+    // as mailable packets (a packet with no address to mail to).
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
+      .run('g1', 'p1', 'HOPE Scholarship', 'https://www.tn.gov/collegepays/financial-aid/hope.html', 'direct_url')
+    const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
+    expect(mailFaxSources).toHaveLength(0)
+    const derived = derivedOnly(portals)
+    expect(derived).toHaveLength(1)
+    expect(derived[0].portalHost).toBe('tn.gov')
+    expect(derived[0].sources[0]).toMatchObject({ title: 'HOPE Scholarship', grantId: 'g1' })
+  })
+
   it('treats a login/apply URL path as a portal even without application_method', async () => {
     db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
       .run('g1', 'p1', 'AcademicWorks Award', 'https://foundation.example.org/apply/scholarship')

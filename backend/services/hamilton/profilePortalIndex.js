@@ -155,7 +155,18 @@ const PORTAL_PLATFORM_HOSTS = new Set([
 const PORTAL_PATH_RE = /(\/login|\/log-?in|\/signin|\/sign-?in|\/sign-?on|\/sso|\/apply|\/application|\/applicant|\/portal|\/account|\/admissions|\/auth|\/register|\/dashboard|\/myaccount|\/students?\/)/i
 
 // application_method values (normalized lowercase) that mean "online portal".
-const PORTAL_METHODS = new Set(['portal', 'online', 'web', 'website', 'account', 'electronic'])
+// application_method values that mean "apply ONLINE at a URL" (a login/apply
+// portal or a direct application link) — NEVER a mailable packet. `direct_url`
+// (and its download variant) is the canonical "there is a URL to apply at"
+// value emitted by grantApplicationApproachAdvisor; without it here, online-only
+// aid programs (FAFSA/TSAC/studentaid.gov links, which carry no mailing address
+// or fax) fell through to the "ambiguous → packet" fallback and were wrongly
+// shown as mail/fax packets. Online sources belong on a portal tile ("Apply
+// online" / "Open portal"), not in the packet section.
+const PORTAL_METHODS = new Set([
+  'portal', 'online', 'web', 'website', 'account', 'electronic',
+  'direct_url', 'direct_url_download', 'url', 'link', 'apply_online', 'application_url',
+])
 
 // application_method values that mean "NOT a portal — apply by mail/fax/email/
 // paper". These force a packet even when a URL is present.
