@@ -167,6 +167,38 @@ describe('Amy evaluation + Anya handoff', () => {
     }
     expect(report.amy_summary.scenarios_total).toBe(1)
   })
+
+  it('flags an INELIGIBLE_MATCH when a non-student profile ACCEPTS enrolled-student aid', () => {
+    const scenario = { scenario_id: 'senior-v1', category: 'individual', label: 'Senior Individual', expected: { state: 'TN', needs: ['medical'] } }
+    const ev = evaluateDiscovery(scenario, 'p-senior', {
+      run: {
+        run_id: 'r', stored: 3, sources: [],
+        recommendations: [
+          { title: 'Tennessee HOPE Scholarship', sponsor: 'TSAC', match_score: 81, decision: 'ACCEPT' },
+          { title: 'Cleveland Emergency Food Assistance', sponsor: 'Food Bank', match_score: 82, decision: 'ACCEPT' },
+        ],
+      },
+      persisted: { opportunities: 3 },
+      // Non-student individual: is_student false, no student-aid need.
+      thesis: { applicant_types: ['individual'], needs: ['medical', 'food'], is_student: false, location: { state: 'TN' } },
+    })
+    expect(ev.ineligible_accepts).toBe(1)
+    expect(ev.findings.some((f) => f.type === 'ineligible_match')).toBe(true)
+    const f = ev.findings.find((x) => x.type === 'ineligible_match')
+    expect(f.file).toBe('backend/services/matchEngine.js')
+    expect(f.evidence.ineligible_titles).toContain('Tennessee HOPE Scholarship')
+  })
+
+  it('does NOT flag INELIGIBLE_MATCH for a real student accepting student aid', () => {
+    const scenario = { scenario_id: 'student-v1', category: 'student', label: 'College Student', expected: { state: 'TN' } }
+    const ev = evaluateDiscovery(scenario, 'p-student', {
+      run: { run_id: 'r', stored: 2, sources: [], recommendations: [{ title: 'Tennessee HOPE Scholarship', sponsor: 'TSAC', match_score: 84, decision: 'ACCEPT' }] },
+      persisted: { opportunities: 2 },
+      thesis: { applicant_types: ['student'], needs: ['scholarship'], is_student: true, location: { state: 'TN' } },
+    })
+    expect(ev.ineligible_accepts).toBe(0)
+    expect(ev.findings.some((f) => f.type === 'ineligible_match')).toBe(false)
+  })
 })
 
 describe('Amy profile store cleanup safety', () => {

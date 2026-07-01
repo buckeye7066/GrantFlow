@@ -13,7 +13,11 @@
  */
 
 import { DEFAULT_MIN_SCORE, ACCEPT_SCORE, REVIEW_SCORE } from '../../config/matchThresholds.js'
+import { isStudentAidOpportunity } from '../matchEngine.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
+
+/** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
+const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
 
 function num(v) {
   const n = Number(v)
@@ -171,6 +175,28 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   const thesisNeeds = Array.isArray(thesis.needs) ? thesis.needs : []
   const thesisTypes = Array.isArray(thesis.applicant_types) ? thesis.applicant_types : []
   const thesisState = thesis?.location?.state || null
+
+  // ── ELIGIBILITY MISMATCH (crawler-intelligence signal) ─────────────────────
+  // The goal is smarter crawlers: an opportunity the profile CANNOT apply for
+  // must never ACCEPT. The canonical example (2026-07-01) is enrolled-student aid
+  // (TN HOPE / FAFSA / Pell / TSAA) accepted for a NON-student individual/family.
+  // Mirrors the engine's own cap condition (!is_student && !wantsStudentAid), so a
+  // real student or an aid-seeking adult never trips it. Reuses the engine's own
+  // isStudentAidOpportunity predicate (no drift). Routes Anya at the eligibility
+  // GATE so the fix is at SCORING time, not just the surface-table net.
+  const wantsStudentAid = thesisNeeds.some((n) => STUDENT_AID_NEEDS.includes(String(n)))
+  const ineligibleAccepts = (!thesis.is_student && !wantsStudentAid)
+    ? accepted.filter((r) => isStudentAidOpportunity({ title: r.title, description: r.sponsor }, null))
+    : []
+  if (ineligibleAccepts.length > 0) {
+    findings.push(
+      makeFinding(FINDING_TYPES.INELIGIBLE_MATCH, {
+        message: `${scenario.label}: ${ineligibleAccepts.length} enrolled-student-aid opportunit(ies) were ACCEPTED for a NON-student profile — the eligibility gate is under-enforcing (these must REJECT/cap at scoring time).`,
+        excerpt: ineligibleAccepts.map((r) => `${r.match_score}:${r.title}`).slice(0, 4).join('; '),
+        evidence: { ...baseEvidence, ineligible_titles: ineligibleAccepts.map((r) => r.title).slice(0, 6), is_student: Boolean(thesis.is_student), thesis_needs: thesisNeeds },
+      }),
+    )
+  }
   if (
     scenario?.expected &&
     (scenario.expected.needs?.length > 0) &&
@@ -322,6 +348,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     sources_failed: failedSources.length,
     candidates,
     false_positives: falsePositives.length,
+    ineligible_accepts: ineligibleAccepts.length,
     findings,
   }
 }

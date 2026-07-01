@@ -204,6 +204,25 @@ export function buildApprovalQueue(evaluations = []) {
     })
   }
 
+  // 2b. Ineligible ACCEPTs → eligibility gate under-enforcing (matchEngine gate).
+  // A profile-INELIGIBLE opportunity (enrolled-student aid for a non-student, an
+  // applicant-type/geo-exclusive award) reached ACCEPT. The evolution goal is
+  // fewer ineligible ACCEPTs at SCORING time — tighten the eligibility gate so
+  // these can never clear ACCEPT for the wrong profile category.
+  const ineligByCat = tally(evals.filter((e) => Number(e.ineligible_accepts) > 0), (e) => e.category)
+  for (const [category, count] of Object.entries(ineligByCat)) {
+    items.push({
+      id: `ineligible_match:${category}`,
+      lever: 'eligibility_gate',
+      target_file: CODE_TARGETS[FINDING_TYPES.INELIGIBLE_MATCH].file,
+      category,
+      severity: SEVERITY.HIGH,
+      rationale: `${count} "${category}" profile(s) ACCEPTED an opportunity they are INELIGIBLE for (e.g. enrolled-student aid for a non-student). Evolve the eligibility gate so ineligible opportunities REJECT/cap below the floor at scoring time; the surfacedEligibility sweep is only the net.`,
+      evidence: { ineligible_profiles: count },
+      requires_approval: true,
+    })
+  }
+
   // 3. Weak categories → scoring under-credit (matchEngine weights).
   const weakByCat = tally(evals.filter((e) => e.status === 'weak'), (e) => e.category)
   for (const [category, count] of Object.entries(weakByCat)) {
