@@ -651,6 +651,163 @@ export async function enforceRelevanceFloor(db) {
 }
 
 /**
+ * INVARIANT: INDIVIDUAL-PROFILE AMOUNT SANITY CEILING
+ * (canonical_rules.md G4 + eligibility realism — a person's pipeline must not be
+ * inflated by institutional-scale money they cannot receive).
+ *
+ * THE BUG THIS CLOSES
+ * -------------------
+ * A funding feed (record_origin `funding_api`, i.e. the federal Grants.gov / NSF
+ * catalog) matched large INSTITUTIONAL research awards — NSF S-STEM, RUI, REU
+ * Site, HBCU targeted-infusion, etc., each $300k–$650k — into an individual
+ * STUDENT's pipeline. Summed by the Pipeline Potential card
+ * (SUM(grants.amount_requested) over active statuses, see
+ * routes/profiles.js `/:id/pipeline-potential`), a single student showed
+ * >$3,000,000 of "potential funding" that is not obtainable by a person: these
+ * are grants awarded to universities / faculty PIs, not to individuals.
+ *
+ * WHY THE EXISTING NETS MISS IT
+ * -----------------------------
+ *   - enforceRelevanceFloor only deletes rows with a NON-NULL match_score below
+ *     the floor. These institutional grants carry `match_score IS NULL`
+ *     (ingested by the funding_api path without a score), and NULL is doctrine-
+ *     protected ("no score is not junk"). So the relevance sweep never touches
+ *     them.
+ *   - There was NO amount-sanity bound anywhere: nothing said "a $650k research
+ *     grant is impossible for an individual applicant".
+ *
+ * THE RULE (amount sanity, profile-type aware)
+ * --------------------------------------------
+ * For an INDIVIDUAL / student / family / veteran profile ONLY (orgs, businesses,
+ * nonprofits, agencies, schools legitimately pursue six- and seven-figure grants
+ * and are NEVER touched), a pipeline grant whose `amount_requested` exceeds a
+ * realistic individual ceiling is institutional money mis-matched into a person's
+ * pipeline and is purged. Same guardrails as the relevance-floor sweep so we can
+ * never destroy real work or real money — a row is deleted ONLY when ALL hold:
+ *   - amount_requested IS NOT NULL and > ceiling.
+ *   - The profile resolves to an INDIVIDUAL type (isIndividualProfileType).
+ *   - status is an early/discovery stage (PURGEABLE_DISCOVERY_STATUSES or NULL);
+ *     anything in PROTECTED_PIPELINE_STATUSES (submitted, awarded, …) is user
+ *     work and is NEVER deleted.
+ *   - title/funder does NOT match PROTECTED_NAME_PATTERN (MTSU/portal).
+ *   - amount_awarded is NULL / <= 0 (a real recorded award is money in hand and
+ *     is preserved even if large).
+ *
+ * The ceiling defaults to $100,000 (well above any realistic individual grant /
+ * scholarship, so the false-positive risk on legitimate aid is ~zero) and is
+ * overridable via env INDIVIDUAL_PIPELINE_AMOUNT_CEILING for ops tuning.
+ *
+ * OVERRIDE: enforcement is ON by default. Set ENFORCE_INDIVIDUAL_AMOUNT_CEILING=0
+ * to DISABLE the delete (count-only) without a code change — same posture as
+ * ENFORCE_RELEVANCE_FLOOR. Idempotent: once the over-ceiling rows are gone a
+ * re-run is a no-op.
+ */
+const INDIVIDUAL_AMOUNT_CEILING_DEFAULT = 100000
+
+/** Resolve the individual amount ceiling at call time so tests/ops can tune env. */
+export function resolveIndividualAmountCeiling() {
+  const v = Number.parseInt(process.env.INDIVIDUAL_PIPELINE_AMOUNT_CEILING || '', 10)
+  return Number.isFinite(v) && v > 0 ? v : INDIVIDUAL_AMOUNT_CEILING_DEFAULT
+}
+
+export async function enforceIndividualAmountCeiling(db) {
+  return runInvariant('individual_amount_ceiling', async () => {
+    const ceiling = resolveIndividualAmountCeiling()
+
+    // Requires amount_requested + profile_id; degrade silently on legacy schemas.
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('amount_requested') || !grantCols.has('profile_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, ceiling, skipped: 'schema' }
+    }
+    const hasAwarded = grantCols.has('amount_awarded')
+
+    // Profile type columns vary by deployment (prod `profiles` has only
+    // primary_type; the matcher prefers applicant_type when present). Probe which
+    // exist and build the SELECT dynamically so a missing column can never throw.
+    const profileCols = await listProfileColumns(db)
+    const typeCols = ['applicant_type', 'primary_type'].filter((c) => profileCols.has(c))
+    const typeSelect = typeCols.length
+      ? typeCols.map((c) => `p.${c} AS ${c}`).join(', ')
+      : 'NULL AS primary_type'
+
+    const awardedGuard = hasAwarded ? 'AND (g.amount_awarded IS NULL OR g.amount_awarded <= 0)' : ''
+
+    // NOTE: unlike the relevance-floor sweep we do NOT pre-exclude by
+    // PROTECTED_PIPELINE_STATUSES here, because 'interested' is BOTH a protected
+    // name and an early auto-match stage — and the ">$3M" junk is auto-matched
+    // 'interested' rows (funding_api auto-set the stage, not a human). Protection
+    // is applied in JS via the PURGEABLE_DISCOVERY_STATUSES allowlist, so only
+    // early/discovery stages (discovered/discovery/interested/new/matched) can be
+    // purged; genuinely-worked stages (gathering_documents, drafting, submitted,
+    // awarded, …) are never in the allowlist and always survive.
+    let candidates
+    try {
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.title, g.funder, g.status, g.amount_requested, ${typeSelect}
+             FROM grants g JOIN profiles p ON p.id = g.profile_id
+            WHERE g.amount_requested IS NOT NULL
+              AND g.amount_requested > ?
+              ${awardedGuard}`,
+        )
+        .all(ceiling)
+    } catch (err) {
+      // profiles table absent or unjoinable on a minimal/test schema — nothing to do.
+      log.warn('individual_amount_ceiling: candidate query failed (non-fatal)', {
+        error: String(err?.message || err),
+      })
+      return { scanned: 0, repaired: 0, enforced: true, ceiling, skipped: 'query' }
+    }
+
+    // Apply the individual-type gate, early-status allowlist, and name guard in
+    // JS so they behave identically on SQLite + Postgres. Orgs/businesses (high
+    // grant asks are legitimate) and unknown types (conservative: NOT individual)
+    // are never touched.
+    const purgeable = (candidates || []).filter((r) => {
+      const status = (r.status === null || r.status === undefined) ? null : String(r.status)
+      const isEarly = status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
+      if (!isEarly) return false
+      if (PROTECTED_NAME_PATTERN.test(`${r.title ?? ''} ${r.funder ?? ''}`)) return false
+      const rawType = r.applicant_type || r.primary_type
+      return isIndividualProfileType(rawType)
+    })
+
+    const violators = purgeable.length
+    const disabled = _parseBoolEnv(process.env.ENFORCE_INDIVIDUAL_AMOUNT_CEILING) === false
+    if (disabled) {
+      if (violators > 0) {
+        log.warn('above-ceiling individual pipeline grants present (purge DISABLED via ENFORCE_INDIVIDUAL_AMOUNT_CEILING=0)', {
+          violators,
+          ceiling,
+        })
+      }
+      return { scanned: violators, repaired: 0, enforced: false, ceiling }
+    }
+
+    if (violators === 0) {
+      return { scanned: 0, repaired: 0, enforced: true, ceiling }
+    }
+
+    const idsToPurge = purgeable.map((r) => r.id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < idsToPurge.length; i += CHUNK) {
+      const slice = idsToPurge.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const result = await db.prepare(`DELETE FROM grants WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(result) || slice.length
+    }
+    if (repaired > 0) {
+      log.info('purged above-ceiling grants from individual pipelines (institutional money in a person pipeline)', {
+        repaired,
+        ceiling,
+      })
+    }
+    return { scanned: violators, repaired, enforced: true, ceiling }
+  })
+}
+
+/**
  * INVARIANT: EVERY PIPELINE GRANT BELONGS TO A PROFILE
  * (canonical_rules.md G4/G8 — the pipeline is profile-scoped end to end).
  *
@@ -1220,6 +1377,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   steps.push(await enforceProfileScopedPipeline(db))
   steps.push(await enforceNoDuplicateGrants(db))
   steps.push(await enforceRelevanceFloor(db))
+  // Amount-sanity net: purge institutional-scale ($ > ceiling) grants that were
+  // mis-matched into an INDIVIDUAL/student pipeline (the ">$3M potential" bug).
+  // Runs after the relevance floor because those below-floor rows are cheaper to
+  // drop first; orgs/businesses and user-progressed work are never touched.
+  steps.push(await enforceIndividualAmountCeiling(db))
   // Profile-level data repair (not pipeline): collapse any doubled display_name
   // (e.g. "Jordan Lane Jordan Michael Lane") back to a single name.
   steps.push(await enforceProfileDisplayNameNotDoubled(db))
@@ -1266,8 +1428,11 @@ export const __testables = {
   PURGEABLE_DISCOVERY_STATUSES,
   RELEVANCE_FLOOR,
   RELEVANCE_FLOOR_FALLBACK,
+  INDIVIDUAL_AMOUNT_CEILING_DEFAULT,
   enforceProfileScopedPipeline,
   enforceProfileIncomeReconciliation,
+  enforceIndividualAmountCeiling,
+  resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,
 }
