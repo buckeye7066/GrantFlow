@@ -104,6 +104,22 @@ describe('reScoreSurfacedIneligible', () => {
     expect(second.demoted).toBe(0)
   })
 
+  it('scopes to a single profile when profileId is given (per-crawl choke point)', async () => {
+    const db = makeDb()
+    db.prepare("INSERT INTO profiles (id, display_name, status) VALUES ('p2','Other','active')").run()
+    const m1 = addMatch(db, { title: 'REJECTME One', score: 88, decision: 'accept' })
+    // A rejectable match on p2 that must NOT be touched when we scope to p1.
+    const oid = 'op2'; const m2 = 'mp2'
+    db.prepare('INSERT INTO funding_opportunities (id,title,opportunity_kind) VALUES (?,?,?)').run(oid, 'REJECTME Two', 'DIRECT_GRANT')
+    db.prepare('INSERT INTO profile_opportunity_matches (id,profile_id,opportunity_id,match_score,match_decision,matcher_version) VALUES (?,?,?,?,?,?)')
+      .run(m2, 'p2', oid, 88, 'accept', 'web-llm')
+    const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp, profileId: 'p1' })
+    expect(res.demoted).toBe(1)
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(m1).match_decision).toBe('reject')
+    // p2 untouched — it was out of scope.
+    expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(m2).match_decision).toBe('accept')
+  })
+
   it('liveOppToOs maps geography, needs, and funding faithfully', () => {
     const os = liveOppToOs({ id: 'x', title: 'T', description: 'D', categories: '["housing"]', is_national: 0, state: 'TN', amount_min: 100, amount_max: 500 })
     expect(os.geography.states).toEqual(['TN'])
