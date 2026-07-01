@@ -58,7 +58,7 @@ import {
   markCredentialUsed,
   registrableDomain,
 } from './hamiltonPortalCredentialService.js'
-import { findValidSession, getSessionStorageState } from './hamiltonCredentialSessionService.js'
+import { findValidSession, getSessionStorageState, importSession } from './hamiltonCredentialSessionService.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
 import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
@@ -931,14 +931,41 @@ async function runAutopilotPathway(db, {
     } catch { storageState = null }
   }
 
+  // Sink for the engine to hand back the authenticated storageState after a
+  // successful login, so we can persist it durably (below) and reuse it next run.
+  const sessionSink = {}
+
   for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS; attempt += 1) {
     engineResult = await runAutopilot({
       url, profile, authorizations,
       documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
+      sessionSink,
     })
     if (loginCredential && engineResult?.logged_in) {
       await markCredentialUsed(db, loginCredential.id).catch(() => {})
+    }
+    // Persist the freshly-authenticated session (AES-256-GCM, profile+host
+    // scoped) so future runs — and post-restart runs — reuse it instead of
+    // re-logging-in. This is the previously-missing half of session persistence
+    // for credential/autopilot logins; the co-browse path imports its own.
+    if (engineResult?.logged_in && sessionSink.storageState) {
+      try {
+        await importSession(db, {
+          userId: userId || task.user_id || 'system',
+          profileId: task.profile_id,
+          portalHost: url,
+          storageState: sessionSink.storageState,
+          label: 'Autopilot login session',
+          authenticationStrategy: 'autopilot_login',
+          expiresAt: new Date(Date.now() + 14 * 86400_000).toISOString(),
+          metadata: { imported_via: 'autopilot_login', task_id: task.id },
+        })
+      } catch { /* best-effort persist; never fail the run */ }
+      // Reuse within this run's later resolver attempts; clear the sink so we
+      // don't redundantly re-import until a new capture replaces it.
+      storageState = sessionSink.storageState
+      sessionSink.storageState = null
     }
     if (engineResult.status === 'submitted' || engineResult.status === 'completed_draft') break
     if (engineResult.status === 'failed' && engineResult.blocker_kind === 'no_browser') break
