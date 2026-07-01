@@ -53,7 +53,7 @@ import {
 import { findValidSession } from './hamiltonCredentialSessionService.js'
 import {
   getMasterVaultStatus,
-  getUnlockedKey,
+  ensureUnlocked,
 } from './hamiltonPortalMasterVault.js'
 import { getPolicyFor, isIdentityProofedHost } from './hamiltonPortalPolicyRegistry.js'
 import { createCaptureRequest } from './hamiltonSessionCaptureRequests.js'
@@ -284,7 +284,7 @@ async function _runAutopilotIdentityForPortal(db, {
     // no passphrase is set), block with a clear status rather than store an
     // unwrapped password. Checked BEFORE the browser gate because it's the most
     // actionable precondition for the owner — independent of browser availability.
-    const masterKey = getUnlockedKey(profileId)
+    const masterKey = await ensureUnlocked(db, profileId)
     if (!masterKey) {
       const status = await getMasterVaultStatus(db, profileId).catch(() => null)
       return {

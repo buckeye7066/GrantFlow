@@ -1,14 +1,19 @@
-import React, { useMemo } from "react"
+import React, { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { KeyRound, ShieldCheck, Loader2, CheckCircle2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { KeyRound, ShieldCheck, Loader2, CheckCircle2, Lock, Unlock } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
   getHamiltonAuthorizations,
   grantHamiltonAuthorization,
   revokeHamiltonAuthorization,
+  getPortalVaultStatus,
+  enableAutonomousUnlock,
+  disableAutonomousUnlock,
 } from "@/api/hamilton"
 
 // One profile-level consent = "sign in with my saved logins and prepare my
@@ -69,6 +74,36 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
     onError: (err) => {
       refresh()
       toast({ variant: "destructive", title: "Couldn't update permission", description: err?.message || "Please try again." })
+    },
+  })
+
+  // "Stay signed in without me" — autonomous vault unlock (escrow).
+  const [passphrase, setPassphrase] = useState("")
+  const vaultQuery = useQuery({
+    queryKey: ["portal-vault", profileId],
+    queryFn: () => getPortalVaultStatus(profileId),
+    enabled: Boolean(profileId),
+    staleTime: 30_000,
+  })
+  const vault = vaultQuery.data?.vault || null
+  const autoUnlockOn = Boolean(vault?.autonomous_unlock)
+  const hasPassphrase = Boolean(vault?.has_passphrase)
+
+  const setAutoUnlock = useMutation({
+    mutationFn: async ({ enable, pass }) =>
+      enable ? enableAutonomousUnlock(profileId, pass) : disableAutonomousUnlock(profileId),
+    onSuccess: (_d, vars) => {
+      setPassphrase("")
+      queryClient.invalidateQueries({ queryKey: ["portal-vault", profileId] })
+      toast({
+        title: vars.enable ? "Autonomous sign-in on" : "Autonomous sign-in off",
+        description: vars.enable
+          ? "Hamilton can now unlock and sign in on its own — no passphrase each run."
+          : "Hamilton will ask for the passphrase again before using its auto-provisioned logins.",
+      })
+    },
+    onError: (err) => {
+      toast({ variant: "destructive", title: "Couldn't update", description: err?.message || "Check the passphrase and try again." })
     },
   })
 
@@ -149,6 +184,61 @@ export default function HamiltonAutopilotConsentCard({ profileId }) {
                 )}
               </span>
             </label>
+
+            {loginOn && (
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
+                      {autoUnlockOn ? <Unlock className="h-4 w-4 text-emerald-600" /> : <Lock className="h-4 w-4 text-slate-400" />}
+                      Stay signed in without me
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      Lets Hamilton unlock its saved logins on scheduled/background runs, so you never
+                      re-enter the passphrase.
+                    </div>
+                  </div>
+                  {autoUnlockOn && (
+                    <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-700 shrink-0">On</Badge>
+                  )}
+                </div>
+                {vaultQuery.isLoading ? null : autoUnlockOn ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    disabled={setAutoUnlock.isPending}
+                    onClick={() => setAutoUnlock.mutate({ enable: false })}
+                  >
+                    {setAutoUnlock.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Turn off"}
+                  </Button>
+                ) : hasPassphrase ? (
+                  <form
+                    className="mt-3 flex gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      if (passphrase) setAutoUnlock.mutate({ enable: true, pass: passphrase })
+                    }}
+                  >
+                    <Input
+                      type="password"
+                      value={passphrase}
+                      onChange={(e) => setPassphrase(e.target.value)}
+                      placeholder="Enter portal passphrase once"
+                      autoComplete="off"
+                      className="h-9"
+                    />
+                    <Button type="submit" size="sm" disabled={!passphrase || setAutoUnlock.isPending}>
+                      {setAutoUnlock.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Enable"}
+                    </Button>
+                  </form>
+                ) : (
+                  <div className="mt-3 text-xs text-slate-500">
+                    Set a portal passphrase first (Advanced → add a portal) to enable this.
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="flex items-start gap-2 text-xs text-slate-500">
               <ShieldCheck className="h-4 w-4 shrink-0 text-slate-400 mt-0.5" />

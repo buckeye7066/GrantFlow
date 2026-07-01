@@ -78,7 +78,91 @@ export async function ensureMasterVaultSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_hamilton_master_vault_profile
       ON hamilton_portal_master_vault(profile_id);
   `)
+  // Autonomous-unlock ESCROW (opt-in): a server-key-wrapped copy of the derived
+  // wrapping key so scheduled/background runs unlock WITHOUT a human. Recovering a
+  // master-wrapped password then needs only the server vault key — parity with the
+  // regular server-vault logins that already run unattended. Off unless the owner
+  // enables it. Idempotent add.
+  if (isPostgres) {
+    await db.exec(`
+      ALTER TABLE hamilton_portal_master_vault ADD COLUMN IF NOT EXISTS escrow_ciphertext TEXT;
+      ALTER TABLE hamilton_portal_master_vault ADD COLUMN IF NOT EXISTS escrow_iv TEXT;
+      ALTER TABLE hamilton_portal_master_vault ADD COLUMN IF NOT EXISTS escrow_tag TEXT;
+    `)
+  } else {
+    const cols = new Set((await db.prepare('PRAGMA table_info(hamilton_portal_master_vault)').all()).map((r) => r.name))
+    if (!cols.has('escrow_ciphertext')) await db.exec('ALTER TABLE hamilton_portal_master_vault ADD COLUMN escrow_ciphertext TEXT')
+    if (!cols.has('escrow_iv')) await db.exec('ALTER TABLE hamilton_portal_master_vault ADD COLUMN escrow_iv TEXT')
+    if (!cols.has('escrow_tag')) await db.exec('ALTER TABLE hamilton_portal_master_vault ADD COLUMN escrow_tag TEXT')
+  }
   schemaReady.set(db, true)
+}
+
+// ── autonomous-unlock escrow (opt-in) ─────────────────────────────────────────
+
+/** Store a server-key-wrapped copy of the derived wrapping key for auto-unlock. */
+export async function escrowWrappingKey(db, profileId, key) {
+  if (!db || !profileId || !key) return false
+  await ensureMasterVaultSchema(db)
+  const enc = encryptRuntimeSecret(Buffer.from(key).toString('base64'))
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  await db.prepare(
+    `UPDATE hamilton_portal_master_vault
+        SET escrow_ciphertext = ?, escrow_iv = ?, escrow_tag = ?, updated_at = ${nowFn}
+      WHERE profile_id = ?`,
+  ).run(enc.value_ciphertext, enc.iv, enc.tag, String(profileId))
+  log.info('vault_autonomous_unlock_enabled', { profileId: String(profileId) })
+  return true
+}
+
+/** Null the escrowed columns WITHOUT touching the runtime unlock cache. Used by
+ * setMasterPassphrase (which must leave the just-derived key cached). */
+async function clearEscrowColumns(db, profileId) {
+  if (!db || !profileId) return false
+  await ensureMasterVaultSchema(db)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  await db.prepare(
+    `UPDATE hamilton_portal_master_vault
+        SET escrow_ciphertext = NULL, escrow_iv = NULL, escrow_tag = NULL, updated_at = ${nowFn}
+      WHERE profile_id = ?`,
+  ).run(String(profileId))
+  return true
+}
+
+/** Remove the escrowed key (disables auto-unlock) AND lock the runtime cache. */
+export async function clearEscrow(db, profileId) {
+  const ok = await clearEscrowColumns(db, profileId)
+  lockVault(profileId)
+  return ok
+}
+
+export async function hasEscrow(db, profileId) {
+  const row = await getMasterVault(db, profileId)
+  return Boolean(row?.escrow_ciphertext && row?.escrow_iv && row?.escrow_tag)
+}
+
+async function loadEscrowedKey(db, profileId) {
+  const row = await getMasterVault(db, profileId)
+  if (!row?.escrow_ciphertext || !row?.escrow_iv || !row?.escrow_tag) return null
+  try {
+    const b64 = decryptRuntimeSecret({ value_ciphertext: row.escrow_ciphertext, iv: row.escrow_iv, tag: row.escrow_tag })
+    return Buffer.from(String(b64), 'base64')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The wrapping key for a profile, unlocking from escrow if needed. Returns the
+ * cached key, else transparently unlocks from the escrowed key (auto-unlock for
+ * autonomous runs), else null (vault locked + no escrow → needs a human).
+ */
+export async function ensureUnlocked(db, profileId) {
+  const cached = cachedKey(profileId)
+  if (cached) return cached
+  const key = await loadEscrowedKey(db, profileId)
+  if (key) { cacheKey(profileId, key); return key }
+  return null
 }
 
 // ── runtime unlock cache (passphrase held in memory only, per process) ────────
@@ -191,6 +275,9 @@ function rowToPublic(row) {
     // Whether a passphrase has ever been set (a salt+verifier exist). The salt
     // and verifier themselves are NEVER returned.
     has_passphrase: Boolean(row.salt && row.verifier),
+    // Whether autonomous auto-unlock is enabled (an escrowed key exists). The
+    // escrowed material itself is NEVER returned.
+    autonomous_unlock: Boolean(row.escrow_ciphertext && row.escrow_iv && row.escrow_tag),
     kdf: row.kdf || 'scrypt',
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
@@ -247,7 +334,7 @@ export async function setAutopilotIdentity(db, { profileId, identityEmail } = {}
  *
  * @returns { status, key } — key is the derived wrapping key (in-memory only).
  */
-export async function setMasterPassphrase(db, { profileId, passphrase, identityEmail = undefined } = {}) {
+export async function setMasterPassphrase(db, { profileId, passphrase, identityEmail = undefined, autonomousUnlock = false } = {}) {
   if (!db || !profileId) throw new Error('profileId required')
   const pass = String(passphrase || '')
   if (pass.length < 8) throw new Error('passphrase must be at least 8 characters')
@@ -272,7 +359,11 @@ export async function setMasterPassphrase(db, { profileId, passphrase, identityE
     ).run(String(profileId), email, kdfParams, salt.toString('base64'), verifier.toString('base64'))
   }
   cacheKey(profileId, wrappingKey)
-  log.info('master_passphrase_set', { profileId: String(profileId) })
+  // The salt (and therefore the wrapping key) just changed, so any prior escrow is
+  // stale. Re-escrow the NEW key when autonomous unlock is requested, else clear it.
+  if (autonomousUnlock) await escrowWrappingKey(db, profileId, wrappingKey)
+  else await clearEscrowColumns(db, profileId)
+  log.info('master_passphrase_set', { profileId: String(profileId), autonomous_unlock: Boolean(autonomousUnlock) })
   return { status: await getMasterVaultStatus(db, profileId), key: wrappingKey }
 }
 
@@ -282,7 +373,7 @@ export async function setMasterPassphrase(db, { profileId, passphrase, identityE
  * null on failure. NEVER reveals whether the failure was "no vault" vs "wrong
  * passphrase" beyond the boolean.
  */
-export async function unlockVault(db, { profileId, passphrase } = {}) {
+export async function unlockVault(db, { profileId, passphrase, autonomousUnlock = false } = {}) {
   if (!db || !profileId) return { ok: false, key: null }
   const row = await getMasterVault(db, profileId)
   if (!row || !row.salt || !row.verifier) return { ok: false, key: null, reason: 'no_passphrase_set' }
@@ -291,6 +382,8 @@ export async function unlockVault(db, { profileId, passphrase } = {}) {
   if (!constantTimeEqualB64(row.verifier, candidate)) return { ok: false, key: null, reason: 'wrong_passphrase' }
   const key = deriveWrappingKey(String(passphrase || ''), salt)
   cacheKey(profileId, key)
+  // Opt-in: escrow this key so future autonomous runs unlock without a human.
+  if (autonomousUnlock) await escrowWrappingKey(db, profileId, key)
   return { ok: true, key }
 }
 
@@ -319,6 +412,10 @@ export default {
   unlockVault,
   lockVault,
   getUnlockedKey,
+  ensureUnlocked,
+  escrowWrappingKey,
+  clearEscrow,
+  hasEscrow,
   hasPassphrase,
   wrapSecretWithKey,
   unwrapSecretWithKey,

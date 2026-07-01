@@ -26,7 +26,7 @@ import psl from 'psl'
 import { encryptRuntimeSecret, decryptRuntimeSecret } from '../../utils/runtimeSecrets.js'
 import { normalizeHost } from './hamiltonCredentialSessionService.js'
 import {
-  getUnlockedKey,
+  ensureUnlocked,
   wrapSecretWithKey,
   unwrapSecretWithKey,
 } from './hamiltonPortalMasterVault.js'
@@ -510,8 +510,10 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
     // Auto-provisioned login: the password is wrapped with the profile's master
     // key. We can only recover it when the vault is UNLOCKED (the key is held in
     // the runtime cache). When locked we return a sentinel so the caller surfaces
-    // a clear "unlock vault" status instead of decrypting silently.
-    const key = getUnlockedKey(String(profileId))
+    // a clear "unlock vault" status instead of decrypting silently. When the
+    // owner enabled autonomous unlock, ensureUnlocked transparently unlocks from
+    // the escrowed key so scheduled/background logins work without a human.
+    const key = await ensureUnlocked(db, String(profileId))
     if (!key) {
       return { id: match.id, portal_host: match.portal_host, login_url: match.login_url || null, username: match.username || null, password: null, totp_secret: null, vault_locked: true }
     }
