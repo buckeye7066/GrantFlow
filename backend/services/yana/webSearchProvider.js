@@ -52,7 +52,7 @@ export function makeBraveSearchProvider({
   apiKey = process.env.BRAVE_SEARCH_API_KEY,
   fetchImpl = (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null),
   minIntervalMs = 1100,
-  count = 5,
+  count = 8,
 } = {}) {
   if (!apiKey) throw new Error('makeBraveSearchProvider: BRAVE_SEARCH_API_KEY is required')
   if (typeof fetchImpl !== 'function') throw new Error('makeBraveSearchProvider: no fetch implementation available')

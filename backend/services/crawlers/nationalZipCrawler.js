@@ -558,7 +558,7 @@ async function searchGrantsGovByZip(zip, coords, opts = {}) {
     const seenIds = new Set()
     for (const term of terms.slice(0, 6)) {
       try {
-        const { ok, opportunities: hits } = await searchGrants(term, { rows: 5 })
+        const { ok, opportunities: hits } = await searchGrants(term, { rows: 8 })
         if (!ok || !Array.isArray(hits)) continue
         for (const hit of hits) {
           const id = hit.source_id || hit.id || hit.number || hit.title

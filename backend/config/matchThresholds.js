@@ -23,13 +23,35 @@ export const W_CATEGORY = 0.20
 // ── Discovery / Comprehensive Match ─────────────────────────────────────
 
 /**
+ * Hard floor for the discovery bar. The documented product standard (owner
+ * directive 2026-06-23) is 75, and the code MUST NOT surface matches below it.
+ * This is the lowest value DEFAULT_MIN_SCORE can ever take, regardless of env.
+ */
+export const DISCOVERY_MIN_SCORE_FLOOR = 75
+
+/**
  * Default minimum score for discovery results — the "slider" default.
  * Owner directive (2026-06-23): the bar for what surfaces in a profile's
  * pipeline/discovery view is 75. Anything below is NOT junk — it stays in the
  * master funding_opportunities catalog (deduped) so it can match another
  * profile later — it just doesn't clutter THIS profile's pipeline.
+ *
+ * Configurable via GRANTFLOW_DISCOVERY_MIN_SCORE, but CLAMPED to
+ * [DISCOVERY_MIN_SCORE_FLOOR, 100] — an owner may TIGHTEN the bar (e.g. 85) but
+ * can never drop it below the documented 75. Prefer gaining breadth from the
+ * discovery lanes/queries over loosening this.
+ *
+ * NOTE (2026-07-01): the legacy `ANYA_MATCH_THRESHOLD` env var (env.example /
+ * docs said "80") is NOT read anywhere in the code — it is inert. The single
+ * source of truth for the discovery bar is THIS constant. The effective prod bar
+ * has therefore always been 75, not 80.
  */
-export const DEFAULT_MIN_SCORE = 75
+function resolveDefaultMinScore() {
+  const raw = Number(process.env.GRANTFLOW_DISCOVERY_MIN_SCORE)
+  if (Number.isFinite(raw)) return Math.max(DISCOVERY_MIN_SCORE_FLOOR, Math.min(100, raw))
+  return DISCOVERY_MIN_SCORE_FLOOR
+}
+export const DEFAULT_MIN_SCORE = resolveDefaultMinScore()
 
 /**
  * Number of matched profile needs that earns FULL need-alignment credit.
