@@ -266,6 +266,24 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     /* crawler-gap learning must never fail the crawl */
   }
 
+  // ── Self-correct this crawl's OWN ineligible output ─────────────────────────
+  // A live crawl (esp. the web-llm lane) can persist a stale/inflated ACCEPT that
+  // the FAITHFUL engine would hard-reject for THIS profile (e.g. a student-aid
+  // scholarship surfaced onto a non-student). The nightly fleet sweep eventually
+  // demotes these, but that leaves the just-crawled profile showing ineligible
+  // matches until then. Re-score just this profile's surfaced matches now, at the
+  // choke point closest to creation. Scoped to one profile => cheap; gated by
+  // ENFORCE_SURFACED_MATCH_ELIGIBILITY; never blocks the crawl.
+  try {
+    if (!dryRun && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+      const { reScoreSurfacedIneligible } = await import('./coverageAudit/surfacedEligibility.js');
+      // Demotions are logged inside the sweep via its own logger.
+      await reScoreSurfacedIneligible(db, { profileId });
+    }
+  } catch {
+    /* post-crawl eligibility re-score must never fail the crawl */
+  }
+
   return { run, persisted, thesis, opportunities };
 }
 

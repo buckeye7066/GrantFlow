@@ -100,6 +100,7 @@ function parseBool(v) {
 export async function reScoreSurfacedIneligible(db, {
   limit = 500,
   apply = true,
+  profileId = null,
   loadContext = null,
   resolveThesis = null,
   scoreOpp = null,
@@ -125,22 +126,27 @@ export async function reScoreSurfacedIneligible(db, {
   const disabled = apply === false || parseBool(process.env.ENFORCE_SURFACED_MATCH_ELIGIBILITY) === false
 
   // Real, active, non-synthetic profiles (mirror the coverage sweep's selection).
+  // When `profileId` is given (the per-crawl choke point), scope to just that one
+  // so a live discovery can demote its OWN freshly-persisted ineligible surfaced
+  // matches immediately, instead of waiting for the nightly fleet sweep.
+  const scopeClause = profileId ? ' AND p.id = ?' : ''
+  const scopeArg = profileId ? [String(profileId)] : []
   let profiles = []
   try {
     profiles = await db.prepare(
       `SELECT p.id, p.display_name FROM profiles p
-        WHERE (p.status='active' OR p.status IS NULL) AND (p.deleted_at IS NULL)
+        WHERE (p.status='active' OR p.status IS NULL) AND (p.deleted_at IS NULL)${scopeClause}
           AND NOT EXISTS (SELECT 1 FROM profile_sections ps WHERE ps.profile_id=p.id AND ps.section_key='amy_metadata')
         LIMIT ${Number(limit) || 500}`,
-    ).all()
+    ).all(...scopeArg)
   } catch {
     try {
       profiles = await db.prepare(
         `SELECT p.id, p.display_name FROM profiles p
-          WHERE (p.status='active' OR p.status IS NULL)
+          WHERE (p.status='active' OR p.status IS NULL)${scopeClause}
             AND NOT EXISTS (SELECT 1 FROM profile_sections ps WHERE ps.profile_id=p.id AND ps.section_key='amy_metadata')
           LIMIT ${Number(limit) || 500}`,
-      ).all()
+      ).all(...scopeArg)
     } catch { return { scanned: 0, demoted: 0, profilesAffected: 0, affected: [], enforced: !disabled, skipped: 'profiles' } }
   }
 
