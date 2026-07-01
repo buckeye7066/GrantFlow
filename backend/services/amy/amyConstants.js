@@ -77,6 +77,7 @@ export const FINDING_TYPES = Object.freeze({
   GEO_RADIUS_ISSUE: 'geo_radius_issue',
   INSTITUTION_RECALL_MISS: 'institution_recall_miss',
   HYPERLOCAL_RECALL_MISS: 'hyperlocal_recall_miss',
+  INELIGIBLE_MATCH: 'ineligible_match',
 })
 
 export const SEVERITY = Object.freeze({
@@ -184,6 +185,19 @@ export const CODE_TARGETS = Object.freeze({
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'A profile with a county got NO county/hyperlocal result — confirm buildWebQueries emits county-level queries ("scholarships <county>", "community foundation <county>") and that thesis.location.county is populated.',
+  },
+  // Eligibility mismatch: an opportunity the profile CANNOT apply for was ACCEPTED
+  // (e.g. an enrolled-student scholarship — TN HOPE / FAFSA / Pell / TSAA — accepted
+  // for a non-student individual/family, or an applicant-type/geo-exclusive award).
+  // The lesson (2026-07-01): the eligibility GATE must reject/cap these at SCORING
+  // time so they never ACCEPT; the surface-table net (surfacedEligibility.js) only
+  // heals rows already persisted. Anya evolves the gate; Sam verifies a non-student
+  // synthetic no longer accepts student-aid.
+  [FINDING_TYPES.INELIGIBLE_MATCH]: {
+    file: 'backend/services/matchEngine.js',
+    line: 2288,
+    severity: SEVERITY.HIGH,
+    hint: 'A profile-INELIGIBLE opportunity was ACCEPTED. Evolve the eligibility gate so it never ACCEPTs: student-only aid (isStudentAidOpportunity) must REJECT/cap for a non-student (STUDENT_AID_NONSTUDENT_CAP + requiresStudent gate); applicant-type/geo-exclusive awards must fail the applicant/geo gate. Widen isStudentAidOpportunity (RE_STUDENT_AID_SIGNAL) to any leaking student-aid program brand. The nightly surfacedEligibility sweep (backend/services/coverageAudit/surfacedEligibility.js) is the NET that demotes stale ACCEPTs the reconcile never re-scores — keep it, but the goal is fewer ineligible ACCEPTs at the source.',
   },
 })
 
