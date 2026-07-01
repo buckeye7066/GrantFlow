@@ -295,6 +295,24 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const refetchPortals = () =>
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
 
+  // Deep-link from a 2FA / CAPTCHA / identity-proof notification: it lands here
+  // with ?cobrowse=<host>. Surface a prominent, clickable "Open side-by-side
+  // login" card for that portal (the click opens the co-browse window — the
+  // popup must open inside a real user gesture) and scroll to it.
+  const [cobrowseHost, setCobrowseHost] = React.useState("")
+  const cobrowseRef = React.useRef(null)
+  React.useEffect(() => {
+    try {
+      const h = new URLSearchParams(window.location.search).get("cobrowse")
+      if (h) setCobrowseHost(h)
+    } catch { /* ignore */ }
+  }, [])
+  React.useEffect(() => {
+    if (cobrowseHost && cobrowseRef.current) {
+      cobrowseRef.current.scrollIntoView({ behavior: "smooth", block: "center" })
+    }
+  }, [cobrowseHost, isLoading])
+
   // Track the popup-close poll so we never leak it / accumulate multiple.
   const loginPollRef = React.useRef(null)
   React.useEffect(() => {
@@ -997,6 +1015,52 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       <CardContent className="space-y-7">
         {/* One-time provisioned password modal (secret never goes through a toast). */}
         <OneTimePasswordModal value={oneTimePassword} onClose={() => setOneTimePassword(null)} />
+
+        {/* Co-browse call-to-action: Hamilton hit a wall only a human can clear
+            (2FA approval, CAPTCHA, identity proofing). Deep-linked from the
+            notification; one click opens the side-by-side window. */}
+        {cobrowseHost && (
+          <div ref={cobrowseRef} className="rounded-2xl border-2 border-current-coral bg-current-coral/10 p-4">
+            <div className="flex items-start gap-3">
+              <PanelsTopLeft className="h-5 w-5 shrink-0 text-current-coral" />
+              <div className="min-w-0 flex-1">
+                <p className="font-display font-bold text-current-ink">Hamilton needs you to finish signing in</p>
+                <p className="mt-1 text-[13px] text-current-ink/75">
+                  <span className="money">{cobrowseHost}</span> hit a step only you can clear — a 2FA approval,
+                  a CAPTCHA, or identity verification. Open the side-by-side window and Hamilton will guide you
+                  through it, then keep going on its own.
+                </p>
+                <button
+                  type="button"
+                  className={`${BTN_CORAL} mt-3`}
+                  disabled={loginMutation.isPending}
+                  onClick={() => {
+                    const match = portals.find((p) => {
+                      const ph = p.portalHost || p.host
+                      return ph && (ph === cobrowseHost || String(ph).includes(cobrowseHost) || String(cobrowseHost).includes(ph))
+                    })
+                    startLogin(match || { portalHost: cobrowseHost, loginUrl: null, label: cobrowseHost })
+                  }}
+                >
+                  {loginMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                  ) : (
+                    <PanelsTopLeft className="h-4 w-4" />
+                  )}
+                  Open side-by-side login
+                </button>
+              </div>
+              <button
+                type="button"
+                className="text-current-ink/40 hover:text-current-ink"
+                onClick={() => setCobrowseHost("")}
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ── Portal Autopilot (master vault) controls ──────────────────────
             ONE master passphrase + an identity email let Hamilton self-provision

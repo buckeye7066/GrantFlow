@@ -26,12 +26,32 @@ import { buildProfileSectionLink } from '@/config/missingInfoTargets'
  * what to flash once there. Returns { navigateTo, flash } or {} when we can't
  * resolve a profile to land on.
  */
+function hostFromNotification(d) {
+  const raw = d.portal_host || d.host || d.portal_url || d.login_url || ''
+  if (!raw) return ''
+  try {
+    return new URL(String(raw).startsWith('http') ? raw : `https://${raw}`).hostname
+  } catch {
+    return String(raw).replace(/^https?:\/\//, '').split('/')[0]
+  }
+}
+
 function resolveNotificationTarget(n) {
   const d = n?.data || {}
   const type = String(n?.type || '')
   const profileId = d.profile_id || d.profileId || n?.profile_id || null
   if (!profileId) return {}
 
+  // A wall only a human can clear live (2FA push/SMS/hardware, CAPTCHA, identity
+  // proofing) → deep-link to the profile's Portals tab and flag the exact portal
+  // so it surfaces a clickable "Open side-by-side login" card. `cobrowse=<host>`
+  // is read by ProfilePortalsCard to render + scroll to that card.
+  if (/2fa_required|captcha_required|identity_proof/.test(type)) {
+    const host = hostFromNotification(d)
+    const params = { id: profileId, tab: 'pipeline' }
+    if (host) params.cobrowse = host
+    return { navigateTo: createPageUrl('ProfileDetail', params), flash: 'portal-cobrowse' }
+  }
   // Login needed → the profile's Saved portal logins card (Pipeline tab) so the
   // user/admin can add the credential Hamilton needs to sign in.
   if (/login_required/.test(type)) {
