@@ -81,7 +81,7 @@ describe('buildPacketContent + narrativeOverrides', () => {
     basic_information: { first_name: 'Robert', last_name: 'White', email: 'r@example.com' },
     essays: { primary: 'raw profile essay text' },
   }
-  const opportunity = { title: 'Test Grant', funder_name: 'Test Funder' }
+  const opportunity = { title: 'Test Grant', sponsor: 'Test Funder' }
 
   it('prefers the MBA-drafted prose over raw profile essays and drops the false missing flag', () => {
     const overrides = buildPacketNarrativeOverrides(proposal)

@@ -128,8 +128,8 @@ export default function Funder() {
       const funder = ensureFunder(grant.funder)
       funder.grants.push(grant)
       // Correct column names from the list endpoint.
-      if (!funder.email) funder.email = grant.contact_email || grant.funder_email || null
-      if (!funder.phone) funder.phone = grant.contact_phone || grant.funder_phone || null
+      if (!funder.email) funder.email = grant.contact_email || null
+      if (!funder.phone) funder.phone = grant.contact_phone || null
       if (!funder.address) funder.address = grant.funder_address || null
       if (!funder.url) funder.url = grant.url || grant.application_url || grant.portal_url || null
       const gType = grant.opportunity_type || grant.funding_type

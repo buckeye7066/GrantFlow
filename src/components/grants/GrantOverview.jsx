@@ -128,7 +128,7 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
     const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime());
     const showApplicationMethodAlert = grant.application_method && ['auto_fafsa', 'auto_profile', 'nomination', 'invitation', 'no_application'].includes(grant.application_method);
     
-    const hasContactInfo = grant.funder_email || grant.funder_phone || grant.funder_fax || grant.funder_address;
+    const hasContactInfo = grant.contact_email || grant.contact_phone || grant.funder_fax || grant.funder_address;
     const matchScore = grant.match_score || 0;
     const hasMatchScore = matchScore > 0;
     const matchColor = getMatchScoreColor(matchScore);
@@ -537,8 +537,8 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 {grant.funder_fax && (
                                     <div><strong>Fax to:</strong> <span className="font-medium">{grant.funder_fax}</span></div>
                                 )}
-                                {grant.funder_email && (
-                                    <div><strong>Email to:</strong> <a href={`mailto:${grant.funder_email}`} className="underline font-semibold">{grant.funder_email}</a></div>
+                                {grant.contact_email && (
+                                    <div><strong>Email to:</strong> <a href={`mailto:${grant.contact_email}`} className="underline font-semibold">{grant.contact_email}</a></div>
                                 )}
                                 {(grant.funder_address || grant.funder_fax) && onOpenPrintApp && (
                                     <Button size="sm" onClick={onOpenPrintApp} className="mt-2 gap-2 bg-blue-600 hover:bg-blue-700">
@@ -569,14 +569,14 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         </div>
                     )}
 
-                    {(grant.funder_address || grant.funder_fax || grant.funder_email || grant.funder_phone || grant.contact_name || grant.contact_email || grant.contact_phone) && (
+                    {(grant.funder_address || grant.funder_fax || grant.contact_name || grant.contact_email || grant.contact_phone) && (
                         <div className="bg-slate-50 rounded-lg p-4 space-y-2">
                             <h4 className="text-sm font-semibold text-slate-700">Contact & Submission Details</h4>
-                            {(grant.contact_name || grant.funder_email || grant.funder_phone) && (
+                            {(grant.contact_name || grant.contact_email || grant.contact_phone) && (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                                     {grant.contact_name && <div><span className="text-slate-500">Contact:</span> <span className="font-medium">{grant.contact_name}</span></div>}
-                                    {(grant.funder_email || grant.contact_email) && <div><span className="text-slate-500">Email:</span> <a href={`mailto:${grant.funder_email || grant.contact_email}`} className="text-blue-600 hover:underline">{grant.funder_email || grant.contact_email}</a></div>}
-                                    {(grant.funder_phone || grant.contact_phone) && <div><span className="text-slate-500">Phone:</span> <a href={`tel:${grant.funder_phone || grant.contact_phone}`} className="text-blue-600 hover:underline">{grant.funder_phone || grant.contact_phone}</a></div>}
+                                    {grant.contact_email && <div><span className="text-slate-500">Email:</span> <a href={`mailto:${grant.contact_email}`} className="text-blue-600 hover:underline">{grant.contact_email}</a></div>}
+                                    {(grant.contact_phone) && <div><span className="text-slate-500">Phone:</span> <a href={`tel:${grant.contact_phone}`} className="text-blue-600 hover:underline">{grant.contact_phone}</a></div>}
                                 </div>
                             )}
                             {grant.funder_fax && (
@@ -591,7 +591,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         </div>
                     )}
 
-                    {!grant.application_method && !grant.application_url && !grant.url && !grant.funder_email && !grant.contact_email && (
+                    {!grant.application_method && !grant.application_url && !grant.url && !grant.contact_email && (
                         <p className="text-slate-500 text-sm italic">No application method information available yet. Ask Anya to help research how to apply.</p>
                     )}
                 </CardContent>

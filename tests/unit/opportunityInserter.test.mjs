@@ -348,3 +348,56 @@ test('opportunityInserter: normalizes state values at ingest and drops invalid c
   ])
 })
 
+
+test('opportunityInserter: sponsor accepts funder/agency naming-drift aliases at the ingest choke point', async () => {
+  const db = createDb()
+
+  // Producer that (wrongly but historically) emits `funder` instead of `sponsor`
+  // must still land a populated sponsor column — never a silent NULL (#725 class).
+  const viaFunder = await upsertFundingOpportunity(db, {
+    title: 'Drift Funder Opp',
+    funder: 'Volunteer Foundation',
+    source: 'unit_test',
+    source_id: 'drift-funder-1',
+    source_url: 'https://www.grants.gov/',
+    application_url: 'https://www.grants.gov/',
+    record_origin: 'live_crawl',
+  })
+  assert.equal(viaFunder.inserted, true)
+  assert.equal(
+    db.prepare('SELECT sponsor FROM funding_opportunities WHERE source_id = ?').get('drift-funder-1').sponsor,
+    'Volunteer Foundation',
+  )
+
+  const viaAgency = await upsertFundingOpportunity(db, {
+    title: 'Drift Agency Opp',
+    agency: 'Department of Example',
+    source: 'unit_test',
+    source_id: 'drift-agency-1',
+    source_url: 'https://www.grants.gov/',
+    application_url: 'https://www.grants.gov/',
+    record_origin: 'live_crawl',
+  })
+  assert.equal(viaAgency.inserted, true)
+  assert.equal(
+    db.prepare('SELECT sponsor FROM funding_opportunities WHERE source_id = ?').get('drift-agency-1').sponsor,
+    'Department of Example',
+  )
+
+  // Canonical `sponsor` always wins over any alias.
+  const viaBoth = await upsertFundingOpportunity(db, {
+    title: 'Canonical Sponsor Opp',
+    sponsor: 'Canonical Sponsor',
+    funder: 'Alias Ignored',
+    source: 'unit_test',
+    source_id: 'drift-both-1',
+    source_url: 'https://www.grants.gov/',
+    application_url: 'https://www.grants.gov/',
+    record_origin: 'live_crawl',
+  })
+  assert.equal(viaBoth.inserted, true)
+  assert.equal(
+    db.prepare('SELECT sponsor FROM funding_opportunities WHERE source_id = ?').get('drift-both-1').sponsor,
+    'Canonical Sponsor',
+  )
+})

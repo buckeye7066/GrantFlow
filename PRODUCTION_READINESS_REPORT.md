@@ -331,3 +331,72 @@ telemetry via read-only in-container queries):
 - Biweekly parity is a pure function of the persisted anchor (never "now"), so restarts cannot
   flip which Friday an account is billed.
 - Do-not-touch items preserved: matching thresholds untouched; John remains draft-only.
+
+## 11. Addendum — funder integrity verification pass (2026-07-02)
+
+Owner ask: "The item funder, make sure it works according to its goal."
+
+**The goal, precisely** (docs/canonical_rules.md §Definitions + schema): the funding organization's
+name is a first-class display/dedup field with a deliberate two-column design — the catalog
+(`funding_opportunities`) carries **`sponsor`**, the pipeline (`grants`) carries **`funder`**, and the
+catalog→pipeline bridge maps sponsor→funder at insert. It must be (a) populated at ingest, (b) part of
+the dedup fingerprint (`title|funder|deadline|url`), (c) shown on every user-facing surface (cards,
+detail, pipeline, print sheets, packets, AI drafts), and (d) never invented (AI data-honesty rule).
+
+### Hop-by-hop verification (3 parallel audits, full-tree)
+
+| Hop | Verdict | Evidence |
+|---|---|---|
+| Crawler-OS ingestion (parsers→contract→storage) | CLEAN | canonical `sponsor` end-to-end (`crawler-os/contract.js`, `storage.js:73`, `crawlerOsPersistence.js:282`); web-LLM lane folds `funder`→`sponsor` (`webLane.js:84`) |
+| Legacy/source ingest (Grants.gov, NIH, NSF, Simpler, SAM, Fed Register, ProPublica, email-ingest) | CLEAN | every source emits `sponsor:` into `upsertFundingOpportunity` |
+| Dedup/canonicalization | CLEAN | `grantFingerprint.js` (`sponsor \|\| funder`), `enforceInvariants` title+funder key; crawler-OS `canonicalOpportunityKey` is URL+external-id by design |
+| matchEngine / thresholds / surfacing | CLEAN | reads `opportunity.sponsor` on catalog-shaped rows only; thresholds untouched |
+| Yana / John outreach | N/A-CLEAN | Yana/John target customer prospects (`organization_name`), never grants.funder |
+| Frontend surfaces (~60 read sites judged) | CLEAN post-fixes | pervasive dual-reads (`funder \|\| sponsor`); pipeline card fallback "Funder not listed" |
+
+### Bugs found and FIXED (all the #725 sponsor/funder drift class)
+
+1. **`backend/routes/ai.js` (3 sites)** — `/portal-assist` and `/generate-printable-application` read
+   the non-existent `grant.funder_name` and fell through to `org_name` — the **applicant's own
+   organization** was presented to the AI (and returned to the UI) as the "Funder". Now reads
+   `grant.funder`. Also `grant.funder_email` (no such column) → `grant.contact_email`.
+2. **Hamilton application packets** — `hamiltonApplicationPacketGenerator.js:136,277` read only
+   phantom aliases (`funder_name`/`organization`/`source_name`/`source_label`), so every packet
+   heading and mailing subject rendered the literal string **"Funder"** in prod. Chain is now
+   `opp.sponsor || opp.funder || opp.organization`. Same fix in `hamiltonFullProposalGenerator.js:221`
+   (was missing `sponsor`). The old tests passed because fixtures used `funder_name` — fixtures
+   converted to real row shapes so they can never mask this again.
+3. **Ingest choke point** — `opportunityInserter.js` accepted only `opportunity.sponsor`; a producer
+   emitting `funder`/`agency` was rejected (`missing_sponsor_and_description`) or persisted NULL.
+   New `resolveSponsorName()` resolves `sponsor|funder|funder_name|organization|agency` BEFORE
+   validation (canonical `sponsor` always wins).
+4. **Catalog→pipeline bridge** — `opportunityMatcher.js:572,636` + `routes/grants.js:2342,2380` wrote
+   `grants.funder = opportunity.sponsor` with no fallback while the co-located fingerprint used
+   `sponsor || funder` (same-row inconsistency). Aligned.
+5. **Dead contact fields** — `GrantOverview.jsx` "Email to:" branch, `Outreach.jsx` funder email
+   (always null), `Funder.jsx` dead trailing aliases → all read real `contact_email`/`contact_phone`
+   columns now. `GrantDetail.jsx` funder chain reordered canonical-first.
+
+### New invariant + regression net
+
+- **`enforceFunderBackfill()`** in `backend/startup/enforceInvariants.js` (runs every boot, step 9/11):
+  re-copies `grants.funder` from the linked opportunity's `sponsor` wherever drift left it empty;
+  NEVER invents a value — un-derivable rows are reported as `missingFunder` in the boot summary
+  (Sam/Anya-visible). Idempotent; degrades to count-only on minimal schemas.
+- **Static tripwire `backend/tests/funderFieldDrift.test.js`**: fails the suite if any non-test source
+  reads phantom `grant|opp|opportunity . funder_name|funder_email|funder_phone` without the canonical
+  field on the same line, or a user-facing `grant.sponsor` without a `funder` fallback (the PR #816
+  lesson, now machine-enforced).
+- 6 new invariant tests, 5 packet funder-resolution tests, 3 ingest alias tests; runner test updated.
+
+### Prod data quality (read-only, DATABASE_PUBLIC_URL, 2026-07-02 pre-deploy)
+
+- `grants`: 586 rows, **25 (4.3%) empty funder** — 24 `discovered` + 1 `interested`, all created
+  2026-06-21→25; 15 are linked to catalog rows whose sponsor is ALSO empty, 10 unlinked → **0
+  currently derivable** (backfill protects future drift; remainder is surfaced as `missingFunder`).
+- `funding_opportunities`: 8,871 rows, **333 (3.75%) empty sponsor** (315 active; 268 `live_crawl`,
+  65 `curated_verified`). `raw_source_payload` is empty in prod, so these are NOT derivable from
+  stored metadata — per the data-honesty rule they are handled by display fallbacks ("Funder not
+  listed"), not fabricated. Duplicate-variant noise is trivial (7 case/spacing pairs, ≈23 rows).
+- Every user-facing surface now renders a real funder when the row has one, and an honest
+  placeholder when it does not.

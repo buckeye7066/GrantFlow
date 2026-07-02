@@ -51,7 +51,7 @@ const ORG_PROFILE = {
 }
 
 const OPPORTUNITY = {
-  id: 'opp-1', title: 'Community STEM Access Grant', funder_name: 'Volunteer Foundation',
+  id: 'opp-1', title: 'Community STEM Access Grant', sponsor: 'Volunteer Foundation',
   description: 'Supports STEM access programs for low-income students.',
   eligibility_text: '501(c)(3) nonprofits or students in TN.',
   priorities: 'Measurable academic outcomes; sustainability.',

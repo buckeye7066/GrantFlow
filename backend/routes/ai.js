@@ -1105,7 +1105,7 @@ A user is applying for funding and needs help answering the application question
 
 === FUNDING SOURCE ===
 Title: ${grant.title || grant.name || 'Unknown'}
-Funder: ${grant.funder_name || grant.org_name || 'Unknown'}
+Funder: ${grant.funder || 'Unknown'}
 Description: ${grant.description || ''}
 Amount: ${grant.amount || grant.amount_max || 'Not specified'}
 URL: ${grant.application_url || grant.url || portal_url || ''}
@@ -1227,11 +1227,11 @@ router.post('/generate-printable-application', enforceTierCapability(TIER_CAPABI
 
 === FUNDING SOURCE ===
 Title: ${grant.title || grant.name || 'Funding Opportunity'}
-Funder: ${grant.funder_name || grant.org_name || 'Funding Organization'}
+Funder: ${grant.funder || 'Funding Organization'}
 Description: ${grant.description || 'N/A'}
 Amount: ${grant.amount || grant.amount_max || 'Not specified'}
 Deadline: ${grant.deadline || 'Rolling/Open'}
-Submission: ${grant.funder_address ? 'Mail to: ' + grant.funder_address : ''}${grant.funder_fax ? ' | Fax to: ' + grant.funder_fax : ''}${grant.funder_email ? ' | Email to: ' + grant.funder_email : ''}
+Submission: ${grant.funder_address ? 'Mail to: ' + grant.funder_address : ''}${grant.funder_fax ? ' | Fax to: ' + grant.funder_fax : ''}${grant.contact_email ? ' | Email to: ' + grant.contact_email : ''}
 
 === APPLICANT ===
 Name: ${applicantName}
@@ -1312,11 +1312,11 @@ Return ONLY valid JSON:
       success: true,
       application: parsed || { raw: rawText },
       grant_title: grant.title || grant.name,
-      funder: grant.funder_name || grant.org_name || null,
+      funder: grant.funder || null,
       submission: {
         address: grant.funder_address || null,
         fax: grant.funder_fax || null,
-        email: grant.funder_email || null,
+        email: grant.contact_email || null,
       },
     });
   } catch (error) {

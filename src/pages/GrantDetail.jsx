@@ -739,7 +739,7 @@ export default function GrantDetail() {
                   opportunity={{
                     id: grant.opportunity_id || grant.id,
                     title: grant.title || grant.grant_name,
-                    sponsor: grant.funder_name || grant.sponsor || grant.funder,
+                    sponsor: grant.funder || grant.sponsor || grant.funder_name,
                     application_url: grant.application_url || grant.url,
                     deadline: grant.deadline,
                     kind: grant.opportunity_kind || 'direct',
