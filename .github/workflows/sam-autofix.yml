@@ -136,8 +136,14 @@ jobs:
           gh pr create --base main --head "$BRANCH" \
             --title "fix(sam): daily eslint --fix corrections" --body "$BODY"
           if [ "$GREEN" = "true" ]; then
-            echo "Gate green → squash-merging to main (auto-deploys to prod)."
-            gh pr merge "$BRANCH" --squash --delete-branch
+            # --auto: merge only once the PR's OWN required checks (branch
+            # protection) pass, instead of merging immediately on the weaker
+            # in-job npm test alone. Falls back to immediate merge when the
+            # repo has no protection/auto-merge configured, preserving the
+            # old behaviour rather than stranding the PR.
+            echo "Gate green → auto-squash-merge once required checks pass (auto-deploys to prod)."
+            gh pr merge "$BRANCH" --squash --delete-branch --auto \
+              || gh pr merge "$BRANCH" --squash --delete-branch
           else
             echo "::warning::Test gate FAILED — leaving the PR open for human review (NOT merged)."
           fi
