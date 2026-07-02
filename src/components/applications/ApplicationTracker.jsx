@@ -27,6 +27,7 @@ import {
   recordOutcome,
 } from '@/api/grantApplications'
 import { differenceInDays, parseISO, isValid } from 'date-fns'
+import { isValidEmail } from '@/utils/validators'
 
 // Status configuration
 const STATUSES = [
@@ -221,13 +222,24 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
     setErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev))
   }
 
+  // Native number/date inputs silently discard keystrokes they can't parse —
+  // onChange never fires, so the user gets no feedback at all. Catch the
+  // rejected character at the keystroke level and show a hint instead.
+  function hintOnRejectedKey(field, message, acceptRe) {
+    return (e) => {
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !acceptRe.test(e.key)) {
+        setErrors((prev) => ({ ...prev, [field]: message }))
+      }
+    }
+  }
+
   function handleSubmit(e) {
     e.preventDefault()
     // Validate with visible, field-level feedback instead of a silent no-op.
     const nextErrors = {}
     if (!form.grant_name.trim()) nextErrors.grant_name = 'Grant name is required.'
     if (!form.profile_id) nextErrors.profile_id = 'Select a profile for this application.'
-    if (form.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contact_email.trim())) {
+    if (form.contact_email && !isValidEmail(form.contact_email)) {
       nextErrors.contact_email = 'Enter a valid email address (e.g. name@example.org).'
     }
     if (form.amount_requested !== '') {
@@ -301,6 +313,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
             className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             value={form.amount_requested}
             onChange={(e) => set('amount_requested', e.target.value)}
+            onKeyDown={hintOnRejectedKey('amount_requested', 'Numbers only — letters and symbols are ignored here.', /[\d.,$eE+-]/)}
             placeholder="0"
           />
           {errors.amount_requested && <p className="mt-1 text-xs text-red-600">{errors.amount_requested}</p>}
@@ -314,7 +327,9 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
           className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           value={form.deadline_date}
           onChange={(e) => set('deadline_date', e.target.value)}
+          onKeyDown={hintOnRejectedKey('deadline_date', 'Use the date picker or type digits (MM/DD/YYYY) — text is ignored here.', /[\d/.-]/)}
         />
+        {errors.deadline_date && <p className="mt-1 text-xs text-red-600">{errors.deadline_date}</p>}
       </div>
 
       {initialValues && (

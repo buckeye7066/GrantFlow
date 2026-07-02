@@ -199,6 +199,14 @@ export const BLOCKER_PROFILE = Object.freeze({
     admin_required: true,
     user_required: true,
   },
+  portal_unreachable: {
+    title: 'Funder website unreachable',
+    message: 'Hamilton could not reach the funder\'s website — the site may be down or the saved link may be outdated. Verify the portal link or find an alternate way to apply.',
+    required_action: 'find_alternate',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
   unknown: {
     title: 'Hamilton hit an unrecognised blocker',
     message: 'Hamilton paused for a blocker she could not classify. An admin should review the captured page text.',
@@ -328,6 +336,11 @@ export async function resolveBlocker(db, ctx, blockerInput) {
       break
     case 'unknown_application_method':
       directive = await resolveUnknownMethod(db, ctx, blockerInput)
+      break
+    case 'portal_unreachable':
+      // Nothing to retry against a dead host — alert with the engine's
+      // human-readable detail (never the raw Playwright error).
+      directive = blocked('portal_unreachable', blockerInput?.detail || BLOCKER_PROFILE.portal_unreachable.message)
       break
     default:
       directive = escalate('unknown', `Hamilton could not classify this blocker: ${blockerInput?.text || blockerInput?.detail || ''}`)

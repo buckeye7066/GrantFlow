@@ -9,6 +9,7 @@ import {
   profilesEndpointFor,
   selectInterviewCandidates,
   snoozeProfile,
+  snoozeProfiles,
 } from './loginGapInterviewLogic'
 import ProfileGapInterview from './ProfileGapInterview'
 import {
@@ -35,9 +36,15 @@ import {
  *      persisting answers through the same merge+PUT path as ProfileGapGate
  *      (shared gapInterviewPersistence.js).
  *
- * NEVER hard-blocks: "Skip for now", the dialog X, and outside-click all
- * dismiss. Dismissing snoozes that profile for the browser SESSION
- * (sessionStorage), so it re-asks at the next login — not on every navigation.
+ * NEVER hard-blocks, and closing must never open another dialog:
+ *   - "Skip for now" snoozes JUST the current profile (session) and moves to
+ *     the next gapped profile, if any.
+ *   - A close GESTURE (Escape, the dialog X, outside-click) ends the whole
+ *     interview: it snoozes every remaining queued profile for the browser
+ *     session and closes. Users were previously trapped walking the entire
+ *     profile queue because close was wired to "advance".
+ * Snoozes are sessionStorage, so Anya re-asks at the next login — not on
+ * every navigation.
  *
  * Enabled by default; kill switch is VITE_GAP_GATE_ENABLED=false (see
  * src/lib/gapGateFlag.js — shared with the ProfileOverview mount).
@@ -52,6 +59,7 @@ export default function LoginGapInterviewLauncher() {
   const [gapped, setGapped] = useState(null) // null = not probed yet
   const [index, setIndex] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [closedForSession, setClosedForSession] = useState(false)
   const probedRef = useRef(false)
 
   const userKey = user?.id ?? user?.email ?? 'anon'
@@ -90,17 +98,26 @@ export default function LoginGapInterviewLauncher() {
     }
   }, [enabled, profilesQuery.isSuccess, candidates])
 
-  if (!enabled) return null
+  if (!enabled || closedForSession) return null
   const current = Array.isArray(gapped) ? gapped[index] : null
   if (!current) return null
 
   const advance = () => setIndex((i) => i + 1)
 
-  const handleDismiss = () => {
+  // Explicit "Skip for now" button: snooze just this profile, show the next.
+  const handleSkip = () => {
     if (submitting) return
-    // Session snooze: re-ask at the next login, not on the next navigation.
     snoozeProfile(current.profile.id)
     advance()
+  }
+
+  // Close GESTURE (Escape / X / outside-click): end the whole interview for
+  // this session. Snoozing only the current profile here would immediately
+  // surface the next profile's dialog — the "trapped in modal cycles" bug.
+  const handleClose = () => {
+    if (submitting) return
+    snoozeProfiles(gapped.slice(index).map((item) => item?.profile?.id))
+    setClosedForSession(true)
   }
 
   const handleSubmit = async (sectionUpdates) => {
@@ -120,7 +137,7 @@ export default function LoginGapInterviewLauncher() {
   const profileName = current.profile.display_name || 'this profile'
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) handleDismiss() }}>
+    <Dialog open onOpenChange={(open) => { if (!open) handleClose() }}>
       <DialogContent
         className="max-w-lg max-h-[85vh] overflow-y-auto"
         data-testid="login-gap-interview-dialog"
@@ -136,7 +153,7 @@ export default function LoginGapInterviewLauncher() {
           plan={current.plan}
           submitting={submitting}
           onSubmit={handleSubmit}
-          onSkip={handleDismiss}
+          onSkip={handleSkip}
         />
       </DialogContent>
     </Dialog>

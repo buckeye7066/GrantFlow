@@ -3,7 +3,7 @@
  *
  * Pure, deterministic blocker classifier. Given an arbitrary blocker
  * signal — text from a portal page, an engine `blocker_kind`, or a
- * preflight finding — returns one of sixteen canonical categories
+ * preflight finding — returns one of the canonical categories
  * defined by the Hard-Stop Resolver spec.
  *
  *   01 missing_required_information
@@ -22,6 +22,8 @@
  *   14 final_review_screen
  *   15 deadline_expired
  *   16 unknown_application_method
+ *   17 portal_unreachable            (DNS/connection/navigation failure — the
+ *                                     site is down or the stored URL is dead)
  *
  * 08/09/10 are deliberately distinct: a wet signature needs ink, a digital
  * signature needs the applicant to e-sign (Hamilton never forges either), and
@@ -50,6 +52,7 @@ export const BLOCKER_CATEGORIES = Object.freeze([
   'final_review_screen',
   'deadline_expired',
   'unknown_application_method',
+  'portal_unreachable',
 ])
 
 // Mapping from raw engine `blocker_kind` strings to canonical categories.
@@ -74,10 +77,16 @@ const ENGINE_KIND_MAP = Object.freeze({
   too_many_pages: 'portal_anti_bot_block',
   click_failed: 'portal_anti_bot_block',
   preflight: 'missing_required_information',
+  portal_unreachable: 'portal_unreachable',
 })
 
 const TEXT_RULES = Object.freeze([
-  // login / sso first — order matters because /login/ would otherwise
+  // Network/navigation failures first — a raw Playwright/Chromium error string
+  // (net::ERR_*, ENOTFOUND, navigation timeout) is unambiguous and must never
+  // fall through to `unknown` ("Hamilton could not classify this blocker:
+  // page.goto: net::ERR_NAME_NOT_RESOLVED" reached users verbatim).
+  { rx: /net::ERR_[A-Z_]+|\b(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH)\b|getaddrinfo|name\s*not\s*resolved|page\.goto.*?(timeout|exceeded)|navigation\s*(timeout|failed)/i, category: 'portal_unreachable' },
+  // login / sso next — order matters because /login/ would otherwise
   // match generic auth text before SSO is detected.
   { rx: /\b(shibboleth|cas\b|sso\b|single\s*sign[-\s]*on|university\s*login|school\s*login|google\s*sign[-\s]*in|microsoft\s*login|clever\s*login|sign\s*in\s*with\s*google|sign\s*in\s*with\s*microsoft)\b/i, category: 'sso_required' },
   { rx: /\b(2fa|two[-\s]*factor|multi[-\s]*factor|otp\b|one[-\s]*time\s*code|authenticator|verification\s*code|push\s*notification|hardware\s*key|security\s*key|sms\s*code|email\s*code)\b/i, category: 'two_factor_required' },

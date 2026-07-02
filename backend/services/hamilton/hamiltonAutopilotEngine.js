@@ -826,7 +826,26 @@ export async function runAutopilot({
 
     return { status: 'blocked', blocker_kind: 'too_many_pages', blocker_detail: `Hit ${MAX_PAGES} page cap`, filled_fields: filled, pages_visited: pagesVisited, trace }
   } catch (err) {
-    return { status: 'failed', blocker_kind: 'engine_error', blocker_detail: err?.message || String(err), filled_fields: filled, pages_visited: 0, trace }
+    const raw = err?.message || String(err)
+    // DNS / connection / navigation-timeout failures are a distinct,
+    // user-explainable blocker (dead link or site down). Without this branch
+    // they fell into the generic engine_error bucket and users saw raw
+    // Playwright text ("Hamilton could not classify this blocker: page.goto:
+    // net::ERR_NAME_NOT_RESOLVED …").
+    if (/net::ERR_[A-Z_]+|\b(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH)\b|getaddrinfo|Timeout \d+ms exceeded/i.test(raw)) {
+      let host = ''
+      try { host = new URL(url).hostname } catch { /* non-parseable url — keep generic wording */ }
+      return {
+        status: 'failed',
+        blocker_kind: 'portal_unreachable',
+        blocker_detail: `Hamilton could not reach ${host || "the funder's website"} — the site may be down or the saved portal link may be outdated.`,
+        blocker_raw: raw.split('\n')[0].slice(0, 300),
+        filled_fields: filled,
+        pages_visited: 0,
+        trace,
+      }
+    }
+    return { status: 'failed', blocker_kind: 'engine_error', blocker_detail: raw, filled_fields: filled, pages_visited: 0, trace }
   } finally {
     // Persist the authenticated session so the NEXT run reuses it instead of
     // re-logging-in. Portal logins must survive across runs AND container
