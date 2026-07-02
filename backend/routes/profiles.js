@@ -3845,7 +3845,10 @@ router.get('/:id/gap-plan', async (req, res) => {
   const { id } = req.params
   if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
   try {
-    const profile = await req.db.prepare('SELECT id, display_name, primary_type, state, city, zip FROM profiles WHERE id = ?').get(id)
+    // profiles has NO state/city/zip columns — location lives in the
+    // basic_information section. Selecting them here made EVERY gap-plan call
+    // 500 with "no such column: state" (the endpoint-sweep gate caught it).
+    const profile = await req.db.prepare('SELECT id, display_name, primary_type FROM profiles WHERE id = ?').get(id)
     if (!profile) return res.status(404).json({ error: 'Profile not found' })
 
     const sectionRows = await req.db
@@ -3854,7 +3857,13 @@ router.get('/:id/gap-plan', async (req, res) => {
     const sections = {}
     for (const s of sectionRows) sections[s.section_key] = safeParseJSON(s.data, {})
 
-    const normalized = normalizeProfile(profile, sections)
+    const basic = sections.basic_information || {}
+    const normalized = normalizeProfile({
+      ...profile,
+      state: basic.state ?? null,
+      city: basic.city ?? null,
+      zip: basic.zip ?? basic.zip_code ?? null,
+    }, sections)
     const firstName = String(profile.display_name || '').trim().split(/\s+/)[0] || 'there'
     const plan = buildProfileGapPlan(normalized, sections, {
       displayName: firstName,
