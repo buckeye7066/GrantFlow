@@ -107,8 +107,10 @@ jobs:
             # Check CI status
             STATUS_CHECKS=$(echo "$pr" | jq -r '.statusCheckRollup // [] | map(select(.conclusion != null)) | map(.conclusion) | join(",")')
 
-            if echo "$STATUS_CHECKS" | grep -q "FAILURE"; then
-              echo "❌ PR #$PR_NUMBER has failing checks. Skipping."
+            # CANCELLED and TIMED_OUT are NOT passes — a cancelled CodeQL run
+            # (e.g. its job timeout) must not qualify a PR for auto-merge.
+            if echo "$STATUS_CHECKS" | grep -qE "FAILURE|CANCELLED|TIMED_OUT"; then
+              echo "❌ PR #$PR_NUMBER has failing/cancelled checks. Skipping."
               SKIP_COUNT=$((SKIP_COUNT + 1))
               continue
             fi
