@@ -8,6 +8,13 @@
  * No I/O, no calls to LLMs. The output is deterministic and audit-friendly:
  * the Admin UI can show the personalization vars next to the rendered body
  * so reviewers see exactly which Yana fields produced which sentences.
+ *
+ * Writing bar (this is the fallback when the AI path is unavailable, so it
+ * must be excellent on its own): hook grounded in the org's OWN evidence,
+ * a value proposition shaped by the funding lane that actually fits them
+ * (fire departments hear about AFG-style equipment programs, food pantries
+ * hear about food-security funders), a brief honest origin story, and one
+ * crisp call-to-action. No filler, no generic flattery, no hype.
  */
 
 import { fillTemplate, pickSubjectTemplate, TEMPLATES, frameForType, OPT_OUT_LINE } from './johnEmailTemplates.js'
@@ -15,12 +22,13 @@ import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
 import { getJohnConfig } from './johnOutreachSafety.js'
 import { aiComposerEnabled, composeEmailWithAI } from './johnEmailComposerAI.js'
 import { extractOrgSignals } from './johnEvidenceSufficiency.js'
+import { matchFundingLane, DEFAULT_FUNDING_FRAME } from './johnFundingLanes.js'
 
 /**
  * Build a clean, list-style noun phrase from Yana's focus/program areas (e.g.
  * "education and youth mentoring"). These are tag-like and read naturally
  * mid-sentence. Returns null when there are none — free-text/mission detail is
- * carried by the attention line instead (where a colon frame keeps it
+ * carried by the evidence hook instead (where a colon frame keeps it
  * grammatical), so the opening never says "looking into opened a saturday…".
  */
 function deriveHookPhrase(signals) {
@@ -44,31 +52,58 @@ function deriveEvidenceTopic(signals, hookPhrase) {
   return clause.length <= 60 ? clause : clause.slice(0, 60).trim() + '…'
 }
 
+/** Trim + punctuate a free-text evidence detail so a colon frame reads cleanly. */
+function evidenceDetail(signals) {
+  const detail = String(signals.hookText || '').trim()
+  if (!detail) return null
+  const trimmed = detail.length <= 200 ? detail : detail.slice(0, 200).trim() + '…'
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
+
 /**
- * Compose the opening line. Specific when we have clean focus/program tags;
- * warm-but-honest when we don't (instead of the old "…doing meaningful work
- * around community-focused funding work" which collided "work" with "work").
+ * Compose the opening paragraph — the hook, grounded in the org's OWN
+ * evidence whenever we have it. Priority:
+ *   1. A specific free-text detail ("replacing 25-year-old SCBA gear") leads,
+ *      framed by a colon so any grammatical shape reads cleanly, followed by
+ *      the lane's sector observation so the empathy is specific, not generic.
+ *   2. Clean focus/program tags ("food security and senior services").
+ *   3. An honest generic opener — never fake specificity we don't have.
  */
-function buildOpeningLine(orgName, hookPhrase) {
+function buildOpeningLine(orgName, signals, hookPhrase, lane) {
   const org = orgName || 'your organization'
+  const detail = evidenceDetail(signals)
+  const observation = lane?.observation ? ` ${lane.observation}` : ''
+  if (detail) {
+    return `One thing about ${org} stayed with me: ${detail}${observation} That is why I am writing.`
+  }
   if (hookPhrase) {
-    return `I came across ${org} while looking into ${hookPhrase}, and your work stood out enough that I wanted to reach out directly.`
+    return `I came across ${org} while looking into ${hookPhrase}, and your work stood out enough that I wanted to reach out directly.${observation}`
   }
   return `I came across ${org} while looking for organizations whose mission tends to outrun their budget, and from what I can see, yours is doing real work that deserves to be funded.`
 }
 
 /**
- * Compose the "what stood out" sentence that leads the value paragraph. Empty
- * string when we have no specific detail, so the paragraph flows straight into
- * "Here is the short version:" without an awkward dangling claim.
+ * Compose the value paragraph: what funding actually exists for an org like
+ * this one (the lane), and what GrantFlow concretely does about it. When no
+ * lane matches we stay honest and general rather than inventing a fit.
  */
-function buildAttentionLine(orgName, signals) {
+function buildValueParagraph(orgName, hookPhrase, lane, detailUsedInOpening) {
   const org = orgName || 'your organization'
-  const detail = String(signals.hookText || '').trim()
-  if (!detail) return ''
-  const trimmed = detail.length <= 200 ? detail : detail.slice(0, 200).trim() + '…'
-  const punctuated = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
-  return `What stayed with me about ${org} was this: ${punctuated} `
+  const frame = lane || DEFAULT_FUNDING_FRAME
+  const engine = `GrantFlow builds a funding profile of ${org} (mission, location, focus, eligibility), matches it against funding of exactly that kind, and then keeps every deadline, document, and application moving in one place so nothing slips.`
+  if (lane) {
+    const lead = hookPhrase && detailUsedInOpening
+      ? `Work in ${hookPhrase} is usually funded through ${frame.categories}, and finding those programs is a job in itself.`
+      : `Work like yours is usually funded through ${frame.categories}, and finding those programs is a job in itself.`
+    return `${lead} ${engine}`
+  }
+  return `Here is the short version: GrantFlow builds a funding profile of ${org} (mission, location, focus areas, and eligibility) and matches that against ${frame.categories}. Then it keeps every deadline, document, and application moving in one place, so nothing slips through the cracks.`
+}
+
+/** One crisp, self-serve call-to-action: talk to Anya, get a live scan. */
+function buildCtaParagraph(orgName) {
+  const org = orgName || 'your organization'
+  return `You should not have to take my word for any of this. The link below opens a short conversation with Anya, our assistant. Tell her about ${org} and she will run a live scan of funding that fits, no account or commitment needed just to look. If what comes back looks worth your time, you can take the next step from there:`
 }
 
 function htmlEscape(str) {
@@ -119,25 +154,32 @@ export function composeWithTemplate(lead, opts = {}) {
   const interpretation = opts.interpretation || interpretLead(lead)
 
   const signals = extractOrgSignals(lead)
+  const lane = matchFundingLane(lead, signals)
   const orgName = interpretation.organization_name || 'your organization'
   const hookPhrase = deriveHookPhrase(signals)
   const evidenceTopic = deriveEvidenceTopic(signals, hookPhrase)
-  const openingLine = buildOpeningLine(interpretation.organization_name, hookPhrase)
-  const attentionLine = buildAttentionLine(interpretation.organization_name, signals)
+  const detail = evidenceDetail(signals)
+  const openingLine = buildOpeningLine(interpretation.organization_name, signals, hookPhrase, lane)
+  const valueParagraph = buildValueParagraph(interpretation.organization_name, hookPhrase, lane, !!detail)
+  const ctaParagraph = buildCtaParagraph(interpretation.organization_name)
   const recipientEmail = interpretation?.contact?.email || null
 
-  // Only steer the subject toward the "Quick note about <topic>" form when we
-  // have a genuinely specific, short hook; otherwise fall back to the org-name
-  // subject so we never ship "Quick note about community-focused funding work".
+  // Subject: prefer the lane-specific form ("Fire and EMS grant options for
+  // <Org>") — personal, specific, and honest. Otherwise steer toward the
+  // "Quick note about <topic>" form only when we have a genuinely specific,
+  // short hook, so we never ship "Quick note about community-focused funding
+  // work". Final fallback is the org-name subject.
   const subjectTopic = evidenceTopic && evidenceTopic.length <= 50 ? evidenceTopic : null
   const subjectTemplate = pickSubjectTemplate({
     organization_name: interpretation.organization_name,
     evidence_topic: subjectTopic,
+    funding_lane_subject: lane?.subjectLead || null,
   })
 
   const subject = fillTemplate(subjectTemplate, {
     ORGANIZATION_NAME: orgName,
     PROJECT_OR_NEED: subjectTopic || orgName,
+    FUNDING_LANE_SUBJECT: lane?.subjectLead || '',
   }).trim()
 
   const physical = String(config.physicalAddress || '').trim()
@@ -153,7 +195,8 @@ export function composeWithTemplate(lead, opts = {}) {
     SALUTATION: salutation,
     ORGANIZATION_NAME: orgName,
     OPENING_LINE: openingLine,
-    ATTENTION_LINE: attentionLine,
+    VALUE_PARAGRAPH: valueParagraph,
+    CTA_PARAGRAPH: ctaParagraph,
     PROSPECT_LINK: prospectLink,
     OPT_OUT_LINE,
     PHYSICAL_ADDRESS: physical,
@@ -169,7 +212,10 @@ export function composeWithTemplate(lead, opts = {}) {
     contact_role: interpretation.contact?.role || null,
     contact_generic_address: !!interpretation.contact?.generic,
     organization_name: interpretation.organization_name,
+    organization_type: interpretation.organization_type || null,
     organization_type_framing: frameForType(interpretation.organization_type),
+    funding_lane: lane?.key || null,
+    funding_lane_categories: lane?.categories || null,
     evidence_topic: evidenceTopic,
     evidence_hook_phrase: hookPhrase,
     evidence_specific: signals.hasSpecific,

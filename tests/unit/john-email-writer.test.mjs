@@ -21,6 +21,9 @@ test('composeEmailFromLead produces an email that passes the safety classifier',
       r.subject.includes('Riverbend') || r.subject.includes('SCBA') || /Quick note/.test(r.subject),
       `unexpected subject: ${r.subject}`
     )
+    // Never clickbait: no ALL-CAPS words (4+ letters) and no exclamation points.
+    assert.doesNotMatch(r.subject, /\b[A-Z]{4,}\b/)
+    assert.doesNotMatch(r.subject, /!/)
 
     // Body must include the opt-out line and the configured physical address.
     assert.match(r.body_text, /no thanks/i)
@@ -46,6 +49,19 @@ test('composeEmailFromLead produces an email that passes the safety classifier',
     assert.equal(r.personalization.salutation, 'Hello Chief Allen,')
     assert.ok(r.personalization.evidence_topic)
     assert.equal(r.personalization.config_snapshot.from_alias, cfg.fromAlias)
+
+    // The value proposition is shaped by the org's funding lane: a fire
+    // department hears about firefighter assistance / equipment funding, not
+    // a one-size-fits-all "grants and foundation programs" sentence.
+    assert.equal(r.personalization.funding_lane, 'fire_ems')
+    assert.match(r.body_text, /firefighter assistance|AFG/)
+    // The hook leads with the org's OWN evidence, up top.
+    assert.match(r.body_text.split('\n\n')[1], /SCBA gear/)
+    // No marketing sludge: banned filler phrases never appear.
+    assert.doesNotMatch(r.body_text, /I hope this (email )?finds you well/i)
+    assert.doesNotMatch(r.body_text, /to whom it may concern/i)
+    // No em/en dashes in the deterministic copy (house style).
+    assert.doesNotMatch(r.body_text, /[—–]/)
 
     // The composed draft satisfies the same safety classifier the agent uses.
     const safety = evaluateDraftSafety({

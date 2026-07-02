@@ -21,6 +21,10 @@ export const APPROVED_SUBJECT_TEMPLATES = [
   'A possible GrantFlow fit for {{ORGANIZATION_NAME}}',
   'Grant and funding search help for {{ORGANIZATION_NAME}}',
   'Quick note about {{PROJECT_OR_NEED}}',
+  // Funding-lane subjects: the lead-in names the CATEGORY of funding GrantFlow
+  // would actually surface for this kind of org ("Fire and EMS grant options
+  // for Riverbend VFD"). Specific, honest, never clickbait.
+  '{{FUNDING_LANE_SUBJECT}} for {{ORGANIZATION_NAME}}',
 ]
 
 export const OPT_OUT_LINE = `If this is not relevant, just reply "no thanks" and I won't follow up.`
@@ -28,15 +32,21 @@ export const OPT_OUT_LINE = `If this is not relevant, just reply "no thanks" and
 /**
  * Body template.
  *
- * {{OPENING_LINE}} and {{ATTENTION_LINE}} are composed grammatically by the
- * writer (johnEmailWriter) from whatever specific facts Yana supplied, so the
- * email never renders the old "\u2026work around community-focused funding work"
- * redundancy or the clumsy "what caught my attention about you was \u2026". When the
- * facts are thin, ATTENTION_LINE is empty and the paragraph still reads cleanly
- * (it flows straight into "Here is the short version:").
+ * The writer (johnEmailWriter) composes {{OPENING_LINE}}, {{VALUE_PARAGRAPH}},
+ * and {{CTA_PARAGRAPH}} grammatically from whatever specific facts Yana
+ * supplied, plus the funding lane matched in johnFundingLanes — so a fire
+ * department reads about equipment and AFG-style programs while a food pantry
+ * reads about food-security funders, and neither ever gets filler like
+ * "…work around community-focused funding work".
  *
- * Voice: an experienced, plain-spoken founder with an MBA \u2014 warm, specific,
- * and free of hype. The compliant footer (opt-out + postal address) is always
+ * Structure (MBA-level, one idea per paragraph):
+ *   1. Hook grounded in the org's OWN evidence (their words, not ours).
+ *   2. Value: the funding categories GrantFlow would surface for THEM, and
+ *      what the platform actually does.
+ *   3. Honest origin story, brief, told in the third person about Dr. White.
+ *   4. One crisp call-to-action (talk to Anya, live scan, no commitment).
+ *
+ * The compliant footer (signature, opt-out line, postal address) is always
  * present verbatim.
  */
 const DEFAULT_BODY_TEMPLATE = [
@@ -44,11 +54,11 @@ const DEFAULT_BODY_TEMPLATE = [
   '',
   '{{OPENING_LINE}}',
   '',
-  'I\u2019m Ellie, and I help share GrantFlow with organizations doing work like yours. I\u2019ll be honest about where it came from. Our founder, Dr. John White, didn\u2019t set out to build software. He built it to fund his own research lab, Axiom BioLabs. When it actually worked, he started pointing the same engine at the nonprofit and ministry work he cares about, and later at scholarships and college funding for his own kids. Every time, the lesson was the same: the work was never the hard part. Paying for it was. That\u2019s the gap GrantFlow was built to close.',
+  '{{VALUE_PARAGRAPH}}',
   '',
-  '{{ATTENTION_LINE}}Here is the short version: GrantFlow builds a funding profile of an organization (its mission, location, focus areas, and eligibility) and matches that against grants, foundation programs, scholarships, and other funding that genuinely fits. Then it keeps every deadline, document, and application moving in one place, so nothing slips through the cracks.',
+  'I should be straight about where GrantFlow comes from. Our founder, Dr. John White, never set out to build software. He built it to fund his own research lab, Axiom BioLabs. When it worked, he pointed the same engine at the nonprofit and ministry work he cares about, and later at scholarships and college funding for his own kids. The lesson never changed: the work was never the hard part. Paying for it was.',
   '',
-  'I\u2019d rather you judge it for yourself than take my word for it. The link below opens a short conversation with Anya, our assistant. She\u2019ll learn about {{ORGANIZATION_NAME}} and run a live funding scan so you can see the kind of matches it surfaces, no account needed just to look. If what comes back looks worth your time, you can take the next step from there:',
+  '{{CTA_PARAGRAPH}}',
   '',
   '{{PROSPECT_LINK}}',
   '',
@@ -116,9 +126,14 @@ export const TEMPLATES = Object.freeze({
   },
 })
 
-export function pickSubjectTemplate({ organization_name, evidence_topic } = {}) {
-  // If we have a specific project/need topic short enough to be a subject,
-  // prefer the "Quick note about" form.
+export function pickSubjectTemplate({ organization_name, evidence_topic, funding_lane_subject } = {}) {
+  // Best: a lane-specific subject that names both the funding category and the
+  // org ("Fire and EMS grant options for Riverbend VFD") — personal, specific,
+  // and honest about why we are writing.
+  if (funding_lane_subject && organization_name) {
+    return '{{FUNDING_LANE_SUBJECT}} for {{ORGANIZATION_NAME}}'
+  }
+  // Next: a specific project/need topic short enough to be a subject.
   if (evidence_topic && String(evidence_topic).length <= 50) {
     return 'Quick note about {{PROJECT_OR_NEED}}'
   }

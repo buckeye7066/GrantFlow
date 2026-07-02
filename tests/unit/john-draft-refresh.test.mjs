@@ -77,6 +77,9 @@ test('refresh rewrites the body to current copy and preserves the org-specific h
     // …replaced with the current copy, still org-specific from source evidence…
     assert.match(after.body_text, /SCBA gear/)
     assert.match(after.body_text, /Anya/)
+    // …and the refresh re-derives the fire/EMS funding lane from the SCBA
+    // evidence, so the regenerated value proposition stays sector-specific.
+    assert.match(after.body_text, /firefighter assistance|AFG/)
     // …and a real person/title salutation is preserved.
     assert.match(after.body_text, /^Hi Chief,/)
   } finally {

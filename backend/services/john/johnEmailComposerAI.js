@@ -28,6 +28,8 @@ import {
 } from './johnOutreachSafety.js'
 import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
 import { researchOrganization } from './johnOrgResearch.js'
+import { extractOrgSignals } from './johnEvidenceSufficiency.js'
+import { matchFundingLane } from './johnFundingLanes.js'
 
 const GRANTFLOW_FACTS = [
   'GrantFlow is a funding discovery and application-tracking platform.',
@@ -128,7 +130,7 @@ function textToHtml(text) {
   return `<!doctype html><html><body>${paragraphs.join('')}</body></html>`
 }
 
-function buildPrompt(lead, interpretation, facts, config, researchSummary = '') {
+function buildPrompt(lead, interpretation, facts, config, researchSummary = '', lane = null) {
   const org = interpretation.organization_name || 'the organization'
   const salutationMatch = /^(?:hi|hello)\s+([^,]+),/i.exec(interpretation.salutation || '')
   const ctx = {
@@ -147,6 +149,10 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     // Empty when web research is unavailable — the prompt then omits it.
     web_research: researchSummary ? String(researchSummary) : null,
     recipient_salutation_name: salutationMatch ? salutationMatch[1] : null,
+    // The funding categories GrantFlow would genuinely surface for an org of
+    // this type (curated, honest — e.g. a fire department sees AFG-style
+    // equipment programs, a food bank sees food-security funders).
+    likely_funding_categories: lane?.categories || null,
   }
   const system = [
     'You are Ellie, a warm, thoughtful person on the GrantFlow team who reaches out to organizations on behalf of the founder, Dr. John White. You are writing a short, personable note to an organization you have NOT spoken with before. Write the way a sharp, generous, well-read person writes one real human a genuine note: warm, plain-spoken, specific, and a little human. Never like a marketing template. You write as "I" (Ellie); when you mention the founder or GrantFlow’s origin, refer to Dr. John White in the third person.',
@@ -158,12 +164,15 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     'The email body MUST, in this order:',
     '1. LEAD WITH THEM. Spend the FIRST ONE TO TWO PARAGRAPHS genuinely on what THIS organization (and this person) is doing: their mission, the specific programs/work/population they serve, and why it matters, drawn from the supplied facts and web_research (what we found about them on the public web). This is the heart of the email and must make it unmistakable the note was written for them, not blasted to a list. Be specific and warm, like someone who actually looked into their work and respects it. Use ONLY facts present in the supplied data (including web_research snippets); NEVER invent achievements, dollar figures, programs, names, or events, and do not treat a web_research snippet as more certain than it is. If the facts are genuinely thin, write honestly and specifically about their sector and the kind of work they appear to do, rather than padding with vague praise.',
     '2. BRIDGE. Transition naturally from their work into what GrantFlow is and its honest origin, told about the founder in 1-2 sentences (third person): Dr. John White did not set out to build software. He first built GrantFlow to find funding for his own research lab, Axiom BioLabs, then found the same engine helped the mission and nonprofit work he cares about, and even helped him find scholarships and college funding for his own children. Keep it human and a little self-aware, not a sales boast.',
-    '3. Explain concretely how GrantFlow can help THIS organization given the specific mission/work/needs you named in step 1. Tie it directly back to them. Be specific, never generic.',
+    '3. Explain concretely how GrantFlow can help THIS organization given the specific mission/work/needs you named in step 1. Tie it directly back to them. Be specific, never generic. When "likely_funding_categories" is provided, name those categories as the kind of funding GrantFlow surfaces for organizations like theirs (they are curated and honest); do NOT invent other named programs, funders, or dollar amounts beyond them.',
     '',
     'Voice and craft (warm, MBA-level peer outreach):',
     '- Sound like a sharp, generous, well-read peer writing one real person a thoughtful note, not a brochure. Warm, articulate, and confident without being formal or stiff.',
     '- The opening must feel earned and personal: show you understand their work before you ever mention yourself. Lead with curiosity and respect for them, not with your pitch.',
     '- Be concrete. If you cannot say something specific, say something honest and brief rather than filler. Do not repeat a word or phrase awkwardly, and do not stack adjectives.',
+    '- Vary sentence length so the note has rhythm: a short sentence carries weight after a longer one. One idea per paragraph.',
+    '- NEVER open with filler ("I hope this finds you well", "I trust this email finds you") or generic flattery ("your amazing work", "I am so impressed"). Earn every compliment with a specific fact.',
+    '- End the body with a single, clear thought; the system appends the one call-to-action. Do not stack asks.',
     '',
     'Hard rules (a violation makes the email unusable):',
     '- Do NOT write any greeting or salutation in the body. The system adds it separately. This means no "Hey Team", "Hi Team", "Hello Team", "Dear Team", "Hi there", or named greeting.',
@@ -174,7 +183,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '') 
     '- Do NOT use em-dashes or en-dashes (— or –) anywhere. Use commas, periods, parentheses, or a colon instead.',
     '- 200-300 words for the body (enough for one to two real paragraphs about them, then the bridge and how GrantFlow helps). Plain text with paragraph breaks.',
     '- Do NOT write a call to action, an offer to run a scan, a link, a signature, a sign-off, an opt-out line, or a postal address. ALL of those are added separately by the system. End immediately after explaining how GrantFlow can help this organization (step 3).',
-    '- Write a subject line that is specific and non-deceptive. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
+    '- Write a subject line that is specific and non-deceptive: it must name the organization or a concrete element of its mission/work (never a generic "funding opportunity" line that could be sent to anyone). Plainspoken, no clickbait, no words in ALL CAPS, no exclamation points. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
     '',
     'Return ONLY a JSON object: {"subject": "...", "body": "..."} with no markdown, no commentary.',
   ].join('\n')
@@ -234,6 +243,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
   if (!client) return { ok: false, reason: 'no_api_key' }
 
   const facts = extractOrgFacts(lead)
+  const lane = matchFundingLane(lead, extractOrgSignals(lead))
 
   // Pre-draft web research: look the org up on the live web and feed the
   // findings into the prompt. Failure-tolerant + time-bounded — if search is
@@ -244,7 +254,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
     logger,
   })
 
-  const { system, user } = buildPrompt(lead, interpretation, facts, config, research.summary)
+  const { system, user } = buildPrompt(lead, interpretation, facts, config, research.summary, lane)
 
   let raw
   try {
@@ -313,6 +323,9 @@ export async function composeEmailWithAI(lead, opts = {}) {
       contact_name: interpretation.contact?.name || null,
       contact_role: interpretation.contact?.role || null,
       organization_name: interpretation.organization_name,
+      organization_type: interpretation.organization_type || null,
+      funding_lane: lane?.key || null,
+      funding_lane_categories: lane?.categories || null,
       facts_used: {
         mission: facts.mission,
         focus_areas: facts.focus_areas,
