@@ -91,6 +91,9 @@ export function getYanaConfig(env = process.env) {
     // the live web; OFF by default, mirroring Robert's ROBERT_ALLOW_LIVE_WEB.
     allowLiveWeb: readEnvBool(env, 'YANA_ALLOW_LIVE_WEB', false),
     prospectLimit: Number(env?.YANA_PROSPECT_LIMIT || 100),
+    // Per-run cap on backlog re-enrichment attempts (stored needs_enrichment
+    // leads revisited per cycle) so runs stay fast. 0 disables the pass.
+    backlogEnrichLimit: Number(env?.YANA_BACKLOG_ENRICH_LIMIT ?? 10),
   }
 }
 
@@ -173,6 +176,16 @@ async function ensureSchema(db) {
     isPg
       ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS external_id TEXT`
       : `ALTER TABLE yana_lead_candidates ADD COLUMN external_id TEXT`,
+    // Backlog-enrichment bookkeeping: how many times Yana has attempted to find
+    // a contact channel for a needs_enrichment lead, and when. Bounds the
+    // per-lead retry budget so the backlog pass rotates instead of hammering
+    // the same unreachable org forever.
+    isPg
+      ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS enrich_attempts INTEGER NOT NULL DEFAULT 0`
+      : `ALTER TABLE yana_lead_candidates ADD COLUMN enrich_attempts INTEGER NOT NULL DEFAULT 0`,
+    isPg
+      ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS last_enrich_attempt_at ${tsType}`
+      : `ALTER TABLE yana_lead_candidates ADD COLUMN last_enrich_attempt_at ${tsType}`,
     // Prospect dedup key — the ON CONFLICT target for upsertProspectCandidate.
     // Partial (external_id IS NOT NULL) so it never collides with org-sourced
     // rows (external_id null) and allows their UNIQUE(organization_id) to stand.
@@ -594,6 +607,19 @@ export async function discoverProspects(db, {
             if (enriched.website_url && !x.scored.source_urls.includes(enriched.website_url)) {
               x.scored.source_urls = [...x.scored.source_urls, enriched.website_url]
             }
+            // Evidence trail: record the exact public page the contact email was
+            // found on (mailto/contact page). Emails are only ever scraped from
+            // the org's own published pages — never fabricated.
+            if (enriched.email) {
+              const evidenceUrl = enriched.email_source_url || enriched.website_url || null
+              x.scored.public_evidence = [
+                ...(x.scored.public_evidence || []),
+                { type: 'contact_email_source', email: enriched.email, source_url: evidenceUrl },
+              ]
+              if (evidenceUrl && !x.scored.source_urls.includes(evidenceUrl)) {
+                x.scored.source_urls = [...x.scored.source_urls, evidenceUrl]
+              }
+            }
             x.enriched = true
           }
         } catch (err) {
@@ -631,6 +657,169 @@ export async function discoverProspects(db, {
 
   return result
 }
+
+// ---------------------------------------------------------------------------
+// Backlog re-enrichment (the stuck needs_enrichment pile)
+// ---------------------------------------------------------------------------
+
+// Per-lead retry budget for backlog enrichment. Past this many failed
+// attempts a lead is left at needs_enrichment but no longer re-selected, so
+// the per-run budget always goes to leads that still have a chance.
+export const BACKLOG_ENRICH_MAX_ATTEMPTS = Math.max(1, Number(process.env.YANA_BACKLOG_ENRICH_MAX_ATTEMPTS || 3))
+
+/**
+ * Revisit STORED `needs_enrichment` leads (real orgs discovered earlier with no
+ * contact channel) and give each a bounded enrichment attempt: find the org's
+ * own website, scrape a contact email it publicly publishes (mailto/contact
+ * page), and promote the lead to `qualified` so it reaches John.
+ *
+ * Without this pass those leads were written once and never revisited —
+ * enrichment only ran inline on NEWLY-discovered prospects, so any org whose
+ * enrichment failed at discovery time (rate-limited search, per-site fetch
+ * failure, transient cert/HTML error) was stuck at needs_enrichment forever.
+ * That frozen pile is why runs kept reporting qualified-but-0-pushed: nothing
+ * NEW ever qualified.
+ *
+ * Bounded and honest:
+ *   - at most `limit` leads per run (default 10) so runs stay fast;
+ *   - at most BACKLOG_ENRICH_MAX_ATTEMPTS tries per lead, least-tried first;
+ *   - emails come ONLY from the org's own published pages — never fabricated —
+ *     and the page the email was found on is persisted as evidence
+ *     ({ type: 'contact_email_source', source_url }) plus a source_urls entry.
+ */
+export async function enrichNeedsEnrichmentBacklog(db, {
+  enricher = null,
+  limit = 10,
+  maxAttempts = BACKLOG_ENRICH_MAX_ATTEMPTS,
+  runId = null,
+} = {}) {
+  await ensureSchema(db)
+  const summary = { enabled: Boolean(enricher?.enabled), attempted: 0, promoted_to_qualified: 0, still_needs_enrichment: 0, backlog_remaining: 0 }
+  const cap = Math.max(0, Math.floor(Number(limit) || 0))
+  if (!enricher?.enabled || cap === 0) {
+    summary.reason = !enricher?.enabled ? 'enricher_disabled' : 'limit_zero'
+    return summary
+  }
+
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const rows = await db
+    .prepare(
+      `SELECT * FROM yana_lead_candidates
+       WHERE qualification_status = 'needs_enrichment'
+         AND COALESCE(enrich_attempts, 0) < ?
+       ORDER BY COALESCE(enrich_attempts, 0) ASC, lead_score DESC, discovered_at ASC
+       LIMIT ?`,
+    )
+    .all(Math.max(1, Number(maxAttempts) || BACKLOG_ENRICH_MAX_ATTEMPTS), cap)
+
+  // Network-bound lookups run with bounded parallelism; DB writes stay serial.
+  const enrichedResults = await mapWithConcurrency(rows || [], ENRICH_CONCURRENCY, async (row) => {
+    const [city, state] = String(row.location || '').split(',').map((s) => s.trim())
+    try {
+      return await enricher.enrich({
+        organization_name: row.organization_name,
+        website_url: row.website_url,
+        website: row.website_url,
+        city: city || null,
+        state: state || null,
+      })
+    } catch (err) {
+      log.warn(`backlog enrichment failed for "${row.organization_name}": ${err?.message || err}`)
+      return null
+    }
+  })
+
+  for (let i = 0; i < (rows || []).length; i += 1) {
+    const row = rows[i]
+    const enriched = enrichedResults[i]
+    summary.attempted += 1
+
+    const email = enriched?.ok && enriched.email && isValidEmail(enriched.email) ? enriched.email : null
+    if (!email) {
+      // No real published email found this attempt — burn one retry, stay honest.
+      await db
+        .prepare(
+          `UPDATE yana_lead_candidates
+              SET enrich_attempts = COALESCE(enrich_attempts, 0) + 1,
+                  last_enrich_attempt_at = ${nowFn}, updated_at = ${nowFn}
+            WHERE id = ?`,
+        )
+        .run(String(row.id))
+      summary.still_needs_enrichment += 1
+      continue
+    }
+
+    // Re-score with the found contact channel. The row's original identity
+    // signal (mission, focus/program areas, EIN) lives in its persisted
+    // evidence JSON — reconstruct it so the promotion scores the org on its
+    // FULL signal, not just the freshly-found email/website.
+    const priorEvidence = parseJsonArray(row.public_evidence_json)
+    const mission = priorEvidence.find((e) => e?.type === 'mission_statement')?.text || null
+    const focusAreas = priorEvidence.find((e) => e?.type === 'focus_areas')?.value || []
+    const programAreas = priorEvidence.find((e) => e?.type === 'program_areas')?.value || []
+    const scored = scoreOrganizationLead({
+      name: row.organization_name,
+      organization_name: row.organization_name,
+      organization_type: row.organization_type,
+      applicant_type: row.entity_type,
+      email,
+      website: enriched.website_url || row.website_url,
+      website_url: enriched.website_url || row.website_url,
+      website_excerpt: enriched.excerpt || null,
+      mission,
+      focus_areas: focusAreas,
+      program_areas: programAreas,
+      // For 990-sourced prospects the external id IS the org's EIN.
+      ein: row.source === 'propublica_990' ? row.external_id : null,
+      city: city0(row.location),
+      state: state0(row.location),
+    })
+    // Preserve any evidence the lead already carried (e.g. ProPublica identity).
+    const evidenceUrl = enriched.email_source_url || enriched.website_url || null
+    const evidence = [
+      ...priorEvidence.filter((e) => e?.type !== 'contact_email_source'),
+      ...scored.public_evidence.filter((e) => !priorEvidence.some((p) => p?.type === e?.type)),
+      { type: 'contact_email_source', email, source_url: evidenceUrl },
+    ]
+    const sourceSet = new Set([...parseJsonArray(row.source_urls_json), ...scored.source_urls])
+    if (evidenceUrl) sourceSet.add(evidenceUrl)
+    scored.public_evidence = evidence
+    scored.source_urls = Array.from(sourceSet)
+
+    const status = prospectStatus(scored)
+    await db
+      .prepare(
+        `UPDATE yana_lead_candidates
+            SET contact_email = ?, website_url = COALESCE(?, website_url),
+                public_evidence_json = ?, source_urls_json = ?,
+                fit_score = ?, urgency_score = ?, contact_confidence = ?, lead_score = ?,
+                qualification_status = ?, qualification_reasons_json = ?,
+                enrich_attempts = COALESCE(enrich_attempts, 0) + 1,
+                last_enrich_attempt_at = ${nowFn}, run_id = COALESCE(?, run_id), updated_at = ${nowFn}
+          WHERE id = ?`,
+      )
+      .run(
+        email, enriched.website_url || null,
+        JSON.stringify(scored.public_evidence), JSON.stringify(scored.source_urls),
+        scored.fit_score, scored.urgency_score, scored.contact_confidence, scored.lead_score,
+        status, JSON.stringify([...(scored.reasons || []), 'backlog_enrichment', `status:${status}`]),
+        runId, String(row.id),
+      )
+    if (status === 'qualified') summary.promoted_to_qualified += 1
+    else summary.still_needs_enrichment += 1
+  }
+
+  try {
+    const r = await db
+      .prepare(`SELECT COUNT(*) AS c FROM yana_lead_candidates WHERE qualification_status = 'needs_enrichment'`)
+      .get()
+    summary.backlog_remaining = Number(r?.c || 0)
+  } catch { /* count is informational */ }
+  return summary
+}
+
+function city0(location) { return String(location || '').split(',')[0]?.trim() || null }
+function state0(location) { return String(location || '').split(',')[1]?.trim() || null }
 
 /** Dialect-safe "pushed within the last N hours" cutoff expression. */
 function windowCutoffExpr(db, hours) {
@@ -674,6 +863,21 @@ export async function pushQualifiedToJohn(
   const alreadyPushed = await countLeadsPushedWithinWindow(db, { hours: windowHours })
   const remaining = Math.max(0, Number(cap) - alreadyPushed)
 
+  // Queue depth BEFORE this push: qualified leads not yet handed to John. Lets
+  // a 0-push result explain itself (cap exhausted vs. genuinely empty queue)
+  // instead of being a silent zero — the exact ambiguity behind the prod
+  // "N qualified, 0 pushed" confusion.
+  let queueDepth = 0
+  try {
+    const r = await db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM yana_lead_candidates
+         WHERE qualification_status = 'qualified' AND COALESCE(pushed_to_john, 0) = 0`,
+      )
+      .get()
+    queueDepth = Number(r?.c || 0)
+  } catch { /* informational */ }
+
   if (remaining <= 0) {
     return {
       leads_pushed_to_john: 0,
@@ -681,6 +885,8 @@ export async function pushQualifiedToJohn(
       window_hours: Number(windowHours),
       already_pushed_in_window: alreadyPushed,
       cap_reached: true,
+      queue_depth: queueDepth,
+      push_noop_reason: 'cap_reached_in_window',
     }
   }
 
@@ -721,6 +927,10 @@ export async function pushQualifiedToJohn(
     window_hours: Number(windowHours),
     already_pushed_in_window: alreadyPushed,
     cap_reached: alreadyPushed + pushed >= Number(cap),
+    queue_depth: queueDepth,
+    // 0 pushed with budget remaining means every qualified lead was already
+    // handed to John in an earlier run — dedup working, not leads lost.
+    ...(pushed === 0 ? { push_noop_reason: 'no_unpushed_qualified_leads' } : {}),
   }
 }
 
@@ -767,6 +977,7 @@ export async function runYanaDiscovery(db, {
   createdByUserId = null,
   allowLiveWeb = false,
   prospectLimit = 100,
+  backlogEnrichLimit = Number(process.env.YANA_BACKLOG_ENRICH_LIMIT ?? 10),
   prospectDeps = {},
   deps = {},
 } = {}) {
@@ -805,6 +1016,19 @@ export async function runYanaDiscovery(db, {
     summary.candidates_qualified += Number(prospects.qualified || 0)
     summary.candidates_total += Number(prospects.discovered || 0)
 
+    // Backlog re-enrichment: give a bounded slice of the STORED
+    // needs_enrichment pile another chance to gain a real published contact
+    // email and graduate to `qualified`. Without this, a lead whose enrichment
+    // failed at discovery time was stuck forever and John never saw it.
+    const backlogEnricher = prospectDeps.enricher || (allowLiveWeb ? getDefaultContactEnricher() : null)
+    const backlog = await enrichNeedsEnrichmentBacklog(db, {
+      enricher: backlogEnricher,
+      limit: backlogEnrichLimit,
+      runId,
+    })
+    summary.backlog_enrichment = backlog
+    summary.candidates_qualified += Number(backlog.promoted_to_qualified || 0)
+
     // Honest NOOP: when nothing qualified across BOTH funnels, say why in one
     // line so the run isn't a silent zero. Data/config condition, not a bug.
     if (summary.candidates_qualified === 0) {
@@ -827,6 +1051,8 @@ export async function runYanaDiscovery(db, {
       summary.window_hours = pushed.window_hours
       summary.already_pushed_in_window = pushed.already_pushed_in_window
       summary.cap_reached = pushed.cap_reached
+      summary.queue_depth = pushed.queue_depth
+      if (pushed.push_noop_reason) summary.push_noop_reason = pushed.push_noop_reason
     }
     await completeRun(db, runId, { status: 'completed', summary })
     return { ok: true, run_id: runId, ...summary }
