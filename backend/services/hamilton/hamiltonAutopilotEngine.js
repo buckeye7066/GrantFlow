@@ -150,6 +150,24 @@ function readProfileValues(profile) {
   }
 }
 
+// Keys the MBA-drafted narrative may override. Deliberately ONLY the long-form
+// keys: short factual fields (name, address, income, …) must always be the
+// profile's verbatim values, never generated text.
+const NARRATIVE_OVERRIDE_KEYS = Object.freeze(['essay', 'goals'])
+
+/**
+ * Merge MBA-level narrative answers (from hamiltonFullProposalGenerator via the
+ * orchestrator) over the profile-derived values — long-form keys only.
+ */
+function applyNarrativeAnswers(valuesByKey, narrativeAnswers) {
+  if (!narrativeAnswers || typeof narrativeAnswers !== 'object') return valuesByKey
+  for (const key of NARRATIVE_OVERRIDE_KEYS) {
+    const v = narrativeAnswers[key]
+    if (v !== undefined && v !== null && String(v).trim() !== '') valuesByKey[key] = String(v)
+  }
+  return valuesByKey
+}
+
 // ── Form / field helpers (Playwright) ────────────────────────────────
 
 async function detectFields(page) {
@@ -514,6 +532,11 @@ export async function runAutopilot({
   headless = true,
   screenshotsDir = null,
   sessionSink = null,
+  // MBA-level long-form answers drafted by hamiltonFullProposalGenerator
+  // (buildPortalNarrativeAnswers). Only the narrative keys below may be
+  // overridden — short factual fields (name, address, …) always come from
+  // the profile verbatim. Falls back to the profile's raw essays when absent.
+  narrativeAnswers = null,
 } = {}) {
   if (!url) throw new Error('url required')
   if (!profile) throw new Error('profile required')
@@ -548,7 +571,7 @@ export async function runAutopilot({
   }
   const context = await browser.newContext(contextOptions)
   const page = await context.newPage()
-  const valuesByKey = readProfileValues(profile)
+  const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
   const screenshotsRoot = screenshotsDir || path.join(os.tmpdir(), 'hamilton-autopilot-screens')
 
   try {
@@ -756,7 +779,7 @@ export async function runAutopilot({
 export const _internal = {
   FIELD_RULES, STANDING_ATTESTATION_PATTERNS, HARD_ATTESTATION_PATTERNS,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
-  matchFieldKey, readProfileValues,
+  matchFieldKey, readProfileValues, applyNarrativeAnswers,
   detectGate, attemptLogin,
   extractConfirmationReference,
 }
