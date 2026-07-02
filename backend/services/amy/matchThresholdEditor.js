@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DISCOVERY_MIN_SCORE_FLOOR } from '../../config/matchThresholds.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const MATCH_THRESHOLDS_PATH = path.resolve(__dirname, '../../config/matchThresholds.js')
@@ -39,8 +40,11 @@ export async function readCurrentMinScore(filePath = MATCH_THRESHOLDS_PATH) {
  * @returns {Promise<{ applied:boolean, from:number|null, to:number, backup_path:string|null, reason?:string }>}
  */
 export async function applyMinScore(value, { filePath = MATCH_THRESHOLDS_PATH, now = new Date() } = {}) {
-  const to = Math.round(Number(value))
-  if (!Number.isFinite(to)) return { applied: false, from: null, to: value, backup_path: null, reason: 'invalid_value' }
+  const raw = Math.round(Number(value))
+  if (!Number.isFinite(raw)) return { applied: false, from: null, to: value, backup_path: null, reason: 'invalid_value' }
+  // SAFETY: the display floor can be tightened but never dropped below the
+  // documented product standard (owner directive 2026-06-23 — the 75 bar).
+  const to = Math.max(DISCOVERY_MIN_SCORE_FLOOR, Math.min(100, raw))
 
   let text
   try {

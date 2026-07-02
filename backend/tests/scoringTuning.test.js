@@ -27,29 +27,59 @@ describe('live scoring tuning store', () => {
 
   it('setScoringTuning updates the live effective values; reset restores defaults', () => {
     const defaults = getScoringTuning()
-    setScoringTuning({ minScore: 60, weights: { W_NEED: 0.5, W_ELIGIBILITY: 0.2, W_GEO: 0.2, W_CATEGORY: 0.1 } })
-    expect(getEffectiveMinScore()).toBe(60)
+    setScoringTuning({ minScore: 80, weights: { W_NEED: 0.5, W_ELIGIBILITY: 0.2, W_GEO: 0.2, W_CATEGORY: 0.1 } })
+    expect(getEffectiveMinScore()).toBe(80)
     expect(getEffectiveWeights().W_NEED).toBeGreaterThan(defaults.weights.W_NEED)
     resetScoringTuning()
     expect(getEffectiveMinScore()).toBe(defaults.minScore)
     expect(getEffectiveWeights()).toEqual(defaults.weights)
   })
 
+  it('SAFETY: the effective min score can never drop below the documented 75 bar', () => {
+    // Loosening attempts (Amy floor sweep, admin call, stale hydrated value)
+    // are clamped UP to DISCOVERY_MIN_SCORE_FLOOR; tightening is allowed.
+    setScoringTuning({ minScore: 60 })
+    expect(getEffectiveMinScore()).toBe(75)
+    setScoringTuning({ minScore: 0 })
+    expect(getEffectiveMinScore()).toBe(75)
+    setScoringTuning({ minScore: 85 })
+    expect(getEffectiveMinScore()).toBe(85)
+    setScoringTuning({ minScore: 200 })
+    expect(getEffectiveMinScore()).toBe(100)
+  })
+
   it('persists to system_kv and re-hydrates on boot (survives a restart)', async () => {
     const db = new Database(':memory:')
     try {
-      setScoringTuning({ minScore: 55, weights: { W_NEED: 0.4, W_ELIGIBILITY: 0.3, W_GEO: 0.15, W_CATEGORY: 0.15 } })
+      setScoringTuning({ minScore: 80, weights: { W_NEED: 0.4, W_ELIGIBILITY: 0.3, W_GEO: 0.15, W_CATEGORY: 0.15 } })
       const saved = getScoringTuning()
       expect(await persistScoringTuning(db)).toBe(true)
 
       // Simulate a process restart: wipe the live store, then hydrate from DB.
       resetScoringTuning()
-      expect(getEffectiveMinScore()).not.toBe(55)
+      expect(getEffectiveMinScore()).not.toBe(80)
 
       const hydrated = await hydrateScoringTuning(db)
-      expect(hydrated.minScore).toBe(55)
-      expect(getEffectiveMinScore()).toBe(55)
+      expect(hydrated.minScore).toBe(80)
+      expect(getEffectiveMinScore()).toBe(80)
       expect(getEffectiveWeights().W_NEED).toBeCloseTo(saved.weights.W_NEED, 3)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('a persisted sub-75 value is healed up to the floor on hydrate', async () => {
+    const db = new Database(':memory:')
+    try {
+      db.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+      db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+        'crawler_scoring_tuning',
+        JSON.stringify({ minScore: 55, weights: getScoringTuning().weights }),
+        new Date().toISOString(),
+      )
+      const hydrated = await hydrateScoringTuning(db)
+      expect(hydrated.minScore).toBe(75)
+      expect(getEffectiveMinScore()).toBe(75)
     } finally {
       db.close()
     }

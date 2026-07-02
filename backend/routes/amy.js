@@ -116,6 +116,9 @@ router.post('/run', (req, res) => {
         applyTuning: body.applyTuning === true, // writing the floor change is opt-in from the UI
         applyWeights: body.applyWeights === true,
         applyCoverage: body.applyCoverage === true,
+        // Archetype query-steering lessons are additive-only (extra bounded web
+        // queries), so they default ON like the rest of the improvement loop.
+        applyLearning: body.applyLearning !== false,
         anyaApply: body.anyaApply === true,
         samApply: body.samApply === true,
         keepProfiles: body.keepProfiles === true,

@@ -396,6 +396,31 @@ async function loadWeakDataProfiles(db, { profileId, limit }) {
   return weak.slice(0, limit)
 }
 
+/**
+ * Amy's crawler-learning flywheel state, read-only and best-effort:
+ *   - archetype_learning: the per-archetype gap classes currently steering the
+ *     next crawl's web queries (with the Amy run + evidence that caused each);
+ *   - archetype_metrics: the last few runs of per-archetype qualified /
+ *     ineligible-accept counts, so evolution is verifiable on the dashboard.
+ * Degrades to nulls when Amy has never run (or the store is unreadable).
+ */
+async function loadAmyLearning(db) {
+  try {
+    const { getArchetypeLearning, readArchetypeMetrics } = await import('../services/amy/archetypeLearning.js')
+    const [learning, metrics] = await Promise.all([
+      getArchetypeLearning(db).catch(() => null),
+      readArchetypeMetrics(db).catch(() => null),
+    ])
+    return {
+      archetype_learning: learning ?? null,
+      archetype_metrics: Array.isArray(metrics?.runs) ? metrics.runs.slice(0, 5) : [],
+      metrics_updated_at: metrics?.updated_at ?? null,
+    }
+  } catch {
+    return { archetype_learning: null, archetype_metrics: [], metrics_updated_at: null }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/admin/crawl-coverage
 // ---------------------------------------------------------------------------
@@ -406,11 +431,12 @@ router.get('/', async (req, res) => {
   const limit = Math.max(1, Math.min(Number.parseInt(req.query.limit, 10) || 25, 100))
 
   try {
-    const [runs, staleSources, weakDataProfiles, hasRejectionLog] = await Promise.all([
+    const [runs, staleSources, weakDataProfiles, hasRejectionLog, amyLearning] = await Promise.all([
       loadRuns(db, { profileId, limit }),
       loadStaleSources(db),
       loadWeakDataProfiles(db, { profileId, limit }),
       tableExists(db, 'rejection_log'),
+      loadAmyLearning(db),
     ])
 
     const sourcesFailedRecent = runs.reduce((acc, r) => acc + Number(r.sources_failed || 0), 0)
@@ -426,6 +452,7 @@ router.get('/', async (req, res) => {
       runs,
       stale_sources: staleSources,
       weak_data_profiles: weakDataProfiles,
+      amy_learning: amyLearning,
       totals: {
         runs: runs.length,
         sources_failed_recent: sourcesFailedRecent,

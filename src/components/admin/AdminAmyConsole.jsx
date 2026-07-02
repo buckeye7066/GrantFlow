@@ -234,9 +234,30 @@ export default function AdminAmyConsole() {
                     : <span className="text-muted-foreground">{report.coverage_tuning.reason || 'no change'}</span>}
               </div>
             )}
+            {report?.archetype_learning && (
+              <div className="text-xs">
+                <span className="font-medium">Query steering (per archetype): </span>
+                {Object.keys(report.archetype_learning.update || {}).length > 0
+                  ? (
+                    <span className="text-emerald-700">
+                      {Object.entries(report.archetype_learning.update).map(([k, v]) => `${k} → ${(v.classes || []).join('+')}`).join(' · ')}
+                      {' '}(steers the next crawl for these archetypes)
+                    </span>
+                  )
+                  : <span className="text-muted-foreground">no systematic gap this run</span>}
+              </div>
+            )}
             {cohort && (
               <div className="text-xs text-muted-foreground">
                 Cohort: {cohort.profiles} profiles · ok {cohort.ok} · weak {cohort.weak} · zero {cohort.zero} · source-failures {cohort.source_failure_profiles}
+              </div>
+            )}
+            {report?.archetype_metrics && Object.keys(report.archetype_metrics).length > 0 && (
+              <div className="text-xs text-muted-foreground">
+                By archetype:{' '}
+                {Object.entries(report.archetype_metrics)
+                  .map(([k, m]) => `${k} ${m.qualified} qualified / ${m.ineligible_accepts} ineligible (${m.profiles}p)`)
+                  .join(' · ')}
               </div>
             )}
           </CardContent>
@@ -258,6 +279,11 @@ export default function AdminAmyConsole() {
                   <Badge variant="outline" className={SEVERITY_TONE[item.severity] || ''}>{item.severity}</Badge>
                   <span className="font-medium">{item.lever}</span>
                   {item.category && <Badge variant="outline">{item.category}</Badge>}
+                  {item.auto_applied && (
+                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                      auto-applied: {item.auto_applied.lever}
+                    </Badge>
+                  )}
                   <code className="text-xs text-muted-foreground">{item.target_file}</code>
                 </div>
                 <div className="text-sm mt-1">{item.rationale}</div>

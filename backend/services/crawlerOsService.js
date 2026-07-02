@@ -176,6 +176,14 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     return skippedDiscoveryResult(profileId, `profile_${profileStatus || 'deleted'}`);
   }
   const thesis = buildThesis(profileContextToThesisInput(ctx));
+  // Close the learning loop ON THE CRAWL PATH. The learned-gap attach used to
+  // live only in buildThesisForProfile — whose callers (Robert's cross-profile
+  // matchProfiles, invariants, audits) use the thesis for MATCHING, not query
+  // building — so buildWebQueries' gap targeting never fired on an actual
+  // crawl. Attaching here steers THIS run's web queries with what prior crawls
+  // (per-profile, Anya brain) and Amy's synthetic cohort (per-archetype,
+  // amy_archetype_learning) proved the crawler misses. Best-effort, additive.
+  await attachLearnedGaps(db, profileId, thesis);
   // CROSS-PROFILE matching (Robert charter: "match every newly stored opportunity
   // against ALL known profiles"). When the caller supplies matchProfiles (all
   // active theses), each stored opp is matched against all of them in-run (the
@@ -298,22 +306,71 @@ export async function buildThesisForProfile(db = getDb(), profileId) {
   const status = String(ctx?.profile?.status ?? '').trim().toLowerCase();
   if (NON_DISCOVERABLE_PROFILE_STATUSES.has(status) || ctx?.profile?.deleted_at) return null;
   const thesis = buildThesis(profileContextToThesisInput(ctx));
-  // ── Close the learning loop ────────────────────────────────────────────────
-  // liveCrawlGapLearning RECORDS this profile's coverage gaps into Anya's brain
-  // after each crawl. Load the most recent record and attach it so buildWebQueries
-  // can TARGET those gaps on the next run — the crawlers don't just observe what
-  // they miss, they evolve their queries to go find it. Best-effort; never blocks.
+  await attachLearnedGaps(db, profileId, thesis);
+  return thesis;
+}
+
+/**
+ * attachLearnedGaps — close the learning loop by attaching everything the
+ * system has LEARNED about this profile's coverage gaps to the thesis, so
+ * buildWebQueries can TARGET those gaps on the next run. Two learning lanes
+ * are merged (union of gap classes):
+ *
+ *   1. PER-PROFILE — liveCrawlGapLearning records this exact profile's gaps
+ *      into Anya's brain after each real crawl (memory_key `crawler_gap`).
+ *      Carries missing_schools for institution-specific targeting.
+ *   2. PER-ARCHETYPE — Amy's synthetic training cohort proves what the crawler
+ *      systematically misses for this profile's archetype (student / veteran /
+ *      senior / …) and records it in system_kv `amy_archetype_learning`, so a
+ *      lesson learned on a synthetic veteran steers EVERY real veteran's next
+ *      crawl — even a brand-new profile with no crawl history.
+ *
+ * SAFETY: consumption is ADDITIVE-ONLY (extra bounded web queries in
+ * buildWebQueries); no gate, floor, or policy is touched. Best-effort: any
+ * failure leaves the thesis unchanged and never blocks a crawl.
+ *
+ * @returns {Promise<object>} the same thesis (mutated in place)
+ */
+export async function attachLearnedGaps(db = getDb(), profileId, thesis) {
+  if (!thesis || !profileId) return thesis;
+  const classes = new Set();
+  let missingSchools = [];
+  let archetype = null;
+  const sources = [];
+
+  // 1. Per-profile learned gaps (Anya brain, written by liveCrawlGapLearning).
   try {
     const { getMemory } = await import('./anyaBrainService.js');
     const mem = await getMemory(db, { scope: 'profile', scopeId: String(profileId), memoryKey: 'crawler_gap' });
     const c = mem?.content;
     if (c && (c.needs_rediscovery || (Array.isArray(c.classes) && c.classes.length))) {
-      thesis.learned_gaps = {
-        classes: Array.isArray(c.classes) ? c.classes : [],
-        missing_schools: Array.isArray(c.missing_schools) ? c.missing_schools : [],
-      };
+      for (const cls of Array.isArray(c.classes) ? c.classes : []) classes.add(cls);
+      missingSchools = Array.isArray(c.missing_schools) ? c.missing_schools : [];
+      sources.push('profile');
     }
   } catch { /* learned-gap load is best-effort observability, never a blocker */ }
+
+  // 2. Per-archetype learned gaps (Amy's synthetic training flywheel).
+  try {
+    const { getArchetypeLearning, learnedClassesForThesis } = await import('./amy/archetypeLearning.js');
+    const store = await getArchetypeLearning(db);
+    const learned = learnedClassesForThesis(store, thesis);
+    archetype = learned.archetype;
+    if (learned.classes.length > 0) {
+      for (const cls of learned.classes) classes.add(cls);
+      sources.push(`amy_archetype:${learned.archetype}`);
+    }
+  } catch { /* archetype-learning load is best-effort, never a blocker */ }
+
+  if (classes.size > 0 || missingSchools.length > 0) {
+    thesis.learned_gaps = {
+      classes: [...classes],
+      missing_schools: missingSchools,
+      // Audit trail: which learning lane(s) steered this crawl.
+      sources,
+      archetype,
+    };
+  }
   return thesis;
 }
 
@@ -325,6 +382,7 @@ export default {
   runProfileDiscoveryLive,
   runDiscovery,
   buildThesis,
+  attachLearnedGaps,
   computeMatchDecision,
   createFleet,
   createScheduler,

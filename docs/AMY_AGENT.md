@@ -18,16 +18,36 @@ delete it — and is **never deleted until it has been crawled at least once**.
    after scoring, Amy re-scores the collected candidates at every candidate
    floor to find the threshold that maximizes `quality = coverage − 0.6·false_positives`.
 3. **Tune** (`crawlerTuner.js` + `matchThresholdEditor.js`) — if a better floor
-   is proven on a big-enough cohort (≥12) with real gain, Amy **edits
-   `backend/config/matchThresholds.js` for real** — bounded (±10, clamped 50–85),
-   backed up to `audit-reports/amy-threshold-backups/`, and verified (auto-revert
-   on mismatch). This is a genuine, persistent, reversible crawler improvement.
-4. **Hand off** (`amyPipeline.js`) — Anya runs its autonomous code crawl on the
+   is proven on a big-enough cohort (≥12) with real gain, Amy applies the change
+   through the live scoring store — bounded (±10, **hard-clamped to ≥75**: the
+   documented display floor can be tightened but never loosened), backed up, and
+   verified (auto-revert on mismatch). This is a genuine, persistent, reversible
+   crawler improvement.
+4. **Learn per archetype** (`archetypeLearning.js` + `crawler-os/archetypes.js`)
+   — the cohort's systematic misses (institution recall, hyperlocal recall,
+   low-results) are recorded per **archetype** (student / veteran / senior /
+   caregiver / first responder / nonprofit / …) in `system_kv
+   amy_archetype_learning`. The live crawl (`attachLearnedGaps` in
+   `crawlerOsService.js`) classifies every REAL profile's thesis with the same
+   classifier and merges the archetype's learned gap classes into
+   `thesis.learned_gaps`, so `buildWebQueries` **targets the proven weakness on
+   the very next crawl** — a lesson learned on a synthetic veteran steers every
+   real veteran, including brand-new profiles with no crawl history. Safety:
+   learning is whitelisted to additive query-steering classes only; it can never
+   touch an eligibility gate, score floor, or policy.
+5. **Measure per archetype** — every run appends per-archetype
+   qualified/ineligible-accept counts to `system_kv amy_archetype_metrics`
+   (rolling 30-run history) so the evolution is verifiable run-over-run; it is
+   surfaced on the admin crawl-coverage dashboard (`amy_learning` section) and
+   in the Amy panel.
+6. **Hand off** (`amyPipeline.js`) — Anya runs its autonomous code crawl on the
    files Amy flagged (root cause + optional safe code fixes); Sam runs its
-   verified safe-fix pass. Deeper levers go to the **approval queue**.
-5. **Report** — a combined report is persisted (`amyReportStore.js`, `system_kv`)
+   verified safe-fix pass. Deeper levers go to the **approval queue**; items an
+   auto-applied lever already addressed are annotated `auto_applied` (audit
+   trail: what changed, which run, which finding).
+7. **Report** — a combined report is persisted (`amyReportStore.js`, `system_kv`)
    and shown in the admin panel under **Agent Amy**, plus JSON artifacts.
-6. **Cleanup** — only profiles crawled ≥1 are deleted (hard invariant).
+8. **Cleanup** — only profiles crawled ≥1 are deleted (hard invariant).
 
 ## Admin panel
 
@@ -59,14 +79,17 @@ delete it during cleanup sweeps.
 |---------|------|
 | Constants + Anya code-target map | `backend/services/amy/amyConstants.js` |
 | Metadata block + seeded RNG | `backend/services/amy/amyMetadata.js` |
-| Synthetic profile catalog (27 categories) | `backend/services/amy/syntheticProfileCatalog.js` |
+| Synthetic profile catalog (32 categories) | `backend/services/amy/syntheticProfileCatalog.js` |
 | Profile store (create + safe cleanup) | `backend/services/amy/amyProfileStore.js` |
 | Evaluation + Anya handoff builder | `backend/services/amy/amyReport.js` |
+| Archetype classifier (shared producer/consumer key) | `backend/crawler-os/archetypes.js` |
+| Archetype learning + per-run metrics | `backend/services/amy/archetypeLearning.js` |
+| Live-crawl consumption of learned gaps | `attachLearnedGaps` in `backend/services/crawlerOsService.js` |
 | Orchestrator | `backend/services/amy/amyAgent.js` |
 | Daily scheduler | `backend/services/amy/amyScheduler.js` |
 | CLI: training run | `scripts/amy-train.mjs` (`npm run amy:train`) |
 | CLI: Sam cleanup | `scripts/amy-cleanup.mjs` (`npm run amy:cleanup`) |
-| Tests | `backend/tests/amyAgent.test.js` |
+| Tests | `backend/tests/amyAgent.test.js`, `backend/tests/amyArchetypeLearning.test.js` |
 
 ## How it runs
 
@@ -123,6 +146,7 @@ defaults to **100 profiles**, distributed evenly across all categories.
 | `AMY_FLOOR` | `75` | Match-score floor for the crawler event (the slider) |
 | `AMY_IMPROVE` | `true` | Run the Anya→Sam chain + tuning measurement |
 | `AMY_APPLY_TUNING` | `true` | Auto-apply the proven, reversible floor change |
+| `AMY_APPLY_LEARNING` | `true` | Record per-archetype query-steering lessons the live crawl consumes (additive-only) |
 | `AMY_ANYA_APPLY` | `false` | Let Anya write code fixes (else analysis only) |
 | `AMY_SAM_APPLY` | `true` | Let Sam apply + save its safe fixes |
 | `AMY_INTERVAL_MS` | `86400000` | Override the 24h cadence (testing/ops) |

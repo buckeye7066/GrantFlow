@@ -368,14 +368,30 @@ describe('crawlerMetrics', () => {
 })
 
 describe('crawlerTuner', () => {
-  it('proposes a bounded floor change when the cohort proves a better floor', () => {
-    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [55] }))
+  it('proposes a bounded floor RAISE when the cohort proves it cuts false positives', () => {
+    // Every profile has a real 82 match plus a generic/directory 78 accepted as
+    // strong — raising the floor to 80 keeps coverage and removes the junk.
+    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [82, 78], generics: [false, true] }))
     const current = cohortMetricsAtFloor(evals, 75)
     const { best } = sweepFloors(evals)
     const decision = decideFloorChange({ currentFloor: 75, best, currentMetrics: current })
     expect(decision.change).toBe(true)
-    expect(decision.to).toBeLessThan(75)
-    expect(decision.to).toBeGreaterThanOrEqual(65) // bounded by maxDelta=10
+    expect(decision.to).toBe(80)
+  })
+
+  it('SAFETY: never proposes dropping the floor below the documented 75 bar', () => {
+    // A cohort whose candidates all sit at 55 would "prove" a lower floor, but
+    // the display floor is a hard product standard — the tuner must refuse,
+    // even when a caller passes looser bounds.
+    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [55] }))
+    const current = cohortMetricsAtFloor(evals, 75)
+    const { best } = sweepFloors(evals)
+    expect(best.floor).toBeLessThan(75) // the sweep itself would go lower…
+    const decision = decideFloorChange({ currentFloor: 75, best, currentMetrics: current })
+    expect(decision.change).toBe(false) // …but the tuner clamps to >= 75
+    const loose = decideFloorChange({ currentFloor: 75, best, currentMetrics: current, opts: { bounds: [50, 85] } })
+    expect(loose.change).toBe(false)
+    expect(loose.to).toBe(75)
   })
 
   it('refuses to tune on too-small a cohort', () => {
@@ -404,13 +420,34 @@ describe('matchThresholdEditor (surgical, reversible)', () => {
     await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 75\nexport const OTHER = 1\n', 'utf8')
     try {
       expect(await readCurrentMinScore(tmp)).toBe(75)
-      const applied = await applyMinScore(60, { filePath: tmp })
+      const applied = await applyMinScore(80, { filePath: tmp })
       expect(applied.applied).toBe(true)
       expect(applied.from).toBe(75)
-      expect(applied.to).toBe(60)
-      expect(await readCurrentMinScore(tmp)).toBe(60)
+      expect(applied.to).toBe(80)
+      expect(await readCurrentMinScore(tmp)).toBe(80)
       expect(applied.backup_path).toBeTruthy()
       await restoreFromBackup(applied.backup_path, tmp)
+      expect(await readCurrentMinScore(tmp)).toBe(75)
+    } finally {
+      await fsp.unlink(tmp).catch(() => {})
+    }
+  })
+
+  it('SAFETY: clamps any attempt to write a floor below the documented 75 bar', async () => {
+    const tmp = nodePath.join(os.tmpdir(), `amy-mt-clamp-${Date.now()}.js`)
+    await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 75\n', 'utf8')
+    try {
+      // 60 clamps to 75 == current → refused as a no-op; the file never drops.
+      const refused = await applyMinScore(60, { filePath: tmp })
+      expect(refused.applied).toBe(false)
+      expect(refused.reason).toBe('no_change')
+      expect(await readCurrentMinScore(tmp)).toBe(75)
+
+      // From a tightened floor (85), a "lower to 60" lands at the 75 bar, not 60.
+      await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 85\n', 'utf8')
+      const clamped = await applyMinScore(60, { filePath: tmp })
+      expect(clamped.applied).toBe(true)
+      expect(clamped.to).toBe(75)
       expect(await readCurrentMinScore(tmp)).toBe(75)
     } finally {
       await fsp.unlink(tmp).catch(() => {})
@@ -450,16 +487,22 @@ describe('amyReportStore', () => {
 describe('Amy improvement loop (end-to-end, injected)', () => {
   it('measures, tunes (validated), runs chain, persists, and cleans only crawled', async () => {
     const db = createDb()
+    // Every profile finds a real 82 match plus a generic/directory 78 accepted
+    // as strong — the cohort PROVES raising the floor to 80 cuts the junk
+    // without losing coverage (the only direction the safety bound allows).
     const fakeDiscovery = async ({ profileId, floor }) => {
       const t = db.prepare('SELECT primary_type FROM profiles WHERE id=?').get(profileId)
       return {
         run: {
-          run_id: 'r', stored: 1,
-          sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 5, stored: 1 }],
-          recommendations: [{ title: 'Specific Grant', match_score: 55, decision: 'REVIEW' }],
+          run_id: 'r', stored: 2,
+          sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 5, stored: 2 }],
+          recommendations: [
+            { title: 'Specific Grant', match_score: 82, decision: 'ACCEPT' },
+            { title: 'Resource Directory', match_score: 78, decision: 'ACCEPT' },
+          ],
           zero_result: null,
         },
-        persisted: { opportunities: 1 },
+        persisted: { opportunities: 2 },
         thesis: { applicant_types: [t?.primary_type || 'x'], needs: ['funding'], location: { state: 'TN' }, min_match_score: floor },
       }
     }
@@ -486,16 +529,19 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
 
       expect(out.combined.tuning.change).toBe(true)
       expect(out.combined.tuning.applied.applied).toBe(true)
-      expect(editorState.value).toBe(65)
+      expect(editorState.value).toBe(80)
       expect(pipelineCalled).toBe(true)
       expect(out.combined.chain.sam.run_id).toBe('sam-9')
       expect(out.combined.metrics.before).toBeTruthy()
-      expect(out.combined.metrics.best.floor).toBeLessThan(75)
+      expect(out.combined.metrics.best.floor).toBe(80)
       expect(out.crawled_profile_ids.length).toBe(16)
       expect(out.cleanup.deleted).toBe(16)
       expect(out.cleanup.require_crawled).toBe(true)
       const latest = await readLatestAmyReport(db)
       expect(latest.run_id).toBe(out.run_id)
+      // Per-archetype measurement rode along with the run.
+      expect(latest.archetype_metrics).toBeTruthy()
+      expect(Object.keys(latest.archetype_metrics).length).toBeGreaterThan(0)
     } finally {
       db.close()
     }

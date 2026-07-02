@@ -25,6 +25,7 @@ import {
   W_GEO,
   W_CATEGORY,
   DEFAULT_MIN_SCORE,
+  DISCOVERY_MIN_SCORE_FLOOR,
 } from './matchThresholds.js'
 
 export const WEIGHT_KEYS = ['W_NEED', 'W_ELIGIBILITY', 'W_GEO', 'W_CATEGORY']
@@ -66,14 +67,21 @@ export function getScoringTuning() {
 
 /**
  * Update the live tuning in-process. Returns the new effective tuning.
- * Weights are normalized to sum 1.0; minScore is clamped to [0, 100].
+ * Weights are normalized to sum 1.0; minScore is clamped to
+ * [DISCOVERY_MIN_SCORE_FLOOR, 100].
+ *
+ * SAFETY (hard floor, enforced at this choke point): the documented product
+ * standard (owner directive 2026-06-23) is that nothing below 75 surfaces in a
+ * profile's pipeline. No tuning proposal — Amy's floor sweep, an admin call, a
+ * stale persisted value hydrated at boot — may EVER take the effective min
+ * score below DISCOVERY_MIN_SCORE_FLOOR. Tightening (raising) stays allowed.
  */
 export function setScoringTuning({ weights, minScore } = {}) {
   if (weights && typeof weights === 'object') {
     _weights = normalizeWeights({ ..._weights, ...weights })
   }
   if (Number.isFinite(Number(minScore))) {
-    _minScore = Math.max(0, Math.min(100, Math.round(Number(minScore))))
+    _minScore = Math.max(DISCOVERY_MIN_SCORE_FLOOR, Math.min(100, Math.round(Number(minScore))))
   }
   return getScoringTuning()
 }
