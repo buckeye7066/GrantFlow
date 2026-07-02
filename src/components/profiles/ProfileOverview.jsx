@@ -52,11 +52,11 @@ import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
 import { isRealProfileId } from "@/api/profileIdGuards"
 import ProfileGapGate from "./ProfileGapGate"
+import { isGapGateEnabled } from "@/lib/gapGateFlag"
 
-// Anya's gap gate is OFF until VITE_GAP_GATE_ENABLED=true at build. Until then the
-// mount below is fully inert (renders nothing, fetches nothing).
-const GAP_GATE_ENABLED =
-  typeof import.meta !== "undefined" && import.meta.env?.VITE_GAP_GATE_ENABLED === "true"
+// Anya's gap gate is ON by default (kill switch: VITE_GAP_GATE_ENABLED=false).
+// Single source of truth shared with LoginGapInterviewLauncher: src/lib/gapGateFlag.js.
+const GAP_GATE_ENABLED = isGapGateEnabled()
 import {
   calculateProfileCompletion,
   hasMeaningfulProfileValue,
@@ -1212,9 +1212,9 @@ export default function ProfileOverview({
 
   return (
     <div className="space-y-10">
-      {/* Anya's opening interview / gap gate. Inert unless VITE_GAP_GATE_ENABLED
-          is set: when off it renders nothing; when on it prompts the owner to fill
-          the profile's gaps (which then determine the type + eligibility). */}
+      {/* Anya's opening interview / gap gate. ON by default (kill switch:
+          VITE_GAP_GATE_ENABLED=false): prompts the owner to fill the profile's
+          gaps (which then determine the type + eligibility). */}
       {GAP_GATE_ENABLED && profile?.id && isRealProfileId(profile.id) && (
         <ProfileGapGate profileId={profile.id} enabled={GAP_GATE_ENABLED} />
       )}

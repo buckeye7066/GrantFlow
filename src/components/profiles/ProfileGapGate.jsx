@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/api/client'
+import { persistGapAnswers } from './gapInterviewPersistence'
 import ProfileGapInterview from './ProfileGapInterview'
 
 /**
@@ -27,21 +28,9 @@ export default function ProfileGapGate({ profileId, enabled = false, onComplete,
   })
 
   const persist = useMutation({
-    mutationFn: async (sectionUpdates) => {
-      // Merge into current section data (the PUT replaces the section), then save
-      // each changed section.
-      const current = await apiFetch(`/api/profiles/${profileId}/sections`).catch(() => [])
-      const rows = Array.isArray(current) ? current : (current?.sections || [])
-      const byKey = {}
-      for (const s of rows) byKey[s.section_key] = s.data || {}
-      for (const [sectionKey, fields] of Object.entries(sectionUpdates || {})) {
-        const merged = { ...(byKey[sectionKey] || {}), ...fields }
-        await apiFetch(`/api/profiles/${profileId}/sections/${encodeURIComponent(sectionKey)}`, {
-          method: 'PUT',
-          body: JSON.stringify({ data: merged }),
-        })
-      }
-    },
+    // Merge-then-PUT lives in gapInterviewPersistence so the global login
+    // launcher persists through the exact same path (no duplicated logic).
+    mutationFn: (sectionUpdates) => persistGapAnswers(profileId, sectionUpdates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gap-plan', profileId] })
       onComplete?.()
