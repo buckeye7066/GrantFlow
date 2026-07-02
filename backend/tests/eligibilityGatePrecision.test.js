@@ -1,4 +1,4 @@
-/**
+﻿/**
  * eligibilityGatePrecision.test.js
  *
  * Regression coverage for the discovery/matching precision failures observed in
@@ -277,5 +277,64 @@ describe('(e) domain-aware deduplication', () => {
     ]
     const out = deduplicateOpportunities(rows)
     expect(out.length).toBe(3)
+  })
+})
+
+// -- (f) university merit scholarships are STUDENT aid, not researcher-only ----
+//
+// Prod regression (2026-07-01): "MTSU Freshman Guaranteed Scholarships"
+// ("academic merit scholarship ... for first-time incoming freshmen") carried
+// no applicant_types, so entity inference ran on its text. 'academic' and
+// 'university' sat in the RESEARCHER patterns while 'freshman'/'scholarship'
+// were not student patterns -> entityTypesAllowed = ['researcher'] -> the
+// faithful engine hard-rejected it for an actual MTSU student and the
+// surfacedEligibility sweep demoted the real, relatable match.
+
+describe('(f) university merit scholarships are typed student, not researcher-only', () => {
+  const MTSU_SCHOLARSHIP = {
+    id: 'mtsu-freshman',
+    title: 'MTSU Freshman Guaranteed Scholarships',
+    sponsor: 'Middle Tennessee State University',
+    description: 'MTSU awards an array of academic merit scholarship opportunities based on ACT scores and GPA for first-time incoming freshmen.',
+    application_url: 'https://www.mtsu.edu/apply',
+    state: 'TN',
+    categories: ['education', 'scholarship'],
+    amount_min: 1500,
+    amount_max: 6000,
+  }
+
+  it('normalizer infers STUDENT for scholarship/freshman copy and never researcher-ONLY', () => {
+    const n = normalizeOpportunity(MTSU_SCHOLARSHIP)
+    expect(n.entityTypesAllowed).toContain('student')
+    expect(n.entityTypesAllowed.length === 1 && n.entityTypesAllowed[0] === 'researcher').toBe(false)
+    expect(n.isResearchOnly).toBeFalsy()
+  })
+
+  it('the canonical engine does NOT applicant-type-reject it for a TN student', () => {
+    const d = computeMatchDecision(
+      { ...TN_STUDENT.profile, is_student: true },
+      MTSU_SCHOLARSHIP,
+      { sections: TN_STUDENT.sections },
+    )
+    const why = JSON.stringify(d?.match_explain ?? d ?? {})
+    expect(why).not.toMatch(/is for researcher but profile is/i)
+    expect(String(d?.decision).toLowerCase()).not.toBe('reject')
+  })
+
+  it('a genuine research-only call still types researcher and rejects a student', () => {
+    const RESEARCH_CALL = {
+      id: 'r01-call',
+      title: 'R01 Biomedical Research Funding',
+      sponsor: 'NIH',
+      description: 'Research funding for principal investigators and faculty researchers at academic institutions. Research proposal required.',
+      application_url: 'https://grants.nih.gov/r01',
+      is_national: true,
+      categories: ['research'],
+    }
+    const n = normalizeOpportunity(RESEARCH_CALL)
+    expect(n.entityTypesAllowed).toContain('researcher')
+    expect(n.entityTypesAllowed).not.toContain('student')
+    const d = computeMatchDecision({ ...TN_STUDENT.profile }, RESEARCH_CALL, { sections: TN_STUDENT.sections })
+    expect(String(d?.decision).toLowerCase()).toBe('reject')
   })
 })
