@@ -127,11 +127,15 @@ export function makeContactEnricher(deps = {}) {
 
       let email = null
       let excerpt = null
+      // Evidence: the exact public page the email was scraped from. NEVER a
+      // fabricated address — only what the org itself publishes.
+      let emailSourceUrl = null
       if (fetcher) {
         try {
           const html = await fetcher(homepage)
           const found = extractEmailsFromHtml(html).find((e) => !isExcludedEmail(e)) || null
           email = found
+          if (found) emailSourceUrl = homepage
           excerpt = htmlToText(html)
         } catch (err) {
           log.warn(`enrich fetch failed for ${homepage}: ${err?.message || err}`)
@@ -152,13 +156,16 @@ export function makeContactEnricher(deps = {}) {
             }
             const deep = await enrichOrgContact({ website: homepage }, { fetchImpl, delayMs: 0 })
             const deepEmail = deep?.email && !isExcludedEmail(deep.email) ? deep.email : null
-            if (deepEmail) email = deepEmail
+            if (deepEmail) {
+              email = deepEmail
+              emailSourceUrl = deep.email_source_url || deep.source_url || homepage
+            }
           } catch (err) {
             log.warn(`enrich contact-page probe failed for ${homepage}: ${err?.message || err}`)
           }
         }
       }
-      return { ok: true, website_url: homepage, email, excerpt }
+      return { ok: true, website_url: homepage, email, email_source_url: email ? emailSourceUrl : null, excerpt }
     },
   }
 }

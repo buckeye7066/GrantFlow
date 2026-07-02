@@ -163,6 +163,10 @@ export async function enrichOrgContact(org, {
   let phone = null
   let contact = null
   let sourceUrl = null
+  // The exact page the EMAIL was found on (sourceUrl is "first page with any
+  // contact signal", which a homepage phone number can claim first). Callers
+  // persisting evidence for a scraped email should prefer this.
+  let emailSourceUrl = null
 
   for (const path of paths) {
     if (email && phone && contact) break
@@ -177,7 +181,7 @@ export async function enrichOrgContact(org, {
     if (delayMs) await delay(delayMs)
     if (!res || res.ok !== true || !res.text) continue
 
-    if (!email) { const e = pickBestOrgEmail(extractContactEmails(res.text), { domain }); if (e) { email = e; sourceUrl = sourceUrl || url } }
+    if (!email) { const e = pickBestOrgEmail(extractContactEmails(res.text), { domain }); if (e) { email = e; emailSourceUrl = url; sourceUrl = sourceUrl || url } }
     if (!phone) { const p = extractPhones(res.text)[0]; if (p) { phone = p; sourceUrl = sourceUrl || url } }
     if (!contact) { const c = extractContactName(res.text); if (c) { contact = c; sourceUrl = sourceUrl || url } }
   }
@@ -189,13 +193,14 @@ export async function enrichOrgContact(org, {
     contact_name: contact?.name || null,
     contact_title: contact?.title || null,
     source_url: sourceUrl,
+    email_source_url: emailSourceUrl,
   }
 }
 
 /** Back-compat: email-only enrichment (wraps enrichOrgContact). */
 export async function enrichOrgEmail(org, opts) {
   const r = await enrichOrgContact(org, opts)
-  return r?.email ? { email: r.email, source_url: r.source_url } : null
+  return r?.email ? { email: r.email, source_url: r.email_source_url || r.source_url } : null
 }
 
 export const __testing__ = { ROLE_LOCALS, JUNK_LOCALS, localPart, emailDomain }

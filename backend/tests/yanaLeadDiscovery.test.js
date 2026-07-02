@@ -184,6 +184,44 @@ describe('pushQualifiedToJohn — Yana Rule 4 rolling cap', () => {
     expect(res.leads_pushed_to_john).toBe(3)
     expect(res.cap).toBe(DAILY_LEAD_CAP)
   })
+
+  // Regression for the prod "N qualified, 0 pushed" confusion: every run
+  // re-qualifies (upserts) the SAME candidates, which were already pushed in an
+  // earlier run, so candidates_qualified stays >0 while pushes are (correctly)
+  // 0. The run must now SAY that — dedup working, not leads lost — and a
+  // genuinely new qualified lead must still be pushed exactly once.
+  it('a re-run over already-pushed candidates reports 0 pushed WITH an explanation, and a new lead still flows', async () => {
+    const db = makeDb()
+    const orgs = Array.from({ length: 3 }, (_, i) => richOrg(i + 1))
+
+    const first = await runYanaDiscovery(db, { allowLeads: true, deps: { loadOrganizations: loaderFor(orgs) } })
+    expect(first.leads_pushed_to_john).toBe(3)
+
+    // Same orgs re-discovered (the frozen-universe shape from the prod audit).
+    const second = await runYanaDiscovery(db, { allowLeads: true, deps: { loadOrganizations: loaderFor(orgs) } })
+    expect(second.candidates_qualified).toBe(3)      // re-qualified in place
+    expect(second.leads_pushed_to_john).toBe(0)      // dedup: never re-pushed
+    expect(second.cap_reached).toBe(false)           // budget was NOT the reason
+    expect(second.push_noop_reason).toBe('no_unpushed_qualified_leads')
+    expect(second.queue_depth).toBe(0)
+
+    // A genuinely NEW qualified lead is pushed exactly once on the next run.
+    const third = await runYanaDiscovery(db, { allowLeads: true, deps: { loadOrganizations: loaderFor([...orgs, richOrg(4)]) } })
+    expect(third.leads_pushed_to_john).toBe(1)
+    const pushedRows = db.prepare(`SELECT COUNT(*) AS c FROM yana_lead_candidates WHERE COALESCE(pushed_to_john,0) = 1`).get()
+    expect(pushedRows.c).toBe(4)
+  })
+
+  it('cap-exhausted pushes report the reason and the waiting queue depth', async () => {
+    const db = makeDb()
+    const orgs = Array.from({ length: 4 }, (_, i) => richOrg(i + 1))
+    await discoverLeadCandidates(db, { loadOrganizations: loaderFor(orgs) })
+    await pushQualifiedToJohn(db, { cap: 2 })
+    const blocked = await pushQualifiedToJohn(db, { cap: 2 })
+    expect(blocked.leads_pushed_to_john).toBe(0)
+    expect(blocked.push_noop_reason).toBe('cap_reached_in_window')
+    expect(blocked.queue_depth).toBe(2) // two qualified leads still waiting
+  })
 })
 
 import { discoverProspects } from '../services/yana/yanaLeadDiscovery.js'
