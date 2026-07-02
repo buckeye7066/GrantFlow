@@ -25,7 +25,7 @@ import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
 import { computeMatchDecision } from './matchEngine.js';
 import { buildEvolutionSignals } from './profileEvolution.js';
-import { CRAWLER_OUTCOME, MATCH_DECISION, REASON, canonicalOpportunityKey } from './contract.js';
+import { CRAWLER_OUTCOME, MATCH_DECISION, OPPORTUNITY_KIND, REASON, canonicalOpportunityKey } from './contract.js';
 import {
   upsertSource, upsertOpportunity, upsertMatch,
   recordRun, recordSourceRun, recordRejection, recordFetch,
@@ -122,10 +122,18 @@ export async function runDiscovery(deps, opts = {}) {
       if (!resp.ok || resp.body == null) {
         sawFetchError = true;
         recordRejection(store, runId, { source_id: sourceId, reason: 'fetch_failed', detail: resp.reason ?? resp.error ?? `status:${resp.status}`, url: req.url });
-        continue;
+        // A true DIRECTORY/locator candidate is constructed ENTIRELY from
+        // registry config — parseDirectory never reads the body. A transient
+        // fetch failure (site hiccup, CI-runner egress blocked) must not erase
+        // the honest locator row a sparse profile depends on. Emit it anyway
+        // with fetch-less evidence (content_hash stays null → the link is
+        // honestly unverified; link_unverified ≠ dead). Everything else still
+        // skips: API/list candidates come from the body, and a PROGRAM-kind
+        // registry page that stops resolving may genuinely be gone.
+        if (req.parseCfg?.directoryCandidate?.kind !== OPPORTUNITY_KIND.DIRECTORY) continue;
       }
 
-      const parsed = parse(req.family, resp.body, req.parseCfg ?? {});
+      const parsed = parse(req.family, resp.ok ? resp.body : '', req.parseCfg ?? {});
       const candidates = parsed.candidates ?? [];
       if (parsed.error) {
         sawParseError = true;
@@ -299,5 +307,10 @@ function finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSumma
     finished_at: finishedAt,
   };
 }
+
+// Test-only: the ladder builder is unit-tested directly because honest
+// DIRECTORY locators now survive fetch failures, making an organic all-sources
+// zero unreachable for any thesis whose plan includes a directory source.
+export const _internal = { buildLadder };
 
 export default { runDiscovery };
