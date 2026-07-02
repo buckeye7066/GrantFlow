@@ -50,6 +50,64 @@ describe('responseEnvelope middleware', () => {
     expect(res.body).toEqual([1, 2, 3])
   })
 
+  it('redacts 500 error detail in production (route-catch err.message leak)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const app = appWith((a) =>
+        a.get('/boom', (_req, res) =>
+          res.status(500).json({
+            error: 'SQLITE_ERROR: no such column: secret_col',
+            message: 'select * from users failed',
+            stack: 'Error: at db.js:12',
+            error_type: 'SqliteError',
+          }),
+        ),
+      )
+      const res = await request(app).get('/boom')
+      expect(res.status).toBe(500)
+      expect(res.body).toEqual({
+        ok: false,
+        error: 'Internal server error',
+        message: 'Internal server error',
+        error_type: 'SqliteError',
+        request_id: 'test-req-id',
+      })
+      // Original detail must still be logged server-side for debugging.
+      expect(err).toHaveBeenCalledWith(
+        '[envelope] redacted 500 response detail',
+        expect.objectContaining({ error: 'SQLITE_ERROR: no such column: secret_col' }),
+      )
+    } finally {
+      vi.unstubAllEnvs()
+      err.mockRestore()
+    }
+  })
+
+  it('does NOT redact 500 detail outside production', async () => {
+    const app = appWith((a) =>
+      a.get('/boom', (_req, res) => res.status(500).json({ error: 'raw detail' })),
+    )
+    const res = await request(app).get('/boom')
+    expect(res.body.error).toBe('raw detail')
+  })
+
+  it('leaves intentional non-500 5xx messages (503 catalog_busy) untouched in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const app = appWith((a) =>
+        a.get('/busy', (_req, res) =>
+          res.status(503).json({ error: 'catalog_busy', message: 'busy, retry shortly', retryable: true }),
+        ),
+      )
+      const res = await request(app).get('/busy')
+      expect(res.body.error).toBe('catalog_busy')
+      expect(res.body.message).toBe('busy, retry shortly')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('double res.json() after the response is sent is a logged no-op, not a throw', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const app = appWith((a) =>

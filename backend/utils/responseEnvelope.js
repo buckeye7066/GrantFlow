@@ -16,7 +16,50 @@
  *     no-op (logged, not silent) instead of a crash.
  *
  * `req.requestId` is expected to be set by upstream request-id middleware.
+ *
+ *  3. Production 500-detail redaction: hundreds of route-level catch blocks
+ *     respond `res.status(500).json({ error: err.message })`, bypassing the
+ *     central errorHandler's production redaction and leaking DB/driver
+ *     internals to clients. Rather than trusting per-call discipline across
+ *     45+ route files, this choke point redacts string `error`/`message`/
+ *     `detail`/`details` fields (and drops `stack`) on HTTP 500 responses in
+ *     production, mirroring formatError()'s behavior. The original text is
+ *     still logged server-side with the request id, and non-500 statuses
+ *     (e.g. the intentional 503 catalog_busy / 504 timeout messages) are
+ *     untouched. Dev/test behavior is unchanged.
  */
+const REDACTABLE_500_FIELDS = ['error', 'message', 'detail', 'details']
+
+function redactServerErrorBody(body, req) {
+  const redacted = { ...body }
+  const leaked = {}
+  let changed = false
+  for (const field of REDACTABLE_500_FIELDS) {
+    if (typeof redacted[field] === 'string' && redacted[field]) {
+      leaked[field] = redacted[field]
+      redacted[field] = 'Internal server error'
+      changed = true
+    }
+  }
+  if (typeof redacted.stack === 'string') {
+    delete redacted.stack
+    changed = true
+  }
+  if (changed) {
+    try {
+      console.error('[envelope] redacted 500 response detail', {
+        method: req.method,
+        url: req.originalUrl || req.url,
+        requestId: req.requestId || null,
+        ...leaked,
+      })
+    } catch {
+      /* logging must never throw here */
+    }
+  }
+  return redacted
+}
+
 export function responseEnvelope(req, res, next) {
   const originalJson = res.json.bind(res)
   res.json = (body) => {
@@ -44,6 +87,11 @@ export function responseEnvelope(req, res, next) {
     }
 
     const requestId = req.requestId || null
+
+    // Read NODE_ENV at call time (not module load) so tests can toggle it.
+    if (status === 500 && process.env.NODE_ENV === 'production') {
+      body = redactServerErrorBody(body, req)
+    }
 
     const normalized = Object.prototype.hasOwnProperty.call(body, 'ok')
       ? body

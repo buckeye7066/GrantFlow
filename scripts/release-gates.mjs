@@ -50,6 +50,12 @@ async function main() {
   // crashes on boot with ERR_MODULE_NOT_FOUND, so prod silently keeps serving the
   // previous deployment" failure mode that masked profile section AI fixes for days.
   await run('node', ['scripts/check-runtime-imports.mjs'], { label: 'runtime-imports' })
+
+  // Gate 0b: env-example drift guard — every process.env / import.meta.env
+  // reference must appear in the checked-in .env.example files. Previously this
+  // only ran in `check:prepush`, which no hook or CI job invokes, so the
+  // examples silently drifted (2026-07-01 pass found ~45 missing vars).
+  await run('node', ['scripts/check-env-examples.mjs'], { label: 'env-examples' })
   await run(npmBin(), ['run', 'profile-scope:check'], { label: 'profile-scope' })
   await run(npmBin(), ['run', 'safe-sql:check'], { label: 'safe-sql' })
   await run('node', ['--test', 'tests/unit/no-fake-production-rule.test.mjs'], { label: 'no-fake-rule' })

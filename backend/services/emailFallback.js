@@ -29,7 +29,12 @@ export async function sendVerificationEmail(email, code) {
 export async function sendPasswordSetupEmail(email, link) {
   console.warn('[emailFallback] Using fallback email service')
   console.warn('[emailFallback] Password setup email would be sent to:', email)
-  console.warn('[emailFallback] Password setup link:', link)
+  if (process.env.NODE_ENV !== 'production') {
+    // Dev convenience only — the link embeds the setup token, which must never
+    // land in production logs (auth routes error out before this in prod, but
+    // belt-and-braces).
+    console.warn('[emailFallback] Password setup link:', link)
+  }
   return false
 }
 

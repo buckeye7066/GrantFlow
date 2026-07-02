@@ -569,8 +569,18 @@ export async function runAutopilot({
   } else if (storageStatePath && fs.existsSync(storageStatePath)) {
     contextOptions = { storageState: storageStatePath }
   }
-  const context = await browser.newContext(contextOptions)
-  const page = await context.newPage()
+  // Guard the setup path: if newContext/newPage throws (e.g. /dev/shm memory
+  // pressure), the already-launched Chromium must not leak — the main
+  // try/finally below only covers code after both exist.
+  let context
+  let page
+  try {
+    context = await browser.newContext(contextOptions)
+    page = await context.newPage()
+  } catch (setupErr) {
+    await browser.close().catch(() => {})
+    throw setupErr
+  }
   const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
   const screenshotsRoot = screenshotsDir || path.join(os.tmpdir(), 'hamilton-autopilot-screens')
 

@@ -172,6 +172,10 @@ router.post('/comprehensive-match', async (req, res) => {
 
     // Profile isolation: only global catalog + this profile's own crawl results
     const profileIdForIsolation = profile_id || profile?.id || null
+    // Ownership gate: the caller must actually have access to the profile whose
+    // private crawl results they are asking to read (same guard as the sibling
+    // routes below; funding_opportunities is not covered by the scopedQuery net).
+    if (profileIdForIsolation && !(await ensureProfileAccess(req, res, String(profileIdForIsolation)))) return
     const isolationClause = profileIdForIsolation
       ? 'AND (profile_id IS NULL OR profile_id = ?)'
       : 'AND profile_id IS NULL'
@@ -254,6 +258,9 @@ router.post('/ecf-service-search', async (req, res) => {
 
     // Profile isolation
     const isolationId = profile_id || profile?.id || null
+    // Ownership gate (see comprehensive-match above): callers may only read
+    // their own profile's private crawl results.
+    if (isolationId && !(await ensureProfileAccess(req, res, String(isolationId)))) return
     const isolationClause = isolationId
       ? 'AND (profile_id IS NULL OR profile_id = ?)'
       : 'AND profile_id IS NULL'

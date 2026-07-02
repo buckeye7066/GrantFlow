@@ -89,10 +89,29 @@ export function getCrawlerOsStore(opts = {}) {
  */
 export function makeProductionFetcher(overrides = {}) {
   return createFetcher({
-    doFetch: (url, init) => fetch(url, init),
+    doFetch: (url, init) => fetchWithTimeout(url, init),
     resolve: (host) => dns.promises.resolve(host),
     ...overrides,
   });
+}
+
+// Per-request timeout for the production crawl fetcher. The OS fetcher
+// (backend/crawler-os/fetcher.js) intentionally delegates timeouts to the host
+// app's doFetch; native fetch/undici has NO default deadline, so without this a
+// single half-open remote hangs runProfileDiscoveryLive forever and pins one of
+// the MAX_CONCURRENT_CRAWLERS slots. Respects a caller-provided AbortSignal.
+function crawlFetchTimeoutMs() {
+  // Read at call time so tests (and live env changes) can tune it.
+  return Math.max(50, Number(process.env.CRAWLER_FETCH_TIMEOUT_MS) || 30000);
+}
+
+/** Exported for tests. */
+export function fetchWithTimeout(url, init = {}) {
+  const timeoutSignal = AbortSignal.timeout(crawlFetchTimeoutMs());
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
+  return fetch(url, { ...init, signal });
 }
 
 /**

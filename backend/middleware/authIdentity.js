@@ -148,7 +148,10 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         // 3c. Stateless JWT verification + optional DB session enrichment
         if (!handled) {
           try {
-            const payload = jwt.verify(token, jwtSecret)
+            // Pin the algorithm: all GrantFlow tokens are HS256 (symmetric
+            // secret). Prevents algorithm-confusion if an asymmetric key is
+            // ever introduced into the environment.
+            const payload = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] })
             // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
             // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
             // We still try to validate against DB sessions when available, but we do not require it.
