@@ -41,11 +41,40 @@ export const PROFILE_SCOPED_TABLES = new Set([
   'anya_tool_registry_snapshot',
 ])
 
-// NOTE: organizations contains tenant-sensitive applicant rows, but the current
-// schema links them through profiles.organization_id / user_organizations rather
-// than an organizations.profile_id column. Keep organization access guarded at
-// the route/service layer until a future schema migration gives this SQL guard a
-// real profile_id predicate to enforce.
+/**
+ * Dual-scope tables: rows with profile_id IS NULL are the shared/global catalog
+ * (crawl results visible to everyone); rows with a non-NULL profile_id are
+ * private to that profile. Canonical visible-set clause:
+ *   (profile_id IS NULL OR profile_id = ?)
+ *
+ * Enforcement chosen after auditing all ~255 call sites (2026-07-02 pass):
+ *   - READS  : catalog-wide SELECTs without any profile/row predicate are the
+ *              product's current intentional behavior (opportunities browse,
+ *              matching scans), so an unscoped read under a tenant claim is
+ *              logged/counted (profile_bleed) — NOT blocked — unless
+ *              PROFILE_SCOPE_FUNDING_READS=strict opts in after drift retires.
+ *   - WRITES : every legitimate wholesale UPDATE/DELETE writer (deadline expiry,
+ *              Anya health dedup, remove-loans, min-national backfill) runs from
+ *              boot/background/admin contexts, so a wholesale write under a
+ *              non-admin tenant claim is a bug → strict (throws by default).
+ *              Row-targeted writes (id/fingerprint/source_id/profile_id
+ *              predicates, or profile_id IS NULL global-maintenance filters)
+ *              pass.
+ *   - INSERTS: allowed — crawl ingestion legitimately writes global rows even
+ *              inside request-initiated discovery contexts.
+ */
+export const DUAL_SCOPE_TABLES = new Set(['funding_opportunities'])
+
+/**
+ * Organization-scoped tables: organizations has NO profile_id column — tenancy
+ * links through profiles.organization_id / user_organizations. The scope key is
+ * therefore the org row itself. Under a non-admin tenant claim, SELECT/UPDATE/
+ * DELETE must be row-targeted (id = ? / id IN (...)) or reached through the
+ * owning-row linkage (an organization_id equality/join). INSERTs (org creation)
+ * read nothing and are allowed. All request-path queries audited 2026-07-02
+ * already satisfy this, so this tier is strict by default.
+ */
+export const ORG_SCOPED_TABLES = new Set(['organizations'])
 
 /** Admins can read/write across tenants; readers of this role bypass the guard. */
 const ADMIN_ROLES = new Set(['admin', 'admin_global', 'service', 'service_role', 'health_check'])
@@ -84,7 +113,18 @@ export function getProfileContext() {
  */
 export function analyzeProfileScope(sql) {
   const raw = String(sql || '')
-  if (!raw.trim()) return { isScoped: false, tables: [], hasProfilePredicate: false, op: null }
+  const empty = {
+    isScoped: false,
+    tables: [],
+    hasProfilePredicate: false,
+    op: null,
+    dualScopeTables: [],
+    orgScopedTables: [],
+    fundingReadViolation: false,
+    fundingWriteViolation: false,
+    orgViolation: false,
+  }
+  if (!raw.trim()) return empty
 
   // Strip comments and string literals to avoid false positives inside text.
   const stripped = raw
@@ -99,10 +139,12 @@ export function analyzeProfileScope(sql) {
 
   // DDL and pragma never carry row-level scope.
   if (!op || ['CREATE', 'ALTER', 'DROP', 'PRAGMA', 'EXPLAIN', 'VACUUM', 'BEGIN', 'COMMIT', 'ROLLBACK', 'ATTACH', 'DETACH'].includes(op)) {
-    return { isScoped: false, tables: [], hasProfilePredicate: false, op }
+    return { ...empty, op }
   }
 
   const tables = []
+  const dualScopeTables = []
+  const orgScopedTables = []
   const tableRegex = /\b(FROM|JOIN|INTO|UPDATE)\s+(?:ONLY\s+)?["`]?([A-Za-z_][A-Za-z0-9_]*)["`]?/g
   let m
   while ((m = tableRegex.exec(upper)) !== null) {
@@ -110,10 +152,16 @@ export function analyzeProfileScope(sql) {
     if (PROFILE_SCOPED_TABLES.has(tbl) && !tables.includes(tbl)) {
       tables.push(tbl)
     }
+    if (DUAL_SCOPE_TABLES.has(tbl) && !dualScopeTables.includes(tbl)) {
+      dualScopeTables.push(tbl)
+    }
+    if (ORG_SCOPED_TABLES.has(tbl) && !orgScopedTables.includes(tbl)) {
+      orgScopedTables.push(tbl)
+    }
   }
 
-  if (tables.length === 0) {
-    return { isScoped: false, tables: [], hasProfilePredicate: false, op }
+  if (tables.length === 0 && dualScopeTables.length === 0 && orgScopedTables.length === 0) {
+    return { ...empty, op }
   }
 
   // Acceptable predicates:
@@ -133,7 +181,39 @@ export function analyzeProfileScope(sql) {
   const emptySet = /\bWHERE\s+1\s*=\s*0\b/.test(upper)
   const hasProfilePredicate = hasEqPredicate || hasInPredicate || insertHasColumn || emptySet
 
-  return { isScoped: true, tables, hasProfilePredicate, op }
+  // Tier-specific predicates (dual-scope + org-scoped tables).
+  const PARAM = '(\\?|\\$\\d+|:[A-Z_][A-Z0-9_]*|@[A-Z_][A-Z0-9_]*)'
+  // \bID does not match inside FOO_ID (the "_" is a word char), so this only
+  // matches the bare `id` column (optionally alias-qualified: fo.id = ?).
+  const idTargeted =
+    new RegExp(`\\bID\\s*=\\s*${PARAM}`).test(upper) || /\bID\s+IN\s*\(/.test(upper)
+  const rowKeyTargeted = new RegExp(
+    `\\b(FINGERPRINT|SOURCE_ID|CANONICAL_OPPORTUNITY_KEY)\\s*=\\s*${PARAM}`,
+  ).test(upper)
+  const profileIdIsNull = /\bPROFILE_ID\s+IS\s+NULL\b/.test(upper)
+  const orgLinkage = /\bORGANIZATION_ID\b/.test(upper)
+
+  const isWrite = op === 'UPDATE' || op === 'DELETE'
+  const fundingRowScoped =
+    hasEqPredicate || hasInPredicate || profileIdIsNull || idTargeted || rowKeyTargeted || emptySet
+  const fundingReadViolation =
+    dualScopeTables.length > 0 && !isWrite && op !== 'INSERT' && !fundingRowScoped
+  const fundingWriteViolation =
+    dualScopeTables.length > 0 && isWrite && !fundingRowScoped
+  const orgViolation =
+    orgScopedTables.length > 0 && op !== 'INSERT' && !(idTargeted || orgLinkage || emptySet)
+
+  return {
+    isScoped: tables.length > 0,
+    tables,
+    hasProfilePredicate,
+    op,
+    dualScopeTables,
+    orgScopedTables,
+    fundingReadViolation,
+    fundingWriteViolation,
+    orgViolation,
+  }
 }
 
 /**
@@ -159,8 +239,24 @@ export function assertProfileScopedSql(sql, opts = {}) {
   if (role && ROLE_TABLE_BYPASS[role]) return sql
 
   const analysis = analyzeProfileScope(sql)
-  if (!analysis.isScoped) return sql
-  if (analysis.hasProfilePredicate) return sql
+
+  // Collect violations across the three tiers.
+  //   blocking  — throws in strict mode (default when a profile is claimed)
+  //   warn-only — observability tier (never throws unless explicitly opted in)
+  const coreViolation = analysis.isScoped && !analysis.hasProfilePredicate
+  const fundingReadsStrict =
+    String(process.env.PROFILE_SCOPE_FUNDING_READS || '').trim().toLowerCase() === 'strict'
+  const blockingViolations = []
+  const warnViolations = []
+  if (coreViolation) blockingViolations.push({ tier: 'profile', tables: analysis.tables })
+  if (analysis.orgViolation) blockingViolations.push({ tier: 'organizations', tables: ['organizations'] })
+  if (analysis.fundingWriteViolation) blockingViolations.push({ tier: 'funding_write', tables: analysis.dualScopeTables })
+  if (analysis.fundingReadViolation) {
+    const v = { tier: 'funding_read', tables: analysis.dualScopeTables }
+    if (fundingReadsStrict) blockingViolations.push(v)
+    else warnViolations.push(v)
+  }
+  if (blockingViolations.length === 0 && warnViolations.length === 0) return sql
 
   // Strict mode fires when a profile is actually claimed. Otherwise the request
   // is a system/boot/admin path and should be logged (not blocked). Warn-only
@@ -171,8 +267,10 @@ export function assertProfileScopedSql(sql, opts = {}) {
   const warnOnly = mode === 'warn' || mode === 'warning' || legacyStrict === '0' || legacyStrict === 'false'
   const strict = hasClaim && !warnOnly
 
+  const allViolations = [...blockingViolations, ...warnViolations]
   const detail = {
-    tables: analysis.tables,
+    tiers: allViolations.map((v) => v.tier),
+    tables: [...new Set(allViolations.flatMap((v) => v.tables))],
     op: analysis.op,
     sql: String(sql).slice(0, 400),
     profileId: ctx.profileId || null,
@@ -180,9 +278,10 @@ export function assertProfileScopedSql(sql, opts = {}) {
     route: opts.route || ctx.route || null,
   }
 
-  if (strict) {
+  if (strict && blockingViolations.length > 0) {
+    const first = blockingViolations[0]
     throw new ProfileScopeError(
-      `Profile-scoped ${analysis.op} on [${analysis.tables.join(', ')}] without profile_id predicate`,
+      `Profile-scoped ${analysis.op} on [${first.tables.join(', ')}] without required scope predicate (tier: ${first.tier})`,
       detail,
     )
   }
@@ -192,18 +291,33 @@ export function assertProfileScopedSql(sql, opts = {}) {
   ctx.profileBleedSamples = (ctx.profileBleedSamples || [])
   if (ctx.profileBleedSamples.length < 20) ctx.profileBleedSamples.push(detail)
 
+  emitBleedWarning(detail)
+  return sql
+}
+
+// Warn-log deduplication: hot read paths (catalog browse, matching scans) hit
+// the funding_read observability tier on every request; log each unique
+// route+op+tier signature once per process so prod logs stay readable while
+// per-request counts remain available on ctx.profileBleed / profileBleedSamples.
+const seenBleedSignatures = new Set()
+function emitBleedWarning(detail) {
   try {
+    const routeSig = String(detail.route || detail.sql.slice(0, 120)).split('?')[0]
+    const sig = `${detail.tiers.join('+')}|${detail.op}|${routeSig}`
+    if (seenBleedSignatures.has(sig)) return
+    if (seenBleedSignatures.size < 500) seenBleedSignatures.add(sig)
     // Soft emit so the existing audit log pipeline sees it.
-     
+
     console.warn('[profile_bleed] unscoped SQL', JSON.stringify(detail))
   } catch {
     /* noop */
   }
-  return sql
 }
 
 export default {
   PROFILE_SCOPED_TABLES,
+  DUAL_SCOPE_TABLES,
+  ORG_SCOPED_TABLES,
   ProfileScopeError,
   runProfileContext,
   getProfileContext,

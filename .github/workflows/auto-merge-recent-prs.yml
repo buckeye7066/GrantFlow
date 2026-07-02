@@ -123,6 +123,18 @@ jobs:
               continue
             fi
 
+            # An empty/absent check rollup is a FAILURE, not a pass: the required
+            # contexts ("test" and "postgres-migrations", per branch protection on
+            # main) must each be PRESENT and SUCCESSFUL before this workflow will
+            # queue a merge. Guards against checks that never reported (e.g. CI
+            # never triggered on the head SHA).
+            REQUIRED_GREEN=$(echo "$pr" | jq -r '[.statusCheckRollup // [] | .[] | select((.name // .context) == "test" or (.name // .context) == "postgres-migrations") | select((.conclusion // .state // "") == "SUCCESS")] | map(.name // .context) | unique | length')
+            if [ "$REQUIRED_GREEN" -lt 2 ]; then
+              echo "❌ PR #$PR_NUMBER is missing successful required checks (test + postgres-migrations green: $REQUIRED_GREEN/2). Skipping."
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+              continue
+            fi
+
             # Check for required approvals (get PR details)
             APPROVALS=$(gh pr view "$PR_NUMBER" --json reviews --jq '[.reviews[] | select(.state == "APPROVED")] | length')
 

@@ -162,6 +162,16 @@ jobs:
                   continue
                 fi
 
+                # An empty/absent check rollup is a FAILURE, not a pass: the
+                # required contexts ("test" and "postgres-migrations", per branch
+                # protection on main) must each be PRESENT and SUCCESSFUL.
+                REQUIRED_GREEN=$(echo "$CHECKS_JSON" | jq '[.[] | select((.name // .context) == "test" or (.name // .context) == "postgres-migrations") | select((.conclusion // .state // "") == "SUCCESS")] | map(.name // .context) | unique | length')
+                if [ "$REQUIRED_GREEN" -lt 2 ]; then
+                  echo "⏸️  PR #$EXISTING_PR missing successful required checks (test + postgres-migrations green: $REQUIRED_GREEN/2). Skipping."
+                  echo ""
+                  continue
+                fi
+
                 APPROVALS=$(gh pr view "$EXISTING_PR" --json reviews --jq '[.reviews[] | select(.state == "APPROVED")] | length')
                 if [ "$APPROVALS" -eq 0 ]; then
                   echo "⏸️  PR #$EXISTING_PR has no approvals. Skipping."
