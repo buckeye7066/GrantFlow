@@ -217,7 +217,9 @@ export async function runSam(args = {}) {
         const fixes = await applySafeFixes({
           fixIds: effectiveFixIds,
           perFixParams,
-          context: { authorisedByAdmin, mode },
+          // db rides along so DB-level safe fixes (queue.recover-stale-jobs)
+          // can act; file-level fixes ignore it.
+          context: { authorisedByAdmin, mode, db },
           maxFixes,
         })
         appliedFixes.push(...fixes)

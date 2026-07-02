@@ -5022,3 +5022,313 @@ registerTool({
     }
   },
 })
+
+// ── Anya moderates matches directly (owner-gated) ─────────────────────────────
+// Before this tool the owner had to hand-edit the DB to promote/demote a match
+// score or dismiss/restore a pipeline grant — Anya could only explain matches,
+// not act on them. Dismiss/restore reuse the SAME choke points the human UI
+// uses (grants DELETE route semantics + pipelineDismissals tombstones), so
+// sticky-delete invariants hold no matter which path performed the edit.
+registerTool({
+  name: 'owner.moderate_match',
+  description:
+    'OWNER ONLY. Moderate a pipeline match for a profile: "promote"/"demote" set a new match_score (0-100); "dismiss" removes the grant from the pipeline WITH a sticky pipeline_dismissals tombstone (so the matcher never re-adds it); "restore" clears the tombstone for a funding opportunity so the matcher may re-add it on the next run. Use when the owner asks Anya to boost, bury, remove, or bring back a match.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile that owns the match' },
+      action: { type: 'string', enum: ['promote', 'demote', 'dismiss', 'restore'], description: 'What to do' },
+      grantId: { type: 'string', description: 'grants.id — required for promote/demote/dismiss' },
+      opportunityId: { type: 'string', description: 'funding_opportunities.id — required for restore' },
+      score: { type: 'integer', minimum: 0, maximum: 100, description: 'New match_score for promote/demote (defaults: promote 85, demote 55)' },
+      force: { type: 'boolean', description: 'Allow dismissing a user-progressed grant (submitted/awarded). Default false.' },
+    },
+    required: ['profileId', 'action'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const profileId = String(params.profileId)
+    const action = String(params.action || '').toLowerCase()
+    const userId = context?.ctx?.userId ?? context?.user?.id ?? null
+
+    if (action === 'promote' || action === 'demote') {
+      if (!params.grantId) throw new Error('grantId is required for promote/demote')
+      const grantId = String(params.grantId)
+      const row = await db.prepare('SELECT id, title, status, match_score FROM grants WHERE id = ? AND profile_id = ?').get(grantId, profileId)
+      if (!row) throw new Error(`Grant ${grantId} not found for profile ${profileId}`)
+      const fallback = action === 'promote' ? 85 : 55
+      const requested = Number.isFinite(Number(params.score)) ? Math.round(Number(params.score)) : fallback
+      const newScore = Math.max(0, Math.min(100, requested))
+      await db
+        .prepare('UPDATE grants SET match_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND profile_id = ?')
+        .run(newScore, grantId, profileId)
+      return {
+        ok: true,
+        action,
+        grant_id: grantId,
+        profile_id: profileId,
+        title: row.title,
+        previous_score: row.match_score ?? null,
+        new_score: newScore,
+      }
+    }
+
+    if (action === 'dismiss') {
+      if (!params.grantId) throw new Error('grantId is required for dismiss')
+      const grantId = String(params.grantId)
+      const grantRow = await db.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ?').get(grantId, profileId)
+      if (!grantRow) throw new Error(`Grant ${grantId} not found for profile ${profileId}`)
+      // Protected user-progressed statuses are never auto-purged (canonical
+      // invariant); the owner must say force:true to override deliberately.
+      const protectedStatuses = new Set(['submitted', 'awarded', 'active', 'completed'])
+      if (protectedStatuses.has(String(grantRow.status || '').toLowerCase()) && params.force !== true) {
+        throw new Error(
+          `Grant ${grantId} is user-progressed (status=${grantRow.status}); pass force:true to dismiss it anyway.`,
+        )
+      }
+      let opportunityRow = null
+      if (grantRow.funding_opportunity_id) {
+        try {
+          opportunityRow = await db
+            .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+            .get(grantRow.funding_opportunity_id)
+        } catch { /* purged source opportunity — tombstone still records by fingerprint */ }
+      }
+      // Mirror the human DELETE /api/grants/:id path: children first, then the
+      // grant, then the sticky tombstone.
+      for (const sql of [
+        'DELETE FROM milestones WHERE grant_id = ?',
+        'DELETE FROM expenses WHERE grant_id = ?',
+        'DELETE FROM application_drafts WHERE grant_id = ?',
+        'UPDATE documents SET grant_id = NULL WHERE grant_id = ?',
+      ]) {
+        try { await db.prepare(sql).run(grantId) } catch { /* optional table absent in this env */ }
+      }
+      await db.prepare('DELETE FROM grants WHERE id = ?').run(grantId)
+      const { recordDismissal } = await import('./pipelineDismissals.js')
+      const tombstone = await recordDismissal(db, {
+        profileId,
+        grantRow,
+        opportunity: opportunityRow,
+        userId,
+        reason: 'owner_anya_dismissed',
+      })
+      return {
+        ok: true,
+        action,
+        grant_id: grantId,
+        profile_id: profileId,
+        title: grantRow.title,
+        dismissed: true,
+        tombstone_recorded: tombstone?.recorded === true,
+      }
+    }
+
+    if (action === 'restore') {
+      if (!params.opportunityId) throw new Error('opportunityId is required for restore')
+      const opportunity = await db
+        .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+        .get(String(params.opportunityId))
+      if (!opportunity) throw new Error(`Funding opportunity ${params.opportunityId} not found`)
+      const { clearDismissal } = await import('./pipelineDismissals.js')
+      const cleared = await clearDismissal(db, profileId, opportunity)
+      return {
+        ok: true,
+        action,
+        profile_id: profileId,
+        opportunity_id: String(params.opportunityId),
+        tombstones_cleared: cleared,
+        message: cleared > 0
+          ? 'Dismissal cleared — the matcher may re-add this opportunity on its next run.'
+          : 'No dismissal tombstone found for this opportunity/profile.',
+      }
+    }
+
+    throw new Error(`Unknown action "${action}" — expected promote, demote, dismiss, or restore.`)
+  },
+})
+
+// ── Anya requeues stuck Hamilton tasks (owner-gated) ──────────────────────────
+// Blocked/failed Hamilton application tasks previously required manual DB
+// surgery (or waiting for the missing-info auto-resume) to re-enter the run
+// queue. This puts a task back to 'ready' so the periodic Hamilton runner
+// re-picks it — using the SAME applicationTaskStore state machine (never raw
+// SQL against a status the CHECK constraint would reject).
+registerTool({
+  name: 'owner.requeue_hamilton_task',
+  description:
+    'OWNER ONLY. Re-queue a blocked, waiting, failed, or cancelled Hamilton application task (status back to "ready") so the Hamilton runner re-picks it. Refuses to requeue in-flight or terminal (submitted/completed) tasks. Use when the owner asks Anya to "re-kick", "retry", or "unstick" a Hamilton application.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      taskId: { type: 'string', description: 'application_tasks.id to requeue' },
+      reason: { type: 'string', description: 'Optional note recorded on the task event log' },
+    },
+    required: ['taskId'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const taskId = String(params.taskId)
+    const { ensureApplicationTaskSchema, getApplicationTask, updateApplicationTask, appendTaskEvent } = await import('./hamilton/applicationTaskStore.js')
+    await ensureApplicationTaskSchema(db)
+    const task = await getApplicationTask(db, taskId)
+    if (!task) throw new Error(`Hamilton task ${taskId} not found`)
+
+    const status = String(task.status || '')
+    const requeueable =
+      status === 'failed' ||
+      status === 'cancelled' ||
+      status === 'queued' ||
+      status.startsWith('blocked') ||
+      status.startsWith('waiting_for')
+    if (!requeueable) {
+      throw new Error(
+        `Task ${taskId} is in status "${status}" — only blocked/waiting/failed/cancelled/queued tasks can be requeued.`,
+      )
+    }
+
+    const updated = await updateApplicationTask(db, taskId, { status: 'ready' })
+    try {
+      await appendTaskEvent(db, {
+        taskId,
+        eventType: 'owner_requeued',
+        status: 'ready',
+        message: String(params.reason || 'Requeued by the owner via Anya (owner.requeue_hamilton_task).').slice(0, 500),
+        actorUserId: context?.ctx?.userId ?? null,
+        actorRole: 'owner',
+      })
+    } catch { /* event log is best-effort; the requeue itself already succeeded */ }
+    return {
+      ok: true,
+      task_id: taskId,
+      previous_status: status,
+      new_status: updated?.status || 'ready',
+      profile_id: task.profile_id ?? null,
+    }
+  },
+})
+
+// ── Anya targets a re-crawl at a weak profile (owner-gated) ───────────────────
+// Robert's coverage analyzer identifies weak/zero-result profiles and his
+// funding-trace bridge can seed new sources for them — but nothing re-CRAWLED
+// the profile afterwards without the owner manually running a crawler. This
+// tool closes the loop: seed sources from funded peers (Robert's trace bridge)
+// AND dispatch a real crawler job for the profile in one owner ask. With no
+// profileId it runs Robert's weakest-profiles sweep instead.
+registerTool({
+  name: 'owner.recrawl_weak_profile',
+  description:
+    'OWNER ONLY. Targeted coverage repair for a weak profile: seeds new funding sources via Robert\'s funding-trace bridge (funded peers → their funders → robert_source_candidates) and dispatches a fresh crawler job for the profile. Without a profileId, runs Robert\'s weakest-profiles auto-seed sweep (highest zero-result risk first). Use when the owner says a profile "has no matches", "needs another crawl", or asks Anya to fix weak coverage.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile to repair; omit to sweep the weakest profiles instead' },
+      crawlType: { type: 'string', description: 'Crawler job type to dispatch (default comprehensive)' },
+      maxEntities: { type: 'integer', minimum: 1, maximum: 15, description: 'Trace seeds per profile (default 5)' },
+      limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Sweep width when no profileId given (default 3)' },
+      skipCrawl: { type: 'boolean', description: 'Only seed sources; do not dispatch a crawler job.' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { upsertSourceCandidate } = await import('./robert/robertRunStore.js')
+    const { autoSeedTraceForProfile, autoSeedWeakestProfiles } = await import('./robert/robertFundingTraceBridge.js')
+    const maxEntities = Math.max(1, Math.min(15, Number(params?.maxEntities) || 5))
+
+    if (!params?.profileId) {
+      const sweep = await autoSeedWeakestProfiles(db, {
+        limit: Math.max(1, Math.min(20, Number(params?.limit) || 3)),
+        maxEntitiesPerProfile: maxEntities,
+        deps: { upsert: upsertSourceCandidate },
+      })
+      return { ok: true, mode: 'weakest_sweep', ...sweep }
+    }
+
+    const profileId = String(params.profileId)
+    const profile = await db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) throw new Error(`Profile ${profileId} not found`)
+
+    let seeded = null
+    let seedError = null
+    try {
+      seeded = await autoSeedTraceForProfile(db, {
+        profileId,
+        maxEntities,
+        deps: { upsert: upsertSourceCandidate },
+      })
+    } catch (err) {
+      // Seeding is best-effort widening; the re-crawl below is the core ask.
+      seedError = err?.message || String(err)
+    }
+
+    let crawl = null
+    if (params?.skipCrawl !== true) {
+      const { createCrawlerJob } = await import('./crawlerJobCreation.js')
+      const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
+      const creation = await createCrawlerJob(db, {
+        type: String(params?.crawlType || 'comprehensive'),
+        parameters: { profile_id: profileId },
+        requestedBy: context?.ctx?.userId ?? 'anya_owner',
+        buildSnapshot: false,
+      })
+      setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+      crawl = { job_id: creation.jobId, type: String(params?.crawlType || 'comprehensive') }
+    }
+
+    return {
+      ok: true,
+      mode: 'targeted',
+      profile_id: profileId,
+      seeded: seeded
+        ? { entities: seeded.seeds_traced ?? null, upserted: seeded.total_upserted ?? null, per_entity: seeded.per_entity ?? [] }
+        : null,
+      seed_error: seedError,
+      crawl,
+    }
+  },
+})
+
+// ── Anya proposes code fixes end-to-end (owner-gated) ─────────────────────────
+// The final leg of "Anya edits on her own": she can already FIND issues
+// (admin.code.autoRepair dry-run) and DRAFT a patch (code.suggestPatch); this
+// tool lets her PROPOSE it — dispatching .github/workflows/anya-code-fix-pr.yml
+// which applies the patch on a clean checkout, runs the corruption guard +
+// quality gate + release gates, opens a PR against main, and (optionally)
+// queues CI-gated auto-merge. Never a direct-to-main mutation: branch
+// protection's required checks always gate the merge.
+registerTool({
+  name: 'owner.propose_code_fix',
+  description:
+    'OWNER ONLY. Propose a code fix as a CI-gated pull request: dispatches the Anya Code Fix GitHub workflow with a unified diff. The workflow applies the patch, runs the release gates, opens a PR against main, and (by default) queues auto-merge that completes ONLY when the required CI checks pass. Pair with code.suggestPatch or admin.code.autoRepair to generate the diff. Refuses patches that touch protected paths (migrations, schema, workflows, auth, billing).',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      patch: { type: 'string', description: 'Unified diff to propose (from code.suggestPatch / admin.code.autoRepair)' },
+      title: { type: 'string', description: 'Short human summary for the PR title' },
+      automerge: { type: 'boolean', description: 'Queue CI-gated auto-merge (default true). false = leave the PR for manual review.' },
+    },
+    required: ['patch'],
+  },
+  handler: async (params, context) => {
+    const { dispatchCodeFixWorkflow } = await import('./anyaCodeFixDispatch.js')
+    const result = await dispatchCodeFixWorkflow({
+      patch: String(params.patch),
+      title: params?.title ? String(params.title) : '',
+      automerge: params?.automerge !== false,
+      fetchImpl: typeof context?.fetchImpl === 'function' ? context.fetchImpl : null,
+    })
+    if (!result.ok) {
+      // Surface the refusal/dispatch failure as a structured error the chat
+      // layer can show verbatim (validation reasons are owner-actionable).
+      throw new Error(result.error || 'Code-fix dispatch failed')
+    }
+    return result
+  },
+})

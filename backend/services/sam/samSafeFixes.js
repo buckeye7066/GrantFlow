@@ -103,6 +103,8 @@ export async function applySafeFix({ fixId, context = {}, params = {} } = {}) {
       return regenerateReadinessLog(params)
     case 'lint.eslint-fix-file':
       return eslintFixFile(params)
+    case 'queue.recover-stale-jobs':
+      return recoverStaleQueueJobs(params, context)
     default:
       return refusal(`fix id ${fixId} is registered but has no implementation.`)
   }
@@ -124,6 +126,14 @@ export function deriveSafeFixesFromFindings(findings = []) {
   const fixIds = ['docs.regenerate-readiness-log'] // always safe + idempotent
   const perFixParams = {}
   for (const f of Array.isArray(findings) ? findings : []) {
+    // A finding may nominate a registered safe fix explicitly (e.g. Sam's
+    // queue.staleJobs check sets evidence.safe_fix_id). Only fixes that exist
+    // in SAFE_FIX_REGISTRY with risk_level 'safe' are honoured — a finding can
+    // never invent authority, and applySafeFix re-enforces every gate anyway.
+    const nominated = f?.evidence?.safe_fix_id
+    if (typeof nominated === 'string' && findSafeFixById(nominated)?.risk_level === 'safe' && !fixIds.includes(nominated)) {
+      fixIds.push(nominated)
+    }
     if (!f?.safe_auto_fix_available) continue
     const file = (f.affected_files || []).find((p) => /^(src|backend)[/\\]/.test(String(p || '')))
     if (file && !perFixParams['lint.eslint-fix-file']) {
@@ -402,6 +412,56 @@ async function eslintFixFile({ file = '', _runEslint = runEslintCli } = {}) {
       ? `eslint --fix applied and verified clean on ${file}`
       : `${file} already lint-clean (no changes)`,
     evidence: { file, fix_status: fixRes.status, verify_status: verifyRes.status },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Safe fix: recover stale crawler queue jobs (DB-only, idempotent)
+// ---------------------------------------------------------------------------
+// Acts on Sam's queue.staleJobs finding. Delegates to the SAME
+// crawlerConcurrencyGuard cleanups the admin queue endpoint
+// (POST /api/admin/queue/recover-stale) invokes, so the recovery semantics are
+// identical no matter who triggers them: dead running jobs are marked
+// failed/partial (real progress preserved), ancient queued jobs are expired.
+// Never touches a file; a second run recovers 0 rows.
+async function recoverStaleQueueJobs(params = {}, context = {}) {
+  const db = context.db || params.db
+  if (!db || typeof db.prepare !== 'function') {
+    return refusal('queue.recover-stale-jobs: no database handle available on this run.')
+  }
+  // Injectable for tests (mirrors the _runEslint pattern above).
+  let cleanupRunning = params._cleanupStaleCrawlers
+  let cleanupQueued = params._cleanupStaleQueuedJobs
+  if (typeof cleanupRunning !== 'function' || typeof cleanupQueued !== 'function') {
+    try {
+      const guard = await import('../crawlerConcurrencyGuard.js')
+      cleanupRunning = cleanupRunning || guard.cleanupStaleCrawlers
+      cleanupQueued = cleanupQueued || guard.cleanupStaleQueuedJobs
+    } catch (err) {
+      return refusal(`queue.recover-stale-jobs: crawlerConcurrencyGuard unavailable (${err?.message || err})`)
+    }
+  }
+  try {
+    const recoveredRunning = Number(await cleanupRunning(db)) || 0
+    const recoveredQueued = Number(await cleanupQueued(db)) || 0
+    const total = recoveredRunning + recoveredQueued
+    return {
+      ok: true,
+      fix_id: 'queue.recover-stale-jobs',
+      applied: total > 0,
+      message: total > 0
+        ? `Recovered ${recoveredRunning} stale running and ${recoveredQueued} stale queued crawler job(s).`
+        : 'No stale crawler jobs to recover (already clean).',
+      evidence: { recovered_running: recoveredRunning, recovered_queued: recoveredQueued },
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      fix_id: 'queue.recover-stale-jobs',
+      applied: false,
+      message: maskSecrets(`stale-job recovery failed: ${err?.message || err}`),
+      evidence: { error: maskSecrets(String(err?.message || err)) },
+    }
   }
 }
 
