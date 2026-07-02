@@ -71,6 +71,13 @@ import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
+// Shared DST-correct ET wall-clock helpers for the in-process schedulers below.
+// CRITICAL: these clamp Node 20's ICU midnight quirk (hour "24" with
+// hour12:false). The previous inline copies read hour 24 during 00:00–00:59 ET,
+// which is ≥ any trigger hour, so a tick landing in that hour fired the whole
+// day's jobs at midnight (observed in prod: Sam's 05:00 sweep + Anya's 09:00
+// owner email both ran at ~00:05 ET after a midnight deploy).
+import { etNowParts, eligibleDayKey as etEligibleDayKey, eligibleWeekKey as etEligibleWeekKey } from './utils/etTime.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
 import { startHealthService } from './services/anyaHealthService.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
@@ -3551,31 +3558,14 @@ if (process.env.NODE_ENV !== 'test') {
 
   function scheduleWeeklyVerificationReport(dbInstance) {
     const MARKER = 'weekly_verify_last_run'
-    const nowEt = () => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York',
-        weekday: 'short',
-        hour: 'numeric',
-        hour12: false,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      }).formatToParts(new Date())
-      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
-      return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
-    }
+    // Shared ET clock (utils/etTime.js) — clamps the Node 20 midnight hour-"24"
+    // quirk that made these windows open at 00:xx ET instead of the trigger hour.
+    const nowEt = etNowParts
     // The Monday (YYYY-MM-DD, ET) whose 06:00 window has most recently opened.
     // Before Monday 06:00 this points at the PREVIOUS Monday, so the new week is
     // not yet eligible. Comparing this to the persisted marker gives both the
     // once-per-week guard and automatic catch-up for a missed window.
-    const eligibleWeekKey = ({ weekday, hour, ymd }) => {
-      const off = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday] ?? 0
-      const back = weekday === 'Mon' && hour < 6 ? 7 : off
-      const [Y, M, D] = ymd.split('-').map(Number)
-      const d = new Date(Date.UTC(Y, M - 1, D))
-      d.setUTCDate(d.getUTCDate() - back)
-      return d.toISOString().slice(0, 10)
-    }
+    const eligibleWeekKey = (parts) => etEligibleWeekKey(6, parts)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
@@ -3643,24 +3633,12 @@ if (process.env.NODE_ENV !== 'test') {
   function scheduleHamiltonWeeklyDigest(dbInstance) {
     const MARKER = 'hamilton_weekly_digest_last_run'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.HAMILTON_WEEKLY_DIGEST_HOUR_ET) || 8))
-    const nowEt = () => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-      }).formatToParts(new Date())
-      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
-      return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
-    }
+    // Shared ET clock (utils/etTime.js) — clamps the Node 20 midnight hour-"24"
+    // quirk that made these windows open at 00:xx ET instead of the trigger hour.
+    const nowEt = etNowParts
     // The Monday (YYYY-MM-DD, ET) whose TRIGGER_HOUR window has most recently
     // opened; before that on Monday it points at the previous Monday.
-    const eligibleWeekKey = ({ weekday, hour, ymd }) => {
-      const off = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday] ?? 0
-      const back = weekday === 'Mon' && hour < TRIGGER_HOUR ? 7 : off
-      const [Y, M, D] = ymd.split('-').map(Number)
-      const d = new Date(Date.UTC(Y, M - 1, D))
-      d.setUTCDate(d.getUTCDate() - back)
-      return d.toISOString().slice(0, 10)
-    }
+    const eligibleWeekKey = (parts) => etEligibleWeekKey(TRIGGER_HOUR, parts)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
@@ -3699,24 +3677,12 @@ if (process.env.NODE_ENV !== 'test') {
   function scheduleMondayPortalReminder(dbInstance) {
     const MARKER = 'monday_portal_reminder_last_run'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.MONDAY_PORTAL_REMINDER_HOUR_ET) || 9))
-    const nowEt = () => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-      }).formatToParts(new Date())
-      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
-      return { weekday: p.weekday, hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
-    }
+    // Shared ET clock (utils/etTime.js) — clamps the Node 20 midnight hour-"24"
+    // quirk that made these windows open at 00:xx ET instead of the trigger hour.
+    const nowEt = etNowParts
     // The Monday (YYYY-MM-DD, ET) whose TRIGGER_HOUR window has most recently
     // opened; before that on Monday it points at the previous Monday.
-    const eligibleWeekKey = ({ weekday, hour, ymd }) => {
-      const off = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }[weekday] ?? 0
-      const back = weekday === 'Mon' && hour < TRIGGER_HOUR ? 7 : off
-      const [Y, M, D] = ymd.split('-').map(Number)
-      const d = new Date(Date.UTC(Y, M - 1, D))
-      d.setUTCDate(d.getUTCDate() - back)
-      return d.toISOString().slice(0, 10)
-    }
+    const eligibleWeekKey = (parts) => etEligibleWeekKey(TRIGGER_HOUR, parts)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
@@ -3750,23 +3716,12 @@ if (process.env.NODE_ENV !== 'test') {
   function scheduleNightlyMaintenanceSweep(dbInstance) {
     const MARKER = 'nightly_maintenance_last_run'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.NIGHTLY_MAINTENANCE_HOUR_ET) || 4))
-    const nowEt = () => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', hour: 'numeric', hour12: false,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-      }).formatToParts(new Date())
-      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
-      return { hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
-    }
+    // Shared ET clock (utils/etTime.js) — clamps the Node 20 midnight hour-"24"
+    // quirk that made these windows open at 00:xx ET instead of the trigger hour.
+    const nowEt = etNowParts
     // The ET day (YYYY-MM-DD) whose TRIGGER_HOUR window has opened; before that
     // hour it points at the previous day so today isn't yet eligible.
-    const eligibleDayKey = ({ hour, ymd }) => {
-      if (hour >= TRIGGER_HOUR) return ymd
-      const [Y, M, D] = ymd.split('-').map(Number)
-      const d = new Date(Date.UTC(Y, M - 1, D))
-      d.setUTCDate(d.getUTCDate() - 1)
-      return d.toISOString().slice(0, 10)
-    }
+    const eligibleDayKey = (parts) => etEligibleDayKey(TRIGGER_HOUR, parts)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
@@ -3818,21 +3773,10 @@ if (process.env.NODE_ENV !== 'test') {
     const MARKER = 'sam_daily_code_sweep_last_run'
     const RUN_ID_KEY = 'sam_daily_code_sweep_run_id'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.SAM_DAILY_CODE_SWEEP_HOUR_ET) || 5))
-    const nowEt = () => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', hour: 'numeric', hour12: false,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-      }).formatToParts(new Date())
-      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
-      return { hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
-    }
-    const eligibleDayKey = ({ hour, ymd }) => {
-      if (hour >= TRIGGER_HOUR) return ymd
-      const [Y, M, D] = ymd.split('-').map(Number)
-      const d = new Date(Date.UTC(Y, M - 1, D))
-      d.setUTCDate(d.getUTCDate() - 1)
-      return d.toISOString().slice(0, 10)
-    }
+    // Shared ET clock (utils/etTime.js) — clamps the Node 20 midnight hour-"24"
+    // quirk that made these windows open at 00:xx ET instead of the trigger hour.
+    const nowEt = etNowParts
+    const eligibleDayKey = (parts) => etEligibleDayKey(TRIGGER_HOUR, parts)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
@@ -3871,21 +3815,10 @@ if (process.env.NODE_ENV !== 'test') {
   function scheduleAnyaDailyOwnerReport(dbInstance) {
     const MARKER = 'anya_daily_owner_report_last_run'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.ANYA_DAILY_REPORT_HOUR_ET) || 9))
-    const nowEt = () => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', hour: 'numeric', hour12: false,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-      }).formatToParts(new Date())
-      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
-      return { hour: Number(p.hour), ymd: `${p.year}-${p.month}-${p.day}` }
-    }
-    const eligibleDayKey = ({ hour, ymd }) => {
-      if (hour >= TRIGGER_HOUR) return ymd
-      const [Y, M, D] = ymd.split('-').map(Number)
-      const d = new Date(Date.UTC(Y, M - 1, D))
-      d.setUTCDate(d.getUTCDate() - 1)
-      return d.toISOString().slice(0, 10)
-    }
+    // Shared ET clock (utils/etTime.js) — clamps the Node 20 midnight hour-"24"
+    // quirk that made these windows open at 00:xx ET instead of the trigger hour.
+    const nowEt = etNowParts
+    const eligibleDayKey = (parts) => etEligibleDayKey(TRIGGER_HOUR, parts)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)

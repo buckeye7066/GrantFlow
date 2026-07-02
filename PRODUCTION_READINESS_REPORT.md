@@ -300,3 +300,34 @@ webhook raw-body handling and idempotent event processing are unchanged. Billing
 - static gates: env-examples, profile-scope, safe-sql, deployment-config all PASS
 - Dependabot reference PRs #815/#814 closed in favor of this change (dependabot's lockfile-only
   express bump had failing CI — the route-syntax fixes above were required).
+## 10. Addendum — owner comms & scheduling verification pass (2026-07-02)
+
+Verification-first sweep of the five owner-requested comms behaviors (evidence pulled from prod
+telemetry via read-only in-container queries):
+
+| # | Requirement | Existed? | Enabled in prod? | Evidence | Gap fixed in this PR |
+|---|---|---|---|---|---|
+| 1 | Yana→John daily leads→Drafts (cap 50, FROM Ellie@axiombiolabs.org, never auto-send) | Yes | Yes (`JOHN_ENABLED`/`JOHN_RUN_ON_SCHEDULE`, daily 05:30 ET) | `john_runs` scheduled rows 06-29/06-30/07-01; drafts carry `actual_from: Ellie@axiombiolabs.org`, `alias_send_supported: true`; cap defaults 50/24h; Ellie mailbox confirmed real via Graph (200 on `/users/Ellie@…/messages`) | Nothing to fix (volume is lead-supply-limited, not cap-limited). Owner-side: SendAs grant + `User.Read.All` remain optional polish (see §10.1) |
+| 2 | Sam nightly sweep → ONE Anya morning email (09:00 ET) | Yes | Yes (`SAM_DAILY_CODE_SWEEP_ENABLED`, `ANYA_DAILY_REPORT_ENABLED`) | `system_kv` markers + `sam_runs` (2026-07-02 run `sam-mr2zetbz-qsfnrz`); Anya summary `sent:true, to: owner` — exactly one/day via day-key marker | **Midnight-hour bug fixed**: Node 20 ICU renders midnight as hour `"24"`, so a tick in 00:00–00:59 ET opened the whole day's windows (Sam 05:00 sweep + Anya "09:00" email both fired ~00:05 ET on 2026-07-02). New `backend/utils/etTime.js` clamps it; all six server.js ET schedulers now share it. `SAM_RUN_ON_SCHEDULE=false` is INTENTIONAL (retired legacy 04:00-UTC cron superseded by the 05:00 ET sweep) — left off |
+| 3 | Weekly Monday 09:00 ET per-ACTIVE-profile update, AUTO-SEND | Partially (Hamilton weekly digest Mon 08:00 ET — but DRAFT-only into owner mailbox) | Yes (ran 2026-06-29: 19 drafted, 0 errors) | `system_kv` `hamilton_weekly_digest_last_run(_summary)` | Added `HAMILTON_WEEKLY_DIGEST_DELIVERY=send` mode: auto-sends each active profile's digest via the comms channel (Resend), audited in `comms_broadcasts(_recipients)` kind `weekly_digest`. Default stays `draft`; prod env set to `send` + hour `9`. "Active" = profile status not deleted/suspended, excluding `agent:amy` synthetics |
+| 4 | Friday 09:00 ET invoices; per-profile weekly / every-other-week / monthly cadence | Yes (weekly Fri + semimonthly + monthly-on-the-1st; `billing_cadence` field + `PUT /api/billing/me/:id/cadence`) | Yes (`BILLING_AUTOMATION_ENABLED=true`) | `billing_invoices`: 19 sent for `weekly:2026-06-26`; all 23 accounts `weekly` | Added `biweekly` (every OTHER Friday 09:00 ET, parity anchored to persisted `billing_anchor_at` / fixed epoch `2026-01-02` — redeploy-stable); `monthly` moved to FIRST FRIDAY 09:00 ET (0 monthly accounts in prod → no period-key collisions); cadence select added to the Billing page (was API-only) |
+| 5 | Auto reminders for unpaid/overdue invoices | Yes (dunning: second notice ≥3 days unpaid; suspend after one full billing cycle, only when a payment path exists) | Yes (same gate as #4) | `billing_invoices`: `second_notice` row 2026-06-26; 10 `suspended` from `weekly:2026-06-19` | Nothing to fix; `cadenceCycleDays` already handles `biweekly` (14d) |
+
+### 10.1 Owner-side (cannot be done from this repo)
+
+- **Send-as-Ellie at MANUAL send time**: Graph accepts `from: Ellie@axiombiolabs.org` on draft
+  creation today (drafts verified). For the manual send from dr.johnwhite's Drafts to go out as
+  Ellie, Exchange needs a Send-As grant: M365 admin center → Users → Ellie → Mail → *Send as*
+  → add `dr.johnwhite@axiombiolabs.org` (or PowerShell:
+  `Add-RecipientPermission "Ellie@axiombiolabs.org" -Trustee "dr.johnwhite@axiombiolabs.org" -AccessRights SendAs`).
+- **App-registration `User.Read.All` (application) + admin consent** would let John's alias
+  verifier read the mailbox object (today its directory-lookup step 403s — cosmetic; drafting works).
+
+### 10.2 Idempotency / cadence design decisions
+
+- All schedulers remain persisted-checkpoint (Postgres `system_kv` day/week markers + scheduler
+  locks + hourly catch-up); invoices are unique on `(profile_id, period_key)` — Railway
+  mid-schedule redeploys can neither skip nor double-send.
+- Biweekly parity is a pure function of the persisted anchor (never "now"), so restarts cannot
+  flip which Friday an account is billed.
+- Do-not-touch items preserved: matching thresholds untouched; John remains draft-only.
