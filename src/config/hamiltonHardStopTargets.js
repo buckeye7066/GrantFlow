@@ -254,6 +254,16 @@ export const HARD_STOP_TARGETS = Object.freeze({
     ],
     href: (b) => createPageUrl("Pipeline", { profile_id: b?.profile_id }),
   },
+  portal_unreachable: {
+    actionLabel: "Verify portal link",
+    fixedWhere: "Pipeline → flagged application",
+    instructions: [
+      "Hamilton could not reach the funder's website — the site may be down or the saved link may be outdated.",
+      "Check the application URL; update it if the funder moved, or remove the source if the site is gone.",
+      "Retry Hamilton once the link loads in your browser.",
+    ],
+    href: (b) => createPageUrl("Pipeline", { profile_id: b?.profile_id }),
+  },
   unknown_application_method: {
     actionLabel: "Review contact packet",
     fixedWhere: "Pipeline → flagged application",

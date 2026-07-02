@@ -27,6 +27,7 @@ import {
   profilesEndpointFor,
   selectInterviewCandidates,
   snoozeProfile,
+  snoozeProfiles,
 } from '../loginGapInterviewLogic.js'
 import { isGapGateEnabled } from '@/lib/gapGateFlag'
 
@@ -125,6 +126,13 @@ describe('LoginGapInterviewLauncher decision logic', () => {
     expect(isProfileSnoozed('p2', storage)).toBe(false)
   })
 
+  it('snoozeProfiles snoozes every id at once (queue-wide close)', () => {
+    const storage = fakeStorage()
+    snoozeProfiles(['p1', 'p2', undefined, null], storage)
+    expect(isProfileSnoozed('p1', storage)).toBe(true)
+    expect(isProfileSnoozed('p2', storage)).toBe(true)
+  })
+
   it('only interviews plans that actually have questions', () => {
     expect(planNeedsInterview(GAPPED_PLAN())).toBe(true)
     expect(planNeedsInterview(COMPLETE_PLAN)).toBe(false)
@@ -187,6 +195,31 @@ describe('LoginGapInterviewLauncher component', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('login-gap-interview-dialog')).toBeNull(),
     )
+  })
+
+  it('a close GESTURE (Escape) ends the whole interview — it never opens the next profile', async () => {
+    mockApi({
+      profiles: [
+        { id: 'p1', display_name: 'Robert' },
+        { id: 'p2', display_name: 'Anastasia' },
+      ],
+      plans: { p1: GAPPED_PLAN('state'), p2: GAPPED_PLAN('county') },
+    })
+    renderLauncher()
+
+    expect(await screen.findByText('Which state do you live in?')).toBeTruthy()
+
+    // Escape must END the interview session — the trapped-in-modal-cycles bug
+    // was close gestures advancing to the next profile's dialog instead.
+    fireEvent.keyDown(screen.getByTestId('login-gap-interview-dialog'), { key: 'Escape' })
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('login-gap-interview-dialog')).toBeNull(),
+    )
+    expect(screen.queryByText('Which county do you live in?')).toBeNull()
+    // Every queued profile is snoozed for the session, not just the visible one.
+    expect(window.sessionStorage.getItem(`${SNOOZE_KEY_PREFIX}p1`)).toBeTruthy()
+    expect(window.sessionStorage.getItem(`${SNOOZE_KEY_PREFIX}p2`)).toBeTruthy()
   })
 
   it('admin cap: fetches only email-linked profiles via scope=mine', async () => {

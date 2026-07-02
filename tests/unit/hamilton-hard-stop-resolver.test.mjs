@@ -81,11 +81,21 @@ function resetCaches() {
 // ── classifier ──────────────────────────────────────────────────────
 
 describe('hamiltonBlockerClassifier', () => {
-  it('exports the 16 spec categories incl. distinct signature/attestation', () => {
-    assert.equal(BLOCKER_CATEGORIES.length, 16)
+  it('exports the 17 spec categories incl. distinct signature/attestation', () => {
+    assert.equal(BLOCKER_CATEGORIES.length, 17)
     assert.ok(BLOCKER_CATEGORIES.includes('wet_signature_required'))
     assert.ok(BLOCKER_CATEGORIES.includes('digital_signature_required'))
     assert.ok(BLOCKER_CATEGORIES.includes('legal_attestation_required'))
+    assert.ok(BLOCKER_CATEGORIES.includes('portal_unreachable'))
+  })
+
+  it('classifies network/navigation failures as portal_unreachable, never unknown', () => {
+    // Engine kind (new engine catch branch)
+    assert.equal(classifyBlocker({ kind: 'portal_unreachable' }).category, 'portal_unreachable')
+    // Raw Playwright/Chromium error text (legacy engine_error payloads)
+    assert.equal(classifyBlocker({ text: 'page.goto: net::ERR_NAME_NOT_RESOLVED at https://1stresponderchildren.org/apply' }).category, 'portal_unreachable')
+    assert.equal(classifyBlocker({ detail: 'getaddrinfo ENOTFOUND deadfunder.org' }).category, 'portal_unreachable')
+    assert.equal(classifyBlocker({ detail: 'page.goto: Timeout 30000ms exceeded.' }).category, 'portal_unreachable')
   })
 
   it('classifies preflight inputs', () => {
@@ -380,6 +390,23 @@ describe('hamiltonHardStopResolver', () => {
     const d = await resolveBlocker(db, ctx(), { kind: 'login' })
     assert.equal(d.classification.category, 'login_required')
     assert.equal(d.outcome, 'escalated')
+  })
+
+  it('portal_unreachable → blocks with the human-readable detail, not raw error text', async () => {
+    const db = makeDb()
+    const detail = 'Hamilton could not reach 1stresponderchildren.org — the site may be down or the saved portal link may be outdated.'
+    const d = await resolveBlocker(db, ctx(), { kind: 'portal_unreachable', detail })
+    assert.equal(d.classification.category, 'portal_unreachable')
+    assert.equal(d.outcome, 'blocked')
+    assert.equal(d.detail, detail)
+    assert.ok(!/net::|page\.goto/i.test(d.detail))
+  })
+
+  it('legacy raw net-error text never hits the unclassified default', async () => {
+    const db = makeDb()
+    const d = await resolveBlocker(db, ctx(), { text: 'page.goto: net::ERR_NAME_NOT_RESOLVED at https://1stresponderchildren.org/' })
+    assert.equal(d.classification.category, 'portal_unreachable')
+    assert.equal(d.outcome, 'blocked')
   })
 
   it('login → reuses saved session when authorized and present', async () => {

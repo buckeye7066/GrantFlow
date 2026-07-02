@@ -38,6 +38,18 @@ export function snoozeProfile(profileId, storage = defaultStorage()) {
 }
 
 /**
+ * Snooze EVERY listed profile at once. Used when the user closes the login
+ * interview dialog (Escape / X / outside-click): a close gesture must end the
+ * whole interview for the session — it must never surface the next profile's
+ * dialog, or the user is trapped walking the entire queue to get out.
+ */
+export function snoozeProfiles(profileIds, storage = defaultStorage()) {
+  for (const id of Array.isArray(profileIds) ? profileIds : []) {
+    snoozeProfile(id, storage)
+  }
+}
+
+/**
  * Which profile-list endpoint to probe for the login interview.
  *
  * ADMIN CAP (deliberate): an admin's plain GET /api/profiles returns EVERY

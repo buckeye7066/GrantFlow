@@ -246,7 +246,7 @@ node --test tests/unit/hamilton-automation.test.mjs
 
 Hamilton never gives up at the first portal hiccup. Every detected blocker
 flows through the **Hard-Stop Resolver**, which classifies the blocker
-into one of sixteen canonical categories and tries an approved
+into one of seventeen canonical categories and tries an approved
 resolution strategy *before* asking the user.
 
 | Category | Resolver strategy | Lawful guard |
@@ -267,6 +267,7 @@ resolution strategy *before* asking the user.
 | final_review_screen | proceed automatically — Autopilot does not stop here | n/a |
 | deadline_expired | mark task blocked + suggest related opportunities | n/a |
 | unknown_application_method | generate funder contact packet | n/a |
+| portal_unreachable | mark task blocked with a human-readable "site unreachable / link may be dead" alert (DNS, connection, navigation-timeout failures) | never surface raw Playwright errors to users |
 
 ### Persistence
 

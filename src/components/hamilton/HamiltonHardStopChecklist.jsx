@@ -115,13 +115,18 @@ export default function HamiltonHardStopChecklist({ profileId }) {
   // Hidden for non-admins / when the endpoint is unreachable.
   if (loadFailed) return null
 
+  // With zero open stops the card must read as an all-clear status, not a
+  // warning — an amber "hard stops to clear" header above "No open hard stops"
+  // is contradictory.
+  const hasStops = blockers.length > 0
+
   return (
-    <div className="rounded-lg border border-amber-200 bg-white mb-4 overflow-hidden">
-      <div className="flex items-center justify-between gap-2 px-4 py-3 bg-amber-50 border-b border-amber-200">
-        <h2 className="text-sm font-semibold text-amber-900 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4" />
-          Hamilton hard stops to clear
-          <Badge variant="outline" className="ml-1">{blockers.length}</Badge>
+    <div className={`rounded-lg border bg-white mb-4 overflow-hidden ${hasStops ? "border-amber-200" : "border-slate-200"}`}>
+      <div className={`flex items-center justify-between gap-2 px-4 py-3 border-b ${hasStops ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+        <h2 className={`text-sm font-semibold flex items-center gap-2 ${hasStops ? "text-amber-900" : "text-slate-700"}`}>
+          {hasStops ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+          {hasStops ? "Hamilton hard stops to clear" : "Hamilton hard stops"}
+          {hasStops && <Badge variant="outline" className="ml-1">{blockers.length}</Badge>}
         </h2>
         <div className="flex items-center gap-1">
           {blockers.length > 0 && (

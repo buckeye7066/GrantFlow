@@ -1478,7 +1478,7 @@ async function runAutopilotPathway(db, {
       profileUserId: task.user_id,
       type: 'hamilton_failed',
       title: 'Hamilton Autopilot failed',
-      message: engineResult.blocker_detail || 'See the task audit trail.',
+      message: friendlyEngineFailureMessage(engineResult),
       severity: 'error',
       data: { task_id: task.id, run_id: run.id },
     })
@@ -1491,7 +1491,7 @@ async function runAutopilotPathway(db, {
       userType: null,
       adminType: 'hamilton_admin_task_failed',
       title: 'Hamilton Autopilot failed',
-      message: engineResult.blocker_detail || 'See the task audit trail for details.',
+      message: friendlyEngineFailureMessage(engineResult),
       severity: 'error',
       data: { run_id: run.id, blocker_kind: engineResult.blocker_kind },
     })
@@ -1503,6 +1503,19 @@ async function runAutopilotPathway(db, {
     autopilot_run: run.id,
     autopilot_result: engineResult,
   }
+}
+
+// User-facing text for a failed autopilot run. Kinds the engine already
+// describes in plain language (portal_unreachable, no_browser preflights) pass
+// through; a raw engine_error (Playwright/Chromium internals) is summarized —
+// the full text stays in the task audit trail, not in a user notification.
+function friendlyEngineFailureMessage(engineResult) {
+  const detail = engineResult?.blocker_detail || ''
+  if (engineResult?.blocker_kind === 'engine_error') {
+    const firstLine = detail.split('\n')[0].slice(0, 160)
+    return `Hamilton hit a technical problem on this portal and stopped safely. The task audit trail has the full details.${firstLine ? ` (${firstLine})` : ''}`
+  }
+  return detail || 'See the task audit trail.'
 }
 
 function blockerNotificationType(kind) {
