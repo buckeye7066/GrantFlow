@@ -31,12 +31,25 @@ function safeParseArray(val) {
 // Entity type indicators extracted from text
 // ---------------------------------------------------------------------------
 const ENTITY_PATTERNS = [
-  { type: 'student', patterns: ['student', 'undergraduate', 'graduate', 'college student', 'k-12', 'high school', 'university student', 'enrolled student'] },
+  // 'freshman'/'sophomore'/'dual enrollment': unambiguous student words that
+  // were missing — "MTSU Freshman Guaranteed Scholarships" ("academic merit
+  // scholarship ... for first-time incoming freshmen") inferred NO student type
+  // (verified in prod, 2026-07-01). NOTE: 'scholarship' itself must NOT be a
+  // student pattern — professional-development scholarships (e.g. NAEMT
+  // EMT-Paramedic) would become student-ONLY and hard-reject the working
+  // professionals they exist for.
+  { type: 'student', patterns: ['student', 'undergraduate', 'graduate', 'college student', 'k-12', 'high school', 'university student', 'enrolled student', 'freshman', 'freshmen', 'sophomore', 'dual enrollment'] },
   { type: 'veteran', patterns: ['veteran', 'military', 'armed forces', 'service member', 'vets', 'active duty', 'military personnel'] },
   { type: 'nonprofit', patterns: ['nonprofit', 'non-profit', '501(c)(3)', '501c3', 'charitable organization', 'charity', 'faith-based', 'church', 'religious organization', 'ministry', 'faith organization', 'volunteer fire', 'fire department', 'fire station', 'ems organization', 'first responder organization', 'rescue squad', 'emergency services organization'] },
   { type: 'business', patterns: ['business', 'small business', 'entrepreneur', 'startup', 'self-employed', 'sole proprietor', 'llc', 'corporation', 'microenterprise', 'business owner', 'for-profit'] },
   { type: 'individual', patterns: ['individual', 'person', 'resident', 'household', 'family', 'low-income', 'adult', 'senior'] },
-  { type: 'researcher', patterns: ['researcher', 'academic', 'faculty', 'scientist', 'investigator', 'principal investigator', 'research institution', 'university'] },
+  // NOT 'academic'/'university': those words are pervasive in ordinary student
+  // scholarship copy ("academic merit", any university-sponsored award), and as
+  // researcher indicators they typed such awards researcher-ONLY → hard reject
+  // for students. Genuinely institutional/research-only calls are still caught
+  // by INSTITUTIONAL_PATTERNS / RESEARCH_ONLY_PATTERNS below (which retain
+  // 'academic institution', 'university grants', 'research institution', …).
+  { type: 'researcher', patterns: ['researcher', 'faculty', 'scientist', 'investigator', 'principal investigator', 'research institution', 'postdoc', 'postdoctoral'] },
   { type: 'artist', patterns: ['artist', 'creative', 'musician', 'performer', 'writer', 'filmmaker', 'visual artist'] },
   { type: 'caregiver', patterns: ['caregiver', 'parent', 'guardian', 'foster parent', 'foster care', 'family caregiver'] },
 ]
