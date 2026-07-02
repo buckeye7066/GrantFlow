@@ -48,7 +48,7 @@ jobs:
 
       - name: Checkout main
         if: steps.guard.outputs.proceed == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
