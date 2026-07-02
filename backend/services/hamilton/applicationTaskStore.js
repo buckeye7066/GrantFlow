@@ -392,6 +392,11 @@ export async function ensureApplicationTask(db, {
   agentPersonaVersion = 'hamilton-mba-2026',
   initialStatus = 'queued',
   currentStep = null,
+  // Effective batch auto-submit option (options.allow_auto_submit on
+  // automateSelected). Persisted so the stored allow_auto_submit column
+  // reflects runtime truth instead of silently staying at its FALSE default.
+  // `undefined` = caller did not specify → leave the stored value untouched.
+  allowAutoSubmit = undefined,
 } = {}) {
   if (!profileId) throw new Error('profileId required')
   if (!opportunityId && !grantId) throw new Error('opportunityId or grantId required')
@@ -430,6 +435,12 @@ export async function ensureApplicationTask(db, {
       if (currentPipelineStage && existing.current_pipeline_stage !== currentPipelineStage) {
         patch.push('current_pipeline_stage = ?'); params.push(currentPipelineStage)
       }
+      // Keep allow_auto_submit in sync with the batch that (re-)enqueued the
+      // task: an idempotent re-POST that resumes a task must refresh the flag
+      // so the stored column keeps reflecting the runtime option.
+      if (allowAutoSubmit !== undefined && Boolean(existing.allow_auto_submit) !== Boolean(allowAutoSubmit)) {
+        patch.push('allow_auto_submit = ?'); params.push(allowAutoSubmit ? 1 : 0)
+      }
       if (patch.length > 0) {
         params.push(existing.id)
         const safeNowSql = nowSqlLiteral(db)
@@ -446,8 +457,8 @@ export async function ensureApplicationTask(db, {
         `INSERT INTO application_tasks
            (id, user_id, profile_id, opportunity_id, grant_id, portal_id, application_id,
             university_application_id, automation_type, selected_from_stage, current_pipeline_stage,
-            agent_persona_version, assigned_agent, status, current_step, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hamilton', ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})`,
+            agent_persona_version, assigned_agent, status, current_step, allow_auto_submit, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'hamilton', ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})`,
       )
       .run(
         id,
@@ -464,6 +475,7 @@ export async function ensureApplicationTask(db, {
         agentPersonaVersion,
         initialStatus,
         currentStep,
+        allowAutoSubmit === undefined ? 0 : (allowAutoSubmit ? 1 : 0),
       )
 
     await appendTaskEvent(db, {

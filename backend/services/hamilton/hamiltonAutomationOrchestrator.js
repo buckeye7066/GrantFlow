@@ -333,6 +333,10 @@ export async function automateSingleSource(db, {
     agentPersonaVersion: PERSONA_VERSION,
     initialStatus,
     currentStep: classification.automation_type,
+    // Persist the batch's effective auto-submit option so the stored column
+    // reflects runtime truth (an idempotent re-POST refreshes it). undefined
+    // when the batch didn't specify → stored value left untouched.
+    allowAutoSubmit: options?.allow_auto_submit === undefined ? undefined : Boolean(options.allow_auto_submit),
   })
 
   await appendTaskEvent(db, {
