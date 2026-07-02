@@ -226,21 +226,53 @@ export async function runHealthCheck(db) {
 
   // 5. Deduplicate global catalog — merge exact title+sponsor+state duplicates
   try {
-    // Find duplicate groups (profile_id IS NULL only — never touch profile-scoped records)
-    const dupGroups = await db
-      .prepare(
-        `SELECT title, sponsor, state, COUNT(*) as cnt, MIN(id) as keep_id
-         FROM funding_opportunities
-         WHERE profile_id IS NULL
-         GROUP BY title, sponsor, state
-         HAVING COUNT(*) > 1
-         LIMIT 200`,
-      )
-      .all()
+    status.dedup_opportunities = await dedupGlobalCatalogOpportunities(db)
+  } catch (err) {
+    log.error('[AnyaHealth] dedup_opportunities error:', err.message)
+    status.errors.push({ task: 'dedup_opportunities', error: err.message })
+    status.dedup_opportunities = { error: err.message }
+  }
 
-    const isPostgresDup = db?.dialect === 'postgres'
-    let removed = 0
-    for (const group of dupGroups) {
+  // 6. Auto-repair scan — non-critical dry-run code quality check
+  try {
+    const repairReport = await runAutoRepair(db, { dryRun: true })
+    status.auto_repair_scan = {
+      scannedFiles: repairReport.scannedFiles,
+      empty_catch: repairReport.findings.empty_catch.length,
+      console_log: repairReport.findings.console_log.length,
+      profile_bleed: repairReport.findings.profile_bleed.length,
+    }
+  } catch (err) {
+    // Non-critical — never block the health check
+    status.auto_repair_scan = { error: err.message }
+  }
+
+  status.completed_at = new Date().toISOString()
+  status.duration_ms = Date.now() - startTime
+  return status
+}
+
+/**
+ * Step 5, extracted: merge exact title+sponsor+state duplicates in the GLOBAL
+ * catalog (profile_id IS NULL only — never touches profile-scoped records).
+ * Exported for direct testing; runHealthCheck calls it as step 5.
+ */
+export async function dedupGlobalCatalogOpportunities(db) {
+  // Find duplicate groups (profile_id IS NULL only — never touch profile-scoped records)
+  const dupGroups = await db
+    .prepare(
+      `SELECT title, sponsor, state, COUNT(*) as cnt, MIN(id) as keep_id
+       FROM funding_opportunities
+       WHERE profile_id IS NULL
+       GROUP BY title, sponsor, state
+       HAVING COUNT(*) > 1
+       LIMIT 200`,
+    )
+    .all()
+
+  const isPostgresDup = db?.dialect === 'postgres'
+  let removed = 0
+  for (const group of dupGroups) {
       try {
         // Prefer the duplicate with a valid application_url; fall back to MIN(id)
         // PostgreSQL: use IS NOT DISTINCT FROM for null-safe equality (avoids untyped parameter error)
@@ -281,15 +313,48 @@ export async function runHealthCheck(db) {
         // Reassign dependent grants to the kept opportunity BEFORE deleting dupes,
         // otherwise the FK grants_funding_opportunity_id_fkey blocks the DELETE.
         // Guarded by IN (...) so we only touch rows pointing at ids we're about to remove.
+        //
+        // COLLISION-AWARE: ux_grants_profile_opportunity forbids a profile
+        // holding the same opportunity twice, so a blanket reassign threw
+        // "duplicate key" whenever a profile already had a grant on keepId —
+        // which skipped the WHOLE group forever (the recurring
+        // "dedup reassign grants failed" prod warning). Now:
+        //   1) reassign only rows that will NOT collide (profile-less rows
+        //      always reassign; the partial index ignores them), then
+        //   2) DETACH the remaining colliders (funding_opportunity_id = NULL).
+        //      A collider is by definition a second pipeline row for an
+        //      opportunity the profile already holds via keepId, and the row
+        //      it points at is about to be deleted anyway — detaching keeps
+        //      the user's grant row 100% intact (never auto-purged, per
+        //      canonical rules) while unblocking the catalog delete.
         const removeIds = toRemove.map((r) => r.id)
         const placeholders = removeIds.map(() => '?').join(', ')
         try {
-          await db
+          // Row-by-row (not one set-based UPDATE): a single UPDATE evaluates
+          // NOT EXISTS against the statement-start snapshot, so a profile
+          // holding grants on TWO dupes would reassign both and still violate
+          // the index mid-statement. Counts here are tiny (dupe groups).
+          const candidates = await db
             .prepare(
-              `UPDATE grants SET funding_opportunity_id = ?
+              `SELECT id, profile_id FROM grants
                WHERE funding_opportunity_id IN (${placeholders})`,
             )
-            .run(keepId, ...removeIds)
+            .all(...removeIds)
+          const holders = await db
+            .prepare(`SELECT profile_id FROM grants WHERE funding_opportunity_id = ? AND profile_id IS NOT NULL`)
+            .all(keepId)
+          const profilesOnKeep = new Set(holders.map((h) => h.profile_id))
+          for (const cand of candidates) {
+            const collides = cand.profile_id !== null
+              && cand.profile_id !== undefined
+              && profilesOnKeep.has(cand.profile_id)
+            if (collides) {
+              await db.prepare(`UPDATE grants SET funding_opportunity_id = NULL WHERE id = ?`).run(cand.id)
+            } else {
+              await db.prepare(`UPDATE grants SET funding_opportunity_id = ? WHERE id = ?`).run(keepId, cand.id)
+              if (cand.profile_id !== null && cand.profile_id !== undefined) profilesOnKeep.add(cand.profile_id)
+            }
+          }
         } catch (reassignErr) {
           // If reassignment itself fails, skip the delete for this group rather
           // than attempt a DELETE that will surely fail on the same FK.
@@ -323,35 +388,12 @@ export async function runHealthCheck(db) {
         // Non-fatal: log and continue
         log.error('[AnyaHealth] dedup delete error:', delErr.message)
       }
-    }
-
-    status.dedup_opportunities = { groups_found: dupGroups.length, removed }
-    if (removed > 0) {
-      log.info(`[AnyaHealth] Deduped ${removed} duplicate global catalog entries across ${dupGroups.length} groups`)
-    }
-  } catch (err) {
-    log.error('[AnyaHealth] dedup_opportunities error:', err.message)
-    status.errors.push({ task: 'dedup_opportunities', error: err.message })
-    status.dedup_opportunities = { error: err.message }
   }
 
-  // 6. Auto-repair scan — non-critical dry-run code quality check
-  try {
-    const repairReport = await runAutoRepair(db, { dryRun: true })
-    status.auto_repair_scan = {
-      scannedFiles: repairReport.scannedFiles,
-      empty_catch: repairReport.findings.empty_catch.length,
-      console_log: repairReport.findings.console_log.length,
-      profile_bleed: repairReport.findings.profile_bleed.length,
-    }
-  } catch (err) {
-    // Non-critical — never block the health check
-    status.auto_repair_scan = { error: err.message }
+  if (removed > 0) {
+    log.info(`[AnyaHealth] Deduped ${removed} duplicate global catalog entries across ${dupGroups.length} groups`)
   }
-
-  status.completed_at = new Date().toISOString()
-  status.duration_ms = Date.now() - startTime
-  return status
+  return { groups_found: dupGroups.length, removed }
 }
 
 /**
