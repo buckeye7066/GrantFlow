@@ -688,7 +688,13 @@ async function _describeAutopilotStateForPortal(db, { profileId, portalHost, has
     if (!status?.has_passphrase) {
       return { state: AUTOPILOT_STATE.NEEDS_USER, detail: 'Set a master passphrase so Hamilton can provision a login.' }
     }
-    if (!status?.is_unlocked) {
+    // `is_unlocked` reflects only the in-process runtime cache — after a restart
+    // it is false even when the owner enabled AUTONOMOUS UNLOCK (#732), whose
+    // escrowed key lets ensureUnlocked() open the vault without a human. Treat
+    // an escrowed vault as effectively unlocked so the dashboard doesn't show a
+    // false "vault locked" (and Sam doesn't page the owner) for a vault
+    // Hamilton can open on her own.
+    if (!status?.is_unlocked && !status?.autonomous_unlock) {
       return { state: AUTOPILOT_STATE.VAULT_LOCKED, detail: 'Unlock the master passphrase so Hamilton can provision a login.' }
     }
     // Passphrase set + unlocked + no existing login + not identity-proofed →

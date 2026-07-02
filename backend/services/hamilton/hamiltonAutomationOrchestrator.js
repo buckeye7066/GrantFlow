@@ -43,7 +43,12 @@ import {
   setMissingInfo,
 } from './applicationTaskStore.js'
 import { generateAndSavePacket } from './hamiltonApplicationPacketGenerator.js'
-import { generateMbaProposal, saveProposalDocument } from './hamiltonFullProposalGenerator.js'
+import {
+  generateMbaProposal,
+  saveProposalDocument,
+  buildPortalNarrativeAnswers,
+  buildPacketNarrativeOverrides,
+} from './hamiltonFullProposalGenerator.js'
 import {
   emitHamiltonNotificationToProfileAndAdmins,
   emitHamiltonLifecycleAlerts,
@@ -398,6 +403,128 @@ async function reload(db, taskId) {
   return await getApplicationTask(db, taskId)
 }
 
+/**
+ * SIGNUP-INSTEAD-OF-PARKING recovery for a login-blocked portal run.
+ *
+ * Runs the Portal Autopilot Identity brain (runAutopilotIdentityForPortal) for
+ * the blocked host — which provisions a unique master-wrapped login and drives
+ * the account-signup adapter where the portal lawfully allows it — then
+ * re-reads the vault. Returns `{ outcome, credential }`; a non-null credential
+ * means the caller can retry the engine run and log in. Compliance rails live
+ * IN the brain (identity-proofed hosts, ToS-forbidden portals, CAPTCHA/2FA
+ * walls all hand off to humans); this helper never weakens them. A credential
+ * that is vault-locked or still pending registration is NOT usable and is
+ * filtered out. Never throws.
+ */
+export async function attemptPortalSignupRecovery(db, {
+  profileId, userId = 'system_admin_token', taskId = null, url, profile = null,
+  _identityRunner = null, _credentialFetcher = null,
+} = {}) {
+  try {
+    const runIdentity = _identityRunner
+      || (await import('./hamiltonPortalAutopilotIdentity.js')).runAutopilotIdentityForPortal
+    const outcome = await runIdentity(db, {
+      profileId, userId, portalHost: url, loginUrl: url, profile,
+    })
+    if (taskId) {
+      await appendTaskEvent(db, {
+        taskId, eventType: 'progress', status: 'filling_portal', step: 'portal_signup',
+        message: `No saved login for this portal — Hamilton ran the account-signup path: ${outcome.state}${outcome.detail ? ` (${outcome.detail})` : ''}`,
+        actorUserId: userId, actorRole: 'agent',
+        details: { state: outcome.state, host: outcome.host, blocker: outcome.blocker || null },
+      }).catch(() => {})
+    }
+    if (outcome.state !== 'auto_provisioned' && outcome.state !== 'has_existing_credentials') {
+      return { outcome, credential: null }
+    }
+    const fetchCredential = _credentialFetcher || getDecryptedCredentialWithFallback
+    let credential = await fetchCredential(db, { profileId, portalHost: url }).catch(() => null)
+    if (credential?.vault_locked || credential?.pending_registration) credential = null
+    return { outcome, credential }
+  } catch (err) {
+    // Signup is additive; a failure falls through to the caller's normal backoff.
+    console.warn(`[hamiltonOrchestrator] portal signup path failed (non-fatal): ${err?.message || err}`)
+    return { outcome: null, credential: null }
+  }
+}
+
+/**
+ * Draft the full MBA-level proposal for a task (best-effort — NEVER throws;
+ * a drafting failure must never break the calling pathway). Saves the drafted
+ * proposal to the profile's Documents, attaches it to the task, and returns
+ * the raw proposal so callers can reuse its sections:
+ *   - the DOCUMENT pathway maps them onto the packet's narrative sections
+ *     (buildPacketNarrativeOverrides), and
+ *   - the PORTAL pathway maps them onto the engine's essay/goals answers
+ *     (buildPortalNarrativeAnswers).
+ * This is the single choke point that gives every Hamilton output the same
+ * MBA-grade writing from ONE persona/prompt (hamiltonFullProposalGenerator).
+ *
+ * @returns {Promise<{ proposal: object|null, proposalResult: object|null, proposalGaps: Array }>}
+ */
+async function draftMbaProposalForTask(db, {
+  task, profile, opportunity, grant, userId, status = 'generating_documents',
+}) {
+  let proposal = null
+  let proposalResult = null
+  let proposalGaps = []
+  try {
+    proposal = await generateMbaProposal(db, {
+      profile, opportunity, grant, taskId: task.id,
+    })
+    if (proposal?.ok && proposal.sections.length > 0) {
+      proposalResult = await saveProposalDocument(db, {
+        profile, opportunity, grant, proposal, taskId: task.id, userId,
+      })
+      proposalGaps = Array.isArray(proposal.evidence_gaps) ? proposal.evidence_gaps : []
+      await updateApplicationTask(db, task.id, {
+        outputProposalDocumentId: proposalResult.proposal_document_id,
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'progress',
+        status,
+        step: 'full_proposal_drafted',
+        message: `Hamilton drafted a full ${proposal.kind} grant proposal (${proposal.sections.length} sections, ${proposal.meta?.provider || 'ai'}) and saved it to Documents.${proposalGaps.length ? ` Flagged ${proposalGaps.length} evidence gap(s).` : ''}`,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: {
+          proposal_document_id: proposalResult.proposal_document_id,
+          section_keys: proposal.meta?.section_keys || [],
+          evidence_gap_count: proposalGaps.length,
+          funder_alignment_count: proposal.funder_alignment?.alignment?.length || 0,
+        },
+      })
+    } else if (proposal && !proposal.ok) {
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'note',
+        status,
+        step: 'full_proposal_skipped',
+        message: `Hamilton could not draft the full narrative proposal (${proposal.error || 'no groundable sections'}); proceeding with the profile's own narrative text.`,
+        actorUserId: userId,
+        actorRole: 'agent',
+      })
+      proposal = null
+    }
+  } catch (err) {
+    // Drafting is additive — a failure must never break the pathway.
+    console.warn(`[hamiltonOrchestrator] full proposal draft failed (non-fatal): ${err?.message || err}`)
+    proposal = null
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'note',
+      status,
+      step: 'full_proposal_error',
+      message: 'Hamilton hit an error drafting the full narrative proposal; proceeding with the profile\'s own narrative text.',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { error: String(err?.message || err).slice(0, 300) },
+    }).catch(() => {})
+  }
+  return { proposal, proposalResult, proposalGaps }
+}
+
 async function runDocumentPathway(db, {
   task, profile, opportunity, grant, classification, userId, options,
 }) {
@@ -420,60 +547,9 @@ async function runDocumentPathway(db, {
   // type and aligned to the funder's requirements), saves it to the
   // profile's Documents, attaches it to the task, and records any evidence
   // gaps as missing-info. Any failure falls back silently to the packet.
-  let proposalResult = null
-  let proposalGaps = []
-  try {
-    const proposal = await generateMbaProposal(db, {
-      profile, opportunity, grant, taskId: task.id,
-    })
-    if (proposal?.ok && proposal.sections.length > 0) {
-      proposalResult = await saveProposalDocument(db, {
-        profile, opportunity, grant, proposal, taskId: task.id, userId,
-      })
-      proposalGaps = Array.isArray(proposal.evidence_gaps) ? proposal.evidence_gaps : []
-      await updateApplicationTask(db, task.id, {
-        outputProposalDocumentId: proposalResult.proposal_document_id,
-      })
-      await appendTaskEvent(db, {
-        taskId: task.id,
-        eventType: 'progress',
-        status: 'generating_documents',
-        step: 'full_proposal_drafted',
-        message: `Hamilton drafted a full ${proposal.kind} grant proposal (${proposal.sections.length} sections, ${proposal.meta?.provider || 'ai'}) and saved it to Documents.${proposalGaps.length ? ` Flagged ${proposalGaps.length} evidence gap(s).` : ''}`,
-        actorUserId: userId,
-        actorRole: 'agent',
-        details: {
-          proposal_document_id: proposalResult.proposal_document_id,
-          section_keys: proposal.meta?.section_keys || [],
-          evidence_gap_count: proposalGaps.length,
-          funder_alignment_count: proposal.funder_alignment?.alignment?.length || 0,
-        },
-      })
-    } else if (proposal && !proposal.ok) {
-      await appendTaskEvent(db, {
-        taskId: task.id,
-        eventType: 'note',
-        status: 'generating_documents',
-        step: 'full_proposal_skipped',
-        message: `Hamilton could not draft the full narrative proposal (${proposal.error || 'no groundable sections'}); proceeding with the submission packet.`,
-        actorUserId: userId,
-        actorRole: 'agent',
-      })
-    }
-  } catch (err) {
-    // Drafting is additive — a failure must never break document generation.
-    console.warn(`[hamiltonOrchestrator] full proposal draft failed (non-fatal): ${err?.message || err}`)
-    await appendTaskEvent(db, {
-      taskId: task.id,
-      eventType: 'note',
-      status: 'generating_documents',
-      step: 'full_proposal_error',
-      message: 'Hamilton hit an error drafting the full narrative proposal; proceeding with the submission packet.',
-      actorUserId: userId,
-      actorRole: 'agent',
-      details: { error: String(err?.message || err).slice(0, 300) },
-    }).catch(() => {})
-  }
+  const { proposal, proposalResult, proposalGaps } = await draftMbaProposalForTask(db, {
+    task, profile, opportunity, grant, userId, status: 'generating_documents',
+  })
 
   const generatePdf = options?.generate_pdf !== false
   const generateDocx = options?.generate_docx !== false
@@ -489,6 +565,11 @@ async function runDocumentPathway(db, {
     automationType,
     taskId: task.id,
     userId,
+    // Route the packet's narrative sections through the SAME MBA-level drafted
+    // prose (need statement / personal narrative / goals) so the submission
+    // packet writes at the proposal's quality bar instead of pasting raw
+    // profile essays. Falls back to the raw essays when drafting failed.
+    narrativeOverrides: proposal ? buildPacketNarrativeOverrides(proposal) : null,
   })
 
   // Combine the packet's missing-info with the proposal's evidence gaps so a
@@ -907,6 +988,7 @@ async function runAutopilotPathway(db, {
   // use). Decrypted server-side and handed straight to the portal's own login
   // form — never logged or returned.
   let loginCredential = null
+  let vaultLockedForHost = false
   if (authorizations.use_saved_credentials_reference) {
     try {
       // Profile's own saved login first, then the shared admin vault — so a
@@ -914,6 +996,19 @@ async function runAutopilotPathway(db, {
       // it isn't saved on this specific profile.
       loginCredential = await getDecryptedCredentialWithFallback(db, { profileId: task.profile_id, portalHost: url })
     } catch { loginCredential = null }
+    // A master-wrapped credential the vault could not unlock (no cached key, no
+    // autonomous-unlock escrow) has password=null — handing it to the engine
+    // produced a misleading "saved login could not be completed" block. Treat it
+    // as no usable credential and tell the owner the REAL fix: unlock the vault.
+    if (loginCredential?.vault_locked) {
+      vaultLockedForHost = true
+      loginCredential = null
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'filling_portal', step: 'vault_locked',
+        message: 'A saved login exists for this portal but the master passphrase is locked (no autonomous unlock). Unlock the vault — or enable autonomous unlock — and Hamilton will use it.',
+        actorUserId: userId, actorRole: 'agent',
+      }).catch(() => {})
+    }
   }
 
   // Resolve a durable saved SESSION for this portal host (a storageState the
@@ -931,9 +1026,27 @@ async function runAutopilotPathway(db, {
     } catch { storageState = null }
   }
 
+  // ── MBA-level long-form answers for the portal's essay/goals fields ──
+  // When narrative generation is authorized, draft the SAME full proposal the
+  // document pathway produces (one persona, one prompt — no duplicate quality
+  // bar) and hand its placeholder-free sections to the engine so portal essay
+  // boxes get MBA-grade prose instead of the raw profile essay. Best-effort:
+  // drafting failure falls back to the profile's own essays, never blocks.
+  let narrativeAnswers = null
+  if (authorizations.generate_narratives) {
+    const { proposal } = await draftMbaProposalForTask(db, {
+      task, profile, opportunity, grant, userId, status: 'filling_portal',
+    })
+    if (proposal) {
+      const answers = buildPortalNarrativeAnswers(proposal)
+      if (answers.essay || answers.goals) narrativeAnswers = answers
+    }
+  }
+
   // Sink for the engine to hand back the authenticated storageState after a
   // successful login, so we can persist it durably (below) and reuse it next run.
   const sessionSink = {}
+  let signupAttempted = false
 
   // FAST-SKIP known auth walls: when a PRIOR finished run on this task already
   // hit an authentication gate (login/SSO/2FA/CAPTCHA) and we STILL hold
@@ -976,6 +1089,7 @@ async function runAutopilotPathway(db, {
       documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
       sessionSink,
+      narrativeAnswers,
     })
     if (loginCredential && engineResult?.logged_in) {
       await markCredentialUsed(db, loginCredential.id).catch(() => {})
@@ -1004,6 +1118,34 @@ async function runAutopilotPathway(db, {
     }
     if (engineResult.status === 'submitted' || engineResult.status === 'completed_draft') break
     if (engineResult.status === 'failed' && engineResult.blocker_kind === 'no_browser') break
+
+    // ── Signup path (Portal Autopilot Identity) instead of parking ──
+    // A login gate with NO usable credential anywhere (profile vault, admin
+    // vault, saved session) used to defer the task on a retry backoff and wait
+    // for a human. When the user authorized credential use, Hamilton instead
+    // asks the identity brain to CREATE the account (unique master-wrapped
+    // password + browser-driven registration via hamiltonPortalSignupAdapter),
+    // then retries the run with the new login. The brain enforces every
+    // compliance rail itself — identity-proofed hosts, ToS-forbidden portals,
+    // CAPTCHA/2FA walls all hand off to the human paths unchanged; 2FA and
+    // CAPTCHA are NEVER bypassed. Tried at most once per run.
+    if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'login'
+        && !loginCredential && !vaultLockedForHost && !signupAttempted
+        && authorizations.use_saved_credentials_reference) {
+      signupAttempted = true
+      const recovered = await attemptPortalSignupRecovery(db, {
+        profileId: task.profile_id,
+        userId: userId || task.user_id || 'system_admin_token',
+        taskId: task.id,
+        url,
+        profile,
+        _identityRunner: options?._identityRunner || null,
+      })
+      if (recovered.credential) {
+        loginCredential = recovered.credential
+        continue // retry the run, now able to log in
+      }
+    }
 
     // Hand the blocker to the resolver.
     const directive = await resolveBlocker(db, {
@@ -1216,12 +1358,18 @@ async function runAutopilotPathway(db, {
           profileUserId: task.user_id,
           type: blockerNotificationType(engineResult.blocker_kind),
           title: blockerTitle(engineResult.blocker_kind),
-          message: plan.message,
+          // When the ONLY thing between Hamilton and the saved login is the
+          // locked master passphrase, say exactly that — "unlock the vault (or
+          // enable autonomous unlock)" is actionable; a generic login notice is not.
+          message: vaultLockedForHost && engineResult.blocker_kind === 'login'
+            ? 'A saved login exists for this portal but the master passphrase is locked. Unlock the vault (Portals → Autopilot) — or enable autonomous unlock — and Hamilton will resume on her own.'
+            : plan.message,
           severity: 'warning',
           data: {
             task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind,
             auto_retry: true, next_retry_at: plan.nextRetryAt, attempt: plan.attempt, max_attempts: plan.maxAttempts,
             portal_url: url,
+            ...(vaultLockedForHost ? { vault_locked: true } : {}),
           },
         })
       }
