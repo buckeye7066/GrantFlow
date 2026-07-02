@@ -16,6 +16,7 @@ const UploadApplicationForm = lazyWithRetry(() => import("@/components/organizat
 const OrganizationForm = lazyWithRetry(() => import("@/components/organizations/OrganizationForm"), 'Org:OrganizationForm')
 const QuickAddDialog = lazyWithRetry(() => import("@/components/organizations/QuickAddDialog"), 'Org:QuickAddDialog')
 const UploadFormDialog = lazyWithRetry(() => import("@/components/organizations/UploadFormDialog"), 'Org:UploadFormDialog')
+const AutomatedSearchConfig = lazyWithRetry(() => import("@/components/organizations/AutomatedSearchConfig"), 'Org:AutomatedSearchConfig')
 import { useToast } from "@/components/ui/use-toast"
 import { listProfiles, uploadProfileAvatar } from "@/api/profiles"
 import { canonicalizeProfileTypeId } from "@/services/profileTypes"
@@ -53,6 +54,7 @@ export default function Organizations() {
   const [uploadFormOpen, setUploadFormOpen] = useState(false)
   const [comprehensiveOpen, setComprehensiveOpen] = useState(false)
   const [comprehensiveSubmitting, setComprehensiveSubmitting] = useState(false)
+  const [autoSearchOrg, setAutoSearchOrg] = useState(null)
   const { toast } = useToast()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -346,6 +348,7 @@ const matchesSearch =
                   key={org.id}
                   organization={org}
                   onEdit={() => navigate(createPageUrl("ProfileDetail", { id: org.id }))}
+                  onAutomatedSearch={(selected) => setAutoSearchOrg(selected)}
                   onDelete={() => {
                     // Navigate to profile page where delete functionality exists
                     navigate(createPageUrl("OrganizationProfile", { id: org.id }))
@@ -377,6 +380,14 @@ const matchesSearch =
           onOpenChange={setUploadFormOpen}
           onUpload={handleUploadForm}
         />
+
+        {autoSearchOrg && (
+          <AutomatedSearchConfig
+            organization={autoSearchOrg}
+            open={Boolean(autoSearchOrg)}
+            onClose={() => setAutoSearchOrg(null)}
+          />
+        )}
 
         <Dialog open={comprehensiveOpen} onOpenChange={setComprehensiveOpen}>
           <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
