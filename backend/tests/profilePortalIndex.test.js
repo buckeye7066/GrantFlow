@@ -32,7 +32,7 @@ function makeDb() {
   const db = new Database(':memory:')
   // Minimal schema the resolver reads from.
   db.exec(`
-    CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, email TEXT, updated_at DATETIME);
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, email TEXT, primary_type TEXT, updated_at DATETIME);
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, profile_id TEXT, title TEXT,
@@ -182,6 +182,40 @@ describe('getProfilePortals', () => {
     expect(derived[0].supportsTwoWaySync).toBe(true)
     expect(derived[0].connectorId).toBe('mtsu')
     expect(derived[0].sources.length).toBe(2)
+  })
+
+  it('suppresses the host-less SCHOOL process tile when a derived tile for the same school exists', async () => {
+    // Student profile whose own school is MTSU (drives the host-less school
+    // PROCESS tile) AND whose university_applications derive a REAL mtsu.edu
+    // tile. Host-keyed dedupe can't see the null-host process tile — the
+    // label fallback must collapse them to ONE tile (the derived one wins).
+    db.prepare("UPDATE profiles SET primary_type = 'student' WHERE id = 'p1'").run()
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p1', 'education', JSON.stringify({
+        school_name: 'Middle Tennessee State University', currently_enrolled: true,
+      }))
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p1', 'university_applications', JSON.stringify({
+        applications: [
+          { name: 'Middle Tennessee State University', portals: { student_portal_url: 'https://pipeline.mtsu.edu/login' } },
+        ],
+      }))
+    const { portals } = await getProfilePortals(db, 'p1')
+    const mtsuTiles = portals.filter((p) => /middle tennessee|mtsu/i.test(String(p.label)))
+    expect(mtsuTiles).toHaveLength(1)
+    // The surviving tile is the derived one — real host, not the null-host stub.
+    expect(mtsuTiles[0].portalHost).toBe('mtsu.edu')
+    // A DIFFERENT school with no derived tile still gets its process tile
+    // (the fallback only suppresses actual duplicates).
+    const other = await (async () => {
+      db.prepare("INSERT INTO profiles (id, display_name, primary_type) VALUES ('p2', 'Other Student', 'student')").run()
+      db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+        .run('p2', 'education', JSON.stringify({ school_name: 'Central High School', currently_enrolled: true }))
+      return getProfilePortals(db, 'p2')
+    })()
+    const central = other.portals.filter((p) => /central high/i.test(String(p.label)))
+    expect(central).toHaveLength(1)
+    expect(central[0].portalHost).toBe(null)
   })
 
   it('marks status ready when the profile holds a credential for the host', async () => {

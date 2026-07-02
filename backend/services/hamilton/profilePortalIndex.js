@@ -119,6 +119,20 @@ function isRealConnector(connector) {
   return Boolean(connector && connector.id && connector.id !== 'generic')
 }
 
+/**
+ * Normalize a tile label for name-based dedupe of host-less SCHOOL process
+ * tiles: lowercase, drop any parenthetical (a derived tile may render as
+ * "Middle Tennessee State University (mtsu.edu)"), collapse everything
+ * non-alphanumeric to single spaces. Returns '' when nothing usable remains.
+ */
+function normalizePortalLabel(label) {
+  return String(label ?? '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
 // ── PORTAL vs NON-PORTAL classification ──────────────────────────────────────
 // RULE: a funding source is "real" if it has a URL. A real LOGIN/APPLICATION
 // portal becomes a dashboard tile; anything that is NOT a portal (info-only page,
@@ -687,12 +701,22 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
     // Merge in the gated PROCESS portals. Dedupe by host against the derived
     // portals (a derived pipeline/college tile for the same host wins — it
     // carries real sources), and dedupe process tiles among themselves by id.
+    // A SCHOOL process tile has portalHost:null by design (we list the school
+    // even when no login URL resolves), so the host-keyed dedupe can't see it —
+    // fall back to matching the school NAME against derived tile labels, else a
+    // student whose school already has a real tile (credential / college link)
+    // gets a duplicate needs_setup tile for the same school.
     const derivedHosts = new Set(portals.map((p) => p.portalHost).filter(Boolean))
+    const derivedLabels = portals.map((p) => normalizePortalLabel(p.label)).filter(Boolean)
     const seenProcessIds = new Set()
     for (const desc of processPortals) {
       if (desc.id && seenProcessIds.has(desc.id)) continue
       if (desc.id) seenProcessIds.add(desc.id)
       if (desc.portalHost && derivedHosts.has(desc.portalHost)) continue
+      if (!desc.portalHost && desc.kind === 'school') {
+        const school = normalizePortalLabel(desc.label)
+        if (school && derivedLabels.some((l) => l === school || l.includes(school) || school.includes(l))) continue
+      }
       const tile = await buildProcessTile(db, profileId, desc, { credentialDomains })
       portals.push(tile)
       if (tile.portalHost) derivedHosts.add(tile.portalHost)
