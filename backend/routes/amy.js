@@ -54,6 +54,13 @@ router.get('/status', async (req, res) => {
         running_started_at: run.started_at,
         last_run_ok: run.ok,
         last_run_error: run.error,
+        // Honesty: a run deduped by the scheduler lock records ok:true with
+        // summary {skipped:true, reason:'lock_held'} — without the summary the
+        // panel cannot tell a skipped run from a real training run.
+        last_run_summary: run.summary ?? null,
+        last_run_skipped: run.summary?.skipped === true,
+        last_run_skip_reason: run.summary?.skipped === true ? (run.summary?.reason ?? null) : null,
+        last_run_finished_at: run.finished_at,
       },
     })
   } catch (err) {

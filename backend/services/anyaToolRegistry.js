@@ -5332,3 +5332,27 @@ registerTool({
     return result
   },
 })
+
+// ── Coverage-sweep observability (Agent Observability Rule read side) ────────
+// The nightly per-profile result-coverage sweep persists its outcome to
+// system_kv `coverage_audit_last_run` (heartbeat status:'running' before the
+// heal loop, status:'failed' on exception, status:'completed' with gap counts
+// on success). This read-only tool is Anya's window into it — same pattern as
+// owner.get_self_heal_status: report exactly what was recorded, never a
+// synthesized "healthy".
+registerTool({
+  name: 'owner.coverage_audit_status',
+  description: 'OWNER ONLY. Show the LAST per-profile result-coverage sweep (nightly runProfileCoverageSweep): when it ran, its status (completed / failed / still running), gap counts (with_gap, needs_rediscovery, surfacing_regressions), what the bounded autoheal re-discovered, and the top gapped profiles — read straight from system_kv. Use when the owner asks "did the coverage audit run?" / "which profiles have coverage gaps?".',
+  requiresOwner: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { getLastCoverageSweep } = await import('./coverageAudit/profileResultCoverageAudit.js')
+    const last = await getLastCoverageSweep(db)
+    if (!last) {
+      return { has_run: false, message: 'No coverage sweep has recorded a run yet (system_kv coverage_audit_last_run absent). It runs inside the 04:00 ET nightly sweep; owner.run_nightly_sweep can trigger one now.' }
+    }
+    return { has_run: true, last_run: last }
+  },
+})

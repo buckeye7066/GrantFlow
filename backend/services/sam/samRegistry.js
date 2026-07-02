@@ -271,6 +271,88 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Nightly coverage-sweep freshness: runProfileCoverageSweep persists its
+    // result to system_kv `coverage_audit_last_run` (plus a status:'running'
+    // heartbeat before the heal loop and status:'failed' on exception). This
+    // check is the READ side the Agent Observability Rule requires — before it,
+    // the record was write-only, so a sweep that silently died on every run
+    // (restart mid-autoheal) left the key absent for weeks and nobody noticed.
+    id: 'coverage.sweepHealth',
+    label: 'Profile result-coverage sweep freshness',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the last recorded per-profile result-coverage sweep (system_kv coverage_audit_last_run) and flags when it is absent, failed, stuck in status=running, or stale (>36h old — the sweep is nightly). Surfaces the gap counts (with_gap / needs_rediscovery / surfacing_regressions / healed) when healthy. Fails open when system_kv itself is not queryable yet.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'coverage sweep health: db unavailable' }
+      const STALE_MS = 36 * 60 * 60 * 1000
+      const RUNNING_GRACE_MS = 3 * 60 * 60 * 1000
+      let row
+      try {
+        row = await db.prepare('SELECT value, updated_at FROM system_kv WHERE key = ?').get('coverage_audit_last_run')
+      } catch (err) {
+        // system_kv not migrated yet — environment gap, not a defect.
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!row?.value) {
+        return {
+          ok: false,
+          summary: 'The nightly profile result-coverage sweep has NEVER recorded a run (system_kv coverage_audit_last_run absent) — it is either not scheduled or dying before it can record anything.',
+          evidence: { key: 'coverage_audit_last_run', present: false },
+          recommended_fix: 'Check the nightly sweep logs (runNightlyMaintenanceSweep → runProfileCoverageSweep) and NIGHTLY_MAINTENANCE_ENABLED; run owner.run_nightly_sweep or the sweep directly to seed the record.',
+          confidence: 0.85,
+        }
+      }
+      let last = null
+      try { last = JSON.parse(row.value) } catch { last = null }
+      if (!last || typeof last !== 'object') {
+        return { ok: false, summary: 'coverage_audit_last_run exists but is unparseable JSON.', evidence: { raw: String(row.value).slice(0, 200) } }
+      }
+      const recordedAtMs = Date.parse(last.recorded_at || row.updated_at || '') || 0
+      const startedAtMs = Date.parse(last.started_at || '') || recordedAtMs
+      const ageMs = Date.now() - recordedAtMs
+      const gapCounts = {
+        scanned: last.summary?.scanned ?? null,
+        with_gap: last.summary?.with_gap ?? null,
+        needs_rediscovery: last.summary?.needs_rediscovery ?? null,
+        surfacing_regressions: last.summary?.surfacing_regressions ?? null,
+        healed: last.healed_count ?? null,
+      }
+      if (last.status === 'failed') {
+        return {
+          ok: false,
+          summary: `The last coverage sweep FAILED: ${last.error || 'unknown error'} (started ${last.started_at || 'unknown'}).`,
+          evidence: { status: 'failed', error: last.error || null, started_at: last.started_at || null },
+          recommended_fix: 'Read the recorded error; the usual suspects are DB pool starvation during the autoheal re-discovery loop and a deploy restart mid-run.',
+          confidence: 0.9,
+        }
+      }
+      if (last.status === 'running' && Date.now() - startedAtMs > RUNNING_GRACE_MS) {
+        return {
+          ok: false,
+          summary: `A coverage sweep started ${last.started_at || 'unknown'} and never completed (heartbeat still status=running after ${Math.round((Date.now() - startedAtMs) / 3600000)}h) — the process likely restarted mid-autoheal.`,
+          evidence: { status: 'running', started_at: last.started_at || null, gap_counts: gapCounts },
+          recommended_fix: 'Re-run the sweep (owner.run_nightly_sweep or runProfileCoverageSweep); if this recurs, the autoheal loop is outliving the deploy window — lower COVERAGE_AUTOHEAL_MAX.',
+          confidence: 0.85,
+        }
+      }
+      if (recordedAtMs && ageMs > STALE_MS) {
+        return {
+          ok: false,
+          summary: `The coverage sweep last completed ${Math.round(ageMs / 3600000)}h ago (> 36h) — the nightly run is not landing.`,
+          evidence: { recorded_at: last.recorded_at || row.updated_at || null, age_hours: Math.round(ageMs / 3600000), gap_counts: gapCounts },
+          recommended_fix: 'Confirm NIGHTLY_MAINTENANCE_ENABLED and that the 04:00 ET scheduler fired; check the nightly sweep logs for a failure before the coverage step.',
+          confidence: 0.85,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Coverage sweep healthy: recorded ${last.recorded_at || row.updated_at || 'recently'}; scanned=${gapCounts.scanned ?? 'n/a'}, with_gap=${gapCounts.with_gap ?? 'n/a'}, needs_rediscovery=${gapCounts.needs_rediscovery ?? 'n/a'}, surfacing_regressions=${gapCounts.surfacing_regressions ?? 'n/a'}, healed=${gapCounts.healed ?? 'n/a'}.`,
+        evidence: { recorded_at: last.recorded_at || row.updated_at || null, status: last.status || 'completed', gap_counts: gapCounts },
+      }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
