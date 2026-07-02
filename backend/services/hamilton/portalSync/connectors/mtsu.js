@@ -161,6 +161,9 @@ export async function read(page, ctx = {}) {
   // ── PRIMARY: model-driven, selector-independent extraction ─────────────────
   const llm = await extractPortalDataWithLLM(page, { log, navCandidates })
   raw.llm = llm.raw
+  // Fabrication-guard audit trail (items the extractor refused to treat as user
+  // awards) — surfaced in the run summary for human review.
+  const rejected = Array.isArray(llm.rejected) ? llm.rejected : []
   const seenAwardKeys = new Set()
   for (const a of llm.awards || []) {
     awards.push({
@@ -244,8 +247,8 @@ export async function read(page, ctx = {}) {
   // be rejected by the section guard and silently dropped. Award status is
   // captured per-award above instead.
 
-  log(`MTSU read complete: ${fields.length} fields, ${awards.length} awards, ${notFound.length} notFound`)
-  return { fields, awards, notFound, raw }
+  log(`MTSU read complete: ${fields.length} fields, ${awards.length} awards (${rejected.length} rejected by fabrication guard), ${notFound.length} notFound`)
+  return { fields, awards, notFound, rejected, raw }
 }
 
 /**
