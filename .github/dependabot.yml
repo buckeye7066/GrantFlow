@@ -33,6 +33,12 @@ updates:
       - dependency-name: "react-dom"
         update-types:
           - "version-update:semver-major"
+      # Tailwind 4 is a deliberate migration (CSS-first config, new PostCSS
+      # plugin, class changes with pure-visual regressions CI can't see) —
+      # not a dependency bump. Ignored until that migration is scheduled.
+      - dependency-name: "tailwindcss"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "github-actions"
     directory: "/"

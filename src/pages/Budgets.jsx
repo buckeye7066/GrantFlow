@@ -7,7 +7,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { sumBy } from "lodash";
+import { sumBy } from "@/utils/aggregate";
 
 const StatCard = ({ title, value, icon: Icon, color }) => (
   <Card className="shadow-lg border-0">

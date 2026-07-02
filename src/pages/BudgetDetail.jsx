@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ArrowLeft, Loader2, DollarSign, Plus, Banknote, TrendingDown, AlertTriangle } from "lucide-react";
-import { sumBy, groupBy } from "lodash";
+import { sumBy, groupBy } from "@/utils/aggregate";
 import { format } from "date-fns";
 import AddBudgetItemForm from "../components/budgets/AddBudgetItemForm";
 import AddExpenseForm from "../components/budgets/AddExpenseForm";
