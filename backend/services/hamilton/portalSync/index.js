@@ -31,7 +31,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 
 import { normalizeHost, findValidSession, getSessionStorageState } from '../hamiltonCredentialSessionService.js'
-import { getDecryptedCredentialWithFallback, listCredentialedDomains } from '../hamiltonPortalCredentialService.js'
+import { getDecryptedCredentialWithFallback, listCredentialedDomains, registrableDomain } from '../hamiltonPortalCredentialService.js'
 import {
   browserAutomationPermittedForUrl,
   isBrowserAutomationEnabled,
@@ -96,7 +96,7 @@ function profileToFundingSources(profile) {
  * @returns {Promise<{ fieldsWritten:number, fieldsRejected:Array, awardsWritten:number, awardsDismissed:number }>}
  */
 async function persistReadResult(db, { profileId, portalHost, actorUserId, readResult }) {
-  const out = { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0 }
+  const out = { fieldsWritten: 0, fieldsRejected: [], awardsWritten: 0, awardsDismissed: 0, awardsFailed: [] }
 
   for (const f of Array.isArray(readResult?.fields) ? readResult.fields : []) {
     if (!f?.sectionKey || !f?.field || f.value === undefined || f.value === null || String(f.value).trim() === '') continue
@@ -148,11 +148,81 @@ async function persistReadResult(db, { profileId, portalHost, actorUserId, readR
       portal_url: a?.sourceUrl || connection.portal_url,
       source_url: a?.sourceUrl || connection.portal_url,
     }
-    const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection).catch(() => false)
-    if (ok) out.awardsWritten += 1
+    // A persist failure must be RECORDED, not swallowed: a run that silently
+    // dropped awards used to still report a clean "completed" summary. The
+    // failure list rides the run summary (and blocks the auto-merge below) so
+    // the sync never looks more successful than it was.
+    try {
+      const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection)
+      if (ok) out.awardsWritten += 1
+      else out.awardsFailed.push({ title, reason: 'upsert_returned_false' })
+    } catch (err) {
+      out.awardsFailed.push({ title, reason: err?.message || 'upsert_failed' })
+    }
   }
 
   return out
+}
+
+/**
+ * Stamp last_checked_at / last_check_status on every student_portals row whose
+ * URL lives on the synced host, so the "last checked" columns the portals panel
+ * renders actually get written (they were previously write-path-dead — no
+ * caller ever invoked recordPortalCheck). Best-effort; never throws.
+ */
+async function recordStudentPortalChecks(db, { profileId, host, status }) {
+  try {
+    const { listStudentPortals, recordPortalCheck } = await import('../studentPortalStore.js')
+    const wantDomain = registrableDomain(host)
+    if (!wantDomain) return
+    const portals = await listStudentPortals(db, profileId, { includeInactive: false })
+    for (const p of portals || []) {
+      const match = [p.portal_url, p.login_url, p.application_url]
+        .some((u) => u && registrableDomain(normalizeHost(u)) === wantDomain)
+      if (!match) continue
+      await recordPortalCheck(db, profileId, p.id, { status }).catch(() => {})
+    }
+  } catch { /* best-effort — a check stamp must never break the sync */ }
+}
+
+/**
+ * Should a completed READ be recorded as the portal's terminal MERGED state?
+ * Conservative by design ("merged only when truly merged"): only when data was
+ * genuinely written into the profile (or deliberately dismissed by the user)
+ * AND nothing failed to persist — an empty or partially-failed read leaves the
+ * portal unmerged and still on the weekly reminder.
+ */
+export function shouldMarkMergedAfterRead(persisted) {
+  if (!persisted || typeof persisted !== 'object') return false
+  const pulledData = (Number(persisted.fieldsWritten) || 0)
+    + (Number(persisted.awardsWritten) || 0)
+    + (Number(persisted.awardsDismissed) || 0) > 0
+  const cleanPersist = (persisted.awardsFailed || []).length === 0
+    && (persisted.fieldsRejected || []).length === 0
+  return pulledData && cleanPersist
+}
+
+/**
+ * Record the terminal `merged` lifecycle state after a successful READ that
+ * truly pulled data in (shouldMarkMergedAfterRead), with the sync run as the
+ * auditable proof markPortalMerged requires. Returns whether the merge was
+ * recorded. Best-effort — a status write failure never breaks the sync.
+ */
+export async function finalizeReadMerge(db, { profileId, host, runId = null, persisted } = {}) {
+  if (!shouldMarkMergedAfterRead(persisted)) return false
+  try {
+    const { markPortalMerged } = await import('../portalCompletionStore.js')
+    const merged = await markPortalMerged(db, {
+      profileId, portalHost: host,
+      source: 'portal_sync',
+      syncRunId: runId || undefined,
+      evidence: runId ? `portal_sync_run:${runId}` : `portal_sync_read:${new Date().toISOString()}`,
+    })
+    return Boolean(merged)
+  } catch (err) {
+    log.warn('portal_sync_merge_mark_failed', { profileId, host, err: err?.message })
+    return false
+  }
 }
 
 async function loadProfileBundle(db, profileId) {
@@ -206,9 +276,14 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
 
   await ensurePortalSyncSchema(db).catch(() => {})
   const runId = await recordRunStart(db, { profileId, portalHost: host, connectorId, direction: dir, actorUserId }).catch(() => null)
+  // Run bookkeeping failure must be VISIBLE: with runId=null the run would
+  // finish "successfully" while the health surface / lastSync show "never
+  // synced". Surface the degradation on the result instead of hiding it.
+  if (!runId) log.warn('portal_sync_run_bookkeeping_failed', { profileId, host })
 
   const fail = async (error, extra = {}) => {
     await finishRun(db, runId, { status: 'failed', error, summary: extra }).catch(() => {})
+    await recordStudentPortalChecks(db, { profileId, host, status: 'failed' })
     return { ok: false, direction: dir, connectorId, runId, error, ...extra }
   }
 
@@ -275,6 +350,7 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
     }
 
     const result = { ok: true, direction: dir, connectorId, runId }
+    if (!runId) result.bookkeeping_degraded = true
     const summary = { connector: connectorId }
 
     if (dir === 'read' || dir === 'both') {
@@ -287,6 +363,15 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
         persisted,
       }
       summary.read = result.read
+
+      // TRUE MERGE: a successful READ that actually pulled the portal's data
+      // into the profile IS the merge the lifecycle store defines — record it,
+      // with the sync run as auditable proof, so the tile turns "merged" and
+      // the weekly unmerged-portals reminder stops nagging about a portal
+      // whose data is already in.
+      const merged = await finalizeReadMerge(db, { profileId, host, runId, persisted })
+      result.merged = merged
+      summary.merged = merged
     }
 
     if (dir === 'write' || dir === 'both') {
@@ -300,6 +385,7 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
     }
 
     await finishRun(db, runId, { status: 'completed', summary }).catch(() => {})
+    await recordStudentPortalChecks(db, { profileId, host, status: 'completed' })
     return result
   } catch (err) {
     return fail(err?.message || String(err))
@@ -308,5 +394,7 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
     if (browser) { try { await browser.close() } catch { /* best-effort */ } }
   }
 }
+
+export const _internal = { persistReadResult, recordStudentPortalChecks }
 
 export default { runPortalSync, listConnectors, getConnectorForHost, ensurePortalSyncSchema, listRuns }
