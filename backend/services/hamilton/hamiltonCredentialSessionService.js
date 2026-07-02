@@ -287,28 +287,50 @@ export async function getSessionStorageState(db, sessionId) {
  * Return a valid (non-expired, non-revoked) session for the given
  * profile + portal host, or null if none exists. Also marks an
  * expired row as `expired` so the UI can prompt the user.
+ *
+ * Matching is by REGISTRABLE DOMAIN (eTLD+1), exact host preferred — the same
+ * rule the credential vault uses (getDecryptedCredential). A session the user
+ * captured on `mtsu.edu` must be found when the run lands on `login.mtsu.edu`
+ * (and vice versa); exact-host-only matching silently hid working sessions and
+ * hard-stopped runs the vault could satisfy.
  */
 export async function findValidSession(db, { profileId, portalHost } = {}) {
   if (!db || !profileId || !portalHost) return null
   await ensureSchema(db)
   const host = normalizeHost(portalHost)
-  const row = await db.prepare(
+  if (!host) return null
+  const rows = await db.prepare(
     `SELECT * FROM hamilton_saved_sessions
-      WHERE profile_id = ? AND portal_host = ? AND status = 'valid'
-      ORDER BY established_at DESC LIMIT 1`,
-  ).get(String(profileId), host)
-  if (!row) return null
-  if (row.expires_at) {
-    const expiresAt = new Date(row.expires_at).getTime()
-    if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
-      const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
-      await db.prepare(
-        `UPDATE hamilton_saved_sessions SET status = 'expired', updated_at = ${nowFn} WHERE id = ?`,
-      ).run(row.id)
-      return null
+      WHERE profile_id = ? AND status = 'valid'
+      ORDER BY established_at DESC`,
+  ).all(String(profileId))
+  if (!rows || rows.length === 0) return null
+  // Exact host first, then any session sharing the registrable domain. PSL-based
+  // (via registrableDomain) so 'foo.co.uk' never matches 'bar.co.uk'. Lazy import
+  // avoids a hard load-order dependency in the credential-service import cycle.
+  const { registrableDomain } = await import('./hamiltonPortalCredentialService.js')
+  const wantDomain = registrableDomain(host)
+  const candidates = [
+    ...rows.filter((r) => normalizeHost(r.portal_host) === host),
+    ...(wantDomain
+      ? rows.filter((r) => normalizeHost(r.portal_host) !== host
+          && registrableDomain(normalizeHost(r.portal_host)) === wantDomain)
+      : []),
+  ]
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  for (const row of candidates) {
+    if (row.expires_at) {
+      const expiresAt = new Date(row.expires_at).getTime()
+      if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
+        await db.prepare(
+          `UPDATE hamilton_saved_sessions SET status = 'expired', updated_at = ${nowFn} WHERE id = ?`,
+        ).run(row.id)
+        continue // an expired exact-host session must not mask a valid domain match
+      }
     }
+    return rowToSession(row)
   }
-  return rowToSession(row)
+  return null
 }
 
 export async function markSessionUsed(db, sessionId) {
