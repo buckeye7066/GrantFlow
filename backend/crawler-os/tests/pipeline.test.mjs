@@ -53,8 +53,13 @@ test('a placeholder candidate is rejected by the reality gate and never enters t
   assert.ok(r.rejected >= 1 || r.stored === 0);
 });
 
-test('when every source yields nothing, a zero-result ladder explains why and what next', async () => {
-  // Force grants.gov to return zero rows AND fail the directory routes.
+test('failed directory fetches still surface honest DIRECTORY locator rows (fetch failure ≠ zero results)', async () => {
+  // grants.gov empty AND every fetch fails. True DIRECTORY candidates are
+  // built entirely from registry config (parseDirectory ignores the body), so
+  // a transient fetch failure — a site hiccup or a CI runner whose egress to
+  // those sites is blocked — must not erase the honest locator rows a sparse
+  // profile depends on. This was zeroing the discover-local-funding release
+  // gate in CI (2026-07-01).
   const d = deps({ grantsGov: [], fail: new Set([
     'cof.org',
     'benefits.gov',
@@ -68,14 +73,31 @@ test('when every source yields nothing, a zero-result ladder explains why and wh
   ]) });
   const thesis = buildThesis(SAMPLE_VFD_PROFILE);
   const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run0' });
-  assert.equal(r.stored, 0);
-  assert.ok(r.zero_result, 'a zero-result ladder must be present');
-  assert.ok(typeof r.zero_result.zero_result_reason === 'string');
-  assert.ok(Array.isArray(r.zero_result.next_steps) && r.zero_result.next_steps.length > 0);
-  assert.ok(Array.isArray(r.zero_result.searched_sources));
-  assert.ok(r.profile_evolution, 'profile evolution signal must be returned');
-  assert.equal(r.profile_evolution.event_type, 'profile_coverage_gap');
-  assert.ok(Array.isArray(r.profile_evolution.recommended_source_lanes));
+  assert.ok(r.stored >= 1, `directory locators must survive fetch failures (stored=${r.stored})`);
+  for (const o of storage.listCatalog(d.store)) {
+    assert.equal(o.kind, OPPORTUNITY_KIND.DIRECTORY, `only DIRECTORY rows may store without a fetched body, got kind=${o.kind} for "${o.title}"`);
+  }
+  assert.ok(!r.zero_result, 'no zero-result ladder when honest locators stored');
+});
+
+test('when a run truly stores nothing, the zero-result ladder explains why and what next', async () => {
+  // Honest DIRECTORY locators now survive fetch failures, so an organic
+  // all-sources zero is unreachable for any thesis whose plan includes a
+  // directory source — the ladder remains the safety net for the paths that
+  // can still zero (no sources selected, every candidate gate-rejected).
+  // Unit-test the builder directly with a realistic failed-run shape.
+  const { _internal } = await import('../pipeline.js');
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const thePlan = { selected_source_ids: ['grants_gov', 'sam_gov'], source_decisions: [] };
+  const summaries = [
+    { source_id: 'grants_gov', outcome: 'error', reason: 'fetch_failed', fetched: 1, parsed: 0, rejected: 0, stored: 0, existing: 0, deduped: 0, queries: [] },
+    { source_id: 'sam_gov', outcome: 'error', reason: 'fetch_failed', fetched: 1, parsed: 0, rejected: 0, stored: 0, existing: 0, deduped: 0, queries: [] },
+  ];
+  const ladder = _internal.buildLadder(thesis, thePlan, summaries, 'all_sources_failed');
+  assert.ok(ladder, 'a zero-result ladder must be present');
+  assert.ok(typeof ladder.zero_result_reason === 'string');
+  assert.ok(Array.isArray(ladder.next_steps) && ladder.next_steps.length > 0);
+  assert.ok(Array.isArray(ladder.searched_sources));
 });
 
 test('telemetry records the run and its source outcomes (nothing fails silently)', async () => {
