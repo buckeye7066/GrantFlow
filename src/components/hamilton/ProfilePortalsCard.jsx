@@ -52,6 +52,7 @@ import {
   lockPortalAutopilot,
   setPortalAutopilotIdentity,
   runPortalAutopilot,
+  setPortalMergeStatus,
 } from "@/api/hamilton"
 import { deleteGrant } from "@/api/grants"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
@@ -403,6 +404,12 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const vaultStatus = (data?.vaultStatus && typeof data.vaultStatus === "object")
     ? data.vaultStatus
     : { has_passphrase: false, is_unlocked: false, identity_email: null }
+  // Can Hamilton USE the vault right now? `is_unlocked` is only the server's
+  // in-process cache — after a backend restart it reads false even when the
+  // owner enabled AUTONOMOUS UNLOCK (escrowed key), which the server opens on
+  // its own at run time. Gate capabilities on the effective state so a restart
+  // doesn't hide the "Set up with Hamilton" actions behind a phantom lock.
+  const vaultUsable = Boolean(vaultStatus.is_unlocked || vaultStatus.autonomous_unlock)
 
   const refetchPortals = () =>
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
@@ -547,6 +554,23 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
       }
     },
     onError: (err) => showErrorToast(toast, "Could not start push", err?.message || "Please try again."),
+  })
+
+  // Human "I merged this" confirmation — the ONLY manual path to the terminal
+  // `merged` state (which ends the weekly unmerged-portals reminder). The
+  // backend refuses a merge without explicit confirmation; this button IS that
+  // confirmation. Successful two-way syncs mark it automatically server-side.
+  const mergeMutation = useMutation({
+    mutationFn: (portal) => setPortalMergeStatus(profileId, { portalHost: portal.portalHost, status: "merged" }),
+    onSuccess: (res, portal) => {
+      refetchPortals()
+      showSuccessToast(
+        toast,
+        "Marked merged",
+        `${portal.label || portal.portalHost} is recorded as merged — its data is in this profile and weekly reminders for it stop.`,
+      )
+    },
+    onError: (err) => showErrorToast(toast, "Could not mark merged", err?.message || "Please try again."),
   })
 
   // Save (or re-use) a durable application packet Document for a mail/fax source.
@@ -773,7 +797,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   // "Open side-by-side login" tiles.
   const startingEverything = autopilotRunMutation.isPending || bulkPacketMutation.isPending
   const startHamiltonEverything = () => {
-    const canPortals = vaultStatus.is_unlocked
+    const canPortals = vaultUsable
     const hasPackets = mailFaxSources.length > 0
 
     if (!canPortals && !hasPackets) {
@@ -827,7 +851,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     const canRunAutopilot =
       host &&
       !ready &&
-      vaultStatus.is_unlocked &&
+      vaultUsable &&
       !offerCobrowse &&
       portal.autopilotState !== "identity_proof_required"
 
@@ -875,16 +899,37 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
             )}
           </div>
 
-          <span
-            className={`money inline-flex shrink-0 items-center gap-1.5 self-start whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${
-              ready
-                ? "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]"
-                : "border-[#f1cabd] bg-current-coralSoft text-[#9a3320]"
-            }`}
-          >
-            <StatusDot tone={ready ? "ready" : "needs"} size="sm" />
-            {ready ? "Ready" : "Needs login"}
-          </span>
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 self-start">
+            {/* Merge lifecycle badge — the backend annotates every tile with its
+                real merged/complete state (profile_portal_status); render it so
+                the dashboard matches reality instead of silently dropping it. */}
+            {portal.isMerged && (
+              <span
+                className="money inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#bfe0cd] bg-current-emeraldSoft px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-[#0d5536]"
+                title={portal.mergedAt ? `Merged ${formatWhen(portal.mergedAt)} — data pulled into this profile` : "Merged — data pulled into this profile"}
+              >
+                <CheckCircle2 className="h-3 w-3" /> Merged
+              </span>
+            )}
+            {!portal.isMerged && portal.isComplete && (
+              <span
+                className="money inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-current-line bg-transparent px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-current-ink/70"
+                title="Application complete — results not yet pulled into the profile"
+              >
+                <ClipboardList className="h-3 w-3" /> Complete
+              </span>
+            )}
+            <span
+              className={`money inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.06em] ${
+                ready
+                  ? "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]"
+                  : "border-[#f1cabd] bg-current-coralSoft text-[#9a3320]"
+              }`}
+            >
+              <StatusDot tone={ready ? "ready" : "needs"} size="sm" />
+              {ready ? "Ready" : "Needs login"}
+            </span>
+          </div>
         </div>
 
         {/* Plain autopilot-state label — what Hamilton can/can't do for this
@@ -955,6 +1000,23 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <RefreshCw className="h-4 w-4" />}
                 Refresh sign-in
               </button>
+              {/* Human merge confirmation ("I merged this"). A successful Pull
+                  marks merged automatically; this is the manual path for data
+                  the user pulled in themselves. Ends the weekly reminder. */}
+              {host && !portal.isMerged && (
+                <button
+                  type="button"
+                  className={BTN_BASE}
+                  disabled={mergeMutation.isPending}
+                  onClick={() => mergeMutation.mutate(portal)}
+                  title="Confirm this portal's data is already in the profile — stops the weekly unmerged-portal reminder"
+                >
+                  {mergeMutation.isPending && mergeMutation.variables?.portalHost === host
+                    ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                    : <CheckCircle2 className="h-4 w-4" />}
+                  Mark merged
+                </button>
+              )}
               {!portal.supportsTwoWaySync && portal.loginUrl && (
                 <a className={BTN_BASE} href={portal.loginUrl} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4" /> Open portal
@@ -1150,6 +1212,14 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
         node: (<><Unlock className="h-3 w-3" /> Unlocked</>),
       }
     }
+    // Autonomous unlock: the runtime cache is locked (e.g. after a restart) but
+    // the escrowed key lets Hamilton open the vault on her own — honest AND usable.
+    if (vaultStatus.autonomous_unlock) {
+      return {
+        cls: "border-[#bfe0cd] bg-current-emeraldSoft text-[#0d5536]",
+        node: (<><ShieldCheck className="h-3 w-3" /> Auto-unlock on</>),
+      }
+    }
     return {
       cls: "border-current-line bg-transparent text-current-ink/70",
       node: (<><Lock className="h-3 w-3" /> Locked</>),
@@ -1206,7 +1276,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               </p>
               <p className="mt-0.5 text-[13px] text-current-ink/70">
                 One click: sets up every portal login Hamilton can, and makes an application packet for each mail/fax funder.
-                {!vaultStatus.is_unlocked && " Unlock the vault below to include the portal logins."}
+                {!vaultUsable && " Unlock the vault below to include the portal logins."}
               </p>
             </div>
             <button
@@ -1388,14 +1458,14 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 <button
                   type="button"
                   className={BTN_EMERALD}
-                  disabled={autopilotRunMutation.isPending || !vaultStatus.is_unlocked}
+                  disabled={autopilotRunMutation.isPending || !vaultUsable}
                   onClick={() => autopilotRunMutation.mutate({})}
-                  title={vaultStatus.is_unlocked ? "Let Hamilton set up logins for every portal it can" : "Unlock the vault first"}
+                  title={vaultUsable ? "Let Hamilton set up logins for every portal it can" : "Unlock the vault first"}
                 >
                   {autopilotRunMutation.isPending && !busyAutopilotHost ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Wand2 className="h-4 w-4" />}
                   Run Autopilot (whole profile)
                 </button>
-                {vaultStatus.has_passphrase && vaultStatus.is_unlocked && (
+                {vaultStatus.has_passphrase && vaultUsable && (
                   <button
                     type="button"
                     className={BTN_BASE}
