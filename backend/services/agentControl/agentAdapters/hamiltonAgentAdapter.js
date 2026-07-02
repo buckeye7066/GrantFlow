@@ -153,6 +153,13 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       // the moment the user signs in once. Compare against a JS-supplied ISO
       // `now` so the format matches the stored ISO next_retry_at (avoids the
       // SQLite CURRENT_TIMESTAMP vs ISO lexicographic mismatch).
+      // Also re-pick 'blocked' tasks that recorded an intent to retry
+      // (next_retry_at set and due). A task can land in 'blocked' with a live
+      // next_retry_at (e.g. an auth backoff that was later hard-blocked by a
+      // different path, or legacy rows written before the waiting_for_* split);
+      // without this arm those rows sit blocked forever even though the
+      // scheduler owes them a re-attempt. Conservative: a blocked task with
+      // next_retry_at IS NULL is a genuine human hand-off and is never re-picked.
       const nowIso = new Date().toISOString()
       tasks = await db
         .prepare(`
@@ -162,10 +169,12 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
            WHERE status IN ('queued','ready','analyzing','ready_to_start')
               OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_email_verification','waiting_for_window')
                   AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+              OR (status = 'blocked'
+                  AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
            ORDER BY updated_at ASC
            LIMIT ?
         `)
-        .all(nowIso, maxBatch)
+        .all(nowIso, nowIso, maxBatch)
       if (!Array.isArray(tasks)) tasks = []
     } catch { /* table missing on bare DBs — empty list is fine */ }
 

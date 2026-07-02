@@ -489,6 +489,22 @@ router.post('/tasks/:taskId/retry', async (req, res) => {
   try {
     const profile = await loadProfile(req.db, ctx.task.profile_id)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
+    // Truthful backoff accounting: every manual retry counts. Without this the
+    // task's retry_count stayed 0 across admin retries (the orchestrator only
+    // increments it on the auth-backoff path), so "how many times has this been
+    // re-attempted" read as never. Record it BEFORE the background re-run so a
+    // re-run that fails again still shows the attempt.
+    const retryCount = (Number(ctx.task.retry_count) || 0) + 1
+    await updateApplicationTask(req.db, ctx.task.id, { retryCount })
+    await appendTaskEvent(req.db, {
+      taskId: ctx.task.id,
+      eventType: 'note',
+      step: 'manual_retry',
+      message: `Manual retry #${retryCount} requested — Hamilton is re-running this application.`,
+      actorUserId: getAuthUserId(ctx.user),
+      actorRole: ctx.user.role === 'admin' ? 'admin' : 'user',
+      details: { retry_count: retryCount },
+    })
     runAutomationInBackground('retry_single', () => automateSingleSource(req.db, {
       profile,
       profileId: ctx.task.profile_id,
@@ -1595,7 +1611,10 @@ router.get('/admin/hard-stops', async (req, res) => {
   if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const limit = Math.max(1, Math.min(500, Number.parseInt(req.query.limit || '200', 10) || 200))
-    const rawBlockers = await listOpenAdminBlockers(req.db, { limit })
+    // Optional ?profile_id= narrows the checklist to one profile's stops (the
+    // dashboard default remains "every profile").
+    const profileId = String(req.query.profile_id || req.query.profileId || '').trim() || null
+    const rawBlockers = await listOpenAdminBlockers(req.db, { limit, profileId })
     // Annotate each stop with its inline-fix descriptor (or null) so the UI only
     // renders a "type the value here" input for stops the save endpoint accepts.
     const blockers = (rawBlockers || []).map((b) => ({ ...b, inline_field: inlineFieldForBlocker(b) }))

@@ -155,6 +155,21 @@ export function rowToBlocker(row) {
   }
 }
 
+/**
+ * Identity of a blocker for open-duplicate detection: the specific field/key it
+ * concerns (metadata.key, carried through from preflight/engine context) or,
+ * lacking one, its raw text. Two open rows on the same task with the same
+ * blocker_type + same dedupe key are the SAME stop, not two stops.
+ */
+export function blockerDedupeKey({ metadata = null, metadata_json = null, blocker_text = null, blockerText = null } = {}) {
+  const meta = safeJson(metadata ?? metadata_json)
+  const key = meta?.key ?? null
+  if (key !== null && key !== undefined && String(key).trim() !== '') return `k:${String(key).trim().toLowerCase()}`
+  const text = blocker_text ?? blockerText ?? null
+  if (text !== null && String(text).trim() !== '') return `t:${String(text).trim().toLowerCase()}`
+  return ''
+}
+
 export async function recordBlocker(db, {
   taskId, profileId, userId = null,
   fundingSourceId = null,
@@ -171,8 +186,34 @@ export async function recordBlocker(db, {
     throw new Error('taskId, profileId, blockerType required')
   }
   await ensureSchema(db)
-  const id = crypto.randomUUID()
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+
+  // Dedup at the insert choke point: a re-run that hits the same stop again
+  // must TOUCH the existing OPEN row (bump updated_at, refresh the text), not
+  // stack an identical duplicate — every retry of an unknown_application_method
+  // task was inserting a fresh open blocker, tripling the operator checklist.
+  // Identity = same task + same blocker_type + same field/key (or text).
+  const incomingKey = blockerDedupeKey({ metadata, blockerText })
+  try {
+    const open = await db.prepare(
+      `SELECT * FROM hamilton_blockers WHERE task_id = ? AND blocker_type = ? AND resolved_at IS NULL`,
+    ).all(String(taskId), String(blockerType))
+    const existing = (open || []).find((r) => blockerDedupeKey(r) === incomingKey)
+    if (existing) {
+      await db.prepare(
+        `UPDATE hamilton_blockers
+            SET blocker_text = COALESCE(?, blocker_text),
+                blocker_message = COALESCE(?, blocker_message),
+                updated_at = ${nowFn}
+          WHERE id = ?`,
+      ).run(blockerText, blockerMessage, existing.id)
+      return rowToBlocker(await db.prepare('SELECT * FROM hamilton_blockers WHERE id = ?').get(existing.id))
+    }
+  } catch {
+    // Dedupe probe failure must never block recording the stop itself.
+  }
+
+  const id = crypto.randomUUID()
   await db.prepare(
     `INSERT INTO hamilton_blockers
         (id, task_id, profile_id, user_id, funding_source_id,
@@ -318,16 +359,20 @@ export async function getBlocker(db, id) {
 
 /**
  * Return every unresolved blocker across the system. Used by the
- * admin "Hamilton hard stops" dashboard.
+ * admin "Hamilton hard stops" dashboard. Pass profileId to narrow the
+ * list to one profile's open stops.
  */
-export async function listOpenAdminBlockers(db, { limit = 200 } = {}) {
+export async function listOpenAdminBlockers(db, { limit = 200, profileId = null } = {}) {
   if (!db) return []
   await ensureSchema(db)
-  const rows = await db.prepare(
-    `SELECT * FROM hamilton_blockers
-      WHERE resolved_at IS NULL
-      ORDER BY detected_at DESC
-      LIMIT ?`,
-  ).all(Number(limit) || 200)
+  const params = []
+  let sql = `SELECT * FROM hamilton_blockers WHERE resolved_at IS NULL`
+  if (profileId) {
+    sql += ` AND profile_id = ?`
+    params.push(String(profileId))
+  }
+  sql += ` ORDER BY detected_at DESC LIMIT ?`
+  params.push(Number(limit) || 200)
+  const rows = await db.prepare(sql).all(...params)
   return (rows || []).map(rowToBlocker)
 }

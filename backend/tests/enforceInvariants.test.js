@@ -873,7 +873,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(10)
+    expect(summary.ran).toBe(11)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -886,6 +886,7 @@ describe('enforceInvariants — runner', () => {
       'student_aid_eligibility',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
+      'hamilton_task_self_heal',
     ])
   })
 
@@ -1160,5 +1161,204 @@ describe('enforceStudentAidEligibility — student-aid on non-student profiles',
     expect(first.repaired).toBe(1)
     const second = await enforceStudentAidEligibility(db, { resolveThesis })
     expect(second.repaired).toBe(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: Hamilton task lifecycle self-heal — a blocked task whose
+// missing-profile-field preflight blocker no longer reproduces is re-queued,
+// and already-stacked duplicate OPEN hard-stops collapse to one (extras are
+// RESOLVED as 'duplicate', never deleted).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceHamiltonTaskSelfHeal', () => {
+  let taskStore
+  let blockerStore
+
+  async function makeHamiltonDb() {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        display_name TEXT
+      );
+      CREATE TABLE profile_sections (
+        profile_id TEXT,
+        section_key TEXT,
+        data TEXT
+      );
+    `)
+    taskStore = await import('../services/hamilton/applicationTaskStore.js')
+    blockerStore = await import('../services/hamilton/hamiltonBlockerStore.js')
+    // applicationTaskStore caches "schema ensured" in a module-global flag; a
+    // fresh in-memory db per test needs it reset so its tables get created.
+    taskStore._resetSchemaCache()
+    await taskStore.ensureApplicationTaskSchema(raw)
+    return raw
+  }
+
+  async function makeBlockedTask(db, {
+    profileId = 'p-heal', grantId = crypto.randomUUID(),
+    message = 'Hamilton Autopilot stopped at preflight: Profile is missing first name',
+    missing = [{ kind: 'field', key: 'first_name', label: 'Profile is missing first name' }],
+  } = {}) {
+    const task = await taskStore.ensureApplicationTask(db, {
+      profileId, grantId, automationType: 'portal', initialStatus: 'queued',
+    })
+    await taskStore.updateApplicationTask(db, task.id, { status: 'blocked', lastAgentMessage: message })
+    if (missing.length > 0) await taskStore.setMissingInfo(db, task.id, missing)
+    return task
+  }
+
+  beforeEach(() => {
+    delete process.env.ENFORCE_HAMILTON_TASK_SELF_HEAL
+    delete process.env.HAMILTON_SELF_HEAL_REQUEUE_CAP
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_HAMILTON_TASK_SELF_HEAL
+    delete process.env.HAMILTON_SELF_HEAL_REQUEUE_CAP
+  })
+
+  it('re-queues a blocked task whose flagged name field is now derivable from display_name', async () => {
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    const task = await makeBlockedTask(db, {})
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.ok).toBe(true)
+    expect(res.requeued).toBe(1)
+
+    const after = await taskStore.getApplicationTask(db, task.id)
+    expect(after.status).toBe('ready')
+    expect(after.next_retry_at).toBe(null)
+    // Stale blocker text is replaced, not carried into the re-queued task.
+    expect(after.last_agent_message).not.toMatch(/missing first name/i)
+
+    const items = await taskStore.listMissingInfo(db, task.id, { includeResolved: false })
+    expect(items.length).toBe(0)
+
+    // Idempotent: the task is no longer blocked, so a second pass is a no-op.
+    const again = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(again.requeued).toBe(0)
+  })
+
+  it('leaves a task blocked when the flagged field is STILL missing', async () => {
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', null)
+    const task = await makeBlockedTask(db, {})
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.requeued).toBe(0)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+  })
+
+  it('never touches a blocked task with a non-profile-field outstanding item (conservative class gate)', async () => {
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    const task = await makeBlockedTask(db, {
+      missing: [
+        { kind: 'field', key: 'first_name', label: 'Profile is missing first name' },
+        { kind: 'login', key: 'portal_login', label: 'Sign in to the portal' },
+      ],
+    })
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.requeued).toBe(0)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+  })
+
+  it('heals a LEGACY blocked task (no missing-info rows) by parsing the preflight message', async () => {
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Anastasia White')
+    db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p-heal', 'basic_information', JSON.stringify({ email: 'ana@example.com' }))
+    const task = await makeBlockedTask(db, {
+      message: 'Hamilton Autopilot stopped at preflight: Profile is missing first name; Profile is missing email',
+      missing: [],
+    })
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.requeued).toBe(1)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('ready')
+  })
+
+  it('skips a legacy blocked task whose message includes a NON-profile-field blocker', async () => {
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    const task = await makeBlockedTask(db, {
+      message: 'Hamilton Autopilot stopped at preflight: Profile is missing first name; Portal URL is missing',
+      missing: [],
+    })
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.requeued).toBe(0)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+  })
+
+  it('collapses duplicate OPEN hard-stops to one (extras resolved as duplicate, never deleted)', async () => {
+    const db = await makeHamiltonDb()
+    const taskId = crypto.randomUUID()
+    // First blocker via the store (creates the hamilton_blockers schema), then
+    // stack two raw identical duplicates the way the pre-dedup insert path did.
+    const first = await blockerStore.recordBlocker(db, {
+      taskId, profileId: 'p-dup', blockerType: 'unknown_application_method',
+      blockerText: 'no signup form found', metadata: { key: 'application_method' },
+    })
+    // Make the first stop clearly the OLDEST (CURRENT_TIMESTAMP has 1s
+    // resolution, so all three rows would otherwise tie on detected_at).
+    db.prepare('UPDATE hamilton_blockers SET detected_at = ? WHERE id = ?')
+      .run('2026-06-20T00:00:00.000Z', first.id)
+    for (let i = 0; i < 2; i += 1) {
+      db.prepare(
+        `INSERT INTO hamilton_blockers (id, task_id, profile_id, blocker_type, blocker_text, metadata_json, detected_at)
+         VALUES (?, ?, 'p-dup', 'unknown_application_method', 'no signup form found', ?, CURRENT_TIMESTAMP)`,
+      ).run(crypto.randomUUID(), taskId, JSON.stringify({ key: 'application_method' }))
+    }
+    // A different-key open blocker on the same task must survive untouched.
+    db.prepare(
+      `INSERT INTO hamilton_blockers (id, task_id, profile_id, blocker_type, blocker_text, metadata_json, detected_at)
+       VALUES (?, ?, 'p-dup', 'unknown_application_method', 'other stop', ?, CURRENT_TIMESTAMP)`,
+    ).run(crypto.randomUUID(), taskId, JSON.stringify({ key: 'something_else' }))
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.dedupedBlockers).toBe(2)
+
+    const open = db.prepare('SELECT * FROM hamilton_blockers WHERE resolved_at IS NULL').all()
+    expect(open.length).toBe(2) // one survivor per key group
+    expect(open.some((b) => b.id === first.id)).toBe(true) // oldest kept
+    const resolved = db.prepare('SELECT * FROM hamilton_blockers WHERE resolved_at IS NOT NULL').all()
+    expect(resolved.length).toBe(2)
+    expect(resolved.every((b) => b.resolution_strategy === 'duplicate')).toBe(true)
+
+    // Idempotent: one open row per group left, so a second pass dedupes nothing.
+    const again = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(again.dedupedBlockers).toBe(0)
+  })
+
+  it('ENFORCE_HAMILTON_TASK_SELF_HEAL=0 counts candidates but writes nothing', async () => {
+    process.env.ENFORCE_HAMILTON_TASK_SELF_HEAL = '0'
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    const task = await makeBlockedTask(db, {})
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.enforced).toBe(false)
+    expect(res.repaired).toBe(0)
+    expect(res.scanned).toBeGreaterThan(0)
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+  })
+
+  it('caps requeues per boot (HAMILTON_SELF_HEAL_REQUEUE_CAP)', async () => {
+    process.env.HAMILTON_SELF_HEAL_REQUEUE_CAP = '1'
+    const db = await makeHamiltonDb()
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-heal', 'Robert White')
+    await makeBlockedTask(db, { grantId: 'g-cap-1' })
+    await makeBlockedTask(db, { grantId: 'g-cap-2' })
+
+    const res = await __testables.enforceHamiltonTaskSelfHeal(db)
+    expect(res.requeued).toBe(1)
+    expect(res.requeueCapped).toBe(true)
+    const blocked = db.prepare("SELECT COUNT(*) AS n FROM application_tasks WHERE status = 'blocked'").get()
+    expect(Number(blocked.n)).toBe(1)
   })
 })
