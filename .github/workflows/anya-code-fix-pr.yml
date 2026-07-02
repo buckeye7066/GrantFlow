@@ -6,6 +6,16 @@ on:
         description: "Unified diff patch to apply"
         required: true
         type: string
+      pr_title:
+        description: "Optional short summary used in the PR title"
+        required: false
+        type: string
+        default: ""
+      automerge:
+        description: "Queue CI-gated auto-merge on the PR (merges only when required checks are green)"
+        required: false
+        type: string
+        default: "false"
 
 permissions:
   contents: write
@@ -62,7 +72,13 @@ jobs:
 
       - name: Create branch, commit, push, and open PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a PAT when provisioned: PRs created with the default
+          # GITHUB_TOKEN do not trigger `on: pull_request` CI runs, so the
+          # required checks (and therefore auto-merge) would wait forever.
+          # With GITHUB_TOKEN the PR still opens and simply awaits review.
+          GH_TOKEN: ${{ secrets.ANYA_PR_TOKEN != '' && secrets.ANYA_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_TITLE_INPUT: ${{ inputs.pr_title }}
+          AUTOMERGE_INPUT: ${{ inputs.automerge }}
         run: |
           set -euo pipefail
 
@@ -71,13 +87,26 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          PR_TITLE="Anya Code Fix: apply patch"
+          if [ -n "$PR_TITLE_INPUT" ]; then
+            PR_TITLE="Anya Code Fix: $PR_TITLE_INPUT"
+          fi
+
           git checkout -b "$BRANCH_NAME"
           git add -A
-          git commit -m "fix: apply Anya code fix patch"
+          git commit -m "fix: apply Anya code fix patch" -m "$PR_TITLE"
           git push origin "$BRANCH_NAME"
 
           gh pr create \
             --base main \
             --head "$BRANCH_NAME" \
-            --title "Anya Code Fix: apply patch" \
-            --body "This PR was automatically created by the Anya Code Fix PR workflow after applying the provided patch."
+            --title "$PR_TITLE" \
+            --body "This PR was automatically created by the Anya Code Fix PR workflow after applying the provided patch. Merging is gated by the required CI checks on main."
+
+          # CI-gated auto-merge: never a direct merge — GitHub only completes
+          # this once every required branch-protection check is green. Failure
+          # to queue (e.g. auto-merge disabled) leaves the PR open for review.
+          if [ "$AUTOMERGE_INPUT" = "true" ]; then
+            gh pr merge "$BRANCH_NAME" --squash --auto \
+              || echo "auto-merge could not be queued; PR remains open for manual review."
+          fi

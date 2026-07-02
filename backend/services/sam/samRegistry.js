@@ -38,6 +38,18 @@ export const CHECK_KIND = Object.freeze({
   INTERNAL: 'internal',
 })
 
+// Dialect-aware time cutoff for raw timestamp comparisons (mirrors
+// crawlerConcurrencyGuard): Postgres compares ISO strings against timestamptz
+// natively, but SQLite CURRENT_TIMESTAMP stores 'YYYY-MM-DD HH:MM:SS' — an ISO
+// cutoff with its 'T' separator sorts AFTER every same-date SQLite timestamp,
+// so same-day comparisons silently misclassify. Both formats are returned in
+// the shape the engine actually stores.
+function timeCutoff(db, msAgo) {
+  const iso = new Date(Date.now() - msAgo).toISOString()
+  if (db?.dialect === 'postgres') return iso
+  return iso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+}
+
 // ---------------------------------------------------------------------------
 // Diagnostic checks (read-only — no writes, no scripts)
 // ---------------------------------------------------------------------------
@@ -646,6 +658,146 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     severityOnFailure: SEVERITY.HIGH,
     description: 'Confirms Anya telemetry is reachable and her tool-usage/run summary is populated, so a regression in her tool surface is caught.',
   },
+  // Deep per-agent checks — the HTTP telemetry probes above only prove the
+  // summary endpoint answers 200; these read the agents' OWN tables so a
+  // "reachable but silently failing" agent (runs erroring, yield frozen at
+  // zero, tool calls failing) surfaces as a Sam finding instead of a green
+  // dashboard. All fail OPEN: disabled agent / missing table / no data yet is
+  // an environment state, never a finding.
+  {
+    id: 'agent.yana.yield',
+    label: 'Yana lead yield (qualification pipeline)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads yana_lead_candidates directly: flags the frozen-universe failure class where Yana keeps FINDING leads but qualifies/pushes NONE to John over the recent window (a scoring or cursor regression, not an empty market). Fails open when Yana is disabled, the table is absent, or the sample is too small.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'yana yield: db unavailable' }
+      const enabled = /^(1|true|yes|on)$/i.test(String(process.env.YANA_ENABLED ?? '').trim())
+      // Portable time window: compute the cutoff in JS in the dialect's own
+      // timestamp format (datetime('now', ...) is SQLite-only; prod runs PG).
+      const since = timeCutoff(db, 14 * 24 * 60 * 60 * 1000)
+      let rows
+      try {
+        rows = await db
+          .prepare(`
+            SELECT
+              COUNT(*) AS found,
+              SUM(CASE WHEN qualification_status = 'qualified' THEN 1 ELSE 0 END) AS qualified,
+              SUM(CASE WHEN pushed_to_john = 1 THEN 1 ELSE 0 END) AS pushed
+            FROM yana_lead_candidates
+            WHERE created_at >= ?
+          `)
+          .get(since)
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `yana_lead_candidates not queryable yet (${err?.message || 'unknown'})` }
+      }
+      const found = Number(rows?.found || 0)
+      const qualified = Number(rows?.qualified || 0)
+      const pushed = Number(rows?.pushed || 0)
+      if (!enabled && found === 0) {
+        return { ok: true, summary: 'Yana disabled (YANA_ENABLED off) and no recent lead candidates — nothing to assess.' }
+      }
+      // Frozen-universe signal: a real sample of found leads, zero qualified
+      // AND zero pushed. A small trickle is not a signal.
+      if (found >= 10 && qualified === 0 && pushed === 0) {
+        return {
+          ok: false,
+          summary: `Yana found ${found} lead candidate(s) in 14 days but qualified 0 and pushed 0 to John — qualification pipeline looks frozen.`,
+          evidence: { found, qualified, pushed, window_days: 14, enabled },
+          recommended_fix: 'Inspect yana qualification scoring + the persisted discovery cursor (frozen-universe class); confirm the John bridge is consuming qualified leads.',
+          confidence: 0.8,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Yana yield (14d): found ${found}, qualified ${qualified}, pushed ${pushed} (enabled=${enabled}).`,
+        evidence: { found, qualified, pushed, enabled },
+      }
+    },
+  },
+  {
+    id: 'agent.john.draftHealth',
+    label: 'John run/draft health',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads john_runs directly: flags when John\'s recent runs are consistently FAILING (the telemetry endpoint stays 200 through that). Fails open when John has never run or his tables are absent.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'john health: db unavailable' }
+      let recent
+      try {
+        recent = await db
+          .prepare('SELECT status FROM john_runs ORDER BY started_at DESC LIMIT 5')
+          .all()
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `john_runs not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!recent || recent.length === 0) {
+        return { ok: true, summary: 'John has not run yet (no john_runs rows).' }
+      }
+      const failed = recent.filter((r) => String(r.status || '').toLowerCase() === 'failed').length
+      if (recent.length >= 3 && failed === recent.length) {
+        return {
+          ok: false,
+          summary: `John's last ${recent.length} runs ALL failed — outreach drafting is down while telemetry still answers 200.`,
+          evidence: { recent_statuses: recent.map((r) => r.status), failed },
+          recommended_fix: 'Read the latest john_runs.error / summary; usual suspects are Graph auth (alias 403 → User.Read.All) and empty lead input from Yana.',
+          confidence: 0.85,
+        }
+      }
+      return {
+        ok: true,
+        summary: `John run health ok: ${failed}/${recent.length} recent run(s) failed.`,
+        evidence: { recent_statuses: recent.map((r) => r.status) },
+      }
+    },
+  },
+  {
+    id: 'agent.anya.toolFailures',
+    label: 'Anya tool failure rate',
+    category: SAM_CATEGORIES.ADMIN_TOOL_INTEGRITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads anya_tool_usage directly: flags when a disproportionate share of Anya\'s recent tool invocations FAILED (her surface can be reachable while individual tools break underneath). Reports the top failing tools so the defect is triageable. Fails open on missing table / small sample.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'anya tool failures: db unavailable' }
+      let rows
+      try {
+        rows = await db
+          .prepare(`
+            SELECT tool_name, success FROM anya_tool_usage
+            ORDER BY created_at DESC LIMIT 200
+          `)
+          .all()
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `anya_tool_usage not queryable yet (${err?.message || 'unknown'})` }
+      }
+      const total = rows?.length || 0
+      if (total < 10) {
+        return { ok: true, summary: `anya tool usage: only ${total} recent call(s); no reliable failure signal yet.` }
+      }
+      const failures = rows.filter((r) => Number(r.success) === 0)
+      const rate = failures.length / total
+      if (rate > 0.3) {
+        const byTool = {}
+        for (const f of failures) byTool[f.tool_name] = (byTool[f.tool_name] || 0) + 1
+        const top = Object.entries(byTool).sort((a, b) => b[1] - a[1]).slice(0, 5)
+        return {
+          ok: false,
+          summary: `${Math.round(rate * 100)}% of Anya's last ${total} tool calls failed. Top failing: ${top.map(([t, n]) => `${t}(${n})`).join(', ')}.`,
+          evidence: { total, failed: failures.length, failure_rate: Number(rate.toFixed(3)), top_failing_tools: top },
+          recommended_fix: 'Query anya_tool_usage for error_message on the top failing tools; a single broken dependency (DB column, provider key) usually explains the cluster.',
+          confidence: 0.85,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Anya tool health ok: ${failures.length}/${total} recent call(s) failed (${Math.round(rate * 100)}%).`,
+        evidence: { total, failed: failures.length },
+      }
+    },
+  },
   {
     id: 'agent.robert.discoveryPhases',
     label: 'Robert discovery phases (catalog mine + email feed)',
@@ -1044,6 +1196,52 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    id: 'queue.staleJobs',
+    label: 'Stale crawler queue jobs',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Flags crawler jobs stuck in "running" past the stale threshold or "queued" for over 24h — dead workers / dispatcher stalls that silently starve discovery. Carries safe_fix_id queue.recover-stale-jobs so a repair-safe run ACTS on the finding (Sam sees → Sam fixes) instead of only reporting it. Fails open when the table is absent.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'queue stale jobs: db unavailable' }
+      const staleRunningMs = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(7 * 60 * 60 * 1000), 10)
+      const staleQueuedMs = 24 * 60 * 60 * 1000
+      const runningCutoff = timeCutoff(db, staleRunningMs)
+      const queuedCutoff = timeCutoff(db, staleQueuedMs)
+      let running = 0
+      let queued = 0
+      try {
+        const r = await db
+          .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`)
+          .get(runningCutoff)
+        running = Number(r?.c || 0)
+        const q = await db
+          .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'queued' AND created_at < ?`)
+          .get(queuedCutoff)
+        queued = Number(q?.c || 0)
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `crawler_jobs not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (running > 0 || queued > 0) {
+        return {
+          ok: false,
+          summary: `${running} crawler job(s) stuck running past ${Math.round(staleRunningMs / 3600000)}h and ${queued} queued > 24h — the queue is silently starving discovery.`,
+          evidence: {
+            stale_running: running,
+            stale_queued: queued,
+            // Consumed by samSafeFixes.deriveSafeFixesFromFindings: on the
+            // human-authorized repair-safe path Sam applies the registered
+            // deterministic cleanup instead of only reporting.
+            safe_fix_id: 'queue.recover-stale-jobs',
+          },
+          recommended_fix: 'Run Sam in repair-safe mode (auto-applies queue.recover-stale-jobs) or POST /api/admin/queue/recover-stale.',
+          confidence: 0.9,
+        }
+      }
+      return { ok: true, summary: 'no stale crawler queue jobs.', evidence: { stale_running: 0, stale_queued: 0 } }
+    },
+  },
+  {
     id: 'crawler.coverageDegraded',
     label: 'Crawler coverage degraded (source failure rate)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
@@ -1169,6 +1367,12 @@ export const SAFE_FIX_REGISTRY = Object.freeze([
     label: 'Run eslint --fix on a single file',
     risk_level: 'safe',
     description: 'Runs eslint with --fix limited to one file when the lint check identified that exact path. Refuses if the file is outside src/ or backend/.',
+  },
+  {
+    id: 'queue.recover-stale-jobs',
+    label: 'Recover stale crawler queue jobs',
+    risk_level: 'safe',
+    description: 'Runs the SAME idempotent stale-job recovery the admin queue endpoint uses (crawlerConcurrencyGuard.cleanupStaleCrawlers + cleanupStaleQueuedJobs): marks dead running jobs failed/partial and expires ancient queued jobs. Deterministic, DB-only, never touches files; a second run recovers 0.',
   },
 ])
 
