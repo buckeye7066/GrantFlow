@@ -124,41 +124,43 @@ export function buildLocalFundingQueries(profileContext = {}, maxQueries = 8) {
 }
 
 /**
- * Run profile-driven local web searches and return funding LEADS.
+ * Execute a list of web queries and merge the hits into deduped funding LEADS.
+ * Shared by the profile-keyed lane (searchLocalWebByProfile) and the
+ * need-keyed lane (searchNeedWebLeads) so both produce ONE lead shape:
+ * record_origin='web_search', is_lead=true, no application_url (a lead's URL
+ * is a source page to verify, never an application target).
  *
- * @param {Object} profileContext
- * @param {Object} [opts]
- * @param {number} [opts.maxQueries=8]
+ * @param {string[]} queries
+ * @param {Object} opts
+ * @param {string|null} [opts.state]
  * @param {number} [opts.perQueryCount=6]
  * @param {number} [opts.timeoutMs=9000] Overall wall-clock budget.
- * @returns {Promise<{ opportunities: Object[], debug: Object }>}
+ * @returns {Promise<{ opportunities: Object[], raw: number }>}
  */
-export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
-  const maxQueries = Math.max(1, Math.min(Number(opts.maxQueries) || 8, 12))
-  const perQueryCount = Math.max(1, Math.min(Number(opts.perQueryCount) || 6, 15))
-  const timeoutMs = Math.max(1000, Math.min(Number(opts.timeoutMs) || 9000, 25000))
-
-  const queries = buildLocalFundingQueries(profileContext, maxQueries)
-  const debug = { queries, raw: 0, deduped: 0 }
-  if (queries.length === 0) return { opportunities: [], debug }
-
-  const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
-  const deadline = Date.now() + timeoutMs
+async function collectWebLeads(queries, { state = null, perQueryCount = 6, timeoutMs = 9000 } = {}) {
+  const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 9000, 25000))
+  let raw = 0
 
   const perQuery = await Promise.all(
     queries.map(async (query) => {
       const remaining = deadline - Date.now()
       if (remaining <= 0) return []
-      const results = await searchWeb(query, { count: perQueryCount, timeoutMs: Math.min(remaining, 8000) })
-        .catch(() => [])
-      return results.map((r) => ({ ...r, _query: query }))
+      // try/catch (not .catch chaining) so a synchronous throw from the search
+      // engine is swallowed too — this lane must NEVER fail the caller.
+      let results = []
+      try {
+        results = await searchWeb(query, { count: perQueryCount, timeoutMs: Math.min(remaining, 8000) })
+      } catch {
+        results = []
+      }
+      return (results || []).map((r) => ({ ...r, _query: query }))
     }),
   )
 
   // Merge + dedupe by URL across queries, recording every query that surfaced it.
   const byUrl = new Map()
   for (const list of perQuery) {
-    debug.raw += list.length
+    raw += list.length
     for (const r of list) {
       const key = String(r.url).toLowerCase().replace(/\/$/, '')
       if (!key) continue
@@ -193,9 +195,169 @@ export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
     is_lead: true,
   }))
 
+  return { opportunities, raw }
+}
+
+/**
+ * Run profile-driven local web searches and return funding LEADS.
+ *
+ * @param {Object} profileContext
+ * @param {Object} [opts]
+ * @param {number} [opts.maxQueries=8]
+ * @param {number} [opts.perQueryCount=6]
+ * @param {number} [opts.timeoutMs=9000] Overall wall-clock budget.
+ * @returns {Promise<{ opportunities: Object[], debug: Object }>}
+ */
+export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
+  const maxQueries = Math.max(1, Math.min(Number(opts.maxQueries) || 8, 12))
+  const perQueryCount = Math.max(1, Math.min(Number(opts.perQueryCount) || 6, 15))
+  const timeoutMs = Math.max(1000, Math.min(Number(opts.timeoutMs) || 9000, 25000))
+
+  const queries = buildLocalFundingQueries(profileContext, maxQueries)
+  const debug = { queries, raw: 0, deduped: 0 }
+  if (queries.length === 0) return { opportunities: [], debug }
+
+  const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
+  const { opportunities, raw } = await collectWebLeads(queries, { state, perQueryCount, timeoutMs })
+
+  debug.raw = raw
   debug.deduped = opportunities.length
   log.info(`[liveWebSearch] ${queries.length} queries → ${debug.raw} raw → ${debug.deduped} unique local leads`)
   return { opportunities, debug }
 }
 
-export default { searchLocalWebByProfile, buildLocalFundingQueries }
+/**
+ * Build web queries for a CONCRETE user-stated need ("15 passenger van",
+ * "help to pay for an Ethics Probe Class"). This is the item-funding lane:
+ * the profile-keyed crawl has no reason to have fetched pages about a specific
+ * item, so the need itself must drive the search. Queries anchor on:
+ *   - the taxonomy phrase that matched (expandNeed's matchedKey — e.g.
+ *     "passenger van", "probe class") when it is a phrase, else the raw need;
+ *   - the applicant type (nonprofit / small business / school) so a nonprofit
+ *     gets "passenger van grant nonprofit", not consumer-loan noise;
+ *   - the profile's state for local funders;
+ *   - variant 'gift' flips the intent to donation / in-kind programs
+ *     ("organizations that donate passenger van") for the "find donation or
+ *     gift programs" path.
+ *
+ * @param {string} needText - raw user need text
+ * @param {Object|null} expandedNeed - output of needTaxonomy.expandNeed(needText)
+ * @param {Object} [profileContext]
+ * @param {Object} [opts]
+ * @param {('funding'|'gift')} [opts.variant='funding']
+ * @param {number} [opts.maxQueries=5]
+ * @returns {string[]}
+ */
+export function buildNeedWebQueries(needText, expandedNeed = null, profileContext = {}, opts = {}) {
+  const variant = opts.variant === 'gift' ? 'gift' : 'funding'
+  const maxQueries = Math.max(1, Math.min(Number(opts.maxQueries) || 5, 8))
+  const need = String(needText || '').replace(/\s+/g, ' ').trim()
+  if (!need) return []
+
+  const profile = profileContext?.profile ?? {}
+  const signals = profileContext?.signals ?? {}
+  const loc = signals?.location ?? {}
+  const state = loc.state || profile.state || null
+
+  const type = String(
+    profile.primary_type || profile.applicant_type || signals.entityType || '',
+  ).replace(/_/g, ' ').trim().toLowerCase()
+  const applicantNoun =
+    type.includes('nonprofit') || type.includes('501') || type.includes('church') || type.includes('ministry')
+      ? 'nonprofit'
+      : type.includes('business')
+        ? 'small business'
+        : type.includes('school')
+          ? 'school'
+          : ''
+
+  // Core term: prefer the taxonomy PHRASE that matched (it strips filler like
+  // "help to pay for an …"), but only when it is a phrase — a single-word key
+  // like "vehicle" is a category, not the user's item.
+  const matchedKey = String(expandedNeed?.matchedKey || '').trim()
+  const core = matchedKey.includes(' ') ? matchedKey : need
+
+  const queries = []
+  const push = (q) => {
+    const v = String(q || '').replace(/\s+/g, ' ').trim()
+    if (v) queries.push(v)
+  }
+
+  if (variant === 'gift') {
+    push(`"${core}" donation program ${applicantNoun}`)
+    push(`organizations that donate ${core}`)
+    push(`free ${core} ${applicantNoun || 'program'} ${state || ''}`)
+    push(`${core} in-kind donation ${state || ''}`)
+  } else {
+    push(`"${core}" grant ${applicantNoun}`)
+    push(`"${core}" funding assistance ${state || ''}`)
+    push(`grant to pay for ${core} ${applicantNoun}`)
+    // One taxonomy-broadened query (first synonym that differs from the core)
+    const syn = (expandedNeed?.synonyms || []).find(
+      (s) => s && String(s).toLowerCase() !== core.toLowerCase(),
+    )
+    if (syn) push(`${syn} ${applicantNoun ? `${applicantNoun} ` : ''}grant ${state || ''}`)
+  }
+  // When the core was distilled from a longer sentence, keep ONE raw-text query
+  // so nothing the user typed is silently dropped.
+  if (core.toLowerCase() !== need.toLowerCase()) {
+    push(`${need} ${variant === 'gift' ? 'donation' : 'grant'}`)
+  }
+
+  const seen = new Set()
+  const out = []
+  for (const q of queries) {
+    const k = q.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(q)
+    if (out.length >= maxQueries) break
+  }
+  return out
+}
+
+/**
+ * Run need-keyed live web searches and return funding LEADS for a concrete
+ * item/need. Same safety posture as searchLocalWebByProfile: results are
+ * labeled leads (record_origin='web_search'), display-merged by the caller,
+ * NEVER ingested into the shared catalog unverified, and fully failure-tolerant.
+ *
+ * @param {Object} opts
+ * @param {string} opts.needText
+ * @param {Object|null} [opts.expandedNeed] - needTaxonomy.expandNeed output
+ * @param {Object} [opts.profileContext]
+ * @param {('funding'|'gift')} [opts.variant='funding']
+ * @param {number} [opts.maxQueries=5]
+ * @param {number} [opts.perQueryCount=6]
+ * @param {number} [opts.timeoutMs=12000] Overall wall-clock budget.
+ * @returns {Promise<{ opportunities: Object[], debug: Object }>}
+ */
+export async function searchNeedWebLeads({
+  needText,
+  expandedNeed = null,
+  profileContext = {},
+  variant = 'funding',
+  maxQueries = 5,
+  perQueryCount = 6,
+  timeoutMs = 12000,
+} = {}) {
+  const queries = buildNeedWebQueries(needText, expandedNeed, profileContext, { variant, maxQueries })
+  const debug = { queries, raw: 0, deduped: 0 }
+  if (queries.length === 0) return { opportunities: [], debug }
+
+  const state = profileContext?.signals?.location?.state ?? profileContext?.profile?.state ?? null
+  const { opportunities, raw } = await collectWebLeads(queries, {
+    state,
+    perQueryCount: Math.max(1, Math.min(Number(perQueryCount) || 6, 15)),
+    timeoutMs,
+  })
+
+  debug.raw = raw
+  debug.deduped = opportunities.length
+  log.info(
+    `[liveWebSearch] need "${String(needText).slice(0, 60)}" (${variant}): ${queries.length} queries → ${debug.raw} raw → ${debug.deduped} unique leads`,
+  )
+  return { opportunities, debug }
+}
+
+export default { searchLocalWebByProfile, buildLocalFundingQueries, buildNeedWebQueries, searchNeedWebLeads }

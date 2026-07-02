@@ -126,14 +126,18 @@ export async function runSmartCrawler({
 
 /**
  * Search for a specific need/item using curated data + live web search.
- * Calls POST /api/real-crawlers/specific-need which runs the full pipeline
- * plus DuckDuckGo web search and known item source catalogs.
+ * Calls POST /api/real-crawlers/specific-need which re-ranks this profile's
+ * Crawler OS results against the need AND runs a need-keyed live web search
+ * (SearXNG/Brave) whose hits come back as labeled leads
+ * (result_source='web_search'). Pass variant='gift' to bias the web queries
+ * toward donation / in-kind programs ("organizations that donate X").
  * profile_id is required â throws early if missing.
  * @param {Object} opts
  * @param {string} opts.profileId - Required. Profile ID for context/signals.
  * @param {string} opts.needText - Required. Human-readable need description.
  * @param {number} [opts.minMatchScore]
  * @param {number} [opts.maxResults]
+ * @param {('funding'|'gift')} [opts.variant]
  * @returns {Promise<Object>}
  */
 export async function searchSpecificNeed({
@@ -141,6 +145,7 @@ export async function searchSpecificNeed({
   needText,
   minMatchScore = 20,
   maxResults = 30,
+  variant = 'funding',
 }) {
   const pid = typeof profileId === 'string' ? profileId.trim() : null
   if (!pid) {
@@ -156,6 +161,7 @@ export async function searchSpecificNeed({
       need_text: needText.trim(),
       min_match_score: minMatchScore,
       max_results: maxResults,
+      variant: variant === 'gift' ? 'gift' : 'funding',
     }),
   })
 }

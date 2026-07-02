@@ -34,7 +34,7 @@ import NeedsDiscoveryPanel from "@/components/ai/NeedsDiscoveryPanel"
 
 const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
-import { createCrawlerJob, searchSpecificNeed } from "@/api/crawlers"
+import { searchSpecificNeed } from "@/api/crawlers"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { useTierEntitlements } from "@/hooks/useTierEntitlements"
@@ -328,13 +328,15 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
 
           {opportunity.application_url ? (
             <section className="space-y-2">
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">Application Portal</h3>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">
+                {opportunity.record_origin === "web_search" ? "Source Page (verify before applying)" : "Application Portal"}
+              </h3>
               <Button
                 variant="default"
                 className="gap-2"
                 onClick={() => window.open(opportunity.application_url, "_blank", "noopener,noreferrer")}
               >
-                Visit portal
+                {opportunity.record_origin === "web_search" ? "Visit source" : "Visit portal"}
                 <ExternalLink className="w-4 h-4" />
               </Button>
             </section>
@@ -363,6 +365,11 @@ export default function ItemFunding() {
   const [includeDisqualified, setIncludeDisqualified] = useState(false)
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [submittedItem, setSubmittedItem] = useState("")
+  // Live-search options: the "deeper sweep" action lowers the need-match floor,
+  // the "donation or gift programs" action flips the web-query variant. Both
+  // re-run the SAME live endpoint (the old item_search/item_gift_search crawler
+  // jobs were retired with the legacy crawlers and no longer exist server-side).
+  const [liveOptions, setLiveOptions] = useState({ minMatchScore: 15, variant: "funding" })
 
   const statesQuery = useQuery({
     queryKey: ["opportunity-states"],
@@ -402,13 +409,14 @@ export default function ItemFunding() {
 
   // Live web + curated search via /specific-need (only when profile selected)
   const liveSearchQuery = useQuery({
-    queryKey: ["item-live-search", submittedItem, filters.profileId],
+    queryKey: ["item-live-search", submittedItem, filters.profileId, liveOptions.minMatchScore, liveOptions.variant],
     queryFn: () =>
       searchSpecificNeed({
         profileId: filters.profileId,
         needText: submittedItem,
-        minMatchScore: 15,
+        minMatchScore: liveOptions.minMatchScore,
         maxResults: 40,
+        variant: liveOptions.variant,
       }),
     enabled: submittedItem.trim().length > 0 && Boolean(filters.profileId) && filters.profileId !== "all",
     retry: 1,
@@ -428,6 +436,10 @@ export default function ItemFunding() {
   // Live search results from specific-need endpoint
   const liveResults = liveSearchQuery.data?.opportunities ?? []
   const liveWebCount = liveSearchQuery.data?.web_search_results ?? 0
+  // Honest web-lane telemetry: distinguish "searched the web, found nothing"
+  // from "live web search unavailable/disabled on the server".
+  const webSearchAttempted = liveSearchQuery.data?.web_search?.attempted ?? false
+  const liveSearchPartial = Boolean(liveSearchQuery.data?.timed_out)
   // Applicant type detected from the selected profile (drives profile-aware funder picks)
   const applicantType = liveSearchQuery.data?.applicant_type ?? null
   const applicantTypeLabel = APPLICANT_TYPE_LABELS[applicantType] ?? null
@@ -451,7 +463,7 @@ export default function ItemFunding() {
           description: opp.description,
           url: opp.url || opp.application_url,
           application_url: opp.application_url || opp.url,
-          source: opp.source || opp.result_source || 'Live Search',
+          source: opp.result_source === 'web_search' ? 'Live web search' : opp.source || opp.result_source || 'Live Search',
           categories: opp.categories || [],
           match_reasons: opp.need_match?.matchedTerms || opp.match_reasons || [],
           amount_min: toNumberOrNull(opp.amount_min),
@@ -462,6 +474,7 @@ export default function ItemFunding() {
           is_national: isNationalValue,
           opportunity_type: opp.opportunity_type || opp.type || 'program',
           sponsor: opp.sponsor || opp.source,
+          record_origin: opp.record_origin || null,
         },
         match: {
           score: opp.combined_score || opp.match_score || 50,
@@ -534,6 +547,7 @@ export default function ItemFunding() {
       })
       return
     }
+    setLiveOptions({ minMatchScore: 15, variant: "funding" })
     setSubmittedItem(filters.item.trim())
   }
 
@@ -541,6 +555,7 @@ export default function ItemFunding() {
     const next = String(name || "").trim()
     if (!next) return
     setFilters((prev) => ({ ...prev, item: next }))
+    setLiveOptions({ minMatchScore: 15, variant: "funding" })
     setSubmittedItem(next)
   }
 
@@ -551,6 +566,7 @@ export default function ItemFunding() {
       includeNational: true,
       profileId: "all",
     })
+    setLiveOptions({ minMatchScore: 15, variant: "funding" })
     setSubmittedItem("")
   }
 
@@ -564,114 +580,56 @@ export default function ItemFunding() {
     return trimmed
   }
 
-  const handleRequestItemCrawler = async () => {
+  // Guard shared by the two deeper-search actions. Returns true when a live
+  // search can run (item entered + profile selected + tier allows item funding).
+  const canRunDeeperSearch = (contextLabel) => {
     if (!submittedItem) {
       toast({
         variant: "destructive",
         title: "Search for an item first",
-        description: "Enter the item or equipment name before requesting a crawler sweep.",
+        description: `Enter the item or equipment name before ${contextLabel}.`,
       })
-      return
+      return false
     }
-
-    const validProfileId = getValidatedProfileId()
-    if (!validProfileId) {
+    if (!getValidatedProfileId()) {
       toast({
         variant: "destructive",
         title: "Select a profile first",
-        description: "Item crawlers run against a specific profile. Choose a profile, then retry.",
+        description: "Deeper item searches run against a specific profile. Choose a profile, then retry.",
       })
-      return
+      return false
     }
-
     if (!canItemFunding) {
       toast({
         variant: "destructive",
         title: "Tier upgrade required",
         description: "Item funding is not enabled for this profile\u2019s billing tier.",
       })
-      return
+      return false
     }
-
-    try {
-      const payload = {
-        type: "item_search",
-        parameters: {
-          item: submittedItem,
-          state: filters.state !== "all" ? filters.state : null,
-          includeNational: filters.includeNational,
-        },
-        profile_id: validProfileId,
-      }
-
-      const job = await createCrawlerJob(payload)
-      const idText = typeof job?.id === "string" ? `Job ${job.id.slice(0, 8)}\u2026 is running.` : ""
-      toast({
-        title: "Item crawler queued",
-        description: `We\u2019ll search for ${submittedItem}.${idText ? ` ${idText}` : ""}`,
-      })
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Unable to queue crawler",
-        description: error instanceof Error ? error.message : "Try again shortly.",
-      })
-    }
+    return true
   }
 
-  const handleRequestItemGiftCrawler = async () => {
-    if (!submittedItem) {
-      toast({
-        variant: "destructive",
-        title: "Search for an item first",
-        description: "Enter the item or equipment name before searching donation/gift programs.",
-      })
-      return
-    }
+  // The old item_search / item_gift_search crawler jobs were retired with the
+  // legacy crawlers (the backend rejects those job types), so these actions now
+  // re-run the LIVE specific-need search with different knobs instead of
+  // pretending to queue a job that would never run.
+  const handleRequestItemCrawler = () => {
+    if (!canRunDeeperSearch("running a deeper sweep")) return
+    setLiveOptions((prev) => ({ ...prev, minMatchScore: 5 }))
+    toast({
+      title: "Deeper live search running",
+      description: `Searching more sources for ${submittedItem} with a lower match floor.`,
+    })
+  }
 
-    const validProfileId = getValidatedProfileId()
-    if (!validProfileId) {
-      toast({
-        variant: "destructive",
-        title: "Select a profile first",
-        description: "Donation-source crawlers run against a specific profile. Choose a profile, then retry.",
-      })
-      return
-    }
-
-    if (!canItemFunding) {
-      toast({
-        variant: "destructive",
-        title: "Tier upgrade required",
-        description: "Item funding is not enabled for this profile\u2019s billing tier.",
-      })
-      return
-    }
-
-    try {
-      const payload = {
-        type: "item_gift_search",
-        parameters: {
-          item: submittedItem,
-          match_threshold: 55,
-          max_results: 20,
-        },
-        profile_id: validProfileId,
-      }
-
-      const job = await createCrawlerJob(payload)
-      const idText = typeof job?.id === "string" ? `Job ${job.id.slice(0, 8)}\u2026 is running.` : ""
-      toast({
-        title: "Donation-source crawler queued",
-        description: `We\u2019ll find organizations that provide ${submittedItem}.${idText ? ` ${idText}` : ""}`,
-      })
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Unable to queue donation-source crawler",
-        description: error instanceof Error ? error.message : "Try again shortly.",
-      })
-    }
+  const handleRequestItemGiftCrawler = () => {
+    if (!canRunDeeperSearch("searching donation/gift programs")) return
+    setLiveOptions((prev) => ({ ...prev, variant: "gift" }))
+    toast({
+      title: "Searching donation and gift programs",
+      description: `Looking for organizations that donate or provide ${submittedItem} directly.`,
+    })
   }
 
   return (
@@ -697,8 +655,8 @@ export default function ItemFunding() {
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
               <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle &ldquo;Show match/loan results&rdquo; to review them).</li>
-              <li>Local crawler searches within 25 miles (or the student&apos;s campus ZIP) for locality-specific aid.</li>
-              <li>Scholarship and Geo Crawl augment the list with verified national gift-based funding.</li>
+              <li>Curated matches come from your profile&apos;s verified crawler results, re-ranked for this exact item.</li>
+              <li>Live web results are labeled as leads &mdash; real pages found right now; always verify the source before applying.</li>
             </ul>
           </div>
         </div>
@@ -814,6 +772,12 @@ export default function ItemFunding() {
                         <Loader2 className="w-3 h-3 animate-spin" /> searching web...
                       </span>
                     ) : null}
+                    {liveSearchQuery.isSuccess && hasSelectedProfile && !webSearchAttempted ? (
+                      <span className="text-amber-600 ml-1">(live web search unavailable)</span>
+                    ) : null}
+                    {liveSearchPartial ? (
+                      <span className="text-amber-600 ml-1">(deep crawl still running &mdash; check back shortly)</span>
+                    ) : null}
                   </p>
                   {hasSelectedProfile && applicantTypeLabel ? (
                     <p className="inline-flex items-center gap-1 text-slate-500">
@@ -835,6 +799,7 @@ export default function ItemFunding() {
           profileId={filters.profileId}
           onSearchItem={(searchText) => {
             setFilters((prev) => ({ ...prev, item: searchText }))
+            setLiveOptions({ minMatchScore: 15, variant: "funding" })
             setSubmittedItem(searchText)
           }}
         />
@@ -885,6 +850,10 @@ export default function ItemFunding() {
                 { label: "Profile", value: hasSelectedProfile ? selectedProfile?.display_name || "Selected" : "Not selected" },
                 { label: "Excluded review rows", value: String(disqualifiedCount) },
                 { label: "Live web rows", value: String(liveWebCount || 0) },
+                {
+                  label: "Live web search",
+                  value: !hasSelectedProfile ? "Needs a profile" : webSearchAttempted ? "Searched" : "Unavailable",
+                },
               ]}
               actions={[
                 {
@@ -902,8 +871,8 @@ export default function ItemFunding() {
                 },
                 {
                   kind: "crawler",
-                  label: "Queue deeper crawler sweep",
-                  description: "Search more sources for this exact item and selected profile.",
+                  label: "Run a deeper live search",
+                  description: "Lower the match floor and re-search curated sources plus the live web for this exact item.",
                   onClick: handleRequestItemCrawler,
                   disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
                   variant: hasSelectedProfile ? "default" : "outline",
@@ -911,7 +880,7 @@ export default function ItemFunding() {
                 {
                   kind: "crawler",
                   label: "Find donation or gift programs",
-                  description: "Look for organizations that provide the item directly.",
+                  description: "Search the live web for organizations that donate or provide the item directly.",
                   onClick: handleRequestItemGiftCrawler,
                   disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
                 },
