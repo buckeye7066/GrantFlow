@@ -170,7 +170,7 @@
     "cmdk": "^1.0.0",
     "concurrently": "^10.0.3",
     "cookie-parser": "^1.4.6",
-    "date-fns": "^3.6.0",
+    "date-fns": "^4.4.0",
     "embla-carousel-react": "^8.5.2",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
