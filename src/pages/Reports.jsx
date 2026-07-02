@@ -10,7 +10,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { Loader2, Filter, TrendingUp, Target, Award, Banknote, Percent, FileText, Plus, Calendar, Clock, AlertTriangle } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { groupBy, countBy, sumBy } from "lodash";
+import { groupBy, countBy, sumBy } from "@/utils/aggregate";
 import { format, subMonths, isPast, differenceInDays } from 'date-fns';
 import { canonicalStage, isActiveStage } from '../../shared/pipelineStages.js';
 import { useToast } from "@/components/ui/use-toast";

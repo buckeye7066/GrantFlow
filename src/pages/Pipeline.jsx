@@ -26,7 +26,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { useFilteredGrants } from "@/components/hooks/useFilteredGrants";
 import { isGrantExpired } from "@/components/shared/grantUtils";
 import { createPageUrl } from "@/utils";
-import { countBy } from "lodash";
+import { countBy } from "@/utils/aggregate";
 import { listProfiles } from "@/api/profiles";
 import { apiFetch } from "@/api/client";
 import { env } from "@/config/env.js";
