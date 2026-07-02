@@ -27,6 +27,8 @@
  *   AMY_APPLY_TUNING            auto-apply the proven, reversible floor change (default true)
  *   AMY_APPLY_WEIGHTS           auto-apply scoring-weight edits, re-crawl validated (default true)
  *   AMY_APPLY_COVERAGE          auto-apply additive source-coverage edits, validated (default true)
+ *   AMY_APPLY_LEARNING          record per-archetype query-steering lessons the
+ *                               live crawl consumes (additive-only; default true)
  *   AMY_ANYA_APPLY              let Anya write code fixes (default false → analysis only)
  *   AMY_SAM_APPLY               let Sam apply+save its safe fixes (default true)
  *   AMY_INTERVAL_MS             override the 24h cadence (testing/ops)
@@ -69,6 +71,7 @@ export function getAmyConfig() {
     applyTuning: bool(process.env.AMY_APPLY_TUNING, true),
     applyWeights: bool(process.env.AMY_APPLY_WEIGHTS, true),
     applyCoverage: bool(process.env.AMY_APPLY_COVERAGE, true),
+    applyLearning: bool(process.env.AMY_APPLY_LEARNING, true),
     anyaApply: bool(process.env.AMY_ANYA_APPLY, false),
     samApply: bool(process.env.AMY_SAM_APPLY, true),
     intervalMs: Number(process.env.AMY_INTERVAL_MS) > 0 ? Number(process.env.AMY_INTERVAL_MS) : DAY_MS,
@@ -96,6 +99,7 @@ function kickOff({ db, logger, source = 'scheduler' }) {
       applyTuning: cfg.applyTuning,
       applyWeights: cfg.applyWeights,
       applyCoverage: cfg.applyCoverage,
+      applyLearning: cfg.applyLearning,
       anyaApply: cfg.anyaApply,
       samApply: cfg.samApply,
     },

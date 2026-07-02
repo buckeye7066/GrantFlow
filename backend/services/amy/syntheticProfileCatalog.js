@@ -519,6 +519,120 @@ export const CATEGORY_CATALOG = Object.freeze({
     }),
   },
 
+  senior_citizen: {
+    label: 'Senior Citizen',
+    primary_type: 'senior',
+    kind: 'individual',
+    build: () => ({
+      basic_information: { age: 72 },
+      government_assistance: { medicare_recipient_self: true },
+      financial_information: { financial_need_level: 'moderate', low_income: true, household_size: 1 },
+      housing: { status: 'stable', type: 'own' },
+      narrative: {
+        mission: 'Retired senior living on a fixed income.',
+        primary_goal: 'Senior services: meals, transportation, home repair, and utility help.',
+      },
+      programs_services: {
+        focus_areas: ['senior_services', 'aging'],
+        interests: ['senior assistance', 'meals on wheels', 'home repair', 'utility assistance'],
+        keywords: ['senior grant', 'older adult assistance', 'aging services'],
+      },
+    }),
+  },
+
+  family_caregiver: {
+    label: 'Family Caregiver',
+    primary_type: 'family',
+    kind: 'individual',
+    build: () => ({
+      family: { household_size: 3, responsibilities: 'Caring full-time for an aging parent with dementia.' },
+      family_life: { caregiver: true },
+      financial_information: { financial_need_level: 'moderate', household_size: 3 },
+      narrative: {
+        mission: 'Family caregiver for an aging parent.',
+        primary_goal: 'Respite care, caregiver support, and home-care assistance.',
+      },
+      programs_services: {
+        focus_areas: ['caregiving', 'family'],
+        interests: ['respite care', 'caregiver support', 'dementia care'],
+        keywords: ['caregiver grant', 'respite assistance', 'family caregiver support'],
+      },
+    }),
+  },
+
+  first_responder: {
+    label: 'EMS / First Responder Professional',
+    primary_type: 'individual_need',
+    kind: 'individual',
+    build: ({ rng }) => ({
+      occupation: { ems_worker: true, healthcare_worker: true, healthcare_worker_type: 'EMT' },
+      employment: { current_status: 'Full-time', employer: pick(rng, REAL_EMPLOYERS) },
+      education: { highest_level: 'high school diploma', cte_pathway: 'Emergency Medical Services' },
+      narrative: {
+        mission: 'Working EMS professional advancing to paramedic.',
+        primary_goal: 'First-responder education, certification, and wellness support.',
+      },
+      programs_services: {
+        focus_areas: ['first_responder', 'workforce'],
+        interests: ['EMS scholarship', 'paramedic certification', 'first responder support'],
+        keywords: ['EMS grant', 'first responder scholarship', 'paramedic training'],
+      },
+    }),
+  },
+
+  adult_learner: {
+    label: 'Adult Returning Student',
+    primary_type: 'individual_need',
+    kind: 'individual',
+    build: ({ location, rng }) => {
+      const school = pick(rng, REAL_INSTITUTIONS)
+      return {
+        basic_information: {
+          age: 38,
+          location: { city: location.city, state: location.state, county: `${location.county} County`, zip_code: location.zip },
+        },
+        education: {
+          highest_level: 'some college, returning adult',
+          intended_major: 'Business Administration',
+          pell_grant_eligible: true,
+          fafsa_completed: true,
+          target_colleges: [school],
+        },
+        employment: { current_status: 'Full-time', employer: pick(rng, REAL_EMPLOYERS) },
+        family: { household_size: 4, responsibilities: 'Working parent returning to finish a degree.' },
+        narrative: {
+          mission: 'Working adult returning to college to finish a degree.',
+          primary_goal: 'Adult-learner scholarships, tuition assistance, and childcare while studying.',
+        },
+        programs_services: {
+          focus_areas: ['scholarship', 'adult_education'],
+          interests: ['adult learner scholarship', 'tuition reimbursement', 'nontraditional student'],
+          keywords: ['returning student scholarship', 'adult education grant', 'tuition assistance'],
+        },
+      }
+    },
+  },
+
+  volunteer_fire_department: {
+    label: 'Volunteer Fire Department',
+    primary_type: 'volunteer_fire_department',
+    kind: 'org',
+    build: ({ location, rng }) => ({
+      organization_details: { organization_type: 'volunteer fire department', sam_gov_registered: true },
+      location_focus: { rural_resident: true, geographic_focus: `${location.county} County, ${location.state}` },
+      narrative: {
+        mission: 'Rural volunteer fire department protecting the county.',
+        primary_goal: 'Turnout gear, apparatus, and operations funding (FEMA AFG/SAFER).',
+        funding_amount_needed: pick(rng, FUNDING_BANDS),
+      },
+      programs_services: {
+        focus_areas: ['public_safety', 'emergency'],
+        interests: ['FEMA AFG', 'turnout gear', 'SAFER grant'],
+        keywords: ['volunteer fire department grant', 'firefighter equipment', 'AFG'],
+      },
+    }),
+  },
+
   faith_based_org: {
     label: 'Faith-Based Organization',
     primary_type: 'faith_based',

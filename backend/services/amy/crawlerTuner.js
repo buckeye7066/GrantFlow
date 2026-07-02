@@ -15,6 +15,7 @@
  *     pointed at real files. These are the changes too risky to auto-apply.
  */
 
+import { DISCOVERY_MIN_SCORE_FLOOR } from '../../config/matchThresholds.js'
 import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
 
 /**
@@ -22,14 +23,20 @@ import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
  * @param {number} args.currentFloor
  * @param {object} args.best        - best floor metrics from sweepFloors()
  * @param {object} args.currentMetrics - cohort metrics at currentFloor
- * @param {object} [args.opts] { minCohort=12, maxDelta=10, minGain=0.03, bounds=[50,85] }
+ * @param {object} [args.opts] { minCohort=12, maxDelta=10, minGain=0.03,
+ *        bounds=[DISCOVERY_MIN_SCORE_FLOOR,85] }. SAFETY: the lower bound is
+ *        HARD-clamped to DISCOVERY_MIN_SCORE_FLOOR (75) — no caller-supplied
+ *        bounds can let a tuning proposal drop the display floor below the
+ *        documented product standard. Coverage must come from better
+ *        queries/sources, never from loosening the bar.
  * @returns {{ change:boolean, from:number, to:number, reason:string, projected:object, gain:number }}
  */
 export function decideFloorChange({ currentFloor, best, currentMetrics, opts = {} }) {
   const minCohort = Number.isFinite(opts.minCohort) ? opts.minCohort : 12
   const maxDelta = Number.isFinite(opts.maxDelta) ? opts.maxDelta : 10
   const minGain = Number.isFinite(opts.minGain) ? opts.minGain : 0.03
-  const bounds = Array.isArray(opts.bounds) ? opts.bounds : [50, 85]
+  const rawBounds = Array.isArray(opts.bounds) ? opts.bounds : [DISCOVERY_MIN_SCORE_FLOOR, 85]
+  const bounds = [Math.max(DISCOVERY_MIN_SCORE_FLOOR, Number(rawBounds[0]) || DISCOVERY_MIN_SCORE_FLOOR), Number(rawBounds[1]) || 85]
 
   const projected = best
   const gain = Number(((best?.quality_score ?? 0) - (currentMetrics?.quality_score ?? 0)).toFixed(4))
@@ -116,6 +123,14 @@ const CATEGORY_COVERAGE = Object.freeze({
   agricultural_cooperative: { applicant_types: ['farm'], need_categories: ['agriculture', 'capital'], source: 'usda_rd' },
   research_lab: { applicant_types: ['business', 'nonprofit'], need_categories: ['programs', 'technology'], source: 'nih_guide' },
   workforce_org: { applicant_types: ['nonprofit', 'government'], need_categories: ['workforce', 'employment'], source: 'eda_economic_development' },
+  // Archetype-breadth additions (2026-07-01) — coverage lanes for the synthetic
+  // categories Amy now exercises, so a proven zero-result gap can auto-widen a
+  // real, relevant source instead of only landing in the approval queue.
+  senior_citizen: { applicant_types: ['senior', 'individual'], need_categories: ['aging', 'senior'], source: 'area_agency_on_aging' },
+  family_caregiver: { applicant_types: ['caregiver', 'family'], need_categories: ['caregiving'], source: 'area_agency_on_aging' },
+  first_responder: { applicant_types: ['individual'], need_categories: ['education', 'emergency'], source: 'united_way_211' },
+  adult_learner: { applicant_types: ['student', 'individual'], need_categories: ['education'], source: 'studentaid_gov' },
+  volunteer_fire_department: { applicant_types: ['vfd'], need_categories: ['equipment', 'emergency', 'operations'], source: 'fema_afg' },
 })
 
 /**

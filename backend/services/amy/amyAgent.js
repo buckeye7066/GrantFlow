@@ -34,6 +34,7 @@ import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMet
 import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue } from './crawlerTuner.js'
 import { getEffectiveMinScore, getEffectiveWeights, setScoringTuning, persistScoringTuning } from '../../config/scoringTuning.js'
 import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } from './crawlerCoverageEditor.js'
+import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype } from './archetypeLearning.js'
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
 
@@ -68,6 +69,10 @@ export async function runAmyTraining(options = {}) {
     applyTuning = false,
     applyWeights = false,
     applyCoverage = false,
+    // Archetype learning (query steering): the safest lever — it can only ADD
+    // bounded web queries for archetypes the cohort proved weak — so it is ON
+    // whenever the improvement loop runs.
+    applyLearning = true,
     anyaEnabled = true,
     anyaApply = false,
     samEnabled = true,
@@ -187,6 +192,38 @@ export async function runAmyTraining(options = {}) {
   const decision = decideFloorChange({ currentFloor, best, currentMetrics: before, opts: tuningOpts })
   const approvalQueue = buildApprovalQueue(evaluations)
 
+  // ── MEASURE + LEARN per ARCHETYPE (the Amy→crawler flywheel) ────────────
+  // Metrics: per-archetype qualified / ineligible-accept counts for THIS run —
+  // the verifiable before/after unit (persisted below as rolling history).
+  // Learning: gap classes the cohort proved (institution/hyperlocal/low_results),
+  // which the live crawl consumes via attachLearnedGaps → buildWebQueries so
+  // the NEXT crawl for any real profile of that archetype targets the miss.
+  const archetypeMetrics = buildArchetypeMetrics(evaluations)
+  const archetypeUpdate = buildArchetypeLearningUpdate(evaluations, {
+    runId,
+    at: clock().toISOString(),
+    minEvidence: tuningOpts.archetype?.minEvidence,
+  })
+  let archetypeLearningApplied = null
+  if (improve && applyLearning) {
+    try {
+      const cohortArchetypes = [...new Set(evaluations.map((e) => evaluationArchetype(e)).filter(Boolean))]
+      archetypeLearningApplied = await saveArchetypeLearning(db, archetypeUpdate, {
+        runId,
+        at: clock().toISOString(),
+        cohortArchetypes,
+      })
+      if (Object.keys(archetypeUpdate).length > 0) {
+        logger.info('Amy recorded archetype query-steering lessons', {
+          run_id: runId,
+          archetypes: Object.keys(archetypeUpdate),
+        })
+      }
+    } catch (err) {
+      logger.warn('Amy archetype learning persist failed', { error: err?.message })
+    }
+  }
+
   // ── IMPROVE: apply the proven floor change (bounded, backed-up, reversible) ──
   let tuningApplied = null
   let after = before
@@ -300,6 +337,29 @@ export async function runAmyTraining(options = {}) {
     })
   }
 
+  // ── AUDIT TRAIL: mark approval-queue items an auto-applied lever addressed ──
+  // A queue item that a validated, kept evolution already acted on is annotated
+  // (not removed) so the panel shows WHAT changed, WHICH run changed it, and
+  // which Amy finding caused it — instead of the same item reappearing dead.
+  const coverageKept = Boolean(coverageTuning?.validation?.kept)
+  const weightsKept = Boolean(weightTuning?.validation?.kept)
+  const coverageCategories = new Set((coverageTuning?.additions || []).map((a) => a.category))
+  const learnedArchetypes = new Set(Object.keys(archetypeUpdate))
+  for (const item of approvalQueue) {
+    if (coverageKept && item.lever === 'source_keyword_coverage' && coverageCategories.has(item.category)) {
+      item.auto_applied = { lever: 'source_coverage_overrides', run_id: runId, kept: true }
+    } else if (weightsKept && item.lever === 'scoring_weights') {
+      item.auto_applied = { lever: 'scoring_weights', run_id: runId, kept: true }
+    } else if (item.lever === 'source_keyword_coverage') {
+      // Query-steering learning fires for the item's archetype on the next crawl.
+      const archetypesForCategory = evaluations
+        .filter((e) => e.category === item.category)
+        .map((e) => evaluationArchetype(e))
+      const steered = archetypesForCategory.find((a) => learnedArchetypes.has(a))
+      if (steered) item.auto_applied = { lever: 'archetype_query_learning', archetype: steered, run_id: runId, kept: true }
+    }
+  }
+
   const completedAtDate = clock()
   const combined = {
     generator: 'Amy',
@@ -321,6 +381,13 @@ export async function runAmyTraining(options = {}) {
     tuning: { ...decision, applied: tuningApplied },
     weight_tuning: weightTuning,
     coverage_tuning: coverageTuning,
+    // Per-archetype flywheel: this run's measurement + the steering it recorded.
+    archetype_metrics: archetypeMetrics,
+    archetype_learning: {
+      update: archetypeUpdate,
+      applied: Boolean(archetypeLearningApplied),
+      store: archetypeLearningApplied,
+    },
     chain,
     approval_queue: approvalQueue,
     amy: { summary, handoff },
@@ -329,6 +396,17 @@ export async function runAmyTraining(options = {}) {
   // Persist combined report for the admin panel (best-effort).
   if (saveReport && db) {
     await saveAmyReport(db, combined).catch(() => {})
+  }
+
+  // Persist per-archetype metrics history — the run-over-run PROOF that the
+  // crawlers are improving (read by Sam/Anya via system_kv and surfaced on the
+  // admin crawl-coverage dashboard). Always written (measurement, not a lever).
+  if (db) {
+    await appendArchetypeMetrics(db, {
+      runId,
+      at: completedAtDate.toISOString(),
+      metrics: archetypeMetrics,
+    }).catch(() => {})
   }
 
   // Write artifacts (best-effort).
@@ -368,6 +446,7 @@ export async function runAmyTraining(options = {}) {
     floor_tuned: tuningApplied?.applied ? `${decision.from}->${decision.to}` : 'none',
     weights_tuned: weightTuning?.validation?.kept ? 'kept' : weightTuning?.applied?.applied ? 'reverted' : 'none',
     coverage_tuned: coverageTuning?.validation?.kept ? 'kept' : coverageTuning?.applied?.applied ? 'reverted' : 'none',
+    archetypes_learned: Object.keys(archetypeUpdate).length,
     approval_items: approvalQueue.length,
     cleaned: cleanup?.deleted ?? 0,
     kept: keepProfiles,

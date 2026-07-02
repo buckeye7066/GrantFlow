@@ -14,6 +14,7 @@
 
 import { DEFAULT_MIN_SCORE, ACCEPT_SCORE, REVIEW_SCORE } from '../../config/matchThresholds.js'
 import { isStudentAidOpportunity } from '../matchEngine.js'
+import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
@@ -107,6 +108,11 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     label: scenario?.label,
     profile_id: profileId,
     run_id: result?.run?.run_id || opts.runId || null,
+    // Archetype key (crawler-os/archetypes.js) — the aggregation unit the
+    // archetype-learning flywheel generalizes this profile's lessons under.
+    // Classified from the REAL discovery thesis so producer and consumer
+    // (live-crawl steering) can never drift.
+    archetype: result?.thesis ? classifyThesisArchetype(result.thesis) : null,
   }
 
   // Hard error path (discovery threw).
