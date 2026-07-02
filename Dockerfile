@@ -39,19 +39,26 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy ONLY production dependencies from builder
-COPY --from=builder /app/node_modules ./node_modules
-
 # Hamilton browser automation (HAMILTON_ENABLE_BROWSER_AUTOMATION): install the
 # chromium browser Playwright drives, plus its OS shared-library dependencies.
-# `playwright` is a production dependency (above), so node_modules already ships
-# the client; this downloads the matching browser build into a fixed path. The
-# code in hamiltonAutopilotEngine.js calls chromium.executablePath() and falls
-# back to a `no_browser` blocker when this is absent, so the image MUST carry it
-# for automation to run. Adds ~300MB — the cost of in-image browser automation.
+# `playwright` is a production dependency, so node_modules ships the client;
+# this downloads the matching browser build into a fixed path. The code in
+# hamiltonAutopilotEngine.js calls chromium.executablePath() and falls back to
+# a `no_browser` blocker when this is absent, so the image MUST carry it for
+# automation to run. Adds ~300MB — the cost of in-image browser automation.
+#
+# Layer-cache hygiene: we deliberately COPY only the playwright client packages
+# (not the whole node_modules) before running the browser install, so this
+# ~300MB layer is keyed to the playwright VERSION and survives unrelated
+# lockfile changes. cli.js only requires its sibling playwright-core.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN node node_modules/playwright/cli.js install --with-deps chromium \
-  && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/node_modules/playwright /tmp/pw/node_modules/playwright
+COPY --from=builder /app/node_modules/playwright-core /tmp/pw/node_modules/playwright-core
+RUN node /tmp/pw/node_modules/playwright/cli.js install --with-deps chromium \
+  && rm -rf /tmp/pw /var/lib/apt/lists/*
+
+# Copy ONLY production dependencies from builder
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy backend code
 COPY --from=builder /app/backend ./backend
