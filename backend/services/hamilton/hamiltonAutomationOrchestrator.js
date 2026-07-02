@@ -935,7 +935,42 @@ async function runAutopilotPathway(db, {
   // successful login, so we can persist it durably (below) and reuse it next run.
   const sessionSink = {}
 
-  for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS; attempt += 1) {
+  // FAST-SKIP known auth walls: when a PRIOR finished run on this task already
+  // hit an authentication gate (login/SSO/2FA/CAPTCHA) and we STILL hold
+  // neither a saved credential nor a saved session, relaunching a browser is
+  // guaranteed waste — chromium startup + up-to-25s nav timeout per backoff
+  // retry, multiplied across the whole retry ladder. Synthesize the same
+  // blocker without launching; the shared blocked-handling below re-plans the
+  // auth backoff exactly as if the engine had hit the wall again. Because the
+  // vault + session store were re-checked JUST above, the moment a credential
+  // or session appears the next retry takes the real browser path. First
+  // attempts are never skipped (no prior evidence), so open portals still get
+  // their genuine try.
+  let knownAuthWallKind = null
+  if (!loginCredential && !storageState) {
+    const priorKind = await latestFinishedBlockerKind(db, { taskId: task.id, excludeRunId: run.id }).catch(() => null)
+    if (priorKind && isAuthBlocker(priorKind)) {
+      knownAuthWallKind = priorKind
+      engineResult = {
+        status: 'blocked',
+        blocker_kind: priorKind,
+        blocker_detail: `Fast-skip: this portal previously required authentication (${priorKind}) and no saved credential or session is available yet. Hamilton skipped the browser launch and will re-check the vault on the next retry.`,
+        fast_skipped: true,
+      }
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'progress',
+        status: 'filling_portal',
+        step: 'autopilot',
+        message: `Known ${priorKind} wall + no saved credential/session — browser launch skipped (cheap vault re-check retry).`,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, blocker_kind: priorKind, fast_skipped: true },
+      })
+    }
+  }
+
+  for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS && !knownAuthWallKind; attempt += 1) {
     engineResult = await runAutopilot({
       url, profile, authorizations,
       documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
@@ -1290,9 +1325,68 @@ function blockerTitle(kind) {
 }
 
 /**
- * Process N selected sources sequentially. Returns an array of
- * { task, classification, ...details } so the UI can render a
- * per-source result.
+ * The most recent FINISHED autopilot run's blocker_kind for a task (excluding
+ * the in-progress run). NULL when the latest finished run succeeded or none
+ * exist — checking the LATEST run (not "any run ever blocked") means a portal
+ * that later succeeded never fast-skips.
+ */
+async function latestFinishedBlockerKind(db, { taskId, excludeRunId = null } = {}) {
+  if (!db || !taskId) return null
+  try {
+    const row = await db
+      .prepare(`
+        SELECT blocker_kind FROM hamilton_autopilot_runs
+         WHERE task_id = ?
+           AND (? IS NULL OR id != ?)
+           AND status IN ('blocked','completed','submitted','failed')
+         ORDER BY created_at DESC
+         LIMIT 1
+      `)
+      .get(taskId, excludeRunId, excludeRunId)
+    return row?.blocker_kind || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * How many sources Hamilton drives at once within one automateSelected batch.
+ * Default 2 — each portal source can hold a full chromium instance, so the cap
+ * is deliberately small and clamped (1..4) to stay inside the container's
+ * memory budget. 1 restores the old fully-serial behaviour.
+ */
+export function resolveAutopilotConcurrency(env = ENV) {
+  const raw = Number.parseInt(env.HAMILTON_AUTOPILOT_CONCURRENCY || '', 10)
+  if (!Number.isInteger(raw) || raw <= 0) return 2
+  return Math.max(1, Math.min(4, raw))
+}
+
+/**
+ * Run `worker(item, i)` over items with at most `limit` in flight.
+ * Results keep the input order; a worker MUST NOT throw (callers wrap).
+ */
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length)
+  let cursor = 0
+  const lanes = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const i = cursor
+      cursor += 1
+      if (i >= items.length) return
+      results[i] = await worker(items[i], i)
+    }
+  })
+  await Promise.all(lanes)
+  return results
+}
+
+/**
+ * Process N selected sources with bounded concurrency (default 2, env
+ * HAMILTON_AUTOPILOT_CONCURRENCY, clamp 1..4). Returns an array of
+ * { task, classification, ...details } in the same order as selectedSources
+ * so the UI can render a per-source result. Each source is an independent
+ * application_task, so concurrent processing is safe; the cap keeps
+ * simultaneous chromium instances inside the container's memory budget.
  */
 export async function automateSelected(db, {
   profileId, userId = null, selectedSources = [], options = {},
@@ -1309,15 +1403,18 @@ export async function automateSelected(db, {
     throw err
   }
 
-  const results = []
-  for (const source of selectedSources) {
-    try {
-      const r = await automateSingleSource(db, { profile, profileId, userId, source, options })
-      results.push({ ok: true, source, ...r })
-    } catch (err) {
-      results.push({ ok: false, source, error: err?.message || String(err) })
-    }
-  }
+  const results = await runWithConcurrency(
+    selectedSources,
+    resolveAutopilotConcurrency(),
+    async (source) => {
+      try {
+        const r = await automateSingleSource(db, { profile, profileId, userId, source, options })
+        return { ok: true, source, ...r }
+      } catch (err) {
+        return { ok: false, source, error: err?.message || String(err) }
+      }
+    },
+  )
   return { ok: true, results }
 }
 
@@ -1325,4 +1422,5 @@ export const _internal = {
   loadProfileBundle, loadOpportunity, loadGrant, loadPortalLink,
   mapClassificationToInitialStatus, mapAutomationTypeToFinishedStatus,
   mapAutomationTypeToPipelineStage, notificationTypeForAutomation,
+  latestFinishedBlockerKind, runWithConcurrency,
 }

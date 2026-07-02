@@ -3090,6 +3090,26 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })()
 
+    // Hamilton — restart recovery. A redeploy kills any in-process autopilot
+    // batch; tasks caught in a transient in-flight status (filling_portal,
+    // generating_*, …) would otherwise stay orphaned forever because nothing
+    // re-picks those statuses. Requeue the stale ones to ready_to_start so the
+    // scheduler / next autopilot kick resumes them. Runs regardless of the
+    // scheduler gates — recovery is data repair, not automation. 15 min stale
+    // window so a rolling deploy's overlap (old container still finishing a
+    // task) is never demoted mid-work.
+    ;(async () => {
+      try {
+        const { reconcileOrphanedApplicationTasks } = await import('./startup/hamiltonTaskRecovery.js')
+        const r = await reconcileOrphanedApplicationTasks(db, { staleMinutes: 15 })
+        if (r?.demoted > 0) {
+          console.log(`[Server] Hamilton restart recovery: requeued ${r.demoted}/${r.scanned} orphaned in-flight task(s)`)
+        }
+      } catch (err) {
+        console.warn('[Server] Hamilton restart recovery skipped:', err?.message)
+      }
+    })()
+
     // Hamilton — Application Autopilot scheduler. OFF by default; only arms when
     // HAMILTON_RUN_ON_SCHEDULE=true AND HAMILTON_ENABLE_BROWSER_AUTOMATION=true.
     // This is the timer that re-picks autonomous portal runs deferred to

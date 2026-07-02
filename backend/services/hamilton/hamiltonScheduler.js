@@ -91,6 +91,18 @@ async function tick({ db, logger = console } = {}) {
       ttlMs: 30 * 60 * 1000,
       logger,
     }, async () => {
+      // Self-heal first: requeue in-flight tasks orphaned by a crash or a
+      // Railway redeploy (in-process work dies with the container; the DB rows
+      // survive but nothing else re-picks transient statuses). 45 min stale
+      // window — a live portal run with 3 resolver attempts can legitimately
+      // hold filling_portal for ~30 minutes, so we never demote active work.
+      try {
+        const { reconcileOrphanedApplicationTasks } = await import('../../startup/hamiltonTaskRecovery.js')
+        await reconcileOrphanedApplicationTasks(db, { staleMinutes: 45, logger })
+      } catch (err) {
+        logger?.warn?.('[hamilton:scheduler] task recovery failed:', err?.message || err)
+      }
+
       const adapter = new HamiltonAgentAdapter()
       // Provide an inert signal: this is a headless scheduled run with no Agent
       // Control run row, so there is no stop/pause channel and heartbeats/events
@@ -174,6 +186,16 @@ export function startHamiltonScheduler({ db, logger = console } = {}) {
     tick({ db, logger }).catch(() => {})
   }, intervalMs)
   if (typeof timer.unref === 'function') timer.unref()
+
+  // Kick one tick shortly after boot instead of waiting a full interval: a
+  // redeploy interrupts any in-process Hamilton batch, and this makes the
+  // queue (plus the recovery sweep inside tick) resume within a minute of the
+  // new container coming up rather than after the first 5-minute poll.
+  const kickoff = setTimeout(() => {
+    tick({ db, logger }).catch(() => {})
+  }, 45 * 1000)
+  if (typeof kickoff.unref === 'function') kickoff.unref()
+
   return { started: true, intervalMs, batchSize: resolveBatchSize() }
 }
 
