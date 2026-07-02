@@ -84,7 +84,12 @@ function createDb() {
     );
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
-      categories TEXT, opportunity_kind TEXT, is_active INTEGER DEFAULT 1
+      categories TEXT, opportunity_kind TEXT, is_active INTEGER DEFAULT 1,
+      -- The #779 actionable-coverage audit selects deadline columns; the
+      -- fixture must carry them or every learnFromCrawlGaps call fails with
+      -- "no such column: o.deadline" (this test was merged while CI was red
+      -- and never actually passed).
+      deadline TEXT, deadline_at TEXT, deadline_type TEXT
     );
     CREATE TABLE profile_opportunity_matches (
       profile_id TEXT, opportunity_id TEXT, match_score REAL,
