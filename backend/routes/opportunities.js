@@ -1381,8 +1381,21 @@ router.get('/geo/scored', async (req, res) => {
   }
 });
 
+// Express 5 / path-to-regexp v8 removed inline param regexes, so the UUID
+// constraint that used to live in the route pattern (`:id([0-9a-fA-F]{8}-…)`)
+// is now enforced in-handler. Non-UUID ids return the same 404 the old
+// pattern produced by not matching. Static routes (/meta/*, /geo/*) are
+// registered above, so they still win over `/:id`.
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+function requireUuidParam(req, res) {
+  if (UUID_RE.test(String(req.params.id || ''))) return true
+  res.status(404).json({ error: 'Not found' })
+  return false
+}
+
 // Get single opportunity
-router.get('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
+router.get('/:id', async (req, res) => {
+  if (!requireUuidParam(req, res)) return
   try {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
@@ -1554,7 +1567,8 @@ router.post('/bulk', async (req, res) => {
 });
 
 // Update opportunity
-router.put('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
+router.put('/:id', async (req, res) => {
+  if (!requireUuidParam(req, res)) return
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
@@ -1727,7 +1741,8 @@ function buildMatchExplanation(profile, sections, opp) {
 }
 
 // Delete opportunity (soft delete)
-router.delete('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
+router.delete('/:id', async (req, res) => {
+  if (!requireUuidParam(req, res)) return
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return

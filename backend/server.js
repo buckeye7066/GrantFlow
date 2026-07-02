@@ -192,6 +192,10 @@ const distPath = join(__dirname, '..', 'dist');
 const app = express();
 app.set('trust proxy', 1);
 app.set('etag', 'strong');
+// Express 5 changed the default query parser from 'extended' (qs) to 'simple'.
+// Pin the Express 4 behavior so nested/array query params (?a[b]=1, ?x[]=y)
+// keep parsing the way every existing route expects.
+app.set('query parser', 'extended');
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 
 function getUploadCacheFileName(req) {
@@ -430,7 +434,9 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// Express 5: '*' is no longer a valid path (path-to-regexp v8) — '/{*splat}'
+// is the equivalent match-everything pattern for CORS preflight.
+app.options('/{*splat}', cors(corsOptions));
 
 app.use(compression({ threshold: 1024 }));
 
@@ -2691,8 +2697,10 @@ const spaFallbackLimiter = rateLimit({
   skip: (req) => req.path.startsWith('/api/'), // Skip API routes
 });
 
-// Serve React app for all non-API routes (SPA fallback)
-app.get('*', spaFallbackLimiter, (req, res, next) => {
+// Serve React app for all non-API routes (SPA fallback).
+// Express 5 / path-to-regexp v8: '*' is no longer a valid path — the named
+// wildcard '/{*splat}' is the v5 equivalent (braces so it matches '/' too).
+app.get('/{*splat}', spaFallbackLimiter, (req, res, next) => {
   // Skip API routes - let them fall through to 404 handler
   if (req.path.startsWith('/api/')) {
     return next();

@@ -15,7 +15,7 @@ gates pass locally except known-environmental test flakes (documented in §6); C
 
 - **Frontend** (`src/`): React 18 + Vite 8 + Tailwind + Radix UI; state in Zustand; API via `src/api/`.
   Deployed to **Vercel** (auto-deploy from `main`).
-- **Backend** (`backend/`): Express 4, ~30+ route files (`backend/routes/`), services (`backend/services/`),
+- **Backend** (`backend/`): Express 5 (upgraded from 4.x, 2026-07-02 — see §9), ~30+ route files (`backend/routes/`), services (`backend/services/`),
   DB shim (`backend/db/`), boot tasks (`backend/startup/` — `ensureSchemaInvariants.js` then `enforceInvariants.js`).
   Entry `backend/server.js` via `backend/start.js`. Deployed to **Railway** (project `kind-flexibility`,
   service `GrantFlow`; auto-deploy from `main`; **ephemeral filesystem** — uploads stored as BYTEA in Postgres).
@@ -249,3 +249,54 @@ gates pass locally except known-environmental test flakes (documented in §6); C
   (dual-scope + org-scoped tiers, see §7). Post-deploy: watch for `[profile_bleed]` log lines with
   `"tiers":["funding_read"]` — each identifies a catalog-wide read under a tenant claim to retire
   before flipping `PROFILE_SCOPE_FUNDING_READS=strict`.
+
+## 9. Dependency majors taken (owner-approved, 2026-07-02 — second PR of the follow-up pair)
+
+The two deliberately-deferred majors from the dependency-bump review were taken as a mechanical
+upgrade validated by the full test suite. No payment behavior, prices, products, auth rules, or
+public API shapes were changed.
+
+### Express 4.22.2 → 5.2.1
+
+Full route-pattern audit (grep of every `.get/.post/.put/.delete/.patch/.all/.use/.options` path
+string across `backend/routes/`, `backend/server.js`, `backend/middleware/`, `backend/apply/`)
+found exactly four Express-5 incompatibilities, all fixed:
+
+| Site | v4 form | v5 fix |
+| --- | --- | --- |
+| `backend/server.js` SPA fallback | `app.get('*', …)` | `app.get('/{*splat}', …)` (braced so it matches `/` too) |
+| `backend/server.js` CORS preflight | `app.options('*', …)` | `app.options('/{*splat}', …)` |
+| `backend/routes/opportunities.js` GET/PUT/DELETE `/:id(<uuid-regex>)` ×3 | inline param regex (removed in path-to-regexp v8; throws at route registration) | plain `/:id` + in-handler `requireUuidParam()` returning the same 404 non-matches used to get; static `/meta/*` and `/geo/*` routes register earlier so precedence is unchanged |
+| `backend/server.js` query parsing | v5 default parser changed `'extended'` → `'simple'` | pinned `app.set('query parser', 'extended')` to preserve v4 nested/array query semantics |
+
+Audited and confirmed absent: `app.del`, `res.sendfile`, `req.param()`, `res.redirect('back')`,
+writable-`req.query` assignments, two-arg `res.json(status, body)`, optional-`?` route params,
+bare `req.body.x` access in GET/DELETE handlers (v5 leaves `req.body` undefined when nothing was
+parsed). `express.urlencoded` is used once (smsInbound) with an explicit `extended: false`.
+express-rate-limit 8.x supports Express 5. Promise-rejection forwarding to error middleware is new
+v5 behavior and strictly an improvement (errorHandler is already registered last).
+
+**Runtime verification** (not just tests): server booted locally on SQLite; `/readyz` + `/healthz`
+returned 200, CORS preflight 204, SPA fallback served `dist/index.html` at `/` and at deep links,
+non-UUID `/api/opportunities/:id` returned 404 as before.
+
+### Stripe SDK 20.4.1 → 22.3.0
+
+Actual SDK surface used (exhaustive grep): `stripe.customers.create`,
+`stripe.checkout.sessions.create`, `stripe.prices.retrieve`, `stripe.webhooks.constructEvent` —
+all stable across the 21/22 majors, which principally move the SDK-pinned default API version and
+raise the Node floor to 18 (runtime is Node 20+). The client is constructed without an explicit
+`apiVersion` (SDK default, by design — comment preserved in `backend/services/stripeService.js`);
+webhook raw-body handling and idempotent event processing are unchanged. Billing suites pass
+(19/19: billingRoutes, billingAccounts, billingEffective).
+
+### Verification (each gate run individually, post-upgrade)
+
+- lint PASS, typecheck PASS, build PASS
+- node:test half: 2765 tests, 2753 pass, 0 fail, 12 skip
+- vitest half: 2278 pass / 9 fail — the documented environmental set only (4 network-dependent
+  discovery tests + hamiltonFullProposalGenerator / hamiltonPacketBilingual / anyaAutoRepairService
+  parallel-load flakes, re-verified 44/44 in isolation)
+- static gates: env-examples, profile-scope, safe-sql, deployment-config all PASS
+- Dependabot reference PRs #815/#814 closed in favor of this change (dependabot's lockfile-only
+  express bump had failing CI — the route-syntax fixes above were required).
