@@ -162,6 +162,25 @@ describe('archetype learning persistence (system_kv)', () => {
     }
   })
 
+  it('a THIN healthy cohort cannot clear a lesson; a real one can (counts form)', async () => {
+    const db = createDb()
+    try {
+      await saveArchetypeLearning(db, { veteran: { classes: ['low_results'] } }, { runId: 'r1', at: 't1' })
+
+      // One lucky veteran profile this run → below the evidence bar → retained.
+      await saveArchetypeLearning(db, {}, { runId: 'r2', at: 't2', cohortArchetypes: { veteran: 1 } })
+      let store = await getArchetypeLearning(db)
+      expect(store.archetypes.veteran.classes).toEqual(['low_results'])
+
+      // A properly-exercised healthy cohort → cleared.
+      await saveArchetypeLearning(db, {}, { runId: 'r3', at: 't3', cohortArchetypes: { veteran: 4 } })
+      store = await getArchetypeLearning(db)
+      expect(store.archetypes.veteran).toBeUndefined()
+    } finally {
+      db.close()
+    }
+  })
+
   it('SAFETY: non-whitelisted classes are stripped on save and on read-out', async () => {
     const db = createDb()
     try {

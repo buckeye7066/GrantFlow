@@ -214,18 +214,27 @@ export async function getArchetypeLearning(db) {
 /**
  * Fold one run's learning update into the rolling store. An archetype with a
  * fresh entry is REPLACED (latest evidence wins); an archetype the new run
- * proved HEALTHY (present in cohort, no gap classes) is CLEARED — so a fixed
- * weakness stops steering queries instead of steering them forever.
+ * proved HEALTHY (exercised with at least `minEvidence` profiles, no gap
+ * classes) is CLEARED — so a fixed weakness stops steering queries instead of
+ * steering them forever. A thin cohort (one lucky profile) is NOT allowed to
+ * clear a lesson a full run proved: clearing needs the same evidence bar as
+ * learning.
  *
+ * @param {object} opts { runId, at, cohortArchetypes: string[]|Record<string,number>, minEvidence=2 }
  * @returns {Promise<object>} the new store value
  */
-export async function saveArchetypeLearning(db, update, { runId = null, at = null, cohortArchetypes = [] } = {}) {
+export async function saveArchetypeLearning(db, update, { runId = null, at = null, cohortArchetypes = [], minEvidence = 2 } = {}) {
   if (!db?.prepare) return null
   const prev = (await kvGet(db, KV_LEARNING_KEY)) || {}
   const prevArchetypes = prev.archetypes && typeof prev.archetypes === 'object' ? prev.archetypes : {}
   const nextArchetypes = { ...prevArchetypes }
-  // Clear archetypes this run exercised and found healthy.
-  for (const key of Array.isArray(cohortArchetypes) ? cohortArchetypes : []) {
+  // Clear archetypes this run exercised (with enough profiles) and found healthy.
+  const clearable = Array.isArray(cohortArchetypes)
+    ? cohortArchetypes // legacy list form: every listed archetype may clear
+    : Object.entries(cohortArchetypes || {})
+        .filter(([, count]) => Number(count) >= minEvidence)
+        .map(([key]) => key)
+  for (const key of clearable) {
     if (!update?.[key]) delete nextArchetypes[key]
   }
   for (const [key, entry] of Object.entries(update || {})) {

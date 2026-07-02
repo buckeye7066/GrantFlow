@@ -207,11 +207,16 @@ export async function runAmyTraining(options = {}) {
   let archetypeLearningApplied = null
   if (improve && applyLearning) {
     try {
-      const cohortArchetypes = [...new Set(evaluations.map((e) => evaluationArchetype(e)).filter(Boolean))]
+      // Per-archetype cohort sizes: an archetype may only CLEAR a prior lesson
+      // when this run exercised it with real evidence (same bar as learning).
+      const cohortArchetypes = Object.fromEntries(
+        Object.entries(archetypeMetrics).map(([key, m]) => [key, m.profiles]),
+      )
       archetypeLearningApplied = await saveArchetypeLearning(db, archetypeUpdate, {
         runId,
         at: clock().toISOString(),
         cohortArchetypes,
+        minEvidence: tuningOpts.archetype?.minEvidence,
       })
       if (Object.keys(archetypeUpdate).length > 0) {
         logger.info('Amy recorded archetype query-steering lessons', {
