@@ -171,6 +171,49 @@ function fieldPresent(profile, paths, key, resolvedFields) {
   return false
 }
 
+/**
+ * Field keys the preflight can raise a MISSING-PROFILE-FIELD hard stop for.
+ * Exported so the boot self-heal sweep (enforceInvariants) can recognise a
+ * blocked task whose blocker is this class and re-check it with the SAME
+ * presence logic used here — one source of truth, no drift.
+ */
+export const PREFLIGHT_PROFILE_FIELD_KEYS = Object.freeze([
+  ...REQUIRED_IDENTITY_FIELDS.map((f) => f.key),
+  'school_name',
+  'household_income',
+])
+
+/**
+ * Re-evaluate a set of previously-flagged profile-field keys against the
+ * CURRENT profile. Returns the keys that are STILL missing (empty array =
+ * the original preflight blocker no longer reproduces). Uses the exact
+ * per-key presence rules preflightSingleSource applies, including full-name
+ * derivation and the resolved-field cache.
+ */
+export function recheckMissingProfileFields(profile, keys = [], resolvedFields = null) {
+  const stillMissing = []
+  for (const rawKey of keys) {
+    const key = normKey(rawKey)
+    if (key === 'school_name') {
+      const apps = pickFirst(profile, ['university_applications.applications']) || []
+      const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : null
+      const present = (firstApp && nonEmpty(firstApp.name)) ||
+        fieldPresent(profile, [], 'school_name', resolvedFields)
+      if (!present) stillMissing.push(key)
+      continue
+    }
+    if (key === 'household_income') {
+      if (!fieldPresent(profile, ['financial_information.household_income', 'household.income', 'household_income'], 'household_income', resolvedFields)) {
+        stillMissing.push(key)
+      }
+      continue
+    }
+    const spec = REQUIRED_IDENTITY_FIELDS.find((f) => f.key === key)
+    if (!fieldPresent(profile, spec?.paths || [], key, resolvedFields)) stillMissing.push(key)
+  }
+  return stillMissing
+}
+
 function looksLikeStudentFunding(opportunity) {
   const text = [opportunity?.title, opportunity?.description, opportunity?.eligibility_text]
     .filter(Boolean).join(' ')

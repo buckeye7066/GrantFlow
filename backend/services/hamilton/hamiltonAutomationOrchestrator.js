@@ -811,7 +811,13 @@ async function runAutopilotPathway(db, {
     preflight: {},
     status: 'preflight',
   })
-  await updateApplicationTask(db, task.id, { status: 'launching_portal' })
+  // Replace last_agent_message on re-entry: a retried task must not keep
+  // showing its PREVIOUS blocker text (e.g. "missing first name") while it is
+  // actively running again.
+  await updateApplicationTask(db, task.id, {
+    status: 'launching_portal',
+    lastAgentMessage: 'Hamilton Autopilot starting (user-authorized unattended completion).',
+  })
   await appendTaskEvent(db, {
     taskId: task.id,
     eventType: 'progress',
@@ -1006,7 +1012,12 @@ async function runAutopilotPathway(db, {
   // portal can't trap Hamilton in an infinite cycle.
   const MAX_RESOLVER_ATTEMPTS = 3
   await updateAutopilotRun(db, run.id, { status: 'running' })
-  await updateApplicationTask(db, task.id, { status: 'filling_portal' })
+  // Same re-entry rule as launching_portal: never carry a stale blocker
+  // message into an actively-running status.
+  await updateApplicationTask(db, task.id, {
+    status: 'filling_portal',
+    lastAgentMessage: 'Hamilton is filling the portal application.',
+  })
 
   let storageStatePath = options?.storageStatePath || null
   let documents = Array.isArray(options?.documents) ? [...options.documents] : []

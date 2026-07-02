@@ -1561,6 +1561,271 @@ export async function enforceStudentAidEligibility(db, { resolveThesis = null } 
 }
 
 /**
+ * INVARIANT: A BLOCKED HAMILTON TASK WHOSE BLOCKER NO LONGER REPRODUCES IS
+ * RE-QUEUED (Hamilton lifecycle self-heal — "automation is king": a fixed
+ * cause must not leave its casualties stranded).
+ *
+ * THE BUGS THIS CLOSES
+ * --------------------
+ * 1. STALE FALSE-BLOCKS. Preflight once raised FALSE "Profile is missing
+ *    first name / last name / email" hard stops (display_name parsing bug,
+ *    fixed 2026-06-20 in hamiltonPreflight). The producer is fixed, but the
+ *    19 tasks it blocked stay status='blocked' forever — nothing ever re-runs
+ *    a previously blocked task whose blocker no longer reproduces against the
+ *    CURRENT profile. This sweep re-checks each blocked task whose blocker is
+ *    the missing-profile-field preflight class using the SAME presence logic
+ *    preflight uses (recheckMissingProfileFields — no drift) and, when every
+ *    flagged field is now present, re-queues it (status 'ready', blocker
+ *    fields cleared) so the normal scheduler re-pick resumes it.
+ * 2. DUPLICATE OPEN HARD-STOPS. The blocker insert had no dedup, so retries
+ *    stacked identical open blockers (task 51b2f063 carried 3 identical open
+ *    unknown_application_method stops). The insert path now dedupes
+ *    (hamiltonBlockerStore.recordBlocker); this sweep repairs the rows already
+ *    stacked: for each (task, blocker_type, field/key) group of OPEN blockers
+ *    it keeps the OLDEST and marks the extras resolved with strategy
+ *    'duplicate' — rows are never deleted (append-only audit store).
+ *
+ * SAFETY POSTURE
+ * --------------
+ *   - CONSERVATIVE CLASS GATE: only tasks whose ENTIRE outstanding blocker set
+ *     is the missing-profile-field preflight class are re-checked. A task with
+ *     any other unresolved item (document, login, consent, …) is never touched.
+ *   - COUNT-GATED: requeues are capped per boot (default 50, env
+ *     HAMILTON_SELF_HEAL_REQUEUE_CAP) so a huge backlog can't cause a boot storm.
+ *   - IDEMPOTENT: a requeued task is no longer 'blocked' and a deduped group
+ *     has one open row, so a re-run is a no-op.
+ *   - OVERRIDE: ON by default. Set ENFORCE_HAMILTON_TASK_SELF_HEAL=0 for
+ *     count-only (no writes), same posture as ENFORCE_RELEVANCE_FLOOR.
+ */
+const SELF_HEAL_REQUEUE_CAP_DEFAULT = 50
+
+/** Resolve the per-boot requeue cap at call time so tests/ops can tune env. */
+export function resolveSelfHealRequeueCap() {
+  const v = Number.parseInt(process.env.HAMILTON_SELF_HEAL_REQUEUE_CAP || '', 10)
+  return Number.isFinite(v) && v > 0 ? v : SELF_HEAL_REQUEUE_CAP_DEFAULT
+}
+
+// Map a preflight blocker label back to its field key ("Profile is missing
+// first name" → first_name; the school label is worded differently).
+function preflightLabelToFieldKey(label) {
+  const text = String(label || '').trim().toLowerCase()
+  if (!text) return null
+  if (/^profile is missing school\s*\/\s*university$/.test(text)) return 'school_name'
+  const m = /^profile is missing ([a-z ]+)$/.exec(text)
+  return m ? m[1].trim().replace(/\s+/g, '_') : null
+}
+
+export async function enforceHamiltonTaskSelfHeal(db) {
+  return runInvariant('hamilton_task_self_heal', async () => {
+    // application_tasks may not exist on a minimal/test DB — degrade silently.
+    try {
+      await db.prepare('SELECT id FROM application_tasks LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+
+    // Lazy imports (same pattern as enforceStudentAidEligibility): reuse the
+    // EXACT preflight presence logic + the canonical task/blocker stores so
+    // this sweep can never drift from the live check, and a missing module can
+    // never abort boot.
+    let PREFLIGHT_PROFILE_FIELD_KEYS, recheckMissingProfileFields
+    let updateApplicationTask, appendTaskEvent, resolveMissingInfoItem
+    let getResolvedFieldsAsMap = null
+    try {
+      ;({ PREFLIGHT_PROFILE_FIELD_KEYS, recheckMissingProfileFields } = await import('../services/hamilton/hamiltonPreflight.js'))
+      ;({ updateApplicationTask, appendTaskEvent, resolveMissingInfoItem } = await import('../services/hamilton/applicationTaskStore.js'))
+    } catch (err) {
+      log.warn('hamilton_task_self_heal: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    try {
+      ;({ getResolvedFieldsAsMap } = await import('../services/hamilton/hamiltonResolvedFieldStore.js'))
+    } catch { getResolvedFieldsAsMap = null }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_HAMILTON_TASK_SELF_HEAL) === false
+    const cap = resolveSelfHealRequeueCap()
+    const fieldClass = new Set(PREFLIGHT_PROFILE_FIELD_KEYS)
+
+    // ── Part 1: re-check blocked missing-profile-field tasks ─────────────────
+    let blockedRows = []
+    try {
+      blockedRows = await db.prepare(
+        `SELECT id, profile_id, last_agent_message FROM application_tasks
+          WHERE status = 'blocked' ORDER BY updated_at ASC LIMIT 500`,
+      ).all()
+      if (!Array.isArray(blockedRows)) blockedRows = []
+    } catch { blockedRows = [] }
+
+    // Minimal profile-bundle loader (profiles row + parsed sections merged, the
+    // shape recheckMissingProfileFields expects — display_name at the top level
+    // is what enables first/last-name derivation). Cached per profile.
+    const profileCache = new Map()
+    const loadProfile = async (profileId) => {
+      if (profileCache.has(profileId)) return profileCache.get(profileId)
+      let bundle = null
+      try {
+        const row = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+        if (row) {
+          const sections = {}
+          try {
+            const sectionRows = await db
+              .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+              .all(String(profileId))
+            for (const r of sectionRows || []) {
+              try { sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data } catch { /* ignore */ }
+            }
+          } catch { /* profile_sections absent — profiles row alone still allows name derivation */ }
+          bundle = { ...row, ...sections, sections }
+        }
+      } catch { bundle = null }
+      profileCache.set(profileId, bundle)
+      return bundle
+    }
+
+    let scanned = 0
+    let requeued = 0
+    let requeueCapped = false
+    for (const task of blockedRows) {
+      // Flagged field keys for this task: unresolved missing-info items first
+      // (the canonical record preflight writes), else parse the preflight
+      // last_agent_message for legacy rows blocked before items were recorded.
+      let unresolvedItems = []
+      try {
+        unresolvedItems = await db.prepare(
+          'SELECT kind, key FROM application_missing_info WHERE task_id = ? AND resolved = 0',
+        ).all(String(task.id))
+        if (!Array.isArray(unresolvedItems)) unresolvedItems = []
+      } catch { unresolvedItems = [] }
+
+      let keys
+      if (unresolvedItems.length > 0) {
+        // Class gate: EVERY outstanding item must be a profile field in the
+        // preflight class, or we leave the task alone.
+        if (!unresolvedItems.every((m) => m.kind === 'field' && fieldClass.has(String(m.key)))) continue
+        keys = unresolvedItems.map((m) => String(m.key))
+      } else {
+        const msg = String(task.last_agent_message || '')
+        if (!/stopped at preflight:/i.test(msg)) continue
+        const detail = msg.replace(/^.*stopped at preflight:\s*/i, '')
+        const parts = detail.split(';').map((s) => s.trim()).filter(Boolean)
+        if (parts.length === 0) continue
+        const mapped = parts.map(preflightLabelToFieldKey)
+        // Same class gate: every recorded blocker label must map to the class.
+        if (mapped.some((k) => !k || !fieldClass.has(k))) continue
+        keys = mapped
+      }
+
+      const profile = await loadProfile(task.profile_id)
+      if (!profile) continue
+      let resolvedFields = null
+      if (getResolvedFieldsAsMap) {
+        try { resolvedFields = await getResolvedFieldsAsMap(db, task.profile_id) } catch { resolvedFields = null }
+      }
+      const stillMissing = recheckMissingProfileFields(profile, keys, resolvedFields)
+      if (stillMissing.length > 0) continue // blocker still real — leave blocked
+
+      scanned += 1
+      if (disabled) continue
+      if (requeued >= cap) { requeueCapped = true; break }
+
+      for (const m of unresolvedItems) {
+        try {
+          await resolveMissingInfoItem(db, task.id, {
+            kind: m.kind, key: m.key, value: 'present_on_profile', resolvedBy: 'self_heal_sweep',
+          })
+        } catch { /* item resolution is best-effort; the requeue is the repair */ }
+      }
+      await updateApplicationTask(db, task.id, {
+        status: 'ready',
+        nextRetryAt: null,
+        currentStep: 'self_heal_requeue',
+        lastAgentMessage: 'Previously-flagged profile fields are now present — task re-queued; Hamilton will resume automatically.',
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'unblocked',
+        status: 'ready',
+        step: 'self_heal',
+        message: `Boot self-heal: the "${keys.join(', ')}" preflight blocker no longer reproduces against the current profile — task re-queued.`,
+        actorRole: 'agent',
+        details: { self_heal: true, rechecked_keys: keys },
+      })
+      requeued += 1
+    }
+
+    // ── Part 2: dedupe already-stacked OPEN hard-stops ──────────────────────
+    // Keep the OLDEST open row per (task, type, key) group; mark the extras
+    // resolved with strategy 'duplicate' (never delete — append-only store).
+    let dedupedBlockers = 0
+    let duplicateGroups = 0
+    try {
+      const { blockerDedupeKey, recordResolution } = await import('../services/hamilton/hamiltonBlockerStore.js')
+      const open = await db.prepare(
+        `SELECT id, task_id, blocker_type, blocker_text, metadata_json, detected_at
+           FROM hamilton_blockers WHERE resolved_at IS NULL`,
+      ).all()
+      const groups = new Map()
+      for (const row of open || []) {
+        const key = `${row.task_id}|${row.blocker_type}|${blockerDedupeKey(row)}`
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key).push(row)
+      }
+      const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+      for (const rows of groups.values()) {
+        if (rows.length < 2) continue
+        duplicateGroups += 1
+        if (disabled) { dedupedBlockers += rows.length - 1; continue }
+        const sorted = [...rows].sort((a, b) => {
+          const ta = Date.parse(String(a.detected_at ?? '')) || 0
+          const tb = Date.parse(String(b.detected_at ?? '')) || 0
+          if (ta !== tb) return ta - tb
+          return String(a.id).localeCompare(String(b.id))
+        })
+        const keeper = sorted[0]
+        for (let i = 1; i < sorted.length; i += 1) {
+          const dupe = sorted[i]
+          await db.prepare(
+            `UPDATE hamilton_blockers
+                SET resolved_at = ${nowFn}, resolution_strategy = 'duplicate', updated_at = ${nowFn}
+              WHERE id = ? AND resolved_at IS NULL`,
+          ).run(dupe.id)
+          try {
+            await recordResolution(db, {
+              blockerId: dupe.id, taskId: dupe.task_id,
+              strategy: 'duplicate', outcome: 'resolved',
+              detail: `Duplicate of open blocker ${keeper.id} (same task/type/key); resolved by boot self-heal sweep.`,
+            })
+          } catch { /* audit row is best-effort; the resolve above is the repair */ }
+          dedupedBlockers += 1
+        }
+      }
+    } catch { /* hamilton_blockers absent — nothing to dedupe */ }
+
+    if (disabled) {
+      if (scanned > 0 || dedupedBlockers > 0) {
+        log.warn('hamilton self-heal candidates present (writes DISABLED via ENFORCE_HAMILTON_TASK_SELF_HEAL=0)', {
+          requeueCandidates: scanned, duplicateBlockers: dedupedBlockers,
+        })
+      }
+      return { scanned: scanned + dedupedBlockers, repaired: 0, enforced: false, requeued: 0, dedupedBlockers: 0 }
+    }
+    if (requeued > 0 || dedupedBlockers > 0) {
+      log.info('hamilton task self-heal repaired stale lifecycle state', {
+        requeued, dedupedBlockers, duplicateGroups, requeueCapped, cap,
+      })
+    }
+    return {
+      scanned: scanned + dedupedBlockers,
+      repaired: requeued + dedupedBlockers,
+      enforced: true,
+      requeued,
+      dedupedBlockers,
+      ...(requeueCapped ? { requeueCapped: true, cap } : {}),
+    }
+  })
+}
+
+/**
  * INVARIANT: A SEARCH-ENGINE RESULTS URL IS NEVER AN APPLICATION TARGET
  * (URL hygiene — canonical_rules.md "no random junk" + urlRules.js Phase G).
  *
@@ -1757,6 +2022,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // profile down to the applicant's own (need-consistent / lower) figure, so
   // need-based matching can't be poisoned by a captured parent/household income.
   steps.push(await enforceProfileIncomeReconciliation(db))
+  // Hamilton lifecycle self-heal: re-queue blocked tasks whose missing-profile-
+  // field preflight blocker no longer reproduces, and collapse already-stacked
+  // duplicate OPEN hard-stops (keep oldest, resolve extras as 'duplicate').
+  steps.push(await enforceHamiltonTaskSelfHeal(db))
   // URL-hygiene net: a search-engine RESULTS url is never a portal/application
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
@@ -1808,4 +2077,7 @@ export const __testables = {
   isIndividualProfileType,
   parseIncomeValue,
   STUDENT_AID_DEMOTE_SCORE,
+  enforceHamiltonTaskSelfHeal,
+  resolveSelfHealRequeueCap,
+  SELF_HEAL_REQUEUE_CAP_DEFAULT,
 }
