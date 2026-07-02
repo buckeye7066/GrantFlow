@@ -49,7 +49,11 @@ async function loadConnectors() {
  */
 function pickTimeCol(cols) {
   const set = new Set(cols)
-  for (const c of ['finished_at', 'started_at', 'created_at', 'updated_at']) {
+  // started_at FIRST: it is set on every row (the writer orders by it too),
+  // whereas finished_at is NULL for an in-flight run — ordering by finished_at
+  // DESC pushed running rows to the bottom, so "latest per host" picked a stale
+  // finished run over the one currently in progress.
+  for (const c of ['started_at', 'finished_at', 'created_at', 'updated_at']) {
     if (set.has(c)) return c
   }
   return null

@@ -32,11 +32,12 @@
  * evidence gaps as missing-info, and notifies the owner. Any failure
  * there falls back to the existing packet (never breaks the pathway).
  *
- * FOLLOW-UP (documented, not yet wired): feeding the drafted narrative
- * sections into the portal autofill/`/portal-assist` answer source so
- * Hamilton reuses this prose to answer portal form fields. The drafted
- * sections are persisted to the task + Documents, so that wiring is a
- * read of already-saved content — see PR notes.
+ * REUSE (wired): the drafted sections also feed
+ *   - the PORTAL autofill pathway (buildPortalNarrativeAnswers → the
+ *     autopilot engine's essay/goals fields), and
+ *   - the PACKET generator's narrative sections
+ *     (buildPacketNarrativeOverrides → buildPacketContent), so every
+ *     Hamilton output writes at the same MBA level from ONE prompt/persona.
  */
 
 import path from 'node:path'
@@ -429,6 +430,75 @@ export async function generateMbaProposal(db, {
   }
 }
 
+// ── public: reuse the drafted narrative elsewhere ────────────────────
+//
+// The MBA-level quality bar lives in ONE place (the persona + prompt above).
+// The portal autofill pathway and the packet generator must not re-implement
+// their own (weaker) narrative generation — they consume the SAME drafted
+// proposal via the two mappers below.
+
+// A drafted section that still carries an "[ EVIDENCE NEEDED: … ]" placeholder
+// is grounded-but-incomplete. It is fine inside a reviewable DOCUMENT (the
+// packet prints missing-info markers by contract) but must never be typed into
+// a LIVE portal form field.
+function hasEvidencePlaceholder(text) {
+  return /\[\s*EVIDENCE\s+NEEDED/i.test(String(text || ''))
+}
+
+function sectionContent(proposal, key) {
+  const s = (proposal?.sections || []).find((x) => x && x.key === key)
+  const content = s?.content ? String(s.content).trim() : ''
+  return content || null
+}
+
+/**
+ * Map a drafted proposal onto the autopilot engine's long-form field keys
+ * (`essay`, `goals`) so portal essay/narrative boxes get MBA-level prose
+ * instead of the raw profile essay. Placeholder-bearing sections are skipped —
+ * Hamilton never types "[ EVIDENCE NEEDED ]" into a live portal; the engine
+ * then falls back to the applicant's own saved essay text.
+ *
+ * @returns {{ essay?: string, goals?: string }}
+ */
+export function buildPortalNarrativeAnswers(proposal) {
+  const out = {}
+  if (!proposal || !Array.isArray(proposal.sections)) return out
+  const clean = (key) => {
+    const c = sectionContent(proposal, key)
+    return c && !hasEvidencePlaceholder(c) ? c : null
+  }
+  const need = clean('need_statement')
+  const capacity = clean('personal_capacity') || clean('organizational_capacity')
+  const essayParts = [need, capacity].filter(Boolean)
+  if (essayParts.length > 0) out.essay = essayParts.join('\n\n')
+  const goals = clean('goals_objectives')
+  if (goals) out.goals = goals
+  return out
+}
+
+/**
+ * Map a drafted proposal onto the packet generator's narrative sections
+ * (Statement of Need / Personal-Student Narrative / Career Goals) so the
+ * submission packet carries the same MBA-level prose as the full proposal.
+ * Placeholders are allowed here — the packet's missing-info contract already
+ * surfaces every evidence gap for review before anything is sent.
+ *
+ * @returns {{ statement_of_need?, personal_statement?, goals? }}
+ */
+export function buildPacketNarrativeOverrides(proposal) {
+  const out = {}
+  if (!proposal || !Array.isArray(proposal.sections)) return out
+  const need = sectionContent(proposal, 'need_statement')
+  if (need) out.statement_of_need = need
+  const personal = sectionContent(proposal, 'personal_capacity')
+    || sectionContent(proposal, 'organizational_capacity')
+    || sectionContent(proposal, 'cover_letter')
+  if (personal) out.personal_statement = personal
+  const goals = sectionContent(proposal, 'goals_objectives')
+  if (goals) out.goals = goals
+  return out
+}
+
 // ── public: persist ──────────────────────────────────────────────────
 
 function getProposalStorageDir() {
@@ -581,4 +651,6 @@ export const _internal = {
   buildProposalPrompt,
   normalizeProposal,
   getProposalStorageDir,
+  hasEvidencePlaceholder,
+  sectionContent,
 }
