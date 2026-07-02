@@ -220,12 +220,27 @@ describe('crawlerManager.generateSchoolCards — Anastasia / MTSU end-to-end', (
       (c) => c.schoolName === 'Made Up College of Nowhere' && c.id.startsWith('school-offcampus-'),
     )
     assert.ok(unknown, 'unknown school must still produce an off-campus card (mission rule: avoid zero-result UX)')
-    // For unknown schools the URL falls back to a public search — but the
-    // matchReasons must explicitly say so, so the UI / Anya can warn the user.
+    // For unknown schools the URL is null (never a search-results fallback) and
+    // the matchReasons must explicitly say so, so the UI / Anya can warn the user.
+    assert.equal(unknown.url, null, 'unknown school card must carry url=null, not a synthesized link')
     assert.ok(
       unknown.matchReasons.some((r) => /Portal URL not yet added/.test(r)),
       'unknown school must surface "Portal URL not yet added" reason for transparency',
     )
+  })
+
+  it('URL hygiene: no school card ever carries a search-engine results URL', () => {
+    // The old fallback synthesized "google.com/search?q=<school> financial aid
+    // office" links that were persisted as application targets and drove
+    // Hamilton into Google's sign-in wall (verified in prod). Cards now carry a
+    // real institutional URL or null — never a search link.
+    for (const card of cards) {
+      if (!card.url) continue
+      assert.ok(
+        !/(google|bing|duckduckgo|yahoo|ecosia)\.[a-z.]+\/(search|html)|[?&]q=/.test(card.url),
+        `card ${card.id} must not carry a search-engine URL: ${card.url}`,
+      )
+    }
   })
 })
 

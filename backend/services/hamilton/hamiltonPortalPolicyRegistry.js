@@ -121,6 +121,39 @@ const SEED_POLICIES = Object.freeze([
     notes: 'University SSO required; rely on saved session when reuse is authorized.',
   }),
   Object.freeze({
+    // benefits.gov is a federal benefit FINDER — informational article/
+    // directory pages only. There is no application portal anywhere on the
+    // host (each benefit is applied for on the administering agency's own
+    // site), so a task pointing here is unsubmittable by design. Route it to
+    // the manual/packet path instead of ever driving a browser at it.
+    portal_host: 'benefits.gov',
+    automation_allowed: false,
+    agent_submission_allowed: false,
+    scraping_allowed: false,
+    api_available: false,
+    manual_only: true,
+    fallback_path: 'manual',
+    source_of_policy: 'https://www.benefits.gov/',
+    notes: 'Informational benefit directory with no application surface. Hamilton produces guidance/packet material; the actual application happens on the administering agency\'s site.',
+  }),
+  Object.freeze({
+    // medicaid.gov hosts program information and policy articles only —
+    // Medicaid/CHIP applications are filed with the state Medicaid agency or
+    // via healthcare.gov, never on medicaid.gov itself. Same reasoning as
+    // benefits.gov: info pages queued as "portals" must degrade to the packet
+    // path, not the login flow. (studentaid.gov article pages are already
+    // covered by its manual-only entry above.)
+    portal_host: 'medicaid.gov',
+    automation_allowed: false,
+    agent_submission_allowed: false,
+    scraping_allowed: false,
+    api_available: false,
+    manual_only: true,
+    fallback_path: 'manual',
+    source_of_policy: 'https://www.medicaid.gov/',
+    notes: 'Informational program pages only — applications go through the state Medicaid agency or healthcare.gov. Hamilton produces guidance/packet material instead of browser automation.',
+  }),
+  Object.freeze({
     // Mirrors the mtsu.edu school entry. Cleveland State Community College
     // uses portal SSO; policy specifics should be re-verified against the
     // live CSCC portal once a session is captured.

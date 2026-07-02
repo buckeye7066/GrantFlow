@@ -281,8 +281,13 @@ export function generateSchoolCards(analysis) {
     const baseScore = 85;
     const hasPortal = !!school.portals?.financialAid;
     const matchedRegistry = !!school.knownSchoolMatched;
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(school.name + ' financial aid office')}`;
-    const finaidUrl = school.portals?.financialAid || school.website || searchUrl;
+    // URL-hygiene rule: when we don't know a school's real portal URL, the card
+    // carries url=null — NEVER a search-engine results link. A persisted
+    // "google.com/search?q=…" fallback became funding_opportunities.application_url
+    // and Hamilton then retried logins against Google's sign-in wall (verified in
+    // prod). Null is honest ("Portal URL not yet added"); display layers that want
+    // a search shortcut compute one at render time (see PortalLoginButton.jsx).
+    const finaidUrl = school.portals?.financialAid || school.website || null;
 
     cards.push({
       id: `school-finaid-${slug}`,
@@ -318,10 +323,8 @@ export function generateSchoolCards(analysis) {
     }
 
     // On-campus housing & residence life card — links to the school's housing
-    // office when known, otherwise a Google search.
-    const housingUrl =
-      school.portals?.housing
-      || `https://www.google.com/search?q=${encodeURIComponent(school.name + ' housing residence life')}`;
+    // office when known; null otherwise (never a search-results fallback).
+    const housingUrl = school.portals?.housing || null;
     const housingHasReal = !!school.portals?.housing;
     cards.push({
       id: `school-housing-${slug}`,
@@ -340,15 +343,11 @@ export function generateSchoolCards(analysis) {
       schoolName: prefix,
     });
 
-    // Off-campus housing card — only emitted as a separate, distinct card
-    // when we have a verified off-campus URL for the school. This is the
-    // exact card a student looking for "off-campus housing scholarships /
-    // grants for MTSU" expects. When unknown, fall back to a generic
-    // off-campus search card so the user still gets *something* actionable.
+    // Off-campus housing card — carries the school's verified off-campus URL
+    // when we have one; url=null when unknown (the card's guidance text is
+    // still actionable, and a null URL can never be queued as a portal).
     const offCampusHasReal = !!school.portals?.offCampusHousing;
-    const offCampusUrl =
-      school.portals?.offCampusHousing
-      || `https://www.google.com/search?q=${encodeURIComponent(school.name + ' off-campus housing student rent assistance')}`;
+    const offCampusUrl = school.portals?.offCampusHousing || null;
     cards.push({
       id: `school-offcampus-${slug}`,
       name: `${prefix} — Off-Campus Housing & Rent Assistance`,
@@ -362,20 +361,20 @@ export function generateSchoolCards(analysis) {
         `Off-campus housing resources for target school: ${prefix}`,
         offCampusHasReal
           ? 'Verified off-campus housing portal linked'
-          : 'Portal URL not yet added — using public search fallback',
+          : 'Portal URL not yet added',
       ],
       contact: extractPrimaryContact(school.contacts, 'Housing') || extractPrimaryContact(school.contacts, 'Financial Aid'),
       schoolName: prefix,
       knownSchoolMatched: matchedRegistry,
     });
 
-    // Scholarship search card specific to this school
-    const scholarshipSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(school.name + ' scholarships grants financial aid')}`;
+    // Scholarship card specific to this school (registry URL or null — never a
+    // search-results fallback).
     cards.push({
       id: `school-scholarships-${slug}`,
       name: `${prefix} — Institutional Scholarships & Grants`,
       description: `Search for scholarships, grants, and financial aid specific to ${prefix}. Includes merit aid, need-based grants, departmental awards, and endowed scholarships.`,
-      url: school.portals?.scholarships || scholarshipSearchUrl,
+      url: school.portals?.scholarships || school.website || null,
       categories: ['education', 'scholarship'],
       type: 'school_portal',
       fundingType: 'institutional_aid',
@@ -394,7 +393,7 @@ export function generateSchoolCards(analysis) {
           id: `school-dept-${slug}-${deptSlug}`,
           name: `${prefix} — ${dept.area || 'Department Contact'}`,
           description: `Contact for ${dept.area || 'this program'} at ${prefix}. ${contactLines}`,
-          url: dept.url || school.website || searchUrl,
+          url: dept.url || school.website || null,
           categories: ['education'],
           type: 'school_department',
           fundingType: 'department_contact',

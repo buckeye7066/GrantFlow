@@ -274,6 +274,26 @@ describe('hamiltonPortalPolicyRegistry', () => {
     assert.equal(unknown.fallback_path, 'pdf_docx')
   })
 
+  it('routes informational federal hosts (benefits.gov / medicaid.gov) to the manual path — never browser automation', async () => {
+    const db = makeDb()
+    // Article pages on these hosts were queued as application portals in prod;
+    // they are informational-only by design (no application surface on the host).
+    const benefits = await getPolicyFor(db, 'www.benefits.gov')
+    assert.equal(benefits.portal_host, 'benefits.gov')
+    assert.equal(benefits.automation_allowed, false)
+    assert.equal(benefits.manual_only, true)
+    assert.equal(benefits.fallback_path, 'manual')
+
+    const medicaid = await getPolicyFor(db, 'medicaid.gov')
+    assert.equal(medicaid.automation_allowed, false)
+    assert.equal(medicaid.fallback_path, 'manual')
+
+    // studentaid.gov article pages (e.g. /understand-aid/types/grants) are
+    // covered by its existing manual-only seed entry.
+    const studentAid = await getPolicyFor(db, 'studentaid.gov')
+    assert.equal(studentAid.automation_allowed, false)
+  })
+
   it('upserts and respects DB overrides over the seed', async () => {
     const db = makeDb()
     await upsertPolicy(db, {

@@ -201,6 +201,44 @@ describe('hamiltonAutomationClassifier — every pathway', () => {
     const r = classifyFundingSource({ opportunity: { title: 'Unspecified' } })
     assert.equal(r.automation_type, 'unknown')
   })
+
+  // URL hygiene: a search-engine RESULTS url is never an application target.
+  // Legacy rows persisted "google.com/search?q=<school> financial aid office"
+  // as application_url and Hamilton drove the login flow against Google's
+  // sign-in wall. The classifier must skip such URLs entirely.
+  it('never resolves a search-engine results URL — classifies as unknown, resolved_url null', () => {
+    const r = classifyFundingSource({
+      opportunity: {
+        title: 'Middle Tennessee State University — Financial Aid',
+        application_url: 'https://www.google.com/search?q=Middle+Tennessee+State+University+financial+aid+office',
+      },
+    })
+    assert.equal(r.automation_type, 'unknown')
+    assert.equal(r.resolved_url, null)
+  })
+
+  it('skips a search-engine application_url but still uses a real fallback URL', () => {
+    const r = classifyFundingSource({
+      opportunity: {
+        title: 'MTSU Financial Aid',
+        application_url: 'https://www.bing.com/search?q=mtsu+financial+aid',
+        source_url: 'https://www.mtsu.edu/financial-aid/',
+      },
+    })
+    assert.equal(r.automation_type, 'portal')
+    assert.equal(r.resolved_url, 'https://www.mtsu.edu/financial-aid/')
+  })
+
+  it('explicit portal mode with only a search-results URL yields resolved_url null (nothing to log into)', () => {
+    const r = classifyFundingSource({
+      opportunity: {
+        application_mode: 'portal',
+        application_url: 'https://duckduckgo.com/?q=college+grants',
+      },
+    })
+    assert.equal(r.automation_type, 'portal')
+    assert.equal(r.resolved_url, null)
+  })
 })
 
 describe('hamiltonApplicationPacketGenerator — content + DOCX', () => {
