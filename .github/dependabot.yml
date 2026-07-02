@@ -45,6 +45,11 @@ updates:
       - dependency-name: "date-fns"
         update-types:
           - "version-update:semver-major"
+      # @types/node tracks the Node RUNTIME major (currently 20) — bump it
+      # together with a runtime upgrade, never independently.
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: "github-actions"
     directory: "/"
