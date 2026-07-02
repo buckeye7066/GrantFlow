@@ -111,7 +111,9 @@ gates pass locally except known-environmental test flakes (documented in §6); C
   / `merge-all-branches.yml` gate on "no failing/pending checks + 1 approval" — an empty
   `statusCheckRollup` passes the script filter. Mitigated in practice: `gh pr merge --auto` still honors
   branch protection, and required contexts on `main` were verified live as `["test","postgres-migrations"]`
-  (matches the actual job names). Documented; no change needed beyond awareness.
+  (matches the actual job names). **RESOLVED (owner-approved follow-up, 2026-07-02):** both workflows now
+  require the required contexts `test` and `postgres-migrations` to be PRESENT and SUCCESSFUL in the
+  rollup before queuing a merge — an empty/absent rollup is treated as a failure and the PR is skipped.
 - **L4 — Duplicate numeric migration prefixes** (047, 054, 068, 069, 078, 079, 080, 110, 127). Harmless:
   `backend/db/migrate.js:75-77` sorts by full filename, so order is deterministic and already baked into
   every prod migration ledger. Do NOT renumber (would re-run under new names). Cosmetic only.
@@ -198,13 +200,33 @@ gates pass locally except known-environmental test flakes (documented in §6); C
 
 - **Owner-config items from the June 2026 pass remain** (backups/legal/retention, Sentry DSN) — owner
   scope, not code.
-- **`funding_opportunities` (and `organizations`) are not in `PROFILE_SCOPED_TABLES`** in
-  `backend/db/scopedQuery.js`, so the SQL-layer bleed net does not cover them — route-level guards are
-  the only line of defense there (M3 was exactly this class). Extending the net is a deliberate,
-  potentially behavior-affecting change: **flagged for a dedicated pass, requires human approval.**
-- **L3** (auto-merge workflows tolerate an empty check rollup) — mitigated by branch protection
-  (`gh pr merge --auto` honors required contexts, verified live); tightening the workflow scripts is
-  optional hardening.
+- **`funding_opportunities` and `organizations` SQL-bleed net — RESOLVED (owner-approved, 2026-07-02).**
+  `backend/db/scopedQuery.js` now covers both tables with tier-appropriate enforcement (chosen after
+  auditing all ~255 `funding_opportunities` call sites and every request-path `organizations` query):
+  - **`organizations` → strict org-scoped tier.** The table has NO `profile_id` column (tenancy links
+    through `profiles.organization_id` / `user_organizations`), so the profile_id-predicate rule cannot
+    apply. Instead, under a non-admin request with an active profile claim, SELECT/UPDATE/DELETE must be
+    row-targeted (`id = ?` / `id IN (...)`) or reached through the owning-row linkage (an
+    `organization_id` equality/join); INSERT (org creation) reads nothing and is allowed. Violations
+    THROW by default (`ProfileScopeError`), same escape hatch as the core tier (`PROFILE_SCOPE_MODE=warn`).
+    Every existing request-path query already satisfies this (verified: organizations list route adds
+    `id IN (accessible set)` for non-admins; wholesale COUNT/scan sites are admin-gated or boot/agent
+    contexts that bypass the guard) — so this is pure hardening, no behavior change.
+  - **`funding_opportunities` → dual-scope tier.** The table is deliberately dual-scope: `profile_id IS
+    NULL` rows are the shared global crawl catalog, non-NULL rows are profile-private (canonical clause
+    `(profile_id IS NULL OR profile_id = ?)`). Blind inclusion in the strict net would have broken the
+    product: catalog browse and matching scans legitimately read the whole catalog today. Enforcement:
+    **writes (UPDATE/DELETE) are strict** — a wholesale write under a non-admin tenant claim throws;
+    row-targeted writes (id / fingerprint / source_id / canonical_opportunity_key / profile_id predicates,
+    or `profile_id IS NULL` global maintenance) pass; INSERT (crawl ingestion of global rows, including
+    request-initiated discovery) is allowed. **Reads are an observability tier** — unscoped catalog-wide
+    reads under a tenant claim are counted on the request context (`profileBleed` + samples) and warn-logged
+    (deduped per route+op to keep prod logs readable), NOT blocked; flip `PROFILE_SCOPE_FUNDING_READS=strict`
+    once the drift list retires. All wholesale writers were verified boot/background/admin-only
+    (deadlineExpiryService: server boot scheduler; anyaHealthService: admin route + startup service;
+    remove-loans: admin/bulk-key gate; ensureMinimumNationalOpportunities: selfHeal/boot), so strict
+    writes cannot break existing flows. Guard tests extended: `tests/unit/scoped-query.test.mjs`
+    (32 tests, +21 new covering both tiers).
 - **Local-only test flakes**: `agent-control-locks` (parallel-run timing) and the 4 network-dependent
   discovery tests (sandboxed local network). Consider stubbing the web-search lane in those tests so
   local runs are hermetic.
@@ -223,4 +245,7 @@ gates pass locally except known-environmental test flakes (documented in §6); C
 - Post-deploy: watch one scheduled discovery cycle for `[envelope] redacted 500 response detail` log
   lines (each one identifies a route-catch leak site now being redacted) and for crawl-fetch timeout
   aborts (`TimeoutError`) replacing formerly-hung slots.
-- Optional: extend `PROFILE_SCOPED_TABLES` (see §7) after a dedicated review.
+- ~~Optional: extend `PROFILE_SCOPED_TABLES` (see §7) after a dedicated review.~~ DONE 2026-07-02
+  (dual-scope + org-scoped tiers, see §7). Post-deploy: watch for `[profile_bleed]` log lines with
+  `"tiers":["funding_read"]` — each identifies a catalog-wide read under a tenant claim to retire
+  before flipping `PROFILE_SCOPE_FUNDING_READS=strict`.
