@@ -67,6 +67,10 @@ const ENGINE_KIND_MAP = Object.freeze({
   attestation: 'legal_attestation_required',
   validation: 'ambiguous_required_field',
   no_progress: 'unknown_application_method',
+  // Informational page with no application form (engine's submit-hunt
+  // truthfulness gate) — same degrade path as no_progress: the resolver
+  // produces the manual funder-contact packet.
+  no_application_form: 'unknown_application_method',
   too_many_pages: 'portal_anti_bot_block',
   click_failed: 'portal_anti_bot_block',
   preflight: 'missing_required_information',

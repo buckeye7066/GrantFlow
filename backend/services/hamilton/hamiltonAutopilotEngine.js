@@ -276,14 +276,48 @@ async function detectButtons(page, patterns) {
       for (const r of rxList) {
         const re = new RegExp(r.source, r.flags)
         if (re.test(text)) {
+          // Form context: a submit-looking control that is not part of a real
+          // <form> with fillable fields is usually page chrome or a navigation
+          // link on an informational page — NOT an application-form submit.
+          // The main loop uses this to avoid hunting stray "Submit"/"Apply
+          // now" controls on pages that have no application form at all.
+          const form = el.closest('form')
+          let formFieldCount = 0
+          if (form) {
+            for (const f of form.querySelectorAll('input, textarea, select')) {
+              const t = (f.getAttribute('type') || '').toLowerCase()
+              if (f.tagName.toLowerCase() === 'input'
+                && (t === 'hidden' || t === 'submit' || t === 'button' || t === 'image')) continue
+              formFieldCount += 1
+            }
+          }
           el.setAttribute('data-hamilton-btn', `b${out.length}`)
-          out.push({ bid: `b${out.length}`, text })
+          out.push({ bid: `b${out.length}`, text, inForm: !!form, formFieldCount })
           break
         }
       }
     }
     return out
   }, { rxList: patterns.map((p) => ({ source: p.source, flags: p.flags })) })
+}
+
+/**
+ * Truthfulness gate for the submit hunt (no-form informational pages).
+ *
+ * A "Submit"/"Apply now"-labelled control only counts as an APPLICATION submit
+ * when Hamilton actually worked an application form on this run:
+ *   - she filled at least one recognised field (`anyFieldFilled`), OR
+ *   - the control lives inside a real <form> element that has fillable fields.
+ *
+ * Informational pages (e.g. a university's financial-aid overview page) often
+ * carry stray submit-looking chrome or "Apply Now" nav links. Hunting those and
+ * hard-failing with click_failed misreported "this page has no application
+ * form" as an engine failure. Pure function — unit-tested directly.
+ */
+function actionableSubmitButtons(submitButtons, { anyFieldFilled = false } = {}) {
+  const list = Array.isArray(submitButtons) ? submitButtons : []
+  if (anyFieldFilled) return list
+  return list.filter((b) => b && b.inForm && Number(b.formFieldCount) > 0)
 }
 
 async function clickButtonByBid(page, bid) {
@@ -693,16 +727,39 @@ export async function runAutopilot({
         }
       }
 
-      // Decide what to click next.
-      const canSubmit = submitButtons.length > 0
+      // Decide what to click next. Submit controls pass the truthfulness gate
+      // first (actionableSubmitButtons): Hamilton only treats a submit-looking
+      // control as an application submit when she actually filled application
+      // fields on this run, or the control sits inside a real form with
+      // fillable fields.
+      const submitCandidates = actionableSubmitButtons(submitButtons, { anyFieldFilled: filled.length > 0 })
+      const canSubmit = submitCandidates.length > 0
       const canNext   = nextButtons.length > 0
       const canDraft  = draftButtons.length > 0
 
+      if (!canSubmit && !canNext && submitButtons.length > 0) {
+        // The page has submit-LOOKING controls but no application form Hamilton
+        // worked (nothing filled; controls are page chrome / nav links). This is
+        // an informational page — degrade to the manual / funder-contact packet
+        // pathway (unknown_application_method) instead of hunting a submit
+        // button and hard-failing with click_failed.
+        trace.push({
+          step: 'no_application_form',
+          detail: { ignored_submit_like_controls: submitButtons.map((b) => b.text).slice(0, 5) },
+        })
+        return {
+          status: 'blocked',
+          blocker_kind: 'no_application_form',
+          blocker_detail: 'This page has no application form to fill — the only submit-like controls are page chrome or navigation links (informational page). Hamilton degrades to the manual funder-contact packet pathway.',
+          filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+        }
+      }
+
       if (canSubmit && finalAllowSubmit) {
         // Submit the application.
-        trace.push({ step: 'submit_attempt', detail: { button: submitButtons[0].text } })
+        trace.push({ step: 'submit_attempt', detail: { button: submitCandidates[0].text } })
         const beforeUrl = (() => { try { return page.url() } catch { return null } })()
-        const clicked = await clickButtonByBid(page, submitButtons[0].bid)
+        const clicked = await clickButtonByBid(page, submitCandidates[0].bid)
         if (!clicked) {
           return { status: 'failed', blocker_kind: 'click_failed', blocker_detail: 'Submit button could not be clicked', filled_fields: filled, pages_visited: pagesVisited, trace }
         }
@@ -792,4 +849,5 @@ export const _internal = {
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   detectGate, attemptLogin,
   extractConfirmationReference,
+  actionableSubmitButtons,
 }
