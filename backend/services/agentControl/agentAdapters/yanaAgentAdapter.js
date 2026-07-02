@@ -72,6 +72,7 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       // YANA_ALLOW_LIVE_WEB (honest NOOP when off).
       allowLiveWeb: yanaCfg.allowLiveWeb,
       prospectLimit: yanaCfg.prospectLimit,
+      backlogEnrichLimit: yanaCfg.backlogEnrichLimit,
     })
 
     if (signal?.shouldStop?.()) {

@@ -52,6 +52,22 @@ describe('makeContactEnricher — deep contact-page probe', () => {
     expect(res.email).toBe('info@compasscommunityhealth.org')
     // It must have actually visited a contact page, not just the homepage.
     expect(fetched.some((u) => /\/contact/.test(u))).toBe(true)
+    // Evidence trail: the exact public page the email was scraped from.
+    expect(res.email_source_url).toMatch(/compasscommunityhealth\.org\/contact/)
+  })
+
+  it('reports the homepage as the email source when the email is on the homepage', async () => {
+    const enricher = makeContactEnricher({
+      env: { YANA_ALLOW_LIVE_WEB: 'true' },
+      searchProvider: async () => [
+        { url: 'https://www.frontdoororg.org/', title: 'Front Door Org', snippet: '' },
+      ],
+      fetcher: async () => '<html><body><a href="mailto:info@frontdoororg.org">Email us</a></body></html>',
+    })
+
+    const res = await enricher.enrich({ organization_name: 'Front Door Org' })
+    expect(res.email).toBe('info@frontdoororg.org')
+    expect(res.email_source_url).toBe('https://www.frontdoororg.org/')
   })
 
   it('still returns the homepage (email null) when no contact page yields an address', async () => {
@@ -67,5 +83,7 @@ describe('makeContactEnricher — deep contact-page probe', () => {
     expect(res.ok).toBe(true)
     expect(res.website_url).toBe('https://www.emaillessorg.org/')
     expect(res.email).toBeNull()
+    // No email → no fabricated evidence URL either.
+    expect(res.email_source_url).toBeNull()
   })
 })
