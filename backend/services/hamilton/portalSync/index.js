@@ -257,12 +257,40 @@ async function loadProfileBundle(db, profileId) {
  * @param {string} [arg.actorUserId]
  * @returns {Promise<{ ok:boolean, direction:string, connectorId:string|null, read?:object, write?:object, runId:string|null, error?:string }>}
  */
+// In-flight sync registry: survives across requests within one process; a
+// process restart clears it, which is correct (the orphaned run is finished or
+// dead by then).
+const inFlightSyncs = new Map()
+
 export async function runPortalSync(db, { profileId, portalHost, direction = 'read', actorUserId = null } = {}) {
   if (!db) return { ok: false, direction, connectorId: null, runId: null, error: 'db required' }
   if (!profileId) return { ok: false, direction, connectorId: null, runId: null, error: 'profileId required' }
   const host = normalizeHost(portalHost)
   if (!host) return { ok: false, direction, connectorId: null, runId: null, error: 'portalHost required' }
   const dir = VALID_DIRECTIONS.has(direction) ? direction : 'read'
+
+  // IN-FLIGHT GUARD: a sync can outlive the HTTP edge timeout (the client sees
+  // a 504 while the server-side run keeps going and persists). A blind retry
+  // then runs the SAME portal twice concurrently. Refuse the duplicate and hand
+  // back the running runId so callers poll GET /runs instead.
+  const flightKey = `${profileId}|${host}`
+  const running = inFlightSyncs.get(flightKey)
+  if (running) {
+    return {
+      ok: false, direction: dir, connectorId: running.connectorId || null,
+      runId: running.runId || null, in_flight: true,
+      error: 'a sync for this profile + portal is already running; poll /api/hamilton/portal-sync/runs for its result',
+    }
+  }
+  inFlightSyncs.set(flightKey, { runId: null, connectorId: null, startedAt: Date.now() })
+  try {
+    return await runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey })
+  } finally {
+    inFlightSyncs.delete(flightKey)
+  }
+}
+
+async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, flightKey }) {
 
   // Load the saved login up front so connector resolution is credential-aware:
   // an MTSU account saved under login.microsoftonline.com must route to the MTSU
@@ -276,6 +304,9 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
 
   await ensurePortalSyncSchema(db).catch(() => {})
   const runId = await recordRunStart(db, { profileId, portalHost: host, connectorId, direction: dir, actorUserId }).catch(() => null)
+  // Let concurrent duplicate callers learn WHICH run is already in flight.
+  const flight = flightKey ? inFlightSyncs.get(flightKey) : null
+  if (flight) { flight.runId = runId; flight.connectorId = connectorId }
   // Run bookkeeping failure must be VISIBLE: with runId=null the run would
   // finish "successfully" while the health surface / lastSync show "never
   // synced". Surface the degradation on the result instead of hiding it.
@@ -355,10 +386,22 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
 
     if (dir === 'read' || dir === 'both') {
       const readResult = await connector.read(page, ctx)
+      // A connector that could not even REACH the portal (DNS failure, cert
+      // mismatch, connection reset) must yield a FAILED run — recording
+      // "completed, 0 awards" for a page the browser never loaded shows dead
+      // portals as green on every dashboard.
+      if (readResult?.reached === false) {
+        return await fail(`portal unreachable: ${readResult?.error || 'navigation failed'}`, { unreachable: true })
+      }
       const persisted = await persistReadResult(db, { profileId, portalHost: host, actorUserId, readResult })
       result.read = {
         fields_found: (readResult?.fields || []).length,
+        // Name the fields a sync wrote — a bare fieldsWritten count is
+        // unauditable after the fact.
+        fields: (readResult?.fields || []).map((f) => ({ sectionKey: f?.sectionKey, field: f?.field })),
         awards_found: (readResult?.awards || []).length,
+        // Fabrication-guard audit trail: extracted items REFUSED as user awards.
+        rejected: readResult?.rejected || [],
         not_found: readResult?.notFound || [],
         persisted,
       }
@@ -377,10 +420,14 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
     if (dir === 'write' || dir === 'both') {
       const fundingSources = profileToFundingSources(profile)
       const writeResult = await connector.write(page, ctx, { fundingSources })
+      if (writeResult?.reached === false && dir === 'write') {
+        return await fail(`portal unreachable: ${writeResult?.error || 'navigation failed'}`, { unreachable: true })
+      }
       result.write = {
         written: writeResult?.written || [],
         skipped: writeResult?.skipped || [],
       }
+      if (writeResult?.reached === false) result.write.unreachable = writeResult?.error || 'navigation failed'
       summary.write = result.write
     }
 

@@ -19,25 +19,55 @@
  * never has to supply a URL.
  */
 
+import { registrableDomain } from '../../hamiltonPortalCredentialService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
 
 const GENERIC_NOTE =
   'Signed in successfully, but there is no structured data connector for this portal yet, ' +
   'so no fields were read/written. (A dedicated connector is needed to map this portal.)'
 
-function destinationUrl(ctx) {
+/**
+ * Navigation candidates, in order: the saved credential's login_url (the URL the
+ * user actually logs in at) first, then https://<host>/, then — when the host is
+ * a bare APEX domain — https://www.<host>/. The www fallback matters in prod:
+ * goingmerry.com does not resolve (DNS) and coca-colascholarsfoundation.org's
+ * apex cert is invalid, but both www. hosts work.
+ */
+function candidateUrls(ctx) {
+  const urls = []
   const loginUrl = ctx?.credential?.login_url || ctx?.credential?.loginUrl || null
-  if (loginUrl && /^https?:\/\//i.test(loginUrl)) return loginUrl
-  return `https://${ctx?.portalHost || ''}/`
+  if (loginUrl && /^https?:\/\//i.test(loginUrl)) urls.push(loginUrl)
+  const host = String(ctx?.portalHost || '').trim().toLowerCase()
+  if (host) {
+    urls.push(`https://${host}/`)
+    let apex = false
+    try { apex = registrableDomain(host) === host } catch { apex = false }
+    if (apex && !/^www\./i.test(host)) urls.push(`https://www.${host}/`)
+  }
+  return [...new Set(urls)]
 }
 
+/**
+ * Try each candidate URL until one loads. Every failed attempt is recorded (URL
+ * + real Playwright error) so the run summary shows exactly what was tried.
+ */
 async function visit(page, ctx) {
-  const url = destinationUrl(ctx)
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    return { reached: true, url }
-  } catch (err) {
-    return { reached: false, url, error: err?.message || String(err) }
+  const attempts = []
+  for (const url of candidateUrls(ctx)) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      return { reached: true, url, attempts }
+    } catch (err) {
+      attempts.push({ url, error: err?.message || String(err) })
+    }
+  }
+  return {
+    reached: false,
+    url: attempts[attempts.length - 1]?.url || null,
+    error: attempts.length
+      ? attempts.map((a) => `${a.url}: ${a.error}`).join(' | ')
+      : 'no navigable URL for this portal',
+    attempts,
   }
 }
 
@@ -50,7 +80,18 @@ const generic = {
     const log = ctx?.log || (() => {})
     const nav = await visit(page, ctx)
     if (!nav.reached) {
-      return { fields: [], awards: [], notFound: [`Could not reach ${nav.url}: ${nav.error}`], raw: { navigated: nav } }
+      // reached:false + error propagate to the orchestrator, which records the
+      // run as FAILED with the real navigation error — never a clean
+      // "completed" for a portal the browser could not even load.
+      return {
+        reached: false,
+        error: nav.error,
+        fields: [],
+        awards: [],
+        rejected: [],
+        notFound: [`Could not reach the portal: ${nav.error}`],
+        raw: { navigated: nav },
+      }
     }
 
     // Selector-independent extraction from the authenticated page text.
@@ -63,6 +104,9 @@ const generic = {
     return {
       fields: llm.fields || [],
       awards: llm.awards || [],
+      // Fabrication-guard audit trail: what the extractor REFUSED to record as
+      // user awards (listing/marketing entries) — surfaced in the run summary.
+      rejected: llm.rejected || [],
       notFound,
       raw: { navigated: nav, llm: llm.raw },
     }
@@ -70,10 +114,15 @@ const generic = {
 
   async write(page, ctx /*, data */) {
     const nav = await visit(page, ctx)
-    return {
-      written: [],
-      skipped: [nav.reached ? GENERIC_NOTE : `Could not reach ${nav.url}: ${nav.error}`],
+    if (!nav.reached) {
+      return {
+        reached: false,
+        error: nav.error,
+        written: [],
+        skipped: [`Could not reach the portal: ${nav.error}`],
+      }
     }
+    return { written: [], skipped: [GENERIC_NOTE] }
   },
 }
 
