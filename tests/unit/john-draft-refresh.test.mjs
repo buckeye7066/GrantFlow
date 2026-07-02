@@ -77,6 +77,9 @@ test('refresh rewrites the body to current copy and preserves the org-specific h
     // …replaced with the current copy, still org-specific from source evidence…
     assert.match(after.body_text, /SCBA gear/)
     assert.match(after.body_text, /Anya/)
+    // …and the refresh re-derives the fire/EMS funding lane from the SCBA
+    // evidence, so the regenerated value proposition stays sector-specific.
+    assert.match(after.body_text, /firefighter assistance|AFG/)
     // …and a real person/title salutation is preserved.
     assert.match(after.body_text, /^Hi Chief,/)
   } finally {
@@ -85,7 +88,7 @@ test('refresh rewrites the body to current copy and preserves the org-specific h
   }
 })
 
-test('refresh replaces old generic team salutations with the professional fallback', async () => {
+test('refresh replaces old generic team salutations with the warm org-specific greeting', async () => {
   const restore = applyDefaultJohnEnv()
   const db = makeJohnDb()
   try {
@@ -104,8 +107,12 @@ test('refresh replaces old generic team salutations with the professional fallba
     assert.equal(provider.patches.length, 1, 'Outlook draft PATCHed once')
 
     const after = await getDraft(db, id)
-    assert.match(after.body_text, /^Hello,/)
+    // Since the Ellie identity pass (#782/#783), a lead with NO named contact
+    // gets the warm org-specific greeting — never the old bland "Hey Team,"
+    // and not the cold bare "Hello," either.
+    assert.match(after.body_text, /^Hello Riverbend Volunteer Fire Department team,/)
     assert.doesNotMatch(after.body_text, /^Hey Team,/i)
+    assert.doesNotMatch(after.body_text, /^Hello,/)
   } finally {
     restore()
     db.close()
