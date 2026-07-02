@@ -51,6 +51,12 @@ import { useSettingsStore } from "@/stores/settingsStore"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
 import { isRealProfileId } from "@/api/profileIdGuards"
+import ProfileGapGate from "./ProfileGapGate"
+
+// Anya's gap gate is OFF until VITE_GAP_GATE_ENABLED=true at build. Until then the
+// mount below is fully inert (renders nothing, fetches nothing).
+const GAP_GATE_ENABLED =
+  typeof import.meta !== "undefined" && import.meta.env?.VITE_GAP_GATE_ENABLED === "true"
 import {
   calculateProfileCompletion,
   hasMeaningfulProfileValue,
@@ -1206,6 +1212,12 @@ export default function ProfileOverview({
 
   return (
     <div className="space-y-10">
+      {/* Anya's opening interview / gap gate. Inert unless VITE_GAP_GATE_ENABLED
+          is set: when off it renders nothing; when on it prompts the owner to fill
+          the profile's gaps (which then determine the type + eligibility). */}
+      {GAP_GATE_ENABLED && profile?.id && isRealProfileId(profile.id) && (
+        <ProfileGapGate profileId={profile.id} enabled={GAP_GATE_ENABLED} />
+      )}
       <section className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-sm p-6 md:p-8 space-y-6">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-5">

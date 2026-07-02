@@ -103,6 +103,27 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     coverage = { ok: false, error: err?.message }
   }
 
+  // Gap-email review drafts: when a profile is incomplete, draft a warm "a few
+  // quick questions" email (Ellie voice) into the owner's mailbox for review.
+  // DRAFT-ONLY, never sends. No-op unless GAP_EMAIL_DRAFTS_ENABLED=true, so this
+  // is inert by default. Best-effort — never blocks the sweep.
+  try {
+    const { draftGapEmailsForIncompleteProfiles, gapEmailDraftsEnabled } = await import('../profileGapEmailDrafts.js')
+    if (gapEmailDraftsEnabled()) {
+      const { getJohnConfig } = await import('../john/johnOutreachSafety.js')
+      const { createOutlookProvider } = await import('../john/johnOutlookProvider.js')
+      const provider = createOutlookProvider({ config: getJohnConfig(), logger: log })
+      if (provider.ready) {
+        const gapMail = await draftGapEmailsForIncompleteProfiles(db, { provider })
+        log.info('nightly gap-email review drafts', { drafted: gapMail?.drafted ?? 0, scanned: gapMail?.scanned ?? 0 })
+      } else {
+        log.warn('gap-email drafts enabled but Outlook provider not configured', { missing: provider.missing })
+      }
+    }
+  } catch (err) {
+    log.warn('nightly gap-email drafts failed (non-fatal)', { error: err?.message })
+  }
+
   // Sam cleanup sweep for Amy's synthetic crawler-training profiles. Amy tags
   // every profile it creates as synthetic + allow_sam_cleanup, marks it crawled
   // once discovery runs, and improves the crawler weights/coverage from the

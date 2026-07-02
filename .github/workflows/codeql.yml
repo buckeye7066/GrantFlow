@@ -16,7 +16,10 @@ jobs:
   analyze:
     name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Main-branch runs were taking ~15m23s and getting CANCELLED at the old
+    # 15-minute timeout — security scanning was silently dying. PR runs finish
+    # ~13m; 25 gives headroom without letting a hang burn an hour.
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
