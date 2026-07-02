@@ -78,6 +78,7 @@ import {
 } from './hamiltonAuthorizationStore.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
+import { isSearchEngineUrl } from '../../config/urlRules.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -702,6 +703,45 @@ async function runActionPacketPathway(db, {
 async function runPortalPathway(db, {
   task, profile, opportunity, grant, classification, userId, options,
 }) {
+  // URL-hygiene runtime guard (defense in depth behind the classifier's
+  // readUrl filter): a search-engine RESULTS page is not a portal. If one
+  // reaches this pathway anyway (a caller-supplied classification, a legacy
+  // task), degrade to the truthful unknown_application_method state and null
+  // the persisted target URLs — NEVER the login flow (Hamilton was classifying
+  // Google's sign-in wall as login_required and burning the whole auth-retry
+  // ladder against a search page).
+  if (isSearchEngineUrl(classification.resolved_url)) {
+    await updateApplicationTask(db, task.id, {
+      status: 'blocked',
+      automationType: 'unknown',
+      portalUrl: null,
+      applicationUrl: null,
+      nextRetryAt: null,
+      lastAgentMessage:
+        'The recorded application link is a search-results page, not a real portal (unknown_application_method). A human should find the funder\'s actual application URL and update the record so Hamilton can take over.',
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'blocked',
+      status: 'blocked',
+      step: 'url_hygiene',
+      message: 'Target URL is a search-engine results page — degraded to unknown_application_method; no login attempted.',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { blocker_kind: 'unknown_application_method', rejected_url: classification.resolved_url },
+    })
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: 'hamilton_task_blocked',
+      title: 'Hamilton needs a real application link',
+      message: `${opportunity?.title || grant?.title || 'A selected funding source'} only has a search-results link on file, so there is nothing Hamilton can submit to. Please supply the funder's actual application URL.`,
+      severity: 'warning',
+      data: { task_id: task.id, blocker_kind: 'unknown_application_method' },
+    })
+    return { task: await reload(db, task.id), classification, blocked: true, blocker_kind: 'unknown_application_method' }
+  }
+
   // The portal pathway always runs Hamilton Autopilot when the user
   // authorized at least `complete_forms`. Without that authorization
   // we save the portal URL and wait — Autopilot does not run until

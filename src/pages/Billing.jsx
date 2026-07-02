@@ -10,13 +10,20 @@ import { Badge } from "@/components/ui/badge"
 import { Loader2, PenSquare, ShieldCheck, Users, FileText, Gift, Clock, PauseCircle, PlayCircle, Ban } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
-import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview, grantFreePeriod, revokeFreePeriod, suspendAccount, reactivateAccount, banAccountUser, unbanAccountUser } from "@/api/billing"
+import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview, grantFreePeriod, revokeFreePeriod, suspendAccount, reactivateAccount, banAccountUser, unbanAccountUser, setBillingCadence } from "@/api/billing"
 import TierMatrix from "@/components/billing/TierMatrix.jsx"
 import ContactAndNotifications from "@/components/comms/ContactAndNotifications.jsx"
 import { getProfile } from "@/api/profiles"
 import { labelForProfileType } from "@/services/profileTypes"
 import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
+
+const cadenceOptions = [
+  { value: "weekly", label: "Weekly — every Friday" },
+  { value: "biweekly", label: "Every other week — alternating Fridays" },
+  { value: "semimonthly", label: "Twice a month — the 1st and 16th" },
+  { value: "monthly", label: "Monthly — first Friday of the month" },
+]
 
 const discountOptions = [
   { value: "none", label: "No discount" },
@@ -616,6 +623,55 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
   )
 }
 
+/**
+ * Invoice-cadence chooser (weekly / every-other-Friday / semimonthly / monthly
+ * first-Friday). Uses the non-admin PUT /api/billing/me/:profileId/cadence.
+ */
+function CadenceSelector({ profileId, current, onSaved }) {
+  const { toast } = useToast()
+  const [value, setValue] = useState(current || "weekly")
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setValue(current || "weekly") }, [current])
+
+  const handleChange = async (next) => {
+    const prev = value
+    setValue(next)
+    setSaving(true)
+    try {
+      await setBillingCadence(profileId, next)
+      toast({ title: "Invoice schedule updated", description: cadenceOptions.find((o) => o.value === next)?.label })
+      onSaved?.()
+    } catch (error) {
+      setValue(prev)
+      toast({ title: "Could not update invoice schedule", description: error?.message, variant: "destructive" })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Invoice schedule</p>
+      <div className="mt-2 flex items-center gap-2">
+        <Select value={value} onValueChange={handleChange} disabled={saving}>
+          <SelectTrigger className="bg-white">
+            <SelectValue placeholder="Choose invoice schedule" />
+          </SelectTrigger>
+          <SelectContent>
+            {cadenceOptions.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {saving ? <Loader2 className="w-4 h-4 animate-spin text-slate-400" /> : null}
+      </div>
+      <p className="text-xs text-slate-500 mt-2">
+        Invoices go out at 9:00 AM Eastern. This changes when you are invoiced, not the amount.
+      </p>
+    </div>
+  )
+}
+
 function MemberBillingCard({ profileId, billing, isLoading, onRefresh }) {
   if (isLoading) {
     return (
@@ -697,6 +753,11 @@ function MemberBillingCard({ profileId, billing, isLoading, onRefresh }) {
             </p>
           </div>
         </div>
+        <CadenceSelector
+          profileId={profileId}
+          current={billing.account?.billing_cadence}
+          onSaved={onRefresh}
+        />
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 flex gap-3 items-start">
           <ShieldCheck className="w-5 h-5 text-emerald-600 mt-0.5" />
           <div>

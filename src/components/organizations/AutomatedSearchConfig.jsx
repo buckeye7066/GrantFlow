@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import client from '@/api/client';
+import { apiFetch } from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Dialog,
@@ -11,88 +11,74 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Loader2, Zap, CheckCircle, Info } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { format } from 'date-fns';
 
+// Platform default display floor (backend DEFAULT_MIN_SCORE); shown when the
+// profile has no stored preference. The stored preference feeds run-smart's
+// explicit-min path server-side — it never changes the platform floor itself.
+const PLATFORM_DEFAULT_MIN_SCORE = 75;
+
+/**
+ * Per-profile discovery settings. The min-match-score slider persists to the
+ * REAL preferences API (PUT /api/profiles/:id/discovery-preferences) and
+ * run-smart uses the stored value as its default min_match_score — replacing
+ * the dead legacy Base44 `AutomatedSearch` entity path nothing ever read.
+ * `organization` is a mapped profile (id = profile id, see Organizations.jsx).
+ */
 export default function AutomatedSearchConfig({ organization, open, onClose }) {
   const queryClient = useQueryClient();
-  const [config, setConfig] = useState({
-    enabled: true,
-    search_frequency: 'weekly',
-    search_time: '08:00',
-    notify_email: true,
-    min_match_score: 60,
-  });
+  const [minScore, setMinScore] = useState(PLATFORM_DEFAULT_MIN_SCORE);
+  const [runResult, setRunResult] = useState(null);
 
-  const { data: existingConfig, isLoading: isLoadingConfig } = useQuery({
-    queryKey: ['automatedSearch', organization.id],
-    queryFn: () => client.entities.AutomatedSearch.filter({ organization_id: organization.id }).then(res => res[0]),
+  const { data: prefs, isLoading: isLoadingConfig } = useQuery({
+    queryKey: ['discoveryPreferences', organization.id],
+    queryFn: () => apiFetch(`/api/profiles/${organization.id}/discovery-preferences`),
     enabled: !!organization.id && open,
   });
 
   useEffect(() => {
-    if (existingConfig) {
-      setConfig({
-        ...existingConfig,
-        search_time: existingConfig.search_time || '08:00',
-      });
-    } else if (open) {
-        setConfig({
-            enabled: true,
-            search_frequency: 'weekly',
-            search_time: '08:00',
-            notify_email: true,
-            min_match_score: 60,
-        });
-    }
-  }, [existingConfig, open]);
+    if (!open) { setRunResult(null); return; }
+    const stored = prefs?.discovery?.min_match_score;
+    setMinScore(typeof stored === 'number' ? stored : PLATFORM_DEFAULT_MIN_SCORE);
+  }, [prefs, open]);
 
-  const mutation = useMutation({
-    mutationFn: (data) => {
-      const payload = { ...data, organization_id: organization.id };
-      if (existingConfig?.id) {
-        return client.entities.AutomatedSearch.update(existingConfig.id, payload);
-      }
-      return client.entities.AutomatedSearch.create(payload);
-    },
+  const saveMutation = useMutation({
+    mutationFn: (value) =>
+      apiFetch(`/api/profiles/${organization.id}/discovery-preferences`, {
+        method: 'PUT',
+        body: JSON.stringify({ min_match_score: value }),
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['automatedSearch'] });
+      queryClient.invalidateQueries({ queryKey: ['discoveryPreferences', organization.id] });
       onClose();
     },
   });
 
   const runNowMutation = useMutation({
-    mutationFn: () => client.functions.invoke('runAutomatedDiscovery', {}),
+    // No explicit minMatchScore: the server applies this profile's stored
+    // preference, which is exactly the wiring this dialog configures.
+    mutationFn: async () => {
+      await apiFetch(`/api/profiles/${organization.id}/discovery-preferences`, {
+        method: 'PUT',
+        body: JSON.stringify({ min_match_score: minScore }),
+      });
+      // Intentionally omits min_match_score so the server resolves the stored
+      // preference — proving the end-to-end wiring this dialog configures.
+      return apiFetch('/api/real-crawlers/run-smart', {
+        method: 'POST',
+        body: JSON.stringify({ profile_id: organization.id }),
+      });
+    },
     onSuccess: (response) => {
-      const result = response.data.results?.find(r => r.organization_id === organization.id);
+      setRunResult({ count: Number(response?.count ?? 0), partial: Boolean(response?.partial) });
       queryClient.invalidateQueries({ queryKey: ['grants'] });
-      queryClient.invalidateQueries({ queryKey: ['automatedSearch', organization.id] });
-    }
+      queryClient.invalidateQueries({ queryKey: ['discoveryPreferences', organization.id] });
+    },
   });
 
-  const handleSave = () => {
-    mutation.mutate(config);
-  };
-
-  const handleRunNow = () => {
-    // First save the config, then run discovery
-    if (!existingConfig) {
-      mutation.mutate(config, {
-        onSuccess: () => {
-          runNowMutation.mutate();
-        }
-      });
-    } else {
-      runNowMutation.mutate();
-    }
-  };
-
-  const isSaving = mutation.isPending;
+  const isSaving = saveMutation.isPending;
   const isRunning = runNowMutation.isPending;
 
   return (
@@ -101,13 +87,14 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-blue-600" />
-            Automated Discovery Settings
+            Discovery Settings
           </DialogTitle>
           <DialogDescription>
-            Configure automatic searches for "{organization.name}". The system will regularly scan all data sources, match opportunities against this profile, and automatically add high-scoring grants to your pipeline.
+            Set the minimum match score for "{organization.name}". Smart funding searches for this profile
+            will only return opportunities scoring at or above this threshold.
           </DialogDescription>
         </DialogHeader>
-        
+
         {isLoadingConfig ? (
           <div className="flex justify-center items-center h-40">
             <Loader2 className="w-8 h-8 animate-spin text-slate-500" />
@@ -117,84 +104,33 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
             <Alert className="bg-blue-50 border-blue-200">
               <Info className="h-4 w-4 text-blue-600" />
               <AlertDescription className="text-blue-800 text-sm">
-                When enabled, GrantFlow will automatically search Grants.gov, Benefits.gov, DSIRE, and other sources. High-scoring matches will be added to your "Discovered" pipeline stage and you'll receive email notifications.
+                This preference is saved to the profile and applied automatically whenever a smart funding
+                search runs without its own threshold. The platform default is {PLATFORM_DEFAULT_MIN_SCORE}%.
               </AlertDescription>
             </Alert>
 
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg">
-              <Label htmlFor="enabled-switch" className="text-base font-medium">
-                Enable Automated Discovery
-              </Label>
-              <Switch
-                id="enabled-switch"
-                checked={config.enabled}
-                onCheckedChange={(checked) => setConfig({ ...config, enabled: checked })}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Search Frequency</Label>
-              <Select
-                value={config.search_frequency}
-                onValueChange={(value) => setConfig({ ...config, search_frequency: value })}
-                disabled={!config.enabled}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="daily">Daily</SelectItem>
-                  <SelectItem value="weekly">Weekly</SelectItem>
-                  <SelectItem value="biweekly">Every 2 Weeks</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-slate-500">How often to scan for new opportunities</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Search Time (EST)</Label>
-              <Input
-                type="time"
-                value={config.search_time}
-                onChange={(e) => setConfig({ ...config, search_time: e.target.value })}
-                disabled={!config.enabled}
-              />
-              <p className="text-xs text-slate-500">What time of day to run the search</p>
-            </div>
-
             <div className="space-y-3">
-              <Label>Minimum match score: {config.min_match_score}%</Label>
+              <Label>Minimum match score: {minScore}%</Label>
               <Slider
-                value={[config.min_match_score]}
-                onValueChange={(values) => setConfig({ ...config, min_match_score: values[0] })}
+                value={[minScore]}
+                onValueChange={(values) => setMinScore(values[0])}
                 min={0}
                 max={100}
                 step={5}
-                disabled={!config.enabled}
                 className="w-full"
               />
               <p className="text-xs text-slate-500">
-                Only opportunities scoring above this threshold will be automatically added to your pipeline.
+                Lower values return more (but weaker) matches; higher values return fewer, stronger ones.
               </p>
             </div>
 
-            <div className="flex items-center justify-between">
-              <Label htmlFor="notify-switch" className="flex-grow">
-                Send Email Notifications
-              </Label>
-              <Switch
-                id="notify-switch"
-                checked={config.notify_email}
-                onCheckedChange={(checked) => setConfig({ ...config, notify_email: checked })}
-                disabled={!config.enabled}
-              />
-            </div>
-
-            {existingConfig?.last_run_date && (
-                <div className="text-sm text-slate-500 pt-4 border-t">
-                    <p>Last run: {format(new Date(existingConfig.last_run_date), "PPp")}</p>
-                    <p>Opportunities found: {existingConfig.last_results_count || 0}</p>
-                </div>
+            {runResult && (
+              <div className="text-sm text-slate-600 pt-4 border-t">
+                <p>
+                  Search finished: {runResult.count} opportunit{runResult.count === 1 ? 'y' : 'ies'} found
+                  {runResult.partial ? ' so far (still running in the background)' : ''}.
+                </p>
+              </div>
             )}
           </div>
         )}
@@ -203,36 +139,34 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
           <Button variant="outline" onClick={onClose} disabled={isSaving || isRunning}>
             Cancel
           </Button>
-          {config.enabled && (
-            <Button 
-              variant="outline"
-              onClick={handleRunNow} 
-              disabled={isSaving || isRunning || isLoadingConfig}
-            >
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Running...
-                </>
-              ) : (
-                <>
-                  <Zap className="w-4 h-4 mr-2" />
-                  Run Now
-                </>
-              )}
-            </Button>
-          )}
-          <Button onClick={handleSave} disabled={isSaving || isRunning || isLoadingConfig}>
+          <Button
+            variant="outline"
+            onClick={() => runNowMutation.mutate()}
+            disabled={isSaving || isRunning || isLoadingConfig}
+          >
+            {isRunning ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Zap className="w-4 h-4 mr-2" />
+                Save & Run Now
+              </>
+            )}
+          </Button>
+          <Button onClick={() => saveMutation.mutate(minScore)} disabled={isSaving || isRunning || isLoadingConfig}>
             {isSaving ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Saving...
               </>
             ) : (
-                <>
+              <>
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Save Settings
-                </>
+              </>
             )}
           </Button>
         </DialogFooter>

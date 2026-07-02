@@ -145,6 +145,7 @@ router.get('/me/:profileId', async (req, res) => {
         is_pro_bono: account.is_pro_bono,
         custom_monthly_cents: account.custom_monthly_cents,
         custom_hourly_cents: account.custom_hourly_cents,
+        billing_cadence: normalizeCadence(accountRow.billing_cadence),
       },
       billing,
       free_period: describeFreePeriod(accountRow),
@@ -161,7 +162,7 @@ async function canAccessProfile(req, profileId) {
   return accessible === null || accessible.has(String(profileId))
 }
 
-// USER: choose / change the billing cadence (weekly | semimonthly | monthly).
+// USER: choose / change the billing cadence (weekly | biweekly | semimonthly | monthly).
 // This is the "choose at signup" control — it changes WHEN you're invoiced, not
 // the amount, so the user may set it for a profile they can access.
 router.put('/me/:profileId/cadence', async (req, res) => {

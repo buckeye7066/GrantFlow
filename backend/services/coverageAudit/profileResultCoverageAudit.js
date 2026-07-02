@@ -322,7 +322,8 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
 
 // ── Observability: persist the last sweep to system_kv (Agent Observability
 // Rule) so Sam diagnostics + Anya's owner tools can SEE what the sweep found. ──
-const KV_KEY = 'coverage_audit_last_run'
+export const COVERAGE_SWEEP_KV_KEY = 'coverage_audit_last_run'
+const KV_KEY = COVERAGE_SWEEP_KV_KEY
 
 async function recordCoverageSweep(db, payload) {
   if (!db?.prepare) return
@@ -370,6 +371,26 @@ export function isCoverageAutohealEnabled() {
  * @param {number}  [opts.limit]     profiles to scan.
  */
 export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohealEnabled(), maxHeal = Number(process.env.COVERAGE_AUTOHEAL_MAX) || 5, limit = 500 } = {}) {
+  const startedAt = new Date().toISOString()
+  // Heartbeat BEFORE any work: a sweep that dies mid-heal (process restart,
+  // OOM, deploy) previously left NO trace in system_kv — the record only landed
+  // at the very end, so `coverage_audit_last_run` looked write-only/absent.
+  // With a status:'running' record up front, Sam's coverage.sweepHealth check
+  // can detect a never-completing sweep instead of seeing nothing at all.
+  await recordCoverageSweep(db, { ok: null, status: 'running', started_at: startedAt })
+  try {
+    const result = await runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, startedAt })
+    await recordCoverageSweep(db, result)
+    return result
+  } catch (err) {
+    // An exception must still leave a terminal record (status:'failed') so the
+    // failure is observable — the caller's log line alone is not persistent.
+    await recordCoverageSweep(db, { ok: false, status: 'failed', started_at: startedAt, error: String(err?.message || err) })
+    throw err
+  }
+}
+
+async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, startedAt }) {
   // Heal the ineligible-surfaced-match class (student-aid on a non-student) FIRST,
   // via the same choke-point invariant boot uses, so the audit below reflects the
   // post-heal state and Sam/Anya see a clean count. This is a decision-staleness
@@ -451,6 +472,8 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
 
   const result = {
     ok: true,
+    status: 'completed',
+    started_at: startedAt,
     summary,
     autoheal: Boolean(autoheal),
     healed_count: healed.length,
@@ -463,7 +486,6 @@ export async function runProfileCoverageSweep(db, { autoheal = isCoverageAutohea
       : null,
     top_gaps: audits.filter((a) => a.has_gap).slice(0, 25).map((a) => ({ id: a.profile_id, name: a.display_name, gaps: a.gaps })),
   }
-  await recordCoverageSweep(db, result)
   return result
 }
 

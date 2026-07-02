@@ -151,6 +151,37 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
   - **`HAMILTON_CLOUD_LOGIN_PUBLIC_BASE`** - For `self_hosted` on a single-port PaaS (e.g. Railway): a public base URL that reverse-proxies Chromium's devtools endpoint so a remote device (phone) can reach the interactive window. If unset on such a host, the interactive window may not be reachable remotely (session capture still works for local/self-hosted hosts and via the CLI tool); the UI surfaces this and points users to Saved Login.
   - **`HAMILTON_CLOUD_LOGIN_ENABLED`** - Back-compat kill switch: `"false"` disables cloud login regardless of provider.
 
+- **Hamilton weekly per-profile digest (Monday, America/New_York — DST-aware)**
+  - One "where your funding stands" update per ACTIVE profile (status not
+    `deleted`/`suspended`, excluding Amy's synthetic `agent:amy` profiles)
+    every Monday. Persisted-checkpoint scheduler (`system_kv` week marker +
+    scheduler lock + hourly catch-up) — a Railway redeploy can neither skip a
+    week nor double-send.
+  - **`HAMILTON_WEEKLY_DIGEST_ENABLED`** - `"true"` (DEFAULT). `"false"` disables.
+  - **`HAMILTON_WEEKLY_DIGEST_HOUR_ET`** - Trigger hour, ET. Default `8`. Prod runs `9` (owner spec: Monday 09:00 ET).
+  - **`HAMILTON_WEEKLY_DIGEST_DELIVERY`** - `"draft"` (DEFAULT) drafts one Outlook
+    message per profile into the owner's mailbox for manual review/send.
+    `"send"` (owner-approved 2026-07-02; set in prod) AUTO-SENDS each profile's
+    digest to its contact emails via the comms channel (Resend); every send is
+    recorded in `comms_broadcasts` / `comms_broadcast_recipients` with kind
+    `weekly_digest` for the Sam/Anya observability trail. The leads pipeline
+    (John) is unaffected and stays draft-only.
+
+- **Billing automation (invoices + reminders + suspension)**
+  - Gated by **`BILLING_AUTOMATION_ENABLED`** - `"true"` in prod. Hourly
+    idempotent cycle (`runBillingCycle`): one invoice per (profile, period_key),
+    dunning second notice after `BILLING_SECOND_NOTICE_DAYS` (default 3),
+    suspension after a full billing cycle (or `BILLING_SUSPEND_DAYS` override)
+    and only when a payment path exists (Stripe configured or
+    `BILLING_ALLOW_SUSPEND_WITHOUT_STRIPE=true`).
+  - Cadence is per account (`billing_accounts.billing_cadence`, user-settable
+    via `PUT /api/billing/me/:profileId/cadence` and the Billing page):
+    `weekly` (every Friday 09:00 ET), `biweekly` (every OTHER Friday 09:00 ET —
+    parity anchored to the account's persisted `billing_anchor_at`, falling
+    back to the fixed epoch Friday `2026-01-02`, so redeploys can never flip
+    the alternation), `semimonthly` (1st + 16th), `monthly` (FIRST FRIDAY of
+    the month, 09:00 ET).
+
 - **Verification layer (ProPublica + US Census — FREE, NO API KEY)**
   - A best-effort, non-blocking enrichment layer that confirms tax-exempt orgs
     (IRS Form 990 via ProPublica Nonprofit Explorer) and resolves a profile's /

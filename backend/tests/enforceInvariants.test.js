@@ -38,6 +38,7 @@ import {
   enforceProfileDisplayNameNotDoubled,
   enforceProfileIncomeReconciliation,
   enforceProfileIdIntegrity,
+  enforceNoSearchEngineApplicationTargets,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -873,7 +874,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(11)
+    expect(summary.ran).toBe(12)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -887,6 +888,7 @@ describe('enforceInvariants — runner', () => {
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
       'hamilton_task_self_heal',
+      'no_search_engine_application_targets',
     ])
   })
 
@@ -1360,5 +1362,142 @@ describe('enforceHamiltonTaskSelfHeal', () => {
     expect(res.requeueCapped).toBe(true)
     const blocked = db.prepare("SELECT COUNT(*) AS n FROM application_tasks WHERE status = 'blocked'").get()
     expect(Number(blocked.n)).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: a search-engine RESULTS url is never a portal/application target
+// (URL hygiene — the "Hamilton retried login against google.com/search" bug).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceNoSearchEngineApplicationTargets', () => {
+  const SEARCH_URL = 'https://www.google.com/search?q=Middle+Tennessee+State+University+financial+aid+office'
+  const REAL_URL = 'https://www.mtsu.edu/financial-aid/'
+
+  function makeUrlDb() {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE application_tasks (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT,
+        status TEXT,
+        automation_type TEXT DEFAULT 'unknown',
+        portal_url TEXT,
+        application_url TEXT,
+        next_retry_at TEXT,
+        last_agent_message TEXT
+      );
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        application_url TEXT,
+        apply_url TEXT,
+        source_url TEXT
+      );
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT,
+        title TEXT,
+        status TEXT,
+        application_url TEXT,
+        url TEXT
+      );
+    `)
+    return db
+  }
+
+  function insertTask(db, { id, status = 'waiting_for_login', portalUrl = null, applicationUrl = null }) {
+    db.prepare(
+      `INSERT INTO application_tasks (id, profile_id, status, automation_type, portal_url, application_url, next_retry_at)
+       VALUES (?, 'p1', ?, 'portal', ?, ?, '2099-01-01T00:00:00Z')`,
+    ).run(id, status, portalUrl, applicationUrl)
+  }
+
+  afterEach(() => {
+    delete process.env.ENFORCE_URL_HYGIENE
+  })
+
+  it('nulls search-result task URLs and reclassifies the blocker to unknown_application_method', async () => {
+    const db = makeUrlDb()
+    insertTask(db, { id: 't-bad', portalUrl: SEARCH_URL, applicationUrl: SEARCH_URL })
+
+    const res = await enforceNoSearchEngineApplicationTargets(db)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBeGreaterThanOrEqual(1)
+
+    const row = db.prepare('SELECT * FROM application_tasks WHERE id = ?').get('t-bad')
+    expect(row.portal_url).toBe(null)
+    expect(row.application_url).toBe(null)
+    expect(row.status).toBe('blocked')
+    expect(row.automation_type).toBe('unknown')
+    expect(row.next_retry_at).toBe(null)
+    expect(row.last_agent_message).toContain('unknown_application_method')
+  })
+
+  it('never touches a task with a real portal URL, and never rewrites terminal-task history', async () => {
+    const db = makeUrlDb()
+    insertTask(db, { id: 't-real', portalUrl: REAL_URL, applicationUrl: REAL_URL })
+    insertTask(db, { id: 't-done', status: 'submitted', portalUrl: SEARCH_URL })
+
+    await enforceNoSearchEngineApplicationTargets(db)
+
+    const real = db.prepare('SELECT * FROM application_tasks WHERE id = ?').get('t-real')
+    expect(real.portal_url).toBe(REAL_URL)
+    expect(real.status).toBe('waiting_for_login')
+
+    // Terminal task: URL nulled (junk data healed) but status/history untouched.
+    const done = db.prepare('SELECT * FROM application_tasks WHERE id = ?').get('t-done')
+    expect(done.portal_url).toBe(null)
+    expect(done.status).toBe('submitted')
+    expect(done.automation_type).toBe('portal')
+  })
+
+  it('nulls search-result URLs on funding_opportunities and grants without deleting rows', async () => {
+    const db = makeUrlDb()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, application_url, apply_url, source_url)
+       VALUES ('fo-bad', 'MTSU Financial Aid', ?, ?, ?)`,
+    ).run(SEARCH_URL, SEARCH_URL, REAL_URL)
+    db.prepare(
+      `INSERT INTO grants (id, profile_id, title, status, application_url, url)
+       VALUES ('g-bad', 'p1', 'MTSU Financial Aid', 'discovered', ?, ?)`,
+    ).run(SEARCH_URL, REAL_URL)
+
+    const res = await enforceNoSearchEngineApplicationTargets(db)
+    expect(res.repaired).toBeGreaterThanOrEqual(2)
+
+    const fo = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get('fo-bad')
+    expect(fo.application_url).toBe(null)
+    expect(fo.apply_url).toBe(null)
+    expect(fo.source_url).toBe(REAL_URL) // real URL preserved
+    expect(fo.title).toBe('MTSU Financial Aid') // row never deleted
+
+    const g = db.prepare('SELECT * FROM grants WHERE id = ?').get('g-bad')
+    expect(g.application_url).toBe(null)
+    expect(g.url).toBe(REAL_URL)
+  })
+
+  it('is count-only when ENFORCE_URL_HYGIENE=0, idempotent otherwise, and tolerant of missing tables', async () => {
+    const db = makeUrlDb()
+    insertTask(db, { id: 't-bad', portalUrl: SEARCH_URL })
+
+    process.env.ENFORCE_URL_HYGIENE = '0'
+    const counted = await enforceNoSearchEngineApplicationTargets(db)
+    expect(counted.enforced).toBe(false)
+    expect(counted.scanned).toBe(1)
+    expect(counted.repaired).toBe(0)
+    expect(db.prepare('SELECT portal_url FROM application_tasks WHERE id = ?').get('t-bad').portal_url).toBe(SEARCH_URL)
+
+    delete process.env.ENFORCE_URL_HYGIENE
+    const first = await enforceNoSearchEngineApplicationTargets(db)
+    expect(first.repaired).toBeGreaterThanOrEqual(1)
+    const second = await enforceNoSearchEngineApplicationTargets(db)
+    expect(second.scanned).toBe(0)
+    expect(second.repaired).toBe(0)
+
+    // Missing tables (fresh/test schema) never fail the sweep.
+    const bare = new Database(':memory:')
+    const res = await enforceNoSearchEngineApplicationTargets(bare)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(0)
   })
 })

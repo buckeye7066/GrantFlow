@@ -13,6 +13,19 @@ export async function getBillingOverview(profileId) {
   return apiFetch(`/api/billing/me/${profileId}`)
 }
 
+/**
+ * NON-ADMIN: choose when this profile is invoiced.
+ *   cadence: 'weekly' (every Friday) | 'biweekly' (every other Friday)
+ *          | 'semimonthly' (1st + 16th) | 'monthly' (first Friday of the month)
+ * All at 09:00 America/New_York.
+ */
+export async function setBillingCadence(profileId, cadence) {
+  return apiFetch(`/api/billing/me/${profileId}/cadence`, {
+    method: 'PUT',
+    body: JSON.stringify({ cadence }),
+  })
+}
+
 export async function listBillingTiers() {
   return apiFetch('/api/billing/tiers')
 }

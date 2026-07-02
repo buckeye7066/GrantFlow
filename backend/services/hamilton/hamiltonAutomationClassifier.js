@@ -46,6 +46,8 @@
  * guessing.
  */
 
+import { isSearchEngineUrl } from '../../config/urlRules.js'
+
 const PORTAL_RESULT_KINDS = new Set(['application', 'portal', 'apply'])
 const AUTO_PROFILE_RESULT_KINDS = new Set(['auto_match', 'institutional_match', 'nomination'])
 const NO_APPLICATION_RESULT_KINDS = new Set(['directory', 'awareness', 'reference', 'no_application'])
@@ -85,16 +87,28 @@ function readMode(opportunity, grant) {
 }
 
 function readUrl(opportunity, grant) {
-  return (
-    opportunity?.application_url
-    || opportunity?.apply_url
-    || opportunity?.url
-    || opportunity?.source_url
-    || grant?.application_url
-    || grant?.apply_url
-    || grant?.url
-    || null
-  )
+  const candidates = [
+    opportunity?.application_url,
+    opportunity?.apply_url,
+    opportunity?.url,
+    opportunity?.source_url,
+    grant?.application_url,
+    grant?.apply_url,
+    grant?.url,
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    // URL-hygiene rule: a search-engine RESULTS page (google.com/search?q=…)
+    // is never an application target. Legacy rows persisted before the insert
+    // gate can still carry one; skipping it here means resolved_url is null and
+    // the source classifies as unknown/mail instead of "portal" — so Hamilton
+    // never drives the login flow against a search page (she was retrying
+    // Google's sign-in wall 5x per task in prod). The orchestrator then
+    // re-persists the nulled URL onto the task row, healing it in place.
+    if (isSearchEngineUrl(candidate)) continue
+    return candidate
+  }
+  return null
 }
 
 function readContact(opportunity, grant, key) {

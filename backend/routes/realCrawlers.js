@@ -22,6 +22,7 @@ import {
 } from '../services/opportunityTrust.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
 import { SCORE_FLOOR, DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
+import { resolveRunSmartMinScore } from '../services/discoveryPreferences.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
 import { searchLiveFederalByProfile } from '../services/shared/liveFederalSearch.js'
 import { searchLocalWebByProfile } from '../services/shared/liveWebSearch.js'
@@ -943,7 +944,7 @@ router.get('/health-check', async (req, res) => {
 router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   const {
     profile_id,
-    min_match_score = DEFAULT_MIN_SCORE,
+    min_match_score,
     primary_category: clientPrimaryCategory = null,
     intent_terms: clientIntentTerms = null,
     need_text = '',
@@ -965,7 +966,12 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   // Stamp the per-profile "discovery has run" signal (best-effort, never blocks):
   // run-smart is a discovery path for this profile.
   void stampLastDiscoveryAt(db, profile_id)
-  const minScore = Number(min_match_score) || DEFAULT_MIN_SCORE
+  // Explicit request min wins (legacy `Number(x) || DEFAULT_MIN_SCORE`
+  // semantics); otherwise the profile's STORED discovery preference (the
+  // "Minimum match score" slider) is the default, then DEFAULT_MIN_SCORE.
+  // The stored preference rides the sanctioned explicit-min path — the
+  // DISPLAY floor itself is never lowered here.
+  const minScore = await resolveRunSmartMinScore(db, profile_id, min_match_score)
   const allOpportunities = []
   const seenTitles = new Set()
 

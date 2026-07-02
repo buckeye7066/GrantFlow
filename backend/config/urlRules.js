@@ -58,6 +58,9 @@ export const SEARCH_ENGINE_URL_PATTERNS = [
   /\bbing\.com\/search\b/i, // audit:allow placeholder
   /\bduckduckgo\.com\/\?q=/i, // audit:allow placeholder
   /\bduckduckgo\.com\/\?.*&q=/i, // audit:allow placeholder
+  // html.duckduckgo.com/html/?q=… is the no-JS results endpoint our own
+  // webSearchEngine queries — same results-page shape, same rule.
+  /\bduckduckgo\.com\/html\/?\?/i, // audit:allow placeholder
   /\byahoo\.com\/search\b/i, // audit:allow placeholder
   /\byandex\.\w+\/search\b/i, // audit:allow placeholder
   /\bbaidu\.com\/s\?/i, // audit:allow placeholder

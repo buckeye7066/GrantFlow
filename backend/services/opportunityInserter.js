@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './shared/opportunityPolicy.js'
+import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy, isSearchEngineUrl } from './shared/opportunityPolicy.js'
 import { applyFundableOpportunityNormalization, evaluateFundableOpportunity } from './matching/qualityGate.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
 import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
@@ -406,9 +406,18 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   }
 
   const recordOrigin = deriveRecordOrigin(opportunity)
-  const sourceUrl = normalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url)
-  const applicationUrl = normalizeUrl(opportunity.application_url)
-  const evidenceUrl = normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl)
+  // URL-hygiene choke point: a search-engine RESULTS page
+  // ("google.com/search?q=…", "bing.com/search?…", …) is a query someone never
+  // ran, not a funding portal — it must never be persisted as a source /
+  // application target. Crawler fallbacks used to synthesize these when no real
+  // URL was known, and Hamilton then queued them as portals and retried logins
+  // against Google's sign-in wall. Scrub them to null HERE (the single insert
+  // path); a row left with no real URL is then rejected by the candidateUrl
+  // gate just below instead of entering the catalog as an unsubmittable target.
+  const dropSearchResultsUrl = (u) => (isSearchEngineUrl(u) ? null : u)
+  const sourceUrl = dropSearchResultsUrl(normalizeUrl(opportunity.source_url ?? opportunity.url ?? opportunity.application_url))
+  const applicationUrl = dropSearchResultsUrl(normalizeUrl(opportunity.application_url))
+  const evidenceUrl = dropSearchResultsUrl(normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl))
 
   const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {

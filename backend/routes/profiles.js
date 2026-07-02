@@ -1168,6 +1168,42 @@ router.put('/:id/automation-preferences', async (req, res) => {
   }
 })
 
+// ── Per-profile discovery preferences ───────────────────────────────────────
+// The "Minimum match score" slider (Automated Discovery settings) persists
+// here — same automation_preferences section, `discovery` sub-key — and
+// run-smart reads it as the default min_match_score when a request does not
+// specify one. Previously the slider saved into a dead legacy Base44 entity
+// nothing read. The DISPLAY floor DEFAULT_MIN_SCORE is not affected.
+router.get('/:id/discovery-preferences', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    const { getDiscoveryPreferences } = await import('../services/discoveryPreferences.js')
+    res.json({ discovery: await getDiscoveryPreferences(req.db, profileId) })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.put('/:id/discovery-preferences', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    if (!canAccessProfileIdFromCtx(req.ctx, profileId)) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+
+    const { normalizeMinMatchScore, saveDiscoveryMinMatchScore, getDiscoveryPreferences } = await import('../services/discoveryPreferences.js')
+    const raw = req.body?.min_match_score
+    if (raw !== undefined && raw !== null && normalizeMinMatchScore(raw) === null) {
+      return res.status(400).json({ error: 'min_match_score must be a number between 0 and 100 (or null to clear).' })
+    }
+    await saveDiscoveryMinMatchScore(req.db, profileId, raw ?? null, req.ctx?.userId ?? null)
+    res.json({ discovery: await getDiscoveryPreferences(req.db, profileId) })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
 // Aggregated "award amounts and from where" for the printable/PDF document.
 // Pulls scholarships from the committed-college aid pipeline + the grants
 // pipeline (with the opportunity sponsor/source). Read-only; profile-scoped.
