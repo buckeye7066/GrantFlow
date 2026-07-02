@@ -130,7 +130,7 @@ function deadline(opportunity) {
  * paragraphs, "## X" lines become headings. Both the DOCX renderer and
  * the HTML→PDF renderer respect that convention.
  */
-export function buildPacketContent({ opportunity, grant, profile, automationType }) {
+export function buildPacketContent({ opportunity, grant, profile, automationType, narrativeOverrides = null }) {
   const opp = opportunity || grant || {}
   const title = opp.title || opp.name || 'Funding Application'
   const funder = opp.funder_name || opp.organization || opp.source_name || opp.source_label || 'Funder'
@@ -139,7 +139,19 @@ export function buildPacketContent({ opportunity, grant, profile, automationType
 
   const basic = readBasic(profile)
   const student = readStudent(profile)
-  const narratives = readNarratives(profile)
+  // MBA-level narrative reuse: when the orchestrator drafted a full proposal
+  // (hamiltonFullProposalGenerator), its sections override the raw profile
+  // essays so the packet writes at the same professional level. Raw essays stay
+  // the fallback when a section couldn't be drafted; nothing is ever invented —
+  // the proposal is evidence-grounded and its gaps ride the missing-info list.
+  const overrides = narrativeOverrides && typeof narrativeOverrides === 'object' ? narrativeOverrides : {}
+  const rawNarratives = readNarratives(profile)
+  const narratives = {
+    ...rawNarratives,
+    ...(nonEmpty(overrides.statement_of_need) ? { statement_of_need: String(overrides.statement_of_need) } : {}),
+    ...(nonEmpty(overrides.personal_statement) ? { personal_statement: String(overrides.personal_statement) } : {}),
+    ...(nonEmpty(overrides.goals) ? { goals: String(overrides.goals) } : {}),
+  }
 
   const missing = []
   function requireField(label, value, key, kind = 'field') {
@@ -643,12 +655,13 @@ async function resolveProfileLanguage(db, profile, override) {
 export async function generateAndSavePacket(db, {
   profile, opportunity = null, grant = null, automationType = 'pdf_docx', taskId = null, userId = null,
   preferredLanguage = null, translateContent = translatePacketContent,
+  narrativeOverrides = null,
 } = {}) {
   if (!db) throw new Error('db required')
   if (!profile?.id) throw new Error('profile required')
   const profileId = profile.id
 
-  const content = buildPacketContent({ opportunity, grant, profile, automationType })
+  const content = buildPacketContent({ opportunity, grant, profile, automationType, narrativeOverrides })
   const mailingInstructions = buildMailingInstructions({ opportunity, grant, automationType })
   const html = buildHtml({ title: content.title, sections: content.sections, mailingInstructions })
   const docxBuf = await buildDocxBuffer({ title: content.title, sections: content.sections, mailingInstructions })

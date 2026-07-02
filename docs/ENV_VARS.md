@@ -565,6 +565,8 @@ It enumerates environment variables referenced in code and/or present in example
 | `WEEKLY_VERIFY_CHUNKS` | Yes | No | Backend/Node |
 | `X_ADMIN_TOKEN` | Yes | No | Backend/Node |
 | `YANA_ALLOW_LIVE_WEB` | Yes | No | Backend/Node |
+| `YANA_BACKLOG_ENRICH_LIMIT` | Yes | No | Backend/Node |
+| `YANA_BACKLOG_ENRICH_MAX_ATTEMPTS` | Yes | No | Backend/Node |
 | `YANA_CAP_WINDOW_HOURS` | Yes | No | Backend/Node |
 | `YANA_DAILY_LEAD_CAP` | Yes | No | Backend/Node |
 | `YANA_ENABLED` | Yes | No | Backend/Node |
@@ -4594,6 +4596,18 @@ It enumerates environment variables referenced in code and/or present in example
 - **Templates**: (not present)
 - **Code references**:
   - `backend/server.js:L2653` (process.env)
+
+### `YANA_BACKLOG_ENRICH_LIMIT`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/services/yana/yanaLeadDiscovery.js` (process.env) — per-run cap on backlog re-enrichment of stored `needs_enrichment` leads (default 10; 0 disables)
+
+### `YANA_BACKLOG_ENRICH_MAX_ATTEMPTS`
+
+- **Templates**: (not present)
+- **Code references**:
+  - `backend/services/yana/yanaLeadDiscovery.js` (process.env) — per-lead retry budget before a needs_enrichment lead stops being re-selected (default 3)
 
 ### `YANA_CAP_WINDOW_HOURS`
 
