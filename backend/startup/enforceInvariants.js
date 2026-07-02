@@ -60,6 +60,7 @@ import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
+import { isSearchEngineUrl } from '../config/urlRules.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -1560,6 +1561,157 @@ export async function enforceStudentAidEligibility(db, { resolveThesis = null } 
 }
 
 /**
+ * INVARIANT: A SEARCH-ENGINE RESULTS URL IS NEVER AN APPLICATION TARGET
+ * (URL hygiene — canonical_rules.md "no random junk" + urlRules.js Phase G).
+ *
+ * Crawler fallbacks used to synthesize "https://www.google.com/search?q=…"
+ * links when no real portal URL was known, and those were persisted as
+ * funding_opportunities.application_url and application_tasks.portal_url /
+ * application_url. Hamilton then queued the search page as a portal,
+ * classified Google's sign-in wall as login_required, and retried login 5x
+ * against a search results page (verified in prod: 8 Robert tasks + 1
+ * Anastasia task, 2026-07). The producers are now fixed (school-card
+ * fallbacks removed, insert-path scrub in opportunityInserter, classifier
+ * readUrl filter); this sweep is the NET that heals rows any path already
+ * persisted.
+ *
+ * Behavior (bounded, idempotent, non-destructive — no row is ever deleted):
+ *   - application_tasks: NULL the offending portal_url / application_url; on
+ *     a non-terminal task also reclassify to the truthful state — status
+ *     'blocked', automation_type 'unknown', next_retry_at cleared, and a
+ *     last_agent_message naming unknown_application_method so humans see why.
+ *     Terminal tasks (submitted/completed/cancelled/failed) only get their
+ *     URLs nulled; their history is never rewritten.
+ *   - funding_opportunities + grants (the sources feeding tasks): NULL the
+ *     offending application/apply/url columns.
+ *
+ * Count-gated: at most SEARCH_URL_SWEEP_LIMIT rows per table per boot — the
+ * sweep is idempotent so any remainder heals on subsequent boots. Disable via
+ * ENFORCE_URL_HYGIENE=0 (count-only, like the other toggles). SQL LIKE is a
+ * cheap prefilter only; the canonical isSearchEngineUrl() is authoritative on
+ * every row before any write.
+ */
+const SEARCH_URL_SWEEP_LIMIT = 500
+
+// LIKE prefilters mirroring urlRules.SEARCH_ENGINE_URL_PATTERNS (broad on
+// purpose; JS re-verifies). Each literal is an intentional validator entry.
+const SEARCH_URL_LIKE_PREFILTERS = Object.freeze([
+  '%google.%/search%', // audit:allow placeholder
+  '%google.com/url?%', // audit:allow placeholder
+  '%bing.com/search%', // audit:allow placeholder
+  '%duckduckgo.com/%', // audit:allow placeholder
+  '%yahoo.com/search%', // audit:allow placeholder
+  '%yandex.%/search%', // audit:allow placeholder
+  '%baidu.com/s?%', // audit:allow placeholder
+  '%ecosia.org/search%', // audit:allow placeholder
+])
+
+// Task statuses whose history must never be rewritten by the sweep. Mirrors
+// applicationTaskStore.TASK_TERMINAL_STATUSES (+ 'completed'); inlined so the
+// boot sweep does not import the store module (whose schema bootstrap must not
+// run against arbitrary DBs).
+const SEARCH_URL_SWEEP_TERMINAL_TASK_STATUSES = new Set([
+  'submitted', 'completed', 'cancelled', 'failed',
+])
+
+function buildSearchUrlLikeWhere(columns) {
+  const clauses = []
+  const params = []
+  for (const col of columns) {
+    for (const like of SEARCH_URL_LIKE_PREFILTERS) {
+      clauses.push(`${col} LIKE ?`)
+      params.push(like)
+    }
+  }
+  return { where: clauses.join(' OR '), params }
+}
+
+export async function enforceNoSearchEngineApplicationTargets(db) {
+  return runInvariant('no_search_engine_application_targets', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_URL_HYGIENE) === false
+    let scanned = 0
+    let repaired = 0
+
+    // ── 1. application_tasks: null URLs + reclassify non-terminal blockers ──
+    {
+      const { where, params } = buildSearchUrlLikeWhere(['portal_url', 'application_url'])
+      let rows = []
+      try {
+        rows = await db.prepare(
+          `SELECT id, status, portal_url, application_url FROM application_tasks
+            WHERE ${where} LIMIT ${SEARCH_URL_SWEEP_LIMIT}`,
+        ).all(...params)
+      } catch { rows = [] /* table absent on this schema — nothing to heal */ }
+
+      for (const row of rows || []) {
+        const badPortal = isSearchEngineUrl(row.portal_url)
+        const badApplication = isSearchEngineUrl(row.application_url)
+        if (!badPortal && !badApplication) continue // LIKE prefilter false positive
+        scanned += 1
+        if (disabled) continue
+        const sets = []
+        if (badPortal) sets.push('portal_url = NULL')
+        if (badApplication) sets.push('application_url = NULL')
+        const isTerminal = SEARCH_URL_SWEEP_TERMINAL_TASK_STATUSES.has(String(row.status || ''))
+        if (!isTerminal) {
+          sets.push("status = 'blocked'")
+          sets.push("automation_type = 'unknown'")
+          sets.push('next_retry_at = NULL')
+          sets.push(`last_agent_message = 'URL-hygiene invariant: the recorded application link was a search-results page, not a real portal (unknown_application_method). A human should supply the funder''s actual application URL.'`)
+        }
+        try {
+          const res = await db.prepare(`UPDATE application_tasks SET ${sets.join(', ')} WHERE id = ?`).run(row.id)
+          repaired += changesOf(res) || 1
+        } catch (err) {
+          log.warn('url hygiene: application_tasks repair failed (non-fatal)', { task: row.id, error: String(err?.message || err) })
+        }
+      }
+    }
+
+    // ── 2. funding sources feeding the tasks ────────────────────────────────
+    // Column sets are probed implicitly: a SELECT naming a missing column (or
+    // table) throws and that table is skipped — recall-over-crash.
+    const sourceTables = [
+      { table: 'funding_opportunities', columns: ['application_url', 'apply_url', 'source_url'] },
+      { table: 'grants', columns: ['application_url', 'url'] },
+    ]
+    for (const { table, columns } of sourceTables) {
+      const { where, params } = buildSearchUrlLikeWhere(columns)
+      let rows = []
+      try {
+        rows = await db.prepare(
+          `SELECT id, ${columns.join(', ')} FROM ${table} WHERE ${where} LIMIT ${SEARCH_URL_SWEEP_LIMIT}`,
+        ).all(...params)
+      } catch { rows = [] /* table/column absent — skip */ }
+
+      for (const row of rows || []) {
+        const badCols = columns.filter((c) => isSearchEngineUrl(row[c]))
+        if (badCols.length === 0) continue
+        scanned += 1
+        if (disabled) continue
+        try {
+          const res = await db.prepare(
+            `UPDATE ${table} SET ${badCols.map((c) => `${c} = NULL`).join(', ')} WHERE id = ?`,
+          ).run(row.id)
+          repaired += changesOf(res) || 1
+        } catch (err) {
+          log.warn(`url hygiene: ${table} repair failed (non-fatal)`, { id: row.id, error: String(err?.message || err) })
+        }
+      }
+    }
+
+    if (disabled) {
+      if (scanned > 0) log.warn('search-engine application targets present (repair DISABLED via ENFORCE_URL_HYGIENE=0)', { scanned })
+      return { scanned, repaired: 0, enforced: false }
+    }
+    if (repaired > 0) {
+      log.info('nulled search-engine application targets + reclassified affected tasks', { scanned, repaired })
+    }
+    return { scanned, repaired, enforced: true }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -1605,6 +1757,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // profile down to the applicant's own (need-consistent / lower) figure, so
   // need-based matching can't be poisoned by a captured parent/household income.
   steps.push(await enforceProfileIncomeReconciliation(db))
+  // URL-hygiene net: a search-engine RESULTS url is never a portal/application
+  // target — null it wherever it was persisted and reclassify affected tasks
+  // to the truthful unknown_application_method state.
+  steps.push(await enforceNoSearchEngineApplicationTargets(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
