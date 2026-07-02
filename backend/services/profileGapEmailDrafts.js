@@ -61,16 +61,19 @@ export async function draftGapEmailsForIncompleteProfiles(db, {
   const _resolve = resolveContacts || (await import('./comms/commsService.js')).resolveProfileContacts
   const _normalize = normalize || (await import('./profileNormalizer.js')).normalizeProfile
 
+  // profiles has NO state/city/zip columns (location lives in the
+  // basic_information section) — the old SELECT threw on every run and the
+  // .catch(() => []) fallback made the whole sweep a SILENT no-op.
   let profiles = []
   try {
     profiles = await db.prepare(
-      `SELECT p.id, p.display_name, p.primary_type, p.state, p.city, p.zip FROM profiles p
+      `SELECT p.id, p.display_name, p.primary_type FROM profiles p
         WHERE (p.status='active' OR p.status IS NULL) AND (p.deleted_at IS NULL)
           AND NOT EXISTS (SELECT 1 FROM profile_sections ps WHERE ps.profile_id=p.id AND ps.section_key='amy_metadata')
         LIMIT ${Number(limit) || 200}`,
     ).all()
   } catch {
-    profiles = await db.prepare(`SELECT id, display_name, primary_type, state, city, zip FROM profiles WHERE status='active' LIMIT ${Number(limit) || 200}`).all().catch(() => [])
+    profiles = await db.prepare(`SELECT id, display_name, primary_type FROM profiles WHERE status='active' LIMIT ${Number(limit) || 200}`).all().catch(() => [])
   }
 
   const summary = { ok: true, enabled: true, dry_run: Boolean(dryRun), scanned: 0, drafted: 0,
