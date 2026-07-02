@@ -7,7 +7,7 @@ import {
   stampLastDiscoveryAt,
   loadCrawlerOsProfileResults,
 } from '../services/crawlerOsCompatibility.js'
-import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
+import { runProfileDiscoveryLive, isWebDiscoveryEnabled } from '../services/crawlerOsService.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { expandNeed, scoreNeedMatch } from '../services/shared/needTaxonomy.js'
@@ -24,8 +24,7 @@ import { scoreOpportunity } from '../services/matchEngine.js'
 import { SCORE_FLOOR, DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import { resolveRunSmartMinScore } from '../services/discoveryPreferences.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
-import { searchLiveFederalByProfile } from '../services/shared/liveFederalSearch.js'
-import { searchLocalWebByProfile } from '../services/shared/liveWebSearch.js'
+import { searchNeedWebLeads } from '../services/shared/liveWebSearch.js'
 import { ingestOpportunities } from '../services/sources/ingestionService.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import {
@@ -768,11 +767,35 @@ router.get('/find-profile', ensureAdmin, async (req, res) => {
 })
 
 /**
- * Specific need search.
+ * Item-funding web LEADS: minimum need-match score for a live web hit to be
+ * shown, and the cap on how many leads are appended per search. These are NEW
+ * constants for the need-keyed web lane only (they do not touch the canonical
+ * catalog match thresholds in config/matchThresholds.js). Floor 10 ≈ "at least
+ * one need synonym or two need terms appeared in the page title/snippet" —
+ * below that a hit is generic web noise, not an item-funding lead.
+ */
+const WEB_LEAD_MIN_NEED_SCORE = Number(process.env.ITEM_WEB_LEAD_MIN_NEED_SCORE) || 10
+const WEB_LEAD_MAX_RESULTS = Number(process.env.ITEM_WEB_LEAD_MAX_RESULTS) || 12
+
+/**
+ * Specific need search (the Item Funding page's live search).
  * POST /api/real-crawlers/specific-need
+ *
+ * Two lanes, merged and honestly labeled:
+ *   1. CURATED: this profile's Crawler OS results, re-scored against the need
+ *      (result_source='curated'). The live OS crawl is bounded under the
+ *      gateway deadline (mirrors /run-smart) — on overrun we re-rank the
+ *      already-persisted results instead of 504ing.
+ *   2. LIVE WEB LEADS: need-keyed web search (SearXNG/Brave) so a concrete item
+ *      ("passenger van", "PROBE ethics class") finds funders the profile-keyed
+ *      catalog crawl never fetched (result_source='web_search',
+ *      record_origin='web_search'). Leads are display-only: real search hits
+ *      with provenance, never ingested into the shared catalog from here, and
+ *      never given an application_url (canonical G0: no invented facts).
+ *      `variant: 'gift'` biases queries toward donation / in-kind programs.
  */
 router.post('/specific-need', ensureAuth, async (req, res) => {
-  const { profile_id, need_text, min_match_score = 30, max_results = 20 } = req.body
+  const { profile_id, need_text, min_match_score = 30, max_results = 20, variant = 'funding' } = req.body
 
   if (!profile_id) return res.status(400).json({ error: 'profile_id is required' })
   if (!need_text || typeof need_text !== 'string' || need_text.trim().length < 2) {
@@ -795,18 +818,61 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
     void stampLastDiscoveryAt(db, profile_id)
 
     const expandedNeed = expandNeed(need_text)
+    const needVariant = variant === 'gift' ? 'gift' : 'funding'
 
-    // 1. Run curated crawler pipeline
-    const result = await runProfileCrawlerOs(db, profile_id, {
-      minScore: 1,
-      maxResults: 200,
-      crawlerType: 'comprehensive',
-    })
+    // Profile context, loaded ONCE — drives applicant-type detection and the
+    // applicant/geo anchors of the need-keyed web queries. Failure-tolerant:
+    // a missing context degrades to need-only web queries.
+    let profileContext = null
+    try {
+      profileContext = await loadProfileContext(db, profile_id)
+    } catch {
+      profileContext = null
+    }
+
+    // 2. Kick off the need-keyed LIVE WEB lane in parallel with the curated
+    // pipeline so both fit under the same gateway budget. Failure-tolerant:
+    // any error degrades to zero leads, flagged in web_search.error.
+    const webLaneEnabled = isWebDiscoveryEnabled()
+    const webLanePromise = webLaneEnabled
+      ? searchNeedWebLeads({
+          needText: need_text,
+          expandedNeed,
+          profileContext,
+          variant: needVariant,
+          maxQueries: 5,
+          perQueryCount: 6,
+          timeoutMs: Math.min(12000, remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS })),
+        }).catch((err) => ({ opportunities: [], debug: { queries: [], raw: 0, error: err?.message ?? String(err) } }))
+      : Promise.resolve({ opportunities: [], debug: { queries: [], raw: 0, disabled: true } })
+
+    // 1. Run curated crawler pipeline — bounded under the gateway deadline
+    // (mirrors /run-smart). On overrun the abandoned crawl keeps running and
+    // persists; we fall back to this profile's already-persisted OS results so
+    // the user gets an answer instead of a 504.
+    const osOutcome = await withCrawlBudget(
+      () => runProfileCrawlerOs(db, profile_id, {
+        minScore: 1,
+        maxResults: 200,
+        crawlerType: 'comprehensive',
+      }),
+      remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS }),
+    )
+    const timedOut = osOutcome === CRAWL_TIMEOUT
+    let curatedResults
+    if (timedOut) {
+      routeLogger.warn(
+        `[RealCrawlers] specific-need crawl for ${profile_id} exceeded gateway budget; re-ranking persisted results (crawl continues in background)`,
+      )
+      curatedResults = await loadCrawlerOsProfileResults(db, profile_id, 200).catch(() => [])
+    } else {
+      curatedResults = osOutcome.results
+    }
 
     // Re-score all curated results against the specific need
     const needScored = []
     const seenUrls = new Set()
-    for (const opp of result.results) {
+    for (const opp of curatedResults) {
       const needMatch = scoreNeedMatch(opp, expandedNeed)
       if (needMatch && needMatch.score >= Number(min_match_score)) {
         const mapped = mapResultToFrontendShape(opp)
@@ -824,15 +890,40 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       }
     }
 
-    // The old item-specific web lane was retired with the legacy crawlers. It
-    // could add broad, non-profile-specific web results. Crawler OS is the only
-    // source of returned funding rows here; the need text is used only to
-    // re-rank this profile's OS matches.
-    const webSearchCount = 0
+    // Collect the live web leads, score each against the SAME expanded need,
+    // drop generic noise (below the lead floor), dedupe against curated URLs.
+    const webLane = await webLanePromise
+    const webLeads = []
+    for (const lead of webLane.opportunities ?? []) {
+      const urlKey = String(lead.url || '').toLowerCase().replace(/\/$/, '')
+      if (urlKey && seenUrls.has(urlKey)) continue
+      const needMatch = scoreNeedMatch(
+        { name: lead.title, description: lead.description, categories: lead.categories || [] },
+        expandedNeed,
+      )
+      const score = needMatch?.score ?? 0
+      if (score < WEB_LEAD_MIN_NEED_SCORE) continue
+      if (urlKey) seenUrls.add(urlKey)
+      webLeads.push({
+        ...lead,
+        match_score: score,
+        combined_score: score,
+        result_source: 'web_search',
+        need_match: {
+          score,
+          matchedTerms: needMatch?.matchedTerms ?? [],
+          canonicalNeed: needMatch?.canonicalNeed ?? expandedNeed?.canonicalNeed ?? null,
+          expandedFrom: need_text,
+          matchedKey: expandedNeed?.matchedKey ?? null,
+        },
+      })
+    }
+    webLeads.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
+    const webIncluded = webLeads.slice(0, WEB_LEAD_MAX_RESULTS)
+
     let detectedApplicantType = 'crawler-os-profile'
     try {
-      const ctx = await loadProfileContext(db, profile_id)
-      const enriched = buildProfileFacets(ctx)
+      const enriched = buildProfileFacets(profileContext)
       const types = enriched?.signals?.applicantTypes
       if (Array.isArray(types) && types.length) detectedApplicantType = types.join(',')
     } catch {
@@ -840,7 +931,12 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
     }
 
     needScored.sort((a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0))
-    const final = needScored.slice(0, Number(max_results))
+    const curatedFinal = needScored.slice(0, Number(max_results))
+    // Merge: curated matches + labeled web leads, ranked together by score.
+    // Leads carry result_source='web_search' so the UI shows honest provenance.
+    const final = [...curatedFinal, ...webIncluded].sort(
+      (a, b) => (b.combined_score ?? 0) - (a.combined_score ?? 0),
+    )
 
     const duration = Date.now() - startTime
 
@@ -848,6 +944,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       success: true,
       engine: 'crawler-os',
       need_text,
+      variant: needVariant,
       expanded: {
         canonicalNeed: expandedNeed?.canonicalNeed || null,
         matchedKey: expandedNeed?.matchedKey || null,
@@ -855,8 +952,18 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         programCategories: expandedNeed?.programCategories || [],
       },
       count: final.length,
-      total_candidates: result.results.length,
-      web_search_results: webSearchCount,
+      total_candidates: curatedResults.length,
+      web_search_results: webIncluded.length,
+      // Honest web-lane telemetry: the UI can distinguish "searched the web,
+      // found nothing" from "web search unavailable/disabled".
+      web_search: {
+        attempted: webLaneEnabled,
+        queries: webLane.debug?.queries ?? [],
+        raw_results: webLane.debug?.raw ?? 0,
+        error: webLane.debug?.error ?? null,
+      },
+      partial: timedOut,
+      timed_out: timedOut,
       applicant_type: detectedApplicantType,
       duration,
       opportunities: final,
