@@ -18,8 +18,13 @@ import { GRANTS_GOV_SEARCH2_URL } from '../config/grantsGovEndpoints.js';
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('realFundingCrawler')
 
-// Use native fetch (Node 18+) or fall back to node-fetch
-const fetchImpl = globalThis.fetch || (async () => { const nodeFetch = await import('node-fetch'); return nodeFetch.default; })();
+// Native fetch (Node >=20 per package.json engines). The old node-fetch
+// fallback was broken anyway (it assigned a Promise, not a function).
+const fetchImpl = (...args) => globalThis.fetch(...args);
+
+// Native fetch ignores the node-fetch-style `timeout` init option; a real
+// deadline needs an AbortSignal or a hung remote stalls the retry loop forever.
+const FETCH_TIMEOUT_MS = 60000;
 
 // Rate limiting helper
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -49,7 +54,7 @@ async function fetchWithRetry(url, options = {}, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetchImpl(url, {
-        timeout: 60000,
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         headers: {
           'User-Agent': 'GrantFlow Funding Crawler/1.0 (https://grantflow.app; contact@grantflow.app)',
           'Accept': 'application/json, text/html, */*',

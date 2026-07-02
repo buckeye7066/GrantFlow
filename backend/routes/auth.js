@@ -314,7 +314,7 @@ function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
 
 function verifyOtpToken(token) {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET)
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
     if (!decoded || typeof decoded !== 'object') return null
     if (decoded.typ !== 'otp') return null
     if (decoded.kind !== 'email' && decoded.kind !== 'phone') return null

@@ -34,6 +34,8 @@ async function rateLimitedFetch(url, options = {}) {
   lastRequestTime = Date.now();
   
   const response = await fetch(url, {
+    // node-fetch has no default deadline; without a signal a hung remote stalls the caller forever.
+    signal: AbortSignal.timeout(30000),
     ...options,
     headers: {
       'Content-Type': 'application/json',

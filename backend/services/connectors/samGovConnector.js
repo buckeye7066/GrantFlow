@@ -42,6 +42,8 @@ async function rateLimitedFetch(url, apiKey) {
   }
   
   const response = await fetch(url, {
+    // node-fetch has no default deadline; without a signal a hung remote stalls the caller forever.
+    signal: AbortSignal.timeout(30000),
     headers: {
       'X-Api-Key': apiKey,
       'User-Agent': 'GrantFlow/1.0 (grant management system)'

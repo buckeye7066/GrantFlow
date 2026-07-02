@@ -25,6 +25,9 @@ import {
   validate,
 } from '@/api/applicationsApi'
 import { downloadAuthenticatedUrl } from '@/utils/authenticatedDownload'
+import { createLogger } from '@/utils/logger'
+
+const log = createLogger('SubmissionAssistant')
 
 export default function SubmissionAssistant({ open, onClose, grant, organization, applicationId }) {
   const queryClient = useQueryClient()
@@ -107,7 +110,7 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   const focusSection = (sectionKey) => {
     if (!sectionKey) return
     // Lightweight + reversible cross-panel navigation (no API changes).
-    console.log('[SubmissionAssistant] focus section', sectionKey)
+    log.debug('focus section', sectionKey)
     window.dispatchEvent(new CustomEvent('applyEngine:focusSection', { detail: { sectionKey: String(sectionKey) } }))
     onClose?.()
   }

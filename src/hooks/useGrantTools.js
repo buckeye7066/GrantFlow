@@ -164,20 +164,20 @@ export function exportGrantAsPDF(grant) {
     <body>
       <h1>${escapeHtml(grant.title || "Untitled Grant")}</h1>
       <div class="meta">
-        ${[grant.sponsor, grant.state, grant.deadline ? `Deadline: ${grant.deadline}` : null].filter(Boolean).join(" &bull; ")}
+        ${[grant.sponsor || grant.funder, grant.state, grant.deadline ? `Deadline: ${grant.deadline}` : null].filter(Boolean).map((part) => escapeHtml(String(part))).join(" &bull; ")}
       </div>
 
       ${grant.description ? `<div class="section"><h2>Description</h2><p>${escapeHtml(grant.description)}</p></div>` : ""}
 
       <div class="section">
         <h2>Details</h2>
-        ${field("Source", grant.source)}
-        ${field("Sponsor", grant.sponsor)}
-        ${field("State", grant.state)}
-        ${field("Deadline", grant.deadline)}
-        ${field("Deadline Type", grant.deadline_type)}
-        ${field("Amount", [grant.amount_min, grant.amount_max].filter(Boolean).map(n => "$" + Number(n).toLocaleString()).join(" – ") || grant.amount_description)}
-        ${field("Type", grant.opportunity_type)}
+        ${field("Source", escapeHtml(grant.source || ""))}
+        ${field("Sponsor", escapeHtml(grant.sponsor || grant.funder || ""))}
+        ${field("State", escapeHtml(grant.state || ""))}
+        ${field("Deadline", escapeHtml(grant.deadline || ""))}
+        ${field("Deadline Type", escapeHtml(grant.deadline_type || ""))}
+        ${field("Amount", escapeHtml([grant.amount_min, grant.amount_max].filter(Boolean).map(n => "$" + Number(n).toLocaleString()).join(" – ") || grant.amount_description || ""))}
+        ${field("Type", escapeHtml(grant.opportunity_type || ""))}
         ${field("Application URL", grant.application_url ? `<a href="${escapeHtml(grant.application_url)}">${escapeHtml(grant.application_url)}</a>` : null)}
         ${field("Source URL", grant.source_url ? `<a href="${escapeHtml(grant.source_url)}">${escapeHtml(grant.source_url)}</a>` : null)}
       </div>
@@ -200,7 +200,7 @@ export function exportGrantAsPDF(grant) {
       ` : ""}
 
       <div class="footer">
-        Exported from GrantFlow on ${new Date().toLocaleDateString()} &bull; ${grant.source_url || ""}
+        Exported from GrantFlow on ${new Date().toLocaleDateString()} &bull; ${escapeHtml(grant.source_url || "")}
       </div>
     </body>
     </html>

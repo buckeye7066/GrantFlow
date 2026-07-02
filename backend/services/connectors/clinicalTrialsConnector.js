@@ -56,6 +56,8 @@ async function rateLimitedFetch(url) {
   }
   lastRequestAt = Date.now()
   return fetch(url, {
+    // node-fetch has no default deadline; without a signal a hung remote stalls the caller forever.
+    signal: AbortSignal.timeout(30000),
     headers: {
       Accept: 'application/json',
       'User-Agent': 'GrantFlow/1.0 (medical-needs study discovery)',
