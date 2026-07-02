@@ -22,7 +22,7 @@
 
 import { createOutlookProvider } from '../john/johnOutlookProvider.js'
 import { getJohnConfig } from '../john/johnOutreachSafety.js'
-import { resolveProfileContacts } from '../comms/commsService.js'
+import { resolveProfileContacts, sendBroadcast } from '../comms/commsService.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('hamiltonWeeklyDigest')
@@ -34,6 +34,24 @@ export function isWeeklyDigestEnabled() {
   // On by default — the owner asked for it to run every Monday regardless of
   // login. Set HAMILTON_WEEKLY_DIGEST_ENABLED=false to disable.
   return String(process.env.HAMILTON_WEEKLY_DIGEST_ENABLED ?? 'true').toLowerCase() !== 'false'
+}
+
+/**
+ * How the weekly digest is delivered:
+ *   - 'draft' (default) → one Outlook draft per profile into the owner's
+ *     mailbox; the owner reviews and sends manually.
+ *   - 'send'            → AUTO-SEND one email per profile directly to the
+ *     profile's contact emails via the existing comms channel (Resend),
+ *     recorded in comms_broadcasts/comms_broadcast_recipients (kind
+ *     'weekly_digest') so Sam/Anya/admin can audit every send.
+ * Owner-approved auto-send (2026-07-02): prod sets
+ * HAMILTON_WEEKLY_DIGEST_DELIVERY=send. The leads pipeline (John) is not
+ * affected — it stays draft-only.
+ */
+export function weeklyDigestDeliveryMode() {
+  return String(process.env.HAMILTON_WEEKLY_DIGEST_DELIVERY || 'draft').toLowerCase() === 'send'
+    ? 'send'
+    : 'draft'
 }
 
 const ACTIVE_PIPELINE = new Set([
@@ -193,20 +211,30 @@ export function buildDigest({ displayName, signals, now = new Date() }) {
 }
 
 /**
- * Run the weekly digest: build + draft one message per active profile.
- * Returns a summary { ran, drafted, skipped_no_email, profiles, errors }.
+ * Run the weekly digest: build + deliver one message per active profile
+ * ("active" = status not deleted/suspended, and not one of Amy's synthetic
+ * QA profiles). Delivery is per weeklyDigestDeliveryMode(): 'draft' (Outlook
+ * draft into the owner's mailbox) or 'send' (auto-send via the comms channel).
+ * Returns a summary { ran, mode, drafted, sent, skipped_no_email, profiles, errors }.
+ *
+ * `_sendBroadcast` is injectable for unit tests only.
  */
-export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = false, profileIds = null } = {}) {
+export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = false, profileIds = null, _sendBroadcast = sendBroadcast } = {}) {
   if (!force && !isWeeklyDigestEnabled()) return { ran: false, reason: 'disabled' }
 
-  const provider = createOutlookProvider()
-  if (provider.notConfigured) {
-    log.warn('weekly digest skipped — Outlook provider not configured')
-    return { ran: false, reason: 'outlook_not_configured' }
+  const mode = weeklyDigestDeliveryMode()
+  let provider = null
+  let config = null
+  if (mode === 'draft') {
+    provider = createOutlookProvider()
+    if (provider.notConfigured) {
+      log.warn('weekly digest skipped — Outlook provider not configured')
+      return { ran: false, reason: 'outlook_not_configured' }
+    }
+    config = getJohnConfig()
   }
-  const config = getJohnConfig()
-  const fromAlias = config.fromAlias || config.primaryMailbox
-  const displayNameHdr = config.displayName || 'GrantFlow'
+  const fromAlias = config ? (config.fromAlias || config.primaryMailbox) : null
+  const displayNameHdr = config ? (config.displayName || 'GrantFlow') : 'GrantFlow'
 
   let profiles = []
   if (Array.isArray(profileIds) && profileIds.length) {
@@ -219,7 +247,7 @@ export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = fa
     } catch { try { profiles = await db.prepare('SELECT id FROM profiles').all() } catch { profiles = [] } }
   }
 
-  let drafted = 0, skippedNoEmail = 0, errors = 0
+  let drafted = 0, sent = 0, skippedNoEmail = 0, errors = 0
   for (const p of profiles || []) {
     try {
       const contacts = await resolveProfileContacts(db, p.id)
@@ -227,24 +255,41 @@ export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = fa
       if (emails.length === 0) { skippedNoEmail += 1; continue }
       const signals = await gatherProfileSignals(db, p.id, now)
       const digest = buildDigest({ displayName: contacts.display_name, signals, now })
-      await provider.createDraft({
-        toEmail: emails,
-        toName: contacts.display_name || undefined,
-        subject: digest.subject,
-        bodyHtml: digest.html,
-        bodyText: digest.text,
-        requestedFromAlias: fromAlias,
-        replyTo: config.replyTo || fromAlias,
-        displayName: displayNameHdr,
-      })
-      drafted += 1
+      if (mode === 'send') {
+        // Auto-send via the existing comms machinery; every send lands in
+        // comms_broadcasts + comms_broadcast_recipients (kind 'weekly_digest')
+        // for the Sam/Anya observability trail.
+        const r = await _sendBroadcast(db, {
+          profileIds: [p.id],
+          channel: 'email',
+          subject: digest.subject,
+          body: digest.text,
+          html: digest.html,
+          sentBy: 'hamilton',
+          kind: 'weekly_digest',
+        })
+        if ((r?.sent_email ?? 0) > 0) sent += 1
+        else { errors += 1; log.warn('digest send failed', { profile_id: p.id, error: r?.recipients?.[0]?.error || r?.error || 'no_email_sent' }) }
+      } else {
+        await provider.createDraft({
+          toEmail: emails,
+          toName: contacts.display_name || undefined,
+          subject: digest.subject,
+          bodyHtml: digest.html,
+          bodyText: digest.text,
+          requestedFromAlias: fromAlias,
+          replyTo: config.replyTo || fromAlias,
+          displayName: displayNameHdr,
+        })
+        drafted += 1
+      }
     } catch (err) {
       errors += 1
-      log.warn('digest draft failed', { profile_id: p.id, error: err?.message })
+      log.warn(`digest ${mode} failed`, { profile_id: p.id, error: err?.message })
     }
   }
 
-  const summary = { ran: true, drafted, skipped_no_email: skippedNoEmail, profiles: (profiles || []).length, errors, at: now.toISOString() }
+  const summary = { ran: true, mode, drafted, sent, skipped_no_email: skippedNoEmail, profiles: (profiles || []).length, errors, at: now.toISOString() }
   log.info('weekly digest complete', summary)
   return summary
 }

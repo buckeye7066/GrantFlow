@@ -169,7 +169,11 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
   const account = mapAccountRow(accountRow)
   if (!account?.profile_id) return null
   const cadence = normalizeCadence(accountRow.billing_cadence || account.billing_cadence)
-  const moment = billingMomentPassed(cadence, now)
+  // billing_anchor_at doubles as the biweekly parity epoch: the every-other-
+  // Friday alternation is pinned to the account's persisted anchor (or the
+  // fixed BIWEEKLY_EPOCH), so restarts/redeploys can never flip which Friday
+  // an account is invoiced on.
+  const moment = billingMomentPassed(cadence, now, { anchor: accountRow.billing_anchor_at || null })
 
   // Respect the billing anchor (don't invoice periods before billing started).
   const anchor = accountRow.billing_anchor_at ? new Date(accountRow.billing_anchor_at) : null

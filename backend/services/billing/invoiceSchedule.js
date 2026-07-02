@@ -3,8 +3,12 @@
  *
  * Cadences (chosen at signup, stored on billing_accounts.billing_cadence):
  *   - weekly       → every Friday 09:00 America/New_York (Eastern)
+ *   - biweekly     → every OTHER Friday 09:00 Eastern. Which Fridays are "on"
+ *                    is anchored to a persisted epoch (the account's
+ *                    billing_anchor_at when present, else BIWEEKLY_EPOCH) so a
+ *                    redeploy can never flip the alternation parity.
  *   - semimonthly  → the 1st and 16th, 09:00 Eastern (twice a month)
- *   - monthly      → the 1st, 09:00 Eastern
+ *   - monthly      → the FIRST FRIDAY of the month, 09:00 Eastern
  *
  * Pure + timezone-correct via Intl (handles EST/EDT). `billingMomentPassed`
  * returns the most recent billing moment at/before `now` as a stable
@@ -13,7 +17,14 @@
  * start before the account's billing anchor.
  */
 
-export const BILLING_CADENCES = Object.freeze(['weekly', 'semimonthly', 'monthly'])
+export const BILLING_CADENCES = Object.freeze(['weekly', 'biweekly', 'semimonthly', 'monthly'])
+
+/**
+ * Fallback parity anchor for `biweekly` when an account has no
+ * billing_anchor_at: a fixed historical Friday. Being a compile-time constant
+ * (not "now"), the alternation can never flip on a restart or redeploy.
+ */
+export const BIWEEKLY_EPOCH = '2026-01-02' // a Friday
 export const DEFAULT_CADENCE = 'weekly'
 const TZ = 'America/New_York'
 const BILLING_HOUR = 9 // 09:00 ET
@@ -60,26 +71,84 @@ function lastDayOfMonth(year, month) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }
 
+/** Calendar weekday (0=Sun..6=Sat) of an ET calendar date — pure calendar math. */
+function calendarWeekday(year, month, day) {
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+}
+
+/** Day-of-month (1-7) of the first Friday in a month. */
+function firstFridayOfMonth(year, month) {
+  const w = calendarWeekday(year, month, 1)
+  return 1 + ((5 - w + 7) % 7)
+}
+
+/** The most recent Friday (ET calendar date) at/before the given ET date. */
+function mostRecentFriday(year, month, day) {
+  const back = (calendarWeekday(year, month, day) - 5 + 7) % 7
+  return addDaysEt(year, month, day, -back)
+}
+
+/** Whole weeks between two calendar dates (pure UTC-date math, DST-immune). */
+function weeksBetween(a, b) {
+  const ms = Date.UTC(a.year, a.month - 1, a.day) - Date.UTC(b.year, b.month - 1, b.day)
+  return Math.round(ms / (7 * 86400000))
+}
+
 /**
  * The most recent billing moment at/before `now` for a cadence, or null if none
  * has occurred yet today. Returns { period_key, period_start, period_end (ISO
  * dates), billed_at (ISO instant) }.
+ *
+ * `anchor` (optional Date/ISO string) only affects `biweekly`: it pins which
+ * Fridays are "on". Pass the account's persisted billing_anchor_at so the
+ * every-other-Friday alternation survives restarts/redeploys; when absent the
+ * fixed BIWEEKLY_EPOCH is used.
  */
-export function billingMomentPassed(cadence, now = new Date()) {
+export function billingMomentPassed(cadence, now = new Date(), { anchor = null } = {}) {
   const c = normalizeCadence(cadence)
   const et = etParts(now)
 
   if (c === 'monthly') {
-    // The 1st at 09:00 ET. If today is past the 1st (or it's the 1st ≥09:00),
-    // bill for this month; else bill for last month.
+    // The first FRIDAY of the month at 09:00 ET. If we're past this month's
+    // first-Friday moment, bill for this month; else bill for last month.
     let y = et.year; let m = et.month
-    const firstMoment = etDateTimeToUtc(y, m, 1, BILLING_HOUR)
-    if (now < firstMoment) { const p = addDaysEt(y, m, 1, -1); y = p.year; m = p.month }
+    let ff = firstFridayOfMonth(y, m)
+    const firstMoment = etDateTimeToUtc(y, m, ff, BILLING_HOUR)
+    if (now < firstMoment) {
+      const p = addDaysEt(y, m, 1, -1); y = p.year; m = p.month
+      ff = firstFridayOfMonth(y, m)
+    }
     return {
       period_key: `monthly:${y}-${pad(m)}`,
       period_start: isoDate(y, m, 1),
       period_end: isoDate(y, m, lastDayOfMonth(y, m)),
-      billed_at: etDateTimeToUtc(y, m, 1, BILLING_HOUR).toISOString(),
+      billed_at: etDateTimeToUtc(y, m, ff, BILLING_HOUR).toISOString(),
+    }
+  }
+
+  if (c === 'biweekly') {
+    // Every other Friday 09:00 ET, parity anchored to a persisted epoch.
+    let fri = mostRecentFriday(et.year, et.month, et.day)
+    let friMoment = etDateTimeToUtc(fri.year, fri.month, fri.day, BILLING_HOUR)
+    if (now < friMoment) fri = addDaysEt(fri.year, fri.month, fri.day, -7)
+
+    // Anchor Friday: the most recent Friday at/before the anchor's ET date.
+    const anchorDate = anchor ? new Date(anchor) : null
+    const anchorEt = anchorDate && Number.isFinite(anchorDate.getTime())
+      ? etParts(anchorDate)
+      : (() => { const [y, m, d] = BIWEEKLY_EPOCH.split('-').map(Number); return { year: y, month: m, day: d } })()
+    const anchorFri = mostRecentFriday(anchorEt.year, anchorEt.month, anchorEt.day)
+
+    // Step back one week when the candidate Friday is an "off" week.
+    if (((weeksBetween(fri, anchorFri) % 2) + 2) % 2 !== 0) {
+      fri = addDaysEt(fri.year, fri.month, fri.day, -7)
+    }
+    const start = addDaysEt(fri.year, fri.month, fri.day, -13) // 14-day period ending Friday
+    return {
+      period_key: `biweekly:${isoDate(fri.year, fri.month, fri.day)}`,
+      period_start: isoDate(start.year, start.month, start.day),
+      period_end: isoDate(fri.year, fri.month, fri.day),
+      billed_at: etDateTimeToUtc(fri.year, fri.month, fri.day, BILLING_HOUR).toISOString(),
     }
   }
 
