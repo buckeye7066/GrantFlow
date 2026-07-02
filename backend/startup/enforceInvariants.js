@@ -1977,6 +1977,72 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
 }
 
 /**
+ * INVARIANT: PIPELINE GRANTS CARRY THE FUNDER'S NAME WHEN IT IS KNOWABLE.
+ *
+ * `grants.funder` is the pipeline's display name for the granting organization
+ * (the catalog's column is `funding_opportunities.sponsor`; the bridge maps
+ * sponsor→funder at insert time). Historic naming drift (#725 class: `sponsor`
+ * vs `funder` vs `funder_name`) produced pipeline rows with an empty funder
+ * even though the linked catalog row knows the sponsor. This sweep re-copies
+ * the sponsor from the linked opportunity — a pure data repair from our own
+ * stored source metadata, never an invented value (data-honesty rule: rows
+ * whose linked opportunity ALSO lacks a sponsor are counted, not guessed).
+ *
+ * Idempotent: a repaired row no longer matches the WHERE clause. Count-only
+ * reporting for the un-derivable remainder keeps the gap observable (Sam/Anya
+ * read the boot summary) without fabricating data.
+ */
+export async function enforceFunderBackfill(db) {
+  return runInvariant('funder_backfill', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('funder') || !grantCols.has('funding_opportunity_id')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const EMPTY_FUNDER = `(g.funder IS NULL OR TRIM(g.funder) = '')`
+    let repaired = 0
+    try {
+      const result = await db
+        .prepare(
+          `UPDATE grants
+              SET funder = (
+                SELECT fo.sponsor FROM funding_opportunities fo
+                 WHERE fo.id = grants.funding_opportunity_id
+                   AND fo.sponsor IS NOT NULL AND TRIM(fo.sponsor) <> ''
+              )
+            WHERE (grants.funder IS NULL OR TRIM(grants.funder) = '')
+              AND grants.funding_opportunity_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM funding_opportunities fo
+                 WHERE fo.id = grants.funding_opportunity_id
+                   AND fo.sponsor IS NOT NULL AND TRIM(fo.sponsor) <> ''
+              )`,
+        )
+        .run()
+      repaired = changesOf(result)
+    } catch (err) {
+      // funding_opportunities absent on a minimal test DB → count-only below.
+      log.warn('funder_backfill: repair query failed (non-fatal)', { error: String(err?.message || err) })
+    }
+
+    // Observability: how many pipeline rows still show no funder (un-derivable
+    // from stored metadata — an ingest-quality signal, not repairable here).
+    let missing = 0
+    try {
+      const row = await db
+        .prepare(`SELECT COUNT(*) AS n FROM grants g WHERE ${EMPTY_FUNDER}`)
+        .get()
+      missing = Number(row?.n) || 0
+    } catch { /* non-fatal */ }
+
+    if (repaired > 0) {
+      log.info('backfilled grants.funder from linked funding_opportunities.sponsor', { repaired, stillMissing: missing })
+    }
+    return { scanned: repaired + missing, repaired, missingFunder: missing }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -2014,6 +2080,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
   // Operates on profile_opportunity_matches, so it complements the grants sweeps.
   steps.push(await enforceStudentAidEligibility(db))
+  // Pipeline DATA repair: re-copy the funder's name from the linked catalog row
+  // (sponsor→funder) wherever naming drift left grants.funder empty; count the
+  // un-derivable remainder for observability. Runs after the purge sweeps so it
+  // never wastes work repairing rows they are about to remove.
+  steps.push(await enforceFunderBackfill(db))
   // Profile-level data repair (not pipeline): collapse any doubled display_name
   // (e.g. "Jordan Lane Jordan Michael Lane") back to a single name.
   steps.push(await enforceProfileDisplayNameNotDoubled(db))
@@ -2047,6 +2118,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.duplicatesRemoved !== undefined ? { duplicatesRemoved: s.duplicatesRemoved } : {}),
       ...(s.profilesAffected !== undefined ? { profilesAffected: s.profilesAffected } : {}),
       ...(s.flagged !== undefined ? { flagged: s.flagged } : {}),
+      ...(s.missingFunder !== undefined ? { missingFunder: s.missingFunder } : {}),
       ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
     })),
   })
@@ -2073,6 +2145,7 @@ export const __testables = {
   enforceProfileIncomeReconciliation,
   enforceIndividualAmountCeiling,
   enforceStudentAidEligibility,
+  enforceFunderBackfill,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,

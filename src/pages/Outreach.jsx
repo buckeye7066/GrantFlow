@@ -45,8 +45,8 @@ export default function Outreach() {
         if (!funderMap.has(grant.funder)) {
           funderMap.set(grant.funder, {
             name: grant.funder,
-            email: grant.funder_email || null,
-            phone: grant.funder_phone || null,
+            email: grant.contact_email || null,
+            phone: grant.contact_phone || null,
             grants: []
           })
         }

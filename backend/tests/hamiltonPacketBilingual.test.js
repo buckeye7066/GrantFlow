@@ -38,7 +38,7 @@ const profile = {
   basic_information: { first_name: 'Liubov', last_name: 'Samoylenko', email: 'anyawhite@rocketmail.com' },
   essays: { primary: 'My personal statement.' },
 }
-const opportunity = { id: 'opp1', title: 'HOPE Scholarship', funder_name: 'TSAC', deadline: '2026-09-01' }
+const opportunity = { id: 'opp1', title: 'HOPE Scholarship', sponsor: 'TSAC', deadline: '2026-09-01' }
 
 let storageDir
 beforeEach(() => {

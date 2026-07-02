@@ -218,7 +218,7 @@ export function buildFunderRequirements(opportunity, grant) {
   const req = {}
   const put = (label, value) => { if (nonEmpty(value)) req[label] = String(value).slice(0, 2000) }
   put('title', opp.title || opp.name)
-  put('funder', opp.funder_name || opp.funder || opp.organization || opp.source_name)
+  put('funder', opp.sponsor || opp.funder || opp.organization || opp.source_name)
   put('description', opp.description)
   put('eligibility', opp.eligibility_text || opp.eligibility)
   put('priorities', opp.priorities || opp.focus_areas || opp.categories)

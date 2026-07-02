@@ -33,6 +33,7 @@ import {
   enforceRelevanceFloor,
   enforceIndividualAmountCeiling,
   enforceStudentAidEligibility,
+  enforceFunderBackfill,
   resolveIndividualAmountCeiling,
   enforceProfileScopedPipeline,
   enforceProfileDisplayNameNotDoubled,
@@ -874,7 +875,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(12)
+    expect(summary.ran).toBe(13)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -885,6 +886,7 @@ describe('enforceInvariants — runner', () => {
       'relevance_floor',
       'individual_amount_ceiling',
       'student_aid_eligibility',
+      'funder_backfill',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
       'hamilton_task_self_heal',
@@ -1499,5 +1501,125 @@ describe('enforceNoSearchEngineApplicationTargets', () => {
     const res = await enforceNoSearchEngineApplicationTargets(bare)
     expect(res.ok).toBe(true)
     expect(res.repaired).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// INVARIANT: pipeline grants carry the funder's name when it is knowable
+// (grants.funder backfilled from the linked funding_opportunities.sponsor —
+// the #725 sponsor/funder naming-drift class; never invents a value).
+// ---------------------------------------------------------------------------
+
+function makeFunderDb() {
+  const db = makeDb()
+  db.exec(`
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      sponsor TEXT
+    );
+  `)
+  return db
+}
+
+describe('enforceFunderBackfill — grants.funder from linked catalog sponsor', () => {
+  it('backfills an empty grants.funder from the linked opportunity sponsor', async () => {
+    const db = makeFunderDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, sponsor) VALUES (?, ?, ?)')
+      .run('opp-1', 'STEM Access Grant', 'Volunteer Foundation')
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'STEM Access Grant',
+      funder: null, match_score: 90,
+    })
+
+    const result = await enforceFunderBackfill(db)
+    expect(result.ok).toBe(true)
+    expect(result.repaired).toBe(1)
+    expect(db.prepare('SELECT funder FROM grants WHERE id = ?').get(gid).funder)
+      .toBe('Volunteer Foundation')
+  })
+
+  it('treats a whitespace-only funder as empty', async () => {
+    const db = makeFunderDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, sponsor) VALUES (?, ?, ?)')
+      .run('opp-1', 'Grant', 'Real Sponsor')
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Grant', funder: '   ', match_score: 90,
+    })
+
+    const result = await enforceFunderBackfill(db)
+    expect(result.repaired).toBe(1)
+    expect(db.prepare('SELECT funder FROM grants WHERE id = ?').get(gid).funder).toBe('Real Sponsor')
+  })
+
+  it('NEVER invents a funder: unlinked rows and empty-sponsor links are counted, not guessed', async () => {
+    const db = makeFunderDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    // Linked opportunity whose sponsor is itself empty.
+    db.prepare('INSERT INTO funding_opportunities (id, title, sponsor) VALUES (?, ?, ?)')
+      .run('opp-empty', 'No Sponsor Opp', '')
+    const g1 = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-empty', title: 'A', funder: null, match_score: 90,
+    })
+    // No link at all.
+    const g2 = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      title: 'B', funder: null, match_score: 90,
+    })
+
+    const result = await enforceFunderBackfill(db)
+    expect(result.repaired).toBe(0)
+    expect(result.missingFunder).toBe(2)
+    expect(db.prepare('SELECT funder FROM grants WHERE id = ?').get(g1).funder).toBeNull()
+    expect(db.prepare('SELECT funder FROM grants WHERE id = ?').get(g2).funder).toBeNull()
+  })
+
+  it('never overwrites an existing funder value', async () => {
+    const db = makeFunderDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, sponsor) VALUES (?, ?, ?)')
+      .run('opp-1', 'Grant', 'Catalog Sponsor')
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Grant',
+      funder: 'Hand-Entered Funder', match_score: 90,
+    })
+
+    const result = await enforceFunderBackfill(db)
+    expect(result.repaired).toBe(0)
+    expect(db.prepare('SELECT funder FROM grants WHERE id = ?').get(gid).funder)
+      .toBe('Hand-Entered Funder')
+  })
+
+  it('is idempotent (second run repairs nothing)', async () => {
+    const db = makeFunderDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, sponsor) VALUES (?, ?, ?)')
+      .run('opp-1', 'Grant', 'Sponsor Inc')
+    insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Grant', funder: null, match_score: 90,
+    })
+
+    const first = await enforceFunderBackfill(db)
+    const second = await enforceFunderBackfill(db)
+    expect(first.repaired).toBe(1)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('degrades to count-only when funding_opportunities is absent (never throws)', async () => {
+    const db = makeDb() // no funding_opportunities table
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', funder: null, match_score: 90 })
+
+    const result = await enforceFunderBackfill(db)
+    expect(result.ok).toBe(true)
+    expect(result.repaired).toBe(0)
+    expect(result.missingFunder).toBe(1)
   })
 })

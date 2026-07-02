@@ -126,6 +126,26 @@ function normalizeNonEmptyString(value) {
 }
 
 /**
+ * Resolve the granting organization's display name for the catalog's
+ * `sponsor` column. The catalog column is `sponsor` (pipeline `grants` uses
+ * `funder`), but producers have historically drifted between `sponsor`,
+ * `funder`, `funder_name`, `organization`, and `agency` (#725 bug class).
+ * Accept the aliases at this single choke point instead of silently
+ * persisting NULL when a producer uses the "wrong" name. Mirrors the
+ * fallback chain in backend/utils/grantFingerprint.js (opportunityFunder).
+ */
+function resolveSponsorName(opportunity = {}) {
+  return (
+    normalizeNonEmptyString(opportunity.sponsor) ??
+    normalizeNonEmptyString(opportunity.funder) ??
+    normalizeNonEmptyString(opportunity.funder_name) ??
+    normalizeNonEmptyString(opportunity.organization) ??
+    normalizeNonEmptyString(opportunity.agency) ??
+    null
+  )
+}
+
+/**
  * Derive funding_source_type from record_origin and source when not explicitly set.
  */
 /**
@@ -318,6 +338,14 @@ function normalizeDateLikeOrNull(value) {
 }
 
 export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  // Resolve funder-name drift aliases (funder/funder_name/organization/agency
+  // → canonical `sponsor`) BEFORE validation, so a producer that used the
+  // "wrong" name neither fails missing_sponsor validation nor persists NULL.
+  const resolvedSponsor = resolveSponsorName(opportunity)
+  if (resolvedSponsor !== (opportunity?.sponsor ?? null)) {
+    opportunity = { ...opportunity, sponsor: resolvedSponsor }
+  }
+
   // Apply the verification gate before any other processing — this strips any
   // hallucinated last_verified_at the caller may have provided. Crawlers can
   // still opt-in by supplying verification_method/link_status with proof.
@@ -602,7 +630,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
 
     const record = {
       title,
-      sponsor: normalizeNonEmptyString(opportunity.sponsor),
+      sponsor: resolveSponsorName(opportunity),
       description: opportunity.description ?? null,
       source_url: sourceUrl,
       evidence_url: evidenceUrl,
@@ -834,7 +862,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   const normalizedState = normalizeOpportunityState(opportunity.state)
   const record = {
     title,
-    sponsor: normalizeNonEmptyString(opportunity.sponsor),
+    sponsor: resolveSponsorName(opportunity),
     description: opportunity.description ?? null,
     source_url: sourceUrl,
     evidence_url: evidenceUrl,

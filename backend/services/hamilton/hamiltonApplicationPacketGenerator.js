@@ -133,7 +133,7 @@ function deadline(opportunity) {
 export function buildPacketContent({ opportunity, grant, profile, automationType, narrativeOverrides = null }) {
   const opp = opportunity || grant || {}
   const title = opp.title || opp.name || 'Funding Application'
-  const funder = opp.funder_name || opp.organization || opp.source_name || opp.source_label || 'Funder'
+  const funder = opp.sponsor || opp.funder || opp.organization || 'Funder'
   const due = deadline(opp)
   const amount = opp.amount_max || opp.amount || opp.estimated_amount || ''
 
@@ -274,7 +274,7 @@ Applicant fit notes:
 
 export function buildMailingInstructions({ opportunity, grant, automationType }) {
   const opp = opportunity || grant || {}
-  const funder = opp.funder_name || opp.organization || opp.source_name || 'Funder'
+  const funder = opp.sponsor || opp.funder || opp.organization || 'Funder'
   const url = opp.application_url || opp.apply_url || opp.url || null
   const due = deadline(opp)
   const address = opp.mailing_address || opp.application_address || null
