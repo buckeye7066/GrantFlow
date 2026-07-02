@@ -56,6 +56,26 @@ prospects with a real contact channel become qualified leads pushed to John.
 The inbound (own-org) funnel remains data/config as above; lowering
 `YANA_QUALIFY_THRESHOLD` only affects that path.
 
+### "N qualified, 0 pushed to John" — now self-explaining
+`candidates_qualified` counts every candidate (re-)qualified during the run,
+INCLUDING rows that were already forwarded in an earlier run (`pushed_to_john=1`
+is never reset — that's the dedup working). So a run can honestly report
+`candidates_qualified: 21, leads_pushed_to_john: 0`. The push result now says
+which case it is:
+- `push_noop_reason: 'no_unpushed_qualified_leads'` — every qualified lead was
+  already handed to John (dedup, not lost leads).
+- `push_noop_reason: 'cap_reached_in_window'` + `queue_depth` — the rolling
+  24h cap (`YANA_DAILY_LEAD_CAP`) is spent; `queue_depth` qualified leads are
+  waiting for the window to roll.
+
+### Backlog re-enrichment (shipped)
+Stored `needs_enrichment` leads are no longer written once and forgotten: each
+discovery run revisits a bounded slice (`YANA_BACKLOG_ENRICH_LIMIT`, default 10;
+per-lead retry budget `YANA_BACKLOG_ENRICH_MAX_ATTEMPTS`, default 3) and, when a
+REAL published email is found on the org's own site, promotes the lead to
+`qualified` with the source page persisted as evidence
+(`{ type: 'contact_email_source', source_url }`). Never a fabricated address.
+
 ## Hamilton — gated by 48 blockers (data)
 Hamilton counts unresolved rows in `hamilton_blockers`
 (`backend/services/agentControl/agentAdapters/hamiltonAgentAdapter.js`). The 48
