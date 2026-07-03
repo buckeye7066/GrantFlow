@@ -115,6 +115,7 @@ describe('buildThresholdReport + buildThresholdTodoCategory', () => {
 
     const report = await buildThresholdReport(db, PID)
     expect(report.facts.act).toBe(28)
+    expect(report.facts.sat).toBeNull() // blank field = MISSING fact, never 0
     expect(report.near.map((i) => i.grant_id)).toEqual(['g-1'])
     expect(report.qualified.map((i) => i.grant_id)).toEqual(['g-2'])
     expect(report.short.map((i) => i.grant_id)).toEqual(['g-3'])
