@@ -1,7 +1,7 @@
 ﻿import React, { Suspense } from 'react';
 import { lazyWithRetry } from '@/utils/lazyWithRetry';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop, Megaphone, FlaskConical } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop, Megaphone, FlaskConical, PanelsTopLeft } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -27,6 +27,7 @@ import AdminCredentialVault from '@/components/admin/AdminCredentialVault.jsx'
 import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
 import AdminBroadcast from '@/components/admin/AdminBroadcast.jsx'
 import AdminMaintenanceWindow from '@/components/admin/AdminMaintenanceWindow.jsx'
+import AdminPortalAssist from '@/components/admin/AdminPortalAssist.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -85,6 +86,10 @@ export default function Admin() {
             <TabsTrigger value="logins">
               <Bell className="w-4 h-4 mr-2" />
               Logins
+            </TabsTrigger>
+            <TabsTrigger value="portal_assist">
+              <PanelsTopLeft className="w-4 h-4 mr-2" />
+              Portal Assist
             </TabsTrigger>
             <TabsTrigger value="profiles">
               <Users className="w-4 h-4 mr-2" />
@@ -176,6 +181,10 @@ export default function Admin() {
 
           <TabsContent value="logins" className="mt-6">
             <AdminLoginNotifications />
+          </TabsContent>
+
+          <TabsContent value="portal_assist" className="mt-6">
+            <AdminPortalAssist />
           </TabsContent>
 
           <TabsContent value="profiles" className="mt-6">

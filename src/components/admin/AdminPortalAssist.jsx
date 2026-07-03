@@ -1,0 +1,318 @@
+/**
+ * AdminPortalAssist
+ *
+ * Admin-only "Portal Assist" surface. Lets the owner (buckeye7066@gmail.com /
+ * any is_admin user) pick ANY profile and do that user's portal logins FOR them
+ * via Hamilton's secure side-by-side window — the concrete case being a
+ * deadline-pressed applicant (e.g. Anastasia) who can't get signed in herself.
+ *
+ * Why this exists even though admins can already reach any profile: the access
+ * layer already authorizes an admin on every profile (getAccessibleProfileIds →
+ * null = global), and the cloud-login start endpoint honors that. What was
+ * missing was a single, purpose-built place to (a) jump to any profile's portals
+ * and (b) knock out EVERY not-yet-signed-in portal one after another. This
+ * component adds only that convenience; every action underneath is an existing,
+ * vetted primitive.
+ *
+ * It reuses, unchanged:
+ *   • listProfiles              → the profile picker
+ *   • listProfilePortals        → the same GET /api/profiles/:id/portals the
+ *                                 user's own Portals dashboard uses
+ *   • startCloudLogin +         → the secure live co-browse window
+ *     openPendingLoginWindow      (CDP screencast over SSE). The admin signs in
+ *                                 in that window; Hamilton captures + learns the
+ *                                 session so future runs reuse it.
+ *   • <ProfilePortalsCard/>     → the full per-profile toolset (per-portal login,
+ *                                 autopilot, packets, two-way sync) rendered
+ *                                 below, so nothing is lost vs visiting the
+ *                                 profile directly.
+ *
+ * The only new behavior is the "Open logins one at a time" guided bar: browsers
+ * block a bulk window.open, so "open all" is honestly a sequential walk — open
+ * the next not-ready portal on each click; when the admin returns to this tab
+ * (the popup closed / login finished) the list refetches and signed-in portals
+ * drop out of the queue.
+ */
+
+import React from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { listProfiles } from "@/api/profiles"
+import { listProfilePortals, startCloudLogin } from "@/api/hamilton"
+import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
+import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard"
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
+import { useToast } from "@/components/ui/use-toast"
+import { showSuccessToast, showErrorToast } from "@/components/shared/toastHelpers"
+import {
+  PanelsTopLeft,
+  Search,
+  Loader2,
+  ShieldCheck,
+  CheckCircle2,
+  RefreshCw,
+  UserCog,
+} from "lucide-react"
+
+// A portal still needs a login when it isn't "ready" AND we actually resolved a
+// host to sign in to (process/mail tiles without a host can't be co-browsed).
+function needsLogin(portal) {
+  return portal && portal.status !== "ready" && Boolean(portal.portalHost)
+}
+
+export default function AdminPortalAssist() {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+
+  const [filter, setFilter] = React.useState("")
+  const [selectedId, setSelectedId] = React.useState("")
+
+  // Every profile (admin gets the full list, up to the API's admin page size).
+  const profilesQuery = useQuery({
+    queryKey: ["admin-portal-assist-profiles"],
+    queryFn: () => listProfiles({ summary: true }),
+    staleTime: 120_000,
+  })
+  const profiles = React.useMemo(() => {
+    const res = profilesQuery.data
+    const list = Array.isArray(res) ? res : res?.profiles || res?.items || res?.data || []
+    return list
+      .map((p) => ({
+        id: p.id,
+        name: p.display_name || p.name || p.full_name || "(unnamed profile)",
+        type: p.primary_type || p.type || "",
+      }))
+      .filter((p) => p.id)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [profilesQuery.data])
+
+  const filtered = React.useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return profiles
+    return profiles.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.type.toLowerCase().includes(q),
+    )
+  }, [profiles, filter])
+
+  const selectedProfile = profiles.find((p) => p.id === selectedId) || null
+
+  // The chosen profile's portals — SAME query key the ProfilePortalsCard uses,
+  // so this bar and the card share one cache and update together.
+  const portalsQuery = useQuery({
+    queryKey: ["hamilton-profile-portals", selectedId],
+    queryFn: () => listProfilePortals(selectedId),
+    enabled: !!selectedId,
+    staleTime: 120_000,
+  })
+  const portals = Array.isArray(portalsQuery.data?.portals) ? portalsQuery.data.portals : []
+  const pending = portals.filter(needsLogin)
+  const readyCount = portals.filter((p) => p.status === "ready").length
+
+  const refetchPortals = () =>
+    queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", selectedId] })
+
+  // Refresh the list the next time the admin returns to this tab — the honest
+  // signal that they finished (or closed) the secure login popup, since the
+  // popup handle exposes no close event. One-shot so listeners never accumulate.
+  const refreshOnReturn = React.useRef(false)
+  React.useEffect(() => {
+    const onFocus = () => {
+      if (refreshOnReturn.current) {
+        refreshOnReturn.current = false
+        refetchPortals()
+      }
+    }
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+  }, [selectedId])
+
+  const [openingHost, setOpeningHost] = React.useState(null)
+
+  // Open ONE portal's secure side-by-side login for the selected profile. The
+  // popup is opened synchronously in the click gesture (else it's blocked), then
+  // navigated once startCloudLogin resolves — exactly the ProfilePortalsCard flow.
+  const openPortalLogin = async (portal) => {
+    if (!selectedId || !portal?.portalHost) return
+    const popup = openPendingLoginWindow()
+    if (!popup || popup.blocked) {
+      showErrorToast(
+        toast,
+        "Allow pop-ups to sign in",
+        "Your browser blocked the secure login window. Allow pop-ups for GrantFlow, then click again.",
+      )
+      return
+    }
+    setOpeningHost(portal.portalHost)
+    try {
+      const res = await startCloudLogin(selectedId, {
+        portalHost: portal.portalHost,
+        loginUrl: portal.loginUrl || null,
+        label: portal.label || `${portal.portalHost} session`,
+      })
+      const url = resolveLiveLoginUrl(res)
+      if (!url) {
+        popup.fail?.("We couldn't open the secure login. Please try again.")
+        showErrorToast(toast, "Could not start the secure login", "No login window link was returned.")
+        return
+      }
+      popup.navigate?.(url)
+      refreshOnReturn.current = true
+      showSuccessToast(
+        toast,
+        `Signing in to ${portal.label || portal.portalHost}`,
+        `Sign in + clear 2FA in the new window on ${selectedProfile?.name || "this profile"}'s behalf, then close it. Hamilton captures the session so it's reused next time.`,
+      )
+    } catch (err) {
+      popup.fail?.(err?.message || "Could not start the secure login.")
+      showErrorToast(toast, "Could not start the secure login", err?.message || "Please try again.")
+    } finally {
+      setOpeningHost(null)
+    }
+  }
+
+  // "Open logins one at a time": open the FIRST portal still needing a login.
+  // Each click handles one; returning to the tab refetches and the queue shrinks.
+  const openNextLogin = () => {
+    const next = pending[0]
+    if (next) openPortalLogin(next)
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <UserCog className="h-5 w-5 text-primary" />
+            Portal Assist — sign in for a user
+          </CardTitle>
+          <CardDescription>
+            Pick any profile and do their portal logins for them through Hamilton&rsquo;s secure
+            side-by-side window — for a deadline-pressed applicant who can&rsquo;t get signed in.
+            You act as admin on their behalf; Hamilton watches and learns each login so it&rsquo;s
+            reused next time. Nothing is submitted — this only signs in.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Profile picker */}
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Search profiles by name or type…"
+                className="w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+
+            {profilesQuery.isLoading ? (
+              <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading profiles…
+              </div>
+            ) : profilesQuery.isError ? (
+              <p className="py-2 text-sm text-red-600">Could not load profiles. Try again.</p>
+            ) : (
+              <div className="max-h-56 overflow-y-auto rounded-md border border-border">
+                {filtered.length === 0 ? (
+                  <p className="p-3 text-sm text-muted-foreground">No profiles match “{filter}”.</p>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {filtered.map((p) => (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(p.id)}
+                          className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60 ${
+                            selectedId === p.id ? "bg-muted font-semibold" : ""
+                          }`}
+                        >
+                          <span className="truncate">{p.name}</span>
+                          <span className="flex items-center gap-2">
+                            {p.type && (
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+                                {p.type}
+                              </span>
+                            )}
+                            {selectedId === p.id && <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Guided "open each login" bar for the selected profile */}
+          {selectedProfile && (
+            <div className="rounded-lg border border-border bg-muted/40 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 font-semibold text-foreground">
+                    <ShieldCheck className="h-4 w-4 text-primary" />
+                    Assisting {selectedProfile.name}
+                  </p>
+                  {portalsQuery.isLoading ? (
+                    <p className="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading portals…
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      {portals.length} portal{portals.length === 1 ? "" : "s"} · {readyCount} signed in ·{" "}
+                      <span className={pending.length ? "font-semibold text-amber-600" : ""}>
+                        {pending.length} need{pending.length === 1 ? "s" : ""} login
+                      </span>
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => refetchPortals()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title="Refresh portal statuses"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${portalsQuery.isFetching ? "animate-spin" : ""}`} />
+                    Refresh
+                  </button>
+                  {pending.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={openNextLogin}
+                      disabled={Boolean(openingHost)}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      title={`Open the secure login for ${pending[0]?.label || pending[0]?.portalHost}`}
+                    >
+                      {openingHost ? <Loader2 className="h-4 w-4 animate-spin" /> : <PanelsTopLeft className="h-4 w-4" />}
+                      Open next login → {pending[0]?.label || pending[0]?.portalHost}
+                    </button>
+                  ) : (
+                    !portalsQuery.isLoading && (
+                      <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
+                        <CheckCircle2 className="h-4 w-4" /> All portals signed in
+                      </span>
+                    )
+                  )}
+                </div>
+              </div>
+              {pending.length > 1 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Browsers block opening every window at once, so this walks the {pending.length} remaining
+                  logins one at a time — sign in, close the window, and the next one is ready.
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Full per-profile portals dashboard for the selected profile — the same
+          card the user sees, giving the admin every action (per-portal login,
+          autopilot, packets, two-way sync) in addition to the guided bar above. */}
+      {selectedProfile && (
+        <ProfilePortalsCard profileId={selectedId} profileName={selectedProfile.name} />
+      )}
+    </div>
+  )
+}
