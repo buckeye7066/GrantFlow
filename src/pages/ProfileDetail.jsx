@@ -1710,6 +1710,7 @@ export default function ProfileDetail() {
               <div className="space-y-6">
                 <HealthResourcesCard
                   isOrganization={isOrgProfile}
+                  profileId={profileId}
                   state={studentState}
                   conditions={healthMedical?.conditions}
                   supportNeeds={healthMedical?.support_needs}

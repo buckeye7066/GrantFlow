@@ -1,10 +1,12 @@
 import React from "react"
-import { ExternalLink, FlaskConical, HeartPulse, Info, MapPin } from "lucide-react"
+import { ExternalLink, FlaskConical, HeartPulse, Info, Loader2, MapPin } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { useToast } from "@/components/ui/use-toast"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 
 function normalizeState(value) {
   const v = String(value || "").trim().toUpperCase()
@@ -33,8 +35,33 @@ function normalizeConditionNames(conditions) {
   return []
 }
 
-function PortalButton({ href, label }) {
+// With a profileId, resources open through Hamilton's WATCHED secure window
+// (session captured for the profile — see hamiltonWatchedOpen.js); without
+// one it stays a plain new-tab link. Popup must open inside the click gesture,
+// so openWithHamiltonWatching is called directly from onClick with no awaits.
+function PortalButton({ href, label, profileId }) {
+  const { toast } = useToast()
+  const [opening, setOpening] = React.useState(false)
   if (!href) return null
+  if (profileId) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="justify-start"
+        disabled={opening}
+        title={`Open ${label} with Hamilton watching`}
+        onClick={() => {
+          setOpening(true)
+          openWithHamiltonWatching({ profileId, url: href, label, toast }).finally(() => setOpening(false))
+        }}
+      >
+        {opening ? <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+        {label}
+      </Button>
+    )
+  }
   return (
     <Button asChild variant="outline" size="sm" className="justify-start">
       <a href={href} target="_blank" rel="noopener noreferrer">
@@ -45,7 +72,7 @@ function PortalButton({ href, label }) {
   )
 }
 
-function PortalSection({ title, icon: Icon, items, helper }) {
+function PortalSection({ title, icon: Icon, items, helper, profileId }) {
   if (!Array.isArray(items) || items.length === 0) return null
   return (
     <div className="space-y-2">
@@ -56,7 +83,7 @@ function PortalSection({ title, icon: Icon, items, helper }) {
       {helper ? <p className="text-xs text-slate-600">{helper}</p> : null}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((p) => (
-          <PortalButton key={`${p.label}-${p.href}`} href={p.href} label={p.label} />
+          <PortalButton key={`${p.label}-${p.href}`} href={p.href} label={p.label} profileId={profileId} />
         ))}
       </div>
     </div>
@@ -99,6 +126,7 @@ export default function HealthResourcesCard({
   onToggleStudyConsent,
   consentSaving = false,
   isOrganization = false,
+  profileId = null,
 }) {
   // Defense in depth: personal patient-assistance content (copay help, clinical
   // trials matched to "conditions in your medical profile") is for an individual
@@ -200,6 +228,7 @@ export default function HealthResourcesCard({
             title="Transportation to care"
             icon={MapPin}
             items={transportation}
+            profileId={profileId}
             helper={
               wantsTransport
                 ? "Based on your profile, transportation support appears relevant. These are informational resources."
@@ -211,6 +240,7 @@ export default function HealthResourcesCard({
             title="Financial assistance"
             icon={Info}
             items={financialAid}
+            profileId={profileId}
             helper="These organizations offer support programs (copay help, case management, or assistance navigation)."
           />
 
@@ -218,6 +248,7 @@ export default function HealthResourcesCard({
             title="Education resources"
             icon={Info}
             items={education}
+            profileId={profileId}
             helper="Reliable, non-commercial health education sources (informational only)."
           />
 
@@ -266,6 +297,7 @@ export default function HealthResourcesCard({
               title="Research opportunities (opted in)"
               icon={FlaskConical}
               items={research}
+              profileId={profileId}
               helper="Informational only. ClinicalTrials listings are external and eligibility is determined by study teams."
             />
           ) : null}

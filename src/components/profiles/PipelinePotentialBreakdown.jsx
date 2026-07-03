@@ -34,6 +34,8 @@ import { createPageUrl } from "@/utils"
 import PortalLoginButton from "@/components/portal/PortalLoginButton"
 import { safeHttpUrl } from "@/lib/safeUrl"
 import { Money } from "@/components/ui/Money"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
+import { useToast } from "@/components/ui/use-toast"
 
 // Stage label + tone, mirroring the pipeline board (KanbanBoard STATUSES) and
 // covering the legacy status names the backend still tracks. Anything unmapped
@@ -281,6 +283,7 @@ export default function PipelinePotentialBreakdown({
   labelClassName = "",
 }) {
   const [open, setOpen] = useState(false)
+  const { toast } = useToast()
 
   const query = useQuery({
     queryKey: ["pipeline-potential", profileId],
@@ -378,10 +381,16 @@ export default function PipelinePotentialBreakdown({
                             <a href={`mailto:${encodeURIComponent(item.contact_email)}`} className="text-indigo-600 hover:underline">{item.contact_email}</a>
                           )}
                           {item.contact_phone && <span>{item.contact_phone}</span>}
+                          {/* Watched open: Hamilton's secure window, never a bare tab. */}
                           {applyHref && (
-                            <a href={applyHref} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline inline-flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => openWithHamiltonWatching({ profileId, url: applyHref, label: item.title || item.funder, toast })}
+                              className="text-indigo-600 hover:underline inline-flex items-center gap-0.5"
+                              title="Open the application page with Hamilton watching"
+                            >
                               Apply <ExternalLink className="w-2.5 h-2.5" />
-                            </a>
+                            </button>
                           )}
                         </div>
                       )

@@ -57,6 +57,7 @@ import {
 import { deleteGrant } from "@/api/grants"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
 import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilton/liveLoginWindow"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { StatusDot } from "@/components/ui/StatusDot"
@@ -1017,10 +1018,20 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   Mark merged
                 </button>
               )}
+              {/* Watched open, never a bare tab: re-enter the portal through the
+                  same secure co-browse window so Hamilton sees the visit and
+                  keeps the captured session fresh. */}
               {!portal.supportsTwoWaySync && portal.loginUrl && (
-                <a className={BTN_BASE} href={portal.loginUrl} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="h-4 w-4" /> Open portal
-                </a>
+                <button
+                  type="button"
+                  className={BTN_BASE}
+                  disabled={isLoggingIn}
+                  onClick={() => startLogin(portal)}
+                  title="Open this portal in Hamilton's watched window"
+                >
+                  {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <ExternalLink className="h-4 w-4" />}
+                  Open portal
+                </button>
               )}
             </>
           ) : host ? (
@@ -1060,11 +1071,18 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               </button>
             </>
           ) : portal.loginUrl ? (
-            // Process/school tile we resolved a URL for but can't host-scope a
-            // login session: just open it in a new tab.
-            <a className={BTN_BASE} href={portal.loginUrl} target="_blank" rel="noopener noreferrer">
+            // Process/school tile with a URL but no pre-resolved portal host:
+            // openWithHamiltonWatching derives the host from the URL and runs
+            // the same watched co-browse (falls back to a direct open only if
+            // Hamilton can't start) — never a bare tab Hamilton can't see.
+            <button
+              type="button"
+              className={BTN_BASE}
+              onClick={() => openWithHamiltonWatching({ profileId, url: portal.loginUrl, label: portal.label, toast })}
+              title="Open with Hamilton watching"
+            >
               <ExternalLink className="h-4 w-4" /> Open
-            </a>
+            </button>
           ) : (
             // The student's own school with no resolved portal host/URL yet.
             // Instead of a dead-end note, let the owner paste the school's login
