@@ -33,6 +33,7 @@ import {
   enforceRelevanceFloor,
   enforceIndividualAmountCeiling,
   enforceStudentAidEligibility,
+  enforceProfileEligibility,
   enforceFunderBackfill,
   resolveIndividualAmountCeiling,
   enforceProfileScopedPipeline,
@@ -875,7 +876,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(13)
+    expect(summary.ran).toBe(14)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -886,6 +887,7 @@ describe('enforceInvariants — runner', () => {
       'relevance_floor',
       'individual_amount_ceiling',
       'student_aid_eligibility',
+      'profession_eligibility',
       'funder_backfill',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
@@ -1621,5 +1623,87 @@ describe('enforceFunderBackfill — grants.funder from linked catalog sponsor', 
     expect(result.ok).toBe(true)
     expect(result.repaired).toBe(0)
     expect(result.missingFunder).toBe(1)
+  })
+})
+
+// ── Profession-eligibility invariant ──────────────────────────────────────────
+import {
+  ensureApplicationTaskSchema,
+  _resetSchemaCache,
+} from '../services/hamilton/applicationTaskStore.js'
+
+describe('profession eligibility invariant', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    _resetSchemaCache()
+    await ensureApplicationTaskSchema(db) // real application_tasks/events schema
+  })
+
+  const insertTask = (id, profileId, grantId, status) =>
+    db.prepare('INSERT INTO application_tasks (id, profile_id, grant_id, status) VALUES (?, ?, ?, ?)')
+      .run(id, profileId, grantId, status)
+  const grantExists = (id) => Boolean(db.prepare('SELECT id FROM grants WHERE id = ?').get(id))
+  const taskStatus = (id) => db.prepare('SELECT status FROM application_tasks WHERE id = ?').get(id)?.status
+
+  it('cancels tasks + purges early-status grants for a profession mismatch, conservatively', async () => {
+    insertProfile(db, { id: 'p-para', orgId: 'o1', primaryType: 'student' })
+    insertProfile(db, { id: 'p-nurse', orgId: 'o1', primaryType: 'student' })
+    insertProfile(db, { id: 'p-unknown', orgId: 'o1', primaryType: 'individual' })
+
+    const nursingBad = insertGrant(db, { profile_id: 'p-para', title: 'Ohio Nurses Foundation — CE Scholarships', status: 'interested' })
+    const nursingProtected = insertGrant(db, { profile_id: 'p-para', title: 'Nursing & Healthcare Scholarship Resources', status: 'submitted' })
+    const relevant = insertGrant(db, { profile_id: 'p-para', title: 'Coca-Cola Scholars Foundation', status: 'interested' })
+    const nurseOk = insertGrant(db, { profile_id: 'p-nurse', title: 'Ohio Nurses Foundation — CE Scholarships', status: 'interested' })
+    const unknownNursing = insertGrant(db, { profile_id: 'p-unknown', title: 'Ohio Nurses Foundation — CE Scholarships', status: 'interested' })
+
+    insertTask('t-bad', 'p-para', nursingBad, 'blocked')
+    insertTask('t-prot', 'p-para', nursingProtected, 'waiting_for_review')
+    insertTask('t-rel', 'p-para', relevant, 'blocked')
+
+    const signals = { 'p-para': 'paramedic', 'p-nurse': 'nursing bsn', 'p-unknown': '' }
+    const res = await enforceProfileEligibility(db, { resolveSignals: (pid) => signals[pid] ?? '' })
+    expect(res.ok).toBe(true)
+    expect(res.enforced).toBe(true)
+
+    // Early-status nursing item for the paramedic → purged, task cancelled.
+    expect(grantExists(nursingBad)).toBe(false)
+    expect(taskStatus('t-bad')).toBe('cancelled')
+    // Protected (submitted) nursing grant → KEPT (never destroy user work), but its task cancelled.
+    expect(grantExists(nursingProtected)).toBe(true)
+    expect(taskStatus('t-prot')).toBe('cancelled')
+    // Relevant grant + its task → untouched.
+    expect(grantExists(relevant)).toBe(true)
+    expect(taskStatus('t-rel')).toBe('blocked')
+    // Nursing student's nursing grant → untouched (profession matches).
+    expect(grantExists(nurseOk)).toBe(true)
+    // Unknown-field profile → never touched.
+    expect(grantExists(unknownNursing)).toBe(true)
+
+    expect(res.tasksCancelled).toBe(2)
+    expect(res.repaired).toBe(1) // one grant purged
+  })
+
+  it('is idempotent (a second run repairs nothing)', async () => {
+    insertProfile(db, { id: 'p-para', orgId: 'o1' })
+    insertGrant(db, { profile_id: 'p-para', title: 'Ohio Nurses Foundation — CE', status: 'interested' })
+    const first = await enforceProfileEligibility(db, { resolveSignals: () => 'paramedic' })
+    const second = await enforceProfileEligibility(db, { resolveSignals: () => 'paramedic' })
+    expect(first.repaired).toBe(1)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('is count-only when ENFORCE_PROFESSION_ELIGIBILITY=0', async () => {
+    insertProfile(db, { id: 'p-para', orgId: 'o1' })
+    const bad = insertGrant(db, { profile_id: 'p-para', title: 'Ohio Nurses Foundation — CE', status: 'interested' })
+    process.env.ENFORCE_PROFESSION_ELIGIBILITY = '0'
+    try {
+      const res = await enforceProfileEligibility(db, { resolveSignals: () => 'paramedic' })
+      expect(res.enforced).toBe(false)
+      expect(res.scanned).toBeGreaterThan(0)
+      expect(grantExists(bad)).toBe(true)
+    } finally {
+      delete process.env.ENFORCE_PROFESSION_ELIGIBILITY
+    }
   })
 })

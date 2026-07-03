@@ -1806,6 +1806,55 @@ router.post('/from-opportunity', async (req, res, next) => {
       }
     }
 
+    // Profession-lock gate (first line of defense; the boot sweep
+    // enforceProfileEligibility is the net). Refuse to promote an opportunity
+    // LOCKED to a licensed profession the target profile does not practise —
+    // e.g. an "Ohio Nurses Foundation" scholarship into a PARAMEDIC student's
+    // pipeline. Conservative: only fires when BOTH the profile resolves to a
+    // recognised profession AND the opportunity's IDENTITY (title + funder) is
+    // locked to a DIFFERENT one. Non-fatal — any lookup failure falls through.
+    if (normalizedProfileId) {
+      try {
+        const {
+          professionSignalTextFromSections, resolveProfileProfessions,
+          opportunityLockText, assessProfessionEligibility,
+        } = await import('../services/eligibility/professionEligibility.js')
+        const secs = await req.db
+          .prepare("SELECT section_key, data FROM profile_sections WHERE profile_id = ? AND section_key IN ('basic_information','education','employment','career','professional')")
+          .all(normalizedProfileId)
+        const sectionsByKey = {}
+        for (const s of secs || []) sectionsByKey[s.section_key] = s.data
+        const professions = resolveProfileProfessions(professionSignalTextFromSections(sectionsByKey))
+        const professionVerdict = assessProfessionEligibility({
+          itemText: opportunityLockText(opportunity),
+          professions,
+        })
+        if (professionVerdict.ineligible) {
+          routeLogger.info('[grants/from-opportunity] blocked by profession-lock gate', {
+            requestId,
+            profile_id: normalizedProfileId,
+            opportunity_id: resolvedOpportunityId,
+            lock: professionVerdict.lock,
+          })
+          return res.status(400).json({
+            error: 'ineligible_for_profile',
+            message:
+              'This opportunity is restricted to a professional field that does not match the selected profile (for example, a nursing-only scholarship for a paramedic student).',
+            reason: professionVerdict.reason,
+            profession_lock: professionVerdict.lock,
+            opportunity_id: resolvedOpportunityId,
+            requestId,
+          })
+        }
+      } catch (profErr) {
+        routeLogger.warn('[grants/from-opportunity] profession-lock gate lookup failed', {
+          requestId,
+          profile_id: normalizedProfileId,
+          error: profErr?.message || String(profErr),
+        })
+      }
+    }
+
     // Guardrail: don't allow expired opportunities into pipelines.
     // Directory-style resources are allowed; rolling/ongoing deadlines are allowed.
     const stripOrdinalSuffixes = (value) => {

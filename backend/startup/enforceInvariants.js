@@ -2043,6 +2043,204 @@ export async function enforceFunderBackfill(db) {
 }
 
 /**
+ * INVARIANT: NO PROFESSION-INELIGIBLE OPPORTUNITY IN A PROFILE'S PIPELINE OR
+ * HAMILTON QUEUE (canonical_rules.md G4 — profile relevance / eligibility realism).
+ *
+ * THE BUG THIS CLOSES
+ * -------------------
+ * A Tennessee PARAMEDIC student (Robert) had his Hamilton "Needs your input"
+ * queue polluted with items locked to a DIFFERENT licensed profession — "Ohio
+ * Nurses Foundation — CE Scholarships", "Texas/Florida Nurses Foundation",
+ * "Nurse.org — Nursing Scholarships", "NASW — Social Work CE". They leaked in
+ * because a free-text employment note ("400 hours in skilled nursing facilities")
+ * seeded a "nursing scholarships" open-web search, and NOTHING hard-gates an
+ * opportunity restricted to a profession the applicant does not practise:
+ *   - the scorer applies only SOFT penalties;
+ *   - the pipeline-insert gate (applicantTypeGate) only knows individual/org/
+ *     business — not occupation;
+ *   - these rows carry match_score IS NULL (doctrine-protected), so the relevance
+ *     floor never touches them.
+ * Each pipeline grant spawns an application_tasks row, which is exactly the
+ * "… — needs your input" item the owner reads in HamiltonWorkPanel.
+ *
+ * THE RULE (high-precision, reuses the shared predicate — no drift)
+ * ----------------------------------------------------------------
+ * professionEligibility.js decides, per (profile, grant), whether the grant is
+ * LOCKED to a recognised licensed profession the profile does NOT practise. It is
+ * deliberately conservative: it resolves the profile's profession ONLY from
+ * CURATED identity fields (intended major / field of study / career goal /
+ * occupation — never free-text experience) and the opportunity lock ONLY from its
+ * IDENTITY (title + funder — never description). It NEVER rejects when the
+ * profile's field is unknown or when the profile already practises the locked
+ * profession. Dry-run over ALL production grants flagged only the true positives.
+ *
+ * REPAIR
+ * ------
+ *   - CANCEL every non-terminal application_task for an ineligible (profile,
+ *     grant) — this is what removes the item from the Hamilton "needs your input"
+ *     queue, regardless of the grant's pipeline status.
+ *   - PURGE the grant itself ONLY when it is in an early/discovery status
+ *     (PURGEABLE_DISCOVERY_STATUSES or NULL) — recording a sticky-delete tombstone
+ *     first so it stays gone. A protected/user-progressed grant is NEVER deleted;
+ *     it is only marked eligibility_status='ineligible' for audit (its task is
+ *     still cancelled). MTSU/portal names and recorded awards (amount_awarded > 0)
+ *     are never touched.
+ *
+ * OVERRIDE: ON by default. Set ENFORCE_PROFESSION_ELIGIBILITY=0 for count-only
+ * (no writes). Idempotent: a purged grant is gone and a cancelled task is
+ * terminal, so a re-run is a no-op.
+ */
+const TERMINAL_TASK_STATUSES = Object.freeze([
+  'submitted', 'completed', 'complete', 'done',
+  'cancelled', 'canceled', 'archived', 'rejected', 'closed',
+])
+
+export async function enforceProfileEligibility(db, { resolveSignals = null } = {}) {
+  return runInvariant('profession_eligibility', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('title') || !grantCols.has('profile_id') || !grantCols.has('status')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+
+    // Lazy imports (same pattern as enforceStudentAidEligibility) so a boot-time
+    // module cycle can't abort the sweep and the SAME predicate the write-path
+    // gate uses is reused here (no re-encoding → no drift).
+    let professionSignalTextFromSections, resolveProfileProfessions, opportunityLockText, assessProfessionEligibility
+    let cancelApplicationTask = null
+    let recordDismissalFn = null
+    try {
+      ;({
+        professionSignalTextFromSections, resolveProfileProfessions,
+        opportunityLockText, assessProfessionEligibility,
+      } = await import('../services/eligibility/professionEligibility.js'))
+    } catch (err) {
+      log.warn('profession_eligibility: predicate unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    try { ({ cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')) } catch { cancelApplicationTask = null }
+    try { ({ recordDismissal: recordDismissalFn } = await import('../services/pipelineDismissals.js')) } catch { recordDismissalFn = null }
+
+    const hasFunder = grantCols.has('funder')
+    const hasAwarded = grantCols.has('amount_awarded')
+    const hasEligStatus = grantCols.has('eligibility_status')
+
+    const rows = await db
+      .prepare(
+        `SELECT id, profile_id, title, ${hasFunder ? 'funder' : 'NULL AS funder'}, status${hasAwarded ? ', amount_awarded' : ''}
+           FROM grants WHERE profile_id IS NOT NULL AND title IS NOT NULL`,
+      )
+      .all()
+    if (!rows || rows.length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const byProfile = new Map()
+    for (const r of rows) {
+      if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+      byProfile.get(r.profile_id).push(r)
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_PROFESSION_ELIGIBILITY) === false
+    // Does application_tasks exist? (cancel is a no-op on a minimal test DB.)
+    let hasTasks = false
+    try { await db.prepare('SELECT id FROM application_tasks LIMIT 1').get(); hasTasks = true } catch { hasTasks = false }
+
+    // Resolve a profile's professions from its curated section fields. Injectable
+    // for tests via resolveSignals(profileId) → signal text.
+    async function professionsFor(profileId) {
+      if (typeof resolveSignals === 'function') {
+        return resolveProfileProfessions(await resolveSignals(profileId))
+      }
+      let sectionsByKey = {}
+      try {
+        const secs = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+        for (const s of secs || []) sectionsByKey[s.section_key] = s.data
+      } catch { sectionsByKey = {} }
+      return resolveProfileProfessions(professionSignalTextFromSections(sectionsByKey))
+    }
+
+    async function cancelTasksForGrant(profileId, grantId, reason) {
+      if (!hasTasks || !cancelApplicationTask) return 0
+      let taskRows = []
+      try {
+        const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+        taskRows = await db
+          .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
+          .all(profileId, grantId, ...TERMINAL_TASK_STATUSES)
+      } catch { taskRows = [] }
+      let n = 0
+      for (const t of taskRows || []) {
+        try {
+          await cancelApplicationTask(db, t.id, { actorRole: 'system', reason })
+          n += 1
+        } catch (err) {
+          log.warn('profession_eligibility: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
+        }
+      }
+      return n
+    }
+
+    let scanned = 0
+    let grantsPurged = 0
+    let tasksCancelled = 0
+    const affectedProfiles = new Set()
+
+    for (const [profileId, grants] of byProfile) {
+      let professions
+      try { professions = await professionsFor(profileId) } catch { professions = new Set() }
+      // Field unknown / not a recognised profession → never touch this profile.
+      if (!professions || professions.size === 0) continue
+
+      for (const g of grants) {
+        const verdict = assessProfessionEligibility({ itemText: opportunityLockText(g), professions })
+        if (!verdict.ineligible) continue
+        scanned += 1
+        if (disabled) continue
+
+        // 1) Clear the Hamilton queue: cancel this grant's non-terminal tasks.
+        tasksCancelled += await cancelTasksForGrant(profileId, g.id, `Ineligible for this profile — ${verdict.reason}`)
+
+        // 2) Purge the grant only when it's early/discovery + safe to remove.
+        const status = g.status === null || g.status === undefined ? null : String(g.status)
+        const isEarly = status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
+        const protectedName = PROTECTED_NAME_PATTERN.test(`${g.title ?? ''} ${g.funder ?? ''}`)
+        const hasAward = hasAwarded && Number(g.amount_awarded) > 0
+
+        if (isEarly && !protectedName && !hasAward) {
+          if (recordDismissalFn) {
+            try { await recordDismissalFn(db, { profileId, grantRow: g, reason: `profession_eligibility: ${verdict.reason}` }) } catch { /* tombstone best-effort */ }
+          }
+          try {
+            const res = await db.prepare('DELETE FROM grants WHERE id = ?').run(g.id)
+            grantsPurged += changesOf(res) || 1
+          } catch (err) {
+            log.warn('profession_eligibility: grant delete failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+          }
+        } else if (hasEligStatus) {
+          // Protected/awarded → keep the row (never destroy user work) but mark it.
+          try { await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', g.id) } catch { /* audit-only */ }
+        }
+        affectedProfiles.add(profileId)
+      }
+    }
+
+    if (disabled) {
+      if (scanned > 0) {
+        log.warn('profession-mismatched pipeline items present (repair DISABLED via ENFORCE_PROFESSION_ELIGIBILITY=0)', {
+          scanned, profilesAffected: affectedProfiles.size,
+        })
+      }
+      return { scanned, repaired: 0, enforced: false, tasksCancelled: 0, profilesAffected: affectedProfiles.size }
+    }
+
+    if (grantsPurged > 0 || tasksCancelled > 0) {
+      log.info('profession_eligibility: removed profession-mismatched items from pipelines + Hamilton queue', {
+        grantsPurged, tasksCancelled, profilesAffected: affectedProfiles.size,
+      })
+    }
+    return { scanned, repaired: grantsPurged, tasksCancelled, enforced: true, profilesAffected: affectedProfiles.size }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -2080,6 +2278,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
   // Operates on profile_opportunity_matches, so it complements the grants sweeps.
   steps.push(await enforceStudentAidEligibility(db))
+  // Profession-eligibility net: cancel the Hamilton tasks + purge the early-status
+  // grants for opportunities LOCKED to a profession the profile does not practise
+  // (e.g. a nursing scholarship in a paramedic student's pipeline). Reuses the
+  // shared professionEligibility predicate; conservative (never touches a profile
+  // whose field is unknown, or a profession the profile actually practises).
+  steps.push(await enforceProfileEligibility(db))
   // Pipeline DATA repair: re-copy the funder's name from the linked catalog row
   // (sponsor→funder) wherever naming drift left grants.funder empty; count the
   // un-derivable remainder for observability. Runs after the purge sweeps so it
@@ -2145,6 +2349,7 @@ export const __testables = {
   enforceProfileIncomeReconciliation,
   enforceIndividualAmountCeiling,
   enforceStudentAidEligibility,
+  enforceProfileEligibility,
   enforceFunderBackfill,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
