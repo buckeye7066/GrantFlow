@@ -1,8 +1,10 @@
 import React from "react"
-import { KeyRound, ExternalLink, LogIn, Search } from "lucide-react"
+import { KeyRound, ExternalLink, LogIn, Search, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createPageUrl } from "@/utils"
 import { safeHttpUrl, hostFromUrl } from "@/lib/safeUrl"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
+import { useToast } from "@/components/ui/use-toast"
 
 // When we have no portal/login URL on file but we DO know the school / funding
 // source name, build a web search for its login page so the control is never a
@@ -23,9 +25,11 @@ function loginSearchUrl(name) {
  * uses is always one click away, not buried.
  *
  * Two actions:
- *   1. "Log in to portal" — opens the scheme-validated URL in a new tab. When
- *      there is no valid http(s) URL we render a subtle disabled state instead
- *      of a broken link.
+ *   1. "Log in to portal" — with a profileId, opens the portal through
+ *      Hamilton's WATCHED secure window (cloud-login co-browse, session
+ *      captured for the profile — see hamiltonWatchedOpen.js); without one it
+ *      falls back to a plain new tab. When there is no valid http(s) URL we
+ *      render a subtle disabled state instead of a broken link.
  *   2. "Save login for Hamilton" — deep-links to the profile's Pipeline tab
  *      with ?addLogin=<host>&loginUrl=<url> so SavedLoginsCard opens its
  *      Add-Login dialog pre-filled. Requires a profileId; hidden without one.
@@ -51,11 +55,27 @@ export default function PortalLoginButton({
   // un-clickable "No portal link" button. Pass it everywhere a name is known.
   searchName = "",
 }) {
+  const { toast } = useToast()
+  const [opening, setOpening] = React.useState(false)
   const href = safeHttpUrl(url)
   const host = hostFromUrl(url)
   const canSaveLogin = Boolean(profileId) && Boolean(host)
   // Fallback target when no real URL is on file but we know the name.
   const searchHref = href ? null : loginSearchUrl(searchName)
+
+  // With a profile in scope, opening the portal MUST go through Hamilton's
+  // watched window — never a bare tab Hamilton can't see. Popup opens inside
+  // this gesture (first line of the helper), so no awaits before the call.
+  const openWatched = (e) => {
+    e.stopPropagation()
+    setOpening(true)
+    openWithHamiltonWatching({
+      profileId,
+      url: href,
+      label: searchName || host,
+      toast,
+    }).finally(() => setOpening(false))
+  }
 
   // Plain anchor (not useNavigate) so this control works in ANY render context
   // — including the many card surfaces and tests that aren't wrapped in a
@@ -72,7 +92,20 @@ export default function PortalLoginButton({
 
   return (
     <div className={`inline-flex items-center gap-1 ${className}`} data-portal-login>
-      {href ? (
+      {href && profileId ? (
+        <Button
+          type="button"
+          variant={variant}
+          size={size}
+          className="gap-1.5"
+          disabled={opening}
+          onClick={openWatched}
+          title="Open this portal in Hamilton's watched window — he learns the login so it's automatic next time"
+        >
+          {opening ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <LogIn className="h-3.5 w-3.5" />}
+          {label}
+        </Button>
+      ) : href ? (
         <Button
           asChild
           variant={variant}

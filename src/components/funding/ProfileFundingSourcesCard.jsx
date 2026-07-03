@@ -18,8 +18,10 @@
 import React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { listProfileFundingSources } from "@/api/matching"
-import { ExternalLink } from "lucide-react"
+import { ExternalLink, Loader2 } from "lucide-react"
 import { safeHttpUrl } from "@/lib/safeUrl"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
+import { useToast } from "@/components/ui/use-toast"
 
 function fmtAmount(min, max) {
   const f = (n) => `$${Number(n).toLocaleString()}`
@@ -29,16 +31,28 @@ function fmtAmount(min, max) {
   return null
 }
 
-function SourceRow({ s }) {
+function SourceRow({ s, profileId }) {
+  const { toast } = useToast()
+  const [opening, setOpening] = React.useState(false)
   const amount = fmtAmount(s.amount_min, s.amount_max)
   const href = safeHttpUrl(s.url)
-  const RowTag = href ? "a" : "div"
+  // Opening a source is a WATCHED open: Hamilton's secure co-browse window, so
+  // he sees the portal and captures/learns the session for this profile —
+  // never a bare tab. The popup opens inside this click gesture (first line of
+  // openWithHamiltonWatching), so no awaits may come before the call.
+  const openSource = () => {
+    if (!href || opening) return
+    setOpening(true)
+    openWithHamiltonWatching({ profileId, url: href, label: s.title, toast })
+      .finally(() => setOpening(false))
+  }
+  const RowTag = href ? "button" : "div"
   return (
     <li className="rounded-lg border border-slate-200 transition hover:border-blue-200 hover:bg-blue-50/40">
       <RowTag
-        {...(href ? { href, target: "_blank", rel: "noopener noreferrer" } : {})}
-        className="flex items-start justify-between gap-3 p-3 text-left"
-        title={href ? `Open ${s.title}` : "No usable URL saved for this source yet"}
+        {...(href ? { type: "button", onClick: openSource, disabled: opening } : {})}
+        className="flex w-full items-start justify-between gap-3 p-3 text-left"
+        title={href ? `Open ${s.title} with Hamilton watching` : "No usable URL saved for this source yet"}
       >
       <div className="min-w-0">
         <div className="flex items-start gap-2">
@@ -58,7 +72,7 @@ function SourceRow({ s }) {
         {s.is_rolling ? <span className="text-slate-500">Rolling</span> : s.deadline ? <span className="text-slate-500">{s.deadline}</span> : null}
         {href ? (
           <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-white px-2 py-1 font-medium text-blue-700">
-            Open <ExternalLink className="h-3 w-3" />
+            Open {opening ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" /> : <ExternalLink className="h-3 w-3" />}
           </span>
         ) : (
           <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-slate-500">No URL</span>
@@ -69,7 +83,7 @@ function SourceRow({ s }) {
   )
 }
 
-function Group({ title, hint, items }) {
+function Group({ title, hint, items, profileId }) {
   if (!items?.length) return null
   return (
     <section className="mt-4">
@@ -78,7 +92,7 @@ function Group({ title, hint, items }) {
       </h4>
       {hint ? <p className="mb-2 text-xs text-slate-500">{hint}</p> : null}
       <ul className="space-y-2">
-        {items.map((s) => <SourceRow key={s.id} s={s} />)}
+        {items.map((s) => <SourceRow key={s.id} s={s} profileId={profileId} />)}
       </ul>
     </section>
   )
@@ -111,9 +125,9 @@ export default function ProfileFundingSourcesCard({ profileId }) {
         </p>
       ) : (
         <>
-          <Group title="Best matches" hint="Apply-now opportunities that fit this profile." items={data.best_matches} />
-          <Group title="Worth reviewing" hint="Plausible fits to confirm before applying." items={data.worth_reviewing} />
-          <Group title="Directories to search" hint="Places to look — not a single apply-now grant." items={data.directories} />
+          <Group title="Best matches" hint="Apply-now opportunities that fit this profile." items={data.best_matches} profileId={profileId} />
+          <Group title="Worth reviewing" hint="Plausible fits to confirm before applying." items={data.worth_reviewing} profileId={profileId} />
+          <Group title="Directories to search" hint="Places to look — not a single apply-now grant." items={data.directories} profileId={profileId} />
           {data.geo_stubs_hidden ? (
             <p className="mt-3 text-[11px] text-slate-400">{data.geo_stubs_hidden} low-quality “near you” stub(s) hidden.</p>
           ) : null}

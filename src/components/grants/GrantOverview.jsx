@@ -13,6 +13,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
 import { formatReasonText } from '@/utils/reasonText';
 import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
+import { openWithHamiltonWatching } from '@/components/hamilton/hamiltonWatchedOpen';
 
 const StatCard = ({ icon: Icon, label, value, color }) => (
     <div className="flex flex-col p-4 rounded-lg bg-slate-50 border border-slate-200">
@@ -86,6 +87,13 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
     const [showContactNotes, setShowContactNotes] = useState(false);
     const [contactNotes, setContactNotes] = useState(grant?.contact_notes || '');
     const { profiles, activeProfileId } = useAuthStore();
+
+    // Portal/apply links open through Hamilton's WATCHED secure window (see
+    // hamiltonWatchedOpen.js) bound to this grant's profile — never a bare tab.
+    // Called directly from onClick: the popup must be claimed in the gesture.
+    const grantProfileId = grant?.profile_id || activeProfileId || null;
+    const openApplyWatched = (url) =>
+        openWithHamiltonWatching({ profileId: grantProfileId, url, label: grant?.title, toast });
 
     // Keep local contactNotes in sync when the grant changes (navigation/refetch).
     // useState only reads its initial argument on first mount, so without this the
@@ -526,7 +534,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
   const applyUrl = grant.application_url || grant.url;
   const isValidUrl = typeof applyUrl === 'string' && /^https?:\/\//i.test(applyUrl);
   return isValidUrl
-    ? <a href={applyUrl} target="_blank" rel="noopener noreferrer" className="underline font-semibold">{applyUrl}</a>
+    ? <button type="button" onClick={() => openApplyWatched(applyUrl)} title="Open with Hamilton watching" className="underline font-semibold break-all text-left">{applyUrl}</button>
     : <span className="text-slate-500 italic">URL not available</span>;
 })()}
                                     </div>
@@ -563,7 +571,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                               const portalUrl = grant.application_url || grant.url;
                               const isValid = typeof portalUrl === 'string' && /^https?:\/\//i.test(portalUrl) && !['N/A', 'TBD', 'n/a', 'tbd'].includes(portalUrl.trim());
                               return isValid
-                                ? <a href={portalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-sm truncate max-w-md">{portalUrl}</a>
+                                ? <button type="button" onClick={() => openApplyWatched(portalUrl)} title="Open with Hamilton watching" className="text-blue-600 hover:underline text-sm truncate max-w-md text-left">{portalUrl}</button>
                                 : <span className="text-slate-500 italic text-sm">No application link available</span>;
                             })()}
                         </div>

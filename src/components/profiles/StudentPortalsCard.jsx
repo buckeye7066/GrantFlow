@@ -37,6 +37,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
 import HamiltonPortalsPanel from "@/components/hamilton/HamiltonPortalsPanel"
+import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 
 const PORTAL_CHECK_REFRESH_DELAY_MS = 10_000
 
@@ -84,8 +85,33 @@ function extractAwardAmount(resultsJson) {
   }
 }
 
-function PortalButton({ href, label }) {
+// With a profileId, portals open through Hamilton's WATCHED secure window
+// (session captured for the profile — see hamiltonWatchedOpen.js); without
+// one it stays a plain new-tab link. Popup must open inside the click gesture,
+// so openWithHamiltonWatching is called directly from onClick with no awaits.
+function PortalButton({ href, label, profileId }) {
+  const { toast } = useToast()
+  const [opening, setOpening] = useState(false)
   if (!href) return null
+  if (profileId) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="justify-start"
+        disabled={opening}
+        title={`Open ${label} with Hamilton watching`}
+        onClick={() => {
+          setOpening(true)
+          openWithHamiltonWatching({ profileId, url: href, label, toast }).finally(() => setOpening(false))
+        }}
+      >
+        {opening ? <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+        {label}
+      </Button>
+    )
+  }
   return (
     <Button asChild variant="outline" size="sm" className="justify-start">
       <a href={href} target="_blank" rel="noopener noreferrer">
@@ -96,14 +122,14 @@ function PortalButton({ href, label }) {
   )
 }
 
-function PortalSection({ title, items }) {
+function PortalSection({ title, items, profileId }) {
   if (!Array.isArray(items) || items.length === 0) return null
   return (
     <div className="space-y-2">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((p) => (
-          <PortalButton key={p.label} href={p.href} label={p.label} />
+          <PortalButton key={p.label} href={p.href} label={p.label} profileId={profileId} />
         ))}
       </div>
     </div>
@@ -824,9 +850,9 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
           </div>
         )}
         <div className="space-y-5">
-          <PortalSection title="Admissions + financial aid" items={admissionsAndAid} />
-          <PortalSection title="Standardized testing" items={standardizedTesting} />
-          <PortalSection title="Licensure + certification" items={licensureAndCertification} />
+          <PortalSection title="Admissions + financial aid" items={admissionsAndAid} profileId={profileId} />
+          <PortalSection title="Standardized testing" items={standardizedTesting} profileId={profileId} />
+          <PortalSection title="Licensure + certification" items={licensureAndCertification} profileId={profileId} />
         </div>
         <p className="text-xs text-slate-500">
           Tip: keep these logins handy. Add each university&apos;s direct application, portal, and fee/payment links inside the
