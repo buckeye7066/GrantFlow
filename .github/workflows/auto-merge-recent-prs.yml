@@ -55,10 +55,17 @@ jobs:
 
           echo "Looking for PRs updated since: $SINCE_DATE"
 
-          # Get all open PRs updated in the last N hours
+          # Get all open PRs updated in the last N hours.
+          #
+          # Deliberately do NOT request statusCheckRollup here: that GraphQL
+          # query traverses checkSuite.workflowRun nodes owned by foreign
+          # GitHub Apps (e.g. Vercel), which the default GITHUB_TOKEN cannot
+          # read, and the whole listing dies with "GraphQL: Resource not
+          # accessible by integration". Check status is resolved per-PR in the
+          # processing step below via mergeStateStatus instead.
           gh pr list \
             --state open \
-            --json number,title,updatedAt,headRefName,mergeable,statusCheckRollup,labels \
+            --json number,title,updatedAt,headRefName,mergeable,labels \
             --jq "[.[] | select(.updatedAt >= \"$SINCE_DATE\")]" > recent_prs.json
 
           cat recent_prs.json
@@ -104,33 +111,31 @@ jobs:
               continue
             fi
 
-            # Check CI status
-            STATUS_CHECKS=$(echo "$pr" | jq -r '.statusCheckRollup // [] | map(select(.conclusion != null)) | map(.conclusion) | join(",")')
+            # Check CI / branch-protection status per PR via mergeStateStatus.
+            #
+            # Do NOT use statusCheckRollup for this: reading it via GraphQL
+            # traverses checkSuite.workflowRun nodes owned by foreign GitHub
+            # Apps (e.g. Vercel), which the default GITHUB_TOKEN cannot read
+            # ("GraphQL: Resource not accessible by integration").
+            # mergeStateStatus is a plain computed field on the PR — always
+            # readable — and it is STRICTER-or-equal to the old rollup logic:
+            #
+            #   CLEAN     = every branch-protection requirement on main is
+            #               satisfied, including the required "test" and
+            #               "postgres-migrations" checks being PRESENT and
+            #               SUCCESSFUL, and no reported check is failing,
+            #               cancelled, timed out, or still pending.
+            #   BLOCKED   = required checks failing/pending/never reported.
+            #   UNSTABLE  = some non-required check failing or pending.
+            #   BEHIND/DIRTY/DRAFT/UNKNOWN = not ready.
+            #
+            # So a cancelled CodeQL run, a check that never reported on the
+            # head SHA, or an in-progress check still cannot qualify a PR for
+            # auto-merge. (HAS_HOOKS is the GHES equivalent of CLEAN.)
+            MERGE_STATE=$(gh pr view "$PR_NUMBER" --json mergeStateStatus --jq '.mergeStateStatus')
 
-            # CANCELLED and TIMED_OUT are NOT passes — a cancelled CodeQL run
-            # (e.g. its job timeout) must not qualify a PR for auto-merge.
-            if echo "$STATUS_CHECKS" | grep -qE "FAILURE|CANCELLED|TIMED_OUT"; then
-              echo "❌ PR #$PR_NUMBER has failing/cancelled checks. Skipping."
-              SKIP_COUNT=$((SKIP_COUNT + 1))
-              continue
-            fi
-
-            # Check if all required checks have passed
-            PENDING_CHECKS=$(echo "$pr" | jq -r '.statusCheckRollup // [] | map(select(.status == "IN_PROGRESS" or .status == "QUEUED")) | length')
-            if [ "$PENDING_CHECKS" -gt 0 ]; then
-              echo "⏳ PR #$PR_NUMBER has $PENDING_CHECKS pending checks. Skipping for now."
-              SKIP_COUNT=$((SKIP_COUNT + 1))
-              continue
-            fi
-
-            # An empty/absent check rollup is a FAILURE, not a pass: the required
-            # contexts ("test" and "postgres-migrations", per branch protection on
-            # main) must each be PRESENT and SUCCESSFUL before this workflow will
-            # queue a merge. Guards against checks that never reported (e.g. CI
-            # never triggered on the head SHA).
-            REQUIRED_GREEN=$(echo "$pr" | jq -r '[.statusCheckRollup // [] | .[] | select((.name // .context) == "test" or (.name // .context) == "postgres-migrations") | select((.conclusion // .state // "") == "SUCCESS")] | map(.name // .context) | unique | length')
-            if [ "$REQUIRED_GREEN" -lt 2 ]; then
-              echo "❌ PR #$PR_NUMBER is missing successful required checks (test + postgres-migrations green: $REQUIRED_GREEN/2). Skipping."
+            if [ "$MERGE_STATE" != "CLEAN" ] && [ "$MERGE_STATE" != "HAS_HOOKS" ]; then
+              echo "❌ PR #$PR_NUMBER checks are not all green/reported (mergeStateStatus: $MERGE_STATE). Skipping."
               SKIP_COUNT=$((SKIP_COUNT + 1))
               continue
             fi

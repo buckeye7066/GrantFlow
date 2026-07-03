@@ -12,6 +12,13 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./vitest.setup.js"],
     environment: "node",
+    // Integration suites boot the app via testServer.getAppAndDb(), whose
+    // `import("../server.js")` pulls in the full route/service graph. On slower
+    // machines (Windows FS, cold module cache) that first import alone can take
+    // 10s+, tripping Vitest's DEFAULT 10s hookTimeout in beforeAll — a known
+    // intermittent flake class (see the comment in backend/tests/testServer.js).
+    // 30s keeps genuine hangs caught while giving the one-time boot headroom.
+    hookTimeout: 30000,
     // Runner ownership is split by extension to keep the two test runners on
     // disjoint file sets:
     //   - `tests/unit/**/*.test.mjs` are node:test suites (import { test } from
