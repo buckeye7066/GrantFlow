@@ -42,6 +42,7 @@ import { verifyAlias } from './johnAliasVerifier.js'
 import { createOutlookProvider } from './johnOutlookProvider.js'
 import { makeSuppressionChecker } from './johnSuppressionService.js'
 import { reconcileDeletedDrafts } from './johnDraftReconcile.js'
+import { reconcileBouncedDrafts } from './johnBounceReconcile.js'
 
 function normalizeMode(mode) {
   const m = String(mode || '').trim().toLowerCase()
@@ -151,6 +152,15 @@ export async function runJohn({
         summary.drafts_reconciled_deleted = rec.reconciled || 0
       } catch (err) {
         logger?.warn?.('[John] draft reconcile failed (non-fatal)', { error: err?.message })
+      }
+      // Learn from bounces: scan recent NDRs, suppress the failed addresses
+      // (never draft to them again) and archive their draft rows as bounced.
+      // Same best-effort contract as the deleted-draft reconcile above.
+      try {
+        const bounce = await reconcileBouncedDrafts({ db, provider: pInst, logger })
+        summary.bounce_reconcile = bounce
+      } catch (err) {
+        logger?.warn?.('[John] bounce reconcile failed (non-fatal)', { error: err?.message })
       }
     }
 
