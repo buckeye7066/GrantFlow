@@ -423,9 +423,19 @@ async function detectGate(page) {
   // 2FA / OTP heuristics.
   const hasOtp = await page.$('input[autocomplete*="one-time-code"], input[name*="otp"], input[name*="2fa"]').catch(() => null)
   if (hasOtp) return { kind: '2fa', detail: 'One-time code input visible' }
-  // CAPTCHA heuristics.
-  const hasCaptcha = await page.$('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], div.g-recaptcha, div[class*="captcha" i]').catch(() => null)
-  if (hasCaptcha) return { kind: 'captcha', detail: 'CAPTCHA challenge present' }
+  // CAPTCHA heuristics — vendor-agnostic on purpose (owner: "if the captcha
+  // changes every time, can he evolve with it?"). Covers reCAPTCHA, hCaptcha,
+  // Cloudflare Turnstile/managed challenges, FunCaptcha/Arkose, and the
+  // generic signatures most custom widgets share (a data-sitekey attribute or
+  // "captcha"/"challenge" in the element class/id/iframe URL/title) — so a
+  // NEW vendor still classifies as a captcha gate instead of dead-ending as
+  // no_progress/validation.
+  const hasCaptcha = await page.$(
+    'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], iframe[src*="challenges.cloudflare.com"], ' +
+    'iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], iframe[src*="captcha" i], iframe[title*="challenge" i], iframe[title*="captcha" i], ' +
+    'div.g-recaptcha, div.h-captcha, div.cf-turnstile, [data-sitekey], div[class*="captcha" i], div[id*="captcha" i]',
+  ).catch(() => null)
+  if (hasCaptcha) return { kind: 'captcha', detail: 'CAPTCHA / human-verification challenge present' }
   // Payment.
   const hasPayment = await page.$('input[autocomplete="cc-number"], iframe[src*="stripe.com"], iframe[src*="braintree"]').catch(() => null)
   if (hasPayment) return { kind: 'payment', detail: 'Payment widget visible' }
