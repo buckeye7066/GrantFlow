@@ -90,7 +90,9 @@ const TEXT_RULES = Object.freeze([
   // match generic auth text before SSO is detected.
   { rx: /\b(shibboleth|cas\b|sso\b|single\s*sign[-\s]*on|university\s*login|school\s*login|google\s*sign[-\s]*in|microsoft\s*login|clever\s*login|sign\s*in\s*with\s*google|sign\s*in\s*with\s*microsoft)\b/i, category: 'sso_required' },
   { rx: /\b(2fa|two[-\s]*factor|multi[-\s]*factor|otp\b|one[-\s]*time\s*code|authenticator|verification\s*code|push\s*notification|hardware\s*key|security\s*key|sms\s*code|email\s*code)\b/i, category: 'two_factor_required' },
-  { rx: /\b(g[-\s]?recaptcha|recaptcha|hcaptcha|captcha|i'?m\s*not\s*a\s*robot|cloudflare\s*challenge|bot\s*challenge|prove\s*you'?re\s*human|image\s*puzzle)\b/i, category: 'captcha_required' },
+  // Vendor-agnostic (owner: captchas change; detection must generalize):
+  // named vendors + the phrasings human-verification widgets share.
+  { rx: /\b(g[-\s]?recaptcha|recaptcha|hcaptcha|captcha|turnstile|funcaptcha|arkose|i'?m\s*not\s*a\s*robot|cloudflare\s*challenge|bot\s*challenge|prove\s*(that\s*)?you'?re\s*(a\s*)?human|verify\s*(that\s*)?you\s*are\s*(a\s*)?human|checking\s*your\s*browser|image\s*puzzle|slide\s*to\s*verify|select\s*all\s*(the\s*)?(images|squares)|challenge[-\s]platform)\b/i, category: 'captcha_required' },
   { rx: /\b(application\s*fee|transcript\s*fee|portal\s*fee|test\s*score\s*send\s*fee|submission\s*fee|processing\s*fee|payment\s*required|fee\s*of|\$[0-9]+\.\d{2})\b/i, category: 'payment_required' },
   { rx: /\b(wet\s*signature|hand[-\s]*written\s*signature|notarized?|signed\s*in\s*ink|original\s*signature|sign\s*and\s*mail)\b/i, category: 'wet_signature_required' },
   // Digital/e-signature must be checked BEFORE attestation: it's a signature

@@ -63,7 +63,8 @@ import {
   markCredentialUsed,
   registrableDomain,
 } from './hamiltonPortalCredentialService.js'
-import { findValidSession, getSessionStorageState, importSession } from './hamiltonCredentialSessionService.js'
+import { findValidSession, getSessionStorageState, importSession, markSessionExpired } from './hamiltonCredentialSessionService.js'
+import { createCaptureRequest } from './hamiltonSessionCaptureRequests.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
 import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
@@ -1072,11 +1073,16 @@ async function runAutopilotPathway(db, {
   // every profile + every school (MTSU, Cleveland State, …). Decrypted in
   // memory and passed straight to Playwright; never logged or returned.
   let storageState = null
+  // Remember WHICH saved session the run used: if the portal still throws a
+  // login/2FA gate with it, that row is behaviorally dead (revoked server-side
+  // or single-login) and must be expired so readiness stops calling it ready.
+  let usedSessionId = null
   if (authorizations.use_saved_session) {
     try {
       const saved = await findValidSession(db, { profileId: task.profile_id, portalHost: url })
       if (saved?.has_storage_state) {
         storageState = await getSessionStorageState(db, saved.id)
+        usedSessionId = saved.id
       }
     } catch { storageState = null }
   }
@@ -1361,6 +1367,35 @@ async function runAutopilotPathway(db, {
     const plan = isAuthBlocker(engineResult.blocker_kind)
       ? planAuthBackup({ blockerKind: engineResult.blocker_kind, retryCount: priorRetries })
       : { isAuth: false }
+
+    if (plan.isAuth) {
+      // Close the loop the signup path already has: a RUN-path auth gate
+      // (login / 2FA / captcha) means a human must sign in once with Hamilton
+      // watching. Queue the same idempotent capture request the connector and
+      // Portal Assist consume — previously the run path only notified, so the
+      // "sign in once" intent never reached the capture queue.
+      const gateHost = hostOfUrl(url)
+      if (gateHost) {
+        try {
+          await createCaptureRequest(db, {
+            userId,
+            profileId: task.profile_id,
+            portalHost: gateHost,
+            loginUrl: url,
+            label: opportunity?.title || grant?.title || null,
+          })
+        } catch { /* capture-request queue is best-effort */ }
+      }
+      // A saved session that still hits a login/2FA gate is behaviorally dead
+      // (portal revoked it or requires 2FA every login). Expire the row so
+      // findValidSession / portals_needing_capture report reality instead of
+      // a "ready" portal whose every run re-blocks.
+      if (usedSessionId && (engineResult.blocker_kind === 'login' || engineResult.blocker_kind === '2fa')) {
+        try {
+          await markSessionExpired(db, usedSessionId, `portal re-challenged (${engineResult.blocker_kind}) despite saved session`)
+        } catch { /* best-effort */ }
+      }
+    }
 
     if (plan.isAuth && !plan.exhausted) {
       await updateApplicationTask(db, task.id, {
