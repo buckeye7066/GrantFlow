@@ -35,7 +35,45 @@ import {
   formatTodoDate,
   sanitizeTodoPlan,
 } from '../services/profileTodoPlan.js'
+import { buildHamiltonTodoCategory } from '../services/hamilton/hamiltonProfileSummary.js'
 const routeLogger = createLogger('route:ai')
+
+// Merge Hamilton's LIVE needs (missing packet fields/documents, portals that
+// need a sign-in-once session, vault state) into an action plan as its own
+// category. Computed fresh on every read and NEVER persisted with the plan —
+// items disappear automatically once Hamilton's underlying need is resolved.
+// The owner's rule: the Action Plan must show what HAMILTON needs, not just
+// Anya's checklist, and each item must deep-link to where the need is fixed.
+async function withHamiltonCategory(db, profileId, todo) {
+  let hamiltonCategory = null
+  try {
+    hamiltonCategory = await buildHamiltonTodoCategory(db, profileId)
+  } catch (err) {
+    routeLogger.warn('[profile-todo] hamilton category failed (plan returned without it):', err?.message || err)
+  }
+  if (!hamiltonCategory) return todo
+  // No AI plan yet → still surface Hamilton's needs as a minimal plan so the
+  // card is never silent about work the owner must do. The Generate button
+  // stays available (it reads as "Generate Checklist" only when todo is null,
+  // so keep hamilton_only as a hint for the frontend copy).
+  if (!todo || typeof todo !== 'object' || !Array.isArray(todo.categories)) {
+    return {
+      summary: null,
+      categories: [hamiltonCategory],
+      total_items: hamiltonCategory.items.length,
+      hamilton_only: true,
+    }
+  }
+  // Drop any stale persisted copy (older builds may have persisted it), then
+  // lead with Hamilton's needs — they gate live applications.
+  const categories = todo.categories.filter((c) => c?.source !== 'hamilton')
+  const merged = { ...todo, categories: [hamiltonCategory, ...categories] }
+  const baseTotal = typeof todo.total_items === 'number' && todo.total_items > 0
+    ? todo.total_items
+    : categories.reduce((n, c) => n + (Array.isArray(c?.items) ? c.items.length : 0), 0)
+  merged.total_items = baseTotal + hamiltonCategory.items.length
+  return merged
+}
 
 const router = express.Router();
 
@@ -1663,7 +1701,7 @@ Return ONLY valid JSON:
       profile_id,
       applicant_name: applicantName,
       pipeline_count: activeGrants.length,
-      todo: parsed || { raw: rawText },
+      todo: await withHamiltonCategory(db, String(profile_id), parsed || { raw: rawText }),
       completions,
     });
   } catch (error) {
@@ -1689,7 +1727,7 @@ router.get('/profile-todo', async (req, res) => {
     return res.json({
       success: true,
       profile_id,
-      todo: parseSafe(row?.plan, null),
+      todo: await withHamiltonCategory(req.db, profile_id, parseSafe(row?.plan, null)),
       completions: parseSafe(row?.completions, {}),
       applicant_name: row?.applicant_name ?? null,
       generated_at: row?.generated_at ?? null,

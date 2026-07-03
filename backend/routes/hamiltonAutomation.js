@@ -34,8 +34,6 @@ import {
   appendTaskEvent,
   listTaskEvents,
   listMissingInfo,
-  TASK_BLOCKED_STATUSES,
-  TASK_TERMINAL_STATUSES,
 } from '../services/hamilton/applicationTaskStore.js'
 import {
   automateSelected,
@@ -134,7 +132,7 @@ import {
   resolveBlockerById,
   getBlocker,
 } from '../services/hamilton/hamiltonBlockerStore.js'
-import { getMasterVaultStatus } from '../services/hamilton/hamiltonPortalMasterVault.js'
+import { buildHamiltonProfileSummary } from '../services/hamilton/hamiltonProfileSummary.js'
 import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js'
 import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/hamilton/profileFieldTargets.js'
 import { setProfileSectionField } from '../services/profileFieldWriter.js'
@@ -1986,75 +1984,9 @@ router.post('/tasks/:taskId/resolve-blocker-input', async (req, res) => {
 // ── Profile work summary ──────────────────────────────────────────────────────
 // One read-only, profile-access-scoped view powering the profile-page "Hamilton"
 // button: WHAT he is working on right now + EVERYWHERE the owner must add
-// information for him to finish. Aggregates active application tasks, their
-// unresolved missing-info items, portals needing a captured login session, and
-// the master-vault lock state. Every sub-source is wrapped so a single failing
-// store degrades to "skipped" rather than 500ing the whole panel — the panel
-// must never be a dead end (mission rule: avoid zero-result/dead-end states).
-
-// Canonical task vocabulary lives in applicationTaskStore (TASK_BLOCKED_STATUSES
-// = blocked_* gates that need the owner; TASK_TERMINAL_STATUSES = done/failed/
-// cancelled). We widen each with defensive aliases so an unexpected status is
-// never silently mis-bucketed: anything blocked/waiting/needs-prefixed counts as
-// "needs you", and a few extra finished synonyms count as terminal.
-const TERMINAL_TASK_STATUS = new Set([
-  ...TASK_TERMINAL_STATUSES,
-  'completed', 'complete', 'done', 'canceled', 'archived', 'rejected', 'closed',
-])
-const NEEDS_USER_TASK_STATUS = new Set([
-  ...TASK_BLOCKED_STATUSES,
-  'needs_user', 'needs_info', 'blocked', 'awaiting_user', 'paused',
-  'needs_authorization', 'waiting_on_user', 'waiting_for_user', 'action_required',
-])
-function taskNeedsUser(status) {
-  return (
-    NEEDS_USER_TASK_STATUS.has(status) ||
-    status.startsWith('blocked') ||
-    status.startsWith('waiting') ||
-    status.startsWith('needs')
-  )
-}
-
-function humanizeAutomationType(t) {
-  const s = String(t || '').trim()
-  if (!s || s === 'unknown') return 'Application'
-  return s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-// Best-effort, batched title resolution from the grants / funding_opportunities
-// tables so tasks read as real funding-source names instead of raw ids. Missing
-// tables or rows simply leave the fallback (humanized automation type) in place.
-async function resolveTaskTitles(db, tasks, profileId) {
-  const map = new Map()
-  const grantIds = [...new Set((tasks || []).map((t) => t.grant_id).filter(Boolean).map(String))]
-  const oppIds = [...new Set((tasks || []).map((t) => t.opportunity_id).filter(Boolean).map(String))]
-  if (grantIds.length && profileId) {
-    try {
-      const ph = grantIds.map(() => '?').join(',')
-      const rows = await db
-        .prepare(`SELECT id, title FROM grants WHERE profile_id = ? AND id IN (${ph})`)
-        .all(String(profileId), ...grantIds)
-      for (const r of rows || []) if (r?.title) map.set(`grant:${r.id}`, r.title)
-    } catch { /* table/shape mismatch — keep fallbacks */ }
-  }
-  if (oppIds.length) {
-    try {
-      const ph = oppIds.map(() => '?').join(',')
-      const rows = await db.prepare(`SELECT id, title FROM funding_opportunities WHERE id IN (${ph})`).all(...oppIds)
-      for (const r of rows || []) if (r?.title) map.set(`opp:${r.id}`, r.title)
-    } catch { /* table/shape mismatch — keep fallbacks */ }
-  }
-  return map
-}
-
-function taskTitleFromMap(task, titleMap) {
-  return (
-    (task.grant_id && titleMap.get(`grant:${task.grant_id}`)) ||
-    (task.opportunity_id && titleMap.get(`opp:${task.opportunity_id}`)) ||
-    humanizeAutomationType(task.automation_type)
-  )
-}
-
+// information for him to finish. The aggregation itself lives in
+// services/hamilton/hamiltonProfileSummary.js so the SAME needs list also feeds
+// the Profile Action Plan (/api/ai/profile-todo) — change it there, not here.
 router.get('/profile-summary', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
@@ -2064,94 +1996,15 @@ router.get('/profile-summary', async (req, res) => {
     return res.status(403).json({ error: 'forbidden' })
   }
 
-  const workingOn = []
-  const needsYou = []
-
-  // 1. Active tasks + their unresolved missing info.
-  let tasks = []
-  try { tasks = await listApplicationTasks(req.db, { profileId, limit: 200 }) } catch { tasks = [] }
-  const titleMap = await resolveTaskTitles(req.db, tasks, profileId)
-  for (const t of tasks || []) {
-    const status = String(t.status || '').toLowerCase()
-    if (TERMINAL_TASK_STATUS.has(status)) continue
-    const title = taskTitleFromMap(t, titleMap)
-    if (taskNeedsUser(status)) {
-      needsYou.push({
-        id: `task:${t.id}`,
-        kind: 'task_blocked',
-        title: `${title} — needs your input`,
-        detail: t.last_agent_message || t.current_step || 'Open the task to see what Hamilton is waiting on.',
-        where: 'action-plan',
-        task_id: t.id,
-      })
-    } else {
-      workingOn.push({
-        id: t.id,
-        title,
-        automation_type: t.automation_type,
-        status: t.status,
-        current_step: t.current_step,
-        last_message: t.last_agent_message,
-        updated_at: t.updated_at,
-      })
-    }
-    let missing = []
-    try { missing = await listMissingInfo(req.db, t.id, { includeResolved: false }) } catch { missing = [] }
-    for (const m of missing || []) {
-      if (m.resolved) continue
-      const isDoc = String(m.kind || '').toLowerCase() === 'document'
-      needsYou.push({
-        id: `missing:${m.id}`,
-        kind: isDoc ? 'missing_document' : 'missing_field',
-        title: m.label || m.key || (isDoc ? 'Document needed' : 'Information needed'),
-        detail: m.description || `${title}: ${isDoc ? 'Hamilton needs this document.' : 'Hamilton needs this information.'}`,
-        where: isDoc ? 'documents' : 'profile',
-        task_id: t.id,
-        required: Boolean(m.required),
-      })
-    }
-  }
-
-  // 2. Portals that still need a captured login session ("sign in once").
-  let readiness = null
-  try { readiness = await getHamiltonReadiness(req.db, { profileId }) } catch { readiness = null }
-  for (const host of readiness?.portals_needing_capture || []) {
-    needsYou.push({
-      id: `session:${host}`,
-      kind: 'portal_session',
-      title: `Sign in once to ${host}`,
-      detail: 'Hamilton needs a captured login session here (SSO/2FA portals can’t be entered from a saved password alone).',
-      where: 'pipeline',
-      host,
-    })
-  }
-
-  // 3. Master vault: set / unlock so Hamilton can provision and use portal logins.
-  let vault = null
-  try { vault = await getMasterVaultStatus(req.db, profileId) } catch { vault = null }
-  if (vault && !vault.has_passphrase) {
-    needsYou.push({
-      id: 'vault:set', kind: 'vault',
-      title: 'Set Hamilton’s master passphrase',
-      detail: 'One passphrase lets Hamilton create and manage a unique, strong login for each portal.',
-      where: 'pipeline',
-    })
-  } else if (vault && vault.has_passphrase && !vault.is_unlocked) {
-    needsYou.push({
-      id: 'vault:unlock', kind: 'vault',
-      title: 'Unlock Hamilton’s vault',
-      detail: 'Enter the master passphrase so Hamilton can use the saved logins for this session.',
-      where: 'pipeline',
-    })
-  }
+  const summary = await buildHamiltonProfileSummary(req.db, profileId)
 
   return res.json({
     ok: true,
     profile_id: profileId,
-    working_on: workingOn,
-    needs_you: needsYou,
-    next_run_at: readiness?.next_run_at || null,
-    counts: { working: workingOn.length, needs: needsYou.length },
+    working_on: summary.working_on,
+    needs_you: summary.needs_you,
+    next_run_at: summary.next_run_at,
+    counts: { working: summary.working_on.length, needs: summary.needs_you.length },
   })
 })
 
