@@ -55,16 +55,32 @@ export async function getAnyaRun(db, runId, { userId = null, sessionId = null } 
   if (!runId) return null
   let row
   try {
-    row = await db
-      .prepare(
-        `
-          SELECT id, status, kind, session_id, user_id, response_json, error, completed_at
-          FROM anya_runs
-          WHERE id = ?
-          LIMIT 1
-        `,
-      )
-      .get(runId)
+    // progress_json / cancel_requested are additive columns (live step feed +
+    // Stop control); fall back to the legacy column set when they're absent.
+    try {
+      row = await db
+        .prepare(
+          `
+            SELECT id, status, kind, session_id, user_id, response_json, error, completed_at,
+                   progress_json, cancel_requested
+            FROM anya_runs
+            WHERE id = ?
+            LIMIT 1
+          `,
+        )
+        .get(runId)
+    } catch {
+      row = await db
+        .prepare(
+          `
+            SELECT id, status, kind, session_id, user_id, response_json, error, completed_at
+            FROM anya_runs
+            WHERE id = ?
+            LIMIT 1
+          `,
+        )
+        .get(runId)
+    }
   } catch (error) {
     qualityLog.error(`Failed to read Anya run ${runId}:`, error)
     return null
@@ -80,6 +96,12 @@ export async function getAnyaRun(db, runId, { userId = null, sessionId = null } 
   } catch {
     response = null
   }
+  let progress = []
+  try {
+    progress = row.progress_json ? JSON.parse(row.progress_json) : []
+  } catch {
+    progress = []
+  }
 
   return {
     id: row.id,
@@ -87,10 +109,51 @@ export async function getAnyaRun(db, runId, { userId = null, sessionId = null } 
     kind: row.kind,
     session_id: row.session_id,
     degraded: Boolean(response?.degraded),
+    cancelled: Boolean(response?.cancelled),
+    cancel_requested: Number(row.cancel_requested || 0) === 1,
+    progress: Array.isArray(progress) ? progress : [],
     assistant_message_id: response?.assistant_message_id ?? null,
     assistant_text: response?.assistantText ?? null,
     error: row.error ?? null,
     completed_at: row.completed_at ?? null,
+  }
+}
+
+// ── live-run controls (Stop button / Escape + step feed) ────────────────────
+// The owner rule: when Anya performs a task for the user, the user watches the
+// steps live and can halt her at any time. Cancellation is a cooperative flag —
+// the orchestrator checks it between tool steps and stops cleanly (partial
+// work already committed stays; nothing further runs).
+
+export async function requestAnyaRunCancel(db, runId, { userId = null, sessionId = null } = {}) {
+  const run = await getAnyaRun(db, runId, { userId, sessionId })
+  if (!run) return { ok: false, reason: 'not_found' }
+  if (run.status !== 'running') return { ok: false, reason: 'not_running', status: run.status }
+  try {
+    await db.prepare(`UPDATE anya_runs SET cancel_requested = 1 WHERE id = ? AND status = 'running'`).run(runId)
+    return { ok: true }
+  } catch (error) {
+    qualityLog.error(`Failed to request cancel for Anya run ${runId}:`, error)
+    return { ok: false, reason: 'update_failed' }
+  }
+}
+
+export async function isAnyaRunCancelRequested(db, runId) {
+  if (!runId) return false
+  try {
+    const row = await db.prepare('SELECT cancel_requested FROM anya_runs WHERE id = ? LIMIT 1').get(runId)
+    return Number(row?.cancel_requested || 0) === 1
+  } catch {
+    return false // legacy schema without the column — cancel simply unavailable
+  }
+}
+
+export async function setAnyaRunProgress(db, runId, steps) {
+  if (!runId) return
+  try {
+    await db.prepare('UPDATE anya_runs SET progress_json = ? WHERE id = ?').run(safeJson(steps ?? [], '[]'), runId)
+  } catch {
+    // additive column may not exist yet — progress is best-effort observability
   }
 }
 

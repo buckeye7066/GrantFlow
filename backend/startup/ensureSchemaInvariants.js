@@ -773,6 +773,44 @@ export async function ensureSmsConsentColumns(db, { logger = console } = {}) {
 }
 
 /**
+ * anya_runs live-run columns (progress_json + cancel_requested).
+ *
+ * Powers the Anya chat "watch her work" step feed and the Stop/Escape control:
+ * the orchestrator writes each tool step into progress_json and checks
+ * cancel_requested between steps (cooperative cancel — see anyaRuns.js).
+ * Additive on both dialects so older databases pick the columns up on boot.
+ */
+export async function ensureAnyaRunLiveColumns(db, { logger = console } = {}) {
+  return runStep(
+    'anya_runs live-run columns (progress_json + cancel_requested)',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec("ALTER TABLE anya_runs ADD COLUMN IF NOT EXISTS progress_json TEXT DEFAULT '[]'")
+        await db.exec('ALTER TABLE anya_runs ADD COLUMN IF NOT EXISTS cancel_requested INTEGER DEFAULT 0')
+        return
+      }
+      // sqlite: add only if missing.
+      let cols = []
+      try {
+        cols = await db.prepare('PRAGMA table_info(anya_runs)').all()
+      } catch {
+        cols = []
+      }
+      const names = new Set((cols || []).map((c) => c?.name))
+      if (names.size === 0) return // table not created yet — schema.sql owns it
+      if (!names.has('progress_json')) {
+        await db.exec("ALTER TABLE anya_runs ADD COLUMN progress_json TEXT DEFAULT '[]'")
+      }
+      if (!names.has('cancel_requested')) {
+        await db.exec('ALTER TABLE anya_runs ADD COLUMN cancel_requested INTEGER DEFAULT 0')
+      }
+    },
+  )
+}
+
+/**
  * The canonical, ordered registry of schema-invariant steps.
  *
  * SINGLE SOURCE OF TRUTH: this is the only place a step is declared. The boot
@@ -800,6 +838,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['profile_portal_status', ensurePortalCompletionStatusTable],
   ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
   ['sms_consent_columns', ensureSmsConsentColumns],
+  ['anya_run_live_columns', ensureAnyaRunLiveColumns],
   ['perf_indexes', ensurePerfIndexes],
 ]
 

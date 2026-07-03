@@ -7,6 +7,7 @@ import path from 'path'
 import { promises as fs } from 'fs'
 import { createLogger } from '../utils/logger.js'
 import { buildLanguageDirectiveForProfile } from './languagePreference.js'
+import { isAnyaRunCancelRequested, setAnyaRunProgress } from './anyaRuns.js'
 const log = createLogger('anyaOrchestrator')
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
@@ -96,6 +97,12 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['student.commitToUniversity', 'For student profiles, mark a single school (by name or id, e.g. "MTSU") as the one the student is attending. Confirmation-gated like profile.updateSection.'],
   ['anya.nextBestAction', 'Return the recommended next action grounded in current page + opportunity + profile gaps.'],
   ['grants.summarizeMatches', 'Show matched funding opportunities for a profile.'],
+  ['grants.explainMatch', 'Explain why a specific funding opportunity matched (or did not fully match) the profile — applicant type, location, keywords, financial need.'],
+  ['application.createFromOpportunity', 'Create (or return the existing) application for the active profile + opportunity, generating the initial step/document/deadline plan. Call after the user confirms "save this opportunity".'],
+  ['application.completeStep', 'Mark an application checklist step completed when the user says they finished it, and surface the next pending step.'],
+  ['crawlers.planForProfile', 'Show what a profile-specific discovery ("deeper search") would look for, grounded in the profile\'s real facts.'],
+  ['app.explainFeature', 'Explain what a GrantFlow page or feature does, its main actions, and how it relates to other features (routeName e.g. SmartMatcher, Pipeline, MyProfiles).'],
+  ['app.explainField', 'Explain what a specific profile field does, why it matters for matching, and whether it affects crawlers (field key e.g. zip, state, health_conditions).'],
 ]
 export const CHAT_TOOL_WHITELIST = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)
 
@@ -134,6 +141,12 @@ const _STATIC_PROMPT_BASE = [
   '  2. If no tool can do it, tell the user plainly: "I cannot do that from chat. Open the Universities tab, find the school card, and click \'I\'m attending\' on the school you chose." Point them to the exact UI control.',
   '- After a tool call, your text reply must reference the tool result truthfully. Do NOT claim success if the tool returned confirmation_required:true, an error, or a "school_not_found" reason — instead, surface what actually happened and what the user needs to do next.',
   '- If you are uncertain whether a tool exists or whether you are allowed to call it, say so honestly: "I am not sure I can do this directly — let me check / let me show you where to do it manually."',
+  '',
+  'DO IT FOR THEM — OR TEACH THEM (owner rule, applies to every profile task):',
+  '- For ANY task a user could do themselves in their profile (fill a section, fix a fact, save an opportunity, check off a step, understand a screen), offer BOTH paths and let them choose:',
+  '  1. "I can do it for you right now" — use your tools, narrating each step as you go so they can watch what is happening. They can press Escape or the Stop button at any time to halt you mid-task; if you were stopped, acknowledge it and confirm nothing further was changed.',
+  '  2. "Here is how to do it yourself" — explain the steps in plain, everyday language (no jargon, no technical terms), naming the exact tabs and buttons they will see.',
+  '- When their intent is clear ("do it for me" / "just tell me how"), skip the menu and take that path directly.',
   '',
   'Your Role:',
   '- You are the in-app guide for GrantFlow. Help users understand what GrantFlow is, how it works, and what to do next.',
@@ -1006,7 +1019,15 @@ export async function updateTask(
   return mapTask(updated)
 }
 
-export async function generateAssistantResponse(db, user, sessionId, { content, currentPage, pageContext } = {}) {
+// Halt message returned when the user presses Stop/Escape mid-run. Cooperative:
+// the flag is checked BETWEEN steps, so a tool that already committed stays
+// committed and nothing further runs — the message must say exactly that.
+const CANCELLED_REPLY =
+  '⏹ Stopped — you asked me to halt, so I did, before running anything else. ' +
+  'Any step that had already finished is saved; nothing further was changed. ' +
+  'Tell me if you want me to pick it back up or take a different approach.'
+
+export async function generateAssistantResponse(db, user, sessionId, { content, currentPage, pageContext, runId = null } = {}) {
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
     return "I'm here and ready to help—just let me know what you'd like to work on."
@@ -1388,7 +1409,46 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
       ]
       let finalReply = null
 
+      // Live step feed + cooperative cancel ("watch her work" / Escape).
+      // Every step Anya takes is appended here and persisted to the run row so
+      // the chat panel can show it in real time; the cancel flag is honored
+      // between steps so a Stop never yanks a half-finished write.
+      const progressSteps = []
+      const pushStep = async (label, status = 'running') => {
+        progressSteps.push({ label, status, at: new Date().toISOString() })
+        if (runId) await setAnyaRunProgress(db, runId, progressSteps)
+      }
+      const markLastStep = async (status, note = null) => {
+        const last = progressSteps[progressSteps.length - 1]
+        if (last) {
+          last.status = status
+          if (note) last.note = note
+          if (runId) await setAnyaRunProgress(db, runId, progressSteps)
+        }
+      }
+      const humanizeTool = (name) => {
+        const MAP = {
+          'profile.updateSection': 'Saving information to the profile',
+          'profile.getCompletionStatus': 'Checking which profile sections are complete',
+          'student.commitToUniversity': 'Marking the chosen school',
+          'anya.nextBestAction': 'Working out the best next step',
+          'grants.summarizeMatches': 'Pulling up matched funding',
+          'grants.explainMatch': 'Explaining this match',
+          'application.createFromOpportunity': 'Creating the application + checklist',
+          'application.completeStep': 'Checking off the completed step',
+          'crawlers.planForProfile': 'Planning the deeper search',
+          'app.explainFeature': 'Looking up how this feature works',
+          'app.explainField': 'Looking up what this field does',
+        }
+        return MAP[name] || `Running ${name}`
+      }
+      const wasCancelled = async () => Boolean(runId) && (await isAnyaRunCancelRequested(db, runId))
+
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter += 1) {
+        if (await wasCancelled()) {
+          await pushStep('Stopped by you', 'cancelled')
+          return CANCELLED_REPLY
+        }
         const response = await openAIBreaker.exec(
           async () =>
             await openai.chat.completions.create({
@@ -1428,6 +1488,11 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
         for (const call of toolCalls) {
           const openaiName = call?.function?.name || ''
           const registryName = _fromOpenAIToolName(openaiName)
+          if (await wasCancelled()) {
+            await pushStep('Stopped by you', 'cancelled')
+            return CANCELLED_REPLY
+          }
+          await pushStep(humanizeTool(registryName))
           let toolPayload
           try {
             const rawArgs = call?.function?.arguments
@@ -1463,6 +1528,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
               currentPage: currentPage ?? null,
             })
             toolPayload = invoked?.output ?? invoked ?? null
+            await markLastStep('done')
           } catch (toolErr) {
             const status = toolErr?.status ?? null
             toolPayload = {
@@ -1472,6 +1538,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
               tool: registryName,
             }
             console.warn('[Anya] chat tool call failed:', { tool: registryName, status, message: toolPayload.message })
+            await markLastStep('error', toolPayload.message)
           }
           let serializedPayload = ''
           try {

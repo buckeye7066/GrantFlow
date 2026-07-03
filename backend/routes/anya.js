@@ -15,7 +15,7 @@ import {
   updateTask,
   listProfileTasks,
 } from '../services/anyaOrchestrator.js'
-import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun } from '../services/anyaRuns.js'
+import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun, requestAnyaRunCancel } from '../services/anyaRuns.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:anya')
@@ -298,7 +298,9 @@ async function generateAndStoreReply(db, ctx, sessionId, runId, { content, curre
   let degraded = false
   try {
     assistantText = await withReplyTimeout(
-      generateAssistantResponse(db, ctx, sessionId, { content, currentPage, pageContext }),
+      // runId lets the orchestrator publish a live step feed and honor the
+      // user's Stop/Escape (cooperative cancel between tool steps).
+      generateAssistantResponse(db, ctx, sessionId, { content, currentPage, pageContext, runId }),
       timeoutMs,
     )
   } catch (assistantError) {
@@ -434,7 +436,8 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
 })
 
 // Poll a single run's status. The client uses this after a background send to
-// learn when Anya's reply is ready (and to pull it). Owner-scoped.
+// learn when Anya's reply is ready (and to pull it), and to render the live
+// step feed (run.progress). Owner-scoped.
 router.get('/sessions/:sessionId/runs/:runId', async (req, res) => {
   try {
     const run = await getAnyaRun(req.db, req.params.runId, {
@@ -445,6 +448,24 @@ router.get('/sessions/:sessionId/runs/:runId', async (req, res) => {
       return res.status(404).json({ error: 'Run not found' })
     }
     res.json({ run })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+// Stop a running Anya turn (the chat panel's Stop button / Escape key).
+// Cooperative: sets cancel_requested; the orchestrator halts before its next
+// step, so completed work stays and nothing further changes. Owner-scoped.
+router.post('/sessions/:sessionId/runs/:runId/cancel', async (req, res) => {
+  try {
+    const result = await requestAnyaRunCancel(req.db, req.params.runId, {
+      userId: req.ctx?.userId ?? null,
+      sessionId: req.params.sessionId,
+    })
+    if (!result.ok && result.reason === 'not_found') {
+      return res.status(404).json({ error: 'Run not found' })
+    }
+    res.json(result)
   } catch (error) {
     handleError(res, error)
   }

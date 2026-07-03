@@ -1733,6 +1733,11 @@ CREATE TABLE IF NOT EXISTS anya_runs (
   tool_name TEXT,
   request_json TEXT DEFAULT '{}',
   response_json TEXT,
+  -- Live-run observability + control: the orchestrator writes each tool step
+  -- into progress_json (watch-her-work feed) and checks cancel_requested
+  -- between steps (Stop/Escape). See services/anyaRuns.js.
+  progress_json TEXT DEFAULT '[]',
+  cancel_requested INTEGER DEFAULT 0,
   error TEXT
 );
 
