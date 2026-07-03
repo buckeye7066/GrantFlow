@@ -17,6 +17,7 @@
 import process from 'node:process'
 
 import { db } from '../db/index.js'
+import { DESIGNATED_PROFILE_IDS } from '../utils/ensureDesignatedProfiles.js'
 
 function parseArgs(argv) {
   const args = new Set(argv.slice(2))
@@ -45,6 +46,17 @@ async function main() {
   }
 
   // Orphans
+  //
+  // NEVER treat a designated/demo profile as an orphan. These are owner-less by
+  // design (source-safe: no real user_id/organization_id/email stored in the
+  // repo) and are intentionally re-created by boot-time seeding. Sweeping them
+  // here would tombstone + hard-delete an intentional profile, and the tombstone
+  // then makes the boot seeder skip it forever — the exact "restored designated
+  // profile disappears again" flap this fix eliminates.
+  const designatedIds = [...DESIGNATED_PROFILE_IDS]
+  const designatedPlaceholders = designatedIds.length
+    ? `AND p.id NOT IN (${designatedIds.map(() => '?').join(', ')})`
+    : ''
   const orphans = await db
     .prepare(
       `
@@ -58,11 +70,12 @@ async function main() {
         WHERE p.user_id IS NULL
           AND p.organization_id IS NULL
           AND (SELECT COUNT(*) FROM profile_emails pe WHERE pe.profile_id = p.id) = 0
+          ${designatedPlaceholders}
         ORDER BY p.created_at ASC
         LIMIT ?
       `,
     )
-    .all(limit)
+    .all(...designatedIds, limit)
 
   const summary = {
     ok: true,
@@ -97,6 +110,13 @@ async function main() {
     for (const p of orphans || []) {
       const pid = String(p.id || '').trim()
       if (!pid) continue
+
+      // Belt-and-suspenders: never delete a designated/demo profile even if the
+      // query filter above is ever loosened. See the orphans query comment.
+      if (DESIGNATED_PROFILE_IDS.has(pid)) {
+        console.warn('[orphan-maint] skipping designated profile (never an orphan)', { profile_id: pid })
+        continue
+      }
 
       // Check for in-flight crawler jobs before deletion. If any exist, skip the profile
       // to avoid orphaning running crawl work or causing FK errors mid-crawl.
