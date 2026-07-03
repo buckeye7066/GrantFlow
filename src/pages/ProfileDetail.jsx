@@ -78,137 +78,71 @@ function formatRejectReason(reason) {
   return String(reason || "unsupported").replace(/_/g, " ")
 }
 
-function FlowStepButton({ icon: Icon, title, detail, tooltip, onClick, active = false }) {
+// The old "A cleaner path from facts to funding" flow guide duplicated the
+// Workspace nav below it (owner: keep "Work the profile in order", delete the
+// guide). Its one unique piece — the readiness chip — moved into the Workspace
+// header as DeeperSearchChip and became a clickable explainer + launcher.
+function DeeperSearchChip({ completionPct, nextEmptySectionTitle, onRunDeeperSearch, onCompleteProfile }) {
+  const [open, setOpen] = React.useState(false)
+  const ready = completionPct >= 80
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          className={`group flex min-h-[7rem] w-full cursor-pointer flex-col justify-between rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
-            active
-              ? "border-blue-300 bg-blue-50 text-blue-950"
-              : "border-slate-200 bg-white text-slate-900 hover:border-blue-200"
-          }`}
-          aria-label={title}
-        >
-          <span className="flex items-center justify-between gap-3">
-            <span
-              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
-                active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700"
-              }`}
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        aria-haspopup="dialog"
+      >
+        <Search className="h-3.5 w-3.5 text-blue-600" />
+        {ready ? "Ready for deeper search" : "Build the profile signal"}
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>What is a deeper search?</DialogTitle>
+            <DialogDescription>
+              A deeper search is a discovery run built around this profile specifically — not a generic keyword search.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-slate-700">
+            <p>When you run it, GrantFlow:</p>
+            <ul className="list-disc space-y-1.5 pl-5">
+              <li>takes every fact on this profile — identity, location, eligibility, needs, education, and parsed documents;</li>
+              <li>searches the curated funding catalog <span className="font-medium">and</span> the live web with queries written from those facts;</li>
+              <li>scores every result against this profile and keeps only real, eligible matches;</li>
+              <li>adds qualifying matches to the pipeline, where Anya and Hamilton can start working them.</li>
+            </ul>
+            <p className={ready ? "text-emerald-700" : "text-amber-700"}>
+              {ready
+                ? `This profile is ${completionPct}% complete — enough signal for a high-quality run.`
+                : `This profile is ${completionPct}% complete. You can run a search now, but each fact you add sharpens the matches${nextEmptySectionTitle ? ` — start with ${nextEmptySectionTitle}` : ""}.`}
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
+            {!ready && nextEmptySectionTitle && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setOpen(false)
+                  onCompleteProfile?.()
+                }}
+              >
+                Fill in {nextEmptySectionTitle} first
+              </Button>
+            )}
+            <Button
+              onClick={() => {
+                setOpen(false)
+                onRunDeeperSearch?.()
+              }}
             >
-              <Icon className="h-5 w-5" />
-            </span>
-            <ArrowRight className={`h-4 w-4 shrink-0 ${active ? "text-blue-700" : "text-slate-400"}`} />
-          </span>
-          <span className="mt-4 block min-w-0">
-            <span className="block text-sm font-semibold leading-snug">{title}</span>
-            <span className="mt-1 block text-xs leading-relaxed text-slate-600">{detail}</span>
-          </span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
-        {tooltip}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-function ProfileFlowGuide({
-  completionPct,
-  nextEmptySectionTitle,
-  onCompleteProfile,
-  onOpenDocuments,
-  onOpenActionPlan,
-  onFindFunding,
-  onOpenPortals,
-  onOpenUniversities,
-  onOpenHealth,
-  isStudentProfile,
-  isHealthProfile,
-}) {
-  const specialty = isStudentProfile
-    ? {
-        icon: GraduationCap,
-        title: "Student portals",
-        detail: "School aid, scholarships, work-study, and award details.",
-        tooltip: "Open the student workspace for school-specific portals, applications, financial aid, scholarships, and work-study items.",
-        onClick: onOpenUniversities,
-      }
-    : isHealthProfile
-      ? {
-          icon: HeartPulse,
-          title: "Health options",
-          detail: "Benefits, assistance, and opt-in studies when relevant.",
-          tooltip: "Open health support. Studies remain opt-in and should only appear when they match the profile.",
-          onClick: onOpenHealth,
-        }
-      : {
-          icon: KeyRound,
-          title: "Portal setup",
-          detail: "Add logins Hamilton can use when an application needs them.",
-          tooltip: "Open the portal area for saved logins, portal status, and Hamilton access windows.",
-          onClick: onOpenPortals,
-        }
-
-  const factsDetail = nextEmptySectionTitle ? `Next: ${nextEmptySectionTitle}` : "Profile facts look ready."
-  const flowState = completionPct >= 80 ? "Ready for deeper search" : "Build the profile signal"
-
-  const steps = [
-    {
-      icon: UserCheck,
-      title: completionPct >= 100 ? "Review profile facts" : "Complete profile facts",
-      detail: factsDetail,
-      tooltip: "Open the next profile section GrantFlow needs. Empty fields are not punished, but known facts help the crawler search like it knows this person or organization.",
-      onClick: onCompleteProfile,
-      active: completionPct < 80,
-    },
-    {
-      icon: FileSearch,
-      title: "Add documents",
-      detail: "PDFs, screenshots, letters, transcripts, bills, and notes.",
-      tooltip: "Open the document area so uploaded files can be parsed into the profile before searching and planning.",
-      onClick: onOpenDocuments,
-    },
-    {
-      icon: Sparkles,
-      title: "Ask Anya",
-      detail: "A short interview turns the profile into exact needs.",
-      tooltip: "Open the action plan where Anya asks only the missing practical questions and Hamilton can save the checklist.",
-      onClick: onOpenActionPlan,
-      active: completionPct >= 80,
-    },
-    {
-      icon: Search,
-      title: "Find funding",
-      detail: "Run a profile-specific search with the current facts.",
-      tooltip: "Start discovery for this profile so GrantFlow searches by mission, location, needs, eligibility, and profile type.",
-      onClick: onFindFunding,
-    },
-    specialty,
-  ]
-
-  return (
-    <section className="rounded-lg border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Profile flow</p>
-          <h2 className="text-lg font-semibold text-slate-900">A cleaner path from facts to funding</h2>
-        </div>
-        <span className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-          <ClipboardList className="h-3.5 w-3.5 text-blue-600" />
-          {flowState}
-        </span>
-      </div>
-      <TooltipProvider delayDuration={150}>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {steps.map((step) => (
-            <FlowStepButton key={step.title} {...step} />
-          ))}
-        </div>
-      </TooltipProvider>
-    </section>
+              <Search className="mr-2 h-4 w-4" />
+              Run deeper search now
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -257,7 +191,15 @@ function WorkspaceTabTrigger({ icon: Icon, title, detail, tooltip, value, active
   )
 }
 
-function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
+function ProfileWorkspaceNav({
+  activeTab,
+  isStudentProfile,
+  isHealthProfile,
+  completionPct,
+  nextEmptySectionTitle,
+  onRunDeeperSearch,
+  onCompleteProfile,
+}) {
   const primaryTabs = [
     {
       value: "profile",
@@ -362,10 +304,18 @@ function ProfileWorkspaceNav({ activeTab, isStudentProfile, isHealthProfile }) {
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workspace</p>
           <h2 className="text-lg font-semibold text-slate-900">Work the profile in order</h2>
         </div>
-        <span className="inline-flex w-fit items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
-          <ActiveIcon className="h-3.5 w-3.5" />
-          {activeOption.title}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <DeeperSearchChip
+            completionPct={completionPct ?? 0}
+            nextEmptySectionTitle={nextEmptySectionTitle}
+            onRunDeeperSearch={onRunDeeperSearch}
+            onCompleteProfile={onCompleteProfile}
+          />
+          <span className="inline-flex w-fit items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
+            <ActiveIcon className="h-3.5 w-3.5" />
+            {activeOption.title}
+          </span>
+        </div>
       </div>
       <TooltipProvider delayDuration={150}>
         <TabsList
@@ -1374,34 +1324,21 @@ export default function ProfileDetail() {
           )}
         </div>
 
-        <ProfileFlowGuide
-          completionPct={completionPct}
-          nextEmptySectionTitle={nextEmptySectionTitle}
-          isStudentProfile={isStudentProfile}
-          isHealthProfile={isHealthProfile}
-          onCompleteProfile={() => {
-            if (nextEmptySection) {
-              handleOpenSection(nextEmptySection)
-              return
-            }
-            goToWorkspaceTab("profile")
-          }}
-          onOpenDocuments={() => goToWorkspaceTab("documents")}
-          onOpenActionPlan={() => goToWorkspaceTab("action-plan")}
-          onFindFunding={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
-          onOpenPortals={() => {
-            setActiveTab("pipeline")
-            setPendingScrollTarget("portal-logins")
-          }}
-          onOpenUniversities={() => goToWorkspaceTab("universities")}
-          onOpenHealth={() => goToWorkspaceTab("health")}
-        />
-
         <Tabs id="profile-workspace" value={activeTab} onValueChange={setActiveTab} className="w-full scroll-mt-24">
           <ProfileWorkspaceNav
             activeTab={activeTab}
             isStudentProfile={isStudentProfile}
             isHealthProfile={isHealthProfile}
+            completionPct={completionPct}
+            nextEmptySectionTitle={nextEmptySectionTitle}
+            onRunDeeperSearch={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
+            onCompleteProfile={() => {
+              if (nextEmptySection) {
+                handleOpenSection(nextEmptySection)
+                return
+              }
+              goToWorkspaceTab("profile")
+            }}
           />
 
           <TabsContent value="profile" className="mt-6 space-y-6">

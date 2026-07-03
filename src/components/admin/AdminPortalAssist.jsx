@@ -176,6 +176,30 @@ export default function AdminPortalAssist() {
     if (next) openPortalLogin(next)
   }
 
+  // ANY-portal launcher: the owner asked to be able to open a portal that is
+  // NOT on the profile's discovered list (or one whose tile has no resolved
+  // host) with Hamilton watching, so a session exists before the user needs it.
+  // Paste a login URL → we derive the host and run the exact same secure
+  // cloud-login flow; the captured session binds to the selected profile.
+  const [customUrl, setCustomUrl] = React.useState("")
+  const openCustomPortal = () => {
+    const raw = customUrl.trim()
+    if (!selectedId || !raw) return
+    let parsed
+    try {
+      parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
+    } catch {
+      showErrorToast(toast, "Not a valid portal address", "Paste the portal's login page URL (e.g. https://portal.school.edu/login).")
+      return
+    }
+    const host = parsed.hostname.replace(/^www\./i, "")
+    openPortalLogin({
+      portalHost: host,
+      loginUrl: parsed.href,
+      label: host,
+    })
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -302,6 +326,34 @@ export default function AdminPortalAssist() {
                   logins one at a time — sign in, close the window, and the next one is ready.
                 </p>
               )}
+
+              {/* Launch ANY portal — even one not on this profile's list yet. */}
+              <div className="mt-4 border-t border-border pt-3">
+                <p className="text-sm font-medium text-foreground">Launch any portal</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Not listed above? Paste any portal&rsquo;s login page and open it with Hamilton watching —
+                  he captures the session for {selectedProfile.name} so future logins are automatic.
+                </p>
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    type="url"
+                    value={customUrl}
+                    onChange={(e) => setCustomUrl(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") openCustomPortal() }}
+                    placeholder="https://portal.example.edu/login"
+                    className="w-full flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  <button
+                    type="button"
+                    onClick={openCustomPortal}
+                    disabled={Boolean(openingHost) || !customUrl.trim()}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {openingHost ? <Loader2 className="h-4 w-4 animate-spin" /> : <PanelsTopLeft className="h-4 w-4" />}
+                    Open with Hamilton watching
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

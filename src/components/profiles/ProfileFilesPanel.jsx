@@ -246,8 +246,57 @@ export default function ProfileFilesPanel({
   })
 
   const grouped = useMemo(() => {
-    // Keep current grid rendering; hook for future grouping by type.
-    return documents
+    // Hamilton saves the SAME funding source as several artifacts (application
+    // packet PDF + DOCX, full proposal PDF + DOCX). Rendering each as its own
+    // card read as "a lot of duplicates" (owner report, 2026-07-03). Group by
+    // the source's base name — one card per source, with the other artifacts
+    // reachable from that card — while unrelated uploads stay one card each.
+    const FORMAT_SUFFIX = /\s+—\s+(PDF|DOCX|HTML)$/i
+    const VARIANT_SUFFIX = /\s+—\s+Full Proposal$/i
+    const baseNameOf = (doc) =>
+      String(doc?.name || "").replace(FORMAT_SUFFIX, "").replace(VARIANT_SUFFIX, "").trim()
+    const variantLabelOf = (doc) => {
+      const name = String(doc?.name || "")
+      const fmt = name.match(FORMAT_SUFFIX)?.[1]?.toUpperCase() || null
+      const isProposal = VARIANT_SUFFIX.test(name.replace(FORMAT_SUFFIX, ""))
+      const parts = [isProposal ? "Full proposal" : "Packet"]
+      if (fmt) parts.push(fmt)
+      return parts.join(" · ")
+    }
+
+    const byKey = new Map()
+    for (const doc of documents) {
+      // Only generated multi-format artifacts group; everything else keeps
+      // its own card (base === full name → unique key per doc id).
+      const isGroupable = FORMAT_SUFFIX.test(String(doc?.name || ""))
+      const key = isGroupable ? baseNameOf(doc).toLowerCase() : `solo:${doc.id}`
+      if (!byKey.has(key)) byKey.set(key, [])
+      byKey.get(key).push(doc)
+    }
+
+    const groups = []
+    for (const docs of byKey.values()) {
+      if (docs.length === 1) {
+        groups.push({ doc: docs[0], siblings: [], groupDocs: docs })
+        continue
+      }
+      // Primary = the packet PDF when present (what a person most wants to
+      // open), else the newest artifact.
+      const sorted = [...docs].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+      const primary =
+        sorted.find((d) => /—\s+PDF$/i.test(d.name || "") && !VARIANT_SUFFIX.test(String(d.name || "").replace(FORMAT_SUFFIX, ""))) ||
+        sorted[0]
+      const siblings = sorted
+        .filter((d) => d.id !== primary.id)
+        .map((d) => ({ doc: d, label: variantLabelOf(d) }))
+      groups.push({
+        doc: { ...primary, name: baseNameOf(primary) },
+        primaryLabel: variantLabelOf(primary),
+        siblings,
+        groupDocs: docs,
+      })
+    }
+    return groups
   }, [documents])
   const documentStats = useMemo(() => {
     const counts = { total: documents.length, parsed: 0, queued: 0, failed: 0 }
@@ -533,16 +582,23 @@ export default function ProfileFilesPanel({
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {grouped.map((doc) => (
+            {grouped.map((group) => (
               <DocumentItem
-                key={doc.id}
-                document={doc}
+                key={group.doc.id}
+                document={group.doc}
+                primaryLabel={group.primaryLabel}
+                siblings={group.siblings}
                 onDelete={
                   allowDelete
                     ? () => {
-                        const ok = window.confirm(`Delete "${doc?.name ?? "this document"}"? This cannot be undone.`)
+                        const count = group.groupDocs.length
+                        const ok = window.confirm(
+                          count > 1
+                            ? `Delete "${group.doc?.name ?? "this document"}" and all ${count} of its files (PDF/DOCX versions)? This cannot be undone.`
+                            : `Delete "${group.doc?.name ?? "this document"}"? This cannot be undone.`,
+                        )
                         if (!ok) return
-                        deleteMutation.mutate(doc.id)
+                        for (const d of group.groupDocs) deleteMutation.mutate(d.id)
                       }
                     : undefined
                 }

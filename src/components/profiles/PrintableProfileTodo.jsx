@@ -13,6 +13,7 @@ import { apiFetch } from "@/api/client"
 import { ingestDocument } from "@/api/documents"
 import { useToast } from "@/components/ui/use-toast"
 import { buildProfileSectionLink } from "@/config/missingInfoTargets"
+import { createPageUrl } from "@/utils"
 
 const ICON_MAP = {
   clipboard: ClipboardList,
@@ -153,6 +154,17 @@ function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUpl
   // This is the "add the information manually to the profile" path.
   const profileLink = buildProfileSectionLink(profileId, item.field_key || item.profile_section)
 
+  // Hamilton items carry an explicit navigation target ({tab, focus}) so one
+  // click drops the user exactly where the need is fixed (e.g. the portal
+  // sign-in list for a "sign in once" item). Falls back to the field link.
+  const goToLink = !profileLink && item.go_to?.tab
+    ? createPageUrl("ProfileDetail", {
+        id: profileId,
+        tab: item.go_to.tab,
+        focus: item.go_to.focus || undefined,
+      })
+    : null
+
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = "" // allow re-selecting the same file later
@@ -276,6 +288,15 @@ function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUpl
             className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
           >
             Add to profile <ArrowRight className="w-3 h-3" />
+          </Link>
+        )}
+        {goToLink && (
+          <Link
+            to={goToLink}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+          >
+            Go there <ArrowRight className="w-3 h-3" />
           </Link>
         )}
       </div>

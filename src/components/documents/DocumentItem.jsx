@@ -20,7 +20,11 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-export default function DocumentItem({ document, onDelete }) {
+// `siblings` (optional) = other artifacts of the SAME source (e.g. the DOCX and
+// full-proposal copies of a Hamilton packet). They render as download chips on
+// this card instead of separate near-duplicate cards. `primaryLabel` names what
+// this card's own file is ("Packet · PDF") when siblings are shown.
+export default function DocumentItem({ document, onDelete, siblings = [], primaryLabel = null }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [isParsing, setIsParsing] = useState(false);
@@ -31,7 +35,8 @@ export default function DocumentItem({ document, onDelete }) {
     return !isNaN(date.getTime());
   };
 
-  const fileUri = document.download_url ?? document.file_url ?? document.file_uri;
+  const fileUriOf = (doc) => doc.download_url ?? doc.file_url ?? doc.file_uri;
+  const fileUri = fileUriOf(document);
 
   const uploadedLabel = isValidDate(document.created_at)
     ? format(new Date(document.created_at), 'MMM dd, yyyy')
@@ -99,22 +104,23 @@ export default function DocumentItem({ document, onDelete }) {
     }
   };
 
-  const resolveFileUrl = async () => {
-    if (!fileUri) return null;
-    if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
-      return fileUri;
+  const resolveFileUrl = async (doc = document) => {
+    const uri = fileUriOf(doc);
+    if (!uri) return null;
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      return uri;
     }
-    if (fileUri.startsWith('/')) {
-      return fileUri;
+    if (uri.startsWith('/')) {
+      return uri;
     }
-    if (fileUri.startsWith('uploads/')) {
-      return `/${fileUri}`;
+    if (uri.startsWith('uploads/')) {
+      return `/${uri}`;
     }
     try {
       if (!client?.integrations?.Core?.CreateFileSignedUrl) {
         return null;
       }
-      const { signed_url } = await client.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+      const { signed_url } = await client.integrations.Core.CreateFileSignedUrl({ file_uri: uri });
       return signed_url;
     } catch (error) {
       console.error('Failed to resolve remote document URL', error);
@@ -150,16 +156,16 @@ export default function DocumentItem({ document, onDelete }) {
     printable.print();
   };
 
-  const handleDownload = async () => {
-    const url = await resolveFileUrl();
+  const handleDownload = async (doc = document) => {
+    const url = await resolveFileUrl(doc);
     if (url) {
       try {
         await downloadAuthenticatedUrl(url, {
-          fallbackFileName: String(document.file_name || document.name || 'document').trim() || 'document',
+          fallbackFileName: String(doc.file_name || doc.name || 'document').trim() || 'document',
         })
       } catch (error) {
         // If authenticated download fails (e.g. 404 for URL-imported docs), fall through to extracted_text
-        if (!document.extracted_text) {
+        if (!doc.extracted_text) {
           toast({
             variant: 'destructive',
             title: 'Download failed',
@@ -169,9 +175,9 @@ export default function DocumentItem({ document, onDelete }) {
         }
       }
     }
-    if (document.extracted_text) {
-      const blob = new Blob([document.extracted_text], { type: 'text/plain;charset=utf-8' });
-      const fileName = `${document.name || 'document'}.txt`;
+    if (doc.extracted_text) {
+      const blob = new Blob([doc.extracted_text], { type: 'text/plain;charset=utf-8' });
+      const fileName = `${doc.name || 'document'}.txt`;
       const downloadUrl = URL.createObjectURL(blob);
       const link = window.document.createElement('a');
       link.href = downloadUrl;
@@ -211,7 +217,7 @@ export default function DocumentItem({ document, onDelete }) {
 
   return (
     <Card className="flex flex-col h-full cursor-pointer hover:shadow-md hover:border-primary/30 transition-shadow">
-      <div onClick={handleDownload} className="flex-1 min-w-0 flex flex-col" role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDownload() }}>
+      <div onClick={() => handleDownload()} className="flex-1 min-w-0 flex flex-col" role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDownload() }}>
       <CardHeader className="flex-row items-start gap-3 space-y-0 pb-3">
         <div className="p-2.5 bg-blue-50 rounded-lg shrink-0">
           <FileText className="w-5 h-5 text-blue-600" />
@@ -257,6 +263,24 @@ export default function DocumentItem({ document, onDelete }) {
       </CardHeader>
       <CardContent className="flex-grow space-y-2 pt-0 pb-4">
         <p className="text-xs text-slate-500">Uploaded on {uploadedLabel}</p>
+        {siblings.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            {primaryLabel ? (
+              <Badge variant="secondary" className="text-[10px]">{primaryLabel}</Badge>
+            ) : null}
+            {siblings.map(({ doc: sib, label }) => (
+              <button
+                key={sib.id}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handleDownload(sib) }}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                title={`Download ${label}`}
+              >
+                <Download className="w-2.5 h-2.5" /> {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {processingStatus === 'failed' && document.processing_error ? (
           <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-md p-2">
             {document.processing_error}
@@ -286,7 +310,7 @@ export default function DocumentItem({ document, onDelete }) {
           variant="outline"
           size="sm"
           className={isUnparsed ? "" : "flex-1"}
-          onClick={handleDownload}
+          onClick={() => handleDownload()}
           disabled={!fileUri && !document.extracted_text}
         >
           <Download className="w-3 h-3 mr-2" /> Download
