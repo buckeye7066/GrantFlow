@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor, Trash2, RotateCcw, MapPin, CheckSquare } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor, Trash2, RotateCcw, MapPin, CheckSquare, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -21,6 +21,8 @@ import {
   getAnyaTasks,
   createAnyaTask,
   updateAnyaTask,
+  getAnyaRun,
+  cancelAnyaRun,
 } from "@/lib/anyaClient"
 import { bootstrapAnyaSession } from "./anyaSession"
 import { enqueueAnyaBackgroundRun, subscribeAnyaBackground } from "@/lib/anyaBackgroundQueue"
@@ -504,6 +506,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   // run_id so an open panel can show a "working…" line and clear it when the
   // matching reply-ready event arrives.
   const [awaitingRunId, setAwaitingRunId] = useState(null)
+  // Live "watch her work" feed for the in-flight run + Stop/Escape state.
+  const [runProgress, setRunProgress] = useState([])
+  const [isStopping, setIsStopping] = useState(false)
   const [tools, setTools] = useState([])
   const [isLoadingTools, setIsLoadingTools] = useState(false)
   const [isCodeSearchOpen, setIsCodeSearchOpen] = useState(false)
@@ -946,6 +951,55 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     })
     return unsubscribe
   }, [sessionId, refreshMessages])
+
+  // Poll the in-flight run for its live step feed, so the user WATCHES what
+  // Anya is doing as she does it (and sees a Stop take effect). Only runs
+  // while a background reply is pending; clears itself when the run resolves.
+  useEffect(() => {
+    if (!sessionId || !awaitingRunId) {
+      setRunProgress([])
+      setIsStopping(false)
+      return undefined
+    }
+    let alive = true
+    const tick = async () => {
+      try {
+        const run = await getAnyaRun(sessionId, awaitingRunId)
+        if (!alive || !run) return
+        setRunProgress(Array.isArray(run.progress) ? run.progress : [])
+      } catch {
+        /* transient poll failure — keep the last feed */
+      }
+    }
+    tick()
+    const timer = setInterval(tick, 1500)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [sessionId, awaitingRunId])
+
+  // Stop button / Escape — the owner rule: the user can halt Anya mid-task at
+  // any time. Cooperative cancel: she stops before her next step; anything
+  // already saved stays saved (her stop message says so).
+  const handleStopRun = useCallback(async () => {
+    if (!sessionId || !awaitingRunId || isStopping) return
+    setIsStopping(true)
+    try {
+      await cancelAnyaRun(sessionId, awaitingRunId)
+    } catch {
+      setIsStopping(false)
+    }
+  }, [sessionId, awaitingRunId, isStopping])
+
+  useEffect(() => {
+    if (!awaitingRunId) return undefined
+    const onKey = (event) => {
+      if (event.key === "Escape") handleStopRun()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [awaitingRunId, handleStopRun])
 
   useEffect(() => {
     let isMounted = true
@@ -2038,12 +2092,42 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
               </div>
             ) : null}
             {awaitingRunId ? (
-              <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs text-blue-800">
-                <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
-                <span>
-                  Anya is working on this in the background. You can keep using GrantFlow or close
-                  this panel — she’ll ping you the moment the answer is ready.
-                </span>
+              <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs text-blue-800">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
+                    {isStopping
+                      ? "Stopping — Anya halts before her next step…"
+                      : "Anya is working on this. Watch her steps below, keep using GrantFlow, or stop her any time."}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleStopRun}
+                    disabled={isStopping}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                    title="Stop Anya (Esc)"
+                  >
+                    <Square className="h-3 w-3" /> Stop (Esc)
+                  </button>
+                </div>
+                {runProgress.length > 0 ? (
+                  <ul className="space-y-1 border-t border-blue-200/70 pt-2">
+                    {runProgress.map((step, idx) => (
+                      <li key={idx} className="flex items-center gap-1.5">
+                        {step.status === "done" ? (
+                          <span className="text-emerald-600">✓</span>
+                        ) : step.status === "error" ? (
+                          <span className="text-red-600">✗</span>
+                        ) : step.status === "cancelled" ? (
+                          <span className="text-slate-500">⏹</span>
+                        ) : (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin text-blue-500" />
+                        )}
+                        <span className={step.status === "error" ? "text-red-700" : undefined}>{step.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
           </div>

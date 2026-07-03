@@ -70,11 +70,18 @@ export async function postAnyaMessage(sessionId, message, { currentPage, pageCon
 }
 
 // Poll a background reply's run status. Resolves to the run object
-// ({ status, assistant_message_id, assistant_text, degraded, ... }) or null.
+// ({ status, assistant_message_id, assistant_text, degraded, progress, ... }) or null.
 export async function getAnyaRun(sessionId, runId) {
   if (!sessionId || !runId) return null
   const response = await apiFetch(`/api/anya/sessions/${sessionId}/runs/${runId}`)
   return response?.run ?? null
+}
+
+// Ask a running Anya turn to stop (Stop button / Escape). Cooperative: Anya
+// halts before her next step; work already committed stays committed.
+export async function cancelAnyaRun(sessionId, runId) {
+  if (!sessionId || !runId) return null
+  return apiFetch(`/api/anya/sessions/${sessionId}/runs/${runId}/cancel`, { method: "POST" })
 }
 
 export async function listAnyaTools({ includeAdmin = false } = {}) {
