@@ -36,42 +36,56 @@ import {
   sanitizeTodoPlan,
 } from '../services/profileTodoPlan.js'
 import { buildHamiltonTodoCategory } from '../services/hamilton/hamiltonProfileSummary.js'
+import { buildThresholdReport, buildThresholdTodoCategory } from '../services/eligibility/thresholdAnalyzer.js'
 const routeLogger = createLogger('route:ai')
 
-// Merge Hamilton's LIVE needs (missing packet fields/documents, portals that
-// need a sign-in-once session, vault state) into an action plan as its own
-// category. Computed fresh on every read and NEVER persisted with the plan —
-// items disappear automatically once Hamilton's underlying need is resolved.
-// The owner's rule: the Action Plan must show what HAMILTON needs, not just
-// Anya's checklist, and each item must deep-link to where the need is fixed.
-async function withHamiltonCategory(db, profileId, todo) {
-  let hamiltonCategory = null
+// Merge the LIVE categories into an action plan: Hamilton's needs (missing
+// packet fields/documents, sign-in-once portals, vault state) and the
+// Threshold watch (sources the profile ALMOST qualifies for, with the exact
+// number that closes the gap). Computed fresh on every read and NEVER
+// persisted with the plan — items disappear on their own when the underlying
+// need resolves or a profile fact changes. The owner's rules: the Action Plan
+// must show what HAMILTON needs (not just Anya's checklist), every item must
+// deep-link to where it's fixed, and users must see what they almost qualify
+// for and what crosses the threshold.
+async function withLiveCategories(db, profileId, todo) {
+  const liveCategories = []
   try {
-    hamiltonCategory = await buildHamiltonTodoCategory(db, profileId)
+    const hamiltonCategory = await buildHamiltonTodoCategory(db, profileId)
+    if (hamiltonCategory) liveCategories.push(hamiltonCategory)
   } catch (err) {
     routeLogger.warn('[profile-todo] hamilton category failed (plan returned without it):', err?.message || err)
   }
-  if (!hamiltonCategory) return todo
-  // No AI plan yet → still surface Hamilton's needs as a minimal plan so the
-  // card is never silent about work the owner must do. The Generate button
+  try {
+    const thresholdCategory = await buildThresholdTodoCategory(db, profileId)
+    if (thresholdCategory) liveCategories.push(thresholdCategory)
+  } catch (err) {
+    routeLogger.warn('[profile-todo] threshold category failed (plan returned without it):', err?.message || err)
+  }
+  if (liveCategories.length === 0) return todo
+
+  const liveCount = liveCategories.reduce((n, c) => n + c.items.length, 0)
+  // No AI plan yet → still surface the live categories as a minimal plan so
+  // the card is never silent about work the owner must do. The Generate button
   // stays available (it reads as "Generate Checklist" only when todo is null,
   // so keep hamilton_only as a hint for the frontend copy).
   if (!todo || typeof todo !== 'object' || !Array.isArray(todo.categories)) {
     return {
       summary: null,
-      categories: [hamiltonCategory],
-      total_items: hamiltonCategory.items.length,
+      categories: liveCategories,
+      total_items: liveCount,
       hamilton_only: true,
     }
   }
-  // Drop any stale persisted copy (older builds may have persisted it), then
-  // lead with Hamilton's needs — they gate live applications.
-  const categories = todo.categories.filter((c) => c?.source !== 'hamilton')
-  const merged = { ...todo, categories: [hamiltonCategory, ...categories] }
+  // Drop any stale persisted copies (older builds may have persisted them),
+  // then lead with the live categories — they gate live applications.
+  const liveSources = new Set(liveCategories.map((c) => c.source))
+  const categories = todo.categories.filter((c) => !liveSources.has(c?.source))
+  const merged = { ...todo, categories: [...liveCategories, ...categories] }
   const baseTotal = typeof todo.total_items === 'number' && todo.total_items > 0
     ? todo.total_items
     : categories.reduce((n, c) => n + (Array.isArray(c?.items) ? c.items.length : 0), 0)
-  merged.total_items = baseTotal + hamiltonCategory.items.length
+  merged.total_items = baseTotal + liveCount
   return merged
 }
 
@@ -1701,7 +1715,7 @@ Return ONLY valid JSON:
       profile_id,
       applicant_name: applicantName,
       pipeline_count: activeGrants.length,
-      todo: await withHamiltonCategory(db, String(profile_id), parsed || { raw: rawText }),
+      todo: await withLiveCategories(db, String(profile_id), parsed || { raw: rawText }),
       completions,
     });
   } catch (error) {
@@ -1727,13 +1741,35 @@ router.get('/profile-todo', async (req, res) => {
     return res.json({
       success: true,
       profile_id,
-      todo: await withHamiltonCategory(req.db, profile_id, parseSafe(row?.plan, null)),
+      todo: await withLiveCategories(req.db, profile_id, parseSafe(row?.plan, null)),
       completions: parseSafe(row?.completions, {}),
       applicant_name: row?.applicant_name ?? null,
       generated_at: row?.generated_at ?? null,
     });
   } catch (error) {
     console.error('[profile-todo:get] Error:', error);
+    return res.status(500).json(formatError(error));
+  }
+});
+
+/**
+ * GET /api/ai/threshold-report?profile_id=...
+ * The full qualify / almost-qualify analysis for a profile: every pipeline
+ * source with explicit numeric requirements (ACT/SAT/GPA/income/age) compared
+ * to the profile's own facts, with the exact gap and a link to act. The Action
+ * Plan's "Threshold watch" category is the near-miss slice of this report;
+ * this endpoint exposes the whole thing (Anya's profile.thresholdReport tool
+ * reads it too).
+ */
+router.get('/threshold-report', async (req, res) => {
+  try {
+    const profile_id = String(req.query.profile_id || '');
+    if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
+    if (!(await ensureProfileAccess(req, res, profile_id))) return;
+    const report = await buildThresholdReport(req.db, profile_id);
+    return res.json({ success: true, profile_id, ...report });
+  } catch (error) {
+    console.error('[threshold-report] Error:', error);
     return res.status(500).json(formatError(error));
   }
 });

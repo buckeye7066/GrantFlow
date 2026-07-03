@@ -103,6 +103,7 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['crawlers.planForProfile', 'Show what a profile-specific discovery ("deeper search") would look for, grounded in the profile\'s real facts.'],
   ['app.explainFeature', 'Explain what a GrantFlow page or feature does, its main actions, and how it relates to other features (routeName e.g. SmartMatcher, Pipeline, MyProfiles).'],
   ['app.explainField', 'Explain what a specific profile field does, why it matters for matching, and whether it affects crawlers (field key e.g. zip, state, health_conditions).'],
+  ['profile.thresholdReport', "Show what the profile qualifies for and ALMOST qualifies for — each source's explicit ACT/SAT/GPA/income/age requirement vs the profile's facts, the exact gap, and the application link."],
 ]
 export const CHAT_TOOL_WHITELIST = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)
 
@@ -1439,6 +1440,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
           'crawlers.planForProfile': 'Planning the deeper search',
           'app.explainFeature': 'Looking up how this feature works',
           'app.explainField': 'Looking up what this field does',
+          'profile.thresholdReport': 'Checking which thresholds you clear or almost clear',
         }
         return MAP[name] || `Running ${name}`
       }

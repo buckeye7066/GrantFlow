@@ -299,6 +299,17 @@ function TodoItemCard({ item, profileId, categoryName, done, onToggleDone, onUpl
             Go there <ArrowRight className="w-3 h-3" />
           </Link>
         )}
+        {item.link_url && (
+          <a
+            href={item.link_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+          >
+            Open the application page <ArrowRight className="w-3 h-3" />
+          </a>
+        )}
       </div>
     </div>
   )

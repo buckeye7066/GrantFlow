@@ -1671,6 +1671,37 @@ registerTool({
   },
 })
 
+registerTool({
+  name: 'profile.thresholdReport',
+  description: "Show what this profile QUALIFIES for and what it ALMOST qualifies for: every pipeline source with an explicit numeric requirement (ACT, SAT, GPA, income cap, age) compared against the profile's own facts, with the exact gap (e.g. 'needs ACT 29 — has 28') and the application link. Use when the user asks what they're eligible for, why they don't qualify for something, or what would open more funding.",
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile ID to analyze.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const ctx = context?.ctx
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+    const { buildThresholdReport } = await import('./eligibility/thresholdAnalyzer.js')
+    const report = await buildThresholdReport(context.db, profileId)
+    return {
+      ...report,
+      guidance: report.near.length > 0
+        ? 'Explain each near-miss in plain language: what number the source wants, what the profile shows, and the concrete move that crosses it (retake, better semester, corrected fact). Point to the application link when one exists.'
+        : 'No near-misses with explicit numeric thresholds right now. Qualified items clear their stated bars; sources without explicit thresholds are not analyzed (never guess).',
+    }
+  },
+})
+
 // ============================================================================
 // Phase 8: Anya as in-app guide — page-aware "what should I do next?" tool
 // ============================================================================
