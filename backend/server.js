@@ -2206,6 +2206,11 @@ app.use('/api/yana-contacts', lazyRouter('./routes/yanaLeads.js'));
 // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
 app.use('/api/robert', lazyRouter('./routes/robert.js'));
 
+// Promotion Campaigns — owner-only cross-app promotion (GrantFlow/GeneMap/
+// SermonSmith + any app added later). Admin-gated inside the router except
+// the public media route platforms fetch videos from.
+app.use('/api/promo', lazyRouter('./routes/promo.js'));
+
 // Sam — production-readiness agent. /api/sam/health is public; everything
 // else is admin-gated inside the router. Mounted after the rest of the API
 // so Sam's HTTP probes can hit /api/health/* and /readyz cleanly.
@@ -2858,6 +2863,19 @@ if (process.env.NODE_ENV !== 'test') {
         else console.log('[Server] Robert scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
         console.warn('[Server] Robert scheduler startup skipped:', err?.message)
+      }
+    })();
+    // Promotion Campaigns — posts to the owner-checked platforms on cadence.
+    // Safe by default: the master switch defaults on, but every channel starts
+    // UNCHECKED, so nothing posts until the owner ticks a box in Admin → Promotion.
+    ;(async () => {
+      try {
+        const { startPromoScheduler } = await import('./services/promo/promoScheduler.js')
+        const result = startPromoScheduler({ db })
+        if (result?.started) console.log('[Server] Promo scheduler started')
+        else console.log('[Server] Promo scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Promo scheduler startup skipped:', err?.message)
       }
     })();
     // Yana — client-discovery agent scheduler. Disabled by default; only
