@@ -57,15 +57,21 @@ export default function MyProfiles() {
     },
   });
   
-  // Filter profiles
+  // Filter + sort profiles alphabetically by person/organization name.
+  // The API already returns A→Z, but we sort defensively so the list stays
+  // alphabetical regardless of fetch/merge order.
   const filteredProfiles = useMemo(() => {
-    if (!searchTerm) return profiles;
-    
-    const search = searchTerm.toLowerCase();
-    return profiles.filter(profile => 
-      profile.display_name?.toLowerCase().includes(search) ||
-      profile.primary_type?.toLowerCase().includes(search) ||
-      profile.organization_name?.toLowerCase().includes(search)
+    const search = searchTerm.trim().toLowerCase();
+    const matched = !search
+      ? profiles
+      : profiles.filter(profile =>
+          profile.display_name?.toLowerCase().includes(search) ||
+          profile.primary_type?.toLowerCase().includes(search) ||
+          profile.organization_name?.toLowerCase().includes(search)
+        );
+    const nameOf = (p) => (p.display_name || p.organization_name || '').trim();
+    return [...matched].sort((a, b) =>
+      nameOf(a).localeCompare(nameOf(b), undefined, { sensitivity: 'base' })
     );
   }, [profiles, searchTerm]);
   
