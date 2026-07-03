@@ -153,21 +153,20 @@ jobs:
                   continue
                 fi
 
-                CHECKS_JSON=$(gh pr view "$EXISTING_PR" --json statusCheckRollup --jq '.statusCheckRollup // []')
-                FAILING_CHECKS=$(echo "$CHECKS_JSON" | jq '[.[] | select((.conclusion // "") == "FAILURE" or (.conclusion // "") == "CANCELLED")] | length')
-                PENDING_CHECKS=$(echo "$CHECKS_JSON" | jq '[.[] | select((.status // "") == "IN_PROGRESS" or (.status // "") == "QUEUED")] | length')
-                if [ "$FAILING_CHECKS" -gt 0 ] || [ "$PENDING_CHECKS" -gt 0 ]; then
-                  echo "⏸️  PR #$EXISTING_PR checks not green (failing=$FAILING_CHECKS pending=$PENDING_CHECKS). Skipping."
-                  echo ""
-                  continue
-                fi
-
-                # An empty/absent check rollup is a FAILURE, not a pass: the
-                # required contexts ("test" and "postgres-migrations", per branch
-                # protection on main) must each be PRESENT and SUCCESSFUL.
-                REQUIRED_GREEN=$(echo "$CHECKS_JSON" | jq '[.[] | select((.name // .context) == "test" or (.name // .context) == "postgres-migrations") | select((.conclusion // .state // "") == "SUCCESS")] | map(.name // .context) | unique | length')
-                if [ "$REQUIRED_GREEN" -lt 2 ]; then
-                  echo "⏸️  PR #$EXISTING_PR missing successful required checks (test + postgres-migrations green: $REQUIRED_GREEN/2). Skipping."
+                # Check status via mergeStateStatus, NOT statusCheckRollup:
+                # the rollup GraphQL query traverses checkSuite.workflowRun
+                # nodes owned by foreign GitHub Apps (e.g. Vercel), which the
+                # default GITHUB_TOKEN cannot read ("GraphQL: Resource not
+                # accessible by integration"). mergeStateStatus is a plain
+                # computed field and is stricter-or-equal: CLEAN means every
+                # branch-protection requirement is satisfied — the required
+                # "test" and "postgres-migrations" checks are PRESENT and
+                # SUCCESSFUL, and nothing is failing, cancelled, or pending.
+                # An empty/never-reported check rollup yields BLOCKED, not
+                # CLEAN, so it still counts as a failure, not a pass.
+                MERGE_STATE=$(gh pr view "$EXISTING_PR" --json mergeStateStatus --jq '.mergeStateStatus')
+                if [ "$MERGE_STATE" != "CLEAN" ] && [ "$MERGE_STATE" != "HAS_HOOKS" ]; then
+                  echo "⏸️  PR #$EXISTING_PR checks not all green/reported (mergeStateStatus: $MERGE_STATE). Skipping."
                   echo ""
                   continue
                 fi

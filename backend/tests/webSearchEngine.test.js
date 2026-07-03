@@ -49,12 +49,18 @@ beforeEach(() => {
   makeSearxngMock.mockClear()
   delete process.env.BRAVE_SEARCH_API_KEY
   delete process.env.SEARXNG_URL
+  // vitest.setup.js sets GRANTFLOW_TEST_RUNNER=1 so no test hits live web
+  // search as a side effect. THIS file is the dedicated engine test — it
+  // fully mocks the network (httpClient + both providers), so it opts back
+  // in via the engine's explicit escape hatch to exercise the real paths.
+  process.env.GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS = 'true'
   _resetWebSearchEngineForTests()
 })
 
 afterEach(() => {
   delete process.env.BRAVE_SEARCH_API_KEY
   delete process.env.SEARXNG_URL
+  delete process.env.GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS
   _resetWebSearchEngineForTests()
 })
 
