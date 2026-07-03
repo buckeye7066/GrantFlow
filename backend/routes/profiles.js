@@ -663,6 +663,12 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     }
     const { limit, offset } = validatePagination(paginationQuery)
 
+    // Alphabetical by person/organization name (case-insensitive), empty names
+    // last, created_at as a stable tiebreaker. Shared across all list branches so
+    // the profile list reads A→Z everywhere. Uses only LOWER/CASE (SQLite + PG).
+    const orderByName =
+      "ORDER BY (CASE WHEN p.display_name IS NULL OR p.display_name = '' THEN 1 ELSE 0 END), LOWER(p.display_name) ASC, p.created_at ASC"
+
     // "My Profiles" scope: return only profiles owned-by or shared-to this user,
     // even if the caller is an admin (admins otherwise see ALL profiles).
     if (scopeMine) {
@@ -756,7 +762,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
 
       const rows = await req.db
         .prepare(
-          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted}${excludeSyntheticSql} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted}${excludeSyntheticSql} ${orderByName} LIMIT ? OFFSET ?`,
         )
         .all(...idList, limit, offset)
 
@@ -787,7 +793,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       // Get all accessible profiles (with pagination)
       const rows = await req.db
         .prepare(
-          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted}${excludeSyntheticSql} ORDER BY p.created_at ASC LIMIT ? OFFSET ?`,
+          `${profileSelect} WHERE p.id IN (${placeholders})${whereDeleted}${excludeSyntheticSql} ${orderByName} LIMIT ? OFFSET ?`,
         )
         .all(...ids, limit, offset)
 
@@ -811,7 +817,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
         ? `${safeAdminWhere} AND COALESCE(p.created_by, '') <> 'agent:amy'`
         : "WHERE COALESCE(p.created_by, '') <> 'agent:amy'"
     }
-    const stmt = req.db.prepare(`${profileSelect} ${safeAdminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`) // audit:allow dynamic-sql
+    const stmt = req.db.prepare(`${profileSelect} ${safeAdminWhere} ${orderByName} LIMIT ? OFFSET ?`) // audit:allow dynamic-sql
     const profiles = (await stmt.all(limit, offset)).map(mapProfile)
 
     if (includeSummary) {
