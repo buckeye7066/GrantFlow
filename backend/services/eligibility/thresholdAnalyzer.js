@@ -31,7 +31,12 @@ const log = createLogger('thresholdAnalyzer')
 
 function toNumber(value) {
   if (value === null || value === undefined) return null
-  const n = Number(String(value).replace(/[$,\s]/g, ''))
+  const cleaned = String(value).replace(/[$,\s]/g, '')
+  // An empty field is a MISSING fact, not zero — Number('') === 0 silently
+  // turned a blank sat_score into "SAT 0", flunking every SAT-gated award as
+  // "short" instead of the honest "unknown" (caught in prod on 2026-07-03).
+  if (cleaned === '') return null
+  const n = Number(cleaned)
   return Number.isFinite(n) ? n : null
 }
 
