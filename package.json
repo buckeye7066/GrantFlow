@@ -101,6 +101,7 @@
     "@babel/parser": "^7.29.2",
     "@capacitor/android": "8.4.1",
     "@capacitor/core": "8.4.1",
+    "@capacitor/ios": "8.4.1",
     "@sentry/node": "10.63.0",
     "acorn": "^8.17.0",
     "axios": "^1.18.1",
