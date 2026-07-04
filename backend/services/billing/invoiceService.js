@@ -88,6 +88,24 @@ export async function ensureInvoiceSchema(db) {
   ensured = true
 }
 
+/**
+ * Amy's synthetic crawler-training profiles (created_by 'agent:amy') carry
+ * non-routable RFC-6761 `.invalid` emails. Invoicing them just bounces at
+ * Resend forever (dunning re-reminds daily), so billing skips them entirely —
+ * same exclusion the weekly digest and outreach loaders apply.
+ */
+async function isSyntheticProfile(db, profileId) {
+  try {
+    const row = await db.prepare('SELECT created_by FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    return String(row?.created_by || '') === 'agent:amy'
+  } catch { return false }
+}
+
+export function isNonRoutableEmail(email) {
+  const domain = String(email || '').trim().toLowerCase().split('@')[1] || ''
+  return domain === 'invalid' || domain.endsWith('.invalid')
+}
+
 /** Resolve the email to invoice: profile owner user email, else basic_information.email. */
 async function resolveRecipientEmail(db, profileId) {
   try {
@@ -168,6 +186,10 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
   await ensureInvoiceSchema(db)
   const account = mapAccountRow(accountRow)
   if (!account?.profile_id) return null
+  if (await isSyntheticProfile(db, account.profile_id)) {
+    log.info('invoice skipped — synthetic (agent:amy) profile', { profile_id: account.profile_id })
+    return null
+  }
   const cadence = normalizeCadence(accountRow.billing_cadence || account.billing_cadence)
   // billing_anchor_at doubles as the biweekly parity epoch: the every-other-
   // Friday alternation is pinned to the account's persisted anchor (or the
@@ -208,7 +230,7 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     eff.net_monthly_cents, recipient, paymentLink, now.toISOString(), dueAt)
 
   const orgName = await resolveOrgName(db, account.profile_id)
-  if (recipient) {
+  if (recipient && !isNonRoutableEmail(recipient)) {
     const mail = buildInvoiceEmail({ orgName, amountCents: eff.net_monthly_cents, periodStart: moment.period_start, periodEnd: moment.period_end, cadence, dueDate: dueAt.slice(0, 10), paymentLink })
     await sendEmail({ to: recipient, cc: ownerCc(), subject: mail.subject, html: mail.html, text: mail.text })
   }
@@ -236,7 +258,17 @@ export async function processDunning(db, { now = new Date() } = {}) {
   const open = await db.prepare(`SELECT * FROM billing_invoices WHERE status IN ('sent','second_notice')`).all()
   let reminded = 0
   let suspended = 0
+  let voided = 0
   for (const inv of open || []) {
+    // Retire invoices that can never be paid: synthetic (agent:amy) profiles
+    // and non-routable `.invalid` recipients. Voiding stops the daily reminder
+    // -> bounce loop; existing bad rows heal on the next dunning pass.
+    if (isNonRoutableEmail(inv.recipient_email) || await isSyntheticProfile(db, inv.profile_id)) {
+      await db.prepare(`UPDATE billing_invoices SET status = 'void' WHERE id = ?`).run(inv.id)
+      log.info('invoice voided — synthetic profile or non-routable recipient', { invoice_id: inv.id, profile_id: inv.profile_id })
+      voided += 1
+      continue
+    }
     const issued = inv.issued_at ? new Date(inv.issued_at) : null
     if (!issued) continue
     const ageDays = (now - issued) / 86400000
@@ -267,7 +299,7 @@ export async function processDunning(db, { now = new Date() } = {}) {
       reminded += 1
     }
   }
-  return { reminded, suspended }
+  return { reminded, suspended, voided }
 }
 
 /** Mark an invoice paid (Stripe webhook or admin) + lift any suspension. */
