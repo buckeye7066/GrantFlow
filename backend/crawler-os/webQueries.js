@@ -102,6 +102,13 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   const geo = geoPhrase(thesis.location);
   const county = countyPhrase(thesis.location);
   const state = thesis.location?.state ? String(thesis.location.state).trim() : '';
+  // Towns within the ~25-mile local radius of the profile ZIP (nearest first,
+  // computed by geoRadius in the thesis). These reach the next-town-over and
+  // across-county/state-line funders that the exact city/county tokens miss.
+  const nearby = (Array.isArray(thesis.location?.nearby_cities) ? thesis.location.nearby_cities : [])
+    .map((n) => (n?.city && n?.state ? `${String(n.city).trim()}, ${String(n.state).trim()}` : ''))
+    .filter(Boolean)
+    .slice(0, 4);
   const schools = (Array.isArray(thesis.schools) ? thesis.schools : [])
     .map(cleanInstitution)
     .filter(Boolean)
@@ -144,6 +151,9 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       if (i === 0 && field) add(core, `${school} ${field} scholarship`);
       // The university FOUNDATION is where most named endowments live.
       if (i === 0) add(core, `${school} foundation scholarships`);
+      // ENDOWED awards are catalogued separately from general scholarships on
+      // most university sites — the word "endowed" is the phrase that reaches them.
+      if (i === 0) add(core, `${school} endowed scholarships`);
     });
     // Field-of-study scholarships (major), independent of any one school.
     if (field) add(core, `${field} scholarships ${year}`);
@@ -162,6 +172,19 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     add(core, isStudent ? `scholarships ${county}` : `grants for ${word} ${county}`);
     add(core, `community foundation ${county}`);
   }
+  // 25-mile-radius towns (nearest first). The nearest neighbor is CORE — "local"
+  // means the radius, not just the profile's own mailing city; the rest broaden
+  // via the rotated EXTRA pool.
+  nearby.forEach((town, i) => {
+    const q = isStudent ? `scholarships ${town}` : `${word} assistance programs ${town}`;
+    if (i === 0) {
+      add(core, q);
+      add(core, `community foundation ${town}`);
+    } else {
+      add(extra, q);
+      add(extra, `community foundation grants ${town}`);
+    }
+  });
   // Geo + type funding, current cycle (orgs/individuals; a student's best geo
   // query is the scholarship one below, so skip the weak "student grants" phrase).
   if (geo && !isStudent) add(core, `${word} grants ${geo} ${year}`);
@@ -169,6 +192,10 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   if (geo) add(core, `community foundation grants ${geo}`);
   // Students: the single best scholarship query is core (federal APIs skip them).
   if (isStudent) add(core, `scholarships for students ${geo} ${year}`);
+  // State aid programs (HOPE, TSAA, Promise, Cal Grant...) have no API and are a
+  // student's largest single non-federal source — CORE, never rotated out (was
+  // in the rotated EXTRA pool, so runs under the query cap could drop it).
+  if (isStudent && state) add(core, `${state} state scholarship programs`);
 
   // ── EXTRA (broadening pool, rotated by seed) ──
   // Remaining needs + an alternate phrasing for each need.
@@ -189,7 +216,6 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     add(extra, `local scholarships ${geo}`);
     add(extra, `${geo} college grants for students`);
     add(extra, `community foundation scholarships ${geo}`);
-    if (state) add(extra, `${state} state scholarship programs`);
     // Field-of-study / career-goal keyed scholarships.
     for (const term of interests) {
       add(extra, `${term} scholarships ${geo}`);

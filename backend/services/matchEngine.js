@@ -55,6 +55,7 @@ import {
   // Post-weight signal boosts (centralized; values unchanged from former inline literals)
   DEPTH_BONUS_MAX_PCT, DEPTH_BONUS_DIVISOR,
   STUDENT_AID_NONSTUDENT_CAP,
+  SENIOR_PROGRAM_MISMATCH_CAP,
   WORKFORCE_BOOST_PER_HIT, WORKFORCE_BOOST_MAX,
   GPA_BOOST_HIGH, GPA_BOOST_MID, GPA_BOOST_LOW, HOPE_SCHOLARSHIP_BOOST,
   MAJOR_MATCH_BOOST, STEM_SCHOLARSHIP_BOOST, STEM_PLATFORM_BOOST,
@@ -2304,6 +2305,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     housingBonusReasons.push(`Non-student profile × student-aid opportunity (capped at ${STUDENT_AID_NONSTUDENT_CAP})`)
   }
 
+
   // Workforce / pro bono service alignment — applied after weighting so a WIOA
   // training row beats a generic corporate grant when profile proBonoTerms match.
   if (PRO_BONO_OPPORTUNITY_TYPES.has(String(opportunity?.opportunity_type || '').toLowerCase())) {
@@ -2545,6 +2547,29 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       rawScore = rawScore + nudge
       behaviorNudgeReason = reason
       housingBonusReasons.push(reason)
+    }
+  }
+
+  // ── Senior-services mismatch cap (LAST, so no later boost can re-inflate) ──
+  // An Area Agency on Aging / eldercare program must not ACCEPT for a profile
+  // with no senior, caregiver, or aging signal anywhere (the 18-year-old-student
+  // × eldercare-locator class). Population mismatch reduces score, never
+  // hard-rejects (G4): a senior, a caregiver, or a family with aging needs
+  // keeps the full score.
+  if (oppNorm?.isSeniorProgram) {
+    const seniorFacets = Array.isArray(profileNorm?.effectiveFacets) ? profileNorm.effectiveFacets : []
+    const seniorNeedList = Array.isArray(profileNorm?.needCategories)
+      ? profileNorm.needCategories.map((n) => String(n).toLowerCase()) : []
+    const profileAgeNum = Number(profileNorm?.age)
+    const hasSeniorSignal =
+      seniorFacets.includes('senior') || seniorFacets.includes('caregiver') ||
+      Boolean(profileNorm?.isCaregiver) ||
+      (Number.isFinite(profileAgeNum) && profileAgeNum >= 60) ||
+      /senior/i.test(String(profileNorm?.ageGroup || '')) ||
+      seniorNeedList.some((n) => /aging|senior|elder|caregiv|respite/.test(n))
+    if (!hasSeniorSignal) {
+      rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      housingBonusReasons.push(`No senior/caregiver signal × senior-services program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
     }
   }
 

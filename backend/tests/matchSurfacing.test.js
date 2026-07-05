@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   SURFACED_MATCHER_VERSIONS,
   SURFACED_MATCHER_VERSIONS_SQL,
+  DIRECTORY_MIN_SCORE,
   qualifiesForDisplay,
 } from '../config/matchSurfacing.js'
+import { REVIEW_SCORE } from '../config/matchThresholds.js'
 
 describe('matchSurfacing — surfaced matcher versions', () => {
   it('includes crawler-os, cross-match, AND web-llm (the recall regression fix)', () => {
@@ -49,8 +51,22 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
     expect(qualifiesForDisplay({ match_score: 70, match_decision: 'ACCEPT' }, MIN)).toBe(true)
   })
 
-  it('always surfaces directories regardless of score (mission rule)', () => {
-    expect(qualifiesForDisplay({ is_directory: true, match_score: 5 }, MIN)).toBe(true)
+  it('surfaces directories past the display floor (mission rule), but not ones the engine scored irrelevant', () => {
+    // A directory below the requested floor (75) still surfaces...
+    expect(qualifiesForDisplay({ is_directory: true, match_score: 50 }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ is_directory: true, match_score: DIRECTORY_MIN_SCORE }, MIN)).toBe(true)
+    // ...and an UNSCORED directory always surfaces (never scored ≠ scored irrelevant)...
+    expect(qualifiesForDisplay({ is_directory: true }, MIN)).toBe(true)
+    expect(qualifiesForDisplay({ is_directory: true, match_score: null }, MIN)).toBe(true)
+    // ...but a directory the engine affirmatively judged irrelevant stays hidden
+    // (Liubov's real case: federal student-aid directory scored 0 for a senior citizen).
+    expect(qualifiesForDisplay({ is_directory: true, match_score: 0 }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ is_directory: true, match_score: 5 }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ is_directory: true, match_score: DIRECTORY_MIN_SCORE - 1 }, MIN)).toBe(false)
+  })
+
+  it('DIRECTORY_MIN_SCORE stays in sync with the engine REVIEW band', () => {
+    expect(DIRECTORY_MIN_SCORE).toBe(REVIEW_SCORE)
   })
 
   it('does NOT surface REVIEW/REJECT rows below the floor', () => {

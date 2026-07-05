@@ -125,3 +125,57 @@ test('a declared employer produces employer education-program queries', () => {
   assert.ok(qs.includes('Bradley County EMS scholarship'), 'employer scholarship query');
   assert.ok(qs.includes('Bradley County EMS tuition assistance'), 'employer tuition-assistance query');
 });
+
+// ── 25-mile-radius town queries + student state-aid CORE (2026-07-05 QA) ────
+
+test('nearby_cities produce radius-town queries (nearest is CORE)', () => {
+  const thesis = {
+    ...NAMED_STUDENT,
+    location: {
+      ...NAMED_STUDENT.location,
+      nearby_cities: [
+        { city: 'Charleston', state: 'TN', miles: 6 },
+        { city: 'Georgetown', state: 'TN', miles: 7 },
+      ],
+    },
+  };
+  const qs = buildWebQueries(thesis, { year: 2026, max: 40, seed: 0 });
+  assert.ok(qs.includes('scholarships Charleston, TN'), 'nearest town is a CORE student query');
+  assert.ok(qs.includes('community foundation Charleston, TN'), 'nearest town community foundation is CORE');
+  assert.ok(
+    qs.some((q) => /Georgetown, TN/.test(q)),
+    'further towns appear in the broadened pool',
+  );
+});
+
+test('non-students get assistance-program queries for the nearest radius town', () => {
+  const thesis = {
+    applicant_types: ['individual'],
+    needs: ['medical bills'],
+    location: {
+      state: 'TN', city: 'Cleveland', county: 'Bradley County', zip: '37323',
+      nearby_cities: [{ city: 'Charleston', state: 'TN', miles: 6 }],
+    },
+  };
+  const qs = buildWebQueries(thesis, { year: 2026, max: 40, seed: 0 });
+  assert.ok(
+    qs.some((q) => /Charleston, TN/.test(q)),
+    'radius town reached for individuals too',
+  );
+});
+
+test('state scholarship programs query is CORE for students (never rotated out)', () => {
+  // Small max + varying seeds: a CORE query must survive every rotation.
+  for (const seed of [0, 3, 7, 11]) {
+    const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 14, seed });
+    assert.ok(
+      qs.includes('TN state scholarship programs'),
+      `state-aid query present at seed ${seed}`,
+    );
+  }
+});
+
+test('primary school gets an endowed-scholarships query (CORE)', () => {
+  const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 40, seed: 0 });
+  assert.ok(qs.includes('Cleveland State Community College endowed scholarships'));
+});

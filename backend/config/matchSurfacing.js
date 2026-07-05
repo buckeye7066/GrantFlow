@@ -23,6 +23,8 @@
  * reconcile — do NOT wire this constant into those delete paths.
  */
 
+import { REVIEW_SCORE } from './matchThresholds.js'
+
 /**
  * Matcher versions that represent legitimate, profile-scoped matches meant to
  * be shown to the user:
@@ -49,7 +51,11 @@ export const SURFACED_MATCHER_VERSIONS_SQL = `(${SURFACED_MATCHER_VERSIONS.map((
  * display floor.
  *
  * A row surfaces when ANY of:
- *   1. It is a directory/referral — mission rule: directories always survive.
+ *   1. It is a directory/referral scoring at least DIRECTORY_MIN_SCORE (or
+ *      never scored) — mission rule: directories survive the display floor,
+ *      BUT an engine score below the REVIEW band means the engine affirmatively
+ *      judged it irrelevant to this profile (e.g. a federal student-aid
+ *      directory scored 0 for a senior citizen). Those stay hidden.
  *   2. The engine's own decision is ACCEPT — an ACCEPT is only produced at
  *      score >= ACCEPT_SCORE (70) AND after every hard-eligibility / geo /
  *      population gate, and is downgraded to REVIEW when it lacks a URL, has a
@@ -67,9 +73,25 @@ export const SURFACED_MATCHER_VERSIONS_SQL = `(${SURFACED_MATCHER_VERSIONS.map((
  * @param {number} minScore requested display floor
  * @returns {boolean}
  */
+/**
+ * Directories bypass the requested display floor but not the engine's own
+ * REVIEW band: a scored directory below this is an affirmative "irrelevant to
+ * this profile" judgment (e.g. student-aid directory scored 0 for a senior),
+ * not a borderline match.
+ */
+export const DIRECTORY_MIN_SCORE = REVIEW_SCORE
+
 export function qualifiesForDisplay(row, minScore) {
   if (!row) return false
-  if (row.is_directory) return true
+  if (row.is_directory) {
+    // Never-scored (null/blank) ≠ scored-irrelevant: Number(null) is 0, so an
+    // unscored directory must be detected BEFORE numeric coercion or it would
+    // be hidden as if the engine had judged it a zero.
+    const raw = row.match_score
+    if (raw === null || raw === undefined || raw === '') return true
+    const dirScore = Number(raw)
+    return !Number.isFinite(dirScore) || dirScore >= DIRECTORY_MIN_SCORE
+  }
   if (String(row.match_decision || '').toUpperCase() === 'ACCEPT') return true
   const score = Number(row.match_score)
   return Number.isFinite(score) && score >= Number(minScore)
@@ -78,5 +100,6 @@ export function qualifiesForDisplay(row, minScore) {
 export default {
   SURFACED_MATCHER_VERSIONS,
   SURFACED_MATCHER_VERSIONS_SQL,
+  DIRECTORY_MIN_SCORE,
   qualifiesForDisplay,
 }
