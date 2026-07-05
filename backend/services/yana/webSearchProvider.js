@@ -20,7 +20,8 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
-import { isBravePaused, noteBrave429, noteBraveSuccess, braveCircuitState } from './braveRateLimit.js'
+import { isBravePaused, noteBrave429, noteBraveSuccess, braveCircuitState, pauseBrave } from './braveRateLimit.js'
+import { tryConsumeBraveQuery } from './braveBudget.js'
 
 const log = createLogger('yanaWebSearch')
 
@@ -53,6 +54,8 @@ export function makeBraveSearchProvider({
   fetchImpl = (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null),
   minIntervalMs = 1100,
   count = 8,
+  // Injectable for tests; defaults to the shared monthly pacer.
+  consumeBudget = tryConsumeBraveQuery,
 } = {}) {
   if (!apiKey) throw new Error('makeBraveSearchProvider: BRAVE_SEARCH_API_KEY is required')
   if (typeof fetchImpl !== 'function') throw new Error('makeBraveSearchProvider: no fetch implementation available')
@@ -73,6 +76,17 @@ export function makeBraveSearchProvider({
       // Re-check inside the serialized chain: an earlier queued call may have
       // tripped the breaker while this one waited its turn.
       if (isBravePaused()) return []
+      // Monthly PACER (braveBudget.js): ration the shared quota so it lasts the
+      // whole month instead of being drained in the first days and then 429ing
+      // for weeks. When today's allowance is spent, skip Brave — the search
+      // engine's other backends (SearXNG/DDG) carry the load. Fails open.
+      try {
+        const budget = await consumeBudget()
+        if (budget && budget.allowed === false) {
+          log.info(`Brave budget ${budget.reason} — skipping "${q}" (used ${budget.state?.used_today ?? '?'}/${budget.state?.allowance_today ?? '?'} today, ${budget.state?.used ?? '?'}/${budget.state?.budget ?? '?'} this month)`)
+          return []
+        }
+      } catch { /* pacer must never block search — fail open */ }
       const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(q)}&count=${count}`
       let res
       try {
@@ -97,6 +111,14 @@ export function makeBraveSearchProvider({
         } else {
           log.warn(`Brave rate-limited (429) for "${q}" — transient backoff`)
         }
+        return []
+      }
+      if (res.status === 402) {
+        // Payment Required: the subscription/credits lapsed (billing, not rate
+        // limiting). Every further call is doomed until a human fixes billing —
+        // open the circuit for a long window instead of burning the throttle.
+        pauseBrave(6 * 60 * 60 * 1000, 'billing_402')
+        log.warn(`Brave returned 402 (billing) for "${q}" — pausing Brave 6h; renew the subscription`)
         return []
       }
       if (!res.ok) {
