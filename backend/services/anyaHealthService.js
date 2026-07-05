@@ -118,6 +118,11 @@ export async function runHealthCheck(db) {
   //   - Jobs whose `last_heartbeat_at` is NULL but whose `started_at` is
   //     >2h old are treated as orphaned (the worker died before ever
   //     heartbeating).
+  //   - Queued age is judged from COALESCE(last_retry_at, created_at):
+  //     requeueJob stamps last_retry_at as the FRESH queue-entry time, so a
+  //     legitimately requeued old job gets a full 2h to dispatch instead of
+  //     being re-killed on the next health pass (which is how the requeued
+  //     2026-07-01 document_ingest jobs died within minutes on 2026-07-05).
   try {
     const isPostgres = db?.dialect === 'postgres'
     const cleanOrphansSql = isPostgres
@@ -126,7 +131,7 @@ export async function runHealthCheck(db) {
              completed_at = NOW(),
              error = COALESCE(error, 'Marked failed by AnyaHealth orphan cleanup: stale heartbeat or never-started queued job')
          WHERE (
-           (status = 'queued' AND created_at < NOW() - INTERVAL '2 hours')
+           (status = 'queued' AND COALESCE(last_retry_at, created_at) < NOW() - INTERVAL '2 hours')
            OR (
              status = 'running'
              AND (
@@ -140,7 +145,7 @@ export async function runHealthCheck(db) {
              completed_at = datetime('now'),
              error = COALESCE(error, 'Marked failed by AnyaHealth orphan cleanup: stale heartbeat or never-started queued job')
          WHERE (
-           (status = 'queued' AND created_at < datetime('now', '-2 hours'))
+           (status = 'queued' AND COALESCE(last_retry_at, created_at) < datetime('now', '-2 hours'))
            OR (
              status = 'running'
              AND (

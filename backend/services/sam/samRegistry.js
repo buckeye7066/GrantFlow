@@ -232,19 +232,29 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     async run({ db } = {}) {
       if (!db) return { ok: true, skipped: true, summary: 'no db handle; gap-learning read skipped' }
       let store
+      let windowSummary = null
       try {
-        const { getCrawlerGapLearning } = await import('../coverageAudit/liveCrawlGapLearning.js')
+        const { getCrawlerGapLearning, summarizeGapWindow } = await import('../coverageAudit/liveCrawlGapLearning.js')
         store = await getCrawlerGapLearning(db)
+        windowSummary = summarizeGapWindow(store)
       } catch (err) {
         return { ok: true, skipped: true, summary: `gap-learning store unavailable: ${err?.message || err}` }
       }
-      const calls = Number(store?.totals?.calls) || 0
-      if (!store || calls === 0) {
+      const lifetimeCalls = Number(store?.totals?.calls) || 0
+      if (!store || lifetimeCalls === 0) {
         return { ok: true, summary: 'No live crawler-gap telemetry yet.' }
       }
-      const withGap = Number(store.totals.with_gap) || 0
-      const byClass = store.totals.by_class || {}
+      // Judge the RECENT window, not lifetime totals: the lifetime counters
+      // never decay, so a store that was ever gappy would otherwise read as a
+      // permanent alert long after coverage recovered. Stores predating the
+      // daily buckets fall back to lifetime (better than mistaking "no window
+      // data" for healthy).
+      const windowed = Boolean(windowSummary && windowSummary.calls > 0)
+      const calls = windowed ? windowSummary.calls : lifetimeCalls
+      const withGap = windowed ? windowSummary.with_gap : Number(store.totals.with_gap) || 0
+      const byClass = windowed ? windowSummary.by_class : store.totals.by_class || {}
       const gapRate = calls > 0 ? withGap / calls : 0
+      const scopeLabel = windowed ? `live crawls in the last ${windowSummary.days} days` : 'live crawls (lifetime — pre-window store)'
       const topClasses = Object.entries(byClass)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
@@ -255,19 +265,73 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (calls >= 5 && gapRate > 0.4) {
         return {
           ok: false,
-          summary: `${Math.round(gapRate * 100)}% of the last ${calls} live crawls surfaced coverage gaps (${withGap}/${calls}). Top classes: ${topClasses || 'n/a'}.`,
+          summary: `${Math.round(gapRate * 100)}% of ${calls} ${scopeLabel} surfaced coverage gaps (${withGap}/${calls}). Top classes: ${topClasses || 'n/a'}.`,
           evidence: {
             calls,
             with_gap: withGap,
             gap_rate: Number(gapRate.toFixed(3)),
+            windowed,
             by_class: byClass,
+            lifetime: { calls: lifetimeCalls, with_gap: Number(store.totals.with_gap) || 0 },
             recent_examples: Array.isArray(store.recent) ? store.recent.slice(0, 5) : [],
           },
-          recommended_fix: 'Inspect system_kv `crawler_gap_learning` + Anya brain (memory_key crawler_gap). Widen buildWebQueries for institution/hyperlocal/low_results gaps, and confirm the coverage self-heal + student-aid eligibility invariant are running for the ineligible/surfacing classes.',
+          recommended_fix: 'FIRST check crawler.webLaneHealth — a dead open-web lane (search backend down / LLM key exhausted) makes EVERY crawl miss county-level and institution funding, which is exactly this gap signature. Then inspect system_kv `crawler_gap_learning` + Anya brain (memory_key crawler_gap), widen buildWebQueries for institution/hyperlocal/low_results gaps, and confirm the coverage self-heal + student-aid eligibility invariant are running for the ineligible/surfacing classes.',
           confidence: 0.85,
         }
       }
-      return { ok: true, summary: `${withGap}/${calls} recent live crawls had gaps${topClasses ? ` (${topClasses})` : ''}.` }
+      return { ok: true, summary: `${withGap}/${calls} ${scopeLabel} had gaps${topClasses ? ` (${topClasses})` : ''}.` }
+    },
+  },
+  {
+    // Open-web lane liveness: the web lane is best-effort BY DESIGN (a dead
+    // search backend or exhausted LLM key degrades it to a silent no-op so it
+    // never blocks a crawl). This check is the read side that makes that death
+    // observable as itself: runProfileDiscoveryLive records every lane run's
+    // telemetry to system_kv `web_lane_health`; when every recent run produced
+    // ZERO search pages, the search layer (SearXNG upstreams / Brave billing /
+    // DDG throttling) is down — the root cause behind a hyperlocal-gap flood.
+    id: 'crawler.webLaneHealth',
+    label: 'Open-web discovery lane liveness',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Reads the rolling web-lane telemetry (system_kv web_lane_health, recorded on every live discovery) and flags when all recent runs produced zero search pages — a dead search backend or LLM key, the single point of failure for county/community/foundation coverage.',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; web-lane health read skipped' }
+      let store
+      let summary
+      try {
+        const { getWebLaneHealth, summarizeRecentWebLane } = await import('../coverageAudit/webLaneHealth.js')
+        store = await getWebLaneHealth(db)
+        summary = summarizeRecentWebLane(store)
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `web-lane health store unavailable: ${err?.message || err}` }
+      }
+      if (!store || !summary || summary.judged === 0) {
+        return { ok: true, summary: 'No web-lane telemetry yet (no live discovery since deploy).' }
+      }
+      if (summary.dead) {
+        const reasons = summary.reasons.length ? ` Recent errors/reasons: ${summary.reasons.join(' | ')}.` : ''
+        return {
+          ok: false,
+          summary: `Open-web discovery lane is DEAD: ${summary.zero_page}/${summary.judged} recent live crawls got ZERO search pages (0 opportunities stored from the web lane).${reasons}`,
+          evidence: {
+            judged: summary.judged,
+            zero_page: summary.zero_page,
+            errored: summary.errored,
+            stored: summary.stored,
+            reasons: summary.reasons,
+            recent: Array.isArray(store.recent) ? store.recent.slice(0, 8) : [],
+          },
+          recommended_fix: 'Probe the search backends from the prod container: SearXNG (upstream engines suspended? restart the searxng service), Brave API key (HTTP 402 = billing lapsed), and the LLM extraction keys (Anthropic credit balance; OpenAI fallback). Hyperlocal/institution coverage cannot recover until this lane is alive.',
+          confidence: 0.9,
+        }
+      }
+      return {
+        ok: true,
+        summary: `web lane alive: ${summary.judged - summary.zero_page}/${summary.judged} recent runs returned search pages, ${summary.stored} web-lane opportunities stored.`,
+        evidence: { judged: summary.judged, zero_page: summary.zero_page, stored: summary.stored },
+      }
     },
   },
   {
@@ -1297,8 +1361,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`)
           .get(runningCutoff)
         running = Number(r?.c || 0)
+        // COALESCE(last_retry_at, created_at) = fresh queue-entry time — a
+        // requeued old job is not "stuck since its ORIGINAL enqueue".
         const q = await db
-          .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'queued' AND created_at < ?`)
+          .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'queued' AND COALESCE(last_retry_at, created_at) < ?`)
           .get(queuedCutoff)
         queued = Number(q?.c || 0)
       } catch (err) {

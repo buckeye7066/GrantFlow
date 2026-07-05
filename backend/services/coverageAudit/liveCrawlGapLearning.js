@@ -40,6 +40,12 @@ export const KV_KEY = 'crawler_gap_learning'
 /** How many recent gap events to retain in the rolling store. */
 export const RECENT_CAP = 50
 
+/** How many daily buckets to retain (drives the windowed gap rate). */
+export const WINDOW_RETENTION_DAYS = 14
+
+/** Default window (days) Sam judges the gap rate over. */
+export const WINDOW_DAYS = 7
+
 /** TTL for the per-profile pattern written into Anya's brain. */
 const MEMORY_TTL_DAYS = 30
 
@@ -95,6 +101,27 @@ export function buildGapLearningUpdate(prev, audit, { profileId, displayName = n
     for (const c of classes) totals.by_class[c] = (Number(totals.by_class[c]) || 0) + 1
   }
 
+  // Daily buckets — the windowed view. Lifetime `totals` never decay, so a
+  // long-lived store reads as a permanent alert once it has ever been gappy;
+  // Sam's rate must be judged over a recent window instead. Keyed by UTC day,
+  // pruned to WINDOW_RETENTION_DAYS. Only real ISO dates bucket (fixture
+  // timestamps like 't1' are counted in totals but not windowed).
+  const days = { ...(base.days && typeof base.days === 'object' ? base.days : {}) }
+  const dayKey = typeof at === 'string' && /^\d{4}-\d{2}-\d{2}/.test(at) ? at.slice(0, 10) : null
+  if (dayKey) {
+    const bucket = days[dayKey] && typeof days[dayKey] === 'object' ? { ...days[dayKey] } : {}
+    bucket.calls = (Number(bucket.calls) || 0) + 1
+    bucket.with_gap = Number(bucket.with_gap) || 0
+    bucket.by_class = { ...(bucket.by_class || {}) }
+    if (classes.length > 0) {
+      bucket.with_gap += 1
+      for (const c of classes) bucket.by_class[c] = (Number(bucket.by_class[c]) || 0) + 1
+    }
+    days[dayKey] = bucket
+    const keys = Object.keys(days).sort()
+    while (keys.length > WINDOW_RETENTION_DAYS) delete days[keys.shift()]
+  }
+
   let recent = Array.isArray(base.recent) ? base.recent.slice() : []
   if (classes.length > 0) {
     recent.unshift({
@@ -109,7 +136,38 @@ export function buildGapLearningUpdate(prev, audit, { profileId, displayName = n
     recent = recent.slice(0, RECENT_CAP)
   }
 
-  return { totals, recent, updated_at: at ?? base.updated_at ?? null }
+  return { totals, days, recent, updated_at: at ?? base.updated_at ?? null }
+}
+
+/**
+ * PURE: the windowed view Sam's gap-rate check judges. Sums the daily buckets
+ * within the last `days` UTC days (inclusive of today). Returns null when the
+ * store has no daily buckets yet (a pre-window store) so callers can fall back
+ * to the lifetime totals rather than mistaking "no window data" for "healthy".
+ *
+ * @param {object|null} store  value from getCrawlerGapLearning
+ * @param {{ days?:number, nowMs?:number }} [opts]
+ * @returns {{ days:number, calls:number, with_gap:number, by_class:object, rate:number }|null}
+ */
+export function summarizeGapWindow(store, { days = WINDOW_DAYS, nowMs = Date.now() } = {}) {
+  const buckets = store?.days && typeof store.days === 'object' ? store.days : null
+  if (!buckets) return null
+  const cutoff = new Date(nowMs - (days - 1) * 86400000).toISOString().slice(0, 10)
+  const out = { days, calls: 0, with_gap: 0, by_class: {}, rate: 0 }
+  let sawBucket = false
+  for (const [key, bucket] of Object.entries(buckets)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue
+    sawBucket = true
+    if (key < cutoff) continue
+    out.calls += Number(bucket?.calls) || 0
+    out.with_gap += Number(bucket?.with_gap) || 0
+    for (const [c, n] of Object.entries(bucket?.by_class || {})) {
+      out.by_class[c] = (Number(out.by_class[c]) || 0) + (Number(n) || 0)
+    }
+  }
+  if (!sawBucket) return null
+  out.rate = out.calls > 0 ? out.with_gap / out.calls : 0
+  return out
 }
 
 async function ensureKv(db) {
@@ -219,10 +277,13 @@ export async function learnFromCrawlGaps(db, { profileId, thesis = null, display
 export default {
   KV_KEY,
   RECENT_CAP,
+  WINDOW_RETENTION_DAYS,
+  WINDOW_DAYS,
   GAP_CLASSES,
   isCrawlerGapLearningEnabled,
   classifyGaps,
   buildGapLearningUpdate,
+  summarizeGapWindow,
   getCrawlerGapLearning,
   learnFromCrawlGaps,
 }

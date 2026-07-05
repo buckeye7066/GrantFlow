@@ -565,6 +565,12 @@ export async function requeueJob(db, jobId, opts = {}) {
     ? ', attempt_count = 0, dispatch_attempts = 0, retry_count = 0, next_dispatch_at = NULL'
     : ', dispatch_attempts = 0, next_dispatch_at = NULL'
 
+  // last_retry_at is the job's FRESH queue-entry timestamp. The queued-staleness
+  // sweeps (AnyaHealth 2h, cleanupStaleQueuedJobs 24h, Sam queue.staleJobs)
+  // judge COALESCE(last_retry_at, created_at) — without this stamp, requeueing
+  // any job older than a sweep threshold re-failed it within minutes while
+  // COALESCE preserved the requeue reason in `error` (exactly what happened to
+  // the 2026-07-01 orphaned document_ingest jobs when requeued on 2026-07-05).
   const res = await db
     .prepare(
       `
@@ -573,7 +579,8 @@ export async function requeueJob(db, jobId, opts = {}) {
             error = ?,
             worker_id = NULL,
             claimed_at = NULL,
-            completed_at = NULL
+            completed_at = NULL,
+            last_retry_at = CURRENT_TIMESTAMP
             ${resetSql}
         WHERE id = ?
           AND status IN ('failed', 'cancelled', 'running')

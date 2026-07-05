@@ -6,7 +6,9 @@ import {
   isCrawlerGapLearningEnabled,
   getCrawlerGapLearning,
   learnFromCrawlGaps,
+  summarizeGapWindow,
   RECENT_CAP,
+  WINDOW_RETENTION_DAYS,
 } from '../services/coverageAudit/liveCrawlGapLearning.js'
 
 // ── Pure fold + classification (no I/O) ──────────────────────────────────────
@@ -56,6 +58,122 @@ describe('liveCrawlGapLearning — pure fold', () => {
     expect(store.recent).toHaveLength(RECENT_CAP)
     expect(store.totals.calls).toBe(RECENT_CAP + 15)
     expect(store.totals.with_gap).toBe(RECENT_CAP + 15)
+  })
+})
+
+// ── Windowed daily buckets (the decay the lifetime totals lack) ─────────────
+
+describe('liveCrawlGapLearning — daily buckets + window summary', () => {
+  const dayIso = (offsetDays, nowMs) => new Date(nowMs - offsetDays * 86400000).toISOString()
+  const NOW = Date.parse('2026-07-05T12:00:00.000Z')
+
+  it('buckets calls by UTC day and only real ISO timestamps', () => {
+    let store = null
+    store = buildGapLearningUpdate(store, { hyperlocal_gap: true }, { profileId: 'a', at: '2026-07-05T01:00:00Z' })
+    store = buildGapLearningUpdate(store, { has_gap: false }, { profileId: 'b', at: '2026-07-05T02:00:00Z' })
+    store = buildGapLearningUpdate(store, { low_results: true }, { profileId: 'c', at: 'not-a-date' })
+    expect(store.days['2026-07-05']).toMatchObject({ calls: 2, with_gap: 1 })
+    expect(store.days['2026-07-05'].by_class.hyperlocal_gap).toBe(1)
+    expect(Object.keys(store.days)).toHaveLength(1) // bogus timestamp not bucketed
+    expect(store.totals.calls).toBe(3) // …but still counted in lifetime totals
+  })
+
+  it('prunes daily buckets past WINDOW_RETENTION_DAYS', () => {
+    let store = null
+    for (let d = WINDOW_RETENTION_DAYS + 5; d >= 0; d--) {
+      store = buildGapLearningUpdate(store, { hyperlocal_gap: true }, { profileId: 'p', at: dayIso(d, NOW) })
+    }
+    expect(Object.keys(store.days)).toHaveLength(WINDOW_RETENTION_DAYS)
+    // Oldest keys are the ones dropped.
+    expect(store.days[dayIso(WINDOW_RETENTION_DAYS + 5, NOW).slice(0, 10)]).toBeUndefined()
+    expect(store.days[dayIso(0, NOW).slice(0, 10)]).toBeDefined()
+  })
+
+  it('summarizeGapWindow sums only the last N days and computes the rate', () => {
+    let store = null
+    // 10 days ago: 4 gappy calls (outside a 7-day window).
+    for (let i = 0; i < 4; i++) {
+      store = buildGapLearningUpdate(store, { hyperlocal_gap: true }, { profileId: 'old', at: dayIso(10, NOW) })
+    }
+    // Yesterday + today: 3 healthy, 1 gappy.
+    store = buildGapLearningUpdate(store, { has_gap: false }, { profileId: 'h1', at: dayIso(1, NOW) })
+    store = buildGapLearningUpdate(store, { has_gap: false }, { profileId: 'h2', at: dayIso(1, NOW) })
+    store = buildGapLearningUpdate(store, { has_gap: false }, { profileId: 'h3', at: dayIso(0, NOW) })
+    store = buildGapLearningUpdate(store, { institution_gap: true }, { profileId: 'g1', at: dayIso(0, NOW) })
+
+    const win = summarizeGapWindow(store, { days: 7, nowMs: NOW })
+    expect(win.calls).toBe(4)
+    expect(win.with_gap).toBe(1)
+    expect(win.rate).toBeCloseTo(0.25)
+    expect(win.by_class.institution_gap).toBe(1)
+    expect(win.by_class.hyperlocal_gap).toBeUndefined()
+  })
+
+  it('returns null for a pre-window store (no daily buckets) so callers fall back to lifetime', () => {
+    expect(summarizeGapWindow(null)).toBeNull()
+    expect(summarizeGapWindow({ totals: { calls: 100, with_gap: 60 } })).toBeNull()
+    expect(summarizeGapWindow({ days: {} })).toBeNull()
+  })
+})
+
+// ── Sam check judges the WINDOW, not lifetime totals ─────────────────────────
+
+describe('Sam crawler.gapLearning — windowed rate', () => {
+  it('stays green when lifetime totals are terrible but the recent window is healthy', async () => {
+    const { getCheckById } = await import('../services/sam/samRegistry.js')
+    const check = getCheckById('crawler.gapLearning')
+    expect(check).toBeTruthy()
+
+    const raw = new Database(':memory:')
+    raw.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+    const db = raw
+
+    // Lifetime: 58% gappy (the July 2026 standing-red state). Window: healthy.
+    const today = new Date().toISOString().slice(0, 10)
+    const store = {
+      totals: { calls: 477, with_gap: 277, by_class: { hyperlocal_gap: 277 } },
+      days: { [today]: { calls: 10, with_gap: 1, by_class: { hyperlocal_gap: 1 } } },
+      recent: [],
+      updated_at: new Date().toISOString(),
+    }
+    raw.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+      .run('crawler_gap_learning', JSON.stringify(store), store.updated_at)
+
+    const res = await check.run({ db })
+    expect(res.ok).toBe(true)
+    expect(res.summary).toContain('1/10')
+    raw.close()
+  })
+
+  it('still alerts on a gappy recent window, and falls back to lifetime for pre-window stores', async () => {
+    const { getCheckById } = await import('../services/sam/samRegistry.js')
+    const check = getCheckById('crawler.gapLearning')
+
+    const raw = new Database(':memory:')
+    raw.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+    const today = new Date().toISOString().slice(0, 10)
+
+    // Gappy window → alert.
+    const gappy = {
+      totals: { calls: 20, with_gap: 12, by_class: { hyperlocal_gap: 12 } },
+      days: { [today]: { calls: 12, with_gap: 10, by_class: { hyperlocal_gap: 10 } } },
+      recent: [],
+    }
+    raw.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+      .run('crawler_gap_learning', JSON.stringify(gappy), new Date().toISOString())
+    let res = await check.run({ db: raw })
+    expect(res.ok).toBe(false)
+    expect(res.evidence.windowed).toBe(true)
+
+    // Pre-window store (no days) → lifetime fallback still alerts.
+    const preWindow = { totals: { calls: 100, with_gap: 60, by_class: { hyperlocal_gap: 60 } }, recent: [] }
+    raw.prepare('UPDATE system_kv SET value = ? WHERE key = ?')
+      .run(JSON.stringify(preWindow), 'crawler_gap_learning')
+    res = await check.run({ db: raw })
+    expect(res.ok).toBe(false)
+    expect(res.evidence.windowed).toBe(false)
+    expect(res.summary).toContain('lifetime')
+    raw.close()
   })
 })
 

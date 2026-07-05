@@ -147,7 +147,7 @@ describe('queue.staleJobs + queue.recover-stale-jobs (see → act)', () => {
   function queueDb({ staleRunning = 0, staleQueued = 0, fresh = 0 } = {}) {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE crawler_jobs (
-      id TEXT PRIMARY KEY, status TEXT, created_at TEXT, started_at TEXT, last_heartbeat_at TEXT
+      id TEXT PRIMARY KEY, status TEXT, created_at TEXT, started_at TEXT, last_heartbeat_at TEXT, last_retry_at TEXT
     )`)
     const ins = db.prepare(`INSERT INTO crawler_jobs (id, status, created_at, started_at) VALUES (?, ?, ?, ?)`)
     let n = 0
