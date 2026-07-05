@@ -283,6 +283,60 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Amy flywheel daily cohort: the owner's standing directive is that Amy's
+    // synthetic-profile cohort runs at the daily target until a FULL day comes
+    // back with every profile clean at the goals/rules bar. This check makes
+    // the scoreboard visible every morning (it flows into Anya's 09:00 digest).
+    id: 'amy.flywheelCohort',
+    label: 'Amy flywheel daily cohort (synthetic-profile crawl quality)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the Amy flywheel cohort scoreboard (system_kv amy_flywheel_cohort) and flags when the most recent day\'s synthetic-profile cohort had issue profiles or fell short of the daily target.',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; flywheel cohort read skipped' }
+      let store
+      try {
+        const { getFlywheelCohort } = await import('../amy/flywheelCohort.js')
+        store = await getFlywheelCohort(db)
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `flywheel cohort store unavailable: ${err?.message || err}` }
+      }
+      const days = store?.days && typeof store.days === 'object' ? store.days : {}
+      const keys = Object.keys(days).sort()
+      if (keys.length === 0) return { ok: true, summary: 'No Amy flywheel cohort data yet.' }
+      const latest = days[keys[keys.length - 1]]
+      const topTypes = Object.entries(latest.finding_types || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ')
+      const label = `${latest.clean}/${latest.evaluated} clean (target ${latest.target}) on ${latest.day}`
+      if (latest.evaluated > 0 && latest.issues === 0 && latest.complete) {
+        return { ok: true, summary: `GOAL: full cohort clean — ${label}.${store.goal_notified_at ? '' : ' Owner notification pending.'}` }
+      }
+      if (latest.issues > 0) {
+        return {
+          ok: false,
+          summary: `${latest.issues} of ${latest.evaluated} synthetic profiles had issues — ${label}. Top classes: ${topTypes || 'n/a'}.`,
+          evidence: {
+            day: latest.day,
+            target: latest.target,
+            evaluated: latest.evaluated,
+            clean: latest.clean,
+            issues: latest.issues,
+            finding_types: latest.finding_types || {},
+            issue_examples: (latest.issue_examples || []).slice(0, 8),
+            runs: latest.runs || [],
+          },
+          recommended_fix: 'Each issue example names its finding types (amyReport FINDING_TYPES) — ineligible_match/false_positive route to the matchEngine eligibility gates, institution/hyperlocal recall misses route to buildWebQueries breadth, field-mapping/geo misses route to profileIntelligence. Amy\'s own tuning levers (floor/weights/coverage/archetype lessons) act on these automatically; whatever persists across days needs a code change.',
+          confidence: 0.9,
+        }
+      }
+      return { ok: true, summary: `${label} — no issues so far; cohort not yet at target.` }
+    },
+  },
+  {
     // Open-web lane liveness: the web lane is best-effort BY DESIGN (a dead
     // search backend or exhausted LLM key degrades it to a silent no-op so it
     // never blocks a crawl). This check is the read side that makes that death
