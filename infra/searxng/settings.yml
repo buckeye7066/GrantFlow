@@ -18,6 +18,47 @@ search:
     - json
   safe_search: 0
   autocomplete: ""
+  # Recover suspended engines FAST. Stock defaults park an engine for 1-24h
+  # after a 429/CAPTCHA — with our datacenter egress IP that meant every
+  # default engine was perma-suspended within minutes of a restart, and the
+  # instance returned 200 + zero results for everything (the 2026-07 web-lane
+  # outage: hyperlocal coverage silently dead for 3+ days).
+  suspended_times:
+    SearxEngineTooManyRequests: 300
+    SearxEngineCaptcha: 3600
+    SearxEngineAccessDenied: 3600
+
+outgoing:
+  # Stock 3s is too tight for the slower DC-tolerant engines enabled below.
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+
+# Engine mix tuned for a DATACENTER egress IP. Google/Startpage CAPTCHA-wall
+# datacenter IPs almost immediately — with only the stock defaults enabled,
+# one suspension wave killed ALL coverage at once. Keep them off and lean on
+# engines that tolerate DC traffic (bing/mojeek/qwant/yahoo), with ddg/brave
+# as best-effort extras that now recover in minutes instead of hours.
+engines:
+  - name: google
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: bing
+    disabled: false
+    timeout: 8.0
+  - name: mojeek
+    disabled: false
+    timeout: 8.0
+  - name: qwant
+    disabled: false
+    timeout: 8.0
+  - name: yahoo
+    disabled: false
+    timeout: 8.0
+  - name: duckduckgo
+    timeout: 8.0
+  - name: brave
+    timeout: 8.0
 
 general:
   instance_name: "grantflow-search"
