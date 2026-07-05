@@ -681,6 +681,10 @@ export async function cleanupStaleQueuedJobs(db, staleThresholdMs = 24 * 60 * 60
     const isPostgres = db?.dialect === 'postgres'
     const threshold = isPostgres ? thresholdIso : thresholdSqlite
 
+    // Queued age is judged from COALESCE(last_retry_at, created_at):
+    // requeueJob stamps last_retry_at as the fresh queue-entry time, so a
+    // requeued old job gets the full threshold again instead of being
+    // re-failed for the age of its ORIGINAL enqueue.
     const staleJobs = await db
       .prepare(
         isPostgres
@@ -688,13 +692,13 @@ export async function cleanupStaleQueuedJobs(db, staleThresholdMs = 24 * 60 * 60
               SELECT id, type, profile_id, created_at
               FROM crawler_jobs
               WHERE status = 'queued'
-                AND created_at < ?
+                AND COALESCE(last_retry_at, created_at) < ?
             `
           : `
               SELECT id, type, profile_id, created_at
               FROM crawler_jobs
               WHERE status = 'queued'
-                AND datetime(created_at) < datetime(?)
+                AND datetime(COALESCE(last_retry_at, created_at)) < datetime(?)
             `,
       )
       .all(threshold)

@@ -1361,8 +1361,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?`)
           .get(runningCutoff)
         running = Number(r?.c || 0)
+        // COALESCE(last_retry_at, created_at) = fresh queue-entry time — a
+        // requeued old job is not "stuck since its ORIGINAL enqueue".
         const q = await db
-          .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'queued' AND created_at < ?`)
+          .prepare(`SELECT COUNT(*) AS c FROM crawler_jobs WHERE status = 'queued' AND COALESCE(last_retry_at, created_at) < ?`)
           .get(queuedCutoff)
         queued = Number(q?.c || 0)
       } catch (err) {

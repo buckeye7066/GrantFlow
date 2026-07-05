@@ -138,3 +138,49 @@ describe('autoRetryOrphanedJob — caps', () => {
     expect(ok.retried).toBe(true)
   })
 })
+
+// ── Requeue freshness: a requeued OLD job must not be re-killed for its
+// original age (the 2026-07-05 AnyaHealth / stale-queued-sweep class) ────────
+
+describe('requeue freshness — queued staleness judged from last_retry_at', () => {
+  it('requeueJob stamps last_retry_at so the job re-enters the queue "fresh"', async () => {
+    const db = makeDb()
+    const id = crypto.randomUUID()
+    const OLD = '2026-07-01 15:38:23'
+    db.prepare(
+      `INSERT INTO crawler_jobs (id, type, status, profile_id, created_at, completed_at, error)
+       VALUES (?, 'document_ingest', 'failed', 'p1', ?, ?, 'orphaned')`,
+    ).run(id, OLD, OLD)
+
+    const { requeueJob } = await import('../services/crawlerJobState.js')
+    const res = await requeueJob(db, id, { reason: 'admin_retry' })
+    expect(res.ok).toBe(true)
+
+    const row = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(id)
+    expect(row.status).toBe('queued')
+    expect(row.last_retry_at).toBeTruthy()
+    // The fresh queue-entry time is NOW, not the 4-day-old created_at.
+    expect(new Date(String(row.last_retry_at).replace(' ', 'T') + 'Z').getTime()).toBeGreaterThan(Date.now() - 60_000)
+  })
+
+  it('cleanupStaleQueuedJobs spares a freshly-requeued old job but still reaps truly stale ones', async () => {
+    const db = makeDb()
+    const OLD = '2026-07-01 15:38:23'
+    const requeued = crypto.randomUUID()
+    const stale = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO crawler_jobs (id, type, status, created_at, last_retry_at)
+       VALUES (?, 'document_ingest', 'queued', ?, CURRENT_TIMESTAMP)`,
+    ).run(requeued, OLD)
+    db.prepare(
+      `INSERT INTO crawler_jobs (id, type, status, created_at)
+       VALUES (?, 'document_ingest', 'queued', ?)`,
+    ).run(stale, OLD)
+
+    const { cleanupStaleQueuedJobs } = await import('../services/crawlerConcurrencyGuard.js')
+    const cleaned = await cleanupStaleQueuedJobs(db, 24 * 60 * 60 * 1000)
+    expect(cleaned).toBe(1)
+    expect(db.prepare('SELECT status FROM crawler_jobs WHERE id = ?').get(requeued).status).toBe('queued')
+    expect(db.prepare('SELECT status FROM crawler_jobs WHERE id = ?').get(stale).status).toBe('failed')
+  })
+})
