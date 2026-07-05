@@ -136,3 +136,51 @@ describe('buildDigest', () => {
     expect(digest.text).toContain('$5,000')
   })
 })
+
+describe('weekly digest — "what happened this week" delta section (2026-07-05)', () => {
+  const baseSignals = { grants: [], openInvoices: [] }
+
+  it('reports new sources, submissions, and drafts ready from the week', () => {
+    const { text, html, counts } = buildDigest({
+      displayName: 'Robert',
+      signals: {
+        ...baseSignals,
+        newGrants: [
+          { title: 'NAEMT EMS Scholarship', funder: 'NAEMT', created_at: '2026-07-03' },
+          { title: 'TN State Scholarship', funder: 'TSAC', created_at: '2026-07-04' },
+        ],
+        submittedThisWeek: [{ title: 'FSEOG', funder: 'Federal Student Aid', submitted_at: '2026-07-02' }],
+        draftsReadyThisWeek: [{ title: 'Coca-Cola Scholars', funder: 'Coca-Cola Scholars Foundation', updated_at: '2026-07-05' }],
+      },
+      now: new Date('2026-07-06T12:00:00Z'),
+    })
+    expect(text).toMatch(/WHAT HAPPENED THIS WEEK/)
+    expect(text).toMatch(/2 new funding sources added.*NAEMT EMS Scholarship/)
+    expect(text).toMatch(/1 application submitted:.*FSEOG/)
+    expect(text).toMatch(/1 application draft prepared and waiting for your review:.*Coca-Cola Scholars/)
+    expect(html).toMatch(/What happened this week/)
+    expect(counts.this_week).toBe(3)
+  })
+
+  it('quiet week still renders the section with a friendly empty line', () => {
+    const { text, counts } = buildDigest({
+      displayName: 'Hollie',
+      signals: baseSignals,
+      now: new Date('2026-07-06T12:00:00Z'),
+    })
+    expect(text).toMatch(/WHAT HAPPENED THIS WEEK/)
+    expect(text).toMatch(/No new activity this week/)
+    expect(counts.this_week).toBe(0)
+  })
+
+  it('caps the listed titles and summarizes the overflow', () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ title: `Grant ${i + 1}`, funder: 'F', created_at: '2026-07-03' }))
+    const { text } = buildDigest({
+      displayName: 'Vermilion',
+      signals: { ...baseSignals, newGrants: many },
+      now: new Date('2026-07-06T12:00:00Z'),
+    })
+    expect(text).toMatch(/9 new funding sources added/)
+    expect(text).toMatch(/\+3 more/)
+  })
+})

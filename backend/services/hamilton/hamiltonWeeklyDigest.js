@@ -78,7 +78,8 @@ const money = (n) => {
  * missing column/table in some environment never breaks the digest.
  */
 async function gatherProfileSignals(db, profileId, now) {
-  const out = { grants: [], openInvoices: [] }
+  const out = { grants: [], openInvoices: [], newGrants: [], submittedThisWeek: [], draftsReadyThisWeek: [] }
+  const since = new Date(now.getTime() - 7 * DAY).toISOString()
   try {
     out.grants = await db.prepare(
       `SELECT id, title, funder, status, deadline, award_date, end_date,
@@ -99,12 +100,58 @@ async function gatherProfileSignals(db, profileId, now) {
     ).all(String(profileId))
   } catch { /* billing schema may not be present in some envs */ }
 
+  // "What happened this week" — the delta since the last digest, so the reader
+  // sees movement (new sources found, applications submitted, drafts prepared),
+  // not just a standing snapshot. All best-effort.
+  try {
+    out.newGrants = await db.prepare(
+      `SELECT id, title, funder, created_at
+         FROM grants
+        WHERE profile_id = ? AND created_at >= ?
+          AND (status IS NULL OR status NOT IN ('archived','declined','rejected','declined_no_review','closed'))
+        ORDER BY created_at DESC LIMIT 25`,
+    ).all(String(profileId), since)
+  } catch { /* created_at always exists, but stay best-effort */ }
+
+  try {
+    out.submittedThisWeek = await db.prepare(
+      `SELECT t.id, t.submitted_at, g.title, g.funder
+         FROM application_tasks t
+         LEFT JOIN grants g ON g.id = t.grant_id
+        WHERE t.profile_id = ? AND t.submitted_at IS NOT NULL AND t.submitted_at >= ?
+        ORDER BY t.submitted_at DESC LIMIT 25`,
+    ).all(String(profileId), since)
+  } catch { /* application_tasks may be absent in some envs */ }
+
+  try {
+    out.draftsReadyThisWeek = await db.prepare(
+      `SELECT t.id, t.updated_at, g.title, g.funder
+         FROM application_tasks t
+         LEFT JOIN grants g ON g.id = t.grant_id
+        WHERE t.profile_id = ? AND t.status = 'waiting_for_review' AND t.updated_at >= ?
+        ORDER BY t.updated_at DESC LIMIT 25`,
+    ).all(String(profileId), since)
+  } catch { /* application_tasks may be absent in some envs */ }
+
   return out
 }
 
 /** Build the digest content (sections + rendered text/html) for one profile. */
 export function buildDigest({ displayName, signals, now = new Date() }) {
-  const { grants, openInvoices } = signals
+  const { grants, openInvoices, newGrants = [], submittedThisWeek = [], draftsReadyThisWeek = [] } = signals
+
+  // "What happened this week" — the movement since the last digest.
+  const nameOf = (g) => `“${g.title || 'Untitled'}”${g.funder ? ` (${g.funder})` : ''}`
+  const thisWeek = []
+  if (newGrants.length) {
+    thisWeek.push(`${newGrants.length} new funding source${newGrants.length === 1 ? '' : 's'} added to your pipeline: ${newGrants.slice(0, 6).map(nameOf).join('; ')}${newGrants.length > 6 ? `; +${newGrants.length - 6} more` : ''}.`)
+  }
+  if (submittedThisWeek.length) {
+    thisWeek.push(`${submittedThisWeek.length} application${submittedThisWeek.length === 1 ? '' : 's'} submitted: ${submittedThisWeek.slice(0, 6).map(nameOf).join('; ')}.`)
+  }
+  if (draftsReadyThisWeek.length) {
+    thisWeek.push(`${draftsReadyThisWeek.length} application draft${draftsReadyThisWeek.length === 1 ? '' : 's'} prepared and waiting for your review: ${draftsReadyThisWeek.slice(0, 6).map(nameOf).join('; ')}.`)
+  }
   const immediate = []
   const soon = []
   const upcoming = []
@@ -175,6 +222,8 @@ export function buildDigest({ displayName, signals, now = new Date() }) {
     '',
     `Pipeline: ${stageSummary}.${awardedTotal > 0 ? ` Awarded to date: ${money(awardedTotal)}.` : ''}`,
     '',
+    section('WHAT HAPPENED THIS WEEK', thisWeek, 'No new activity this week — your standing items are below.'),
+    '',
     section('NEEDS IMMEDIATE ATTENTION', immediateList, 'Nothing urgent — nicely done.'),
     '',
     section('NEEDS ATTENTION SOON', soonList, 'Nothing in the next few weeks.'),
@@ -197,6 +246,7 @@ export function buildDigest({ displayName, signals, now = new Date() }) {
     <p>Hi${displayName ? ` ${esc(displayName)}` : ''},</p>
     <p>Here's where your funding stands this week.</p>
     <p style="background:#f1f5f9;border-radius:8px;padding:8px 12px"><strong>Pipeline:</strong> ${esc(stageSummary)}.${awardedTotal > 0 ? ` <strong>Awarded to date:</strong> ${esc(money(awardedTotal))}.` : ''}</p>
+    ${htmlSection('What happened this week', thisWeek, 'No new activity this week — your standing items are below.', '#7c3aed')}
     ${htmlSection('Needs immediate attention', immediateList, 'Nothing urgent — nicely done.', '#dc2626')}
     ${htmlSection('Needs attention soon', soonList, 'Nothing in the next few weeks.', '#d97706')}
     ${htmlSection('Upcoming deadlines', upcoming.slice(0, 15).map((u) => u.line), 'No upcoming deadlines in your pipeline.', '#2563eb')}
@@ -206,7 +256,7 @@ export function buildDigest({ displayName, signals, now = new Date() }) {
 
   return {
     subject, text, html,
-    counts: { immediate: immediateList.length, soon: soonList.length, upcoming: upcoming.length, awarded: awarded.length },
+    counts: { immediate: immediateList.length, soon: soonList.length, upcoming: upcoming.length, awarded: awarded.length, this_week: thisWeek.length },
   }
 }
 
