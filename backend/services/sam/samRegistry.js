@@ -335,6 +335,50 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Brave monthly-budget pacing (braveBudget.js): the shared Brave key has a
+    // small monthly quota that the fleet historically drained in the first days
+    // of the month, leaving every consumer dark for weeks. The pacer rations a
+    // daily allowance; this check makes the spend pace observable and flags an
+    // early exhaustion (pacer disabled/misconfigured) — a paced key should
+    // never hit 100% before the final days of the month.
+    id: 'crawler.braveBudget',
+    label: 'Brave Search monthly budget pace',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the Brave query budget pacer state (system_kv brave_search_budget) and flags when the monthly budget is exhausted with days still left in the month. Green output reports used/budget and today\'s allowance so the pace is always visible.',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; brave budget read skipped' }
+      let state
+      try {
+        const { getBraveBudgetState } = await import('../yana/braveBudget.js')
+        state = await getBraveBudgetState({ db })
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `brave budget state unavailable: ${err?.message || err}` }
+      }
+      if (!state || !state.used) {
+        return { ok: true, summary: 'No Brave queries spent yet this month.' }
+      }
+      const now = new Date()
+      const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate()
+      const daysLeft = daysInMonth - now.getUTCDate()
+      if (state.used >= state.budget && daysLeft > 2) {
+        return {
+          ok: false,
+          summary: `Brave monthly budget exhausted early: ${state.used}/${state.budget} used with ${daysLeft} day(s) left — pacing failed or the budget env is set too low/high for the plan.`,
+          evidence: state,
+          recommended_fix: 'Check BRAVE_MONTHLY_QUERY_BUDGET matches the actual Brave plan quota and that BRAVE_BUDGET_ENABLED has not been disabled. Web search degrades to SearXNG/DDG until the calendar month resets.',
+          confidence: 0.85,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Brave budget on pace: ${state.used}/${state.budget} used this month, ${state.used_today}/${state.allowance_today} today.`,
+        evidence: state,
+      }
+    },
+  },
+  {
     // Nightly coverage-sweep freshness: runProfileCoverageSweep persists its
     // result to system_kv `coverage_audit_last_run` (plus a status:'running'
     // heartbeat before the heal loop and status:'failed' on exception). This
