@@ -44,6 +44,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { invokeJsonWithFallback, getOpenAIOptional } from '../../utils/aiProviders.js'
+import { applyFabricationGuard } from './proposalFabricationGuard.js'
 import {
   buildDocxBuffer,
   buildHtml,
@@ -418,14 +419,22 @@ export async function generateMbaProposal(db, {
     return { ...baseResult, ...normalized, ok: false, error: 'Proposal draft contained no groundable sections' }
   }
 
+  // Deterministic honesty gate: the prompt's fabrication rule is advisory to
+  // the LLM; this is the enforcement. Unevidenced first-person identity claims
+  // become "[ EVIDENCE NEEDED ]" placeholders + required gaps, which the
+  // existing contract keeps out of live portal fields.
+  const { proposal: guarded, flags: fabricationFlags } = applyFabricationGuard(normalized, evidence)
+
   return {
     ok: true,
-    ...normalized,
+    ...guarded,
+    fabrication_flags: fabricationFlags,
     meta: {
       provider: llm.provider || null,
       model: PROPOSAL_ANTHROPIC_MODEL,
-      section_keys: normalized.sections.map((s) => s.key),
+      section_keys: guarded.sections.map((s) => s.key),
       funder: funder.funder || null,
+      fabrication_flag_count: fabricationFlags.length,
     },
   }
 }
