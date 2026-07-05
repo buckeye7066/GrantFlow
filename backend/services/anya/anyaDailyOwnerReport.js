@@ -35,6 +35,32 @@ function recipient() {
   return v || 'buckeye7066@gmail.com'
 }
 
+/**
+ * Load the Amy-flywheel data for the digest: today's (or the most recent)
+ * cohort day from the flywheel scoreboard + the latest Amy run report (the
+ * autonomous-edit record). Best-effort — the digest sends without the section
+ * when Amy has no data.
+ */
+async function defaultLoadAmy(db) {
+  try {
+    const [{ getFlywheelCohort }, { readLatestAmyReport }] = await Promise.all([
+      import('../amy/flywheelCohort.js'),
+      import('../amy/amyReportStore.js'),
+    ])
+    const [store, report] = await Promise.all([
+      getFlywheelCohort(db).catch(() => null),
+      readLatestAmyReport(db).catch(() => null),
+    ])
+    const days = store?.days && typeof store.days === 'object' ? store.days : {}
+    const keys = Object.keys(days).sort()
+    const cohort = keys.length ? days[keys[keys.length - 1]] : null
+    if (!cohort && !report) return null
+    return { cohort, goal_notified_at: store?.goal_notified_at ?? null, report }
+  } catch {
+    return null
+  }
+}
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -69,10 +95,66 @@ function fixHint(finding, planByFindingId) {
 }
 
 /**
+ * Summarize the Amy flywheel for the owner: what the daily synthetic cohort
+ * found, which edits the learning loop applied autonomously, and what it could
+ * NOT edit (approval queue + persistent gap classes) — the owner's standing
+ * directive is that these three appear in the morning email. Pure; exported
+ * for tests.
+ *
+ * @param {{cohort?:object|null, goal_notified_at?:string|null, report?:object|null}} amy
+ * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean}|null}
+ */
+export function summarizeAmyFlywheel(amy) {
+  if (!amy || (!amy.cohort && !amy.report)) return null
+  const day = amy.cohort || null
+  const report = amy.report || {}
+
+  const cohortLine = day
+    ? `${day.clean}/${day.evaluated} synthetic profiles clean (target ${day.target}, ${day.issues} with issues) on ${day.day}`
+    : 'No cohort data for today yet.'
+  const goal = Boolean(day && day.complete && day.all_clean)
+
+  const edits = []
+  const tuning = report.tuning || {}
+  if (tuning?.applied?.applied) edits.push(`Score floor tuned ${tuning.from} → ${tuning.to} (validated on the cohort).`)
+  const wt = report.weight_tuning || {}
+  if (wt?.validation?.kept) edits.push('Scoring weights re-tuned — re-crawl validated and KEPT.')
+  else if (wt?.applied?.applied && wt?.validation && !wt.validation.kept) edits.push('Scoring weights trial did not improve quality — auto-REVERTED.')
+  const cov = report.coverage_tuning || {}
+  if (cov?.validation?.kept) {
+    const n = Array.isArray(cov.additions) ? cov.additions.length : 0
+    edits.push(`Source keyword coverage widened (${n} addition${n === 1 ? '' : 's'}) — re-crawl validated and KEPT.`)
+  } else if (cov?.applied?.applied && cov?.validation && !cov.validation.kept) {
+    edits.push('Source coverage trial did not improve quality — auto-REVERTED.')
+  }
+  const lessons = report.archetype_learning?.update || {}
+  const lessonCount = Object.keys(lessons).length
+  if (lessonCount > 0) edits.push(`Query-steering lessons recorded for ${lessonCount} profile archetype${lessonCount === 1 ? '' : 's'} (next crawls target the misses).`)
+
+  const couldNot = []
+  const queue = Array.isArray(report.approval_queue) ? report.approval_queue.filter((q) => !q?.auto_applied) : []
+  for (const item of queue.slice(0, 6)) {
+    couldNot.push(`Needs your approval: ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${item?.reason ? ` — ${item.reason}` : ''}`)
+  }
+  if (queue.length > 6) couldNot.push(`…and ${queue.length - 6} more in the approval queue.`)
+  if (day && day.issues > 0) {
+    const types = Object.entries(day.finding_types || {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, v]) => `${k} ×${v}`)
+      .join(', ')
+    couldNot.push(`Open gap classes the loop has not closed yet: ${types || 'n/a'} — persistent classes need a code change.`)
+  }
+
+  return { cohortLine, edits, couldNot, goal }
+}
+
+/**
  * Build the owner email from a Sam run. Exported for tests.
  * `autoFixed` is an optional count of issues handled by the autofix Action.
+ * `amy` (optional) adds the Amy-flywheel section (see summarizeAmyFlywheel).
  */
-export function buildOwnerReport(run = {}, { now = null } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -132,6 +214,23 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
   if (autoFixing.length) {
     t.push('')
     t.push(`FIXED AUTOMATICALLY OVERNIGHT (no action needed): ${autoFixing.map((f) => maskSecrets(f?.title || 'fix')).slice(0, 10).join('; ')}`)
+  }
+  const flywheel = summarizeAmyFlywheel(amy)
+  if (flywheel) {
+    t.push('')
+    t.push('AMY CRAWLER FLYWHEEL')
+    t.push('====================')
+    t.push(flywheel.goal ? `🎯 GOAL: ${flywheel.cohortLine}` : flywheel.cohortLine)
+    if (flywheel.edits.length) {
+      t.push('Edits Amy applied autonomously:')
+      flywheel.edits.forEach((e) => t.push(`  • ${e}`))
+    } else {
+      t.push('No autonomous edits were needed overnight.')
+    }
+    if (flywheel.couldNot.length) {
+      t.push('Could NOT auto-edit (needs you):')
+      flywheel.couldNot.forEach((e) => t.push(`  • ${e}`))
+    }
   }
   t.push('')
   t.push(`— Anya · from Sam's run ${run?.id || 'n/a'}`)
@@ -199,6 +298,25 @@ export function buildOwnerReport(run = {}, { now = null } = {}) {
       <h3 style="margin:18px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Needs your attention</h3>
       ${needsHumanHtml}
       ${autoHtml}
+      ${(() => {
+        const fw = summarizeAmyFlywheel(amy)
+        if (!fw) return ''
+        const cohortColor = fw.goal ? '#16a34a' : '#334155'
+        const editsHtml = fw.edits.length
+          ? `<ul style="margin:6px 0 0;padding-left:18px;color:#334155;">${fw.edits.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>`
+          : '<div style="color:#64748b;margin-top:4px;">No autonomous edits were needed overnight.</div>'
+        const couldNotHtml = fw.couldNot.length
+          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Could not auto-edit (needs you):</strong>
+               <ul style="margin:6px 0 0;padding-left:18px;color:#78350f;">${fw.couldNot.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`
+          : ''
+        return `
+      <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Amy crawler flywheel</h3>
+      <div style="font-size:13px;">
+        <div style="font-weight:600;color:${cohortColor};">${fw.goal ? '🎯 GOAL: ' : ''}${esc(fw.cohortLine)}</div>
+        <div style="margin-top:8px;"><strong>Edits Amy applied autonomously:</strong>${editsHtml}</div>
+        ${couldNotHtml}
+      </div>`
+      })()}
 
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
@@ -227,6 +345,7 @@ export async function runAnyaDailyOwnerReport(db, {
   send = defaultSendEmail,
   loadRun = defaultGetRun,
   loadLatest = defaultLatestRun,
+  loadAmy = defaultLoadAmy,
   now = null,
 } = {}) {
   try {
@@ -238,7 +357,8 @@ export async function runAnyaDailyOwnerReport(db, {
     if (!run) run = await loadLatest(db).catch(() => null)
     if (!run) return { ran: true, sent: false, reason: 'no_sam_run' }
 
-    const { subject, html, text, stats } = buildOwnerReport(run, { now })
+    const amy = await loadAmy(db).catch(() => null)
+    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {

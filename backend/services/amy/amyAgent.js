@@ -37,6 +37,7 @@ import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } fr
 import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype } from './archetypeLearning.js'
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
+import { recordFlywheelCohort } from './flywheelCohort.js'
 
 const defaultLog = createLogger('services:amy:agent')
 
@@ -401,6 +402,17 @@ export async function runAmyTraining(options = {}) {
   // Persist combined report for the admin panel (best-effort).
   if (saveReport && db) {
     await saveAmyReport(db, combined).catch(() => {})
+  }
+
+  // Daily flywheel scoreboard: fold this run's per-profile clean/issue verdicts
+  // into the ET-day cohort; the first fully-clean full-target day sends the
+  // owner's one-shot goal-reached notification. Best-effort, never fatal.
+  if (db && !dryRunDiscovery) {
+    combined.flywheel_cohort = await recordFlywheelCohort(db, {
+      evaluations,
+      runId,
+      at: completedAtDate.toISOString(),
+    }).catch(() => null)
   }
 
   // Persist per-archetype metrics history — the run-over-run PROOF that the
