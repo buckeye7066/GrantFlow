@@ -273,6 +273,23 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // in-memory while the run objects are alive.
   const opportunities = storage.listCatalog(store);
 
+  // ── Web-lane health telemetry ──────────────────────────────────────────────
+  // Record the lane's per-run telemetry (pages found, extracted, stored, errors)
+  // into the rolling system_kv store Sam's crawler.webLaneHealth check reads. A
+  // dead search backend / exhausted LLM key degrades the lane to a silent no-op
+  // by design (it must never fail a crawl) — this is the observability that
+  // makes that death visible as ITSELF, not as a flood of hyperlocal gaps.
+  // Recorded for ALL live runs (including Amy's synthetic cohort): the lane's
+  // infrastructure health is profile-independent.
+  try {
+    if (run.web_lane) {
+      const { recordWebLaneRun } = await import('./coverageAudit/webLaneHealth.js');
+      await recordWebLaneRun(db, { profileId, telemetry: run.web_lane });
+    }
+  } catch {
+    /* web-lane health telemetry must never fail the crawl */
+  }
+
   // ── Global crawler-gap learning ────────────────────────────────────────────
   // On EVERY live (non-dry-run) discovery call, audit this profile's RESULT
   // coverage and record any gaps into the shared learning store so Sam

@@ -64,6 +64,95 @@ export function shouldAutoRetryOrphan(job) {
 }
 
 /**
+ * Auto-retry one orphaned job by inserting a fresh queued copy (the failed row
+ * keeps its audit trail). Shared by BOTH stale sweeps — the 7h started-at
+ * fallback AND the 5-minute heartbeat sweep. Before this was shared, only the
+ * started-at sweep retried; the heartbeat sweep (the one that actually fires
+ * when a deploy kills workers) terminal-failed every orphan, so a deploy
+ * mid-ingest permanently lost the work (the 2026-07-01 document_ingest class).
+ *
+ * Caps, in addition to shouldAutoRetryOrphan (type / retry budget / age):
+ *   - non-retryable error patterns (FK violations, missing profile, hard timeouts)
+ *   - retry GENERATION carried in parameters.orphan_retry_generation — each
+ *     retry row starts with retry_count 0, so without this a job that orphans
+ *     on every attempt would chain fresh rows forever (the runaway the budget
+ *     was meant to stop).
+ *
+ * @param {object} db
+ * @param {object} job  full row (id, type, profile_id, organization_id,
+ *                      parameters, retry_count, created_at, started_at, error,
+ *                      result_meta)
+ * @returns {Promise<{ retried: boolean, reason?: string, newJobId?: string }>}
+ */
+export async function autoRetryOrphanedJob(db, job) {
+  if (!job?.id) return { retried: false, reason: 'no_job' }
+
+  // Non-retryable error classes (FK violations, missing profiles, hard timeouts).
+  let isNonRetryable = false
+  try {
+    const meta = job.result_meta ? JSON.parse(job.result_meta) : null
+    if (meta?.non_retryable) isNonRetryable = true
+  } catch { /* ignore parse errors */ }
+  if (!isNonRetryable && job.error) {
+    const nonRetryablePatterns = [/no longer exists/i, /foreign key/i, /violates foreign key/i, /profile.*not found/i, /timed out after \d+s/i]
+    isNonRetryable = nonRetryablePatterns.some(p => p.test(job.error))
+  }
+  if (isNonRetryable) return { retried: false, reason: 'non_retryable_error' }
+
+  const retryDecision = shouldAutoRetryOrphan(job)
+  if (!retryDecision.retry) return { retried: false, reason: retryDecision.reason }
+
+  let originalParameters = {}
+  try {
+    originalParameters = job.parameters ? JSON.parse(job.parameters) : {}
+  } catch {
+    originalParameters = {}
+  }
+  if (!originalParameters || typeof originalParameters !== 'object') originalParameters = {}
+
+  const generation = Number(originalParameters.orphan_retry_generation) || 0
+  if (generation >= MAX_ORPHAN_AUTO_RETRIES) {
+    return { retried: false, reason: 'generation_budget_exhausted' }
+  }
+
+  const currentRetryCount = typeof job.retry_count === 'number' ? job.retry_count : 0
+  const retryParameters = {
+    ...originalParameters,
+    retried_from_job_id: job.id,
+    orphan_retry_generation: generation + 1,
+  }
+
+  // Include attempt number in hash so each retry gets a unique idempotency key
+  // while still being deterministic for the same (job id, attempt).
+  const idempotencyKey = crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ type: job.type, profile_id: job.profile_id, original_job_id: job.id, retry_attempt: currentRetryCount + 1 }))
+    .digest('hex')
+    .substring(0, 32)
+
+  const newJobId = crypto.randomUUID()
+  await db
+    .prepare(
+      `
+        INSERT INTO crawler_jobs (
+          id, type, status, profile_id, organization_id,
+          parameters, idempotency_key, requested_by
+        ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      newJobId,
+      job.type,
+      job.profile_id ?? null,
+      job.organization_id ?? null,
+      JSON.stringify(retryParameters),
+      idempotencyKey,
+      'system:orphan-retry',
+    )
+  return { retried: true, newJobId }
+}
+
+/**
  * Stale running-job cleanup
  *
  * We treat "running" jobs older than a threshold as orphaned (server crash, lost worker, etc).
@@ -305,14 +394,18 @@ export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs =
     .prepare(
       isPostgres
         ? `
-            SELECT id, type, profile_id, result_count, result_meta
+            SELECT id, type, profile_id, organization_id, parameters,
+                   retry_count, created_at, started_at, error,
+                   result_count, result_meta
             FROM crawler_jobs
             WHERE status = 'running'
               AND last_heartbeat_at IS NOT NULL
               AND last_heartbeat_at < ?
           `
         : `
-            SELECT id, type, profile_id, result_count, result_meta
+            SELECT id, type, profile_id, organization_id, parameters,
+                   retry_count, created_at, started_at, error,
+                   result_count, result_meta
             FROM crawler_jobs
             WHERE status = 'running'
               AND last_heartbeat_at IS NOT NULL
@@ -355,7 +448,7 @@ export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs =
     }
     const errorMessage = `Job orphaned - heartbeat stale > ${heartbeatThresholdMs}ms (worker presumed dead)`
     try {
-      await db
+      const res = await db
         .prepare(
           `
             UPDATE crawler_jobs
@@ -369,6 +462,8 @@ export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs =
           `,
         )
         .run(errorMessage, job.id)
+      const changes = Number(res?.changes ?? res?.rowCount ?? 0)
+      if (changes === 0) continue // raced: someone else already transitioned it
       cleaned += 1
       console.warn('[crawler-concurrency] Released per-profile lock for orphaned job', {
         jobId: job.id,
@@ -376,6 +471,27 @@ export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs =
         profileId: job.profile_id,
         heartbeatThresholdMs,
       })
+
+      // Deploy/OOM-killed work must not be silently lost: requeue a fresh copy
+      // under the same hard caps the started-at sweep applies (type retirement,
+      // retry budget, age, retry generation, non-retryable error classes).
+      try {
+        const retry = await autoRetryOrphanedJob(db, job)
+        if (retry.retried) {
+          console.warn('[crawler-concurrency] Auto-requeued heartbeat-orphaned job', {
+            originalJobId: job.id,
+            newJobId: retry.newJobId,
+            type: job.type,
+            profileId: job.profile_id,
+          })
+        } else if (retry.reason && retry.reason !== 'non_retryable_error') {
+          console.warn('[crawler-concurrency] Not auto-retrying heartbeat-orphaned job (terminal)', {
+            jobId: job.id, type: job.type, profileId: job.profile_id, reason: retry.reason,
+          })
+        }
+      } catch (retryErr) {
+        console.warn('[crawler-concurrency] Failed to auto-requeue heartbeat-orphaned job:', retryErr?.message)
+      }
     } catch (updateError) {
       console.warn('[crawler-concurrency] Failed to mark heartbeat-stale job as failed', {
         jobId: job.id,
@@ -509,89 +625,31 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         createdAt: job.created_at,
       })
 
-      // Skip auto-retry for non-retryable errors (FK violations, missing profiles, etc.)
-      let isNonRetryable = false
+      // Auto-retry under the shared hard caps (retired types are NEVER retried;
+      // budget / age / generation caps stop the "worker presumed dead → requeue
+      // → orphan again" runaway that flooded the panel with thousands of failures).
       try {
-        const meta = job.result_meta ? JSON.parse(job.result_meta) : null
-        if (meta?.non_retryable) isNonRetryable = true
-      } catch { /* ignore parse errors */ }
-      if (!isNonRetryable && job.error) {
-        const nonRetryablePatterns = [/no longer exists/i, /foreign key/i, /violates foreign key/i, /profile.*not found/i, /timed out after \d+s/i]
-        isNonRetryable = nonRetryablePatterns.some(p => p.test(job.error))
-      }
-
-      if (isNonRetryable) {
-        console.warn('[crawler-concurrency] Skipping auto-retry for non-retryable error', {
-          jobId: job.id, type: job.type, profileId: job.profile_id,
-        })
-      }
-
-      // Hard caps: retired discovery types are NEVER retried; a job that has
-      // exhausted its retry budget or exceeded the age cap is terminally failed.
-      // This is what stops the "worker presumed dead → requeue → orphan again"
-      // runaway that flooded the panel with thousands of failures.
-      const retryDecision = shouldAutoRetryOrphan(job)
-      if (!isNonRetryable && !retryDecision.retry) {
-        console.warn('[crawler-concurrency] Not auto-retrying orphaned job (terminal)', {
-          jobId: job.id, type: job.type, profileId: job.profile_id, reason: retryDecision.reason,
-        })
-      }
-
-      // Auto-retry only when retryable AND all hard caps pass.
-      if (!isNonRetryable && retryDecision.retry) {
-        try {
-          // parameters is already in the SELECT result — no extra query needed.
-          let originalParameters = {}
-          try {
-            originalParameters = job.parameters ? JSON.parse(job.parameters) : {}
-          } catch {
-            originalParameters = {}
-          }
-
-          const retryParameters = {
-            ...(originalParameters && typeof originalParameters === 'object' ? originalParameters : {}),
-            retried_from_job_id: job.id,
-          }
-
-          // Include attempt number in hash so each retry gets a unique idempotency key
-          // while still being deterministic for the same (job id, attempt).
-          const idempotencyKey = crypto
-            .createHash('sha256')
-            .update(JSON.stringify({ type: job.type, profile_id: job.profile_id, original_job_id: job.id, retry_attempt: currentRetryCount + 1 }))
-            .digest('hex')
-            .substring(0, 32)
-
-          const newJobId = crypto.randomUUID()
-          await db
-            .prepare(
-              `
-                INSERT INTO crawler_jobs (
-                  id, type, status, profile_id, organization_id,
-                  parameters, idempotency_key, requested_by
-                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
-              `,
-            )
-            .run(
-              newJobId,
-              job.type,
-              job.profile_id ?? null,
-              job.organization_id ?? null,
-              JSON.stringify(retryParameters),
-              idempotencyKey,
-              'system:orphan-retry',
-            )
-
+        const retry = await autoRetryOrphanedJob(db, job)
+        if (retry.retried) {
           console.warn('[crawler-concurrency] Auto-requeued orphaned job', {
             originalJobId: job.id,
-            newJobId,
+            newJobId: retry.newJobId,
             type: job.type,
             profileId: job.profile_id,
             retryAttempt: currentRetryCount + 1,
             maxRetries: MAX_ORPHAN_AUTO_RETRIES,
           })
-        } catch (retryErr) {
-          console.warn('[crawler-concurrency] Failed to auto-requeue orphaned job:', retryErr?.message)
+        } else if (retry.reason === 'non_retryable_error') {
+          console.warn('[crawler-concurrency] Skipping auto-retry for non-retryable error', {
+            jobId: job.id, type: job.type, profileId: job.profile_id,
+          })
+        } else {
+          console.warn('[crawler-concurrency] Not auto-retrying orphaned job (terminal)', {
+            jobId: job.id, type: job.type, profileId: job.profile_id, reason: retry.reason,
+          })
         }
+      } catch (retryErr) {
+        console.warn('[crawler-concurrency] Failed to auto-requeue orphaned job:', retryErr?.message)
       }
     }
     
