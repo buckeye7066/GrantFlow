@@ -8,6 +8,9 @@
 // community entities, and more.
 //
 // Pure, no I/O. Output is a plain mutable object (the pipeline attaches env).
+// (geoRadius reads the static `zipcodes` dataset — deterministic, no I/O.)
+
+import { nearbyCities } from './geoRadius.js';
 
 const APPLICANT_TYPE_SYNONYMS = {
   individual: ['individual', 'person', 'resident'],
@@ -811,11 +814,17 @@ function normalizeState(state) {
 
 function deriveLocation(profile) {
   const loc = profile?.location ?? profile?.address ?? {};
+  const zip = loc.zip ?? loc.postal_code ?? profile?.zip ?? null;
+  const city = loc.city ?? profile?.city ?? null;
   return {
     state: normalizeState(loc.state ?? loc.region ?? profile?.state ?? null),
     county: loc.county ?? profile?.county ?? null,
-    zip: loc.zip ?? loc.postal_code ?? profile?.zip ?? null,
-    city: loc.city ?? profile?.city ?? null,
+    zip,
+    city,
+    // Distinct towns within the product's 25-mile "local" radius of the ZIP.
+    // City/county name tokens alone cannot reach a funder one town over (or
+    // across a county/state line); the web-query builder searches these by name.
+    nearby_cities: nearbyCities(zip, { excludeCity: city }),
   };
 }
 

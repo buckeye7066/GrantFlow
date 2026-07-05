@@ -220,3 +220,60 @@ test('weights facade is frozen and points at the canonical matcher', () => {
   assert.equal(WEIGHTS.canonical_match_engine, 100);
   assert.throws(() => { WEIGHTS.canonical_match_engine = 999; }, TypeError);
 });
+
+// ── 2026-07-05 QA regression: opportunity-side entity expansion is RESTRICTIVE ──
+// The profile-side map "veteran → [veteran, individual]" was reused on the
+// OPPORTUNITY side, so a military-only directory (DOL TAP, Boots to Business)
+// allowed ANY individual and ACCEPTed at 75 for an 18-year-old non-military
+// student. Military applicant buckets must collapse to the 'veteran' entity
+// class so the canonical requiresVeteran gate can fire.
+
+test('a military-only directory REJECTS for a non-military student thesis', () => {
+  const studentThesis = buildThesis({
+    id: 'p-student',
+    primary_type: 'student',
+    school: 'Cleveland State Community College',
+    state: 'TN', city: 'Cleveland', county: 'Bradley',
+    zip: '37312',
+    needs: ['tuition'],
+  });
+  const dolTap = makeOpportunity({
+    source_id: 'dol_tap', kind: OPPORTUNITY_KIND.DIRECTORY,
+    title: 'Transition Assistance Program employment resources',
+    sponsor: 'U.S. Department of Labor',
+    summary: 'Official DOL VETS transition employment resource for separating and transitioning service members, veterans, and military spouses.',
+    applicant_types: ['transitioning_service_member', 'active_duty', 'veteran', 'military_spouse'],
+    need_categories: ['military_transition', 'employment'],
+    geography: { national: true },
+    apply_url: 'https://www.dol.gov/agencies/vets/programs/tap',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML, reality_status: REALITY_STATUS.VERIFIED,
+  });
+  const m = computeMatchDecision(dolTap, studentThesis);
+  assert.equal(m.decision, MATCH_DECISION.REJECT, `military-only must REJECT for a non-military student (got ${m.decision} @ ${m.match_score})`);
+});
+
+test('the same military-only directory stays available to a veteran thesis', () => {
+  const veteranThesis = buildThesis({
+    id: 'p-vet',
+    primary_type: 'individual',
+    state: 'TN', city: 'Cleveland',
+    zip: '37312',
+    needs: ['employment'],
+    // Declared military service — the thesis builder maps this to the veteran bucket.
+    sections: [{ section_key: 'military_service', data: { is_veteran: true } }],
+  });
+  assert.ok(veteranThesis.applicant_types.includes('veteran'), 'thesis derives the veteran bucket');
+  const dolTap = makeOpportunity({
+    source_id: 'dol_tap', kind: OPPORTUNITY_KIND.DIRECTORY,
+    title: 'Transition Assistance Program employment resources',
+    sponsor: 'U.S. Department of Labor',
+    summary: 'Official DOL VETS transition employment resource for separating and transitioning service members, veterans, and military spouses.',
+    applicant_types: ['transitioning_service_member', 'active_duty', 'veteran', 'military_spouse'],
+    need_categories: ['military_transition', 'employment'],
+    geography: { national: true },
+    apply_url: 'https://www.dol.gov/agencies/vets/programs/tap',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML, reality_status: REALITY_STATUS.VERIFIED,
+  });
+  const m = computeMatchDecision(dolTap, veteranThesis);
+  assert.notEqual(m.decision, MATCH_DECISION.REJECT, `veteran profile must keep military resources (got ${m.decision} @ ${m.match_score})`);
+});

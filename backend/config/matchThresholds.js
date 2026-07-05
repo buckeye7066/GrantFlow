@@ -207,6 +207,15 @@ export const DEPTH_BONUS_DIVISOR = 1000
 /** Ceiling for a non-student profile matched against a student-aid opportunity. */
 export const STUDENT_AID_NONSTUDENT_CAP = 40
 
+/**
+ * Ceiling for a profile with NO senior/aging/caregiving signal matched against
+ * a senior-services program (Area Agency on Aging, eldercare locators, Meals on
+ * Wheels). Mirrors STUDENT_AID_NONSTUDENT_CAP: population mismatches reduce
+ * score rather than hard-reject (canonical G4), but an 18-year-old student must
+ * not see eldercare directories ACCEPT at 75.
+ */
+export const SENIOR_PROGRAM_MISMATCH_CAP = 40
+
 /** Workforce / pro-bono service-term alignment boost (per term hit, and cap). */
 export const WORKFORCE_BOOST_PER_HIT = 3
 export const WORKFORCE_BOOST_MAX = 8

@@ -338,3 +338,103 @@ describe('(f) university merit scholarships are typed student, not researcher-on
     expect(String(d?.decision).toLowerCase()).toBe('reject')
   })
 })
+
+// ── (f) 2026-07-05 QA sweep regressions ──────────────────────────────────────
+// Production audit found three eligibility leaks: (1) DOL TAP / Boots-to-
+// Business (military-only, phrased "for separating and transitioning service
+// members, veterans, and military spouses" — no "only") ACCEPTed at 75 for an
+// 18-year-old non-military student; (2) Area Agency on Aging eldercare
+// directories ACCEPTed at 75 for the same student; (3) grants.gov notices whose
+// institutions-only eligibility lives in eligibility_json scored 90+ for
+// students because the normalizer text corpus never included that field.
+
+describe('(f) military-transition programs are veteran-gated', () => {
+  const DOL_TAP = {
+    id: 'dol-tap',
+    title: 'Transition Assistance Program employment resources',
+    sponsor: 'U.S. Department of Labor',
+    description: 'Official DOL VETS transition employment resource for separating and transitioning service members, veterans, and military spouses.',
+    application_url: 'https://www.dol.gov/agencies/vets/programs/tap',
+    is_national: true,
+  }
+
+  it('normalizer detects the military-transition phrasing as requiresVeteran', () => {
+    const n = normalizeOpportunity(DOL_TAP)
+    expect(n.requiresVeteran).toBe(true)
+  })
+
+  it('rejects for a non-military student profile', () => {
+    const r = computeMatchDecision(TN_STUDENT.profile, DOL_TAP, { profileSections: TN_STUDENT.sections })
+    expect(r.decision).toBe('REJECT')
+  })
+
+  it('veteran-owned business resources are veteran-gated too', () => {
+    const n = normalizeOpportunity({
+      id: 'sba-vet',
+      title: 'SBA veteran-owned business resources',
+      sponsor: 'U.S. Small Business Administration',
+      description: 'Official SBA resource page for veteran-owned businesses and military spouses starting or growing a business.',
+      application_url: 'https://www.sba.gov/business-guide/grow-your-business/veteran-owned-businesses',
+    })
+    expect(n.requiresVeteran).toBe(true)
+  })
+})
+
+describe('(f) senior-services programs are capped for profiles with no senior signal', () => {
+  const ELDERCARE = {
+    id: 'aaa-locator',
+    title: 'Area Agency on Aging & Eldercare Locator',
+    sponsor: 'Administration for Community Living',
+    description: 'Find your local Area Agency on Aging for senior services: meals, transportation, in-home care, benefits counseling, and caregiver respite support.',
+    application_url: 'https://eldercare.acl.gov',
+    is_national: true,
+  }
+
+  it('normalizer flags the program as senior-focused', () => {
+    const n = normalizeOpportunity(ELDERCARE)
+    expect(n.isSeniorProgram).toBe(true)
+  })
+
+  it('a 20-year-old student with no aging/caregiving signal cannot ACCEPT it', () => {
+    const r = computeMatchDecision(TN_STUDENT.profile, ELDERCARE, { profileSections: TN_STUDENT.sections })
+    expect(r.score).toBeLessThanOrEqual(40)
+    expect(r.decision).not.toBe('ACCEPT')
+  })
+
+  it('a senior profile keeps its full score (no cap)', () => {
+    const SENIOR = {
+      profile: { id: 'tn-senior', primary_type: 'individual', state: 'TN', city: 'Cleveland', age: 78 },
+      sections: { basic_information: { answers: { age: 78 } } },
+    }
+    const r = computeMatchDecision(SENIOR.profile, ELDERCARE, { profileSections: SENIOR.sections })
+    expect(r.decision).not.toBe('REJECT')
+    // The senior path must not be capped at the mismatch ceiling.
+    expect(r.score).toBeGreaterThan(40)
+  })
+})
+
+describe('(f) grants.gov eligibility_json reaches the institutional gate', () => {
+  const NUCLEAR_NOTICE = {
+    id: 'gg-329436',
+    title: 'University Nuclear Leadership Program — Scholarship and Fellowship',
+    sponsor: 'Idaho Field Office',
+    source: 'grants_gov',
+    description: 'Scholarship and fellowship support administered through participating universities.',
+    application_url: 'https://www.grants.gov/search-results-detail/329436',
+    is_national: true,
+    eligibility_json: {
+      applicant_types: ['Public and State controlled institutions of higher education', 'Private institutions of higher education'],
+      additional_info: 'Only accredited institutions of higher education may apply; students are funded through their institution.',
+    },
+  }
+
+  it('normalizer sees the institutions-only eligibility from eligibility_json', () => {
+    const n = normalizeOpportunity(NUCLEAR_NOTICE)
+    expect(n.isInstitutionalOnly).toBe(true)
+  })
+
+  it('is rejected (not 90+ ACCEPT) for an individual student', () => {
+    const r = computeMatchDecision(TN_STUDENT.profile, NUCLEAR_NOTICE, { profileSections: TN_STUDENT.sections })
+    expect(r.decision).toBe('REJECT')
+  })
+})

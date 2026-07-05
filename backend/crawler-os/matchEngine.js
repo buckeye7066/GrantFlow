@@ -50,6 +50,37 @@ const APPLICANT_TYPE_TO_CANONICAL_ALLOWED = Object.freeze({
   individual: ['individual'],
 });
 
+// OPPORTUNITY-side applicant-type → allowed entity types. This map must be
+// RESTRICTIVE, unlike the profile-side map above: profile-side, "a veteran IS
+// an individual" correctly widens what a veteran can apply to; opportunity-side
+// the same expansion means "a veterans-only program allows any individual" —
+// which is how DOL TAP / Boots to Business surfaced as ACCEPT for an 18-year-old
+// non-military student. Military-affiliation buckets all collapse to 'veteran'
+// so the normalizer's requiresVeteran gate can fire; population buckets that
+// merely DESCRIBE the audience (senior, caregiver) stay reachable as
+// individuals — relevance is the scorer's job, eligibility is this map's.
+const OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED = Object.freeze({
+  vfd: ['nonprofit', 'organization'],
+  church: ['nonprofit', 'organization'],
+  ministry: ['nonprofit', 'organization'],
+  nonprofit: ['nonprofit', 'organization'],
+  school: ['organization'],
+  government: ['organization'],
+  business: ['business'],
+  farm: ['business'],
+  student: ['student'],
+  veteran: ['veteran'],
+  active_duty: ['veteran'],
+  guard_reserve: ['veteran'],
+  transitioning_service_member: ['veteran'],
+  military_spouse: ['veteran'],
+  military: ['veteran'],
+  family: ['individual'],
+  individual: ['individual'],
+  senior: ['individual'],
+  caregiver: ['individual'],
+});
+
 /**
  * Score an OS-normalized opportunity against one OS thesis using the canonical
  * GrantFlow matcher.
@@ -128,7 +159,7 @@ function thesisToCanonicalProfile(thesis = {}, opts = {}) {
 
 function opportunityToCanonicalOpportunity(opportunity = {}) {
   const applicantTypes = stripWildcard(uniqueStrings(opportunity.applicant_types));
-  const allowedTypes = expandAllowedEntityTypes(applicantTypes);
+  const allowedTypes = expandOpportunityAllowedTypes(applicantTypes);
   const needs = uniqueStrings(opportunity.need_categories);
   const geography = opportunity.geography ?? {};
   const states = uniqueStrings(geography.states);
@@ -202,6 +233,16 @@ function expandAllowedEntityTypes(applicantTypes) {
   for (const type of applicantTypes) {
     if (type === '*') continue;
     expanded.push(...(APPLICANT_TYPE_TO_CANONICAL_ALLOWED[type] ?? [type]));
+  }
+  return uniqueStrings(expanded);
+}
+
+// Opportunity-side (restrictive) counterpart — see OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED.
+function expandOpportunityAllowedTypes(applicantTypes) {
+  const expanded = [];
+  for (const type of applicantTypes) {
+    if (type === '*') continue;
+    expanded.push(...(OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED[type] ?? [type]));
   }
   return uniqueStrings(expanded);
 }

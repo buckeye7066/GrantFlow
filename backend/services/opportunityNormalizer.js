@@ -16,6 +16,25 @@ import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
 // ---------------------------------------------------------------------------
 // Safe JSON parse helper
 // ---------------------------------------------------------------------------
+// Flatten eligibility_json (object or JSON string) into plain search text so
+// the pattern matchers can read structured applicant-eligibility statements.
+function eligibilityJsonToText(val) {
+  if (!val) return ''
+  let obj = val
+  if (typeof val === 'string') {
+    try { obj = JSON.parse(val) } catch { return val }
+  }
+  const parts = []
+  const walk = (v) => {
+    if (v === null || v === undefined) return
+    if (typeof v === 'string' || typeof v === 'number') parts.push(String(v))
+    else if (Array.isArray(v)) v.forEach(walk)
+    else if (typeof v === 'object') Object.values(v).forEach(walk)
+  }
+  walk(obj)
+  return parts.join(' ').slice(0, 4000)
+}
+
 function safeParseArray(val) {
   if (Array.isArray(val)) return val
   if (typeof val === 'string') {
@@ -69,6 +88,19 @@ const RESEARCH_ONLY_PATTERNS = [
   'research grant', 'research award', 'research funding', 'scientific research',
   'biomedical research', 'clinical research', 'basic science', 'translational research',
   'r01', 'r21', 'r03', 'research proposal', 'research protocol',
+]
+
+// ---------------------------------------------------------------------------
+// Senior/aging service programs (Area Agencies on Aging, eldercare locators,
+// senior centers). NOT an eligibility gate — a family/caregiver profile
+// legitimately reaches these for a household elder — but a young student with
+// no aging/caregiving signal must not see them ACCEPT at 75 (the Anastasia
+// class). matchEngine caps the score when the profile lacks any senior signal.
+// ---------------------------------------------------------------------------
+const SENIOR_PROGRAM_PATTERNS = [
+  'area agency on aging', 'area agencies on aging', 'eldercare',
+  'senior services', 'senior citizens', 'senior center', 'older adults',
+  'meals on wheels', 'aging services', 'aging and disability resource',
 ]
 
 // ---------------------------------------------------------------------------
@@ -385,6 +417,13 @@ const EXCLUSIVE_ENTITY_REQUIREMENTS = {
   veteran: [
     /\b(veterans?|service members?|active duty|military personnel)\s+(only|required|eligible)\b/i,
     /\b(must be|limited to|exclusively for|only for)\s+(?:u\.?s\.?\s+)?(?:military\s+)?veterans?\b/i,
+    // Military-transition program language ("for separating and transitioning
+    // service members, veterans, and military spouses") — the DOL TAP / Boots
+    // to Business phrasing that names the military audience without the word
+    // "only". A program FOR the military-affiliated is military-only.
+    /\b(?:separating|transitioning)\s+service\s+members?\b/i,
+    /\bveterans?,?\s+and\s+military\s+spouses?\b/i,
+    /\bveteran[-\s]owned\s+business/i,
   ],
   student: [
     /\b(students?|undergraduates?|graduates?|enrolled students?)\s+(only|required|eligible)\b/i,
@@ -536,6 +575,11 @@ export function normalizeOpportunity(rawOpp) {
     rawOpp.description ?? '',
     rawOpp.sponsor ?? '',
     ...(safeParseArray(rawOpp.eligibility_bullets)),
+    // Structured eligibility (grants.gov "eligible applicants: institutions of
+    // higher education", etc.). Without it, the institutional/exclusivity
+    // patterns above never see the one field that states who may apply — which
+    // is how a universities-only grants.gov notice scored 90+ for a student.
+    eligibilityJsonToText(rawOpp.eligibility_json),
   ].join(' ')
 
   // -- Entity types allowed --
@@ -659,6 +703,9 @@ export function normalizeOpportunity(rawOpp) {
   const isCaregiverProgram = Boolean(rawOpp.is_caregiver_program) ||
     matchesAnyPattern(text, CAREGIVER_PROGRAM_PATTERNS)
 
+  // -- Senior/aging program (score-capped for profiles with no senior signal) --
+  const isSeniorProgram = matchesAnyPattern(text, SENIOR_PROGRAM_PATTERNS)
+
   // -- Veteran/student/nonprofit requirements --
   const requiresVeteran =
     Boolean(rawOpp.requires_veteran) ||
@@ -761,6 +808,7 @@ export function normalizeOpportunity(rawOpp) {
     requiresDisasterContext,
     isDmeOrEquipment,
     isCaregiverProgram,
+    isSeniorProgram,
     requiresVeteran,
     requiresStudent,
     requiresWomen,

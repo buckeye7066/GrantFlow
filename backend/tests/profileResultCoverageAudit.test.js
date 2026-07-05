@@ -100,7 +100,11 @@ describe('profileResultCoverageAudit — detection', () => {
       surfacedRows: [
         { match_score: 60, match_decision: 'review', title: 'weak' }, // below floor, not accept → hidden
         { match_score: 72, match_decision: 'accept', title: 'HOPE' }, // accept below 75 → surfaced
-        { is_directory: true, match_score: 5, title: 'dir' }, // directory → surfaced
+        { is_directory: true, title: 'dir' }, // unscored directory → surfaced
+        // A directory the engine affirmatively scored irrelevant (< REVIEW band)
+        // no longer surfaces — 2026-07-05 rule (student-aid directory scored 0
+        // for a senior citizen was showing in the matches view).
+        { is_directory: true, match_score: 5, title: 'irrelevant dir' },
       ],
       unsurfacedCount: 0,
       thesis: student([]),
