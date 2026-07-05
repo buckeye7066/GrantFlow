@@ -695,7 +695,11 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_content_type TEXT,
   is_admin BOOLEAN DEFAULT 0,
   password_hash TEXT,
-  metadata TEXT
+  metadata TEXT,
+  -- Stamped on every successful sign-in (session mint). NULL = never signed
+  -- in; the NULL->set transition fires the one-time "new user first login"
+  -- owner notification (services/firstLoginNotifier.js).
+  last_login_at DATETIME
 );
 
 -- saved_grants: profile-scoped favorites/bookmarks. Each user can save the

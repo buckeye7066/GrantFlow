@@ -606,6 +606,55 @@ export async function ensureProfileSoftDeleteColumn(db, { logger = console } = {
 }
 
 /**
+ * users.last_login_at column (both dialects) — first-login owner notification.
+ *
+ * Stamped on every successful sign-in at the createSessionAndTokens choke
+ * point; the NULL→set transition fires the one-time "new user first login"
+ * owner email (services/firstLoginNotifier.js). The backfill runs ONLY when
+ * the column is newly added: users that exist at introduction time are marked
+ * as already signed in (created_at) so they never read as "new" — but a
+ * re-run must NOT re-stamp post-introduction users who genuinely haven't
+ * signed in yet. Mirrors migration 0132 (either can run first; both guard on
+ * column existence).
+ */
+export async function ensureUsersLastLoginAtColumn(db, { logger = console } = {}) {
+  return runStep(
+    'users.last_login_at',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'users' AND column_name = 'last_login_at'
+            ) THEN
+              ALTER TABLE users ADD COLUMN last_login_at TIMESTAMPTZ;
+              UPDATE users SET last_login_at = created_at;
+            END IF;
+          END $$;
+        `)
+        return
+      }
+
+      let hasColumn = false
+      try {
+        const cols = await db.prepare('PRAGMA table_info(users)').all()
+        hasColumn = Array.isArray(cols) && cols.some((c) => c?.name === 'last_login_at')
+      } catch {
+        hasColumn = false
+      }
+      if (!hasColumn) {
+        await db.exec('ALTER TABLE users ADD COLUMN last_login_at DATETIME')
+        await db.exec('UPDATE users SET last_login_at = created_at')
+      }
+    },
+  )
+}
+
+/**
  * Ingestion provenance & quality layer tables (both dialects).
  *
  *   opportunity_evidence — per-result evidence snippets (title + matched
@@ -833,6 +882,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['profile_discovery_column', ensureProfileDiscoveryColumn],
   ['profile_preferred_language_column', ensureProfilePreferredLanguageColumn],
   ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
+  ['users_last_login_at_column', ensureUsersLastLoginAtColumn],
   ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
   ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
   ['profile_portal_status', ensurePortalCompletionStatusTable],

@@ -9,6 +9,7 @@ import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
 import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlocklistService.js'
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
+import { recordSuccessfulLogin } from '../services/firstLoginNotifier.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
@@ -1624,6 +1625,16 @@ async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddres
   } catch (auditErr) {
     console.warn('[auth] sign-in audit record failed:', auditErr?.message || auditErr)
   }
+
+  // First-login owner notification + last_login_at stamp, at the same single
+  // choke point as the sign-in audit (covers every method; refresh excluded).
+  // Fire-and-forget: must never affect login latency or outcome.
+  void recordSuccessfulLogin({
+    db,
+    user,
+    method,
+    identifier: identifier ?? user?.primary_email ?? null,
+  })
 
   return {
     accessToken,
