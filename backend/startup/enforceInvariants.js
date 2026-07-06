@@ -2653,7 +2653,8 @@ export async function enforceImportedStatusHonesty(db) {
     }
     const disabled = _parseBoolEnv(process.env.ENFORCE_STATUS_PROVENANCE) === false
 
-    const WHERE = `
+    // Compile-time constant fragment (no user input flows in).
+    const SAFE_WHERE = `
         status = 'submitted'
         AND submitted_date IS NULL
         AND (
@@ -2664,7 +2665,7 @@ export async function enforceImportedStatusHonesty(db) {
 
     let scanned = 0
     try {
-      const row = await db.prepare(`SELECT COUNT(*) AS n FROM grants WHERE ${WHERE}`).get()
+      const row = await db.prepare(`SELECT COUNT(*) AS n FROM grants WHERE ${SAFE_WHERE}`).get()
       scanned = Number(row?.n) || 0
     } catch (err) {
       log.warn('imported_status_honesty: scan failed (non-fatal)', { error: String(err?.message || err) })
@@ -2679,7 +2680,7 @@ export async function enforceImportedStatusHonesty(db) {
     let repaired = 0
     try {
       const result = await db
-        .prepare(`UPDATE grants SET status = 'discovered' WHERE ${WHERE}`)
+        .prepare(`UPDATE grants SET status = 'discovered' WHERE ${SAFE_WHERE}`)
         .run()
       repaired = changesOf(result)
       if (repaired > 0) {
