@@ -102,6 +102,7 @@ async function seedSchema(db) {
       is_admin INTEGER DEFAULT 0,
       has_completed_onboarding INTEGER DEFAULT 0,
       onboarding_completed_at TEXT,
+      guided_cycle_tour_status TEXT DEFAULT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -311,11 +312,13 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(sessionRow.user_id).toBe(completion.body.user_id)
     expect(sessionRow.email).toBe('pastor@hcc.example')
 
-    // The user must exist with the email and be marked onboarded.
-    const userRow = await db.prepare('SELECT id, primary_email, has_completed_onboarding FROM users WHERE id = ?')
+    // The user must exist with the email and be marked onboarded, with the
+    // new guided first-cycle tour queued to show on their first Dashboard visit.
+    const userRow = await db.prepare('SELECT id, primary_email, has_completed_onboarding, guided_cycle_tour_status FROM users WHERE id = ?')
       .get(completion.body.user_id)
     expect(userRow.primary_email).toBe('pastor@hcc.example')
     expect(Number(userRow.has_completed_onboarding)).toBe(1)
+    expect(userRow.guided_cycle_tour_status).toBe('pending')
 
     // A credential + active OTP must exist for the email so /api/auth/email/verify
     // accepts the token returned to the client.

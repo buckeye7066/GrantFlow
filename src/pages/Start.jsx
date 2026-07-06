@@ -26,7 +26,6 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
 import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
-import { useToast } from '@/components/ui/use-toast'
 import OnboardingVideo from '@/components/onboarding/OnboardingVideo'
 import { useLanguage } from '@/i18n'
 
@@ -351,7 +350,6 @@ function AnnounceQuestion({ question, onSubmit, busy }) {
 // ---------------------------------------------------------------------------
 export default function Start() {
   const navigate = useNavigate()
-  const { toast } = useToast()
   const verifyEmailCode = useAuthStore((s) => s.verifyEmailCode)
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const { setLanguage } = useLanguage()
@@ -366,8 +364,26 @@ export default function Start() {
   const [otpCode, setOtpCode] = useState('')
   const [otpBusy, setOtpBusy] = useState(false)
   const [otpError, setOtpError] = useState(null)
-  // How-to video modal (offered on the email step)
+  // Shown for a moment after sign-in, before handing off to the guided tour on Dashboard.
+  const [showTourHandoff, setShowTourHandoff] = useState(false)
+  // How-to video modal (offered on the email step, or auto-played first)
   const [showVideo, setShowVideo] = useState(false)
+  // The intro video now plays automatically before the interview begins, once
+  // per browser — re-watching later (via the email step's "watch video" link)
+  // doesn't re-trigger the auto-play.
+  const [introVideoSeen, setIntroVideoSeen] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('grantflow:intro_video_seen') === '1'
+  })
+  const markIntroVideoSeen = useCallback(() => {
+    try {
+      window.localStorage.setItem('grantflow:intro_video_seen', '1')
+    } catch {
+      // ignore (private browsing / storage disabled) — worst case the video re-plays next visit
+    }
+    setIntroVideoSeen(true)
+    setShowVideo(false)
+  }, [])
 
   const scrollerRef = useRef(null)
 
@@ -500,17 +516,18 @@ export default function Start() {
       if (typeof window !== 'undefined') {
         localStorage.removeItem(SESSION_KEY)
       }
-      toast({
-        title: "You're in!",
-        description: "I'm running your first matches now.",
-      })
-      navigate('/Dashboard', { replace: true })
+      setShowTourHandoff(true)
     } catch (err) {
       setOtpError(err?.message ?? 'That code didn\'t verify. Try again.')
     } finally {
       setOtpBusy(false)
     }
-  }, [completionPayload, otpCode, verifyEmailCode, navigate, toast])
+  }, [completionPayload, otpCode, verifyEmailCode])
+
+  // --- Hand off from the interview into the guided first-cycle tour -------
+  const continueToGuidedTour = useCallback(() => {
+    navigate('/Dashboard', { replace: true })
+  }, [navigate])
 
   const renderQuestion = () => {
     if (!question) return null
@@ -561,7 +578,30 @@ export default function Start() {
             </Alert>
           ) : null}
 
-          {!completionPayload ? renderQuestion() : (
+          {!completionPayload ? renderQuestion() : showTourHandoff ? (
+            <div className="ml-12 max-w-md rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <img
+                  src="/images/anya-avatar.svg"
+                  alt="Anya"
+                  className="h-10 w-10 shrink-0 rounded-full shadow-sm"
+                />
+                <div className="text-sm leading-relaxed text-slate-800">
+                  <p className="font-semibold text-blue-700">You're in!</p>
+                  <p className="mt-1">
+                    I already have your answers, so let's put them to work. I'll walk you through one
+                    full pass together — finding a real funding match, adding it to your pipeline, moving
+                    it forward, and even watching a portal open — so you know exactly how it all fits
+                    together before you're on your own.
+                  </p>
+                </div>
+              </div>
+              <Button onClick={continueToGuidedTour} className="mt-4 w-full gap-2">
+                <ArrowRight className="h-4 w-4" />
+                Let's go
+              </Button>
+            </div>
+          ) : (
             <div className="ml-12 max-w-md rounded-2xl border border-blue-200 bg-white p-4 shadow-sm">
               <form className="space-y-2" onSubmit={verifyOtp}>
                 <Label htmlFor="otp">6-digit sign-in code</Label>
@@ -599,9 +639,9 @@ export default function Start() {
       </div>
 
       <OnboardingVideo
-        open={showVideo}
-        onComplete={() => setShowVideo(false)}
-        onSkip={() => setShowVideo(false)}
+        open={!introVideoSeen || showVideo}
+        onComplete={markIntroVideoSeen}
+        onSkip={markIntroVideoSeen}
       />
     </div>
   )

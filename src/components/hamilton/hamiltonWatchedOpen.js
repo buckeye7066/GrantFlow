@@ -37,6 +37,22 @@ import { openPendingLoginWindow, resolveLiveLoginUrl } from "@/components/hamilt
 import { startCloudLogin } from "@/api/hamilton"
 import { safeHttpUrl, hostFromUrl } from "@/lib/safeUrl"
 import { showErrorToast } from "@/components/shared/toastHelpers"
+import { useGuidedTourStore } from "@/stores/guidedTourStore"
+
+/**
+ * Guided first-cycle tour: a genuine no-op outside the tour (isActive check).
+ * This is the single choke point every "open a portal" call site goes
+ * through, so hooking in here covers all of them (GrantOverview,
+ * ProfileFundingSourcesCard, ProfilePortalsCard, StudentPortalsCard,
+ * HealthResourcesCard, PipelinePotentialBreakdown) with one edit.
+ */
+function reportTourPortalOpened() {
+  try {
+    useGuidedTourStore.getState().reportCompletion("hamilton-portal-opened")
+  } catch {
+    // never let tour bookkeeping break the real portal-open flow
+  }
+}
 
 /** True when this URL can be opened with Hamilton watching for this profile. */
 export function canHamiltonWatch({ profileId, url } = {}) {
@@ -65,6 +81,7 @@ export async function openWithHamiltonWatching({ profileId, url, label = null, t
   // window.open here is still inside the user gesture, so it isn't blocked.
   if (!profileId || !host) {
     if (typeof window !== "undefined") window.open(href, "_blank", "noopener,noreferrer")
+    reportTourPortalOpened()
     return { opened: true, watched: false, blocked: false }
   }
 
@@ -90,6 +107,7 @@ export async function openWithHamiltonWatching({ profileId, url, label = null, t
     const liveUrl = resolveLiveLoginUrl(res)
     if (!liveUrl) throw new Error("No live-login link was returned.")
     popup.navigate(liveUrl)
+    reportTourPortalOpened()
     return { opened: true, watched: true, blocked: false }
   } catch (err) {
     // Hamilton couldn't start — degrade to the portal itself in the SAME
@@ -104,6 +122,7 @@ export async function openWithHamiltonWatching({ profileId, url, label = null, t
           : "The watched session couldn't start, so the portal opened directly.",
       )
     }
+    reportTourPortalOpened()
     return { opened: true, watched: false, blocked: false }
   }
 }

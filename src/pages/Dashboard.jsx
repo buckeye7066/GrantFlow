@@ -186,6 +186,7 @@ function LJWMonogram({ className = "" }) {
 export default function Dashboard() {
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
   const logout = useAuthStore((state) => state.logout)
+  const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
   // "Dashboard Columns" personalization (1/2/3) now actually drives the stat grid.
   // Default (2) keeps the original responsive layout so existing users see no change.
   const { state: dashboardPrefs } = useDashboardPreferences()
@@ -226,12 +227,17 @@ export default function Dashboard() {
     },
   })
   
-  // Check if user has seen the onboarding video
+  // Check if user has seen the onboarding video. Skipped entirely for anyone
+  // who went through the new intake flow (guidedCycleTourStatus non-null) --
+  // they already auto-watched the intro video on /start before the interview,
+  // so this separate prompt would just be a redundant second copy of the
+  // same video.
   useEffect(() => {
+    if (guidedCycleTourStatus) return
     if (userPreferences && !userPreferences.custom_preferences?.onboarding_video_seen) {
       setShowOnboarding(true)
     }
-  }, [userPreferences])
+  }, [userPreferences, guidedCycleTourStatus])
 
   const handleOnboardingComplete = () => {
     setShowOnboarding(false)

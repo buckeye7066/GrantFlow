@@ -14,6 +14,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { formatReasonText } from '@/utils/reasonText';
 import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
 import { openWithHamiltonWatching } from '@/components/hamilton/hamiltonWatchedOpen';
+import { useGuidedTourStore } from '@/stores/guidedTourStore';
 
 const StatCard = ({ icon: Icon, label, value, color }) => (
     <div className="flex flex-col p-4 rounded-lg bg-slate-50 border border-slate-200">
@@ -94,6 +95,22 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
     const grantProfileId = grant?.profile_id || activeProfileId || null;
     const openApplyWatched = (url) =>
         openWithHamiltonWatching({ profileId: grantProfileId, url, label: grant?.title, toast });
+
+    const overviewRef = React.useRef(null);
+    const hamiltonOpenLinkRef = React.useRef(null);
+
+    // Guided first-cycle tour: spotlight this page's overview, then the
+    // "open with Hamilton watching" link, for the 'grant-detail' and
+    // 'hamilton-open' steps.
+    useEffect(() => {
+        const { registerTarget, unregisterTarget } = useGuidedTourStore.getState();
+        registerTarget('grantDetail.overview', overviewRef);
+        registerTarget('grantDetail.hamiltonOpenLink', hamiltonOpenLinkRef);
+        return () => {
+            unregisterTarget('grantDetail.overview');
+            unregisterTarget('grantDetail.hamiltonOpenLink');
+        };
+    }, []);
 
     // Keep local contactNotes in sync when the grant changes (navigation/refetch).
     // useState only reads its initial argument on first mount, so without this the
@@ -293,7 +310,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6" ref={overviewRef}>
             {/* Match Score Highlight - NEW! */}
             {hasMatchScore && (
                 <Card className={`shadow-lg border-0 bg-gradient-to-br ${matchColor.bg} ${matchColor.text} overflow-hidden relative`}>
@@ -534,7 +551,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
   const applyUrl = grant.application_url || grant.url;
   const isValidUrl = typeof applyUrl === 'string' && /^https?:\/\//i.test(applyUrl);
   return isValidUrl
-    ? <button type="button" onClick={() => openApplyWatched(applyUrl)} title="Open with Hamilton watching" className="underline font-semibold break-all text-left">{applyUrl}</button>
+    ? <button ref={hamiltonOpenLinkRef} type="button" onClick={() => openApplyWatched(applyUrl)} title="Open with Hamilton watching" className="underline font-semibold break-all text-left">{applyUrl}</button>
     : <span className="text-slate-500 italic">URL not available</span>;
 })()}
                                     </div>

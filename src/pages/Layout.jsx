@@ -32,7 +32,7 @@ import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
 // /start conversational quiz with Anya — see src/pages/Start.jsx. Existing
 // users coming back are routed straight to the dashboard; new users land at
 // /start (handled by index.jsx + LayoutRoutes redirect below).
-import AnyaGuidedTour from "@/components/onboarding/AnyaGuidedTour";
+import OnboardingSequencer from "@/components/onboarding/OnboardingSequencer";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
@@ -391,8 +391,10 @@ export default function Layout({ children, currentPageName }) {
           eliminate.
          */}
 
-        {/* Anya guided tour (versioned, non-admin only) */}
-        <AnyaGuidedTour />
+        {/* Onboarding priority router: at most one of the new guided
+            first-cycle tour or the older versioned AnyaGuidedTour, never
+            both — see OnboardingSequencer for the priority logic. */}
+        <OnboardingSequencer />
 
         {/*
           Per-page coach prompt (plain-English "what is this page for / what

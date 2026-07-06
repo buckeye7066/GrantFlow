@@ -655,6 +655,93 @@ export async function ensureUsersLastLoginAtColumn(db, { logger = console } = {}
 }
 
 /**
+ * Onboarding/tour state columns (has_completed_onboarding,
+ * onboarding_completed_at, last_seen_manual_version,
+ * last_completed_tour_version, tour_dismissed_at). SQLite migration 047
+ * added these but no Postgres twin ever existed -- confirmed missing in prod
+ * 2026-07-05 (see backend/db/postgres/migrations/0133_...). The existing
+ * AnyaGuidedTour version-gate has been silently degrading in prod until
+ * this backport; re-asserted on every boot for the same self-healing
+ * guarantee as ensureUsersLastLoginAtColumn.
+ */
+export async function ensureOnboardingTourStateColumns(db, { logger = console } = {}) {
+  return runStep(
+    'users.onboarding_tour_state',
+    '[database]',
+    logger,
+    async () => {
+      const columns = [
+        ['has_completed_onboarding', 'BOOLEAN DEFAULT FALSE', 'BOOLEAN DEFAULT 0'],
+        ['onboarding_completed_at', 'TIMESTAMPTZ', 'TEXT'],
+        ['last_seen_manual_version', 'INTEGER DEFAULT 0', 'INTEGER DEFAULT 0'],
+        ['last_completed_tour_version', 'INTEGER DEFAULT 0', 'INTEGER DEFAULT 0'],
+        ['tour_dismissed_at', 'TIMESTAMPTZ', 'TEXT'],
+      ]
+
+      if (db?.dialect === 'postgres') {
+        for (const [name, pgType] of columns) {
+          await db.exec(`
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'users' AND column_name = '${name}'
+              ) THEN
+                ALTER TABLE users ADD COLUMN ${name} ${pgType};
+              END IF;
+            END $$;
+          `)
+        }
+        return
+      }
+
+      const cols = await db.prepare('PRAGMA table_info(users)').all()
+      const existing = new Set(Array.isArray(cols) ? cols.map((c) => c?.name) : [])
+      for (const [name, , sqliteType] of columns) {
+        if (!existing.has(name)) {
+          await db.exec(`ALTER TABLE users ADD COLUMN ${name} ${sqliteType}`)
+        }
+      }
+    },
+  )
+}
+
+/**
+ * guided_cycle_tour_status: the new post-intake guided first-cycle tour's
+ * completion gate, independent of the older last_completed_tour_version.
+ * See backend/db/migrations/130_add_guided_cycle_tour_status.sql.
+ */
+export async function ensureGuidedCycleTourStatusColumn(db, { logger = console } = {}) {
+  return runStep(
+    'users.guided_cycle_tour_status',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'users' AND column_name = 'guided_cycle_tour_status'
+            ) THEN
+              ALTER TABLE users ADD COLUMN guided_cycle_tour_status TEXT DEFAULT NULL;
+            END IF;
+          END $$;
+        `)
+        return
+      }
+
+      const cols = await db.prepare('PRAGMA table_info(users)').all()
+      const hasColumn = Array.isArray(cols) && cols.some((c) => c?.name === 'guided_cycle_tour_status')
+      if (!hasColumn) {
+        await db.exec('ALTER TABLE users ADD COLUMN guided_cycle_tour_status TEXT DEFAULT NULL')
+      }
+    },
+  )
+}
+
+/**
  * Ingestion provenance & quality layer tables (both dialects).
  *
  *   opportunity_evidence — per-result evidence snippets (title + matched
@@ -889,6 +976,8 @@ const SCHEMA_INVARIANT_STEPS = [
   ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
   ['sms_consent_columns', ensureSmsConsentColumns],
   ['anya_run_live_columns', ensureAnyaRunLiveColumns],
+  ['onboarding_tour_state_columns', ensureOnboardingTourStateColumns],
+  ['guided_cycle_tour_status_column', ensureGuidedCycleTourStatusColumn],
   ['perf_indexes', ensurePerfIndexes],
 ]
 

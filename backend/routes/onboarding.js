@@ -501,7 +501,8 @@ router.post('/complete', async (req, res) => {
         .prepare(
           `UPDATE users
               SET has_completed_onboarding = 1,
-                  onboarding_completed_at = ?
+                  onboarding_completed_at = ?,
+                  guided_cycle_tour_status = 'pending'
             WHERE id = ?`,
         )
         .run(nowISO(), user.id)

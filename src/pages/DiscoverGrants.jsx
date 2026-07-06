@@ -16,6 +16,7 @@ import SearchCoveragePanel from '@/components/discovery/SearchCoveragePanel';
 import SourceLaneCoverage from '@/components/discovery/SourceLaneCoverage';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
+import { useGuidedTourStore } from '@/stores/guidedTourStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
@@ -426,6 +427,19 @@ export default function DiscoverGrants() {
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
+
+  // Guided first-cycle tour: register these already-existing refs as spotlight
+  // targets (harmless no-op outside the tour) for the 'discover-intro' and
+  // 'discover-crawl'/'discover-add' steps.
+  useEffect(() => {
+    const { registerTarget, unregisterTarget } = useGuidedTourStore.getState()
+    registerTarget('discover.searchButton', searchActionsRef)
+    registerTarget('discover.resultsPanel', resultsRef)
+    return () => {
+      unregisterTarget('discover.searchButton')
+      unregisterTarget('discover.resultsPanel')
+    }
+  }, [])
   const [dismissedSuggestions, setDismissedSuggestions] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('grantflow:dismissed-suggestions') || '[]');
@@ -745,6 +759,14 @@ export default function DiscoverGrants() {
     return dedupeFundingResults([...catalogOpportunities, ...searchResults])
       .sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
   }, [catalogOpportunities, searchResults])
+
+  // Guided first-cycle tour: advance past the 'discover-crawl' step the
+  // moment real results first appear.
+  useEffect(() => {
+    if (combinedOpportunities.length > 0) {
+      useGuidedTourStore.getState().reportCompletion('discover-crawl')
+    }
+  }, [combinedOpportunities.length])
 
   // Keep FundingResults store in sync with the combined view so /FundingResults
   // always displays whatever the user last saw on DiscoverGrants.
@@ -1316,6 +1338,7 @@ export default function DiscoverGrants() {
           description: `${opportunity.title} has been added to your grants pipeline.`,
         })
       }
+      useGuidedTourStore.getState().reportCompletion('discover-add')
       return { status: 'added', grant: newGrant }
     } catch (error) {
       console.error('Failed to add grant to pipeline:', error);

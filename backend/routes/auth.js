@@ -524,6 +524,15 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
     is_admin: Boolean(userRow.is_admin),
     profiles,
     active_profile_id: activeProfileId ?? (userRow.is_admin ? null : profiles[0]?.id ?? null),
+    // So the guided first-cycle tour can start immediately on login, without
+    // waiting on a separate GET /api/auth/me round-trip (see setAuthenticatedUser's
+    // payload.user branch, which maps this into the store's guidedCycleTourStatus).
+    guided_cycle_tour_status: userRow.guided_cycle_tour_status ?? null,
+    // Pre-existing gap found alongside the above: this was never returned here,
+    // so setAuthenticatedUser's `payload.user?.has_completed_onboarding` read
+    // (used for hasSeenOnboarding/needsProfileCreation) was always reading
+    // undefined -> false on every fresh login through this payload shape.
+    has_completed_onboarding: Boolean(userRow.has_completed_onboarding),
   }
 }
 
@@ -3213,11 +3222,12 @@ router.get('/me', async (req, res) => {
     let lastSeenManualVersion = 0
     let lastCompletedTourVersion = 0
     let tourDismissedAt = null
+    let guidedCycleTourStatus = null
 
     try {
       const onboardingRow = await req.db.prepare(
         `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
-                last_completed_tour_version, tour_dismissed_at
+                last_completed_tour_version, tour_dismissed_at, guided_cycle_tour_status
          FROM users WHERE id = ?`
       ).get(userId)
       if (onboardingRow) {
@@ -3226,6 +3236,7 @@ router.get('/me', async (req, res) => {
         lastSeenManualVersion = Number(onboardingRow.last_seen_manual_version ?? 0)
         lastCompletedTourVersion = Number(onboardingRow.last_completed_tour_version ?? 0)
         tourDismissedAt = onboardingRow.tour_dismissed_at ?? null
+        guidedCycleTourStatus = onboardingRow.guided_cycle_tour_status ?? null
       }
     } catch (dbError) {
       // Columns may not exist yet if migration hasn't run — degrade gracefully
@@ -3244,6 +3255,7 @@ router.get('/me', async (req, res) => {
       lastSeenManualVersion,
       lastCompletedTourVersion,
       tourDismissedAt,
+      guidedCycleTourStatus,
     })
   } catch (error) {
     routeLogger.error('[auth/me] Unexpected error:', error)
@@ -3273,6 +3285,7 @@ router.patch('/onboarding-state', async (req, res) => {
       last_seen_manual_version,
       last_completed_tour_version,
       tour_dismissed_at,
+      guided_cycle_tour_status,
     } = req.body ?? {}
 
     const updates = []
@@ -3302,6 +3315,11 @@ router.patch('/onboarding-state', async (req, res) => {
       values.push(tour_dismissed_at)
     }
 
+    if (['completed', 'skipped'].includes(guided_cycle_tour_status)) {
+      updates.push('guided_cycle_tour_status = ?')
+      values.push(guided_cycle_tour_status)
+    }
+
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No valid fields provided' })
     }
@@ -3315,7 +3333,7 @@ router.patch('/onboarding-state', async (req, res) => {
     // Return updated state
     const row = await req.db.prepare(
       `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
-              last_completed_tour_version, tour_dismissed_at
+              last_completed_tour_version, tour_dismissed_at, guided_cycle_tour_status
        FROM users WHERE id = ?`
     ).get(userId)
 
@@ -3325,6 +3343,7 @@ router.patch('/onboarding-state', async (req, res) => {
       lastSeenManualVersion: Number(row?.last_seen_manual_version ?? 0),
       lastCompletedTourVersion: Number(row?.last_completed_tour_version ?? 0),
       tourDismissedAt: row?.tour_dismissed_at ?? null,
+      guidedCycleTourStatus: row?.guided_cycle_tour_status ?? null,
     })
   } catch (error) {
     routeLogger.error('[auth/onboarding-state] Unexpected error:', error)
