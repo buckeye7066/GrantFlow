@@ -211,3 +211,12 @@ test('a non-research org gets NO SBIR queries', () => {
   );
   assert.ok(!qs.some((q) => /sbir/i.test(q)), 'no SBIR queries for a food pantry');
 });
+
+test('SBIR topic prefers thesis.research_topic and never uses a bookkeeping tag', () => {
+  const qs = buildWebQueries(
+    { ...RESEARCH_ORG_THESIS, research_topic: 'genomics', interest_terms: ['designated', 'source-safe'] },
+    { year: 2026, max: 12, seed: 0 },
+  );
+  assert.ok(qs.includes('SBIR STTR genomics solicitation 2026'), 'topic from research_topic');
+  assert.ok(!qs.some((q) => /designated|source-safe/i.test(q)), 'no bookkeeping-tag queries');
+});
