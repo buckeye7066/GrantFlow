@@ -254,6 +254,13 @@ function gatherStructuredApplicantHints(profile) {
   return hints;
 }
 
+// System/bookkeeping tags that must never be treated as topical interests —
+// they mark HOW a profile is managed, not WHAT it seeks funding for.
+const RESERVED_PROFILE_TAGS = new Set([
+  'designated', 'source-safe', 'source_safe', 'source', 'safe', 'synthetic',
+  'test', 'demo', 'organization', 'individual', 'profile', 'active',
+]);
+
 // Applicant types that describe an ORGANIZATION (vs. a person/household).
 const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal']);
 const INDIVIDUAL_APPLICANT_TYPES = new Set([
@@ -861,6 +868,11 @@ export function buildThesis(profile = {}) {
   // gets a few extra SBIR queries whose results still face the match gates.
   const RE_RESEARCH_ORG = /\b(biotech(?:nology)?|life sciences?|biomedical|bioscience|genomic(?:s)?|laborator(?:y|ies)|r&d|research (?:and development|organi[sz]ation|institute|laboratory))\b/i;
   const is_research_org = isOrg && RE_RESEARCH_ORG.test(blob);
+  // The concrete research TOPIC for query building ("biotechnology", "genomics"
+  // ...), extracted from the profile's own text so the SBIR queries search the
+  // org's actual field. Never trusts tag ordering (see RESERVED_PROFILE_TAGS).
+  const RE_RESEARCH_TOPIC = /\b(biotechnology|biotech|genomics?|bioinformatics|genetic engineering|life sciences?|biomedical(?: research)?|pharmaceutical|biopharmaceutical|bioscience)\b/i;
+  const research_topic = is_research_org ? (blob.match(RE_RESEARCH_TOPIC)?.[1]?.toLowerCase() ?? 'biotechnology') : null;
 
   // Free-text interest / field-of-study / career-goal / talent seeds the applicant
   // entered (major, intended career, demographic scholarship tags). These do NOT
@@ -876,7 +888,12 @@ export function buildThesis(profile = {}) {
       .map((t) => String(t ?? '').trim().toLowerCase())
       .filter(Boolean)
       .filter((t) => t.length > 2 && t.length < 40)
-      .filter((t) => !needs.includes(t) && !applicant_types.includes(t)),
+      .filter((t) => !needs.includes(t) && !applicant_types.includes(t))
+      // System/bookkeeping tags are NOT topics. 'designated' (owner-profile
+      // marker) and 'source-safe' leaked in as interests[0] and became the
+      // web-query topic ("SBIR STTR designated solicitation") — garbage in,
+      // garbage searched. Generic entity words carry no topical signal either.
+      .filter((t) => !RESERVED_PROFILE_TAGS.has(t)),
   )].slice(0, 12);
 
   return {
@@ -889,6 +906,7 @@ export function buildThesis(profile = {}) {
     is_student: isStudent,
     is_org: isOrg,
     is_research_org,
+    research_topic,
     school: profile?.school ?? null,
     // Concrete institution / field-of-study / employer seeds — the highest-signal
     // way to reach institution-specific endowments/departmental scholarships and

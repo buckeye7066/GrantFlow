@@ -202,11 +202,21 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // ZERO SBIR-class rows). Keyed to the org's top interest term so a genomics
   // shop and an ag-tech shop search different solicitations.
   if (thesis.is_research_org) {
-    const topic = interests[0] || 'biotechnology';
+    // Topic comes from the thesis's extracted research field, falling back to
+    // the first interest that LOOKS research-shaped — never blind interests[0]
+    // (tag ordering once made the query "SBIR STTR designated solicitation").
+    const RESEARCH_SHAPED = /biotech|genomic|bioinformat|genetic|life scien|biomedical|pharma|bioscience|research/i;
+    const topic = thesis.research_topic
+      || interests.find((t) => RESEARCH_SHAPED.test(t))
+      || 'biotechnology';
     add(core, `SBIR STTR ${topic} solicitation ${year}`);
     add(core, `${topic} research grants small business ${year}`);
     if (state) add(core, `${state} SBIR matching funds program`);
-    for (const term of interests.slice(1, 4)) add(extra, `SBIR ${term} funding opportunity`);
+    // Per-interest SBIR breadth — research-shaped terms ONLY, so a stray
+    // bookkeeping tag can never become a solicitation search.
+    for (const term of interests.filter((t) => t !== topic && RESEARCH_SHAPED.test(t)).slice(0, 3)) {
+      add(extra, `SBIR ${term} funding opportunity`);
+    }
     add(extra, `NIH SBIR ${topic} ${year}`);
     add(extra, `NSF SBIR ${topic}`);
   }
