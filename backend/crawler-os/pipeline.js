@@ -69,7 +69,10 @@ export async function runDiscovery(deps, opts = {}) {
     storedOppIds.add(canonicalOpp.id);
     for (const mp of matchProfiles) {
       const decision = computeMatchDecision(canonicalOpp, mp, { floor: opts.floor });
-      upsertMatch(store, decision);
+      // Crawler-doctor provenance: registry adapters have no query string, but
+      // the SOURCE that produced the match is knowable (web lane sets both
+      // source_query and discovered_via; here only the source id applies).
+      upsertMatch(store, { ...decision, discovered_via: canonicalOpp.source_id ?? null });
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
       if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);

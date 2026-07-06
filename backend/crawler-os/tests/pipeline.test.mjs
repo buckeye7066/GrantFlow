@@ -37,6 +37,12 @@ test('discovery produces per-profile matches for a matched profile', async () =>
   const matches = storage.getMatchesForProfile(d.store, thesis.profile_id);
   assert.ok(matches.length >= 1);
   for (const m of matches) assert.ok(['accept', 'review', 'reject'].includes(m.decision));
+  // Crawler-doctor provenance: adapter-lane matches record the SOURCE that
+  // produced them (no query string exists for API adapters — that stays null).
+  for (const m of matches) {
+    assert.ok(typeof m.discovered_via === 'string' && m.discovered_via.length > 0);
+    assert.equal(m.source_query, null);
+  }
 });
 
 test('a placeholder candidate is rejected by the reality gate and never enters the catalog', async () => {

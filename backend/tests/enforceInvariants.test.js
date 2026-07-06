@@ -1779,6 +1779,40 @@ describe('enforceGrantAmountBackfill — pipeline-$ visibility', () => {
     expect(statusRow(db, gid).amount_status).toBe('range')
   })
 
+  it('catalog TEXT sweep: extracts amounts/status from already-stored text (bounded, converging)', async () => {
+    const db = makeAmountStatusDb()
+    db.exec('ALTER TABLE funding_opportunities ADD COLUMN description TEXT; ALTER TABLE funding_opportunities ADD COLUMN amount_description TEXT;')
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, description) VALUES (?, ?, ?)')
+      .run('opp-text', 'Rural Fire Grant', 'Departments may request up to $7,500 for turnout gear.')
+    db.prepare('INSERT INTO funding_opportunities (id, title, description) VALUES (?, ?, ?)')
+      .run('opp-varies', 'Community Fund', 'Award amounts vary based on need.')
+    db.prepare('INSERT INTO funding_opportunities (id, title, description) VALUES (?, ?, ?)')
+      .run('opp-nothing', 'Local Partner Page', 'Serving our neighbors since 1985.')
+
+    await enforceGrantAmountBackfill(db)
+    const get = (id) => db.prepare('SELECT amount_min, amount_max, amount_text, amount_status FROM funding_opportunities WHERE id = ?').get(id)
+
+    const dollars = get('opp-text')
+    expect(dollars.amount_max).toBe(7500)
+    expect(dollars.amount_status).toBe('range')
+
+    const varies = get('opp-varies')
+    expect(varies.amount_max).toBeNull() // never invents a number
+    expect(varies.amount_status).toBe('varies')
+    expect(varies.amount_text).toBeTruthy()
+
+    // Nothing found → explicit not_listed, so the sweep CONVERGES (row no
+    // longer matches the backlog WHERE on the next boot).
+    const nothing = get('opp-nothing')
+    expect(nothing.amount_status).toBe('not_listed')
+    expect(nothing.amount_max).toBeNull()
+
+    const again = await enforceGrantAmountBackfill(db)
+    expect(again.ok).toBe(true)
+    expect(get('opp-text').amount_max).toBe(7500) // stable on re-run
+  })
+
   it('stamps truly amount-less ACTIVE grants not_listed (honest label, never a number)', async () => {
     const db = makeAmountStatusDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
