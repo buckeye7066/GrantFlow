@@ -68,6 +68,13 @@ test('avatar lookup prefers website og:image when present', async () => {
     assert.equal(result?.result_meta?.method, 'website_cover')
     assert.ok(result?.result_meta?.website_used)
     assert.ok(result?.result_meta?.image_url_used)
+    // Durable persistence (Railway ephemeral-disk fix, 2026-07-06): the job
+    // result MUST carry the raw bytes + content type so the dispatcher can
+    // store them to profiles.avatar_data — the /uploads file alone vanishes on
+    // redeploy and the logo would "fail to load".
+    assert.ok(Buffer.isBuffer(result?.avatarBuffer))
+    assert.ok(result.avatarBuffer.length > 0)
+    assert.match(String(result?.avatarContentType || ''), /^image\//)
   } finally {
     await new Promise((resolve) => server.close(resolve))
     rmSync(uploadDir, { recursive: true, force: true })
