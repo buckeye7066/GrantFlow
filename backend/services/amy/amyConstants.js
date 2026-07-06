@@ -78,6 +78,7 @@ export const FINDING_TYPES = Object.freeze({
   INSTITUTION_RECALL_MISS: 'institution_recall_miss',
   HYPERLOCAL_RECALL_MISS: 'hyperlocal_recall_miss',
   INELIGIBLE_MATCH: 'ineligible_match',
+  AMOUNT_RECALL_MISS: 'amount_recall_miss',
 })
 
 export const SEVERITY = Object.freeze({
@@ -198,6 +199,21 @@ export const CODE_TARGETS = Object.freeze({
     line: 2288,
     severity: SEVERITY.HIGH,
     hint: 'A profile-INELIGIBLE opportunity was ACCEPTED. Evolve the eligibility gate so it never ACCEPTs: student-only aid (isStudentAidOpportunity) must REJECT/cap for a non-student (STUDENT_AID_NONSTUDENT_CAP + requiresStudent gate); applicant-type/geo-exclusive awards must fail the applicant/geo gate. Widen isStudentAidOpportunity (RE_STUDENT_AID_SIGNAL) to any leaking student-aid program brand. The nightly surfacedEligibility sweep (backend/services/coverageAudit/surfacedEligibility.js) is the NET that demotes stale ACCEPTs the reconcile never re-scores — keep it, but the goal is fewer ineligible ACCEPTs at the source.',
+  },
+  // Pipeline-$ visibility (the "$6,500 pipeline with 118 real sources" class,
+  // 2026-07-05): discovery produced candidates but NONE carried a per-award
+  // dollar amount, so the profile's Pipeline Potential reads ~$0 no matter how
+  // good recall is. Structured feeds pass amount_min/amount_max through the
+  // normalizer; text sources depend on awardAmountExtractor patterns. Amy's
+  // synthetic cohorts should keep probing profile shapes whose likely sources
+  // are text-first (hyperlocal community foundations, church/small-nonprofit
+  // funds, web-llm scholarship pages) — those are where amount extraction gaps
+  // hide, and where new extractor phrasings/adapter field maps are learned.
+  [FINDING_TYPES.AMOUNT_RECALL_MISS]: {
+    file: 'backend/services/awardAmountExtractor.js',
+    line: 1,
+    severity: SEVERITY.MEDIUM,
+    hint: 'Stored candidates carry NO award amounts — the profile\'s pipeline value will read $0 even though recall is fine. If the sources are structured APIs, the adapter is dropping amount fields (map them into amount_min/amount_max). If the sources are web/text, extend extractAwardAmountsFromText with the phrasing seen on these pages (keep it per-award conservative — never program totals). The boot net (enforceGrantAmountBackfill) copies catalog amounts onto pipeline rows, but it cannot invent what ingest never captured.',
   },
 })
 

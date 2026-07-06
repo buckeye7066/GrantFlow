@@ -11,6 +11,7 @@ import { headForVerification } from './shared/httpClient.js'
 import { assessReality } from './opportunityRealityGate.js'
 import { enrichOpportunityVerification } from './verification/index.js'
 import { normalizeOpportunity } from './opportunityNormalizer.js'
+import { resolveOpportunityAmounts } from './awardAmountExtractor.js'
 import { createLogger } from '../utils/logger.js'
 import {
   evaluateProvenance,
@@ -627,6 +628,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   if (existing?.id) {
     const isNational = deriveIsNational(opportunity)
     const normalizedState = normalizeOpportunityState(opportunity.state)
+    // Structured adapter amounts win; conservative text extraction fills in
+    // per-award dollars ("up to $10,000", "$1,000 to $5,000") ONLY when the
+    // source provided none — pipeline-$ visibility depends on this column.
+    const resolvedAmounts = resolveOpportunityAmounts(opportunity)
 
     const record = {
       title,
@@ -637,8 +642,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       contact_info: opportunity.contact_info ?? null,
       eligibility_bullets: JSON.stringify(ensureArray(opportunity.eligibility_bullets)),
       match_reasons: JSON.stringify(ensureArray(opportunity.match_reasons)),
-      amount_min: typeof opportunity.amount_min === 'number' ? opportunity.amount_min : null,
-      amount_max: typeof opportunity.amount_max === 'number' ? opportunity.amount_max : null,
+      amount_min: resolvedAmounts.amount_min,
+      amount_max: resolvedAmounts.amount_max,
       amount_description: opportunity.amount_description ?? null,
       // Postgres DATE cannot accept empty string; normalize to null.
       deadline: normalizeDateLikeOrNull(opportunity.deadline),
@@ -860,6 +865,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   const id = crypto.randomUUID()
   const isNational = deriveIsNational(opportunity)
   const normalizedState = normalizeOpportunityState(opportunity.state)
+  // Same amount resolution as the update path above: structured wins, text
+  // extraction fills only when the adapter provided no numbers.
+  const resolvedAmounts = resolveOpportunityAmounts(opportunity)
   const record = {
     title,
     sponsor: resolveSponsorName(opportunity),
@@ -871,14 +879,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       ensureArray(opportunity.eligibility_bullets),
     ),
     match_reasons: JSON.stringify(ensureArray(opportunity.match_reasons)),
-    amount_min:
-      typeof opportunity.amount_min === 'number'
-        ? opportunity.amount_min
-        : null,
-    amount_max:
-      typeof opportunity.amount_max === 'number'
-        ? opportunity.amount_max
-        : null,
+    amount_min: resolvedAmounts.amount_min,
+    amount_max: resolvedAmounts.amount_max,
     amount_description: opportunity.amount_description ?? null,
     // Postgres rejects empty-string dates (e.g. ""), so normalize to null.
     deadline: normalizeDateLikeOrNull(opportunity.deadline),

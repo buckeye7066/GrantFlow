@@ -248,6 +248,26 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
       )
     }
   }
+  // ── AWARD-AMOUNT recall (pipeline-$ visibility signal) ─────────────────────
+  // Candidates without a per-award dollar amount produce a $0 Pipeline
+  // Potential no matter how good recall is (the 2026-07-05 "$6,500 pipeline
+  // with 118 real sources" class). Fires only on a meaningful sample where NOT
+  // ONE candidate carries an amount — a single missing amount is normal (many
+  // real awards are "amount varies"); a 0% amount rate on 5+ results means the
+  // adapter/extractor lane feeding this profile shape drops dollars entirely.
+  const withAmount = recommendations.filter(
+    (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0 || num(r.amount) > 0,
+  )
+  if (recommendations.length >= 5 && withAmount.length === 0) {
+    findings.push(
+      makeFinding(FINDING_TYPES.AMOUNT_RECALL_MISS, {
+        message: `${scenario.label}: 0 of ${recommendations.length} stored candidates carry an award amount — this profile shape's pipeline value will display ~$0 (amount extraction/adapter gap, not a recall gap).`,
+        excerpt: recommendations.slice(0, 4).map((r) => r.title).filter(Boolean).join('; '),
+        evidence: { ...baseEvidence, results: recommendations.length, with_amount: 0 },
+      }),
+    )
+  }
+
   const thesisCounty = thesis?.location?.county ? normLower(thesis.location.county).replace(/\b(county|parish|borough)\b/g, '').trim() : ''
   if (thesisCounty && recommendations.length > 0 && !recTitles.some((t) => t.includes(thesisCounty))) {
     findings.push(

@@ -57,6 +57,7 @@ import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
+import { PIPELINE_ACTIVE_STATUSES } from '../config/pipelineValue.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
@@ -1992,6 +1993,132 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
  * reporting for the un-derivable remainder keeps the gap observable (Sam/Anya
  * read the boot summary) without fabricating data.
  */
+/**
+ * INVARIANT: PIPELINE GRANTS CARRY A DOLLAR VALUE WHEN ONE IS KNOWABLE
+ * (pipeline-$ visibility — the "$6,500 pipeline with 118 real sources" bug).
+ *
+ * THE BUG THIS CLOSES (2026-07-05)
+ * --------------------------------
+ * Every "Pipeline Potential" surface sums amount_requested (via the
+ * backend/config/pipelineValue.js choke point), but the canonical auto-add
+ * saver (opportunityMatcher.saveToProfilePipeline) historically wrote
+ * amount_requested = NULL because catalog opportunities carry amount_min/
+ * amount_max, never amount_requested. Fleet-wide only 15 of 489 active
+ * pipeline grants had a value; Robert (118 active sources) displayed $6,500
+ * while his rows carried ~$1.8M of award ceilings the display never read.
+ *
+ * THE RULE (same #725 naming-drift class as funder_backfill)
+ * ----------------------------------------------------------
+ *   1. A grant missing BOTH amount_min and amount_max inherits them from its
+ *      linked funding_opportunities row (the catalog is the source of truth
+ *      for award size). NEVER invented — unlinked rows are left alone.
+ *   2. amount_requested, when empty, defaults to amount_max ?? amount_min —
+ *      the SAME default the manual /from-opportunity promote path has always
+ *      applied. A user-entered amount_requested is never overwritten.
+ *   3. Rows with no amount derivable anywhere are COUNTED (missingAmount) as
+ *      an ingest-quality signal for Sam/Anya/Amy — never guessed.
+ *
+ * ORDERING: runs BEFORE enforceIndividualAmountCeiling on purpose — once a
+ * a real award ceiling is visible in amount_requested, the existing ceiling
+ * sweep can (correctly, per G4 doctrine) purge institutional-scale money that
+ * was mis-matched into an INDIVIDUAL's pipeline. Backfill makes values honest;
+ * the ceiling keeps them realistic.
+ *
+ * OVERRIDE: ON by default; ENFORCE_GRANT_AMOUNT_BACKFILL=0 for count-only.
+ * Idempotent: repaired rows no longer match the WHERE on re-run.
+ */
+export async function enforceGrantAmountBackfill(db) {
+  return runInvariant('grant_amount_backfill', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('amount_requested') || !grantCols.has('amount_max')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_AMOUNT_BACKFILL) === false
+
+    let repairedFromCatalog = 0
+    let repairedRequested = 0
+
+    if (!disabled) {
+      // Step 1: inherit award min/max from the linked catalog row when the
+      // grant has neither. Guarded by EXISTS so we never null-out anything.
+      if (grantCols.has('funding_opportunity_id')) {
+        try {
+          const result = await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_min = (
+                        SELECT fo.amount_min FROM funding_opportunities fo
+                         WHERE fo.id = grants.funding_opportunity_id
+                      ),
+                      amount_max = (
+                        SELECT fo.amount_max FROM funding_opportunities fo
+                         WHERE fo.id = grants.funding_opportunity_id
+                      )
+                WHERE COALESCE(grants.amount_min, 0) <= 0
+                  AND COALESCE(grants.amount_max, 0) <= 0
+                  AND grants.funding_opportunity_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM funding_opportunities fo
+                     WHERE fo.id = grants.funding_opportunity_id
+                       AND (COALESCE(fo.amount_min, 0) > 0 OR COALESCE(fo.amount_max, 0) > 0)
+                  )`,
+            )
+            .run()
+          repairedFromCatalog = changesOf(result)
+        } catch (err) {
+          // funding_opportunities absent on a minimal test DB → count-only below.
+          log.warn('grant_amount_backfill: catalog-inherit query failed (non-fatal)', { error: String(err?.message || err) })
+        }
+      }
+
+      // Step 2: default amount_requested from the grant's own ceiling/floor.
+      try {
+        const result = await db
+          .prepare(
+            `UPDATE grants
+                SET amount_requested = COALESCE(NULLIF(amount_max, 0), NULLIF(amount_min, 0))
+              WHERE COALESCE(amount_requested, 0) <= 0
+                AND (COALESCE(amount_max, 0) > 0 OR COALESCE(amount_min, 0) > 0)`,
+          )
+          .run()
+        repairedRequested = changesOf(result)
+      } catch (err) {
+        log.warn('grant_amount_backfill: requested-default query failed (non-fatal)', { error: String(err?.message || err) })
+      }
+    }
+
+    // Observability: active-pipeline rows still showing NO dollar value —
+    // un-derivable from stored metadata. This is the crawler amount-extraction
+    // quality signal Sam reports and Amy's flywheel probes.
+    let missing = 0
+    try {
+      const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      const row = await db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM grants
+            WHERE status IN (${statuses})
+              AND COALESCE(amount_requested, 0) <= 0
+              AND COALESCE(amount_max, 0) <= 0
+              AND COALESCE(amount_min, 0) <= 0`,
+        )
+        .get()
+      missing = Number(row?.n) || 0
+    } catch { /* non-fatal */ }
+
+    const repaired = repairedFromCatalog + repairedRequested
+    if (repaired > 0) {
+      log.info('backfilled pipeline grant amounts', {
+        repairedFromCatalog,
+        repairedRequested,
+        stillMissingAmount: missing,
+        enforced: !disabled,
+      })
+    }
+    return { scanned: repaired + missing, repaired, enforced: !disabled, missingAmount: missing }
+  })
+}
+
 export async function enforceFunderBackfill(db) {
   return runInvariant('funder_backfill', async () => {
     const grantCols = await listGrantColumns(db)
@@ -2268,6 +2395,12 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   steps.push(await enforceProfileScopedPipeline(db))
   steps.push(await enforceNoDuplicateGrants(db))
   steps.push(await enforceRelevanceFloor(db))
+  // Pipeline-$ visibility: inherit award min/max from the linked catalog row
+  // and default amount_requested from the ceiling/floor wherever empty, so
+  // every Pipeline Potential surface can see the money that is actually there.
+  // MUST run before the individual amount ceiling so the ceiling operates on
+  // honest (backfilled) values.
+  steps.push(await enforceGrantAmountBackfill(db))
   // Amount-sanity net: purge institutional-scale ($ > ceiling) grants that were
   // mis-matched into an INDIVIDUAL/student pipeline (the ">$3M potential" bug).
   // Runs after the relevance floor because those below-floor rows are cheaper to
@@ -2323,6 +2456,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.profilesAffected !== undefined ? { profilesAffected: s.profilesAffected } : {}),
       ...(s.flagged !== undefined ? { flagged: s.flagged } : {}),
       ...(s.missingFunder !== undefined ? { missingFunder: s.missingFunder } : {}),
+      ...(s.missingAmount !== undefined ? { missingAmount: s.missingAmount } : {}),
       ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
     })),
   })
@@ -2351,6 +2485,7 @@ export const __testables = {
   enforceStudentAidEligibility,
   enforceProfileEligibility,
   enforceFunderBackfill,
+  enforceGrantAmountBackfill,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,

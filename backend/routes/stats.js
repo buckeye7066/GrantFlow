@@ -5,19 +5,14 @@ import {
   getAccessibleOrganizationIds,
 } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
+// Choke point for pipeline-$ semantics: status list + per-grant value fallback
+// (amount_requested → amount_max → amount_min). Do not re-inline either here.
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../config/pipelineValue.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stats')
 
 const router = express.Router()
-
-// Pipeline stages whose requested amounts count toward "in-pipeline" totals.
-// Terminal stages (awarded/declined/closed/deadline_passed/archived) are excluded.
-const PIPELINE_ACTIVE_STATUSES = [
-  'discovery', 'discovered', 'interested', 'auto_applied', 'drafting',
-  'application_prep', 'app_prep', 'revision', 'portal', 'submitted',
-  'pending_review', 'under_review', 'follow_up', 'report',
-]
 
 const ZERO_STATS = {
   organizations: 0,
@@ -85,7 +80,7 @@ async function computeDashboardStats(db, scope) {
 
   const pipelineStatusClause = `status IN (${PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')})`
   const pipelineTotal = (await db
-    .prepare(`SELECT COALESCE(SUM(amount_requested), 0) as total FROM grants
+    .prepare(`SELECT COALESCE(SUM(${pipelineValueSql('')}), 0) as total FROM grants
               WHERE ${grantScopeSql} AND ${pipelineStatusClause}`)
     .get(...grantScopeParams, ...PIPELINE_ACTIVE_STATUSES))?.total ?? 0
 
