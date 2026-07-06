@@ -194,7 +194,7 @@ async function createProfileFromApplication(db, app, { actor } = {}) {
  *   | { ok: false, ambiguous: true, candidates: Array<{id: string, display_name: string}> }
  * >}
  */
-export async function convertApplicationToProfile(db, app, { actor } = {}) {
+export async function convertApplicationToProfile(db, app, { actor, allowCreate = true } = {}) {
   if (!app?.id) throw new Error('application row required')
 
   // 1. Already linked to a live profile → nothing to create.
@@ -235,6 +235,10 @@ export async function convertApplicationToProfile(db, app, { actor } = {}) {
       }
     }
   } else {
+    if (!allowCreate) {
+      // Caller (the boot sweep, for non-intake rows) wants link-only semantics.
+      return { ok: false, noMatch: true, candidates: [] }
+    }
     profileId = await createProfileFromApplication(db, app, { actor })
     created = true
     matchedBy = 'created'
@@ -290,14 +294,20 @@ export async function reconcileConvertedApplications(db, { actor = 'invariant:co
         flagged += 1
         continue
       }
-      const result = await convertApplicationToProfile(db, app, { actor })
+      // Auto-CREATE only for real intake-form rows. 'signup' (and other) rows
+      // had their profile created at signup time — conjuring a fresh one later
+      // would duplicate the client and split their data (dedupe playbook), so
+      // for those the sweep links to an existing profile or flags the row.
+      const allowCreate = String(app.type || '') === 'service_application'
+      const result = await convertApplicationToProfile(db, app, { actor, allowCreate })
       if (result.ok) {
         repaired += 1
         if (result.created) createdProfiles += 1
       } else {
         flagged += 1
-        log.warn('converted application is ambiguous; leaving for human review', {
+        log.warn('converted application left for human review', {
           application_id: app.id,
+          reason: result.noMatch ? 'no_match_link_only' : 'ambiguous',
           candidates: result.candidates?.map((c) => c.id),
         })
       }

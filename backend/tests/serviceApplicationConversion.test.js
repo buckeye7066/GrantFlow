@@ -159,6 +159,39 @@ describe('reconcileConvertedApplications (boot-sweep net)', () => {
     db.close()
   })
 
+  it('never auto-creates for signup-type rows (link-only) — no duplicate clients', async () => {
+    const db = makeDb()
+    // A 'signup' row's profile was created at signup time; if it can't be
+    // found by email/name, creating a fresh one would split the client's data.
+    db.prepare(
+      `INSERT INTO service_applications (id, type, full_name, email, status, profile_id)
+       VALUES ('sg-1', 'signup', 'Ghost Signup', 'ghost@example.com', 'converted', NULL)`,
+    ).run()
+
+    const result = await reconcileConvertedApplications(db)
+    expect(result.repaired).toBe(0)
+    expect(result.createdProfiles).toBe(0)
+    expect(result.flagged).toBe(1)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM profiles').get().n).toBe(0)
+    db.close()
+  })
+
+  it('links a signup-type row to its single name-matched profile', async () => {
+    const db = makeDb()
+    const profileId = insertProfile(db, { displayName: 'Liubov Samoylenko' })
+    db.prepare(
+      `INSERT INTO service_applications (id, type, full_name, email, status, profile_id)
+       VALUES ('sg-2', 'signup', 'Liubov Samoylenko', 'owner@example.com', 'converted', NULL)`,
+    ).run()
+
+    const result = await reconcileConvertedApplications(db)
+    expect(result.repaired).toBe(1)
+    expect(result.createdProfiles).toBe(0)
+    const row = db.prepare(`SELECT profile_id FROM service_applications WHERE id = 'sg-2'`).get()
+    expect(row.profile_id).toBe(profileId)
+    db.close()
+  })
+
   it('is idempotent: already-linked converted rows are untouched', async () => {
     const db = makeDb()
     const profileId = insertProfile(db, { displayName: 'Linked Client', email: 'linked@example.com' })
