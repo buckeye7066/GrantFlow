@@ -27,6 +27,7 @@ import {
   getJohnConfig,
 } from './johnOutreachSafety.js'
 import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
+import { buildNoConflictParagraph } from './johnEmailTemplates.js'
 import { researchOrganization } from './johnOrgResearch.js'
 import { extractOrgSignals } from './johnEvidenceSufficiency.js'
 import { matchFundingLane } from './johnFundingLanes.js'
@@ -106,6 +107,12 @@ function buildFooter(config, organizationName) {
   const annieAddress = String(config.replyTo || 'Annie@axiombiolabs.org').trim()
   return [
     '',
+    // Owner directive (2026-07-06): acknowledge an existing grant writer /
+    // consultant contract and make the risk-free mechanics explicit (7-day
+    // free trial, no money changing hands, no contract, weekly/biweekly/
+    // monthly billing). Single source of truth in johnEmailTemplates.
+    buildNoConflictParagraph(org),
+    '',
     `The best way to see whether it is worth your time is to try it, so I would rather show you than keep describing it. If you follow the link below, you can talk through your work with Anya, our assistant, and she will run a live scan of funding that fits ${org}, no account or commitment needed just to look. If what comes back is useful, you can take it from there:`,
     ...(link ? ['', link] : []),
     '',
@@ -183,6 +190,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '', 
     '- Do NOT use em-dashes or en-dashes (— or –) anywhere. Use commas, periods, parentheses, or a colon instead.',
     '- 220-340 words for the body: at least half about THEM (two real paragraphs), then the brief bridge and how GrantFlow helps. Plain text with paragraph breaks.',
     '- Do NOT write a call to action, an offer to run a scan, a link, a signature, a sign-off, an opt-out line, or a postal address. ALL of those are added separately by the system. End immediately after explaining how GrantFlow can help this organization (step 3).',
+    '- Do NOT mention pricing, billing, free trials, or contracts. The system appends the trial and billing note (including the acknowledgment that they may already have a grant writer under contract) separately, so writing it yourself would duplicate it.',
     '- Write a subject line that is specific and non-deceptive: it must name the organization or a concrete element of its mission/work (never a generic "funding opportunity" line that could be sent to anyone). Plainspoken, no clickbait, no words in ALL CAPS, no exclamation points. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
     '',
     'Return ONLY a JSON object: {"subject": "...", "body": "..."} with no markdown, no commentary.',
