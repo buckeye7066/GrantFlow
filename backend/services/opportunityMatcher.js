@@ -138,7 +138,7 @@ export async function saveToProfilePipeline(
   profileId,
   profileContext,
   matchPercentage = null,
-  minMatchThreshold = 55,
+  minMatchThreshold = null,
 ) {
   try {
     // The numeric floor is a TRUE FLOOR. A caller's minMatchThreshold can only
@@ -147,10 +147,18 @@ export async function saveToProfilePipeline(
     // result quota (e.g. localCrawler / comprehensiveCrawlerOptimized pass a
     // `thresholdUsed` that falls back to 0) — without this clamp, threshold=0
     // would let every scored-but-irrelevant row into the pipeline.
+    //
+    // An OMITTED threshold means "the canonical floor decides" — it must NOT
+    // act like an explicit 55, because the trusted-source exemption can lower
+    // the effective floor to TRUSTED_RELEVANCE_FLOOR (40) and a phantom
+    // caller-55 out-maxed it on every default-threshold path (the manual
+    // /from-opportunity add could NEVER benefit from trust, 2026-07-06).
     const callerThresholdNum = Number(minMatchThreshold)
-    const callerThreshold = Number.isFinite(callerThresholdNum)
+    const callerProvidedThreshold =
+      minMatchThreshold !== null && minMatchThreshold !== undefined && Number.isFinite(callerThresholdNum)
+    const callerThreshold = callerProvidedThreshold
       ? Math.max(0, Math.min(100, callerThresholdNum))
-      : 55
+      : 0 // no explicit bar — the canonical floor below is the bar
     const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
 
     // Gate 1: Source allowlist — blocks non-approved sources entirely
