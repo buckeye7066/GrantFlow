@@ -126,10 +126,15 @@ describe('Scenario ranking — SDVOSB beats a generic business for an SDVOSB opp
     is_national: true,
   }
 
-  it('SDVOSB profile outscores generic business for an SDVOSB opportunity', () => {
-    const sdvScore = scoreOpportunity(sdvosb, opp).score
-    const genScore = scoreOpportunity(generic, opp).score
-    expect(sdvScore).toBeGreaterThan(genScore)
+  it('SDVOSB profile outranks generic business for an SDVOSB opportunity', () => {
+    // Need-anchored scale: when both profiles' needs are equally covered the
+    // PERCENTAGE is legitimately equal; ranking within a score band is carried
+    // by the topical-evidence tie-break (see matchOpportunities sort).
+    const sdv = scoreOpportunity(sdvosb, opp)
+    const gen = scoreOpportunity(generic, opp)
+    expect(sdv.score).toBeGreaterThanOrEqual(gen.score)
+    expect(sdv.match_explain.scoreBreakdown.topical_evidence)
+      .toBeGreaterThan(gen.match_explain.scoreBreakdown.topical_evidence)
   })
 
   it('Generic business is not hard-rejected (soft penalty, not disqualification)', () => {
@@ -172,10 +177,13 @@ describe('Scenario ranking — faith-based ministry beats generic nonprofit for 
     state: 'TN',
   }
 
-  it('Faith-based ministry outscores generic nonprofit for a faith-based opportunity', () => {
-    const ministryScore = scoreOpportunity(ministry, opp).score
-    const genericScore = scoreOpportunity(genericNonprofit, opp).score
-    expect(ministryScore).toBeGreaterThan(genericScore)
+  it('Faith-based ministry outranks generic nonprofit for a faith-based opportunity', () => {
+    // Same tie-break contract as the SDVOSB scenario above.
+    const min = scoreOpportunity(ministry, opp)
+    const gen = scoreOpportunity(genericNonprofit, opp)
+    expect(min.score).toBeGreaterThanOrEqual(gen.score)
+    expect(min.match_explain.scoreBreakdown.topical_evidence)
+      .toBeGreaterThan(gen.match_explain.scoreBreakdown.topical_evidence)
   })
 })
 
@@ -212,10 +220,13 @@ describe('Scenario ranking — VFD / first responder outscores generic nonprofit
     is_national: true,
   }
 
-  it('VFD profile outscores generic nonprofit for an AFG opportunity', () => {
-    const vfdScore = scoreOpportunity(vfd, opp).score
-    const genericScore = scoreOpportunity(generic, opp).score
-    expect(vfdScore).toBeGreaterThan(genericScore)
+  it('VFD profile outranks generic nonprofit for an AFG opportunity', () => {
+    // Same tie-break contract as the SDVOSB/ministry scenarios above.
+    const vfdR = scoreOpportunity(vfd, opp)
+    const genR = scoreOpportunity(generic, opp)
+    expect(vfdR.score).toBeGreaterThanOrEqual(genR.score)
+    expect(vfdR.match_explain.scoreBreakdown.topical_evidence)
+      .toBeGreaterThan(genR.match_explain.scoreBreakdown.topical_evidence)
   })
 })
 

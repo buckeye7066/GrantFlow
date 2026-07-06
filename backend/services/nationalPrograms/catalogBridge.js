@@ -29,6 +29,7 @@
 import crypto from 'crypto'
 import { isValidRealUrl } from '../shared/opportunityPolicy.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
+import { titleIdentityKey } from '../../crawler-os/contract.js'
 
 /** Stable cross-run fingerprint so the same program is not re-inserted every 6h. */
 export function buildOpportunityFingerprint({ track, sponsor, url, title }) {
@@ -93,6 +94,15 @@ export function programToOpportunity({ track, program, agent }) {
   const eligibility = []
   if (nonEmpty(program.eligible_population)) eligibility.push(String(program.eligible_population).trim())
 
+  // TRACK_A (client) and TRACK_B (provider) rows of the SAME program are
+  // distinct catalog products and must never be merged. The canonical dedup
+  // key (contract.canonicalOpportunityKey) gives external_id precedence over
+  // title identity, so the track is embedded here — paraphrase variants still
+  // collapse WITHIN a track via titleIdentityKey, but never across tracks.
+  const externalId = `national_programs:${String(track || '').trim().toLowerCase()}:${
+    titleIdentityKey(title, sponsor) || fingerprint
+  }`
+
   const opportunity = {
     title,
     sponsor,
@@ -100,6 +110,7 @@ export function programToOpportunity({ track, program, agent }) {
     source: 'national_programs_crawler',
     // Stable id => upsert (not duplicate) on every 6h run.
     source_id: fingerprint,
+    external_id: externalId,
     source_url: url,
     application_url: nonEmpty(program.application_method) && isValidRealUrl(program.application_method)
       ? program.application_method

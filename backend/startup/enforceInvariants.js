@@ -63,6 +63,7 @@ import { resolveProfileType, getParentChain } from '../services/profileTypeRegis
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
 import { resolveOpportunityAmounts } from '../services/awardAmountExtractor.js'
+import { AUTO_ADD_SCORE } from '../config/matchThresholds.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -81,31 +82,31 @@ const log = createLogger('startup:enforceInvariants')
  * legacy constant remains a back-compat fallback only.
  */
 export const RELEVANCE_FLOOR = Number.parseInt(
-  process.env.PIPELINE_RELEVANCE_FLOOR || '50',
+  process.env.PIPELINE_RELEVANCE_FLOOR || '15',
   10,
-) || 50
+) || 15
 
 /**
  * Hard fallback if neither the shared config nor an env override is available.
- * Matches the insert-gate default the partner agent is introducing.
+ * Matches the insert-gate default (need-anchored scale, 2026-07-06).
  */
-const RELEVANCE_FLOOR_FALLBACK = 55
+const RELEVANCE_FLOOR_FALLBACK = 20
 
 /**
  * LENIENT purge floor. The boot sweep is the destructive NET, so it must be at
  * least as lenient as the insert gate — INSERT floor >= PURGE floor — or it
  * would turn around and delete rows the insert gate just (correctly) admitted
- * (e.g. trusted student aid admitted at the 40 trusted floor, or a 50–54 row).
+ * (e.g. trusted rows admitted at the 12 trusted floor).
  *
  * The audit caught a "floor collapse": both the insert gate and this purge
- * resolved to the SAME config value (55), so the purge could delete 50–54 rows
- * that should survive. We restore the documented split — the purge uses
- * min(resolvedFloor, 50) so it can never exceed 50 and never exceed the insert
- * floor. Override the cap via env PIPELINE_PURGE_RELEVANCE_FLOOR.
+ * resolved to the SAME config value, so the purge could delete rows that
+ * should survive. We keep the documented split — the purge uses
+ * min(resolvedFloor, 12) so it can never exceed the TRUSTED insert floor.
+ * Override the cap via env PIPELINE_PURGE_RELEVANCE_FLOOR.
  */
 const PURGE_FLOOR_CAP = (() => {
-  const v = Number.parseInt(process.env.PIPELINE_PURGE_RELEVANCE_FLOOR || '50', 10)
-  return Number.isFinite(v) && v > 0 ? v : 50
+  const v = Number.parseInt(process.env.PIPELINE_PURGE_RELEVANCE_FLOOR || '12', 10)
+  return Number.isFinite(v) && v > 0 ? v : 12
 })()
 
 let _floorCache // memoized { value, source }
@@ -144,7 +145,7 @@ export async function getRelevanceFloor() {
   }
   if (value === undefined) {
     value = RELEVANCE_FLOOR_FALLBACK
-    source = 'fallback(55):config-not-resolvable'
+    source = `fallback(${RELEVANCE_FLOOR_FALLBACK}):config-not-resolvable`
   }
   _floorCache = { value, source }
   return _floorCache
@@ -1374,8 +1375,10 @@ async function listMatchColumns(db) {
   }
 }
 
-/** Score a demoted match is forced BELOW the display floor to so it stops surfacing. */
-const STUDENT_AID_DEMOTE_SCORE = 40
+/** Score a demoted match is forced BELOW the display floor to so it stops
+ *  surfacing. Need-anchored scale: display floor = 25, REVIEW band starts at
+ *  15, so 10 keeps the demoted row visible in audits but never on a card. */
+const STUDENT_AID_DEMOTE_SCORE = 10
 
 /**
  * INVARIANT: STUDENT-AID OPPORTUNITIES DO NOT SURFACE TO A NON-STUDENT PROFILE
@@ -2589,6 +2592,242 @@ export async function enforceProfileEligibility(db, { resolveSignals = null } = 
 }
 
 /**
+ * Shared loader for {profile, sections} contexts, used by the score-backfill
+ * and pipeline-refill invariants below. Returns null when the profile is
+ * missing/deleted/non-discoverable.
+ */
+async function _loadProfileContextForInvariant(db, profileId) {
+  const profile = await db
+    .prepare(`SELECT * FROM profiles WHERE id = ? LIMIT 1`)
+    .get(profileId)
+  if (!profile || profile.deleted_at) return null
+  const status = String(profile.status ?? '').trim().toLowerCase()
+  if (['deleted', 'archived', 'merged', 'inactive'].includes(status)) return null
+  const sections = {}
+  try {
+    const rows = await db
+      .prepare(`SELECT section_key, data FROM profile_sections WHERE profile_id = ?`)
+      .all(profileId)
+    for (const row of rows || []) {
+      try {
+        sections[row.section_key] = typeof row.data === 'string' ? JSON.parse(row.data || '{}') : (row.data || {})
+      } catch { sections[row.section_key] = {} }
+    }
+  } catch { /* sections table may be absent in minimal test DBs */ }
+  return { profile, sections }
+}
+
+/**
+ * INVARIANT: EVERY PIPELINE GRANT CARRIES A MATCH SCORE WHEN ONE IS COMPUTABLE
+ * ("unscored rows are indistinguishable from endorsed rows" — the Eileen
+ * Fisher-on-a-church class: a NULL-score row sits in the pipeline looking
+ * exactly like an engine-endorsed match).
+ *
+ * THE RULE: a grants row with match_score IS NULL is re-scored through the
+ * canonical engine (computeMatchDecision) against its own profile, using the
+ * linked catalog row when available and the grant's own fields otherwise.
+ * The engine's honest number is stamped — including a LOW number for a
+ * mismatch, which then becomes visible on every card and governable by the
+ * relevance floor (whose status/name/origin protections still apply).
+ * Rows that cannot be scored (no resolvable profile) are counted, not guessed.
+ *
+ * Bounded per boot (SCORE_BACKFILL_BATCH, default 300) so a large backlog
+ * converges across a few boots instead of stalling one.
+ *
+ * OVERRIDE: ON by default; ENFORCE_GRANT_SCORE_BACKFILL=0 for count-only.
+ */
+export async function enforceGrantScoreBackfill(db) {
+  return runInvariant('grant_score_backfill', async () => {
+    let candidates
+    try {
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.profile_id, g.funding_opportunity_id, g.title, g.description,
+                  g.funder, g.deadline, g.amount_min, g.amount_max
+           FROM grants g
+           WHERE g.match_score IS NULL AND g.profile_id IS NOT NULL
+           LIMIT ${Math.max(1, Number.parseInt(process.env.SCORE_BACKFILL_BATCH || '300', 10) || 300)}`,
+        )
+        .all()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    if (!candidates?.length) return { scanned: 0, repaired: 0, enforced: true }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_SCORE_BACKFILL) === false
+    if (disabled) {
+      log.warn('unscored pipeline grants present (backfill DISABLED via ENFORCE_GRANT_SCORE_BACKFILL=0)', {
+        scanned: candidates.length,
+      })
+      return { scanned: candidates.length, repaired: 0, enforced: false }
+    }
+
+    // Lazy import: matchEngine pulls a large module graph; only pay for it
+    // when there is actually something to score (and avoid boot-order cycles).
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+
+    const contextCache = new Map()
+    let repaired = 0
+    let unscorable = 0
+    for (const g of candidates) {
+      let ctx = contextCache.get(g.profile_id)
+      if (ctx === undefined) {
+        ctx = await _loadProfileContextForInvariant(db, g.profile_id)
+        contextCache.set(g.profile_id, ctx)
+      }
+      if (!ctx) { unscorable++; continue }
+
+      let opp = null
+      if (g.funding_opportunity_id) {
+        try {
+          opp = await db
+            .prepare(`SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1`)
+            .get(g.funding_opportunity_id)
+        } catch { /* fall through to grant-row scoring */ }
+      }
+      const scoreTarget = opp ?? {
+        id: g.id, title: g.title, description: g.description, sponsor: g.funder,
+        deadline: g.deadline, amount_min: g.amount_min, amount_max: g.amount_max,
+      }
+      try {
+        const decision = computeMatchDecision(ctx.profile, scoreTarget, { profileSections: ctx.sections })
+        const score = Number.isFinite(Number(decision?.score)) ? Math.round(Number(decision.score)) : null
+        if (score === null) { unscorable++; continue }
+        await db
+          .prepare(`UPDATE grants SET match_score = ?, match_decision = COALESCE(match_decision, ?) WHERE id = ?`)
+          .run(score, String(decision?.decision ?? 'REVIEW'), g.id)
+        repaired++
+      } catch (err) {
+        unscorable++
+        log.warn('grant_score_backfill: scoring failed for grant (non-fatal)', {
+          grant: g.id, error: String(err?.message || err),
+        })
+      }
+    }
+    if (repaired > 0) {
+      log.info('backfilled match scores onto unscored pipeline grants', { repaired, unscorable })
+    }
+    return { scanned: candidates.length, repaired, unscorable, enforced: true }
+  })
+}
+
+/**
+ * INVARIANT: AN ACTIVE PROFILE WITH ABOVE-BAR STORED MATCHES NEVER SHOWS A
+ * NEAR-EMPTY PIPELINE (the purge-then-refill gap: the 2026-07-06 below-bar
+ * purge emptied pipelines hours before the daily agents refilled them, so
+ * profiles with a 99-score stored match displayed "$0 — qualifies for
+ * nothing").
+ *
+ * THE RULE: when an active profile's active-status pipeline rows number fewer
+ * than PIPELINE_REFILL_MIN_ROWS (default 5), promote its BEST stored matches
+ * (profile_opportunity_matches ≥ AUTO_ADD_SCORE, re-scored through the
+ * canonical engine at promote time) into the pipeline via the fully-gated
+ * saveToProfilePipeline — which enforces the source allowlist, relevance
+ * floor, duplicate guard, and the user's dismissal tombstones. A row the user
+ * deleted stays deleted; only genuinely new, above-bar sources flow in.
+ *
+ * Re-scoring at promote time also makes this invariant the scale-migration
+ * bridge: stored scores from an older scoring model can neither inflate nor
+ * suppress promotion — the live engine always decides.
+ *
+ * OVERRIDE: ON by default; ENFORCE_PIPELINE_REFILL=0 for count-only.
+ */
+export async function enforcePipelineRefill(db) {
+  return runInvariant('pipeline_refill', async () => {
+    const MIN_ROWS = Math.max(1, Number.parseInt(process.env.PIPELINE_REFILL_MIN_ROWS || '5', 10) || 5)
+
+    let sparse
+    try {
+      const activePh = PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')
+      sparse = await db
+        .prepare(
+          `SELECT p.id AS profile_id,
+                  (SELECT COUNT(*) FROM grants g
+                    WHERE g.profile_id = p.id AND g.status IN (${activePh})) AS active_rows,
+                  (SELECT COUNT(*) FROM profile_opportunity_matches m
+                    WHERE m.profile_id = p.id AND m.match_score >= ?) AS candidate_rows
+           FROM profiles p
+           WHERE p.deleted_at IS NULL
+             AND (p.status IS NULL OR LOWER(p.status) NOT IN ('deleted','archived','merged','inactive'))`,
+        )
+        .all(...PIPELINE_ACTIVE_STATUSES, AUTO_ADD_SCORE)
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const needy = (sparse || []).filter(
+      (r) => Number(r.active_rows) < MIN_ROWS && Number(r.candidate_rows) > 0,
+    )
+    if (needy.length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_PIPELINE_REFILL) === false
+    if (disabled) {
+      log.warn('sparse pipelines with above-bar stored matches present (refill DISABLED via ENFORCE_PIPELINE_REFILL=0)', {
+        profiles: needy.length,
+      })
+      return { scanned: needy.length, repaired: 0, enforced: false }
+    }
+
+    const [{ computeMatchDecision }, { saveToProfilePipeline }] = await Promise.all([
+      import('../services/matchEngine.js'),
+      import('../services/opportunityMatcher.js'),
+    ])
+
+    let promoted = 0
+    let profilesRefilled = 0
+    for (const row of needy) {
+      const ctx = await _loadProfileContextForInvariant(db, row.profile_id)
+      if (!ctx) continue
+      const wanted = MIN_ROWS - Number(row.active_rows)
+
+      let matches
+      try {
+        matches = await db
+          .prepare(
+            `SELECT m.opportunity_id, m.match_score, o.*
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities o ON o.id = m.opportunity_id
+             WHERE m.profile_id = ?
+               AND m.match_score >= ?
+               AND LOWER(COALESCE(m.match_decision, '')) != 'reject'
+               AND NOT EXISTS (
+                 SELECT 1 FROM grants g
+                  WHERE g.profile_id = m.profile_id
+                    AND g.funding_opportunity_id = m.opportunity_id
+               )
+             ORDER BY m.match_score DESC
+             LIMIT ?`,
+          )
+          .all(row.profile_id, AUTO_ADD_SCORE, wanted * 4)
+      } catch { continue }
+
+      let added = 0
+      for (const cand of matches || []) {
+        if (added >= wanted) break
+        try {
+          // Fresh canonical score at promote time — stored scores are advisory.
+          const decision = computeMatchDecision(ctx.profile, cand, { profileSections: ctx.sections })
+          if (decision?.decision === 'REJECT' || !(Number(decision?.score) >= AUTO_ADD_SCORE)) continue
+          const result = await saveToProfilePipeline(
+            db, cand, row.profile_id, ctx, decision.score, AUTO_ADD_SCORE,
+          )
+          if (result?.saved) { added++; promoted++ }
+        } catch (err) {
+          log.warn('pipeline_refill: promote failed (non-fatal)', {
+            profile: row.profile_id, opportunity: cand?.opportunity_id, error: String(err?.message || err),
+          })
+        }
+      }
+      if (added > 0) profilesRefilled++
+    }
+    if (promoted > 0) {
+      log.info('refilled sparse pipelines from above-bar stored matches', { promoted, profilesRefilled })
+    }
+    return { scanned: needy.length, repaired: promoted, profilesRefilled, enforced: true }
+  })
+}
+
+/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -2663,6 +2902,16 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
   steps.push(await enforceNoSearchEngineApplicationTargets(db))
+  // Score-visibility net: stamp an honest canonical score on any unscored
+  // pipeline row so a manually-added mismatch can never masquerade as an
+  // engine-endorsed match. Runs AFTER the purge sweeps (their status/name
+  // protections still govern any subsequent floor action on the new scores).
+  steps.push(await enforceGrantScoreBackfill(db))
+  // Anti-empty-pipeline net: promote above-bar stored matches into any active
+  // profile's near-empty pipeline through the fully-gated saver (tombstones,
+  // source allowlist, duplicate guard all enforced). Runs LAST so it refills
+  // on the post-purge, post-backfill truth.
+  steps.push(await enforcePipelineRefill(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)

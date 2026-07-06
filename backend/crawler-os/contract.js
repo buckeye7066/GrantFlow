@@ -153,13 +153,58 @@ export function deterministicOpportunityId(parts = {}) {
  * consulted by storage.upsertOpportunity on every write — the single durable
  * dedup authority.
  *
- * @param {{ apply_url?:string, info_url?:string, external_id?:string, id?:string }} opp
+ * Identity precedence:
+ *   1. external_id — authoritative structured id (e.g. a grants.gov OPP number).
+ *   2. token-sorted title(+sponsor) — collapses LLM paraphrase variants of the
+ *      SAME program extracted from different pages ("NAEMT EMS Scholarship -
+ *      Paramedics (to advance ems education)" vs "… – Paramedics (to advance
+ *      education in ems)" were 7 distinct URL-keyed catalog rows).
+ *   3. normalized URL, then raw id — last resorts for title-less rows.
+ *
+ * @param {{ title?:string, sponsor?:string, apply_url?:string, info_url?:string, external_id?:string, id?:string }} opp
  * @returns {string}
  */
 export function canonicalOpportunityKey(opp = {}) {
-  const url = normalizeUrlForId(opp.apply_url || opp.info_url || '');
   const ext = String(opp.external_id ?? '').trim().toLowerCase();
-  return (url || ext) ? `${url}|${ext}` : `id:${opp.id ?? ''}`;
+  if (ext) return `ext:${ext}`;
+  const titleKey = titleIdentityKey(opp.title, opp.sponsor);
+  if (titleKey) return `t:${titleKey}`;
+  const url = normalizeUrlForId(opp.apply_url || opp.info_url || '');
+  return url ? `u:${url}` : `id:${opp.id ?? ''}`;
+}
+
+/**
+ * titleIdentityKey — punctuation-insensitive, word-order-insensitive identity
+ * for a title + sponsor pair. Unicode dashes fold to ASCII, punctuation is
+ * stripped, filler words dropped, remaining tokens SORTED — so hyphen/en-dash
+ * variants and re-worded parentheticals of the same program collapse while
+ * genuinely different programs (different substantive tokens) stay distinct.
+ * Exported for the catalog re-key/merge sweep and the legacy inserter.
+ */
+export function titleIdentityKey(title, sponsor) {
+  const t = tokenSortedKey(title);
+  if (!t) return '';
+  const s = tokenSortedKey(sponsor);
+  return s ? `${s}::${t}` : t;
+}
+
+const TITLE_IDENTITY_STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'to', 'in', 'for', 'and', 'or', 'on', 'at', 'by', 'with',
+]);
+
+function tokenSortedKey(value) {
+  if (!value) return '';
+  return String(value)
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/&(?:amp|ndash|mdash|nbsp|#\d+);/g, ' ') // stray HTML entities
+    .replace(/[‐-―−]/g, '-')           // unicode dashes → hyphen
+    .replace(/[^a-z0-9\s-]/g, ' ')                    // strip punctuation
+    .replace(/-/g, ' ')                               // hyphens split tokens
+    .split(/\s+/)
+    .filter((w) => w && !TITLE_IDENTITY_STOPWORDS.has(w))
+    .sort()
+    .join(' ');
 }
 
 /** Strip query/fragment/trailing slash so trivially different URLs collapse. */

@@ -5,12 +5,14 @@
  * Do not hardcode score cutoffs in components — import from here.
  */
 
-// Aligned to the 75 quality bar (owner directive 2026-06-23) — keep in sync
-// with backend/config/matchThresholds.js.
-export const AUTO_ADD_SCORE = 75
-export const STRONG_MATCH_SCORE = 85
-export const GOOD_MATCH_SCORE = 75
-export const MODERATE_MATCH_SCORE = 40
+// NEED-ANCHORED SCALE (owner directive 2026-07-06) — keep in sync with
+// backend/config/matchThresholds.js. The score is the share of the profile's
+// main needs the source addresses, gated by eligibility and geography:
+// 50 literally means "covers about half of what this profile needs".
+export const AUTO_ADD_SCORE = 25
+export const STRONG_MATCH_SCORE = 75
+export const GOOD_MATCH_SCORE = 50
+export const MODERATE_MATCH_SCORE = 15
 export const SCORE_FLOOR = 5
 
 /**
@@ -32,10 +34,10 @@ export function scoreToLabel(score) {
  * the matching/auto-add thresholds above.
  */
 export const MATCH_DISPLAY_TIERS = Object.freeze({
-  excellent: 80,
-  good: 65,
-  fair: 50,
-  potential: 35,
+  excellent: 75, // ~¾+ of the profile's main needs
+  good: 50,      // at least half of the main needs
+  fair: 25,      // at least one fully-matched main need
+  potential: 15, // partial coverage worth a look
 })
 
 export function scoreToMatchLabel(score) {

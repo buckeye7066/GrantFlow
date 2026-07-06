@@ -20,6 +20,7 @@ import {
   persistEvidence,
 } from './provenanceAudit.js'
 import { maybeEmbedOpportunity } from './embeddings/embeddingService.js'
+import { canonicalOpportunityKey } from '../crawler-os/contract.js'
 const log = createLogger('opportunityInserter')
 
 /**
@@ -895,6 +896,41 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     }
   }
 
+  // Canonical-key cross-source deduplication: catches what URL dedup can't —
+  // the SAME program re-extracted from a different page with paraphrased
+  // punctuation/word order (LLM web-discovery re-runs created 7 catalog copies
+  // of one NAEMT scholarship). The key is title-identity based
+  // (crawler-os/contract.js canonicalOpportunityKey); a hit means the program
+  // is already cataloged, so we skip and point at the existing row.
+  const candidateCanonicalKey = canonicalOpportunityKey({
+    title,
+    sponsor: resolveSponsorName(opportunity),
+    apply_url: applicationUrl,
+    info_url: sourceUrl,
+    external_id: opportunity.external_id ?? null,
+  })
+  if (candidateCanonicalKey && !opts.skipUrlDedup) {
+    try {
+      const keyDupe = await db
+        .prepare(
+          `SELECT id, source, source_id FROM funding_opportunities
+           WHERE canonical_opportunity_key = ?
+           LIMIT 1`,
+        )
+        .get(candidateCanonicalKey)
+      if (keyDupe) {
+        return logRejection(db, opportunity, 'dedupe', 'duplicate', {
+          id: keyDupe.id,
+          inserted: false,
+          skipped: true,
+          reason: `canonical_key_duplicate:${keyDupe.source}/${keyDupe.source_id}`,
+        })
+      }
+    } catch (err) {
+      log.error('[opportunityInserter] canonical-key dedup query failed (allowing insert; investigate):', err?.message || err)
+    }
+  }
+
   // IMPORTANT:
   // `funding_opportunities.id` is the DB primary key. Never reuse dataset IDs here because
   // different sources can collide (e.g. "nat-snap") which triggers UNIQUE constraint failures.
@@ -962,6 +998,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         : null,
     notes: opportunity.notes ?? null,
     record_origin: recordOrigin,
+    canonical_opportunity_key: candidateCanonicalKey || null,
     funding_domain: opportunity.funding_domain ?? null,
     funding_subdomain: opportunity.funding_subdomain ?? null,
     source_category: opportunity.source_category ?? null,
@@ -1027,6 +1064,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       match_percentage,
       match_reasons,
       notes,
+      canonical_opportunity_key,
       is_active,
       last_crawled,
       funding_domain,
@@ -1090,6 +1128,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @match_percentage,
       @match_reasons,
       @notes,
+      @canonical_opportunity_key,
       @is_active,
       CURRENT_TIMESTAMP,
       @funding_domain,
@@ -1167,7 +1206,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       last_crawled = CURRENT_TIMESTAMP
   `)
 
-  await insert.run({
+  const bindParams = {
     id,
     title: record.title,
     sponsor: record.sponsor,
@@ -1214,6 +1253,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     match_percentage: record.match_percentage,
     match_reasons: record.match_reasons,
     notes: record.notes,
+    canonical_opportunity_key: record.canonical_opportunity_key ?? null,
     is_active: toDbBoolean(db, true),
     funding_domain: record.funding_domain,
     funding_subdomain: record.funding_subdomain,
@@ -1229,7 +1269,25 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     refund_potential: record.refund_potential ?? null,
     eligibility_signals: record.eligibility_signals ?? null,
     verification_status: record.verification_status ?? null,
-  })
+  }
+
+  try {
+    await insert.run(bindParams)
+  } catch (err) {
+    // A UNIQUE violation on idx_fo_canonical_key means a concurrent writer (or
+    // a row the lookup raced) already cataloged this program under the same
+    // canonical key — that IS the dedup working. Resolve to the existing row.
+    const msg = String(err?.message ?? '')
+    if (record.canonical_opportunity_key && /canonical|unique/i.test(msg)) {
+      const existingByKey = await db
+        .prepare(`SELECT id FROM funding_opportunities WHERE canonical_opportunity_key = ? LIMIT 1`)
+        .get(record.canonical_opportunity_key)
+      if (existingByKey?.id) {
+        return { id: existingByKey.id, inserted: false, skipped: true, reason: 'canonical_key_duplicate:concurrent' }
+      }
+    }
+    throw err
+  }
 
   // Capture per-result evidence snippets (best-effort, never blocks). The
   // evidence is the source text (title + matched description / eligibility)

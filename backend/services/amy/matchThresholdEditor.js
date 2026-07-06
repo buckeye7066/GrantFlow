@@ -3,7 +3,7 @@
  *
  * Surgical, reversible editor for the ONE real crawler knob Amy's loop is
  * allowed to auto-apply: `DEFAULT_MIN_SCORE` in backend/config/matchThresholds.js
- * (the "75% slider" floor). Editing a single, well-isolated constant is the
+ * (the discovery slider floor). Editing a single, well-isolated constant is the
  * lowest-risk way to make a genuine, persistent change to crawler behavior.
  *
  * Every write is backed up to audit-reports/amy-threshold-backups/ and can be
@@ -43,7 +43,8 @@ export async function applyMinScore(value, { filePath = MATCH_THRESHOLDS_PATH, n
   const raw = Math.round(Number(value))
   if (!Number.isFinite(raw)) return { applied: false, from: null, to: value, backup_path: null, reason: 'invalid_value' }
   // SAFETY: the display floor can be tightened but never dropped below the
-  // documented product standard (owner directive 2026-06-23 — the 75 bar).
+  // documented product standard (owner directive 2026-07-06 — the 25 bar on
+  // the need-anchored scale, DISCOVERY_MIN_SCORE_FLOOR).
   const to = Math.max(DISCOVERY_MIN_SCORE_FLOOR, Math.min(100, raw))
 
   let text

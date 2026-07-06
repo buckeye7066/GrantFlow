@@ -76,7 +76,10 @@ export async function runDiscovery(deps, opts = {}) {
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
       if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
-        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, match_score: decision.match_score, decision: decision.decision });
+        // topical_evidence: legacy weighted-evidence subscale, retained so Amy's
+        // weight-tuning validation can measure where the W_* weights still act
+        // (the need-anchored final score does not move with weight changes).
+        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
       }
     }
   }

@@ -284,6 +284,7 @@ export default function PipelinePotentialBreakdown({
   profileName = "",
   cardClassName = "",
   labelClassName = "",
+  unvaluedCount = 0,
 }) {
   const [open, setOpen] = useState(false)
   const { toast } = useToast()
@@ -312,6 +313,11 @@ export default function PipelinePotentialBreakdown({
         </p>
         <Money className="mt-1.5 block text-4xl font-bold leading-none tracking-tight">{formattedTotal}</Money>
         <p className="money mt-1.5 text-[11px] opacity-70">Currently matched in the pipeline · click to see the breakdown</p>
+        {Number(unvaluedCount) > 0 && (
+          <p className="money mt-0.5 text-[11px] opacity-70">
+            + {unvaluedCount} source{Number(unvaluedCount) === 1 ? "" : "s"} with no listed dollar amount (benefit programs &amp; directories)
+          </p>
+        )}
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

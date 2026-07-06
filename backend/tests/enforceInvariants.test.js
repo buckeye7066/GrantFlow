@@ -382,17 +382,18 @@ describe('enforceInvariants — relevance floor', () => {
     expect(Number.isFinite(value)).toBe(true)
     expect(typeof source).toBe('string')
     // backend/config/relevanceFloor.js is now present (merged) → resolves from it.
-    expect(value).toBe(55)
+    // Need-anchored scale (2026-07-06): insert floor = 20.
+    expect(value).toBe(20)
     expect(source).toMatch(/config\/relevanceFloor\.js/)
   })
 
   it('PURGES below-floor discovery grants by DEFAULT (no opt-in needed)', async () => {
-    // The boot purge uses the LENIENT floor (min(insertFloor, 50)) so it can
-    // never delete a row the insert gate admitted. A clearly-junk 30 is below
+    // The boot purge uses the LENIENT floor (min(insertFloor, 12)) so it can
+    // never delete a row the insert gate admitted. A clearly-junk 8 is below
     // that lenient floor and is purged.
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 30, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 8, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.ok).toBe(true)
@@ -401,13 +402,14 @@ describe('enforceInvariants — relevance floor', () => {
     expect(count(db)).toBe(0)
   })
 
-  it('does NOT purge a 50–54 row the insert gate would admit (lenient purge floor)', async () => {
+  it('does NOT purge a 12–19 row the insert gate would admit (lenient purge floor)', async () => {
     // Regression for the audit's "floor collapse": purge floor must be <= insert
-    // floor, so a 54 (below the 55 insert floor but at/above the 50 purge floor)
+    // floor, so a 15 (below the 20 insert floor but at/above the 12 purge floor —
+    // e.g. a trusted-origin row admitted at the 12 trusted floor)
     // is NOT destroyed by the boot net.
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Borderline', match_score: 54, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Borderline', match_score: 15, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.repaired).toBe(0)
@@ -418,7 +420,7 @@ describe('enforceInvariants — relevance floor', () => {
     process.env.ENFORCE_RELEVANCE_FLOOR = '0'
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 30, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 8, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.enforced).toBe(false)
@@ -459,11 +461,11 @@ describe('enforceInvariants — relevance floor', () => {
   it('never deletes MTSU / portal-named rows even when below floor & discovered', async () => {
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { id: 'm1', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Research Award', match_score: 30, status: 'discovered' })
-    insertGrant(db, { id: 'm2', profile_id: 'p1', organization_id: 'org1', title: 'Middle Tennessee State University grant', match_score: 30, status: 'discovered' })
-    insertGrant(db, { id: 'm3', profile_id: 'p1', organization_id: 'org1', title: 'Generic award', funder: 'TN Portal System', match_score: 30, status: 'discovered' })
+    insertGrant(db, { id: 'm1', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Research Award', match_score: 8, status: 'discovered' })
+    insertGrant(db, { id: 'm2', profile_id: 'p1', organization_id: 'org1', title: 'Middle Tennessee State University grant', match_score: 8, status: 'discovered' })
+    insertGrant(db, { id: 'm3', profile_id: 'p1', organization_id: 'org1', title: 'Generic award', funder: 'TN Portal System', match_score: 8, status: 'discovered' })
     // A genuine junk row alongside, to prove the purge still fires for non-protected names.
-    insertGrant(db, { id: 'junk', profile_id: 'p1', organization_id: 'org1', title: 'Random low score', match_score: 30, status: 'discovered' })
+    insertGrant(db, { id: 'junk', profile_id: 'p1', organization_id: 'org1', title: 'Random low score', match_score: 8, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.repaired).toBe(1)
@@ -876,7 +878,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(16)
+    expect(summary.ran).toBe(18)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -895,6 +897,8 @@ describe('enforceInvariants — runner', () => {
       'profile_income_reconciliation',
       'hamilton_task_self_heal',
       'no_search_engine_application_targets',
+      'grant_score_backfill',
+      'pipeline_refill',
     ])
   })
 

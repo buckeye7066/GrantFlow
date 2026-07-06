@@ -193,13 +193,15 @@ function makeCtx(db) {
 }
 
 describe('robertCatalogMiner — effectiveFloorFor', () => {
-  it('uses the trusted floor (40) for vetted record origins', () => {
-    expect(effectiveFloorFor({ record_origin: 'curated_catalog' }, 'ACCEPT')).toBe(40)
-    expect(effectiveFloorFor({ record_origin: 'scholarship_crawler' }, 'REVIEW')).toBe(40)
+  // Need-anchored scale (owner directive 2026-07-06): full INSERT floor 20,
+  // trusted-origin floor 12 (see backend/config/relevanceFloor.js).
+  it('uses the trusted floor (12) for vetted record origins', () => {
+    expect(effectiveFloorFor({ record_origin: 'curated_catalog' }, 'ACCEPT')).toBe(12)
+    expect(effectiveFloorFor({ record_origin: 'scholarship_crawler' }, 'REVIEW')).toBe(12)
   })
-  it('uses the full floor (55) for open-web origins', () => {
-    expect(effectiveFloorFor({ record_origin: 'live_crawl' }, 'ACCEPT')).toBe(55)
-    expect(effectiveFloorFor({ record_origin: null }, 'ACCEPT')).toBe(55)
+  it('uses the full floor (20) for open-web origins', () => {
+    expect(effectiveFloorFor({ record_origin: 'live_crawl' }, 'ACCEPT')).toBe(20)
+    expect(effectiveFloorFor({ record_origin: null }, 'ACCEPT')).toBe(20)
   })
   it('blocks any REJECT decision regardless of origin', () => {
     expect(effectiveFloorFor({ record_origin: 'curated_catalog' }, 'REJECT')).toBe(Number.POSITIVE_INFINITY)
@@ -285,7 +287,7 @@ describe('robertCatalogMiner — mineCatalogForProfiles', () => {
   })
 
   it('drops below-floor and REJECT rows, never fabricating recommendations', async () => {
-    insertOpp(db, { id: 'o-weak', title: 'TN Weak Match Grant', state: 'TN', record_origin: 'live_crawl' }) // score 30 < 55
+    insertOpp(db, { id: 'o-weak', title: 'TN Weak Match Grant', state: 'TN', record_origin: 'live_crawl' }) // REVIEW 30 — below the recommendation review threshold
     insertOpp(db, { id: 'o-reject', title: 'TN Reject Grant', state: 'TN' })                                  // REJECT
     insertOpp(db, { id: 'o-good', title: 'TN Good Grant', state: 'TN' })                                      // ACCEPT 88
 

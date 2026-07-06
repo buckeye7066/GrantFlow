@@ -52,7 +52,7 @@ export function getEffectiveWeights() {
   return _weights
 }
 
-/** Live default min score (the "75% slider" floor). */
+/** Live default min score (the discovery slider floor, need-anchored scale). */
 export function getEffectiveMinScore() {
   return _minScore
 }
@@ -71,10 +71,12 @@ export function getScoringTuning() {
  * [DISCOVERY_MIN_SCORE_FLOOR, 100].
  *
  * SAFETY (hard floor, enforced at this choke point): the documented product
- * standard (owner directive 2026-06-23) is that nothing below 75 surfaces in a
- * profile's pipeline. No tuning proposal — Amy's floor sweep, an admin call, a
- * stale persisted value hydrated at boot — may EVER take the effective min
- * score below DISCOVERY_MIN_SCORE_FLOOR. Tightening (raising) stays allowed.
+ * standard (owner directive 2026-07-06, need-anchored scale) is that nothing
+ * below 25 (DISCOVERY_MIN_SCORE_FLOOR — one fully-matched main need with clean
+ * gates) surfaces in a profile's pipeline. No tuning proposal — Amy's floor
+ * sweep, an admin call, a stale persisted value hydrated at boot — may EVER
+ * take the effective min score below DISCOVERY_MIN_SCORE_FLOOR. Tightening
+ * (raising) stays allowed.
  */
 export function setScoringTuning({ weights, minScore } = {}) {
   if (weights && typeof weights === 'object') {

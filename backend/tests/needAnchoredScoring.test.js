@@ -1,0 +1,147 @@
+/**
+ * needAnchoredScoring.test.js
+ *
+ * Owner directive 2026-07-06: the match score IS need coverage —
+ *   score = (% of the profile's main needs addressed) × eligibilityFactor × geoFactor
+ *
+ * A 50 must literally mean "covers about half of what this profile needs".
+ * The retired additive model handed ~45 baseline points to any national,
+ * entity-eligible source ("Prevention of Disease, Disability, and Death"
+ * scored 50 for a ministry whose needs it did not touch at all).
+ */
+import { describe, it, expect } from 'vitest'
+import { scoreOpportunity, computeMatchDecision } from '../services/matchEngine.js'
+import {
+  SCORE_FLOOR, NO_NEEDS_TOPICAL_CAP, GOOD_MATCH_SCORE, AUTO_ADD_SCORE,
+} from '../config/matchThresholds.js'
+import { canonicalOpportunityKey, titleIdentityKey } from '../crawler-os/contract.js'
+
+const MINISTRY_PROFILE = {
+  id: 'p-ministry',
+  primary_type: 'nonprofit',
+  state: 'TN',
+  needs: ['housing', 'food', 'transportation', 'education'],
+}
+
+const TWO_NEED_OPP = {
+  id: 'opp-2need',
+  title: 'Community Housing Repair and Food Security Grants',
+  description:
+    'Grants for nonprofit organizations to repair affordable housing and run food and nutrition programs for their communities.',
+  application_url: 'https://example-funder.org/apply',
+  is_national: true,
+  categories: ['housing', 'food'],
+}
+
+const GENERIC_FEDERAL_OPP = {
+  id: 'opp-generic',
+  title: 'Prevention of Disease, Disability, and Death by Infectious Diseases',
+  description:
+    'A national program supporting projects for the prevention of disease, disability, and death by infectious diseases. Nonprofit organizations may apply.',
+  application_url: 'https://example.gov/prevention',
+  is_national: true,
+  categories: ['health'],
+}
+
+describe('need-anchored score semantics', () => {
+  it('an opportunity covering 2 of 4 declared needs scores ~50 (the number IS the coverage)', () => {
+    const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, TWO_NEED_OPP)
+    expect(match_explain.scoreBreakdown.matched_needs_count).toBe(2)
+    expect(match_explain.scoreBreakdown.need_denominator).toBe(4)
+    // 2/4 needs, eligibility confirmed or unknown (×1.0 / ×0.8), geo national (×1.0)
+    expect(score).toBeGreaterThanOrEqual(40)
+    expect(score).toBeLessThanOrEqual(50)
+    expect(score).toBeGreaterThanOrEqual(GOOD_MATCH_SCORE * 0.8)
+  })
+
+  it('a generic national opp matching ZERO declared needs scores near the floor — never ~50', () => {
+    const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, GENERIC_FEDERAL_OPP)
+    expect(match_explain.scoreBreakdown.matched_needs_count).toBe(0)
+    // The old model gave this exact class 50. It must now sit at/near the floor,
+    // and always below the pipeline bar.
+    expect(score).toBeLessThan(AUTO_ADD_SCORE)
+    expect(score).toBeLessThanOrEqual(SCORE_FLOOR + 15)
+  })
+
+  it('a profile with NO declared needs is capped at NO_NEEDS_TOPICAL_CAP', () => {
+    const bare = { id: 'p-bare', primary_type: 'nonprofit', state: 'TN' }
+    const { score } = scoreOpportunity(bare, TWO_NEED_OPP)
+    expect(score).toBeLessThanOrEqual(NO_NEEDS_TOPICAL_CAP)
+  })
+
+  it('org × individual-assistance guard: a church never scores high on person/household rent assistance', () => {
+    const church = {
+      id: 'p-church',
+      primary_type: 'nonprofit',
+      state: 'OH',
+      needs: ['housing', 'community'],
+    }
+    const rentAssistance = {
+      id: 'opp-rent',
+      title: 'Emergency Rent & Housing Assistance',
+      description:
+        'Emergency rent assistance and utility assistance for individuals and families in Lorain County facing eviction.',
+      application_url: 'https://example-charity.org/help',
+      state: 'OH',
+      categories: ['housing', 'emergency'],
+    }
+    const { score, match_explain } = scoreOpportunity(church, rentAssistance)
+    // Housing "matches" textually, but the recipient is a PERSON, not an org —
+    // the eligibility gate must crush the score (this was Vermilion's 96).
+    expect(match_explain.scoreBreakdown.eligibility_mismatches).toContain('org_profile_individual_assistance')
+    expect(score).toBeLessThan(AUTO_ADD_SCORE)
+  })
+
+  it('an INDIVIDUAL with a housing need still scores well on the same assistance program', () => {
+    const person = {
+      id: 'p-person',
+      primary_type: 'individual',
+      state: 'OH',
+      needs: ['housing', 'utilities'],
+    }
+    const rentAssistance = {
+      id: 'opp-rent-2',
+      title: 'Emergency Rent & Housing Assistance',
+      description:
+        'Emergency rent assistance and utility assistance for individuals and families in Lorain County facing eviction.',
+      application_url: 'https://example-charity.org/help',
+      state: 'OH',
+      categories: ['housing', 'emergency'],
+    }
+    const { score, match_explain } = scoreOpportunity(person, rentAssistance)
+    expect(match_explain.scoreBreakdown.eligibility_mismatches ?? []).not.toContain('org_profile_individual_assistance')
+    // Both declared needs are addressed → coverage 100, gates ≥ 0.8/1.0.
+    expect(score).toBeGreaterThanOrEqual(AUTO_ADD_SCORE)
+  })
+
+  it('decision copy states coverage in plain language', () => {
+    const decision = computeMatchDecision(MINISTRY_PROFILE, GENERIC_FEDERAL_OPP)
+    expect(String(decision.explanation)).toMatch(/needs/i)
+    expect(String(decision.explanation)).not.toMatch(/moderate match signals/i)
+  })
+})
+
+describe('canonical opportunity identity (near-duplicate dedup)', () => {
+  it('collapses LLM paraphrase variants of the same program (the 7× NAEMT class)', () => {
+    const a = titleIdentityKey('NAEMT EMS Scholarship - Paramedics (to advance ems education)', 'NAEMT')
+    const b = titleIdentityKey('NAEMT EMS Scholarship – Paramedics (to advance education in ems)', 'NAEMT')
+    const c = titleIdentityKey('NAEMT EMS Scholarship – Paramedics (to advance EMS education)', 'NAEMT')
+    expect(a).toBe(b)
+    expect(b).toBe(c)
+  })
+
+  it('keeps genuinely different programs distinct', () => {
+    const basic = titleIdentityKey('NAEMT EMS Scholarship - EMT-Basic (to become EMT-Paramedic)', 'NAEMT')
+    const medics = titleIdentityKey('NAEMT EMS Scholarship - Paramedics (to advance ems education)', 'NAEMT')
+    expect(basic).not.toBe(medics)
+  })
+
+  it('key precedence: external_id, then title identity, then URL', () => {
+    expect(canonicalOpportunityKey({ external_id: 'OPP-123', title: 'X', apply_url: 'https://a.org/x' }))
+      .toBe('ext:opp-123')
+    expect(canonicalOpportunityKey({ title: 'Community Grant', sponsor: 'United Way' }))
+      .toMatch(/^t:/)
+    expect(canonicalOpportunityKey({ apply_url: 'https://a.org/x/' }))
+      .toBe('u:https://a.org/x')
+  })
+})

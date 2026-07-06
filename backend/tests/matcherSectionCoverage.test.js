@@ -42,6 +42,16 @@ function scoreWith(profile, sections, opp) {
   return { score: r.score ?? 0, reasons: r.reasons ?? [], match_explain: r.match_explain ?? {} }
 }
 
+// Need-anchored scale (2026-07-06): the final score is need-coverage x gates,
+// so specialized signals rank via the topical-evidence tie-break instead of
+// inflating the percentage. Directional "signal lifts" assertions compare the
+// tie-break key (with score never dropping).
+function expectLift(withSignal, base) {
+  expect(withSignal.score).toBeGreaterThanOrEqual(base.score)
+  expect(withSignal.match_explain.scoreBreakdown.topical_evidence)
+    .toBeGreaterThan(base.match_explain.scoreBreakdown.topical_evidence)
+}
+
 describe('matcher per-section coverage (audit fix)', () => {
   it('1. veteran_owned lifts score for veteran-owned-business opportunities', () => {
     const opp = {
@@ -60,7 +70,7 @@ describe('matcher per-section coverage (audit fix)', () => {
       { organization_details: { veteran_owned: true } },
       opp
     )
-    expect(withFlag.score).toBeGreaterThan(base.score)
+    expectLift(withFlag, base)
     expect(withFlag.reasons.join(' ')).toMatch(/veteran-owned/i)
   })
 
@@ -77,7 +87,7 @@ describe('matcher per-section coverage (audit fix)', () => {
       { organization_details: { woman_owned: true } },
       opp
     )
-    expect(withFlag.score).toBeGreaterThan(base.score)
+    expectLift(withFlag, base)
     expect(withFlag.reasons.join(' ')).toMatch(/woman-owned/i)
   })
 
@@ -94,7 +104,7 @@ describe('matcher per-section coverage (audit fix)', () => {
       { organization_details: { minority_owned: true } },
       opp
     )
-    expect(withFlag.score).toBeGreaterThan(base.score)
+    expectLift(withFlag, base)
     expect(withFlag.reasons.join(' ')).toMatch(/minority-owned/i)
   })
 
@@ -111,7 +121,7 @@ describe('matcher per-section coverage (audit fix)', () => {
       { organization_details: { organization_type: 'nonprofit' } },
       opp
     )
-    expect(withOrgType.score).toBeGreaterThan(base.score)
+    expectLift(withOrgType, base)
     expect(withOrgType.reasons.join(' ')).toMatch(/(org-type|nonprofit|capacity)/i)
   })
 
@@ -173,7 +183,7 @@ describe('matcher per-section coverage (audit fix)', () => {
       },
       opp
     )
-    expect(withCapacity.score).toBeGreaterThan(base.score)
+    expectLift(withCapacity, base)
     const reasonText = withCapacity.reasons.join(' ').toLowerCase()
     expect(reasonText).toMatch(/capacity|employees|revenue|years|startup/)
   })

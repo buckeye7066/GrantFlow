@@ -35,15 +35,15 @@ describe('live scoring tuning store', () => {
     expect(getEffectiveWeights()).toEqual(defaults.weights)
   })
 
-  it('SAFETY: the effective min score can never drop below the documented 75 bar', () => {
+  it('SAFETY: the effective min score can never drop below the documented 25 bar (need-anchored scale)', () => {
     // Loosening attempts (Amy floor sweep, admin call, stale hydrated value)
     // are clamped UP to DISCOVERY_MIN_SCORE_FLOOR; tightening is allowed.
-    setScoringTuning({ minScore: 60 })
-    expect(getEffectiveMinScore()).toBe(75)
+    setScoringTuning({ minScore: 15 })
+    expect(getEffectiveMinScore()).toBe(25)
     setScoringTuning({ minScore: 0 })
-    expect(getEffectiveMinScore()).toBe(75)
-    setScoringTuning({ minScore: 85 })
-    expect(getEffectiveMinScore()).toBe(85)
+    expect(getEffectiveMinScore()).toBe(25)
+    setScoringTuning({ minScore: 50 })
+    expect(getEffectiveMinScore()).toBe(50)
     setScoringTuning({ minScore: 200 })
     expect(getEffectiveMinScore()).toBe(100)
   })
@@ -68,18 +68,18 @@ describe('live scoring tuning store', () => {
     }
   })
 
-  it('a persisted sub-75 value is healed up to the floor on hydrate', async () => {
+  it('a persisted sub-25 value is healed up to the floor on hydrate (need-anchored scale)', async () => {
     const db = new Database(':memory:')
     try {
       db.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
       db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
         'crawler_scoring_tuning',
-        JSON.stringify({ minScore: 55, weights: getScoringTuning().weights }),
+        JSON.stringify({ minScore: 20, weights: getScoringTuning().weights }),
         new Date().toISOString(),
       )
       const hydrated = await hydrateScoringTuning(db)
-      expect(hydrated.minScore).toBe(75)
-      expect(getEffectiveMinScore()).toBe(75)
+      expect(hydrated.minScore).toBe(25)
+      expect(getEffectiveMinScore()).toBe(25)
     } finally {
       db.close()
     }
@@ -98,17 +98,25 @@ describe('live scoring tuning store', () => {
       is_loan: 0,
     }
 
-    const before = computeMatchDecision(profile, opp).score
+    // NEED-ANCHORED SPLIT (owner directive 2026-07-06): the FINAL score is
+    // need-coverage × eligibility/geo gates and does NOT move with weight
+    // changes — the W_* weights act only inside the legacy weighted-evidence
+    // blend, surfaced as scoreBreakdown.topical_evidence. So the "tuning takes
+    // effect" proof reads the topical subscale, where weights still act.
+    const topicalOf = (d) => Number(d.match_explain?.scoreBreakdown?.topical_evidence)
 
-    // Skew weights hard toward need; the live store must change the engine's score.
+    const before = topicalOf(computeMatchDecision(profile, opp))
+    expect(Number.isFinite(before)).toBe(true)
+
+    // Skew weights hard toward need; the live store must change the engine's blend.
     setScoringTuning({ weights: { W_NEED: 0.6, W_ELIGIBILITY: 0.15, W_GEO: 0.15, W_CATEGORY: 0.1 } })
-    const afterNeedHeavy = computeMatchDecision(profile, opp).score
+    const afterNeedHeavy = topicalOf(computeMatchDecision(profile, opp))
 
     setScoringTuning({ weights: { W_NEED: 0.05, W_ELIGIBILITY: 0.6, W_GEO: 0.3, W_CATEGORY: 0.05 } })
-    const afterEligHeavy = computeMatchDecision(profile, opp).score
+    const afterEligHeavy = topicalOf(computeMatchDecision(profile, opp))
 
-    // At least one skew must move the score off the default — proves the engine
-    // consumes getEffectiveWeights() rather than the cached constants.
+    // At least one skew must move the topical blend off the default — proves the
+    // engine consumes getEffectiveWeights() rather than the cached constants.
     expect(afterNeedHeavy !== before || afterEligHeavy !== before).toBe(true)
   })
 })

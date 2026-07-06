@@ -199,7 +199,9 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         // page this opportunity was extracted from.
         upsertMatch(store, { ...decision, source_query: page.query, discovered_via: 'web_search' });
         if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id) {
-          result.recommendations.push({ opportunity_id: matchOpp.id, title: matchOpp.title, sponsor: matchOpp.sponsor, match_score: decision.match_score, source: 'web_search' });
+          // topical_evidence: legacy weighted-evidence subscale for Amy's
+          // weight-tuning validation (weights no longer move the final score).
+          result.recommendations.push({ opportunity_id: matchOpp.id, title: matchOpp.title, sponsor: matchOpp.sponsor, match_score: decision.match_score, source: 'web_search', topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
         }
       }
     }

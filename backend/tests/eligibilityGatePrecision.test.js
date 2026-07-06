@@ -408,8 +408,12 @@ describe('(f) senior-services programs are capped for profiles with no senior si
     }
     const r = computeMatchDecision(SENIOR.profile, ELDERCARE, { profileSections: SENIOR.sections })
     expect(r.decision).not.toBe('REJECT')
-    // The senior path must not be capped at the mismatch ceiling.
-    expect(r.score).toBeGreaterThan(40)
+    // Need-anchored scale: the senior path must not be hit by the population
+    // MISMATCH gate — the senior strictly outscores the mismatch-gated student.
+    const student = computeMatchDecision(TN_STUDENT.profile, ELDERCARE, { profileSections: TN_STUDENT.sections })
+    expect(r.match_explain?.scoreBreakdown?.eligibility_mismatches ?? [])
+      .not.toContain('senior_program_no_senior_signal')
+    expect(r.score).toBeGreaterThan(student.score)
   })
 })
 

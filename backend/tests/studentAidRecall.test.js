@@ -5,8 +5,8 @@
  *
  *   (a) A loosely-tagged TN student profile gets TN HOPE + Pell as eligible
  *       (REVIEW/ACCEPT, NOT REJECT), AND a curated/trusted aid row scoring
- *       40–54 SAVES (passes the trusted floor) and is NOT purged by the boot
- *       sweep.
+ *       12–19 (need-anchored scale) SAVES (passes the trusted floor) and is
+ *       NOT purged by the boot sweep.
  *   (b) A clearly non-student nonprofit/business profile still does NOT get
  *       student scholarships (the hard REJECT is preserved — precision).
  *   (c) A missing-state profile is NOT state-REJECTed, but a known-DIFFERENT
@@ -121,7 +121,7 @@ describe('(a) loosely-tagged TN student gets student aid as eligible (not REJECT
 })
 
 // ---------------------------------------------------------------------------
-// (a) Recall: a trusted aid row scoring 40–54 SAVES via the trusted floor
+// (a) Recall: a trusted aid row scoring 12–19 SAVES via the trusted floor
 // ---------------------------------------------------------------------------
 
 function makeSaveDb() {
@@ -160,12 +160,12 @@ function makeSaveDb() {
   return raw
 }
 
-describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', () => {
-  it('saves a trusted-origin aid row scored below 55 but at/above 40', async () => {
+describe('(a) trusted student aid scoring 12–19 SAVES via the trusted floor (need-anchored scale)', () => {
+  it('saves a trusted-origin aid row scored below 20 but at/above 12', async () => {
     const db = makeSaveDb()
     // Score deliberately in the dead zone the student-aid caps produce: below
-    // the 55 insert floor, at/above the 40 trusted floor.
-    const score = 45
+    // the 20 insert floor, at/above the 12 trusted floor.
+    const score = 15
     expect(score).toBeLessThan(RELEVANCE_FLOOR)
     expect(score).toBeGreaterThanOrEqual(TRUSTED_RELEVANCE_FLOOR)
 
@@ -183,10 +183,10 @@ describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', 
     expect(Number(db.prepare('SELECT COUNT(*) AS n FROM grants').get().n)).toBe(1)
   })
 
-  it('still BLOCKS an UNTRUSTED open-web aid row at the same below-55 score', async () => {
+  it('still BLOCKS an UNTRUSTED open-web aid row at the same below-20 score', async () => {
     const db = makeSaveDb()
     const untrusted = { ...tnHope, id: 'opp-openweb', record_origin: 'live_crawl' }
-    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 45, 0)
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 15, 0)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)
@@ -222,7 +222,8 @@ describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', 
       record_origin: 'live_crawl',
       source_trust_tier: 'OFFICIAL_API',
     }
-    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 45)
+    // 15 = inside the trusted band (12–19) on the need-anchored scale.
+    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 15)
     expect(res.saved).toBe(true)
     expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
   })
@@ -230,7 +231,7 @@ describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', 
   it('default (omitted) caller threshold still floors UNTRUSTED rows at the full floor', async () => {
     const db = makeSaveDb()
     const untrusted = { ...tnHope, id: 'opp-openweb-2', record_origin: 'live_crawl' }
-    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 45)
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 15)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)
@@ -238,7 +239,7 @@ describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', 
 })
 
 // ---------------------------------------------------------------------------
-// (a) Recall: trusted aid below 55 is NOT purged by the boot sweep
+// (a) Recall: trusted aid below the floor is NOT purged by the boot sweep
 // ---------------------------------------------------------------------------
 
 function makePurgeDb() {
@@ -276,17 +277,18 @@ describe('(a) boot purge exempts trusted-origin aid below the floor', () => {
   it('does NOT purge a trusted-origin aid row scoring below the lenient floor', async () => {
     const db = makePurgeDb()
     db.prepare('INSERT INTO funding_opportunities (id, record_origin) VALUES (?, ?)').run('fo-hope', 'curated_catalog')
-    // Trusted aid at a clearly-low 30 (below the lenient 50 purge floor) — would
-    // be purged if untrusted, but the trusted-origin exemption protects it.
+    // Trusted aid at a clearly-low 8 (below the lenient 12 purge floor,
+    // need-anchored scale) — would be purged if untrusted, but the
+    // trusted-origin exemption protects it.
     db.prepare(
       `INSERT INTO grants (id, profile_id, organization_id, funding_opportunity_id, title, match_score, status)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run('g-hope', 'p-student', 'org1', 'fo-hope', 'Tennessee HOPE Scholarship', 30, 'discovered')
+    ).run('g-hope', 'p-student', 'org1', 'fo-hope', 'Tennessee HOPE Scholarship', 8, 'discovered')
     // A genuine untrusted junk row alongside (no FK → no trusted origin).
     db.prepare(
       `INSERT INTO grants (id, profile_id, organization_id, title, match_score, status)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run('g-junk', 'p-student', 'org1', 'Random low-score row', 30, 'discovered')
+    ).run('g-junk', 'p-student', 'org1', 'Random low-score row', 8, 'discovered')
 
     const res = await enforceRelevanceFloor(db)
     expect(res.ok).toBe(true)

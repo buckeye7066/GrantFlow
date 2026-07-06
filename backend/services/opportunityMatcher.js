@@ -149,9 +149,9 @@ export async function saveToProfilePipeline(
     // would let every scored-but-irrelevant row into the pipeline.
     //
     // An OMITTED threshold means "the canonical floor decides" — it must NOT
-    // act like an explicit 55, because the trusted-source exemption can lower
-    // the effective floor to TRUSTED_RELEVANCE_FLOOR (40) and a phantom
-    // caller-55 out-maxed it on every default-threshold path (the manual
+    // act like an explicit legacy default, because the trusted-source exemption can lower
+    // the effective floor to TRUSTED_RELEVANCE_FLOOR and a phantom
+    // caller default out-maxed it on every default-threshold path (the manual
     // /from-opportunity add could NEVER benefit from trust, 2026-07-06).
     const callerThresholdNum = Number(minMatchThreshold)
     const callerProvidedThreshold =
@@ -769,7 +769,7 @@ export async function trackGlobalOpportunity(db, opportunity) {
 /**
  * Process crawled opportunities and save appropriately
  */
-export async function processCrawledOpportunities(db, opportunities, profileId, profileContext, minMatchThreshold = 55) {
+export async function processCrawledOpportunities(db, opportunities, profileId, profileContext, minMatchThreshold = null) {
   const results = {
     total: opportunities.length,
     savedToPipeline: 0,

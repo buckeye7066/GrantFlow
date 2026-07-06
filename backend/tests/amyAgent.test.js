@@ -379,19 +379,19 @@ describe('crawlerTuner', () => {
     expect(decision.to).toBe(80)
   })
 
-  it('SAFETY: never proposes dropping the floor below the documented 75 bar', () => {
-    // A cohort whose candidates all sit at 55 would "prove" a lower floor, but
+  it('SAFETY: never proposes dropping the floor below the documented 25 bar (need-anchored scale)', () => {
+    // A cohort whose candidates all sit at 18 would "prove" a lower floor, but
     // the display floor is a hard product standard — the tuner must refuse,
     // even when a caller passes looser bounds.
-    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [55] }))
-    const current = cohortMetricsAtFloor(evals, 75)
-    const { best } = sweepFloors(evals)
-    expect(best.floor).toBeLessThan(75) // the sweep itself would go lower…
-    const decision = decideFloorChange({ currentFloor: 75, best, currentMetrics: current })
-    expect(decision.change).toBe(false) // …but the tuner clamps to >= 75
-    const loose = decideFloorChange({ currentFloor: 75, best, currentMetrics: current, opts: { bounds: [50, 85] } })
+    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [18] }))
+    const current = cohortMetricsAtFloor(evals, 25)
+    const { best } = sweepFloors(evals, { min: 10, max: 40, step: 5 })
+    expect(best.floor).toBeLessThan(25) // the sweep itself would go lower…
+    const decision = decideFloorChange({ currentFloor: 25, best, currentMetrics: current })
+    expect(decision.change).toBe(false) // …but the tuner clamps to >= 25
+    const loose = decideFloorChange({ currentFloor: 25, best, currentMetrics: current, opts: { bounds: [10, 40] } })
     expect(loose.change).toBe(false)
-    expect(loose.to).toBe(75)
+    expect(loose.to).toBe(25)
   })
 
   it('refuses to tune on too-small a cohort', () => {
@@ -433,22 +433,22 @@ describe('matchThresholdEditor (surgical, reversible)', () => {
     }
   })
 
-  it('SAFETY: clamps any attempt to write a floor below the documented 75 bar', async () => {
+  it('SAFETY: clamps any attempt to write a floor below the documented 25 bar (need-anchored scale)', async () => {
     const tmp = nodePath.join(os.tmpdir(), `amy-mt-clamp-${Date.now()}.js`)
-    await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 75\n', 'utf8')
+    await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 25\n', 'utf8')
     try {
-      // 60 clamps to 75 == current → refused as a no-op; the file never drops.
-      const refused = await applyMinScore(60, { filePath: tmp })
+      // 10 clamps to 25 == current → refused as a no-op; the file never drops.
+      const refused = await applyMinScore(10, { filePath: tmp })
       expect(refused.applied).toBe(false)
       expect(refused.reason).toBe('no_change')
-      expect(await readCurrentMinScore(tmp)).toBe(75)
+      expect(await readCurrentMinScore(tmp)).toBe(25)
 
-      // From a tightened floor (85), a "lower to 60" lands at the 75 bar, not 60.
-      await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 85\n', 'utf8')
-      const clamped = await applyMinScore(60, { filePath: tmp })
+      // From a tightened floor (40), a "lower to 10" lands at the 25 bar, not 10.
+      await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 40\n', 'utf8')
+      const clamped = await applyMinScore(10, { filePath: tmp })
       expect(clamped.applied).toBe(true)
-      expect(clamped.to).toBe(75)
-      expect(await readCurrentMinScore(tmp)).toBe(75)
+      expect(clamped.to).toBe(25)
+      expect(await readCurrentMinScore(tmp)).toBe(25)
     } finally {
       await fsp.unlink(tmp).catch(() => {})
     }
@@ -682,12 +682,18 @@ describe('Amy weight tuning with empirical validation', () => {
     const db = createDb()
     return db
   }
-  // Discovery returns weak (55) until the weight edit is "applied", then strong (80).
+  // NEED-ANCHORED SPLIT (owner directive 2026-07-06): the FINAL match score is
+  // need-coverage × eligibility/geo gates and never moves with a W_* weight
+  // change — weights act only inside the legacy weighted-evidence blend
+  // (topical_evidence). So the fake discovery keeps the final score pinned in
+  // the REVIEW band (30, weak cohort → weight symptom fires) and moves ONLY the
+  // topical subscale once the weight edit is "applied": weak topical (55) until
+  // then, strong (80, above TOPICAL_EVIDENCE_STRONG_BAR=75) when it improves.
   function discoveryFactory(state, improves) {
     return async ({ profileId }) => {
-      const score = state.applied && improves ? 80 : 55
+      const topical = state.applied && improves ? 80 : 55
       return {
-        run: { run_id: 'r', stored: 1, sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 3, stored: 1 }], recommendations: [{ title: 'Specific Grant', match_score: score, decision: score >= 70 ? 'ACCEPT' : 'REVIEW' }], zero_result: null },
+        run: { run_id: 'r', stored: 1, sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 3, stored: 1 }], recommendations: [{ title: 'Specific Grant', match_score: 30, decision: 'REVIEW', topical_evidence: topical }], zero_result: null },
         persisted: { opportunities: 1 },
         thesis: { applicant_types: ['x'], needs: ['funding'], location: { state: 'TN' } },
       }
@@ -709,7 +715,7 @@ describe('Amy weight tuning with empirical validation', () => {
         improve: true, applyTuning: false, applyWeights: true,
         runDiscovery: discoveryFactory(state, true),
         runPipeline: async () => ({ anya: {}, sam: {} }),
-        thresholdEditor: { read: async () => 75, apply: async () => ({ applied: false }) },
+        thresholdEditor: { read: async () => 25, apply: async () => ({ applied: false }) },
         weightEditor,
         clock: () => new Date('2026-06-29T12:00:00Z'),
       })
@@ -733,7 +739,7 @@ describe('Amy weight tuning with empirical validation', () => {
         improve: true, applyTuning: false, applyWeights: true,
         runDiscovery: discoveryFactory(state, false), // never improves
         runPipeline: async () => ({ anya: {}, sam: {} }),
-        thresholdEditor: { read: async () => 75, apply: async () => ({ applied: false }) },
+        thresholdEditor: { read: async () => 25, apply: async () => ({ applied: false }) },
         weightEditor,
         clock: () => new Date('2026-06-29T12:00:00Z'),
       })
