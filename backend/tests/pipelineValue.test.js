@@ -28,12 +28,14 @@ describe('pipelineValue choke point', () => {
     ]
     for (const r of rows) insert.run(...r)
 
+    // audit:allow dynamic-sql — pipelineValueSql returns a compile-time literal fragment (no user input)
     const sqlTotal = db.prepare(`SELECT SUM(${pipelineValueSql('grants')}) AS t FROM grants`).get().t
     const jsTotal = db.prepare('SELECT * FROM grants').all().reduce((s, g) => s + grantPipelineValue(g), 0)
     expect(sqlTotal).toBe(6500 + 5000 + 1000)
     expect(jsTotal).toBe(sqlTotal)
 
     // Un-aliased variant used by routes/stats.js.
+    // audit:allow dynamic-sql — same compile-time literal fragment, un-aliased variant
     const bare = db.prepare(`SELECT SUM(${pipelineValueSql('')}) AS t FROM grants`).get().t
     expect(bare).toBe(sqlTotal)
   })
