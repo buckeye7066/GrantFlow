@@ -205,6 +205,37 @@ function extractEducationEmployment(sections = {}) {
 }
 
 /**
+ * Section data → signal TEXT for the thesis blob. Raw JSON.stringify leaked
+ * every FIELD NAME into the free-text scan — a section shaped
+ * `{ firefighter: false, veteran: false }` injected the words "firefighter"
+ * and "veteran" into the blob and fired applicant/need keyword rules for
+ * profiles that explicitly declared those facts FALSE (the Axiom 13-bucket
+ * class, 2026-07-06). The honest signal text is:
+ *   - string/number values, kept as-is;
+ *   - a TRUE boolean's field name, humanized ("ssi_recipient_household" →
+ *     "ssi recipient household") — for booleans the key IS the meaning;
+ *   - false / null / empty values contribute NOTHING (declaring a fact false
+ *     must never inject the fact's words).
+ */
+export function sectionSignalText(data, depth = 0) {
+  if (data == null || data === false || data === true || depth > 4) return '';
+  if (typeof data === 'string' || typeof data === 'number') return String(data).trim();
+  if (Array.isArray(data)) return data.map((v) => sectionSignalText(v, depth + 1)).filter(Boolean).join(' ');
+  if (typeof data === 'object') {
+    const parts = [];
+    for (const [k, v] of Object.entries(data)) {
+      if (v === true) parts.push(String(k).replace(/_/g, ' '));
+      else {
+        const text = sectionSignalText(v, depth + 1);
+        if (text) parts.push(text);
+      }
+    }
+    return parts.join(' ');
+  }
+  return '';
+}
+
+/**
  * profileContextToThesisInput — map a loadProfileContext() result into the shape
  * buildThesis() understands. buildThesis is tolerant (it gathers free text and
  * matches keyword/synonym tables), so the goal is to surface every signal the
@@ -218,7 +249,7 @@ export function profileContextToThesisInput(ctx = {}) {
 
   const sectionList = Object.entries(sections).map(([key, data]) => ({
     title: key,
-    body: typeof data === 'string' ? data : JSON.stringify(data ?? {}),
+    body: typeof data === 'string' ? data : sectionSignalText(data),
   }));
 
   const needCategories = [

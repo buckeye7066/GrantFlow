@@ -59,6 +59,15 @@ export function buildCrawlerQueries(thesis = {}, source = {}, opts = {}) {
   // crawler a USDA crawler even when the profile contains generic words.
   seeds.push(...(SOURCE_QUERY_SEEDS[source.source_id] ?? []));
 
+  // Research orgs: SBIR/STTR omnibus NOFOs (NIH/DOD/NSF) ARE posted on
+  // grants.gov, but no generic need/applicant seed ever says "SBIR" — a
+  // biotech's federal query set looked identical to a food pantry's. High
+  // priority (right after the source anchor) so the query cap can't drop it.
+  if (thesis.is_research_org) {
+    seeds.push(`SBIR ${thesis.research_topic ?? ''}`.trim());
+    seeds.push('small business innovation research');
+  }
+
   if (primaryNeed && primaryApplicant) seeds.push(`${primaryNeed} ${primaryApplicant} grant`);
   if (needs.length && primaryApplicant) seeds.push(`${needs.join(' ')} ${primaryApplicant} funding`);
   for (const need of needs.slice(0, 3)) seeds.push(`${need} grant`);

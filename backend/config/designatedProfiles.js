@@ -104,16 +104,30 @@ const PUBLIC_FIXTURE_PROFILES = [
   }),
   profile({
     id: 'profile-avanell-leamon',
-    display_name: 'Designated Family Support Profile',
-    primary_type: 'family',
-    tags: ['family_assistance', 'caregiver', 'appalachian'],
+    // CORRECTED 2026-07-06 (owner): this person is DISABLED (mobility
+    // impairment, senior), NOT a family caregiver. The original seed typed her
+    // 'family' + caregiver from a Base44 import that read "household with
+    // caregiving responsibilities" and inverted the relationship — she is the
+    // one RECEIVING care. The boot seeder re-asserts primary_type/tags from
+    // this config on every deploy, so this file is the source of truth to fix.
+    display_name: 'Designated Disability & Senior Support Profile',
+    primary_type: 'individual',
+    tags: ['disability', 'senior', 'appalachian'],
     cityState: 'Cleveland, Tennessee',
-    goal: 'Find family-support, caregiver, utility, food, and housing stability resources.',
+    goal: 'Find disability-support, senior/aging, accessibility, utility, food, and housing stability resources.',
     sections: {
-      family_life: { caregiver: true },
+      family_life: { caregiver: false },
+      demographics: {
+        disability_status: 'Has disability',
+        age_group: 'Senior 62+',
+      },
+      health_medical: {
+        disability_type: ['mobility impairment'],
+        support_needs_level: 'high',
+      },
       financial_information: {
         financial_need_level: 'high',
-        notes: 'Synthetic household-stability need.',
+        notes: 'Low-income disabled senior household; prioritize disability, aging, and household-stability support.',
       },
     },
   }),
