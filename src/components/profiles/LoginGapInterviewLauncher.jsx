@@ -49,8 +49,14 @@ import {
  *
  * Enabled by default; kill switch is VITE_GAP_GATE_ENABLED=false (see
  * src/lib/gapGateFlag.js — shared with the ProfileOverview mount).
+ *
+ * Optional `onFinished` prop: called exactly once when this launcher has
+ * nothing left to show — either the user closed it (closedForSession) or it
+ * ran out of gapped profiles. Used by ResetOnboardingFlow to sequence
+ * video -> gap interview -> guided tour for an existing user being reset;
+ * the normal global mount in App.jsx doesn't pass it.
  */
-export default function LoginGapInterviewLauncher() {
+export default function LoginGapInterviewLauncher({ onFinished } = {}) {
   const queryClient = useQueryClient()
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const user = useAuthStore((state) => state.user)
@@ -70,6 +76,25 @@ export default function LoginGapInterviewLauncher() {
   const [submitting, setSubmitting] = useState(false)
   const [closedForSession, setClosedForSession] = useState(false)
   const probedRef = useRef(false)
+  const finishedRef = useRef(false)
+
+  // Fire onFinished exactly once, on natural completion (closed, or ran out
+  // of gapped profiles). Deliberately does NOT fire just because `enabled`
+  // is momentarily false (e.g. auth state still loading) -- that's a
+  // transient render, not "finished".
+  useEffect(() => {
+    if (finishedRef.current || !onFinished) return
+    if (!enabled) return
+    if (closedForSession) {
+      finishedRef.current = true
+      onFinished()
+      return
+    }
+    if (gapped !== null && !gapped[index]) {
+      finishedRef.current = true
+      onFinished()
+    }
+  }, [enabled, closedForSession, gapped, index, onFinished])
 
   const userKey = user?.id ?? user?.email ?? 'anon'
   const profilesQuery = useQuery({

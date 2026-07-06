@@ -37,6 +37,54 @@ function getFromEmail() {
   return s ? s : null
 }
 
+// The canonical link back to GrantFlow, appended to every outbound email
+// (user-facing and internal) so no email is ever a dead end -- configurable
+// via the same env var the OTP sign-in link already used, defaulting to the
+// Axiom Biolabs marketing-site URL (verified live 2026-07-06: redirects to
+// the working app rather than 404ing, despite a past DNS-drift incident
+// logged in docs/ERROR_LEDGER.md).
+const GRANTFLOW_LINK_URL = String(
+  process.env.GRANTFLOW_SIGNIN_URL || 'https://www.axiombiolabs.org/grantflow',
+).trim()
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+/** HTML snippet linking back to GrantFlow -- append to every email template's HTML body. */
+export function grantFlowLinkFooterHtml() {
+  const safeUrl = escapeHtml(GRANTFLOW_LINK_URL)
+  return `<p style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 13px; color: #64748b;">
+          <a href="${safeUrl}" style="color: #2563eb;">Open GrantFlow</a>
+        </p>`
+}
+
+/** Plain-text footer linking back to GrantFlow -- append to every email template's text body. */
+export function grantFlowLinkFooterText() {
+  return `\n\n---\nOpen GrantFlow: ${GRANTFLOW_LINK_URL}`
+}
+
+/**
+ * Insert the GrantFlow link footer into an HTML email body. Most templates in
+ * this app are bare fragments (no <html>/<body> wrapper) and can just have
+ * the footer appended; a few (e.g. billing/invoiceService.js) build a full
+ * `<!doctype html><html><body>...</body></html>` document, where a blind
+ * append would land the footer outside the closing tags. Insert before
+ * </body> when present, else append at the end.
+ */
+export function appendGrantFlowLinkFooter(html) {
+  const footer = grantFlowLinkFooterHtml()
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${footer}</body>`)
+  }
+  return html + footer
+}
+
 export class EmailSendError extends Error {
   constructor(message, { provider, status, details } = {}) {
     super(message)
@@ -78,6 +126,14 @@ function getResend() {
  * Generic send with cc support. Returns { ok, id?, skipped?, error? } and never
  * throws — callers (invoicing, dunning) treat email as best-effort. `from`
  * defaults to FROM_EMAIL; `cc` accepts a string or array.
+ *
+ * The single choke point for every OTHER email in the app (owner alerts,
+ * billing, comms broadcasts, ...) that doesn't build its own Resend payload
+ * directly -- so the GrantFlow link footer is appended here ONCE rather than
+ * at each caller. The four templates above that call resend.emails.send()
+ * directly (sendVerificationEmail, sendPasswordSetupEmail,
+ * sendAuthAttemptNotification, sendApplicationEmail) already append it
+ * themselves and never route through here, so there's no double-append risk.
  */
 export async function sendEmail({ to, cc = null, subject, html, text, from = null, replyTo = null } = {}) {
   if (!to || !subject) return { ok: false, error: 'to_and_subject_required' }
@@ -88,8 +144,8 @@ export async function sendEmail({ to, cc = null, subject, html, text, from = nul
       from: from || getFromEmail(),
       to: Array.isArray(to) ? to : [to],
       subject: String(subject),
-      ...(html ? { html } : {}),
-      ...(text ? { text } : {}),
+      ...(html ? { html: appendGrantFlowLinkFooter(html) } : {}),
+      ...(text ? { text: text + grantFlowLinkFooterText() } : {}),
     }
     if (cc) payload.cc = Array.isArray(cc) ? cc : [cc]
     if (replyTo) {
@@ -145,9 +201,10 @@ export async function sendVerificationEmail(email, code) {
           <a href="${safeSignInUrl}" style="color: #2563eb;">${safeSignInUrl}</a>
         </p>
         <p>If you didn't request this code, you can safely ignore this email.</p>
+        ${grantFlowLinkFooterHtml()}
       </div>
     `
-    const text = `Your GrantFlow verification code is: ${code}\n\nThis code will expire in 10 minutes.\n\nSign in here: ${signInUrl}\n\nIf you didn't request this code, you can safely ignore this email.`
+    const text = `Your GrantFlow verification code is: ${code}\n\nThis code will expire in 10 minutes.\n\nSign in here: ${signInUrl}\n\nIf you didn't request this code, you can safely ignore this email.${grantFlowLinkFooterText()}`
 
     const result = await resend.emails.send({
       from,
@@ -200,12 +257,14 @@ export async function sendPasswordSetupEmail(email, link) {
         <pre style="white-space: pre-wrap; word-break: break-all; background-color: #f5f5f5; padding: 12px; border-radius: 8px;">${link.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</pre>
         <p>This link expires in 30 minutes and can only be used once.</p>
         <p>If you didn't request this, you can safely ignore this email.</p>
+        ${grantFlowLinkFooterHtml()}
       </div>
     `
     const text =
       `Set your GrantFlow password using this one-time link:\n\n${link}\n\n` +
       `This link expires in 30 minutes and can only be used once.\n\n` +
-      `If you didn't request this, you can safely ignore this email.`
+      `If you didn't request this, you can safely ignore this email.` +
+      grantFlowLinkFooterText()
 
     const result = await resend.emails.send({
       from,
@@ -281,9 +340,10 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
             ${error ? `<li><strong>Error:</strong> ${String(error).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</li>` : ''}
             <li><strong>Time:</strong> ${new Date().toISOString()}</li>
           </ul>
+          ${grantFlowLinkFooterHtml()}
         </div>
       `,
-      text: `Auth Event: ${event}\nIdentifier: ${identifier}\nSuccess: ${success}${error ? `\nError: ${error}` : ''}\nTime: ${new Date().toISOString()}`,
+      text: `Auth Event: ${event}\nIdentifier: ${identifier}\nSuccess: ${success}${error ? `\nError: ${error}` : ''}\nTime: ${new Date().toISOString()}${grantFlowLinkFooterText()}`,
     })
 
     return true
@@ -323,9 +383,10 @@ export async function sendApplicationEmail(toEmail, applicationData) {
           <h2>Application Submitted Successfully</h2>
           <p>Your application has been received.</p>
           <pre>${JSON.stringify(applicationData, null, 2).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</pre>
+          ${grantFlowLinkFooterHtml()}
         </div>
       `,
-      text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}`,
+      text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}${grantFlowLinkFooterText()}`,
     })
 
     log.info('[email/sendApplicationEmail] Application email sent', {

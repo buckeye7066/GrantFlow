@@ -12,6 +12,7 @@ import twilio from 'twilio'
 import { createLogger } from '../utils/logger.js'
 import { t, dayLabel as localizedDayLabel } from './comms/commsMessages.js'
 import { getUserLanguage } from './comms/profileLanguage.js'
+import { grantFlowLinkFooterHtml, grantFlowLinkFooterText } from './email.js'
 const log = createLogger('deadlineEmailSmsService')
 
 // ── Configuration (lazy, from env) ──────────────────────────────────────────
@@ -67,7 +68,7 @@ export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, dead
         : `<p style="color: #475569; font-size: 15px;">${escapeHtml(t(lang, 'deadline_email_body_review'))}</p>`
       }
       <div style="margin-top: 24px;">
-        <a href="${process.env.CORS_ORIGIN || 'https://grantflow.app'}/Pipeline"
+        <a href="${escapeHtml(process.env.GRANTFLOW_APP_BASE_URL || 'https://app.axiombiolabs.org')}/Pipeline"
            style="display: inline-block; background: #2563eb; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px;">
           ${escapeHtml(t(lang, 'deadline_email_cta'))}
         </a>
@@ -75,11 +76,12 @@ export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, dead
       <p style="color: #94a3b8; font-size: 12px; margin-top: 32px;">
         ${escapeHtml(t(lang, 'deadline_email_footer'))}
       </p>
+      ${grantFlowLinkFooterHtml()}
     </div>
   `
 
   try {
-    await resend.emails.send({ from, to: email, subject, html })
+    await resend.emails.send({ from, to: email, subject, html, text: `${t(lang, 'deadline_email_heading')}${grantFlowLinkFooterText()}` })
     log.info('[deadline-email] Sent to', email, '—', grantTitle)
     return true
   } catch (err) {

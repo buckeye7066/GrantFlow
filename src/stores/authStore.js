@@ -237,7 +237,10 @@ const initialState = {
   lastSeenManualVersion: 0,
   lastCompletedTourVersion: 0,
   tourDismissedAt: null,
-  // 'pending' | 'completed' | 'skipped' | null (null = not eligible, e.g. pre-existing user)
+  // 'pending' (new signup, interview already done on /start) |
+  // 'pending_reinterview' (existing user reset to the new-user experience --
+  // video + Anya's gap interview + tour, via an admin bulk operation) |
+  // 'completed' | 'skipped' | null (not eligible, e.g. un-reset existing user)
   guidedCycleTourStatus: null,
 }
 
@@ -544,6 +547,10 @@ export const useAuthStore = create((set, get) => ({
         needsProfileCreation,
         hasSeenOnboarding: userCompletedOnboarding,
         guidedCycleTourStatus: payload.user?.guided_cycle_tour_status ?? null,
+        onboardingCompletedAt: payload.user?.onboarding_completed_at ?? null,
+        lastSeenManualVersion: Number(payload.user?.last_seen_manual_version ?? 0),
+        lastCompletedTourVersion: Number(payload.user?.last_completed_tour_version ?? 0),
+        tourDismissedAt: payload.user?.tour_dismissed_at ?? null,
       })
 
       // If login payload looks sparse, refresh from server so profile dropdown

@@ -533,6 +533,14 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
     // (used for hasSeenOnboarding/needsProfileCreation) was always reading
     // undefined -> false on every fresh login through this payload shape.
     has_completed_onboarding: Boolean(userRow.has_completed_onboarding),
+    // Full parity with GET /api/auth/me's response (server.js) so
+    // AnyaGuidedTour's version-gate and the guided-tour flows behave
+    // identically whether the frontend just got this from a login response
+    // or from a later bootstrap fetch.
+    onboarding_completed_at: userRow.onboarding_completed_at ?? null,
+    last_seen_manual_version: Number(userRow.last_seen_manual_version ?? 0),
+    last_completed_tour_version: Number(userRow.last_completed_tour_version ?? 0),
+    tour_dismissed_at: userRow.tour_dismissed_at ?? null,
   }
 }
 
@@ -3172,100 +3180,18 @@ router.get('/:provider/callback', async (req, res) => {
   }
 })
 
-router.get('/me', async (req, res) => {
-  try {
-    // Canonical auth truth is req.ctx (DB-backed), but harden against any transient ctx-building issues.
-    // This endpoint must never 401 if the auth middleware already verified a token/admin header.
-    const fallbackUserId = req.user?.userId ?? req.user?.id ?? req.user?.user_id ?? null
-    const fallbackEmail = req.user?.email ?? req.user?.primary_email ?? null
-    const fallbackIsAdmin = Boolean(req.user?.role === 'admin' || req.user?.is_admin === true || req.user?.is_admin === 1)
-    const fallbackActiveProfileId = req.user?.profileId ?? req.user?.profile_id ?? null
-
-    const userId = req.ctx?.userId ?? fallbackUserId
-    if (!userId) {
-      return res.status(401).json({ error: 'Not authenticated' })
-    }
-
-    const email = req.ctx?.email ?? fallbackEmail
-    const isAdmin = typeof req.ctx?.isAdmin === 'boolean' ? Boolean(req.ctx.isAdmin) : fallbackIsAdmin
-    const activeProfileId = req.ctx?.activeProfileId ?? fallbackActiveProfileId
-
-    // Count accessible resources for UI gating. For admins, return total counts.
-    let accessibleProfileCount = 0
-    let accessibleOrgCount = 0
-
-    try {
-      if (req.ctx?.accessibleProfileIds === null) {
-        const row = await req.db.prepare('SELECT COUNT(*) as c FROM profiles').get()
-        accessibleProfileCount = Number(row?.c ?? row?.count ?? 0)
-      } else if (req.ctx?.accessibleProfileIds instanceof Set) {
-        accessibleProfileCount = req.ctx.accessibleProfileIds.size
-      }
-    } catch (dbError) {
-      console.error('[auth/me] Database error fetching profile count:', dbError)
-    }
-
-    try {
-      if (req.ctx?.accessibleOrgIds === null) {
-        const row = await req.db.prepare('SELECT COUNT(*) as c FROM organizations').get()
-        accessibleOrgCount = Number(row?.c ?? row?.count ?? 0)
-      } else if (req.ctx?.accessibleOrgIds instanceof Set) {
-        accessibleOrgCount = req.ctx.accessibleOrgIds.size
-      }
-    } catch (dbError) {
-      console.error('[auth/me] Database error fetching org count:', dbError)
-    }
-
-    // Fetch durable onboarding/tour state from the users table
-    let hasCompletedOnboarding = false
-    let onboardingCompletedAt = null
-    let lastSeenManualVersion = 0
-    let lastCompletedTourVersion = 0
-    let tourDismissedAt = null
-    let guidedCycleTourStatus = null
-
-    try {
-      const onboardingRow = await req.db.prepare(
-        `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
-                last_completed_tour_version, tour_dismissed_at, guided_cycle_tour_status
-         FROM users WHERE id = ?`
-      ).get(userId)
-      if (onboardingRow) {
-        hasCompletedOnboarding = Boolean(onboardingRow.has_completed_onboarding)
-        onboardingCompletedAt = onboardingRow.onboarding_completed_at ?? null
-        lastSeenManualVersion = Number(onboardingRow.last_seen_manual_version ?? 0)
-        lastCompletedTourVersion = Number(onboardingRow.last_completed_tour_version ?? 0)
-        tourDismissedAt = onboardingRow.tour_dismissed_at ?? null
-        guidedCycleTourStatus = onboardingRow.guided_cycle_tour_status ?? null
-      }
-    } catch (dbError) {
-      // Columns may not exist yet if migration hasn't run — degrade gracefully
-      console.warn('[auth/me] Could not fetch onboarding state (migration pending?):', dbError.message)
-    }
-
-    return res.json({
-      userId,
-      email,
-      isAdmin,
-      activeProfileId,
-      accessibleProfileCount,
-      accessibleOrgCount,
-      hasCompletedOnboarding,
-      onboardingCompletedAt,
-      lastSeenManualVersion,
-      lastCompletedTourVersion,
-      tourDismissedAt,
-      guidedCycleTourStatus,
-    })
-  } catch (error) {
-    routeLogger.error('[auth/me] Unexpected error:', error)
-    return res.status(500).json({ 
-      error: 'An unexpected error occurred',
-      error_type: 'internal_error',
-      details: undefined // Never expose internal error details
-    })
-  }
-})
+/**
+ * NOTE: There is no `router.get('/me', ...)` handler here. GET /api/auth/me
+ * is served by an identically-pathed handler registered directly on `app`
+ * in backend/server.js (before this router is mounted at /api/auth), which
+ * therefore always wins Express's route-matching order. A near-duplicate
+ * handler used to live here too -- confirmed via `railway connect`-style
+ * direct API probing (2026-07-06) to be fully unreachable, zero live
+ * traffic, zero test coverage (the auth-identity-matrix tests spawn the
+ * real server.js and were unknowingly exercising the OTHER handler) -- and
+ * was deleted rather than left as a maintenance trap. If GET /me behavior
+ * needs to change, edit the handler in server.js instead.
+ */
 
 /**
  * PATCH /api/auth/onboarding-state
