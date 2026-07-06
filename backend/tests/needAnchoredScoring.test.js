@@ -92,6 +92,30 @@ describe('need-anchored score semantics', () => {
     expect(score).toBeLessThan(AUTO_ADD_SCORE)
   })
 
+  it('sponsor name containing "Church" does not bypass the org guard', () => {
+    // The FUNDER being a church must not read as "organizations may apply" —
+    // Emmanuel Lutheran's rent fund kept scoring 80 for another church because
+    // the sponsor name supplied the org-entity signal.
+    const church = {
+      id: 'p-church-2',
+      primary_type: 'nonprofit',
+      state: 'OH',
+      needs: ['housing', 'community'],
+    }
+    const rentFund = {
+      id: 'opp-rent-3',
+      title: 'Community Outreach Emergency Housing Assistance',
+      sponsor: 'Emmanuel Lutheran Church – Elyria',
+      description: 'Emergency rent and housing assistance for individuals and families facing eviction in Elyria.',
+      application_url: 'https://example-elc.org/help',
+      state: 'OH',
+      categories: ['housing', 'emergency'],
+    }
+    const { score, match_explain } = scoreOpportunity(church, rentFund)
+    expect(match_explain.scoreBreakdown.eligibility_mismatches).toContain('org_profile_individual_assistance')
+    expect(score).toBeLessThan(AUTO_ADD_SCORE)
+  })
+
   it('an INDIVIDUAL with a housing need still scores well on the same assistance program', () => {
     const person = {
       id: 'p-person',

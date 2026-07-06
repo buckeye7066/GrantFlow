@@ -73,7 +73,7 @@ for (const { id: profileId } of profiles) {
   // 2. Scored pipeline rows (NULL rows are the boot backfill's job)
   const grants = await db.all(`
     SELECT g.id AS grant_id, g.match_score AS old_score, g.title AS g_title,
-           g.description AS g_description, g.funder AS g_funder,
+           g.funder AS g_funder,
            g.amount_min AS g_amount_min, g.amount_max AS g_amount_max, o.*
     FROM grants g
     LEFT JOIN funding_opportunities o ON o.id = g.funding_opportunity_id
@@ -82,7 +82,7 @@ for (const { id: profileId } of profiles) {
     try {
       const target = g.id
         ? g
-        : { title: g.g_title, description: g.g_description, sponsor: g.g_funder, amount_min: g.g_amount_min, amount_max: g.g_amount_max }
+        : { title: g.g_title, sponsor: g.g_funder, amount_min: g.g_amount_min, amount_max: g.g_amount_max }
       const d = computeMatchDecision(profile, target, { profileSections: sections })
       const score = Math.round(Number(d?.score) || 0)
       if (score !== Number(g.old_score)) {
