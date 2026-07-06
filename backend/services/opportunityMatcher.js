@@ -368,7 +368,15 @@ export async function saveToProfilePipeline(
     // keep the full RELEVANCE_FLOOR. Precision is bounded by the origin
     // allowlist + the REJECT gate, both of which still apply.
     const recordOrigin = opportunity?.record_origin ?? null
-    const trusted = isTrustedRecordOrigin(recordOrigin)
+    // Trust is about WHERE the row comes from, not HOW it arrived: a grants.gov
+    // / SAM.gov row fetched by the live crawl carries record_origin='live_crawl'
+    // (the untrusted open-web bucket) even though its SOURCE is an official
+    // federal API — the same vetting class as the allowlist's 'grants_gov'
+    // origin. Without this, official federal rows scoring 40-54 (e.g. the NIH
+    // Parent STTR at 40 for a research org, 2026-07-06) were silently floored
+    // at 55 while identical rows from the seed path passed at 40.
+    const officialApiTier = String(opportunity?.source_trust_tier ?? '').toUpperCase() === 'OFFICIAL_API'
+    const trusted = isTrustedRecordOrigin(recordOrigin) || officialApiTier
     const decisionIsReject = decision?.decision === 'REJECT' // already returned above; defensive
     const effectiveFloor = (trusted && !decisionIsReject) ? TRUSTED_RELEVANCE_FLOOR : RELEVANCE_FLOOR
     const effectiveThreshold = Math.max(callerThreshold, effectiveFloor)

@@ -191,6 +191,24 @@ describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', 
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)
   })
+
+  // Trust is about the SOURCE, not the arrival path (2026-07-06): a grants.gov
+  // row fetched live carries record_origin='live_crawl' but its source tier is
+  // OFFICIAL_API — the same vetting class as the 'grants_gov' origin above.
+  // The NIH Parent STTR at 40 for a research org was floored at 55 while an
+  // identical seed-path row would have passed at 40.
+  it('saves an OFFICIAL_API-tier row that arrived via live_crawl at the trusted floor', async () => {
+    const db = makeSaveDb()
+    const officialLive = {
+      ...tnHope,
+      id: 'opp-grantsgov-live',
+      record_origin: 'live_crawl',
+      source_trust_tier: 'OFFICIAL_API',
+    }
+    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 45, 0)
+    expect(res.saved).toBe(true)
+    expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
+  })
 })
 
 // ---------------------------------------------------------------------------
