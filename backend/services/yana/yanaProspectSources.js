@@ -229,30 +229,42 @@ export function makeOpenStreetMapSource(deps = {}) {
   const search = typeof deps.searchPlaces === 'function' ? deps.searchPlaces : realOsmSearchPlaces
   return {
     name: 'openstreetmap',
-    async discover({ limit = 40, location = null } = {}) {
-      if (!location) {
+    // `locations` (array) anchors one run on SEVERAL areas (owner-directed
+    // geographic focus, e.g. three specific counties), splitting `limit`
+    // across them; `location` (single) is the original form and still works.
+    async discover({ limit = 40, location = null, locations = null } = {}) {
+      const anchors = (Array.isArray(locations) && locations.length
+        ? locations
+        : [location])
+        .map((l) => String(l || '').trim())
+        .filter(Boolean)
+      if (!anchors.length) {
         log.info('openstreetmap source skipped — no discovery location to anchor on')
         return []
       }
-      let places = []
-      try {
-        places = await search({ location, limit })
-      } catch (err) {
-        log.warn(`openstreetmap search failed: ${err?.message || err}`)
-        return []
-      }
+      const perAnchor = Math.max(1, Math.floor(limit / anchors.length))
       const out = []
       const seen = new Set()
-      for (const place of places || []) {
+      for (const anchor of anchors) {
         if (out.length >= limit) break
-        const prospect = mapPlaceToProspect(place, { source: 'openstreetmap' })
-        if (!prospect) continue
-        const key = prospect.external_id
-          ? `id:${prospect.external_id}`
-          : `name:${String(prospect.organization_name).trim().toLowerCase()}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        out.push(prospect)
+        let places = []
+        try {
+          places = await search({ location: anchor, limit: perAnchor })
+        } catch (err) {
+          log.warn(`openstreetmap search failed for "${anchor}": ${err?.message || err}`)
+          continue
+        }
+        for (const place of places || []) {
+          if (out.length >= limit) break
+          const prospect = mapPlaceToProspect(place, { source: 'openstreetmap' })
+          if (!prospect) continue
+          const key = prospect.external_id
+            ? `id:${prospect.external_id}`
+            : `name:${String(prospect.organization_name).trim().toLowerCase()}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          out.push(prospect)
+        }
       }
       return out
     },

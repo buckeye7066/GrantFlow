@@ -109,6 +109,7 @@ function placeholderFor(name) {
 
   if (upper === 'JOHN_PRIMARY_MAILBOX') return 'dr.johnwhite@axiombiolabs.org'
   if (upper === 'JOHN_FROM_ALIAS' || upper === 'JOHN_REPLY_TO') return 'Annie@axiombiolabs.org'
+  if (upper === 'YANA_TARGET_AREAS') return 'Bradley County, TN; Lorain County, OH; Erie County, OH'
   if (upper === 'JOHN_DISPLAY_NAME') return 'Annie | GrantFlow'
 
   return ''

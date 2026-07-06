@@ -483,6 +483,35 @@ async function loadOwnOrgKeys(db) {
 }
 
 /**
+ * Owner-directed geographic focus for prospect discovery. YANA_TARGET_AREAS is
+ * a semicolon-separated list of "Place, ST" strings, e.g.
+ * "Bradley County, TN; Lorain County, OH; Erie County, OH". When set:
+ *   - OpenStreetMap anchors on EACH listed area (instead of the operator's
+ *     own-org footprint fallback),
+ *   - ProPublica 990 is limited to the areas' states.
+ * Caller-pinned per-source args always win; empty/unset keeps prior behavior.
+ * Bounded (max 12 areas) so a config typo can't fan a run out indefinitely.
+ */
+function parseTargetAreas(explicit) {
+  const raw = Array.isArray(explicit)
+    ? explicit.join(';')
+    : String(explicit ?? process.env.YANA_TARGET_AREAS ?? '')
+  return raw.split(';').map((s) => s.trim()).filter(Boolean).slice(0, 12)
+}
+
+function targetAreaStates(areas) {
+  const out = []
+  for (const a of areas) {
+    const m = /,\s*([A-Za-z]{2})\s*$/.exec(a)
+    if (m) {
+      const st = m[1].toUpperCase()
+      if (!out.includes(st)) out.push(st)
+    }
+  }
+  return out
+}
+
+/**
  * Most common "City, State" of the operator's own organizations, used to bias
  * Google Maps' local prospect search. Returns null when nothing is known (Maps
  * then searches without a location bias). Best-effort — never throws.
@@ -558,9 +587,27 @@ export async function discoverProspects(db, {
     sharedArgs.pages = PROSPECT_PAGE_STEP
   }
 
+  // Owner-directed geographic focus (YANA_TARGET_AREAS / providerArgs.targetAreas).
+  const targetAreas = parseTargetAreas(sharedArgs.targetAreas)
+  delete sharedArgs.targetAreas
+  if (targetAreas.length) {
+    result.target_areas = targetAreas
+    if (sourceNames.includes('openstreetmap') &&
+        !bySource.openstreetmap?.location && !bySource.openstreetmap?.locations) {
+      bySource.openstreetmap = { ...(bySource.openstreetmap || {}), locations: targetAreas }
+    }
+    const areaStates = targetAreaStates(targetAreas)
+    if (areaStates.length && sourceNames.includes('propublica_990') &&
+        sharedArgs.states === undefined && !bySource.propublica_990?.states) {
+      bySource.propublica_990 = { ...(bySource.propublica_990 || {}), states: areaStates }
+    }
+  }
+
   // OpenStreetMap (free, keyless) anchors geo-local discovery on the operator's
-  // own org footprint (city/state) when the caller didn't pin a location.
-  if (sourceNames.includes('openstreetmap') && !bySource.openstreetmap?.location) {
+  // own org footprint (city/state) when the caller didn't pin a location or
+  // target areas.
+  if (sourceNames.includes('openstreetmap') &&
+      !bySource.openstreetmap?.location && !bySource.openstreetmap?.locations) {
     const geo = await loadOwnGeography(db)
     if (geo) bySource.openstreetmap = { ...(bySource.openstreetmap || {}), location: geo }
   }

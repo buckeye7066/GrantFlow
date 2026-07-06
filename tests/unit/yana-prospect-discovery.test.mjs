@@ -243,3 +243,51 @@ test('runYanaDiscovery surfaces prospect funnel in the summary', async () => {
   assert.equal(result.candidates_qualified, 2, 'qualified prospects count toward the qualified pool John consumes')
   _resetProspectSources()
 })
+
+test('YANA_TARGET_AREAS focuses OSM anchors + ProPublica states (owner geographic focus)', async () => {
+  const db = makeDb()
+  _resetProspectSources()
+  const captured = { osm: null, propublica: null }
+  registerProspectSource('openstreetmap', {
+    discover: async (args) => { captured.osm = args; return [] },
+  })
+  registerProspectSource('propublica_990', {
+    discover: async (args) => { captured.propublica = args; return [] },
+  })
+
+  const res = await discoverProspects(db, {
+    allowLiveWeb: true,
+    sources: ['openstreetmap', 'propublica_990'],
+    enricher: { enabled: false, enrich: async () => ({ ok: false }) },
+    providerArgs: {
+      queries: [{ q: 'x' }],
+      targetAreas: 'Bradley County, TN; Lorain County, OH; Erie County, OH',
+    },
+  })
+
+  assert.deepEqual(res.target_areas, ['Bradley County, TN', 'Lorain County, OH', 'Erie County, OH'])
+  assert.deepEqual(captured.osm.locations, ['Bradley County, TN', 'Lorain County, OH', 'Erie County, OH'])
+  assert.deepEqual(captured.propublica.states, ['TN', 'OH'])
+  _resetProspectSources()
+})
+
+test('caller-pinned per-source geography WINS over target areas', async () => {
+  const db = makeDb()
+  _resetProspectSources()
+  const captured = { osm: null }
+  registerProspectSource('openstreetmap', {
+    discover: async (args) => { captured.osm = args; return [] },
+  })
+  await discoverProspects(db, {
+    allowLiveWeb: true,
+    sources: ['openstreetmap'],
+    enricher: { enabled: false, enrich: async () => ({ ok: false }) },
+    providerArgs: {
+      targetAreas: 'Bradley County, TN',
+      bySource: { openstreetmap: { location: 'Pinned City, GA' } },
+    },
+  })
+  assert.equal(captured.osm.location, 'Pinned City, GA')
+  assert.equal(captured.osm.locations, undefined)
+  _resetProspectSources()
+})
