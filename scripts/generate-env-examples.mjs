@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -8,26 +9,32 @@ function isTextFile(p) {
   return /\.(cjs|mjs|js|jsx|ts|tsx)$/.test(p)
 }
 
-function walk(dir) {
-  const out = []
-  const entries = fs.readdirSync(dir, { withFileTypes: true })
-  for (const ent of entries) {
-    const full = path.join(dir, ent.name)
-    if (ent.isDirectory()) {
-      // Skip build/vendor/tooling dirs. `.cursor` holds vendored editor tooling
-      // (Impeccable skills, rules) whose own IMPECCABLE_* / CURSOR_* env
-      // references are NOT GrantFlow app config and must not leak into the app's
-      // .env.example. `.git` is internal state. (This comment deliberately omits
-      // the env-access syntax so the generator does not scan ITSELF as a source.)
-      if (
-        ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'build' ||
-        ent.name === 'coverage' || ent.name === '.cursor' || ent.name === '.git'
-      ) continue
-      out.push(...walk(full))
-      continue
-    }
-    if (ent.isFile() && isTextFile(full)) out.push(full)
-  }
+/**
+ * Enumerate files to scan via `git ls-files` rather than a hand-walked,
+ * hand-denylisted directory tree. CI only ever sees committed content, so
+ * scanning anything else (untracked scratch scripts, stray duplicate
+ * checkouts like GrantFlow-public-audit/, .claude/worktrees/<name>/ nested
+ * agent scratch, ...) risks a local run picking up env vars a clean CI
+ * checkout never has, and the generated file permanently disagreeing with
+ * what the release gate expects. A denylist has to be updated by hand every
+ * time a new kind of stray directory shows up (this repo has already hit
+ * that three times); tracking git's own notion of "what belongs in this
+ * repo" doesn't.
+ *
+ * One exception: `.cursor/skills/impeccable/` AND `.claude/skills/impeccable/`
+ * ARE tracked (force-added past their own gitignore entries -- the same
+ * vendored editor tooling, mirrored for both editors), so git ls-files alone
+ * would still pull in their IMPECCABLE_* / CURSOR_* / HOME / USERPROFILE env
+ * references. Those aren't GrantFlow app config, so both stay explicitly
+ * excluded even though they're (partially) tracked.
+ */
+function walk() {
+  const out = execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8' })
+    .split('\n')
+    .filter(Boolean)
+    .filter((rel) => !rel.startsWith('.cursor/') && !rel.startsWith('.claude/'))
+    .filter(isTextFile)
+    .map((rel) => path.join(repoRoot, rel))
   return out
 }
 
@@ -125,7 +132,7 @@ function renderEnvExample({ title, lines }) {
  * without writing to disk and compare against the checked-in versions.
  */
 export function buildOutputs() {
-  const files = walk(repoRoot)
+  const files = walk()
 
   const backendVars = new Set()
   const frontendVars = new Set()
