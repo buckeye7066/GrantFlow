@@ -519,12 +519,15 @@ test('computeMatchDecision: rich profile + catalog row without need types scores
     keywords: '[]',
   }
   const decision = computeMatchDecision(profile, opp)
-  // With weighted scoring, a generic directory with no content signals scores lower
-  // than before, but must still produce a meaningful score (not zero) for a rich profile.
+  // Need-anchored scale: a directory that names NO content addresses none of
+  // the profile's needs, so it honestly scores near the floor — it must remain
+  // non-zero and reviewable (never hard-rejected), but it no longer claims a
+  // surfaceable coverage number. Directories surface through their own lane.
   assert.ok(
-    decision.score >= 25,
-    `Expected score ≥25 for full profile + broad curated row, got ${decision.score}`,
+    decision.score > 0,
+    `Expected non-zero score for full profile + broad curated row, got ${decision.score}`,
   )
+  assert.notEqual(decision.decision, 'REJECT', 'content-free directory is reviewable, not rejected')
   assert.ok(
     decision.score > 0,
     `Expected positive score, got ${decision.score}`,

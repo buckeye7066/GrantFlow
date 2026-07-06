@@ -35,8 +35,14 @@ import { inferCandidateProfile } from '../../crawler-os/crawlerVocabulary.js'
 
 const log = createLogger('coverage:surfacedEligibility')
 
-/** Force a demoted match below the display floor so it stops surfacing. */
-export const SURFACED_DEMOTE_SCORE = 40
+/**
+ * Force a demoted match below the display floor so it stops surfacing.
+ * Need-anchored scale (owner directive 2026-07-06): display floor
+ * (DISCOVERY_MIN_SCORE_FLOOR) = 25, REVIEW band starts at 15 — so 10 keeps a
+ * demoted row visible in audits but never on a card. Mirrors
+ * STUDENT_AID_DEMOTE_SCORE in startup/enforceInvariants.js.
+ */
+export const SURFACED_DEMOTE_SCORE = 10
 
 function parseListMaybe(v) {
   if (v === null || v === undefined) return []
@@ -131,8 +137,8 @@ export async function reScoreSurfacedIneligible(db, {
     if (!_thesis) ({ buildThesisForProfile: _thesis } = await import('../crawlerOsService.js'))
     if (!_score) ({ computeMatchDecision: _score } = await import('../../crawler-os/matchEngine.js'))
     ;({ SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } = await import('../../config/matchSurfacing.js'))
-    const { DEFAULT_MIN_SCORE } = await import('../../config/matchThresholds.js')
-    floor = Number(DEFAULT_MIN_SCORE) || 75
+    const { DEFAULT_MIN_SCORE, DISCOVERY_MIN_SCORE_FLOOR } = await import('../../config/matchThresholds.js')
+    floor = Number(DEFAULT_MIN_SCORE) || DISCOVERY_MIN_SCORE_FLOOR
   } catch (err) {
     log.warn('surfacedEligibility deps unavailable (non-fatal)', { error: err?.message })
     return { scanned: 0, demoted: 0, profilesAffected: 0, affected: [], enforced: false, skipped: 'deps' }

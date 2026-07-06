@@ -86,7 +86,8 @@ function rejected(opp) {
  * }}
  */
 export function assembleFundingResults(scored = [], opts = {}) {
-  const minScore = Number.isFinite(opts.minScore) ? Math.max(0, Math.min(100, opts.minScore)) : 50
+  // Fallback default aligned to the need-anchored discovery bar (25).
+  const minScore = Number.isFinite(opts.minScore) ? Math.max(0, Math.min(100, opts.minScore)) : 25
   const maxResults = Math.max(1, Math.min(200, Number(opts.maxResults) || 50))
   const geoExpansionPool = Array.isArray(opts.geoExpansionPool) ? opts.geoExpansionPool : []
   const profileGaps = Array.isArray(opts.profileGaps) ? opts.profileGaps : []

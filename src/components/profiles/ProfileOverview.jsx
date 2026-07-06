@@ -1399,6 +1399,7 @@ export default function ProfileOverview({
               profileId={profile?.id}
               profileName={profile?.display_name || profile?.organization_name || ""}
               formattedTotal={formattedFundsTotal}
+              unvaluedCount={profile?.pipeline_unvalued_count ?? 0}
               cardClassName={theme.pipelineCard}
               labelClassName={theme.pipelineLabel}
             />

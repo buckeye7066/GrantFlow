@@ -45,6 +45,10 @@ import {
   ACCEPT_SCORE, REVIEW_SCORE,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
   NEED_FULL_CREDIT_HITS,
+  // Need-anchored scale (owner directive 2026-07-06)
+  NEED_DENOMINATOR_CAP, NO_NEEDS_TOPICAL_CAP, FIT_EVIDENCE_HALF_CREDIT,
+  ELIG_MATCH_FACTOR, ELIG_UNKNOWN_FACTOR, ELIG_MISMATCH_FACTOR,
+  GEO_MATCH_FACTOR, GEO_UNKNOWN_FACTOR, GEO_MISMATCH_FACTOR,
   CONF_W_SOURCE, CONF_W_ACTIONABILITY, CONF_W_ELIGIBILITY, CONF_W_FRESHNESS,
   CONFIDENCE_SOURCE_TRUST_SCORE,
   CONFIDENCE_ACTIONABLE_FULL, CONFIDENCE_ACTIONABLE_NONE,
@@ -785,6 +789,33 @@ const PRO_BONO_OPPORTUNITY_TYPES = new Set([
   'legal_aid', 'clinic_service', 'equipment_donation',
 ])
 
+// Organization-like profile entity types for the org × individual-assistance
+// guard: an organization is never the RECIPIENT of a person/household benefit
+// program (SSI, SNAP, emergency rent assistance, eldercare directories…).
+const ORG_LIKE_ENTITY_TYPES = new Set([
+  'nonprofit', 'organization', 'church', 'ministry', 'school', 'government',
+  'business', 'small_business', 'volunteer_fire_department', 'farm',
+])
+
+// Person/household assistance-program signature. Deliberately NARROW (named
+// benefit programs + person-directed emergency assistance phrasing): as an
+// org-side penalty a broad "assistance" match would wrongly cap real org
+// grants like FEMA "Hazard Mitigation Assistance" or TA-provider funding.
+const RE_INDIVIDUAL_ASSISTANCE = new RegExp(
+  [
+    'supplemental security income', '\\bssi\\b', '\\bssdi\\b',
+    'social security (?:disability|survivors|benefits)',
+    '\\bmedicare\\b', '\\bmedicaid\\b', '\\bsnap\\b', '\\bwic\\b', '\\bliheap\\b',
+    'food stamp', 'food bank', 'food pantry', 'meals on wheels',
+    'rent(?:al)? assistance', 'utility assistance', 'energy assistance',
+    'emergency (?:rent|rental|financial|shelter|housing) assistance',
+    'help paying bills', 'help with rent',
+    '\\b211\\b', 'eldercare locator', 'area agency on aging',
+    'for individuals and families',
+  ].join('|'),
+  'i',
+)
+
 const SERVICE_FUNDING_TYPES = new Set(['service', 'cost_coverage', 'referral'])
 
 const AMBIGUOUS_SINGLE_WORDS = new Set([
@@ -1019,8 +1050,13 @@ export function isStudentAidOpportunity(opportunity, oppNorm) {
   if (RE_STUDENT_AID_SIGNAL.test(oppText)) return true
   const oppType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
   if (['portal', 'referral', 'school_portal'].includes(oppType) && /\bscholarship\b/.test(oppText)) return true
+  // Precise categories only: bare 'education' is NOT student aid (churches,
+  // nonprofits, and workforce programs run education work). On the
+  // need-anchored scale this classifier feeds the ELIG_MISMATCH crush factor,
+  // so over-breadth here zeroes legitimate education-adjacent grants for every
+  // non-student profile.
   const cats = safeParseArrayField(opportunity?.categories, []).map((c) => String(c).toLowerCase())
-  return cats.some((c) => ['student_aid', 'cost_of_attendance', 'scholarship', 'education'].includes(c))
+  return cats.some((c) => ['student_aid', 'cost_of_attendance', 'scholarship'].includes(c))
 }
 
 function normalizeState(value) {
@@ -2382,12 +2418,32 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
         usable_for_housing: housingClass.usableForHousing ? 1 : 0,
         refund_potential: housingClass.refundPotential ? 1 : 0 }
     : opportunity
-  const oppNorm = profileNorm ? normalizeOpportunity(effectiveOpp) : null
+  // Computed UNCONDITIONALLY (not only when a full profileContext was passed):
+  // the population caps, org×individual-assistance guard, and need-anchored
+  // coverage all read oppNorm, and they must hold for plain-profile callers too.
+  const oppNorm = normalizeOpportunity(effectiveOpp)
 
-  const profileIsStudent = Boolean(profileNorm?.isStudent)
+  // Explicit population/recipient mismatches collected here become the
+  // ELIG_MISMATCH_FACTOR gate in the need-anchored formula below (the legacy
+  // rawScore caps are kept so the topical-evidence fallback stays bounded).
+  const eligibilityMismatches = []
+
+  // Plain-profile callers (no sections/profileNorm) must still be recognized
+  // as students — otherwise the non-student × student-aid mismatch gate crushes
+  // a student's own scholarships.
+  const plainProfileType = normalizeString(
+    effectiveProfile?.primary_type || effectiveProfile?.profile_type || effectiveProfile?.applicant_type || '',
+  )
+  const plainApplicantTypes = safeParseArrayField(effectiveProfile?.applicant_types, [])
+    .map((t) => normalizeString(t))
+  const profileIsStudent = Boolean(profileNorm?.isStudent) ||
+    Boolean(effectiveProfile?.is_student) ||
+    ['student', 'high_school_student', 'college_student'].includes(plainProfileType) ||
+    plainApplicantTypes.includes('student')
   const wantsStudentAid = profileWantsStudentAid(profileNorm, effectiveSignals)
   if (!profileIsStudent && !wantsStudentAid && isStudentAidOpportunity(opportunity, oppNorm)) {
     rawScore = Math.min(rawScore, STUDENT_AID_NONSTUDENT_CAP)
+    eligibilityMismatches.push('student_aid_nonstudent')
     housingBonusReasons.push(`Non-student profile × student-aid opportunity (capped at ${STUDENT_AID_NONSTUDENT_CAP})`)
   }
 
@@ -2627,10 +2683,12 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // borderline match but cannot eliminate one.
   const preferenceSignals = opts?.preferenceSignals ?? null
   let behaviorNudgeReason = null
+  let behaviorNudgeValue = 0
   if (preferenceSignals) {
     const { nudge, reason } = computePreferenceNudge(preferenceSignals, effectiveOpp)
     if (nudge !== 0) {
       rawScore = rawScore + nudge
+      behaviorNudgeValue = nudge
       behaviorNudgeReason = reason
       housingBonusReasons.push(reason)
     }
@@ -2655,6 +2713,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       seniorNeedList.some((n) => /aging|senior|elder|caregiv|respite/.test(n))
     if (!hasSeniorSignal) {
       rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      eligibilityMismatches.push('senior_program_no_senior_signal')
       housingBonusReasons.push(`No senior/caregiver signal × senior-services program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
     }
   }
@@ -2673,6 +2732,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       dvNeedList.some((n) => /domestic|violence|victim|abuse/.test(n))
     if (!hasDvSignal) {
       rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      eligibilityMismatches.push('dv_program_no_dv_signal')
       housingBonusReasons.push(`No domestic-violence signal × victim-services program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
     }
   }
@@ -2685,15 +2745,197 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       agNeedList.some((n) => /agricultur|farm|ranch|livestock|crop/.test(n))
     if (!hasAgSignal) {
       rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      eligibilityMismatches.push('farmer_program_no_ag_signal')
       housingBonusReasons.push(`No agriculture signal × producers-only program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
     }
   }
 
+  // ── Org × individual-assistance guard (recipient-type mismatch) ──
+  // An organization profile (church, nonprofit, business, school…) is never
+  // the RECIPIENT of a person/household benefit program — SSI, SNAP, emergency
+  // rent assistance, 211/eldercare directories, scholarships. These were the
+  // "church qualifies for emergency rent help at 96" class. The guard fires
+  // only when the opportunity does NOT explicitly allow organization
+  // applicants (an org CAN win a grant to OPERATE an assistance program —
+  // those announcements state org eligibility and pass untouched).
+  const profileEntityTypeForGuards = normalizeString(
+    profileNorm?.entityType || resolveApplicantType(effectiveProfile) || '',
+  )
+  const profileIsOrgLike =
+    ORG_LIKE_ENTITY_TYPES.has(profileEntityTypeForGuards) ||
+    Boolean(profileNorm?.isNonprofit) || Boolean(profileNorm?.isBusiness)
+  {
+    if (profileIsOrgLike && !verificationTargetsOrganizations(oppNorm)) {
+      const oppTypeForGuard = String(effectiveOpp?.funding_category || opportunity?.opportunity_type || '').toLowerCase()
+      const looksLikeIndividualAssistance =
+        ['benefit', 'benefit_program'].includes(oppTypeForGuard) ||
+        RE_INDIVIDUAL_ASSISTANCE.test(oppText) ||
+        isStudentAidOpportunity(opportunity, oppNorm)
+      if (looksLikeIndividualAssistance) {
+        rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+        eligibilityMismatches.push('org_profile_individual_assistance')
+        housingBonusReasons.push('Organization profile × person/household assistance program (recipient-type mismatch)')
+      }
+    }
+  }
+
+  // ══ NEED-ANCHORED FINAL SCORE (owner directive 2026-07-06) ══
+  // score = needCoverage% × eligibilityFactor × geoFactor. The legacy weighted
+  // rawScore above survives ONLY as bounded topical evidence for profiles with
+  // no declared needs. See backend/config/matchThresholds.js for the scale.
+  const canonicalOppNormForExplain = oppNorm
+  const canonicalNeedForExplain =
+    profileNorm && canonicalOppNormForExplain
+      ? calculateNeedAlignment(profileNorm, canonicalOppNormForExplain)
+      : { matchedNeeds: [] }
+
+  // Which declared needs does this opportunity address? Union of the canonical
+  // need alignment and per-need synonym hits against the opportunity text.
+  const oppKwsForCoverage = safeParseArrayField(opportunity?.keywords, [])
+  const oppCatsForCoverage = safeParseArrayField(opportunity?.categories, [])
+  const oppSignalsForCoverage = [...oppKwsForCoverage, ...oppCatsForCoverage].map((t) => String(t).toLowerCase())
+  // WHAT counts as "the profile's needs" for coverage:
+  //   - individuals/students/families: the collected need list (declared +
+  //     normalized + signal-derived), unchanged.
+  //   - ORGANIZATIONS: an org's fundable needs are what it DOES — its explicit
+  //     needs plus its programs_services focus areas. The signal-derived need
+  //     list for a needs-silent org is person-benefit boilerplate (a fire
+  //     department "needing" utilities/food/cash assistance), which both
+  //     misses the org's real mission fit and hands person-benefit programs a
+  //     phantom need overlap.
+  let coverageNeeds = profileNeedsForBoost
+  if (profileIsOrgLike) {
+    const explicitNeeds = safeParseArrayField(effectiveProfile?.needs, [])
+      .map((n) => String(n).toLowerCase().trim()).filter(Boolean)
+    const focusAreaNeeds = profileInterestsList
+      .map((n) => String(n).toLowerCase().trim())
+      .filter((n) => n.length >= 3 && !AMBIGUOUS_SINGLE_WORDS.has(n))
+    const orgNeeds = [...new Set([...explicitNeeds, ...focusAreaNeeds])]
+    if (orgNeeds.length > 0) coverageNeeds = orgNeeds
+  }
+
+  // Graded per-need credit:
+  //   1.0 — the need itself, its spaced form, or a table synonym appears
+  //         (a real, on-topic hit: "fire_equipment" → "fire equipment").
+  //   0.5 — only a single WORD of a multi-word need appears ("education" out
+  //         of "continuing_education" in a tech-corp grant) — related, not
+  //         the need itself. Prevents word fragments from claiming full needs.
+  const matchedNeedSet = new Set(
+    (Array.isArray(canonicalNeedForExplain.matchedNeeds) ? canonicalNeedForExplain.matchedNeeds : [])
+      .map((n) => String(n).toLowerCase())
+      .filter((n) => coverageNeeds.includes(n)),
+  )
+  let needCreditTotal = matchedNeedSet.size
+  const textHas = (syn) =>
+    oppText.includes(syn) ||
+    oppSignalsForCoverage.some((signal) => signal.includes(syn) || syn.includes(signal))
+  for (const rawNeed of coverageNeeds) {
+    if (matchedNeedSet.has(rawNeed)) continue
+    const spaced = rawNeed.replace(/[_-]+/g, ' ')
+    // Direct hit on the need itself → full credit.
+    if (textHas(rawNeed) || (spaced !== rawNeed && textHas(spaced))) {
+      matchedNeedSet.add(rawNeed)
+      needCreditTotal += 1
+      continue
+    }
+    // Synonym-table evidence: ≥2 distinct synonym hits = the need is really
+    // addressed (full); a LONE generic synonym ("education" out of the
+    // professional_development table hitting a tech-corp grant) = related,
+    // not the need itself (half).
+    const synHits = (NEED_SYNONYMS[rawNeed] || []).filter((syn) => textHas(syn)).length
+    if (synHits >= 2) {
+      matchedNeedSet.add(rawNeed)
+      needCreditTotal += 1
+      continue
+    }
+    if (synHits === 1) {
+      matchedNeedSet.add(rawNeed)
+      needCreditTotal += 0.5
+      continue
+    }
+    // Word fragments of a multi-word need ("equipment" out of
+    // "fire_equipment") → half credit.
+    const words = spaced.split(/\s+/).filter((w) => w.length >= 4 && !AMBIGUOUS_SINGLE_WORDS.has(w))
+    if ((words.length > 1 || (words.length === 1 && words[0] !== spaced)) && words.some((w) => textHas(w))) {
+      matchedNeedSet.add(rawNeed)
+      needCreditTotal += 0.5
+    }
+  }
+
+  // Specialized fit evidence (the former boost stack + demographic alignment)
+  // is worth at most HALF of one main-need credit.
+  const fitEvidencePoints = housingBonusReasons.reduce((sum, reason) => {
+    const m = String(reason).match(/\+(\d+)/)
+    return sum + (m ? Number(m[1]) : 0)
+  }, 0) + (elig.demoBonus || 0)
+  const hasFitEvidence = fitEvidencePoints > 0
+
+  const totalDeclaredNeeds = coverageNeeds.length
+  const needDenominator = Math.max(1, Math.min(totalDeclaredNeeds, NEED_DENOMINATOR_CAP))
+  let needCoverage
+  if (totalDeclaredNeeds === 0) {
+    // No declared needs: SCALED topical evidence (rawScore × cap/100), so a
+    // better-aligned source still outranks a generic one, but an empty profile
+    // can never exceed NO_NEEDS_TOPICAL_CAP ("half my needs met" is unclaimable
+    // when no needs are declared).
+    needCoverage = Math.max(0, Math.min(100, rawScore)) * (NO_NEEDS_TOPICAL_CAP / 100)
+  } else {
+    // Pure percentage when declared needs match (so "2 of 4" reads exactly
+    // 50). Specialized fit evidence alone (GPA×merit, faith, talent, …) is a
+    // FALLBACK worth half of one main-need credit — it can surface a source,
+    // it can never inflate a real coverage number.
+    const credits = needCreditTotal > 0
+      ? Math.min(needDenominator, needCreditTotal)
+      : (hasFitEvidence ? FIT_EVIDENCE_HALF_CREDIT : 0)
+    needCoverage = (credits / needDenominator) * 100
+  }
+
+  // MISMATCH factor is reserved for the PRECISE detectors (population caps +
+  // org×individual-assistance). The text-based "Type mismatch (soft)" check has
+  // known recall gaps (an SDVOSB grant "mentions" small business without the
+  // matcher confirming it), so it gates at UNKNOWN, mirroring its old soft
+  // penalty — never at the crush factor.
+  const eligFactor = eligibilityMismatches.length > 0
+    ? ELIG_MISMATCH_FACTOR
+    : (elig.applicantTypeMatch ? ELIG_MATCH_FACTOR : ELIG_UNKNOWN_FACTOR)
+
+  const GEO_MISMATCH_TIERS = new Set(['mismatch', 'soft_mismatch', 'title_state_mismatch'])
+  const geoFactor = GEO_MISMATCH_TIERS.has(geo.tier)
+    ? GEO_MISMATCH_FACTOR
+    : (geo.tier === 'unknown' ? GEO_UNKNOWN_FACTOR : GEO_MATCH_FACTOR)
+
+  // Behavior nudge (soft preference learning) still tips borderline scores.
+  // For no-needs profiles it already flowed through rawScore.
+  const anchoredScore = needCoverage * eligFactor * geoFactor +
+    (totalDeclaredNeeds > 0 ? behaviorNudgeValue : 0)
+
   // ── Floor guarantee: validated opportunities always score ≥ SCORE_FLOOR ──
-  const finalScore = Math.max(SCORE_FLOOR, Math.min(100, rawScore))
+  const finalScore = Math.max(SCORE_FLOOR, Math.min(100, Math.round(anchoredScore)))
 
   // Computed once; reused by the reasons list and the scoreBreakdown below.
   const amountEligible = amountInRange(effectiveProfile?.funding_amount_needed, opportunity)
+
+  // ── Plain-language score explanation (the score IS this sentence) ──
+  if (totalDeclaredNeeds > 0) {
+    reasons.push(
+      `Addresses ${matchedNeedSet.size} of the profile's ${needDenominator} main need${needDenominator === 1 ? '' : 's'}` +
+      `${hasFitEvidence ? ' (plus specialized fit signals)' : ''} — ${Math.round(needCoverage)}% need coverage`,
+    )
+  } else {
+    reasons.push(
+      `Profile lists no needs yet — showing topical relevance only (capped at ${NO_NEEDS_TOPICAL_CAP})`,
+    )
+  }
+  if (eligFactor === ELIG_MISMATCH_FACTOR) {
+    reasons.push('Eligibility mismatch — this source targets a different kind of applicant (score heavily reduced)')
+  } else if (eligFactor === ELIG_UNKNOWN_FACTOR) {
+    reasons.push('Eligibility not confirmed by the source (score slightly reduced)')
+  }
+  if (geoFactor === GEO_MISMATCH_FACTOR) {
+    reasons.push('Serves a different area than this profile (score heavily reduced)')
+  } else if (geoFactor === GEO_UNKNOWN_FACTOR) {
+    reasons.push('Service area unknown (score slightly reduced)')
+  }
 
   // Build human-readable reasons
   if (geo.tier === 'zip') reasons.push('Geography: ZIP match')
@@ -2728,18 +2970,12 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   for (const r of housingBonusReasons) reasons.push(r)
 
   // Collect matched signals for match_explain.
-  // Use the canonical normalized opportunity/profile need alignment so Anya and
-  // result cards can explain exactly which profile needs matched.
-  const canonicalOppNormForExplain = oppNorm
-  const canonicalNeedForExplain =
-    profileNorm && canonicalOppNormForExplain
-      ? calculateNeedAlignment(profileNorm, canonicalOppNormForExplain)
-      : { matchedNeeds: [] }
-
+  // canonicalOppNormForExplain / canonicalNeedForExplain were computed above
+  // for the need-anchored score; matchedNeeds reports the FULL matched set
+  // (canonical alignment ∪ per-need synonym hits) so cards explain exactly
+  // which profile needs produced the coverage number.
   const matchedSignals = []
-  const matchedNeeds = Array.isArray(canonicalNeedForExplain.matchedNeeds)
-    ? canonicalNeedForExplain.matchedNeeds
-    : []
+  const matchedNeeds = [...matchedNeedSet]
   if (geo.tier && geo.tier !== 'mismatch' && geo.tier !== 'unknown' && geo.tier !== 'soft_mismatch' && geo.tier !== 'title_state_mismatch')
     matchedSignals.push(`geo:${geo.tier}`)
   if (elig.applicantTypeMatch) matchedSignals.push('applicant_type')
@@ -2792,6 +3028,17 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       ['refund_eligible', 'stipend', 'housing_direct'].includes(effectiveOpp?.funding_category)),
     fundingCategory: effectiveOpp?.funding_category ?? null,
     scoreBreakdown: {
+      // Need-anchored formula inputs (the score = coverage × elig × geo)
+      need_coverage: Math.round(needCoverage),
+      matched_needs_count: matchedNeedSet.size,
+      need_denominator: needDenominator,
+      total_declared_needs: totalDeclaredNeeds,
+      fit_evidence: hasFitEvidence ? FIT_EVIDENCE_HALF_CREDIT : 0,
+      eligibility_factor: eligFactor,
+      geo_factor: geoFactor,
+      eligibility_mismatches: eligibilityMismatches.length ? eligibilityMismatches : undefined,
+      topical_evidence: Math.round(Math.max(0, Math.min(100, rawScore))),
+      // Legacy component subscales (evidence extractors; no longer summed)
       need_component: need.subscale,
       eligibility_component: elig.subscale,
       geo_component: geo.subscale,
@@ -2870,7 +3117,12 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
     return { ...opp, score, confidence, confidence_reasons, confidence_band, reasons, match_explain }
   })
 
-  scored.sort((a, b) => b.score - a.score)
+  // Primary order: need coverage (the score). Tie-break: topical evidence —
+  // two sources covering the same needs still rank by specialized alignment
+  // (faith×faith-based, SDVOSB×veteran-owned, …) without inflating the
+  // interpretable percentage.
+  const topicalOf = (r) => Number(r.match_explain?.scoreBreakdown?.topical_evidence) || 0
+  scored.sort((a, b) => b.score - a.score || topicalOf(b) - topicalOf(a))
 
   const requestedMin = typeof opts.minScore === 'number' ? opts.minScore : 0
   const strictMinScore = opts.strictMinScore === true
@@ -3146,20 +3398,36 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
+  // Need-anchored copy: the score IS need coverage after eligibility/geography
+  // gates, so the explanation states that in plain language.
+  //
+  // Conservative applicability rule (was implicit in the old additive model's
+  // eligibility penalties): a source that states NOTHING about who may apply
+  // never auto-ACCEPTs for an ORGANIZATION — org eligibility is too often
+  // restricted for silence to be treated as consent. Individuals keep the
+  // soft-match behavior (consumer programs rarely enumerate entity types).
+  if (score >= ACCEPT_SCORE && on.applicabilityUnknown && !isIndividualOrCaregiver) {
+    reasons.push('Source does not state who may apply — needs review before ACCEPT for a non-individual profile')
+    return {
+      decision: 'REVIEW',
+      explanation: `Covers about ${score}% of this profile's main needs, but the source does not state who may apply — confirm eligibility before pursuing.`,
+      reasons,
+    }
+  }
   if (score >= ACCEPT_SCORE) {
-    reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — strong match`)
-    return { decision: 'ACCEPT', explanation: `Score ${score}/100 indicates a strong match.`, reasons }
+    reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
+    return { decision: 'ACCEPT', explanation: `Covers about ${score}% of this profile's main needs (eligibility and location check out).`, reasons }
   }
 
   if (score >= REVIEW_SCORE) {
-    reasons.push(`Score ${score} ≥ ${REVIEW_SCORE} — possible match`)
-    return { decision: 'REVIEW', explanation: `Score ${score}/100 warrants review; moderate match signals.`, reasons }
+    reasons.push(`Score ${score} ≥ ${REVIEW_SCORE} — covers part of the profile's needs`)
+    return { decision: 'REVIEW', explanation: `Covers about ${score}% of this profile's main needs — worth a look, not a strong fit.`, reasons }
   }
 
-  reasons.push(`Score ${score} < ${REVIEW_SCORE} — weak match; keep for review instead of discarding`)
+  reasons.push(`Score ${score} < ${REVIEW_SCORE} — little or no need coverage; keep reviewable, low score alone is not hard ineligibility`)
   return {
     decision: 'REVIEW',
-    explanation: `Score ${score}/100 is weak, but the opportunity remains reviewable because low score alone is not hard ineligibility.`,
+    explanation: `Covers little or none of this profile's needs (${score}%). Kept reviewable because a low score alone is not hard ineligibility.`,
     reasons,
   }
 }

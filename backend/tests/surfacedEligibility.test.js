@@ -57,7 +57,8 @@ describe('reScoreSurfacedIneligible', () => {
     expect(res.demoted).toBe(1)
     const row = db.prepare('SELECT match_decision, match_score FROM profile_opportunity_matches WHERE id=?').get(mid)
     expect(row.match_decision).toBe('reject')
-    expect(row.match_score).toBeLessThan(75)
+    // Below the display floor (25, need-anchored scale) so it stops surfacing.
+    expect(row.match_score).toBeLessThan(25)
   })
 
   it('leaves a REVIEW-band (below-floor) match ALONE — recall preserved', async () => {
@@ -79,8 +80,9 @@ describe('reScoreSurfacedIneligible', () => {
 
   it('ignores a match that is NOT currently surfacing (review below floor already hidden)', async () => {
     const db = makeDb()
-    // decision review + score 50 => not surfacing => not a candidate even though scorer would reject.
-    addMatch(db, { title: 'REJECTME Buried', score: 50, decision: 'review' })
+    // decision review + score 20 (below the 25 display floor, need-anchored
+    // scale) => not surfacing => not a candidate even though scorer would reject.
+    addMatch(db, { title: 'REJECTME Buried', score: 20, decision: 'review' })
     const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
     expect(res.demoted).toBe(0)
   })

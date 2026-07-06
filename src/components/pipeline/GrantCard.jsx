@@ -96,14 +96,19 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
   // Get match score - prefer 'match' over 'match_score' (preserve explicit 0)
   const matchScore = grant.match ?? grant.match_score ?? 0;
   const hasMatchScore = matchScore > 0;
+  // NULL/undefined score = the engine never evaluated this row (manual add /
+  // legacy import). It must read "Not scored", never like an endorsed match.
+  const isUnscored = (grant.match ?? grant.match_score) === null || (grant.match ?? grant.match_score) === undefined;
 
-  // Get match score color and label
+  // Get match score color and label (need-anchored scale: 75 strong / 50 good
+  // / 25 one full need / 15 partial — keep bands aligned with
+  // src/lib/matchDisplayThresholds.js MATCH_DISPLAY_TIERS).
   const getMatchScoreColor = (score) => {
     const label = scoreToMatchLabel(score);
-    if (score >= 80) return { bg: 'bg-emerald-500', text: 'text-white', label };
-    if (score >= 65) return { bg: 'bg-green-500', text: 'text-white', label };
-    if (score >= 50) return { bg: 'bg-blue-500', text: 'text-white', label };
-    if (score >= 35) return { bg: 'bg-amber-500', text: 'text-white', label };
+    if (score >= 75) return { bg: 'bg-emerald-500', text: 'text-white', label };
+    if (score >= 50) return { bg: 'bg-green-500', text: 'text-white', label };
+    if (score >= 25) return { bg: 'bg-blue-500', text: 'text-white', label };
+    if (score >= 15) return { bg: 'bg-amber-500', text: 'text-white', label };
     return { bg: 'bg-slate-400', text: 'text-white', label };
   };
 
@@ -177,10 +182,20 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
                 </Badge>
               </HelpTip>
           )}
+          {/* Unscored badge — a manually-added / never-evaluated row must not
+              look like an engine-endorsed match (the Eileen-Fisher class). */}
+          {isUnscored && (
+            <HelpTip text="Not scored: this source was added without a match evaluation (manual add or legacy import). GrantFlow has not verified it fits this profile — it will be scored automatically on the next maintenance pass.">
+              <Badge variant="outline" className="text-xs bg-slate-100 text-slate-600 border-slate-300 cursor-help">
+                <Target className="w-3 h-3 mr-1" />
+                Not scored
+              </Badge>
+            </HelpTip>
+          )}
           {/* Match Score Badge - PROMINENT */}
           {hasMatchScore && (
             <div className="flex items-center gap-1">
-              <HelpTip text={"Match Score: " + Math.round(matchScore) + "%. This shows how well this opportunity fits your profile based on location, demographics, interests, and eligibility criteria. 80%+ = Excellent, 65%+ = Good, 50%+ = Fair."}>
+              <HelpTip text={"Match Score: " + Math.round(matchScore) + "% — the share of this profile's main needs the source addresses, after eligibility and location checks. 75%+ = Strong, 50%+ = Good (half your main needs), 25%+ = one full need."}>
                 <Badge className={"text-xs font-bold " + matchColor.bg + " " + matchColor.text + " cursor-help"}>
                   <Target className="w-3 h-3 mr-1" />
                   {Math.round(matchScore)}% Match

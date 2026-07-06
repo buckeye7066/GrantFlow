@@ -199,9 +199,10 @@ test('individual profile: returns meaningful results from corpus', () => {
     `Individual should match ≥3 opps, got ${meaningful.length}: ${scored.map((s) => `${s.title?.substring(0, 30)}=${s.score}`).join(', ')}`,
   )
 
-  // Housing/utilities/food opps should rank high
+  // Housing/utilities/food opps should clear the need-anchored pipeline bar
+  // (25 = one fully-matched main need with clean gates).
   const housingScore = scored.find((s) => s.title.includes('Housing'))?.score ?? 0
-  assert.ok(housingScore >= 30, `Housing opp should score ≥30 for individual (got ${housingScore})`)
+  assert.ok(housingScore >= 25, `Housing opp should score ≥25 for individual (got ${housingScore})`)
 })
 
 test('student profile: returns meaningful education results', () => {

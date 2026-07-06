@@ -154,8 +154,24 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
 
   // Retain the scored candidates so the tuner can sweep the score floor across
   // the whole cohort WITHOUT re-crawling (the floor is applied after scoring).
+  //
+  // `topical` retains the LEGACY weighted-evidence subscale
+  // (scoreBreakdown.topical_evidence). Need-anchored split (2026-07-06): the
+  // final match score is need-coverage × eligibility/geo gates and no longer
+  // moves with W_* weight changes — weights act only inside this blend — so
+  // Amy's weight-tuning KEEP/REVERT validation measures quality on `topical`.
+  // Falls back to the final score for older results that lack the breakdown.
+  const topicalEvidenceOf = (r) => {
+    const v =
+      r?.topical_evidence ??
+      r?.scoreBreakdown?.topical_evidence ??
+      r?.match_explain?.scoreBreakdown?.topical_evidence ??
+      r?.match_explain?.score_breakdown?.topical_evidence
+    return Number.isFinite(Number(v)) ? Number(v) : num(r?.match_score)
+  }
   const candidates = recommendations.map((r) => ({
     score: num(r.match_score),
+    topical: topicalEvidenceOf(r),
     decision: decisionUpper(r.decision),
     title: r.title ?? null,
     generic: isGenericTitle(r.title),

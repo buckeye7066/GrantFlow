@@ -7,9 +7,10 @@
  * runAmyTraining():
  *   1. Generate varied synthetic profiles across categories (no real PII).
  *   2. Insert each (tagged synthetic + Sam-cleanable + traceable).
- *   3. Run a REAL crawler event for each profile at the 75% slider
- *      (floor = DEFAULT_MIN_SCORE) via runProfileDiscoveryLive, retaining the
- *      scored candidates. Mark each profile crawled_at.
+ *   3. Run a REAL crawler event for each profile at the discovery slider
+ *      (floor = DEFAULT_MIN_SCORE, need-anchored scale) via
+ *      runProfileDiscoveryLive, retaining the scored candidates. Mark each
+ *      profile crawled_at.
  *   4. MEASURE cohort crawler quality (coverage / zero / false-positive) and
  *      SWEEP the score floor over the cohort to find the best threshold.
  *   5. IMPROVE (when enabled): auto-apply the proven, bounded, reversible floor
@@ -25,7 +26,7 @@
 import { getDb } from '../../db/index.js'
 import { runProfileDiscoveryLive } from '../crawlerOsService.js'
 import { createLogger } from '../../utils/logger.js'
-import { DEFAULT_MIN_SCORE } from '../../config/matchThresholds.js'
+import { DEFAULT_MIN_SCORE, TOPICAL_EVIDENCE_STRONG_BAR } from '../../config/matchThresholds.js'
 import { newRunId, clampTtlHours } from './amyMetadata.js'
 import { generateScenarios, CATEGORY_IDS } from './syntheticProfileCatalog.js'
 import { createAmyProfile, cleanupAmyProfiles, markProfileCrawled } from './amyProfileStore.js'
@@ -44,7 +45,7 @@ const defaultLog = createLogger('services:amy:agent')
 /**
  * @param {object} options  (all optional)
  *   db, categories, perCategory, targetCount, dryRunDiscovery=true,
- *   floor (defaults DEFAULT_MIN_SCORE=75 — the slider), keepProfiles=false,
+ *   floor (defaults DEFAULT_MIN_SCORE — the slider, need-anchored scale), keepProfiles=false,
  *   ttlHours=48, runDiscovery, fetcher, logger, clock, writeArtifact, runId,
  *   improve=false (run the Anya→Sam chain + tuning), applyTuning=false (write
  *   the floor change), anyaApply=false, samApply=false, saveReport=true,
@@ -154,7 +155,7 @@ export async function runAmyTraining(options = {}) {
     }
 
     try {
-      // The 75% crawler event: at least one real discovery run per profile.
+      // The slider-floor crawler event: at least one real discovery run per profile.
       const result = await runDiscovery({ db, profileId, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher })
       evaluations.push(evaluateDiscovery(scenario, profileId, result, { runId }))
       // Only count it as crawled when discovery actually ran (not skipped).
@@ -252,11 +253,23 @@ export async function runAmyTraining(options = {}) {
   // unlike the floor (which we can re-score offline), changing weights/coverage
   // changes the scores/candidates themselves, so we must actually re-crawl.
   const sampleIds = crawledProfileIds.slice(0, Math.max(1, validationSampleSize))
-  const baselineQuality = cohortMetricsAtFloor(
-    evaluations.filter((e) => sampleIds.includes(e.profile_id)),
-    operatingFloor,
+  const sampleEvals = evaluations.filter((e) => sampleIds.includes(e.profile_id))
+  const baselineQuality = cohortMetricsAtFloor(sampleEvals, operatingFloor).quality_score
+  // NEED-ANCHORED SPLIT (owner directive 2026-07-06): the FINAL match score is
+  // need-coverage × eligibility/geo gates, so a W_* weight change no longer
+  // moves final scores at all — weights act only inside the topical-evidence
+  // blend (scoreBreakdown.topical_evidence, retained on candidates[].topical).
+  // Validating a WEIGHT change on final scores would therefore always show
+  // "no improvement" and auto-revert every change. The weight validator instead
+  // measures cohort quality on the topical subscale at the (legacy-scale)
+  // strong bar; coverage validation keeps the final-score lens, because adding
+  // sources changes the candidates themselves.
+  const baselineTopicalQuality = cohortMetricsAtFloor(
+    sampleEvals,
+    TOPICAL_EVIDENCE_STRONG_BAR,
+    { scoreKey: 'topical' },
   ).quality_score
-  async function recrawlQuality() {
+  async function recrawlQuality({ floor = operatingFloor, scoreKey = 'score' } = {}) {
     const reEvals = []
     for (const pid of sampleIds) {
       const scn = scenarioByProfile.get(pid)
@@ -268,7 +281,7 @@ export async function runAmyTraining(options = {}) {
         reEvals.push(evaluateDiscovery(scn, pid, null, { error: err?.message, runId }))
       }
     }
-    return { quality: cohortMetricsAtFloor(reEvals, operatingFloor).quality_score, evals: reEvals }
+    return { quality: cohortMetricsAtFloor(reEvals, floor, { scoreKey }).quality_score, evals: reEvals }
   }
 
   // ── IMPROVE: scoring weights (empirical re-crawl validation + auto-revert) ──
@@ -282,15 +295,17 @@ export async function runAmyTraining(options = {}) {
         const applied = await weightEditor.apply(wd.to, { now: clock() })
         weightTuning.applied = applied
         if (applied?.applied) {
-          const rv = await recrawlQuality()
-          if (rv.quality > baselineQuality) {
-            weightTuning.validation = { kept: true, baseline: baselineQuality, after: rv.quality }
+          // Topical lens (see the need-anchored split note above): weights only
+          // move scoreBreakdown.topical_evidence, never the final score.
+          const rv = await recrawlQuality({ floor: TOPICAL_EVIDENCE_STRONG_BAR, scoreKey: 'topical' })
+          if (rv.quality > baselineTopicalQuality) {
+            weightTuning.validation = { kept: true, lens: 'topical_evidence', baseline: baselineTopicalQuality, after: rv.quality }
             after = cohortMetricsAtFloor(rv.evals, operatingFloor)
-            logger.info('Amy kept scoring-weight change', { baseline: baselineQuality, after: rv.quality })
+            logger.info('Amy kept scoring-weight change', { baseline: baselineTopicalQuality, after: rv.quality, lens: 'topical_evidence' })
           } else {
             await weightEditor.restore(applied)
-            weightTuning.validation = { kept: false, reverted: true, baseline: baselineQuality, after: rv.quality }
-            logger.info('Amy reverted scoring-weight change (no improvement)', { baseline: baselineQuality, after: rv.quality })
+            weightTuning.validation = { kept: false, reverted: true, lens: 'topical_evidence', baseline: baselineTopicalQuality, after: rv.quality }
+            logger.info('Amy reverted scoring-weight change (no improvement)', { baseline: baselineTopicalQuality, after: rv.quality, lens: 'topical_evidence' })
           }
         }
       }

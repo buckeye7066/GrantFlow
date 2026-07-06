@@ -7,7 +7,7 @@ import {
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 // Choke point for pipeline-$ semantics: status list + per-grant value fallback
 // (amount_requested → amount_max → amount_min). Do not re-inline either here.
-import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, unvaluedCountSql } from '../config/pipelineValue.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stats')
@@ -79,10 +79,14 @@ async function computeDashboardStats(db, scope) {
     .get(...grantScopeParams))?.total ?? 0
 
   const pipelineStatusClause = `status IN (${PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')})`
-  const pipelineTotal = (await db
-    .prepare(`SELECT COALESCE(SUM(${pipelineValueSql('')}), 0) as total FROM grants
+  const pipelineRow = await db
+    .prepare(`SELECT COALESCE(SUM(${pipelineValueSql('')}), 0) as total,
+                     COALESCE(${unvaluedCountSql('')}, 0) as unvalued
+              FROM grants
               WHERE ${grantScopeSql} AND ${pipelineStatusClause}`)
-    .get(...grantScopeParams, ...PIPELINE_ACTIVE_STATUSES))?.total ?? 0
+    .get(...grantScopeParams, ...PIPELINE_ACTIVE_STATUSES)
+  const pipelineTotal = pipelineRow?.total ?? 0
+  const pipelineUnvaluedCount = pipelineRow?.unvalued ?? 0
 
   // opportunitiesFound is the real, currently-active funding catalog the user can
   // search — a genuine "X real opportunities available to find" figure, not a
@@ -98,6 +102,7 @@ async function computeDashboardStats(db, scope) {
     opportunitiesFound,
     grantsTotal,
     pipelineTotal,
+    pipelineUnvaluedCount,
     isRealData: true,
   }
 }

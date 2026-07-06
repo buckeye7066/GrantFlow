@@ -217,6 +217,11 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
               <div className="text-lg font-bold text-emerald-600">
                 {formatUsd(profile.pipeline_funds_total)}
               </div>
+              {Number(profile.pipeline_unvalued_count) > 0 && (
+                <div className="mt-0.5 text-[10px] leading-tight text-slate-500">
+                  +{profile.pipeline_unvalued_count} source{Number(profile.pipeline_unvalued_count) === 1 ? '' : 's'} w/o listed $
+                </div>
+              )}
             </div>
             <div className="text-center">
               <div className="mb-1 text-xs text-slate-600">Docs</div>

@@ -67,4 +67,23 @@ export function grantPipelineValue(grant) {
   return 0
 }
 
-export default { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue }
+/**
+ * SQL expression counting active-pipeline rows with NO derivable dollar value.
+ * "$0" and "no amount stated" are DIFFERENT facts: benefit programs (SSI,
+ * SNAP, LIHEAP) and directories have real value to the profile but no
+ * per-award figure, so a card that silently sums them as $0 reads as
+ * "qualifies for nothing". Surfaces MUST show this count alongside the total
+ * (e.g. "$32,250 + 51 sources without stated amounts").
+ *
+ * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
+ */
+export function unvaluedCountSql(alias = 'g') {
+  return `SUM(CASE WHEN ${pipelineValueSql(alias)} = 0 THEN 1 ELSE 0 END)`
+}
+
+/** JS twin of unvaluedCountSql for rows already in memory. */
+export function isUnvaluedGrant(grant) {
+  return grantPipelineValue(grant) === 0
+}
+
+export default { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue, unvaluedCountSql, isUnvaluedGrant }

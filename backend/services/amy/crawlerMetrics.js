@@ -20,13 +20,22 @@ function num(v) {
 
 /**
  * Compute crawler outcomes for ONE evaluation at a given score floor, using its
- * retained `candidates` (each { score, decision, generic }).
+ * retained `candidates` (each { score, topical, decision, generic }).
+ *
+ * `scoreKey` selects which retained candidate field the floor is applied to:
+ *   - 'score'   (default) — the FINAL need-anchored match score. Right lens for
+ *     floor sweeps and coverage validation (the floor gates final scores).
+ *   - 'topical' — the legacy weighted-evidence subscale
+ *     (scoreBreakdown.topical_evidence). Right lens for WEIGHT-tuning
+ *     validation: on the need-anchored scale the final score no longer moves
+ *     with W_* weight changes — weights act only inside the topical blend.
+ * Candidates missing the requested field fall back to `score`.
  *
  * @returns {{ qualified, accepted, falsePositives, covered }}
  */
-export function profileOutcomeAtFloor(evaluation, floor) {
+export function profileOutcomeAtFloor(evaluation, floor, { scoreKey = 'score' } = {}) {
   const candidates = Array.isArray(evaluation?.candidates) ? evaluation.candidates : []
-  const qualified = candidates.filter((c) => num(c.score) >= floor)
+  const qualified = candidates.filter((c) => num(c?.[scoreKey] ?? c?.score) >= floor)
   // A "real" qualified match = qualified AND not a generic/directory false-positive.
   const real = qualified.filter((c) => !c.generic)
   const falsePositives = qualified.filter((c) => c.generic)
@@ -49,7 +58,7 @@ export function profileOutcomeAtFloor(evaluation, floor) {
  */
 export const FALSE_POSITIVE_PENALTY = 0.6
 
-export function cohortMetricsAtFloor(evaluations, floor) {
+export function cohortMetricsAtFloor(evaluations, floor, { scoreKey = 'score' } = {}) {
   const evals = Array.isArray(evaluations) ? evaluations : []
   // Only profiles that actually produced scored candidates are scoreable; a
   // profile that was skipped/errored is tracked separately (it's a crawler
@@ -62,7 +71,7 @@ export function cohortMetricsAtFloor(evaluations, floor) {
   let totalQualified = 0
   let totalFalsePositives = 0
   for (const e of scoreable) {
-    const o = profileOutcomeAtFloor(e, floor)
+    const o = profileOutcomeAtFloor(e, floor, { scoreKey })
     if (o.covered) covered += 1
     if (o.falsePositives > 0) fpProfiles += 1
     totalQualified += o.qualified

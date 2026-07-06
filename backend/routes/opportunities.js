@@ -1722,8 +1722,9 @@ function buildMatchExplanation(profile, sections, opp) {
 
   // 5. Score context
   const matchScore = opp.match_score ?? opp.score ?? null
+  // Need-anchored scale: 75 = ~¾ of main needs, 50 = half, 15 = partial.
   const scoreContext = matchScore !== null
-    ? matchScore >= 70 ? 'Strong match' : matchScore >= 40 ? 'Moderate match' : 'Weak match'
+    ? matchScore >= 75 ? 'Strong match' : matchScore >= 50 ? 'Good match' : matchScore >= 15 ? 'Moderate match' : 'Weak match'
     : null
 
   return {

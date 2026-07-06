@@ -10,36 +10,100 @@
  */
 
 // ── Scoring ─────────────────────────────────────────────────────────────
+//
+// NEED-ANCHORED SCALE (owner directive 2026-07-06, supersedes the additive
+// weighted model): the match score IS the share of the profile's main needs
+// the opportunity addresses, gated by eligibility and geography:
+//
+//   score = round( needCoverage% × eligibilityFactor × geoFactor )
+//
+// So a 50 literally means "this source addresses about half of what the
+// profile needs, and the profile can actually apply, where it lives/serves."
+// A source that matches ZERO declared needs scores near the floor no matter
+// how national/generic/nonprofit-eligible it is. The old model's ~45 points
+// of administrative baseline (right entity type + right country) are gone.
 
 /** Minimum score any validated opportunity can receive (floor guarantee) */
 export const SCORE_FLOOR = 5
 
-/** Weighted component weights (must sum to 1.0) */
+/**
+ * Number of "main needs" the coverage denominator counts, so a profile that
+ * lists 10 needs is not punished: coverage is measured against
+ * min(totalNeeds, NEED_DENOMINATOR_CAP). One fully-matched main need on a
+ * 4+-need profile = 25.
+ */
+export const NEED_DENOMINATOR_CAP = 4
+
+/**
+ * Ceiling for profiles with NO declared needs: topical evidence alone
+ * (keywords/categories/facets) may score at most this, so an empty profile
+ * can never look like "half my needs are met".
+ */
+export const NO_NEEDS_TOPICAL_CAP = 40
+
+/**
+ * Specialized fit evidence (GPA×merit, faith×faith-based, housing-usable ×
+ * housing need, major/STEM×scholarship, talent, workforce, benefit-program
+ * alignment, population/mission) counts as at most HALF of one main-need
+ * credit — it refines coverage, it can no longer stack 40 bonus points.
+ */
+export const FIT_EVIDENCE_HALF_CREDIT = 0.5
+
+/** Eligibility gate factors (multiplicative). */
+export const ELIG_MATCH_FACTOR = 1.0     // opportunity confirms the profile's applicant type
+export const ELIG_UNKNOWN_FACTOR = 0.8   // opportunity silent / profile untyped — can't verify
+export const ELIG_MISMATCH_FACTOR = 0.15 // opportunity explicitly targets someone else
+
+/** Geography gate factors (multiplicative). */
+export const GEO_MATCH_FACTOR = 1.0      // serves the profile's area (zip→national tiers)
+export const GEO_UNKNOWN_FACTOR = 0.7    // location signals missing on either side
+export const GEO_MISMATCH_FACTOR = 0.3   // explicitly serves somewhere else
+
+/**
+ * LEGACY weighted component weights. The need-anchored formula above replaced
+ * the additive blend, but the component scorers still run as EVIDENCE
+ * extractors (and the no-needs topical fallback uses the need component), so
+ * the weights remain exported for compatibility (Amy tuning, tests).
+ */
 export const W_NEED = 0.35
 export const W_ELIGIBILITY = 0.25
 export const W_GEO = 0.20
 export const W_CATEGORY = 0.20
 
+/**
+ * "Strong" bar on the LEGACY weighted-evidence subscale
+ * (match_explain.scoreBreakdown.topical_evidence). The need-anchored FINAL
+ * score is need-coverage × eligibility/geo gates and does NOT move when the
+ * W_* weights change — weights act only inside the topical-evidence blend.
+ * Amy's empirical weight-tuning KEEP/REVERT validation therefore measures
+ * cohort quality on this subscale at this bar. 75 is the retired additive
+ * scale's strong bar; the evidence blend still lives on that scale.
+ */
+export const TOPICAL_EVIDENCE_STRONG_BAR = 75
+
 // ── Discovery / Comprehensive Match ─────────────────────────────────────
 
 /**
- * Hard floor for the discovery bar. The documented product standard (owner
- * directive 2026-06-23) is 75, and the code MUST NOT surface matches below it.
- * This is the lowest value DEFAULT_MIN_SCORE can ever take, regardless of env.
+ * Hard floor for the discovery bar, ON THE NEED-ANCHORED SCALE.
+ * 25 = one fully-matched main need with clean eligibility + geography
+ * (1 of NEED_DENOMINATOR_CAP=4). That is the new definition of
+ * "pipeline-worthy" (owner directive 2026-07-06). The previous 75 bar
+ * belonged to the retired additive scale where ~45 points were baseline.
  */
-export const DISCOVERY_MIN_SCORE_FLOOR = 75
+export const DISCOVERY_MIN_SCORE_FLOOR = 25
 
 /**
  * Default minimum score for discovery results — the "slider" default.
- * Owner directive (2026-06-23): the bar for what surfaces in a profile's
- * pipeline/discovery view is 75. Anything below is NOT junk — it stays in the
+ * Owner directive (2026-07-06, need-anchored scale): the bar for what surfaces
+ * in a profile's pipeline/discovery view is 25 — at least one fully-matched
+ * main need with clean gates. Anything below is NOT junk — it stays in the
  * master funding_opportunities catalog (deduped) so it can match another
  * profile later — it just doesn't clutter THIS profile's pipeline.
  *
  * Configurable via GRANTFLOW_DISCOVERY_MIN_SCORE, but CLAMPED to
- * [DISCOVERY_MIN_SCORE_FLOOR, 100] — an owner may TIGHTEN the bar (e.g. 85) but
- * can never drop it below the documented 75. Prefer gaining breadth from the
- * discovery lanes/queries over loosening this.
+ * [DISCOVERY_MIN_SCORE_FLOOR, 100] — an owner may TIGHTEN the bar (e.g. 50)
+ * but can never drop it below the documented floor. Prefer gaining breadth
+ * from the discovery lanes/queries over loosening this.
  *
  * NOTE (2026-07-01): the legacy `ANYA_MATCH_THRESHOLD` env var (env.example /
  * docs said "80") is NOT read anywhere in the code — it is inert. The single
@@ -54,32 +118,31 @@ function resolveDefaultMinScore() {
 export const DEFAULT_MIN_SCORE = resolveDefaultMinScore()
 
 /**
- * Number of matched profile needs that earns FULL need-alignment credit.
- * The need subscale is `min(1, needHits / min(needTotal, NEED_FULL_CREDIT_HITS))`,
- * so a profile that lists many needs is not penalized: a funder realistically
- * addresses a few of a person's needs, and matching this many strongly is a
- * complete need match. Raising this makes scoring stricter (harder to reach the
- * 80% slider); lowering it makes strong matches surface more readily.
+ * LEGACY (retired additive scale): number of matched profile needs that earned
+ * full need-alignment credit in the old need SUBSCALE. The need-anchored
+ * formula uses NEED_DENOMINATOR_CAP instead; this stays exported because the
+ * component scorer (now an evidence extractor) and older tests reference it.
  */
 export const NEED_FULL_CREDIT_HITS = 4
 
 /** Progressive relaxation steps when results are too few.
- *  Tried in order; first to yield results wins. */
-export const RELAX_THRESHOLDS = [30, 15, 0]
+ *  Tried in order; first to yield results wins. (Need-anchored scale:
+ *  15 ≈ a partially-covered need or a discounted full need.) */
+export const RELAX_THRESHOLDS = [15, 8, 0]
 
 /** When all thresholds exhausted, return top N by score */
 export const FALLBACK_TOP_N = 20
 
-// ── Decision Engine ─────────────────────────────────────────────────────
+// ── Decision Engine (need-anchored scale) ───────────────────────────────
 
-/** Score above which an opportunity is auto-accepted (ACCEPT decision) */
-export const ACCEPT_SCORE = 70
+/** ACCEPT: addresses at least half of the profile's main needs. */
+export const ACCEPT_SCORE = 50
 
-/** Score above which an opportunity enters review (REVIEW decision) */
-export const REVIEW_SCORE = 35
+/** REVIEW: some real need coverage worth a human look (below = weak). */
+export const REVIEW_SCORE = 15
 
 /** Minimum score for ACCEPT in the structured decision pipeline */
-export const DECISION_ACCEPT_MIN = 40
+export const DECISION_ACCEPT_MIN = 25
 
 /** Minimum confidence for ACCEPT in the structured decision pipeline */
 export const DECISION_CONFIDENCE_MIN = 50
@@ -264,24 +327,24 @@ export const NEED_GEO_FIT_MIN_GEO_SUBSCALE = 75
 
 // ── Admin / Seeding ─────────────────────────────────────────────────────
 
-/** Minimum score for admin seed-to-pipeline operations */
-export const ADMIN_SEED_MIN_SCORE = 45
+/** Minimum score for admin seed-to-pipeline operations (need-anchored). */
+export const ADMIN_SEED_MIN_SCORE = 20
 
 // ── Frontend Display (sync with src/lib/matchDisplayThresholds.js) ──────
 
 /**
  * Score at or above which results are auto-added to a profile's pipeline.
- * Aligned to the 75 bar (owner directive 2026-06-23) so a "bad match" (< 75)
- * never auto-lands in the working pipeline; it lives in the master catalog
- * instead.
+ * Need-anchored scale (owner directive 2026-07-06): 25 = at least one
+ * fully-matched main need with clean eligibility + geography. Below that,
+ * the source lives in the master catalog only.
  */
-export const AUTO_ADD_SCORE = 75
+export const AUTO_ADD_SCORE = 25
 
-/** Strong match bucket threshold */
-export const STRONG_MATCH_SCORE = 85
+/** Strong match bucket threshold: ~¾ of the profile's main needs. */
+export const STRONG_MATCH_SCORE = 75
 
-/** Good match bucket threshold (aligned to the 75 bar, owner directive). */
-export const GOOD_MATCH_SCORE = 75
+/** Good match bucket threshold: at least half of the main needs. */
+export const GOOD_MATCH_SCORE = 50
 
-/** Moderate match bucket threshold */
-export const MODERATE_MATCH_SCORE = 40
+/** Moderate match bucket threshold (some coverage, review-worthy). */
+export const MODERATE_MATCH_SCORE = 15

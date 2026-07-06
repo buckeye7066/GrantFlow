@@ -10,15 +10,16 @@
  * threshold to 0 to fill a result quota) can never lower the bar below the
  * floor and let junk into the pipeline.
  *
- * Value: 55. This matches `saveToProfilePipeline`'s long-standing default
- * `minMatchThreshold = 55` ("solid matches without being too strict"). It is
- * deliberately NOT 80 — that was a one-time manual prune number, not the
- * standing floor.
+ * Value: 20 on the NEED-ANCHORED scale (owner directive 2026-07-06): one
+ * fully-matched main need (25) with the unknown-eligibility discount (×0.8)
+ * lands at 20, so this floor admits "one real need, unverified eligibility"
+ * and blocks anything with less actual need coverage. (The historical 55
+ * belonged to the retired additive scale whose baseline was ~45.)
  *
  * Relationship to the BOOT-SWEEP purge floor
- * (`RELEVANCE_FLOOR` in startup/enforceInvariants.js, default 50):
+ * (`RELEVANCE_FLOOR` in startup/enforceInvariants.js, default 15):
  *   - The boot sweep is the destructive net that removes existing rows that
- *     are clearly junk; it is intentionally lenient (50) so it never
+ *     are clearly junk; it is intentionally lenient (15) so it never
  *     over-deletes borderline rows a user might care about.
  *   - This INSERT floor is the first line of defense and is set >= the purge
  *     floor, so the saver never inserts a row that the boot sweep would then
@@ -26,39 +27,37 @@
  *     gate (here) is the first line of defense; the boot sweep is the net.
  *
  * Override via env `PIPELINE_INSERT_RELEVANCE_FLOOR` for ops tuning; falls back
- * to 55 if unset or non-numeric.
+ * to 20 if unset or non-numeric.
  *
  * NULL / unknown score handling is the saver's responsibility (see
  * opportunityMatcher.js): a NULL match_score is never "junk" and a clearly
  * eligible ACCEPT is not dropped just because the engine produced no number.
  */
-const parsed = Number.parseInt(process.env.PIPELINE_INSERT_RELEVANCE_FLOOR || '55', 10)
-export const RELEVANCE_FLOOR = Number.isFinite(parsed) && parsed > 0 ? parsed : 55
+const parsed = Number.parseInt(process.env.PIPELINE_INSERT_RELEVANCE_FLOOR || '20', 10)
+export const RELEVANCE_FLOOR = Number.isFinite(parsed) && parsed > 0 ? parsed : 20
 
 /**
  * TRUSTED-SOURCE FLOOR EXEMPTION.
  *
- * The 55 INSERT floor is the right bar for the open web (live/geo crawlers that
+ * The 20 INSERT floor is the right bar for the open web (live/geo crawlers that
  * relax their own threshold to fill a quota). But it silently drops legitimately
- * relevant aid that scores 40–54 from sources we have already vetted — most
- * visibly student aid (TN HOPE, Pell, TSAA, STEP UP, Reconnect, Aspire) whose
- * eligible-but-incomplete profiles land in the 40s because of the student-aid
- * score caps. Those rows are NOT junk; they come from a curated catalog or a
- * scholarship crawler we trust.
+ * relevant aid that scores 12–19 from sources we have already vetted — partial
+ * need coverage (or a discounted full need) from a curated catalog, scholarship
+ * crawler, or federal feed. Those rows are NOT junk.
  *
  * So: for an opportunity whose `record_origin` is in TRUSTED_RECORD_ORIGINS AND
  * whose decision is NOT REJECT, the effective floor drops to
- * TRUSTED_RELEVANCE_FLOOR (40). Untrusted/open-web rows keep the full 55 floor,
+ * TRUSTED_RELEVANCE_FLOOR (12). Untrusted/open-web rows keep the full 20 floor,
  * and a REJECT decision still blocks the save regardless of origin — so the
  * precision risk is bounded by (a) the origin allowlist and (b) the hard REJECT
  * gate that runs before the threshold.
  *
  * Override the trusted floor via env `PIPELINE_TRUSTED_RELEVANCE_FLOOR`; falls
- * back to 40 if unset or non-numeric. It is clamped to never exceed
+ * back to 12 if unset or non-numeric. It is clamped to never exceed
  * RELEVANCE_FLOOR (a "trusted floor" above the normal floor would be nonsense).
  */
-const parsedTrusted = Number.parseInt(process.env.PIPELINE_TRUSTED_RELEVANCE_FLOOR || '40', 10)
-const trustedRaw = Number.isFinite(parsedTrusted) && parsedTrusted > 0 ? parsedTrusted : 40
+const parsedTrusted = Number.parseInt(process.env.PIPELINE_TRUSTED_RELEVANCE_FLOOR || '12', 10)
+const trustedRaw = Number.isFinite(parsedTrusted) && parsedTrusted > 0 ? parsedTrusted : 12
 export const TRUSTED_RELEVANCE_FLOOR = Math.min(trustedRaw, RELEVANCE_FLOOR)
 
 /**

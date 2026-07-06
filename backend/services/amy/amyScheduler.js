@@ -22,7 +22,7 @@
  *                               reality-gated, deduped opportunities are retained.
  *                               Set AMY_PERSIST=false for measurement-only dry runs.
  *   AMY_KEEP_PROFILES           leave profiles for Sam instead of auto-clean (default false)
- *   AMY_FLOOR                   match score floor for the crawler event (default 75 slider)
+ *   AMY_FLOOR                   match score floor for the crawler event (default DEFAULT_MIN_SCORE slider)
  *   AMY_IMPROVE                 run the Anya→Sam chain + tuning measurement (default true)
  *   AMY_APPLY_TUNING            auto-apply the proven, reversible floor change (default true)
  *   AMY_APPLY_WEIGHTS           auto-apply scoring-weight edits, re-crawl validated (default true)

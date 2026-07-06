@@ -274,7 +274,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- funding_source_type values: federal | state | foundation | corporate | university | medical | community | other
   funding_source_type TEXT,
   -- Raw payload captured from upstream source (ingestion pipeline)
-  raw_source_payload TEXT
+  raw_source_payload TEXT,
+
+  -- Crawler OS durable cross-source dedup key (migration 121).
+  -- Source-independent identity from contract.canonicalOpportunityKey;
+  -- NULL for legacy rows (NULLs are distinct under the UNIQUE index).
+  canonical_opportunity_key TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
@@ -289,6 +294,8 @@ CREATE INDEX IF NOT EXISTS idx_funding_opportunities_source_trust_tier
   ON funding_opportunities(source_trust_tier);
 CREATE INDEX IF NOT EXISTS idx_funding_opportunities_reality_status
   ON funding_opportunities(reality_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fo_canonical_key
+  ON funding_opportunities(canonical_opportunity_key);
 
 -- Append-only audit log of every URL verification probe (migration 069).
 -- Lets the mission dashboard answer "when was this opportunity actually

@@ -38,7 +38,7 @@ import { normalizeLanguageCode, isSupportedLanguage } from '../../shared/languag
 // Choke point for pipeline-$ semantics: canonical active-status list + the
 // per-grant value fallback (amount_requested → amount_max → amount_min).
 // Never re-inline a status list or a SUM(amount_requested) here.
-import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue } from '../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue, unvaluedCountSql } from '../config/pipelineValue.js'
 import { buildAwardSummary } from '../services/awardSummary.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
@@ -518,13 +518,15 @@ async function enrichProfileWithSummary(db, profile) {
   // Prefer profile-scoped totals when grants.profile_id exists; fall back to organization totals.
   // This keeps the ProfileCard "Pipeline $X" consistent with the Pipeline page when a user switches profiles.
   let pipelineTotal = 0
+  let pipelineUnvalued = 0
   const activeStatuses = PIPELINE_ACTIVE_STATUSES
   try {
     const placeholders = activeStatuses.map(() => '?').join(',')
     const row = await db
       .prepare(
         `
-        SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total
+        SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total,
+               COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
         FROM grants g
         WHERE g.profile_id = ?
           AND g.status IN (${placeholders})
@@ -532,6 +534,7 @@ async function enrichProfileWithSummary(db, profile) {
       )
       .get(profile.id, ...activeStatuses)
     pipelineTotal = row?.total ?? 0
+    pipelineUnvalued = row?.unvalued ?? 0
   } catch (error) {
     // Older DBs may not have grants.profile_id yet; fall back.
     const msg = error?.message || String(error)
@@ -543,7 +546,8 @@ async function enrichProfileWithSummary(db, profile) {
       const row = await db
         .prepare(
           `
-          SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total
+          SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total,
+                 COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
           FROM grants g
           WHERE g.organization_id = ?
             AND g.status IN (${placeholders})
@@ -551,6 +555,7 @@ async function enrichProfileWithSummary(db, profile) {
         )
         .get(profile.organization_id, ...activeStatuses)
       pipelineTotal = row?.total ?? 0
+      pipelineUnvalued = row?.unvalued ?? 0
     } catch (fallbackError) {
       console.warn(
         '[profiles] pipeline org summary query failed (returning 0):',
@@ -560,6 +565,8 @@ async function enrichProfileWithSummary(db, profile) {
     }
   }
   profile.pipeline_funds_total = pipelineTotal
+  // "no amount stated" ≠ "$0" — cards must render this count alongside the total.
+  profile.pipeline_unvalued_count = pipelineUnvalued
   
   // Get document count
   const docs = await db
@@ -1904,15 +1911,17 @@ router.get('/:id', async (req, res) => {
   // Uses the shared PIPELINE_ACTIVE_STATUSES so the /:id/pipeline-potential
   // breakdown below always reconciles to this number.
   let pipelineTotal = 0
+  let pipelineUnvalued = 0
   const activeStatuses = PIPELINE_ACTIVE_STATUSES
   const pipelinePlaceholders = activeStatuses.map(() => '?').join(',')
   try {
     const pipelineRow = await req.db
       .prepare(
-        `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total, COALESCE(${unvaluedCountSql('g')}, 0) as unvalued FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
       )
       .get(row.id, ...activeStatuses)
     pipelineTotal = pipelineRow?.total ?? 0
+    pipelineUnvalued = pipelineRow?.unvalued ?? 0
   } catch (error) {
     // Fall back to organization-level total if profile_id column doesn't exist
     const msg = error?.message || String(error)
@@ -1922,10 +1931,11 @@ router.get('/:id', async (req, res) => {
     try {
       const pipelineRow = await req.db
         .prepare(
-          `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+          `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total, COALESCE(${unvaluedCountSql('g')}, 0) as unvalued FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
         )
         .get(row.organization_id, ...activeStatuses)
       pipelineTotal = pipelineRow?.total ?? 0
+      pipelineUnvalued = pipelineRow?.unvalued ?? 0
     } catch (fallbackError) {
       console.warn('[profiles] pipeline org detail query failed:', fallbackError?.message)
       pipelineTotal = 0
@@ -1937,6 +1947,7 @@ router.get('/:id', async (req, res) => {
     sections,
     billing,
     pipeline_funds_total: pipelineTotal,
+    pipeline_unvalued_count: pipelineUnvalued,
   })
 })
 
