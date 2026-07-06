@@ -768,6 +768,23 @@ export default function DiscoverGrants() {
     }
   }, [combinedOpportunities.length])
 
+  // Guided first-cycle tour: a FINISHED search with zero matches must not
+  // strand the tour on its event-gated discovery steps (there is nothing to
+  // wait for and nothing to add) — unblock them with an honest note instead.
+  // reportCompletion above still wins if matches arrive on a later search.
+  useEffect(() => {
+    if (!hasSearched || isSearching || combinedOpportunities.length > 0) return
+    const { unblockStep } = useGuidedTourStore.getState()
+    unblockStep(
+      'discover-crawl',
+      "This search didn't find matches yet — that happens, and it's not the end of the road. You can keep going.",
+    )
+    unblockStep(
+      'discover-add',
+      'Nothing to add just yet — continue the tour, then search again after adding more to your profile.',
+    )
+  }, [hasSearched, isSearching, combinedOpportunities.length])
+
   // Keep FundingResults store in sync with the combined view so /FundingResults
   // always displays whatever the user last saw on DiscoverGrants.
   useEffect(() => {

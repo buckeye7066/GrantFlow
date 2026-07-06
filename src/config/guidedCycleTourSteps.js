@@ -81,7 +81,10 @@ const HANDS_ON_STEPS = [
     targetKey: 'grantDetail.hamiltonOpenLink',
     title: "Now let's watch Hamilton work",
     body: "Hamilton is the assistant who can open a portal and fill out an application for you. Click this and I'll watch it open the real portal alongside you -- nothing gets submitted without your say-so.",
-    completion: 'event:hamilton-portal-opened',
+    // The event name after 'event:' is documentation; completion is keyed by
+    // the STEP id — reportCompletion callers must use the step id (the
+    // 'hamilton-portal-opened' vs 'hamilton-open' drift locked this step).
+    completion: 'event:hamilton-open',
   },
   {
     id: 'automation-preferences',

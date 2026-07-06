@@ -47,6 +47,7 @@ export const useGuidedTourStore = create((set, get) => ({
   currentStepId: null,
   targets: {}, // { [targetKey]: RefObject }
   completedStepIds: {}, // { [stepId]: true } once an event-gated step's event has fired
+  stepNotes: {}, // { [stepId]: string } honest explanation shown when a step was unblocked without its real action
 
   start() {
     try {
@@ -55,7 +56,7 @@ export const useGuidedTourStore = create((set, get) => ({
       // ignore (private browsing / storage disabled) -- worst case the gap
       // interview can resume in the same session instead of waiting for the next
     }
-    set({ isActive: true, currentStepId: GUIDED_TOUR_STEPS[0]?.id ?? null, completedStepIds: {} })
+    set({ isActive: true, currentStepId: GUIDED_TOUR_STEPS[0]?.id ?? null, completedStepIds: {}, stepNotes: {} })
   },
 
   registerTarget(key, ref) {
@@ -100,9 +101,32 @@ export const useGuidedTourStore = create((set, get) => ({
   reportCompletion(stepId) {
     const { isActive, currentStepId } = get()
     if (!isActive) return
-    set((s) => ({ completedStepIds: { ...s.completedStepIds, [stepId]: true } }))
+    set((s) => {
+      const nextNotes = { ...s.stepNotes }
+      delete nextNotes[stepId] // the real action happened after all; drop any impossible-action note
+      return { completedStepIds: { ...s.completedStepIds, [stepId]: true }, stepNotes: nextNotes }
+    })
     if (currentStepId === stepId) {
       get().advance()
     }
+  },
+
+  /**
+   * Unblock an event-gated step WITHOUT auto-advancing — used when the real
+   * action the step waits on has become impossible (e.g. a finished search
+   * returned zero matches, so there is nothing to add to the pipeline).
+   * The note replaces the step's waiting hint so the copy stays honest about
+   * why the user may continue. reportCompletion still wins if the real
+   * action happens later.
+   */
+  unblockStep(stepId, note) {
+    if (!get().isActive) return
+    set((s) => {
+      if (s.completedStepIds[stepId]) return s
+      return {
+        completedStepIds: { ...s.completedStepIds, [stepId]: true },
+        stepNotes: note ? { ...s.stepNotes, [stepId]: note } : s.stepNotes,
+      }
+    })
   },
 }))

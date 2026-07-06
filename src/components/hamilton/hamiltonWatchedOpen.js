@@ -48,7 +48,11 @@ import { useGuidedTourStore } from "@/stores/guidedTourStore"
  */
 function reportTourPortalOpened() {
   try {
-    useGuidedTourStore.getState().reportCompletion("hamilton-portal-opened")
+    // MUST be the step's id ('hamilton-open', guidedCycleTourSteps.js), not the
+    // event name — reportCompletion keys completedStepIds and the auto-advance
+    // check off the step id. Reporting the event name here silently left the
+    // step's Next locked forever even after the portal really opened.
+    useGuidedTourStore.getState().reportCompletion("hamilton-open")
   } catch {
     // never let tour bookkeeping break the real portal-open flow
   }
