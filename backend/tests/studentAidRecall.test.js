@@ -209,6 +209,32 @@ describe('(a) trusted student aid scoring 40–54 SAVES via the trusted floor', 
     expect(res.saved).toBe(true)
     expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
   })
+
+  // An OMITTED caller threshold must mean "the canonical floor decides" — the
+  // old default acted like an explicit 55 and out-maxed the trusted floor on
+  // every default path (the manual /from-opportunity add could never benefit
+  // from trust; the NIH Parent STTR at 40 was unaddable by ANY caller).
+  it('default (omitted) caller threshold lets the trusted floor apply', async () => {
+    const db = makeSaveDb()
+    const officialLive = {
+      ...tnHope,
+      id: 'opp-grantsgov-live-2',
+      record_origin: 'live_crawl',
+      source_trust_tier: 'OFFICIAL_API',
+    }
+    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 45)
+    expect(res.saved).toBe(true)
+    expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
+  })
+
+  it('default (omitted) caller threshold still floors UNTRUSTED rows at the full floor', async () => {
+    const db = makeSaveDb()
+    const untrusted = { ...tnHope, id: 'opp-openweb-2', record_origin: 'live_crawl' }
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 45)
+    expect(res.saved).toBe(false)
+    expect(res.gate).toBe('THRESHOLD')
+    expect(res.threshold).toBe(RELEVANCE_FLOOR)
+  })
 })
 
 // ---------------------------------------------------------------------------
