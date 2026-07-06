@@ -62,6 +62,7 @@ import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
+import { resolveOpportunityAmounts } from '../services/awardAmountExtractor.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -2178,6 +2179,67 @@ export async function enforceGrantAmountBackfill(db) {
             .run()
         } catch (err) {
           log.warn('grant_amount_backfill: catalog status derive failed (non-fatal)', { error: String(err?.message || err) })
+        }
+
+        // Step 3b (converging catalog TEXT sweep): rows ingested BEFORE the
+        // extractor existed (or before its 2026-07-06 pattern expansion) have
+        // stored title/description text that was never read for amounts. Run
+        // the conservative extractor over the un-labeled backlog, bounded per
+        // boot; rows where nothing is found get amount_status='not_listed' so
+        // the WHERE clause converges to zero instead of rescanning forever.
+        // Same precision doctrine as ingest: numeric values only from explicit
+        // per-award phrasings; program-total/varies/contact become TEXT+status.
+        try {
+          const backlog = await db
+            .prepare(
+              `SELECT id, title, description, amount_description
+                 FROM funding_opportunities
+                WHERE COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND amount_status IS NULL
+                  AND amount_text IS NULL
+                LIMIT 5000`,
+            )
+            .all()
+          let extracted = 0
+          for (const row of Array.isArray(backlog) ? backlog : []) {
+            const resolved = resolveOpportunityAmounts({
+              title: row.title,
+              description: row.description,
+              amount_description: row.amount_description,
+            })
+            const foundSomething =
+              resolved.amount_min !== null || resolved.amount_max !== null ||
+              resolved.amount_text !== null || resolved.amount_status !== 'not_listed'
+            await db
+              .prepare(
+                `UPDATE funding_opportunities
+                    SET amount_min = COALESCE(?, amount_min),
+                        amount_max = COALESCE(?, amount_max),
+                        amount_text = ?,
+                        amount_status = ?,
+                        amount_confidence = ?
+                  WHERE id = ?`,
+              )
+              .run(
+                resolved.amount_min,
+                resolved.amount_max,
+                resolved.amount_text,
+                resolved.amount_status,
+                resolved.amount_confidence,
+                row.id,
+              )
+            if (foundSomething) extracted += 1
+          }
+          if (backlog.length > 0) {
+            log.info('grant_amount_backfill: catalog text sweep', {
+              scanned: backlog.length,
+              extracted,
+              remaining_hint: backlog.length === 5000 ? 'more next boot' : 'converged',
+            })
+          }
+        } catch (err) {
+          log.warn('grant_amount_backfill: catalog text sweep failed (non-fatal)', { error: String(err?.message || err) })
         }
         if (grantCols.has('funding_opportunity_id')) {
           try {
