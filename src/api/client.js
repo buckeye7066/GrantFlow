@@ -571,7 +571,11 @@ class APIClient {
       // backoff retry instead of surfacing a scary error to the UI (which would
       // otherwise cascade into "heartbeat stale" / spurious auth failures during
       // the few seconds the server is coming back up).
-      const isIdempotentMethod = method === 'GET' || method === 'HEAD';
+      // PUT and DELETE are idempotent by HTTP semantics (same request → same
+      // end state), so replaying one through a blip is as safe as replaying a
+      // GET. POST/PATCH stay excluded — replaying those risks duplicates.
+      const isIdempotentMethod =
+        method === 'GET' || method === 'HEAD' || method === 'PUT' || method === 'DELETE';
       if (
         (response.status === 502 || response.status === 503 || response.status === 504) &&
         isIdempotentMethod &&

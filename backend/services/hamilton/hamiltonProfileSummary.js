@@ -15,7 +15,7 @@
 
 import {
   listApplicationTasks,
-  listMissingInfo,
+  listMissingInfoForTasks,
   TASK_BLOCKED_STATUSES,
   TASK_TERMINAL_STATUSES,
 } from './applicationTaskStore.js'
@@ -98,6 +98,13 @@ export async function buildHamiltonProfileSummary(db, profileId) {
   let tasks = []
   try { tasks = await listApplicationTasks(db, { profileId, limit: 200 }) } catch { tasks = [] }
   const titleMap = await resolveTaskTitles(db, tasks, profileId)
+  // One batched read for every task's missing info — a per-task query inside
+  // the loop below was up to 200 serial round-trips, slow enough under a
+  // contended pool to trip the edge-proxy timeout on the profile page.
+  let missingByTask = new Map()
+  try {
+    missingByTask = await listMissingInfoForTasks(db, (tasks || []).map((t) => t.id), { includeResolved: false })
+  } catch { missingByTask = new Map() }
   for (const t of tasks || []) {
     const status = String(t.status || '').toLowerCase()
     if (TERMINAL_TASK_STATUS.has(status)) continue
@@ -122,9 +129,8 @@ export async function buildHamiltonProfileSummary(db, profileId) {
         updated_at: t.updated_at,
       })
     }
-    let missing = []
-    try { missing = await listMissingInfo(db, t.id, { includeResolved: false }) } catch { missing = [] }
-    for (const m of missing || []) {
+    const missing = missingByTask.get(String(t.id)) || []
+    for (const m of missing) {
       if (m.resolved) continue
       const isDoc = String(m.kind || '').toLowerCase() === 'document'
       needsYou.push({

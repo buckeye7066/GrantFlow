@@ -2801,6 +2801,18 @@ if (process.env.NODE_ENV !== 'test') {
 
   server = app.listen(PORT, '0.0.0.0');
 
+  // Keep-alive race fix for intermittent bodiless 502s ("Application failed to
+  // respond") behind the Railway edge / Vercel rewrite proxies. Node's default
+  // keepAliveTimeout is 5s; the proxies hold upstream sockets far longer. When
+  // Node closes an idle keep-alive socket at the exact moment the proxy writes
+  // the next request into it, the proxy sees a reset and returns 502 to the
+  // browser — scattered, random-endpoint 502s on otherwise-healthy deploys.
+  // The server-side idle timeout must EXCEED every proxy's idle timeout so the
+  // proxy is always the side that closes first. headersTimeout must in turn
+  // exceed keepAliveTimeout or Node kills sockets mid-request-header.
+  server.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS || 620_000);
+  server.headersTimeout = server.keepAliveTimeout + 5_000;
+
   server.on('error', (err) => {
     const code = err?.code || 'UNKNOWN';
     if (code === 'EADDRINUSE') {
