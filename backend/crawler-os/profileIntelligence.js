@@ -261,6 +261,21 @@ const RESERVED_PROFILE_TAGS = new Set([
   'test', 'demo', 'organization', 'individual', 'profile', 'active',
 ]);
 
+// A declared type string that is recognizably an ORGANIZATION even when no
+// exact map/synonym knows it ("Biotechnology / research organization",
+// "community coalition", "research institute"). Used ONLY to keep free-text
+// declared org identities out of the blob-scan fallback — never for scoring.
+const RE_ORG_SHAPED_TYPE = /(organi[sz]ation|institut|universit|hospital|laborator|research|biotech|life scien|foundation|agency|coalition|consortium|company|enterprise)/i;
+
+// Word-boundary synonym match for the no-declared-identity blob fallback.
+// Plain includes() was the applicant-type explosion driver: 'ets' matched
+// "targets"/"assets", 'ems' matched "systems". Multi-word synonyms keep their
+// internal spaces; regex specials are escaped.
+function wordBoundaryMatch(text, synonym) {
+  const escaped = String(synonym).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+}
+
 // Applicant types that describe an ORGANIZATION (vs. a person/household).
 const ORG_APPLICANT_TYPES = new Set(['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal']);
 const INDIVIDUAL_APPLICANT_TYPES = new Set([
@@ -760,10 +775,23 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
       if (syns.some((s) => e.includes(s))) found.add(canon);
     }
   }
+  // 1b. A FREE-TEXT declared org type ("Biotechnology / research organization")
+  // that no exact map or synonym recognizes is still a DECLARED identity — it
+  // must not fall through to the blob scan. The Axiom class (2026-07-06): the
+  // fallback fired for exactly this shape and substring matching exploded to 13
+  // applicant buckets ('ets' ⊂ "targets" → transitioning_service_member, 'ems'
+  // ⊂ "systems" → vfd). Org-shaped declared text maps to the generic org
+  // funding buckets; the match engine still scores actual relevance.
+  if (found.size === 0 && explicit.some((e) => RE_ORG_SHAPED_TYPE.test(e))) {
+    found.add('nonprofit');
+    found.add('business');
+  }
   if (found.size === 0) {
-    // Fallback only — no declared identity. Infer from free text.
+    // Fallback only — no declared identity at all. Infer from free text, with
+    // WORD-BOUNDARY matching: substring includes() was the 13-bucket explosion
+    // driver ('ets' inside "targets"/"assets", 'ems' inside "systems").
     for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
-      if (syns.some((s) => blob.includes(s))) found.add(canon);
+      if (syns.some((s) => wordBoundaryMatch(blob, s))) found.add(canon);
     }
   }
 
@@ -938,13 +966,24 @@ export function buildThesis(profile = {}) {
   // ONLY (like interest_terms — never used for scoring/eligibility), so a
   // text scan is safe here: worst case an org that merely mentions research
   // gets a few extra SBIR queries whose results still face the match gates.
-  const RE_RESEARCH_ORG = /\b(biotech(?:nology)?|life sciences?|biomedical|bioscience|genomic(?:s)?|laborator(?:y|ies)|r&d|research (?:and development|organi[sz]ation|institute|laboratory))\b/i;
-  const is_research_org = isOrg && RE_RESEARCH_ORG.test(blob);
+  const RE_RESEARCH_ORG = /\b(biotech\w*|life sciences?|biomedical|bioscience|genomic(?:s)?|laborator(?:y|ies)|r&d|research (?:and development|organi[sz]ation|institute|laboratory))\b/i;
+  // The DECLARED type text is the strongest research signal of all and is
+  // deliberately excluded from the blob (identity fields are handled
+  // structurally) — read it directly so "Biotechnology / research organization"
+  // counts even when the narrative never repeats the word.
+  const declaredTypeText = [profile?.profile_type, profile?.primary_type, profile?.type]
+    .concat(profile?.applicant_types ?? [])
+    .filter((v) => typeof v === 'string')
+    .join(' ');
+  const is_research_org = isOrg && (RE_RESEARCH_ORG.test(declaredTypeText) || RE_RESEARCH_ORG.test(blob));
   // The concrete research TOPIC for query building ("biotechnology", "genomics"
-  // ...), extracted from the profile's own text so the SBIR queries search the
-  // org's actual field. Never trusts tag ordering (see RESERVED_PROFILE_TAGS).
+  // ...), extracted from the declared type first, then the profile's own text,
+  // so the SBIR queries search the org's actual field. Never trusts tag
+  // ordering (see RESERVED_PROFILE_TAGS).
   const RE_RESEARCH_TOPIC = /\b(biotechnology|biotech|genomics?|bioinformatics|genetic engineering|life sciences?|biomedical(?: research)?|pharmaceutical|biopharmaceutical|bioscience)\b/i;
-  const research_topic = is_research_org ? (blob.match(RE_RESEARCH_TOPIC)?.[1]?.toLowerCase() ?? 'biotechnology') : null;
+  const research_topic = is_research_org
+    ? ((declaredTypeText.match(RE_RESEARCH_TOPIC)?.[1] ?? blob.match(RE_RESEARCH_TOPIC)?.[1])?.toLowerCase() ?? 'biotechnology')
+    : null;
 
   // Free-text interest / field-of-study / career-goal / talent seeds the applicant
   // entered (major, intended career, demographic scholarship tags). These do NOT

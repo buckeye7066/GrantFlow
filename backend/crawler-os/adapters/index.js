@@ -12,6 +12,7 @@ import { createUsdaRdAdapter } from "./usdaRdAdapter.js";
 import { createFemaAfgAdapter } from "./femaAfgAdapter.js";
 import { createStudentAidGovAdapter } from "./studentAidGovAdapter.js";
 import { createFederalRegisterAdapter } from "./federalRegisterAdapter.js";
+import { createSbirGovAdapter } from "./sbirGovAdapter.js";
 import { createAgencyRssAdapter } from "./agencyRssAdapter.js";
 import { createOfficialDirectoryAdapter } from "./officialDirectoryAdapter.js";
 
@@ -53,6 +54,9 @@ const FACTORIES = Object.freeze({
   // API) + NIH Guide funding feed (RSS). Both flow through the planner ->
   // reality gate -> match engine unchanged and widen REAL federal coverage.
   federal_register: createFederalRegisterAdapter,
+  // SBIR/STTR solicitations — the research-org funding universe. Planner-gated
+  // on thesis.is_research_org (sourceRegistry research_only flag).
+  sbir_gov: createSbirGovAdapter,
   nih_guide: createAgencyRssAdapter,
   // NOTE: CareerOneStop's Scholarship Web API was retired (verified 2026-06-23:
   // their 21 live services include no scholarship endpoint; scholarship* paths

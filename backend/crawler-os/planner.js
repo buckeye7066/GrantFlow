@@ -50,6 +50,10 @@ export function plan(thesis = {}) {
     if (!servesApplicant(source, thesis)) { ok = false; reasons.push('applicant_type_not_served'); }
     if (!servesNeed(source, thesis)) { ok = false; reasons.push('need_category_not_covered'); }
     if (!servesGeo(source, thesis)) { ok = false; reasons.push('geography_out_of_scope'); }
+    // Research-restricted sources (SBIR/STTR solicitations) serve ONLY profiles
+    // whose thesis declares research capability — explicit and explainable, so
+    // the applicant/need heuristics can't leak solicitations to a food pantry.
+    if (source.research_only && !thesis.is_research_org) { ok = false; reasons.push('research_org_only'); }
     if (source.loan_allowed && !thesis.loan_allowed && source.default_kinds?.length === 1
         && source.default_kinds[0] === 'PROGRAM' && source.need_categories?.includes('*') === false) {
       // keep loan-capable broad programs; only note it. Loans are gated downstream.

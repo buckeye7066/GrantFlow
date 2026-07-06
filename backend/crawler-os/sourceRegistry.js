@@ -72,6 +72,33 @@ export const SOURCES = Object.freeze([
     priority_score: 90,
   },
   {
+    source_id: 'sbir_gov',
+    name: 'SBIR.gov (Small Business Innovation Research / STTR solicitations)',
+    source_type: 'api',
+    trust_tier: TRUST_TIER.OFFICIAL_API,
+    base_url: 'https://www.sbir.gov',
+    directory: false,
+    loan_allowed: false,
+    cost_share_allowed: false,
+    // SBIR/STTR is exclusively for small for-profit businesses; nonprofit is
+    // included only because generic research orgs derive both buckets — the
+    // research_only gate below is the real precision control.
+    applicant_types: ['business', 'nonprofit'],
+    need_categories: ['*'],
+    // ONLY selected for research-capable orgs (thesis.is_research_org) — the
+    // planner's research_only gate. A food pantry never searches solicitations.
+    research_only: true,
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.PROGRAM],
+    crawler_method: 'api',
+    // Public API, no key. NOTE (2026-07-06): api.www.sbir.gov currently
+    // returns "The SBIR Public API is not available at this time" service-wide;
+    // the adapter reports an honest PARSE_ERROR until it comes back.
+    requires_env: [],
+    refresh_frequency_days: 3,
+    priority_score: 95,
+  },
+  {
     source_id: 'cof_locator',
     name: 'Council on Foundations — Community Foundation Locator',
     source_type: 'directory',

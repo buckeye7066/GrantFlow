@@ -15,7 +15,9 @@
 export function parseApiJson(body, cfg = {}) {
   let json;
   try { json = JSON.parse(body); } catch { return parseProblem('invalid_json', cfg); }
-  const rawList = getPath(json, cfg.listPath);
+  // listPath === '' is the explicit opt-in for APIs whose response IS the list
+  // (a bare JSON array at the root, e.g. SBIR.gov solicitations).
+  const rawList = cfg.listPath === '' ? json : getPath(json, cfg.listPath);
   if (rawList == null) {
     if (cfg.requiredListPath) return parseProblem('required_list_path_missing', cfg);
   }
