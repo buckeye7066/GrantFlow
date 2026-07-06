@@ -1114,6 +1114,21 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     }
   }
 
+  // -- Domestic-violence-survivor / agricultural-producer signals (2026-07-06) --
+  // No dedicated profile section exists for either trait, so scan the whole
+  // section blob (bounded). ADDITIVE-ONLY consumers: these grant eligibility
+  // for survivor-/farmer-restricted programs and keep DV/agriculture programs
+  // from being capped for profiles that carry the signal — a false negative
+  // degrades to REVIEW (missing field), never a wrong hard-reject.
+  let _profileTraitBlob = ''
+  try {
+    _profileTraitBlob = JSON.stringify(profileSections ?? {}).slice(0, 40000).toLowerCase()
+  } catch { _profileTraitBlob = '' }
+  const isDvSurvivor =
+    /domestic violence|intimate partner violence|family violence|abusive relationship|dv survivor|fleeing abuse/.test(_profileTraitBlob)
+  const isFarmer =
+    /\bfarm(?:er|ers|ing)?\b|\branch(?:er|ers|ing)\b|agricultural (?:producer|cooperative|operation)|\blivestock\b|\bcrop(?:s|land)?\b/.test(_profileTraitBlob)
+
   // ---------------------------------------------------------------------------
   // Demographics: traits from demographics section
   // ---------------------------------------------------------------------------
@@ -1752,6 +1767,8 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     hasBusinessNeed,
     isUnableToWork,
     isRefugee,
+    isDvSurvivor,
+    isFarmer,
     // Demographics & identity
     age,
     ageGroup: resolvedAgeGroup,

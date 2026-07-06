@@ -2107,6 +2107,7 @@ export async function enforceGrantAmountBackfill(db) {
 
     let repairedFromCatalog = 0
     let repairedRequested = 0
+    let repairedStatus = 0
 
     if (!disabled) {
       // Step 1: inherit award min/max from the linked catalog row when the
@@ -2155,6 +2156,94 @@ export async function enforceGrantAmountBackfill(db) {
       } catch (err) {
         log.warn('grant_amount_backfill: requested-default query failed (non-fatal)', { error: String(err?.message || err) })
       }
+
+      // Step 3 (amount VISIBILITY, migrations 132/0136): derive the catalog's
+      // amount_status from its own numeric fields (legacy rows predate the
+      // column), then mirror text/status/confidence onto linked grants, then
+      // stamp truly amount-less active grants 'not_listed' so pipeline cards
+      // render an honest label instead of a blank. Statuses are LABELS about
+      // what is known — never invented dollar values.
+      if (grantCols.has('amount_status')) {
+        try {
+          await db
+            .prepare(
+              `UPDATE funding_opportunities
+                  SET amount_status = CASE
+                        WHEN COALESCE(amount_min, 0) > 0 AND amount_min = amount_max THEN 'known'
+                        ELSE 'range'
+                      END
+                WHERE amount_status IS NULL
+                  AND (COALESCE(amount_max, 0) > 0 OR COALESCE(amount_min, 0) > 0)`,
+            )
+            .run()
+        } catch (err) {
+          log.warn('grant_amount_backfill: catalog status derive failed (non-fatal)', { error: String(err?.message || err) })
+        }
+        if (grantCols.has('funding_opportunity_id')) {
+          try {
+            const result = await db
+              .prepare(
+                `UPDATE grants
+                    SET amount_text = (
+                          SELECT fo.amount_text FROM funding_opportunities fo
+                           WHERE fo.id = grants.funding_opportunity_id
+                        ),
+                        amount_status = (
+                          SELECT fo.amount_status FROM funding_opportunities fo
+                           WHERE fo.id = grants.funding_opportunity_id
+                        ),
+                        amount_confidence = (
+                          SELECT fo.amount_confidence FROM funding_opportunities fo
+                           WHERE fo.id = grants.funding_opportunity_id
+                        )
+                  WHERE (grants.amount_status IS NULL OR grants.amount_status = 'not_listed')
+                    AND grants.funding_opportunity_id IS NOT NULL
+                    AND EXISTS (
+                      SELECT 1 FROM funding_opportunities fo
+                       WHERE fo.id = grants.funding_opportunity_id
+                         AND fo.amount_status IS NOT NULL
+                    )`,
+              )
+              .run()
+            repairedStatus = changesOf(result)
+          } catch (err) {
+            log.warn('grant_amount_backfill: status mirror failed (non-fatal)', { error: String(err?.message || err) })
+          }
+        }
+        try {
+          // Grants with a real numeric value but no status yet (own-value rows).
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_status = CASE
+                        WHEN COALESCE(amount_min, 0) > 0 AND amount_min = amount_max THEN 'known'
+                        WHEN COALESCE(amount_max, 0) > 0 OR COALESCE(amount_min, 0) > 0 THEN 'range'
+                        ELSE 'known'
+                      END
+                WHERE amount_status IS NULL
+                  AND (COALESCE(amount_requested, 0) > 0
+                    OR COALESCE(amount_max, 0) > 0
+                    OR COALESCE(amount_min, 0) > 0)`,
+            )
+            .run()
+          const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+          // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_status = 'not_listed'
+                WHERE amount_status IS NULL
+                  AND status IN (${statuses})
+                  AND COALESCE(amount_requested, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND amount_text IS NULL`,
+            )
+            .run()
+        } catch (err) {
+          log.warn('grant_amount_backfill: grant status derive failed (non-fatal)', { error: String(err?.message || err) })
+        }
+      }
     }
 
     // Observability: active-pipeline rows still showing NO dollar value —
@@ -2175,16 +2264,17 @@ export async function enforceGrantAmountBackfill(db) {
       missing = Number(row?.n) || 0
     } catch { /* non-fatal */ }
 
-    const repaired = repairedFromCatalog + repairedRequested
+    const repaired = repairedFromCatalog + repairedRequested + repairedStatus
     if (repaired > 0) {
       log.info('backfilled pipeline grant amounts', {
         repairedFromCatalog,
         repairedRequested,
+        repairedStatus,
         stillMissingAmount: missing,
         enforced: !disabled,
       })
     }
-    return { scanned: repaired + missing, repaired, enforced: !disabled, missingAmount: missing }
+    return { scanned: repaired + missing, repaired, enforced: !disabled, missingAmount: missing, repairedStatus }
   })
 }
 

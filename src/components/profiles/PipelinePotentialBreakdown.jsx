@@ -18,6 +18,7 @@
 import React, { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import client from "@/api/client"
+import { amountTextFallback } from "@/lib/amountDisplay"
 import {
   Dialog,
   DialogContent,
@@ -101,7 +102,9 @@ function formatAmount(item) {
   if (hasMin && hasMax) return min === max ? usd.format(Math.round(min)) : `${usd.format(Math.round(min))} – ${usd.format(Math.round(max))}`
   if (hasMin) return `From ${usd.format(Math.round(min))}`
   if (hasMax) return `Up to ${usd.format(Math.round(max))}`
-  return "Amount varies"
+  // No numeric value — show the honest stored text/status instead of implying
+  // every blank row "varies" (most simply never listed an amount).
+  return amountTextFallback(item) || "Amount not listed"
 }
 
 function formatDeadline(deadline) {

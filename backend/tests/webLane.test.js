@@ -61,6 +61,13 @@ describe('runWebDiscoveryLane', () => {
     const matches = store.all('profile_opportunity_matches').filter((m) => m.profile_id === 'p1')
     expect(matches.length).toBe(1)
     expect(Number(matches[0].match_score)).toBeGreaterThan(0)
+
+    // Crawler-doctor provenance: the match records WHICH query surfaced the
+    // page it was extracted from, and the lane that found it.
+    expect(typeof matches[0].source_query).toBe('string')
+    expect(matches[0].source_query.length).toBeGreaterThan(0)
+    expect(res.queries).toContain(matches[0].source_query)
+    expect(matches[0].discovered_via).toBe('web_search')
   })
 
   it('rejects an expired opportunity via the reality gate', async () => {

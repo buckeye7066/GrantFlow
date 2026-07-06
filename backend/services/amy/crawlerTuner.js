@@ -131,6 +131,9 @@ const CATEGORY_COVERAGE = Object.freeze({
   first_responder: { applicant_types: ['individual'], need_categories: ['education', 'emergency'], source: 'united_way_211' },
   adult_learner: { applicant_types: ['student', 'individual'], need_categories: ['education'], source: 'studentaid_gov' },
   volunteer_fire_department: { applicant_types: ['vfd'], need_categories: ['equipment', 'emergency', 'operations'], source: 'fema_afg' },
+  // 2026-07-06: was ABSENT — CDC zero-result gaps could never auto-remediate
+  // and every finding for the category dead-ended in the approval queue.
+  community_development_corp: { applicant_types: ['nonprofit'], need_categories: ['housing_development', 'economic_development'], source: 'eda_economic_development' },
 })
 
 /**

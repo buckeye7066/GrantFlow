@@ -2659,6 +2659,10 @@ app.use('/api/admin/crawl-coverage', lazyRouter('./routes/adminCrawlCoverage.js'
 // coverage audit that flags zero-coverage / org-directory-only profiles so a
 // VFD can never silently miss FEMA AFG again (architecture: crawler planning).
 app.use('/api/admin/crawler-plan', lazyRouter('./routes/adminCrawlerPlan.js'));
+// Row-level crawler doctor: which QUERY produced each match, include/exclude
+// reasoning, geography + eligibility explain, amount-extraction result, and
+// the learned-gap query expansions the next crawl will add.
+app.use('/api/admin/crawler-doctor', lazyRouter('./routes/adminCrawlerDoctor.js'));
 // Owner-initiated outbound messaging (Broadcast screen): list recipients, send
 // promotional/notification email (dr.johnwhite alias) or SMS, manage phones +
 // opt-in. Admin-only inside the router.

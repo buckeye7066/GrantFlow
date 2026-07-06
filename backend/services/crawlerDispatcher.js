@@ -647,11 +647,37 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         const previous = await db
           .prepare('SELECT avatar_url FROM profiles WHERE id = ?')
           .get(profileContext.profile.id)
-        await db.prepare(`
-          UPDATE profiles
-          SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(result.avatarUrl, profileContext.profile.id)
+        // Durable persistence: the /uploads file is a read cache on Railway's
+        // EPHEMERAL disk — profiles.avatar_data BYTEA is the authoritative copy
+        // (same contract as persistAvatarBytes on the /avatar/from-website
+        // route). Without it the logo 404s after the next redeploy and the
+        // boot self-heal then NULLs avatar_url entirely.
+        const avatarBuffer = Buffer.isBuffer(result.avatarBuffer) ? result.avatarBuffer : null
+        let wroteDurable = false
+        if (avatarBuffer) {
+          try {
+            await db.prepare(`
+              UPDATE profiles
+              SET avatar_url = ?, avatar_data = ?, avatar_content_type = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).run(result.avatarUrl, avatarBuffer, result.avatarContentType || 'image/png', profileContext.profile.id)
+            wroteDurable = true
+          } catch (colErr) {
+            // Legacy DB without the avatar_data columns — fall through to the
+            // url-only update below rather than failing the job.
+            if (!/avatar_data|avatar_content_type|column/i.test(String(colErr?.message || colErr))) throw colErr
+          }
+        }
+        if (!wroteDurable) {
+          await db.prepare(`
+            UPDATE profiles
+            SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(result.avatarUrl, profileContext.profile.id)
+        }
+        // Never let raw image bytes leak into job-result handling below.
+        delete result.avatarBuffer
+        delete result.avatarContentType
 
         if (previous?.avatar_url && previous.avatar_url.startsWith('/uploads/')) {
           // best-effort cleanup

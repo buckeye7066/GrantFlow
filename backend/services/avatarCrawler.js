@@ -168,6 +168,11 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
     ok: true,
     avatarFilename: filename,
     avatarUrl: `/uploads/${filename}`,
+    // Durable persistence: Railway's /uploads disk is EPHEMERAL — the caller
+    // (crawlerDispatcher) must store these bytes to profiles.avatar_data or
+    // the logo silently vanishes on the next redeploy.
+    avatarBuffer: buf,
+    avatarContentType: contentType,
   }
 }
 
@@ -302,6 +307,9 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
     ok: true,
     avatarFilename: filename,
     avatarUrl: `/uploads/${filename}`,
+    // Durable persistence (ephemeral-disk trap) — see tryDownloadDirectUrl.
+    avatarBuffer: buf,
+    avatarContentType: imgType,
     coverUrl,
     website: finalUrl,
     method,
@@ -339,6 +347,8 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
           inserted: 1,
           avatarFilename: directResult.avatarFilename,
           avatarUrl: directResult.avatarUrl,
+          avatarBuffer: directResult.avatarBuffer ?? null,
+          avatarContentType: directResult.avatarContentType ?? null,
           result_meta: {
             ok: true,
             method: 'direct_url_download',
@@ -360,6 +370,8 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
         inserted: 1,
         avatarFilename: websiteResult.avatarFilename,
         avatarUrl: websiteResult.avatarUrl,
+        avatarBuffer: websiteResult.avatarBuffer ?? null,
+        avatarContentType: websiteResult.avatarContentType ?? null,
         result_meta: {
           ok: true,
           method: websiteResult.method || 'website_cover',
@@ -454,12 +466,16 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
 
   const filename = `${Date.now()}-${randomUUID()}.png`
   const filePath = join(uploadDir, filename)
-  fs.writeFileSync(filePath, Buffer.from(base64, 'base64'))
+  const generatedBuf = Buffer.from(base64, 'base64')
+  fs.writeFileSync(filePath, generatedBuf)
 
   return {
     inserted: 1,
     avatarFilename: filename,
     avatarUrl: `/uploads/${filename}`,
+    // Durable persistence (ephemeral-disk trap) — see tryDownloadDirectUrl.
+    avatarBuffer: generatedBuf,
+    avatarContentType: 'image/png',
     result_meta: {
       ok: true,
       method: 'openai_generated',

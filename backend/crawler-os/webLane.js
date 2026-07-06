@@ -195,7 +195,9 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       const matchOpp = canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
       for (const mp of matchProfiles) {
         const decision = computeMatchDecision(matchOpp, mp, { floor: opts.floor });
-        upsertMatch(store, decision);
+        // Provenance for the crawler doctor: the exact query that surfaced the
+        // page this opportunity was extracted from.
+        upsertMatch(store, { ...decision, source_query: page.query, discovered_via: 'web_search' });
         if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id) {
           result.recommendations.push({ opportunity_id: matchOpp.id, title: matchOpp.title, sponsor: matchOpp.sponsor, match_score: decision.match_score, source: 'web_search' });
         }

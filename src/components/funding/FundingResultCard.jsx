@@ -24,6 +24,7 @@
 import React from 'react'
 import PropTypes from 'prop-types'
 import { humanizeMatchReason } from '@/utils/reasonText'
+import { amountTextFallback } from '@/lib/amountDisplay'
 
 // canonicalResultShape() lives in ./canonicalResultShape.js so this file
 // can stay components-only (Vite Fast Refresh requirement).
@@ -206,6 +207,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
           <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Amount</dt>
           <dd className="text-slate-800">
             {formatAmount(result.amount_min, result.amount_max, result.amount_description) ||
+              amountTextFallback(result) ||
               'Not stated'}
           </dd>
         </div>
