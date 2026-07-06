@@ -237,6 +237,8 @@ const initialState = {
   lastSeenManualVersion: 0,
   lastCompletedTourVersion: 0,
   tourDismissedAt: null,
+  // 'pending' | 'completed' | 'skipped' | null (null = not eligible, e.g. pre-existing user)
+  guidedCycleTourStatus: null,
 }
 
 function normalizeId(value) {
@@ -441,6 +443,7 @@ export const useAuthStore = create((set, get) => ({
         lastSeenManualVersion: Number(payload.lastSeenManualVersion ?? 0),
         lastCompletedTourVersion: Number(payload.lastCompletedTourVersion ?? 0),
         tourDismissedAt: payload.tourDismissedAt ?? null,
+        guidedCycleTourStatus: payload.guidedCycleTourStatus ?? null,
       }))
 
       // Always refresh profiles after canonical auth bootstrap.
@@ -540,6 +543,7 @@ export const useAuthStore = create((set, get) => ({
         preferredAuthMethod: get().preferredAuthMethod,
         needsProfileCreation,
         hasSeenOnboarding: userCompletedOnboarding,
+        guidedCycleTourStatus: payload.user?.guided_cycle_tour_status ?? null,
       })
 
       // If login payload looks sparse, refresh from server so profile dropdown
@@ -1073,6 +1077,18 @@ export const useAuthStore = create((set, get) => ({
       method: 'PATCH',
       body: JSON.stringify({ last_completed_tour_version: version, tour_dismissed_at: now }),
     }).catch((err) => console.warn('[authStore] Failed to persist tour state:', err))
+  },
+
+  /**
+   * Persist the new guided first-cycle tour's completion state to the backend.
+   * @param {'completed'|'skipped'} status
+   */
+  markGuidedCycleTourStatus: (status) => {
+    set({ guidedCycleTourStatus: status })
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ guided_cycle_tour_status: status }),
+    }).catch((err) => console.warn('[authStore] Failed to persist guided cycle tour state:', err))
   },
 
   /**

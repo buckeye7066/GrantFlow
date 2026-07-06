@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/api/client'
 import { useAuthStore, normalizeUserAdmin } from '@/stores/authStore'
 import { isGapGateEnabled } from '@/lib/gapGateFlag'
+import { hasGuidedTourRunThisSession } from '@/stores/guidedTourStore'
 import { persistGapAnswers } from './gapInterviewPersistence'
 import {
   planNeedsInterview,
@@ -53,8 +54,16 @@ export default function LoginGapInterviewLauncher() {
   const queryClient = useQueryClient()
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const user = useAuthStore((state) => state.user)
+  const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
   const isAdmin = normalizeUserAdmin(user)
+  // Suppressed for the guided tour's ENTIRE run, and for the rest of the
+  // browser tab session it ran in -- a brand-new profile always has gaps, so
+  // this would otherwise pop up on top of (or right after) the tour. It's
+  // meant to resume on the user's next separate login, not stack the moment
+  // the tour finishes within that same first session.
   const enabled = isGapGateEnabled() && isAuthenticated
+    && guidedCycleTourStatus !== 'pending'
+    && !hasGuidedTourRunThisSession()
 
   const [gapped, setGapped] = useState(null) // null = not probed yet
   const [index, setIndex] = useState(0)

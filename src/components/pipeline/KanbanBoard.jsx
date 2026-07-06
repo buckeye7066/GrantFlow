@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
 import { useToast } from "@/components/ui/use-toast";
 import { canonicalStage } from '../../../shared/pipelineStages.js';
+import { useGuidedTourStore } from '@/stores/guidedTourStore';
 
 // Shared column width constant so the slider math matches the rendered layout.
 // Columns render as w-72 (288px) + gap-4 (16px) = 304px.
@@ -195,6 +196,19 @@ export default function KanbanBoard({ grants, organizations, onGrantUpdate, onGr
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const scrollRef = useRef(null);
+  const firstCardRef = useRef(null);
+
+  // Guided first-cycle tour: spotlight the whole board, then the first card
+  // in the first non-empty column (whichever grant that happens to be).
+  useEffect(() => {
+    const { registerTarget, unregisterTarget } = useGuidedTourStore.getState()
+    registerTarget('pipeline.board', scrollRef)
+    registerTarget('pipeline.firstCard', firstCardRef)
+    return () => {
+      unregisterTarget('pipeline.board')
+      unregisterTarget('pipeline.firstCard')
+    }
+  }, []);
 
   const { data: checklistItems = [] } = useQuery({
     queryKey: ['checklistItems'],
@@ -234,6 +248,7 @@ export default function KanbanBoard({ grants, organizations, onGrantUpdate, onGr
       toast({ variant: 'destructive', title: 'Update Failed', description: e?.message || 'Could not update grant status.' });
       return;
     }
+    useGuidedTourStore.getState().reportCompletion('pipeline-drag');
 
     // Trigger AI assessment when a grant enters the "interested" stage \of the legacy "Assess" / "Discovery" column.
     if (newStatus === 'interested') {
@@ -276,6 +291,16 @@ export default function KanbanBoard({ grants, organizations, onGrantUpdate, onGr
     }
     return acc;
   }, [grants]);
+
+  // Guided first-cycle tour: whichever grant renders first (first non-empty
+  // column, first card in it) is the one 'pipeline-drag' spotlights.
+  const firstCardGrantId = React.useMemo(() => {
+    for (const status of STATUSES) {
+      const list = grantsByStatus[status.value] || [];
+      if (list.length > 0) return list[0].id;
+    }
+    return null;
+  }, [grantsByStatus]);
 
   const handleStarToggle = (grant) => {
     onGrantUpdate(grant.id, { starred: !grant.starred });
@@ -327,7 +352,10 @@ export default function KanbanBoard({ grants, organizations, onGrantUpdate, onGr
                           return (
                             <Draggable key={grant.id} draggableId={grant.id} index={index}>
                               {(provided, snapshot) => (
-                                <div className="block focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg">
+                                <div
+                                  ref={grant.id === firstCardGrantId ? firstCardRef : undefined}
+                                  className="block focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg"
+                                >
                                   <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps}>
                                     <GrantCard
                                       grant={grant}

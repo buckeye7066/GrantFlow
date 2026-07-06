@@ -14,6 +14,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/config/env.js', () => ({ env: { appBase: '/' } }))
 
+// hamiltonWatchedOpen reports guided-tour step completion (a no-op outside
+// an active tour) via useGuidedTourStore, which transitively imports
+// authStore -> the real @/api/client -- irrelevant to what this file tests,
+// so it's mocked directly rather than deepening the env.js mock above.
+vi.mock('@/stores/guidedTourStore', () => ({
+  useGuidedTourStore: { getState: () => ({ reportCompletion: vi.fn() }) },
+}))
+
 const startCloudLogin = vi.fn()
 vi.mock('@/api/hamilton', () => ({
   startCloudLogin: (...args) => startCloudLogin(...args),
