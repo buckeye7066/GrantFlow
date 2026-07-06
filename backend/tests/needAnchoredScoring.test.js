@@ -116,6 +116,41 @@ describe('need-anchored score semantics', () => {
     expect(score).toBeLessThan(AUTO_ADD_SCORE)
   })
 
+  it('title/category "church" vocabulary does not bypass the org guard (Emmanuel Lutheran class)', () => {
+    // Real prod shape: the TITLE names the church, categories say "church
+    // assistance" (= aid FROM a church), eligibility bullets describe PEOPLE.
+    const church = { id: 'p-church-3', primary_type: 'nonprofit', state: 'OH', needs: ['housing', 'community'] }
+    const rentFund = {
+      id: 'opp-rent-4',
+      title: 'Emmanuel Lutheran Church – Community Outreach Emergency Housing Assistance',
+      sponsor: 'Emmanuel Lutheran Church – Elyria',
+      description: 'Provides community outreach services including emergency rent assistance, housing support, and crisis aid. Helps individuals and families facing eviction with direct financial assistance and referrals.',
+      eligibility_bullets: JSON.stringify(['Residents of Lorain County and Elyria, Ohio', 'Low income households', 'Single parents facing housing crisis']),
+      categories: JSON.stringify(['emergency housing assistance', 'rent assistance', 'faith based aid', 'church assistance']),
+      application_url: 'https://example-elc.org/help',
+      state: 'OH',
+    }
+    const { score, match_explain } = scoreOpportunity(church, rentFund)
+    expect(match_explain.scoreBreakdown.eligibility_mismatches).toContain('org_profile_individual_assistance')
+    expect(score).toBeLessThan(AUTO_ADD_SCORE)
+  })
+
+  it('an operator grant that NAMES org applicants in eligibility prose passes the guard', () => {
+    const nonprofit = { id: 'p-np-3', primary_type: 'nonprofit', state: 'OH', needs: ['housing', 'community'] }
+    const operatorGrant = {
+      id: 'opp-operator',
+      title: 'Emergency Rent Assistance Operating Grants',
+      sponsor: 'Ohio Housing Trust',
+      description: 'Grants to nonprofits and community organizations operating emergency rent assistance programs in Ohio.',
+      eligibility_bullets: JSON.stringify(['Eligible applicants: 501(c)(3) nonprofit organizations serving Ohio residents']),
+      application_url: 'https://example-oht.org/apply',
+      state: 'OH',
+      categories: JSON.stringify(['housing', 'capacity']),
+    }
+    const { match_explain } = scoreOpportunity(nonprofit, operatorGrant)
+    expect(match_explain.scoreBreakdown.eligibility_mismatches ?? []).not.toContain('org_profile_individual_assistance')
+  })
+
   it('an INDIVIDUAL with a housing need still scores well on the same assistance program', () => {
     const person = {
       id: 'p-person',
