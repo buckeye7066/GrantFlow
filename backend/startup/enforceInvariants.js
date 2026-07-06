@@ -57,14 +57,16 @@ import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
-import { PIPELINE_ACTIVE_STATUSES } from '../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, WIDE_AWARD_RANGE_RATIO } from '../config/pipelineValue.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
-import { resolveOpportunityAmounts } from '../services/awardAmountExtractor.js'
+import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE } from '../services/awardAmountExtractor.js'
 import { AUTO_ADD_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
+import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
+import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -1983,6 +1985,222 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
 }
 
 /**
+ * INVARIANT: APPLICATION-URL RESCUE — a real candidate rejected ONLY for a
+ * missing URL gets ONE bounded chance to be rescued with a real, live page.
+ *
+ * THE GAP THIS CLOSES (2026-07-06)
+ * --------------------------------
+ * Docs/email/LLM-extracted candidates frequently carry a real title + sponsor
+ * but no application URL, so the opportunityInserter url gate rejects them
+ * (stage 'url', reason 'missing_application_url') and 80+ real programs sat
+ * dead in rejection_log. The gate is CORRECT (a URL-less catalog row is
+ * unusable); what was missing is a rescue lane that finds the program's REAL
+ * page and re-drives the candidate through the full insert gate stack.
+ *
+ * HONESTY POSTURE (canonical_rules.md G0 — never invent data): the rescued URL
+ * comes from findOfficialUrlForOpportunity — a live web search for the
+ * candidate's own title+sponsor, a token-overlap plausibility check, and a
+ * liveness probe. Nothing is guessed or synthesized; "not found" leaves the
+ * rejection standing. The re-drive goes through upsertFundingOpportunity, so
+ * every gate (provenance/policy/validation/reviewer/reality/dedupe) re-applies.
+ *
+ * BOUNDS + OUTAGE GUARD: per boot, at most URL_RESCUE_BOOT_LIMIT search
+ * attempts within URL_RESCUE_TIME_BUDGET_MS; a system_kv cursor
+ * ('url_rescue_last_rejection_id') makes each rejection row get exactly ONE
+ * attempt — EXCEPT when every search in the run came back empty/failed
+ * (searched:false or hits===0), which is indistinguishable from a search-
+ * provider outage: then the cursor does NOT advance, so candidates are never
+ * permanently burned by an outage. `ENFORCE_URL_RESCUE=0` → count-only mode.
+ */
+const URL_RESCUE_SCAN_LIMIT = 50
+const URL_RESCUE_BOOT_LIMIT_DEFAULT = 8
+const URL_RESCUE_TIME_BUDGET_MS_DEFAULT = 20000
+const URL_RESCUE_CURSOR_KEY = 'url_rescue_last_rejection_id'
+/**
+ * Legacy rejection rows (logged before raw_meta carried a candidate snapshot)
+ * may be rescued on title alone, but only when the title is distinctive enough
+ * to make a confident search match: at least this many significant tokens.
+ */
+const URL_RESCUE_TITLE_ONLY_MIN_TOKENS = 4
+
+function _parsePositiveIntEnv(value, fallback) {
+  const n = Number.parseInt(value ?? '', 10)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+async function readUrlRescueCursor(db) {
+  try {
+    // Same key-value store + missing-table tolerance as the Brave budget pacer
+    // (services/yana/braveBudget.js) — survives deploys, never blocks boot.
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(URL_RESCUE_CURSOR_KEY)
+    const n = Number.parseInt(row?.value ?? '', 10)
+    return Number.isFinite(n) && n >= 0 ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+async function writeUrlRescueCursor(db, id) {
+  try {
+    const iso = new Date().toISOString()
+    const value = String(id)
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, iso, URL_RESCUE_CURSOR_KEY)
+    if (!changesOf(res)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(URL_RESCUE_CURSOR_KEY, value, iso)
+    }
+  } catch (err) {
+    log.warn('url rescue: cursor persist failed (non-fatal)', { error: String(err?.message || err) })
+  }
+}
+
+/** Parse the raw_meta JSON of a rejection row; absent/legacy/corrupt → null. */
+function parseRescueCandidateMeta(rawMeta) {
+  if (typeof rawMeta !== 'string' || !rawMeta.trim()) return null
+  try {
+    const meta = JSON.parse(rawMeta)
+    const candidate = meta?.candidate
+    return candidate !== null && candidate !== undefined && typeof candidate === 'object' ? candidate : null
+  } catch {
+    return null
+  }
+}
+
+export async function enforceApplicationUrlRescue(db, deps = {}) {
+  return runInvariant('application_url_rescue', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_URL_RESCUE) === false
+    const bootLimit = _parsePositiveIntEnv(process.env.URL_RESCUE_BOOT_LIMIT, URL_RESCUE_BOOT_LIMIT_DEFAULT)
+    const timeBudgetMs = _parsePositiveIntEnv(process.env.URL_RESCUE_TIME_BUDGET_MS, URL_RESCUE_TIME_BUDGET_MS_DEFAULT)
+    const findOfficialUrl = deps.findOfficialUrl ?? findOfficialUrlForOpportunity
+
+    const counters = {
+      scanned: 0,
+      attempted: 0,
+      rescued: 0,
+      failed: 0,
+      skippedNoTitle: 0,
+      skippedNoMeta: 0,
+      notFound: 0,
+      // runInvariant summary compatibility: rescued rows ARE the repair.
+      repaired: 0,
+      enforced: !disabled,
+    }
+
+    const cursor = await readUrlRescueCursor(db)
+    let rows = []
+    try {
+      rows = await db.prepare(
+        `SELECT id, source, title, raw_meta FROM rejection_log
+          WHERE stage = 'url' AND reason = 'missing_application_url' AND id > ?
+          ORDER BY id ASC LIMIT ${URL_RESCUE_SCAN_LIMIT}`,
+      ).all(cursor)
+    } catch { rows = [] /* rejection_log absent on this schema — nothing to rescue */ }
+    rows = rows || []
+
+    if (disabled) {
+      counters.scanned = rows.length
+      if (rows.length > 0) {
+        log.warn('url rescue: rescuable url-rejections present (rescue DISABLED via ENFORCE_URL_RESCUE=0)', { pending: rows.length })
+      }
+      return counters
+    }
+
+    const startMs = Date.now()
+    const searchOutcomes = []
+    // Cursor candidate: highest rejection id actually PROCESSED (attempted or
+    // deliberately skipped). Rows beyond the boot/time budget are NOT burned —
+    // they stay ahead of the cursor for the next boot.
+    let lastProcessedId = cursor
+
+    for (const row of rows) {
+      if (counters.attempted >= bootLimit || (Date.now() - startMs) > timeBudgetMs) break
+      counters.scanned += 1
+
+      const title = typeof row.title === 'string' ? row.title.trim() : ''
+      if (!title) {
+        counters.skippedNoTitle += 1
+        lastProcessedId = row.id
+        continue
+      }
+
+      const candidate = parseRescueCandidateMeta(row.raw_meta)
+      if (candidate === null && significantTitleTokens(title).length < URL_RESCUE_TITLE_ONLY_MIN_TOKENS) {
+        // Legacy row without a candidate snapshot AND a title too generic for
+        // a confident title-only search — skipping is the honest move.
+        counters.skippedNoMeta += 1
+        lastProcessedId = row.id
+        continue
+      }
+
+      counters.attempted += 1
+      const found = await findOfficialUrl({ title, sponsor: candidate?.sponsor ?? null })
+      searchOutcomes.push(found)
+      lastProcessedId = row.id
+
+      if (!found?.url) {
+        counters.notFound += 1
+        continue
+      }
+
+      try {
+        // Re-drive the candidate's OWN fields (nothing invented) through the
+        // canonical insert path with the found, already-probed URL. verifyUrl
+        // stays false: findOfficialUrlForOpportunity just probed it live.
+        const result = await upsertFundingOpportunity(db, {
+          title,
+          sponsor: candidate?.sponsor ?? null,
+          description: candidate?.description ?? null,
+          deadline: candidate?.deadline ?? null,
+          amount_min: candidate?.amount_min ?? null,
+          amount_max: candidate?.amount_max ?? null,
+          categories: Array.isArray(candidate?.categories) ? candidate.categories : [],
+          source: candidate?.source ?? row.source ?? 'url_rescue',
+          ...(candidate?.record_origin ? { record_origin: candidate.record_origin } : {}),
+          source_url: found.url,
+        }, { verifyUrl: false })
+        if (result && (result.inserted || result.updated) && !result.skipped) {
+          counters.rescued += 1
+        } else {
+          // Found a live page but the full gate stack (or dedupe) still said
+          // no — an honest terminal outcome, counted, never retried.
+          counters.failed += 1
+        }
+      } catch (err) {
+        counters.failed += 1
+        log.warn('url rescue: re-drive failed (non-fatal)', { rejection: row.id, error: String(err?.message || err) })
+      }
+    }
+
+    counters.repaired = counters.rescued
+
+    // Provider-outage guard: when EVERY search this run either failed outright
+    // (searched:false) or honestly returned zero hits, we cannot distinguish
+    // "program not findable" from "search providers down" — do NOT advance the
+    // cursor, so these candidates keep their one real chance.
+    const providerOutage =
+      counters.attempted > 0 &&
+      searchOutcomes.every((o) => o?.searched === false || (o?.searched === true && Number(o?.hits) === 0))
+    if (!providerOutage && lastProcessedId > cursor) {
+      await writeUrlRescueCursor(db, lastProcessedId)
+    } else if (providerOutage) {
+      log.warn('url rescue: all searches empty/failed this run — treating as provider outage; cursor NOT advanced', {
+        attempted: counters.attempted,
+      })
+    }
+
+    if (counters.rescued > 0) {
+      log.info('url rescue: re-drove url-less candidates with real, liveness-verified pages', {
+        scanned: counters.scanned,
+        attempted: counters.attempted,
+        rescued: counters.rescued,
+        notFound: counters.notFound,
+      })
+    }
+    return counters
+  })
+}
+
+/**
  * INVARIANT: PIPELINE GRANTS CARRY THE FUNDER'S NAME WHEN IT IS KNOWABLE.
  *
  * `grants.funder` is the pipeline's display name for the granting organization
@@ -2115,6 +2333,56 @@ export async function enforceGrantAmountBackfill(db) {
     let repairedStatus = 0
 
     if (!disabled) {
+      // Step 0 (catalog amount SANITY net — the HUD Section 4 class): an
+      // UNTRUSTED-source catalog row carrying a numeric per-award figure
+      // outside the extractor's plausibility window is a program appropriation
+      // misparse, not an award. Ingest now demotes these to TEXT
+      // (resolveOpportunityAmounts); this is the boot net for rows persisted
+      // BEFORE that guard. The figure is preserved as honest text; grants that
+      // inherited the fabricated number (amount_requested defaulted from it)
+      // are cleaned in the same pass — user-entered asks and awarded money are
+      // never touched (only values EQUAL to the stripped fabricated numbers).
+      try {
+        const suspect = await db
+          .prepare(
+            `SELECT id, amount_min, amount_max, source, source_trust_tier
+               FROM funding_opportunities
+              WHERE (COALESCE(amount_max, 0) > ${Number(AMOUNT_MAX_PLAUSIBLE)}
+                  OR COALESCE(amount_min, 0) > ${Number(AMOUNT_MAX_PLAUSIBLE)})
+              LIMIT 200`,
+          )
+          .all()
+        for (const row of Array.isArray(suspect) ? suspect : []) {
+          if (isOfficialAmountSource(row)) continue
+          const fmt = (n) => `$${Number(n).toLocaleString('en-US')}`
+          const text =
+            row.amount_min && row.amount_max && row.amount_min !== row.amount_max
+              ? `${fmt(row.amount_min)} – ${fmt(row.amount_max)} (program funding level)`
+              : `${fmt(row.amount_max ?? row.amount_min)} (program funding level)`
+          await db
+            .prepare(
+              `UPDATE funding_opportunities
+                  SET amount_min = NULL, amount_max = NULL, amount_text = ?,
+                      amount_status = 'not_listed', amount_confidence = NULL
+                WHERE id = ?`,
+            )
+            .run(text, row.id)
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_requested = CASE WHEN amount_requested IN (?, ?) THEN NULL ELSE amount_requested END,
+                      amount_min = CASE WHEN amount_min = ? THEN NULL ELSE amount_min END,
+                      amount_max = CASE WHEN amount_max = ? THEN NULL ELSE amount_max END
+                WHERE funding_opportunity_id = ?
+                  AND COALESCE(amount_awarded, 0) <= 0`,
+            )
+            .run(row.amount_min, row.amount_max, row.amount_min, row.amount_max, row.id)
+          repairedStatus += 1
+        }
+      } catch (err) {
+        log.warn('grant_amount_backfill: catalog amount-sanity net failed (non-fatal)', { error: String(err?.message || err) })
+      }
+
       // Step 1: inherit award min/max from the linked catalog row when the
       // grant has neither. Guarded by EXISTS so we never null-out anything.
       if (grantCols.has('funding_opportunity_id')) {
@@ -2147,12 +2415,24 @@ export async function enforceGrantAmountBackfill(db) {
         }
       }
 
-      // Step 2: default amount_requested from the grant's own ceiling/floor.
+      // Step 2: default amount_requested from the grant's own ceiling/floor —
+      // EXCEPT when the floor→ceiling spread is wider than
+      // WIDE_AWARD_RANGE_RATIO. A "$1M–$42M" range is a program ENVELOPE, not
+      // a realistic single award; defaulting the ask to the ceiling fabricated
+      // ~$84M of pipeline value across two org profiles (the HUD Section 4
+      // class). Wide ranges default to the FLOOR; the ceiling stays visible
+      // in amount_max. WIDE_AWARD_RANGE_RATIO is a module numeric constant —
+      // interpolation below is compile-time, not user input.
       try {
         const result = await db
           .prepare(
             `UPDATE grants
-                SET amount_requested = COALESCE(NULLIF(amount_max, 0), NULLIF(amount_min, 0))
+                SET amount_requested = CASE
+                      WHEN COALESCE(amount_min, 0) > 0 AND COALESCE(amount_max, 0) > 0
+                       AND amount_max > amount_min * ${Number(WIDE_AWARD_RANGE_RATIO)}
+                      THEN amount_min
+                      ELSE COALESCE(NULLIF(amount_max, 0), NULLIF(amount_min, 0))
+                    END
               WHERE COALESCE(amount_requested, 0) <= 0
                 AND (COALESCE(amount_max, 0) > 0 OR COALESCE(amount_min, 0) > 0)`,
           )
@@ -2341,6 +2621,213 @@ export async function enforceGrantAmountBackfill(db) {
       })
     }
     return { scanned: repaired + missing, repaired, enforced: !disabled, missingAmount: missing, repairedStatus }
+  })
+}
+
+/**
+ * INVARIANT: pipeline lifecycle statuses tell the truth about who set them.
+ *
+ * A protected status ('submitted') means a HUMAN or Hamilton actually
+ * submitted an application. Bulk imports / schema-repair backfills stamped
+ * rows 'submitted' from the SOURCE's own listing status (grants.gov
+ * "(posted)") with submitted_date NULL — permanently shielding never-scored,
+ * often-ineligible rows from every purge/re-score sweep (the HUD Section 4
+ * $42M rows). Detection is deliberately SURGICAL — all three must hold:
+ *   1. status = 'submitted' with submitted_date IS NULL (no real submission)
+ *   2. import/repair provenance: notes carry the adapter's
+ *      "Funding opportunity … (posted)" summary OR match_explanation says
+ *      admin_schema_repair
+ *   3. no Hamilton submission artifacts implied (submitted_date is the
+ *      canonical submission stamp; a real submit path always sets it)
+ * Matching rows are demoted to 'discovered' so the score-backfill /
+ * relevance-floor nets can finally judge them. A row a user REALLY submitted
+ * (submitted_date set, or human notes) is never touched.
+ *
+ * OVERRIDE: ON by default; ENFORCE_STATUS_PROVENANCE=0 for count-only.
+ */
+export async function enforceImportedStatusHonesty(db) {
+  return runInvariant('imported_status_honesty', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('status') || !grantCols.has('submitted_date')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_STATUS_PROVENANCE) === false
+
+    // Compile-time constant fragment (no user input flows in).
+    const SAFE_WHERE = `
+        status = 'submitted'
+        AND submitted_date IS NULL
+        AND (
+          notes LIKE 'Funding opportunity %(posted).%'
+          OR notes LIKE 'Funding opportunity %(posted)'
+          OR CAST(match_explanation AS TEXT) LIKE '%admin_schema_repair%'
+        )`
+
+    let scanned = 0
+    try {
+      const row = await db.prepare(`SELECT COUNT(*) AS n FROM grants WHERE ${SAFE_WHERE}`).get()
+      scanned = Number(row?.n) || 0
+    } catch (err) {
+      log.warn('imported_status_honesty: scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+    if (scanned === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) {
+      log.warn('import-stamped "submitted" rows present (demote DISABLED via ENFORCE_STATUS_PROVENANCE=0)', { rows: scanned })
+      return { scanned, repaired: 0, enforced: false }
+    }
+
+    let repaired = 0
+    try {
+      const result = await db
+        .prepare(`UPDATE grants SET status = 'discovered' WHERE ${SAFE_WHERE}`)
+        .run()
+      repaired = changesOf(result)
+      if (repaired > 0) {
+        log.info('demoted import-stamped submitted rows to discovered (no real submission ever happened)', { repaired })
+      }
+    } catch (err) {
+      log.warn('imported_status_honesty: demote failed (non-fatal)', { error: String(err?.message || err) })
+    }
+    return { scanned, repaired, enforced: true }
+  })
+}
+
+/**
+ * INVARIANT: a relevant pipeline source's award amount is ACQUIRED when the
+ * funder's own page states it (the "$0 pipeline full of real sources" class:
+ * only ~18% of the catalog carries any dollar figure because ingest text is
+ * often one aggregator sentence — nothing ever read the funder's page).
+ *
+ * Bounded per boot: for catalog rows LINKED TO ACTIVE PIPELINE grants that
+ * have no numeric amount and no amount_text yet, fetch the source page
+ * through the crawler-os production fetcher (SSRF/DNS-rebinding safe) and
+ * run the conservative awardAmountExtractor over the page text. Numbers only
+ * from explicit per-award phrasings; program totals stay text-only; nothing
+ * is ever invented (G0). Attempted rows are remembered in system_kv so a
+ * page that yields nothing is not re-fetched every boot.
+ *
+ * OVERRIDE: ON by default; ENFORCE_AMOUNT_ENRICHMENT=0 for count-only.
+ * Bounds: AMOUNT_ENRICH_BOOT_LIMIT (default 10) fetches per boot,
+ * AMOUNT_ENRICH_TIME_BUDGET_MS (default 20000).
+ */
+export async function enforceAmountEnrichment(db, deps = {}) {
+  return runInvariant('amount_enrichment', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
+    const LIMIT = Math.max(1, Number.parseInt(process.env.AMOUNT_ENRICH_BOOT_LIMIT || '10', 10) || 10)
+    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(process.env.AMOUNT_ENRICH_TIME_BUDGET_MS || '20000', 10) || 20000)
+    const ATTEMPTED_KV_KEY = 'amount_enrich_attempted_ids'
+    const ATTEMPTED_MAX_REMEMBERED = 2000
+
+    // Previously-attempted ids (bounded ring in system_kv; tolerate absence).
+    let attempted = []
+    try {
+      await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+      const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(ATTEMPTED_KV_KEY)
+      const parsed = row?.value ? JSON.parse(row.value) : null
+      if (Array.isArray(parsed)) attempted = parsed.filter((v) => typeof v === 'string')
+    } catch { /* missing table → best-effort, may refetch */ }
+    const attemptedSet = new Set(attempted)
+
+    // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
+    // numeric amount, no text yet (or explicitly not_listed), has a page.
+    let candidates = []
+    try {
+      const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      candidates = await db
+        .prepare(
+          `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url
+             FROM funding_opportunities fo
+             JOIN grants g ON g.funding_opportunity_id = fo.id
+            WHERE g.status IN (${statuses})
+              AND COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
+              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
+              AND fo.amount_text IS NULL
+              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
+            LIMIT 200`,
+        )
+        .all()
+    } catch (err) {
+      log.warn('amount_enrichment: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    const fresh = (candidates || []).filter((c) => c?.id && !attemptedSet.has(String(c.id)))
+    if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) {
+      log.warn('amount-less active pipeline sources present (enrichment DISABLED via ENFORCE_AMOUNT_ENRICHMENT=0)', {
+        candidates: fresh.length,
+      })
+      return { scanned: fresh.length, repaired: 0, enforced: false }
+    }
+
+    const { enrichOpportunityAmountFromSource } =
+      deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
+
+    const startedAt = Date.now()
+    let attemptedNow = 0
+    let enriched = 0
+    let textOnly = 0
+    for (const cand of fresh) {
+      if (attemptedNow >= LIMIT) break
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break
+      attemptedNow++
+      attemptedSet.add(String(cand.id))
+      try {
+        const res = await enrichOpportunityAmountFromSource(cand, deps)
+        if (res?.found && res.amounts) {
+          await db
+            .prepare(
+              `UPDATE funding_opportunities
+                  SET amount_min = ?, amount_max = ?, amount_text = ?,
+                      amount_status = ?, amount_confidence = ?
+                WHERE id = ?
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0`,
+            )
+            .run(
+              res.amounts.amount_min, res.amounts.amount_max, res.amounts.amount_text,
+              res.amounts.amount_status, res.amounts.amount_confidence, cand.id,
+            )
+          enriched++
+        } else if (res?.amount_text || (res?.amount_status && res.amount_status !== 'not_listed')) {
+          // No per-award number, but the page yielded an honest label
+          // ("varies", "contact funder", program-total excerpt) — better than blank.
+          await db
+            .prepare(
+              `UPDATE funding_opportunities
+                  SET amount_text = COALESCE(?, amount_text),
+                      amount_status = COALESCE(?, amount_status)
+                WHERE id = ? AND amount_text IS NULL`,
+            )
+            .run(res.amount_text ?? null, res.amount_status ?? null, cand.id)
+          textOnly++
+        }
+      } catch (err) {
+        log.warn('amount_enrichment: enrich failed (non-fatal)', {
+          opportunity: cand.id, error: String(err?.message || err),
+        })
+      }
+    }
+
+    // Persist the attempted ring (most recent last, bounded). UPDATE-then-
+    // INSERT matches the braveBudget/system_kv convention (shim-safe).
+    try {
+      const ring = [...attemptedSet].slice(-ATTEMPTED_MAX_REMEMBERED)
+      const value = JSON.stringify(ring)
+      const iso = new Date().toISOString()
+      const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, iso, ATTEMPTED_KV_KEY)
+      if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(ATTEMPTED_KV_KEY, value, iso)
+      }
+    } catch { /* best-effort */ }
+
+    if (enriched > 0 || textOnly > 0) {
+      log.info('enriched catalog award amounts from funder pages', { attempted: attemptedNow, enriched, textOnly })
+    }
+    return { scanned: fresh.length, attempted: attemptedNow, repaired: enriched, textOnly, enforced: true }
   })
 }
 
@@ -2796,7 +3283,9 @@ export async function enforcePipelineRefill(db) {
                   WHERE g.profile_id = m.profile_id
                     AND g.funding_opportunity_id = m.opportunity_id
                )
-             ORDER BY m.match_score DESC
+             ORDER BY m.match_score DESC,
+                      CASE WHEN COALESCE(o.amount_max, 0) > 0 OR COALESCE(o.amount_min, 0) > 0
+                           THEN 1 ELSE 0 END DESC
              LIMIT ?`,
           )
           .all(row.profile_id, AUTO_ADD_SCORE, wanted * 4)
@@ -2879,12 +3368,21 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // leak at the data layer (the print-side guard is the first line of defense).
   steps.push(await enforceProfileScopedPipeline(db))
   steps.push(await enforceNoDuplicateGrants(db))
+  // Status-provenance honesty BEFORE the relevance floor: import-stamped
+  // "submitted" rows (no real submission ever happened) are demoted to
+  // 'discovered' so the floor / score-backfill nets can finally judge them —
+  // protected statuses shield USER work, not bulk-import artifacts.
+  steps.push(await enforceImportedStatusHonesty(db))
   steps.push(await enforceRelevanceFloor(db))
   // Pipeline-$ visibility: inherit award min/max from the linked catalog row
   // and default amount_requested from the ceiling/floor wherever empty, so
   // every Pipeline Potential surface can see the money that is actually there.
   // MUST run before the individual amount ceiling so the ceiling operates on
   // honest (backfilled) values.
+  // Amount ACQUISITION first: read the funder's own page for active-pipeline
+  // sources that carry no dollar figure (bounded per boot), so the backfill
+  // right after can mirror freshly-learned amounts onto the grants same-boot.
+  steps.push(await enforceAmountEnrichment(db))
   steps.push(await enforceGrantAmountBackfill(db))
   // Amount-sanity net: purge institutional-scale ($ > ceiling) grants that were
   // mis-matched into an INDIVIDUAL/student pipeline (the ">$3M potential" bug).
@@ -2927,6 +3425,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
   steps.push(await enforceNoSearchEngineApplicationTargets(db))
+  // Application-URL rescue: a candidate rejected ONLY for a missing URL gets
+  // ONE bounded, budget-paced chance to be re-driven with a real, liveness-
+  // verified page found by title+sponsor web search (never invented). Runs
+  // AFTER the URL-hygiene net so a rescued row is immediately covered by it.
+  steps.push(await enforceApplicationUrlRescue(db))
   // Score-visibility net: stamp an honest canonical score on any unscored
   // pipeline row so a manually-added mismatch can never masquerade as an
   // engine-endorsed match. Runs AFTER the purge sweeps (their status/name
@@ -2965,6 +3468,27 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
     })),
   })
 
+  // Agent observability (standing rule: agent-scope mechanisms must be
+  // visible to Sam + Anya): persist the latest sweep summary to system_kv so
+  // the Sam check `pipeline.invariantSweepOutcomes` — and through it Anya's
+  // daily owner digest — can read what the boot nets actually did, instead of
+  // the outcomes living only in ephemeral boot logs. Best-effort.
+  try {
+    const value = JSON.stringify({
+      at: new Date().toISOString(),
+      ran: steps.length,
+      failed,
+      totalRepaired,
+      steps: steps.map((s) => ({ name: s.name, ok: s.ok, repaired: s.repaired ?? 0, scanned: s.scanned ?? 0, ...(s.error ? { error: s.error } : {}) })),
+    })
+    const iso = new Date().toISOString()
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, iso, 'enforce_invariants_last_run')
+    if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run('enforce_invariants_last_run', value, iso)
+    }
+  } catch { /* observability is best-effort — never fail the boot sweep */ }
+
   return { steps, ran: steps.length, failed, totalRepaired }
 }
 
@@ -2991,6 +3515,8 @@ export const __testables = {
   enforceFunderBackfill,
   enforceGrantAmountBackfill,
   enforceNoDanglingMatches,
+  enforceImportedStatusHonesty,
+  enforceAmountEnrichment,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,

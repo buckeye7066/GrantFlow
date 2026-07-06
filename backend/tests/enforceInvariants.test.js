@@ -25,6 +25,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
 import crypto from 'crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   runEnforceInvariants,
   enforceStickyDeletes,
@@ -41,6 +43,10 @@ import {
   enforceProfileIncomeReconciliation,
   enforceProfileIdIntegrity,
   enforceNoSearchEngineApplicationTargets,
+  enforceApplicationUrlRescue,
+  enforceImportedStatusHonesty,
+  enforceAmountEnrichment,
+  enforceGrantAmountBackfill,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -878,7 +884,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(19)
+    expect(summary.ran).toBe(22)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -886,7 +892,9 @@ describe('enforceInvariants — runner', () => {
       'no_cross_profile_bleed',
       'profile_scoped_pipeline',
       'no_duplicate_grants',
+      'imported_status_honesty',
       'relevance_floor',
+      'amount_enrichment',
       'grant_amount_backfill',
       'individual_amount_ceiling',
       'student_aid_eligibility',
@@ -897,6 +905,7 @@ describe('enforceInvariants — runner', () => {
       'profile_income_reconciliation',
       'hamilton_task_self_heal',
       'no_search_engine_application_targets',
+      'application_url_rescue',
       'grant_score_backfill',
       'pipeline_refill',
       'converted_applications_have_profiles',
@@ -2033,5 +2042,442 @@ describe('profession eligibility invariant', () => {
     } finally {
       delete process.env.ENFORCE_PROFESSION_ELIGIBILITY
     }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: application-URL rescue — a candidate rejected ONLY for a missing
+// URL gets ONE bounded chance to be re-driven with a real, liveness-verified
+// page found by title+sponsor search (never invented); a search-provider
+// outage never burns candidates (cursor does not advance).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('enforceApplicationUrlRescue', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+
+  // Real production schema so the re-drive exercises the REAL upsert path
+  // (provenance/policy/validation/reviewer/reality/dedupe gates all live).
+  function makeRescueDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+
+  const TITLE = 'Rural Fire Department Equipment Grant'
+  const FOUND_URL = 'https://www.fema.gov/grants/rural-fire-department-equipment'
+  const CANDIDATE = {
+    sponsor: 'FEMA',
+    description: 'Funds protective equipment and apparatus for volunteer fire departments serving rural communities.',
+    deadline: null,
+    amount_min: 5000,
+    amount_max: 25000,
+    categories: ['equipment', 'community'],
+    source: 'grants_gov',
+    record_origin: 'grants_gov',
+  }
+
+  // candidate: null seeds a LEGACY row (raw_meta without a candidate snapshot).
+  function seedRejection(db, { title = TITLE, candidate = CANDIDATE, source = 'grants_gov', reason = 'missing_application_url', stage = 'url' } = {}) {
+    const rawMeta = candidate === null
+      ? JSON.stringify({ record_origin: 'grants_gov' }) // legacy row: no candidate snapshot
+      : JSON.stringify({ record_origin: 'grants_gov', candidate })
+    const res = db.prepare(
+      'INSERT INTO rejection_log (source, source_url, title, reason, stage, raw_meta) VALUES (?, NULL, ?, ?, ?, ?)',
+    ).run(source, title, reason, stage, rawMeta)
+    return Number(res.lastInsertRowid)
+  }
+
+  function cursorValue(db) {
+    try {
+      const row = db.prepare("SELECT value FROM system_kv WHERE key = 'url_rescue_last_rejection_id'").get()
+      return row ? Number(row.value) : null
+    } catch {
+      return null
+    }
+  }
+
+  function catalogRows(db) {
+    return db.prepare('SELECT * FROM funding_opportunities ORDER BY created_at').all()
+  }
+
+  const finderFound = (overrides = {}) => async () => ({
+    url: FOUND_URL,
+    hit: { url: FOUND_URL, title: TITLE, snippet: 'equipment funding' },
+    probe: { status: 'ok', code: 200 },
+    searched: true,
+    hits: 3,
+    ...overrides,
+  })
+
+  afterEach(() => {
+    delete process.env.ENFORCE_URL_RESCUE
+    delete process.env.URL_RESCUE_BOOT_LIMIT
+    delete process.env.URL_RESCUE_TIME_BUDGET_MS
+  })
+
+  it('rescues a url-less rejection through the REAL upsert path and advances the cursor', async () => {
+    const db = makeRescueDb()
+    const rejectionId = seedRejection(db)
+    const finderCalls = []
+    const res = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async (args) => { finderCalls.push(args); return finderFound()() },
+    })
+
+    expect(res.ok).toBe(true)
+    expect(res.scanned).toBe(1)
+    expect(res.attempted).toBe(1)
+    expect(res.rescued).toBe(1)
+    expect(res.enforced).toBe(true)
+
+    // The finder searched for the candidate's OWN title+sponsor — never invented.
+    expect(finderCalls).toEqual([{ title: TITLE, sponsor: 'FEMA' }])
+
+    // The rescued row landed in the catalog via the full gate stack.
+    const rows = catalogRows(db)
+    expect(rows.length).toBe(1)
+    expect(rows[0].title).toBe(TITLE)
+    expect(rows[0].sponsor).toBe('FEMA')
+    expect(rows[0].source_url).toBe(FOUND_URL)
+
+    // One chance each: the cursor advanced past the rescued row, and a second
+    // run scans/attempts nothing.
+    expect(cursorValue(db)).toBe(rejectionId)
+    const second = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => { throw new Error('must not re-attempt') },
+    })
+    expect(second.scanned).toBe(0)
+    expect(second.attempted).toBe(0)
+  })
+
+  it('provider outage (zero hits or failed search) never advances the cursor — a later run retries', async () => {
+    const db = makeRescueDb()
+    seedRejection(db)
+
+    // Run 1: search provider honestly returns zero hits → outage guard.
+    const emptyRun = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => ({ url: null, searched: true, hits: 0 }),
+    })
+    expect(emptyRun.attempted).toBe(1)
+    expect(emptyRun.notFound).toBe(1)
+    expect(cursorValue(db)).toBe(null)
+
+    // Run 2: search provider threw (searched:false) → still no advance.
+    const failedRun = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => ({ url: null, searched: false, error: 'searxng down' }),
+    })
+    expect(failedRun.attempted).toBe(1)
+    expect(cursorValue(db)).toBe(null)
+
+    // Run 3: providers back up → the same candidate is still rescuable.
+    const rescueRun = await enforceApplicationUrlRescue(db, { findOfficialUrl: finderFound() })
+    expect(rescueRun.rescued).toBe(1)
+    expect(catalogRows(db).length).toBe(1)
+  })
+
+  it('a genuine not-found (search worked, hits > 0) consumes the row\'s one chance', async () => {
+    const db = makeRescueDb()
+    const rejectionId = seedRejection(db)
+    const res = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => ({ url: null, searched: true, hits: 5 }),
+    })
+    expect(res.notFound).toBe(1)
+    expect(res.rescued).toBe(0)
+    expect(cursorValue(db)).toBe(rejectionId)
+
+    const second = await enforceApplicationUrlRescue(db, { findOfficialUrl: finderFound() })
+    expect(second.scanned).toBe(0)
+    expect(catalogRows(db).length).toBe(0)
+  })
+
+  it('skips rows without a title, and legacy no-meta rows with generic titles; distinctive legacy titles are attempted title-only', async () => {
+    const db = makeRescueDb()
+    seedRejection(db, { title: null }) // no title → skippedNoTitle
+    seedRejection(db, { title: 'Community Grant', candidate: null }) // legacy + generic (1 significant token) → skippedNoMeta
+    const distinctiveId = seedRejection(db, {
+      title: 'Rural Volunteer Firefighter Equipment Modernization Award',
+      candidate: null, // legacy row: title-only rescue allowed (>=4 significant tokens)
+      source: 'web_search',
+    })
+
+    const finderCalls = []
+    const res = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async (args) => { finderCalls.push(args); return { url: null, searched: true, hits: 4 } },
+    })
+
+    expect(res.scanned).toBe(3)
+    expect(res.skippedNoTitle).toBe(1)
+    expect(res.skippedNoMeta).toBe(1)
+    expect(res.attempted).toBe(1)
+    expect(finderCalls).toEqual([
+      { title: 'Rural Volunteer Firefighter Equipment Modernization Award', sponsor: null },
+    ])
+    // Skips + the honestly-not-found attempt all consumed their chance.
+    expect(cursorValue(db)).toBe(distinctiveId)
+  })
+
+  it('respects the boot limit without burning un-attempted rows', async () => {
+    const db = makeRescueDb()
+    const first = seedRejection(db, { title: 'Alpha Volunteer Firefighter Equipment Award One' })
+    seedRejection(db, { title: 'Beta Volunteer Firefighter Equipment Award Two' })
+    process.env.URL_RESCUE_BOOT_LIMIT = '1'
+
+    const res = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => ({ url: null, searched: true, hits: 2 }),
+    })
+    expect(res.attempted).toBe(1)
+    expect(res.scanned).toBe(1)
+    // Cursor stops at the last PROCESSED row — the second row keeps its chance.
+    expect(cursorValue(db)).toBe(first)
+
+    delete process.env.URL_RESCUE_BOOT_LIMIT
+    const second = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => ({ url: null, searched: true, hits: 2 }),
+    })
+    expect(second.attempted).toBe(1)
+  })
+
+  it('is count-only when ENFORCE_URL_RESCUE=0 (no searches, no inserts, no cursor writes)', async () => {
+    const db = makeRescueDb()
+    seedRejection(db)
+    process.env.ENFORCE_URL_RESCUE = '0'
+
+    const res = await enforceApplicationUrlRescue(db, {
+      findOfficialUrl: async () => { throw new Error('must not search in count-only mode') },
+    })
+    expect(res.ok).toBe(true)
+    expect(res.enforced).toBe(false)
+    expect(res.scanned).toBe(1)
+    expect(res.attempted).toBe(0)
+    expect(res.rescued).toBe(0)
+    expect(catalogRows(db).length).toBe(0)
+    expect(cursorValue(db)).toBe(null)
+  })
+
+  it('only ever considers stage=url / reason=missing_application_url rows, and tolerates a missing rejection_log table', async () => {
+    const db = makeRescueDb()
+    seedRejection(db, { reason: 'dead_application_url' })
+    seedRejection(db, { stage: 'validation', reason: 'missing_application_url' })
+    const res = await enforceApplicationUrlRescue(db, { findOfficialUrl: finderFound() })
+    expect(res.scanned).toBe(0)
+    expect(res.attempted).toBe(0)
+
+    // Missing tables (fresh/test schema) never fail the sweep.
+    const bare = new Database(':memory:')
+    const bareRes = await enforceApplicationUrlRescue(bare, { findOfficialUrl: finderFound() })
+    expect(bareRes.ok).toBe(true)
+    expect(bareRes.scanned).toBe(0)
+  })
+})
+
+describe('enforceImportedStatusHonesty', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+  function seedGrant(db, g = {}) {
+    const id = g.id || crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, title, status, submitted_date, notes, match_explanation, profile_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, g.title ?? 'G', g.status ?? 'submitted', g.submitted_date ?? null, g.notes ?? null, g.match_explanation ?? null, g.profile_id ?? null)
+    return id
+  }
+  const statusOf = (db, id) => db.prepare('SELECT status FROM grants WHERE id = ?').get(id).status
+
+  it('demotes import-stamped submitted rows (adapter "(posted)" notes, no submitted_date) to discovered', async () => {
+    const db = makeRealDb()
+    const id = seedGrant(db, { notes: 'Funding opportunity CPD-2600-DC-0007 (posted).' })
+    const res = await enforceImportedStatusHonesty(db)
+    expect(res.repaired).toBe(1)
+    expect(statusOf(db, id)).toBe('discovered')
+  })
+
+  it('demotes admin_schema_repair-stamped submitted rows', async () => {
+    const db = makeRealDb()
+    const id = seedGrant(db, { match_explanation: JSON.stringify({ source: 'admin_schema_repair', reason: 'Runtime repair backfill' }) })
+    const res = await enforceImportedStatusHonesty(db)
+    expect(res.repaired).toBe(1)
+    expect(statusOf(db, id)).toBe('discovered')
+  })
+
+  it('NEVER touches a real submission or human-noted work', async () => {
+    const db = makeRealDb()
+    const real = seedGrant(db, { submitted_date: '2026-07-01', notes: 'Funding opportunity ABC-1 (posted).' })
+    const human = seedGrant(db, { notes: 'Submitted via the state portal, confirmation #123' })
+    const pend = seedGrant(db, { status: 'pending_review', notes: 'Funding opportunity XYZ-2 (posted).' })
+    const res = await enforceImportedStatusHonesty(db)
+    expect(res.repaired).toBe(0)
+    expect(statusOf(db, real)).toBe('submitted')
+    expect(statusOf(db, human)).toBe('submitted')
+    expect(statusOf(db, pend)).toBe('pending_review')
+  })
+
+  it('count-only mode via ENFORCE_STATUS_PROVENANCE=0', async () => {
+    const db = makeRealDb()
+    const id = seedGrant(db, { notes: 'Funding opportunity Q-9 (posted).' })
+    process.env.ENFORCE_STATUS_PROVENANCE = '0'
+    try {
+      const res = await enforceImportedStatusHonesty(db)
+      expect(res.scanned).toBe(1)
+      expect(res.repaired).toBe(0)
+      expect(res.enforced).toBe(false)
+      expect(statusOf(db, id)).toBe('submitted')
+    } finally {
+      delete process.env.ENFORCE_STATUS_PROVENANCE
+    }
+  })
+})
+
+describe('enforceAmountEnrichment', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+  function seedLinkedPair(db, { foId = crypto.randomUUID(), sourceUrl = 'https://funder.org/grants' } = {}) {
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, description, source_url) VALUES (?, ?, ?, ?)`,
+    ).run(foId, 'Community Grant', 'A grant.', sourceUrl)
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id) VALUES (?, ?, 'interested', NULL, ?)`,
+    ).run(crypto.randomUUID(), 'Community Grant', foId)
+    return foId
+  }
+  const foRow = (db, id) => db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id)
+
+  it('persists per-award amounts learned from the funder page', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, found: true,
+        amounts: { amount_min: 1000, amount_max: 5000, amount_text: 'grants of $1,000 to $5,000', amount_status: 'range', amount_confidence: 0.9 },
+      }),
+    })
+    expect(res.repaired).toBe(1)
+    const row = foRow(db, foId)
+    expect(row.amount_min).toBe(1000)
+    expect(row.amount_max).toBe(5000)
+    expect(row.amount_status).toBe('range')
+  })
+
+  it('persists an honest text/status label when the page has no per-award number', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, found: false, reason: 'no_per_award_amount_on_page', amount_text: 'Amounts vary', amount_status: 'varies' }),
+    })
+    expect(res.repaired).toBe(0)
+    expect(res.textOnly).toBe(1)
+    const row = foRow(db, foId)
+    expect(row.amount_text).toBe('Amounts vary')
+    expect(row.amount_status).toBe('varies')
+  })
+
+  it('remembers attempted rows so a dry page is not re-fetched every boot', async () => {
+    const db = makeRealDb()
+    seedLinkedPair(db)
+    let calls = 0
+    const deps = { enrichImpl: async () => { calls++; return { attempted: true, found: false, reason: 'thin_page' } } }
+    await enforceAmountEnrichment(db, deps)
+    await enforceAmountEnrichment(db, deps)
+    expect(calls).toBe(1)
+  })
+
+  it('only targets amount-less rows linked to ACTIVE pipeline grants', async () => {
+    const db = makeRealDb()
+    const valued = crypto.randomUUID()
+    db.prepare(`INSERT INTO funding_opportunities (id, title, source_url, amount_max) VALUES (?, 'V', 'https://x.org', 5000)`).run(valued)
+    db.prepare(`INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id) VALUES (?, 'V', 'interested', NULL, ?)`).run(crypto.randomUUID(), valued)
+    db.prepare(`INSERT INTO funding_opportunities (id, title, source_url) VALUES (?, 'U', 'https://y.org')`).run(crypto.randomUUID())
+    let calls = 0
+    const res = await enforceAmountEnrichment(db, { enrichImpl: async () => { calls++; return { attempted: true, found: false } } })
+    expect(calls).toBe(0)
+    expect(res.scanned).toBe(0)
+  })
+
+  it('count-only mode via ENFORCE_AMOUNT_ENRICHMENT=0', async () => {
+    const db = makeRealDb()
+    seedLinkedPair(db)
+    process.env.ENFORCE_AMOUNT_ENRICHMENT = '0'
+    try {
+      let calls = 0
+      const res = await enforceAmountEnrichment(db, { enrichImpl: async () => { calls++; return {} } })
+      expect(calls).toBe(0)
+      expect(res.scanned).toBe(1)
+      expect(res.enforced).toBe(false)
+    } finally {
+      delete process.env.ENFORCE_AMOUNT_ENRICHMENT
+    }
+  })
+})
+
+describe('enforceGrantAmountBackfill wide-range default (program-envelope guard)', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  it('defaults amount_requested to the FLOOR when the range is wider than the ratio, ceiling otherwise', async () => {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    const wide = crypto.randomUUID()
+    const normal = crypto.randomUUID()
+    db.prepare(`INSERT INTO grants (id, title, status, profile_id, amount_min, amount_max) VALUES (?, 'Wide', 'interested', NULL, 1000000, 42000000)`).run(wide)
+    db.prepare(`INSERT INTO grants (id, title, status, profile_id, amount_min, amount_max) VALUES (?, 'Normal', 'interested', NULL, 1000, 5000)`).run(normal)
+    await enforceGrantAmountBackfill(db)
+    const req = (id) => Number(db.prepare('SELECT amount_requested FROM grants WHERE id = ?').get(id).amount_requested)
+    expect(req(wide)).toBe(1000000)
+    expect(req(normal)).toBe(5000)
+  })
+})
+
+describe('enforceGrantAmountBackfill catalog amount-sanity net (untrusted implausible amounts)', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+
+  it('strips fabricated program-appropriation numerics from untrusted rows and cleans inherited grant values', async () => {
+    const db = makeRealDb()
+    const foId = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, source, amount_min, amount_max) VALUES (?, 'HUD Section 4 Capacity Building', 'web_search', 1000000, 42000000)`,
+    ).run(foId)
+    const gId = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id, amount_requested, amount_min, amount_max)
+       VALUES (?, 'HUD Section 4 Capacity Building', 'submitted', NULL, ?, 42000000, 1000000, 42000000)`,
+    ).run(gId, foId)
+    // A grant with a USER-entered ask on the same opportunity must keep it.
+    const userG = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id, amount_requested)
+       VALUES (?, 'HUD Section 4 Capacity Building', 'interested', NULL, ?, 50000)`,
+    ).run(userG, foId)
+
+    await enforceGrantAmountBackfill(db)
+
+    const fo = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(foId)
+    expect(fo.amount_min).toBe(null)
+    expect(fo.amount_max).toBe(null)
+    expect(fo.amount_status).toBe('not_listed')
+    expect(fo.amount_text).toContain('42,000,000')
+    const g = db.prepare('SELECT * FROM grants WHERE id = ?').get(gId)
+    expect(g.amount_requested).toBe(null)
+    expect(g.amount_max).toBe(null)
+    const ug = db.prepare('SELECT amount_requested FROM grants WHERE id = ?').get(userG)
+    expect(Number(ug.amount_requested)).toBe(50000)
+  })
+
+  it('keeps implausibly large amounts on OFFICIAL-source rows', async () => {
+    const db = makeRealDb()
+    const foId = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, source, amount_max) VALUES (?, 'State DOT Bridge Program', 'grants_gov', 25000000)`,
+    ).run(foId)
+    await enforceGrantAmountBackfill(db)
+    const fo = db.prepare('SELECT amount_max FROM funding_opportunities WHERE id = ?').get(foId)
+    expect(Number(fo.amount_max)).toBe(25000000)
   })
 })

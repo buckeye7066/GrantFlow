@@ -157,3 +157,48 @@ describe('resolveOpportunityAmounts — structured wins, extraction fills', () =
     })
   })
 })
+
+describe('resolveOpportunityAmounts — untrusted-source plausibility guard (the HUD Section 4 class)', () => {
+  it('demotes an implausible untrusted structured range to text-only (program funding level)', () => {
+    // The $84M-of-fake-pipeline case: a web/LLM row carried HUD Section 4's
+    // $42M PROGRAM APPROPRIATION as its per-award ceiling.
+    const r = resolveOpportunityAmounts({
+      source: 'web_search',
+      amount_min: 1_000_000,
+      amount_max: 42_000_000,
+    })
+    expect(r.amount_min).toBe(null)
+    expect(r.amount_max).toBe(null)
+    expect(r.amount_status).toBe('not_listed')
+    expect(r.amount_text).toContain('42,000,000')
+    expect(r.amount_text).toContain('program funding level')
+    expect(r.amount_confidence).toBe(null)
+  })
+
+  it('keeps implausibly large amounts when the source is an OFFICIAL feed', () => {
+    const byTier = resolveOpportunityAmounts({
+      source: 'web_search',
+      source_trust_tier: 'OFFICIAL_API',
+      amount_min: 1_000_000,
+      amount_max: 42_000_000,
+    })
+    expect(byTier).toMatchObject({ amount_min: 1_000_000, amount_max: 42_000_000, amount_status: 'range' })
+    const bySource = resolveOpportunityAmounts({
+      source: 'grants_gov',
+      amount_max: 25_000_000,
+    })
+    expect(bySource.amount_max).toBe(25_000_000)
+  })
+
+  it('keeps plausible untrusted structured amounts unchanged', () => {
+    const r = resolveOpportunityAmounts({ source: 'web_search', amount_min: 1000, amount_max: 5000 })
+    expect(r).toMatchObject({ amount_min: 1000, amount_max: 5000, amount_status: 'range' })
+  })
+
+  it('demotes a sub-$100 untrusted "award" the same way', () => {
+    const r = resolveOpportunityAmounts({ source: 'web_search', amount_min: 5, amount_max: 20 })
+    expect(r.amount_min).toBe(null)
+    expect(r.amount_max).toBe(null)
+    expect(r.amount_status).toBe('not_listed')
+  })
+})

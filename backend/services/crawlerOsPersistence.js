@@ -45,9 +45,17 @@ async function prunePipelineRejects(db, memStore, idRemap) {
     const oppId = idRemap.get(m.opportunity_id) ?? m.opportunity_id;
     const osOpp = catalogById.get(m.opportunity_id) ?? null;
     const liveOpp = osOpp ? { ...osOppToLiveRow(osOpp), id: oppId } : { id: oppId };
-    const grants = await db
-      .prepare('SELECT id, status, funding_opportunity_id, fingerprint, title, funder, deadline, url, application_url FROM grants WHERE profile_id = ?')
-      .all(m.profile_id);
+    // Fixture/minimal DBs may lack optional grant columns (fingerprint, funder…)
+    // — degrade to skipping the prune rather than failing the whole persist,
+    // mirroring cleanupHamiltonRejects below.
+    let grants = [];
+    try {
+      grants = await db
+        .prepare('SELECT id, status, funding_opportunity_id, fingerprint, title, funder, deadline, url, application_url FROM grants WHERE profile_id = ?')
+        .all(m.profile_id);
+    } catch {
+      continue;
+    }
     const matchingGrants = (grants || []).filter((g) => {
       if (g.funding_opportunity_id === oppId) return true;
       return likelySameGrantOpportunity(liveOpp, g);

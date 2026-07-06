@@ -43,8 +43,13 @@ function scheduleOpportunityEmbedding(db, opportunityId, opportunity) {
  * Best-effort: log a rejection row, then return the skip verdict unchanged.
  * Centralises the rejection_log write so every skip path is observable
  * without each call site repeating the logging boilerplate. Never throws.
+ *
+ * @param {object} [extraMeta] Optional extra fields merged into raw_meta —
+ *   used by the url gate to persist a reconstructable `candidate` snapshot so
+ *   the application-URL rescue sweep (enforceApplicationUrlRescue) can re-drive
+ *   the row later. All other call sites pass nothing and are unchanged.
  */
-async function logRejection(db, opportunity, stage, reason, verdict) {
+async function logRejection(db, opportunity, stage, reason, verdict, extraMeta) {
   try {
     await recordRejection(db, {
       source: opportunity?.source ?? null,
@@ -52,12 +57,39 @@ async function logRejection(db, opportunity, stage, reason, verdict) {
       title: opportunity?.title ?? null,
       reason,
       stage,
-      raw_meta: { record_origin: opportunity?.record_origin ?? null },
+      raw_meta: {
+        record_origin: opportunity?.record_origin ?? null,
+        ...(extraMeta !== null && extraMeta !== undefined && typeof extraMeta === 'object' ? extraMeta : {}),
+      },
     })
   } catch {
     /* recordRejection is already best-effort; belt-and-suspenders */
   }
   return verdict
+}
+
+/** Max description characters preserved in a url-rejection's rescue snapshot. */
+const RESCUE_META_DESCRIPTION_MAX_CHARS = 500
+/** Max categories preserved in a url-rejection's rescue snapshot. */
+const RESCUE_META_MAX_CATEGORIES = 8
+
+/**
+ * Snapshot of the fields the application-URL rescue lane needs to reconstruct
+ * a candidate that was rejected ONLY for lacking a URL. Everything here is the
+ * candidate's OWN data (verbatim, truncated) — nothing derived or invented.
+ */
+function buildRescueCandidateMeta(opportunity = {}) {
+  const description = normalizeNonEmptyString(opportunity.description)
+  return {
+    sponsor: resolveSponsorName(opportunity),
+    description: description ? description.slice(0, RESCUE_META_DESCRIPTION_MAX_CHARS) : null,
+    deadline: opportunity.deadline ?? null,
+    amount_min: opportunity.amount_min ?? null,
+    amount_max: opportunity.amount_max ?? null,
+    categories: ensureArray(opportunity.categories).slice(0, RESCUE_META_MAX_CATEGORIES),
+    source: opportunity.source ?? null,
+    record_origin: opportunity.record_origin ?? null,
+  }
 }
 
 /**
@@ -469,12 +501,18 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
     const urlReason = !candidateUrl ? 'missing_application_url' : 'dead_application_url'
+    // Persist a reconstructable candidate snapshot in raw_meta: a row rejected
+    // ONLY for lacking a URL is a real, otherwise-viable candidate, and the
+    // application-URL rescue sweep (enforceApplicationUrlRescue) gives it one
+    // bounded chance to be re-driven with a real, liveness-verified page found
+    // by title+sponsor search. Without this snapshot the sponsor/description
+    // were lost and only title-only rescue was possible.
     return logRejection(db, opportunity, 'url', urlReason, {
       id: null,
       inserted: false,
       skipped: true,
       reason: !candidateUrl ? 'missing evidence/source/application URL' : 'invalid or placeholder URL',
-    })
+    }, { candidate: buildRescueCandidateMeta(opportunity) })
   }
 
   // ── MANDATORY reality gate (mission rule #1) ────────────────────────────

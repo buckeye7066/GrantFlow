@@ -47,6 +47,16 @@ export const PIPELINE_ACTIVE_STATUSES = Object.freeze([
 ])
 
 /**
+ * When a grant carries BOTH an award floor and ceiling and the ceiling is more
+ * than this many times the floor, the range is a program ENVELOPE ("$1M–$42M"),
+ * not a realistic single-award figure — defaulting amount_requested to the
+ * ceiling would overstate the pipeline by construction (the HUD Section 4
+ * class: one such row fabricated ~$84M across two org pipelines). Defaulting
+ * uses the FLOOR for wide ranges; the ceiling stays visible in amount_max.
+ */
+export const WIDE_AWARD_RANGE_RATIO = 10
+
+/**
  * SQL expression for one grant row's pipeline dollar value.
  * Compile-time literal (no user input), safe to inline in SQL; works on both
  * SQLite and Postgres (NULLIF/COALESCE are common dialect).
