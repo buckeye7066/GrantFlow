@@ -594,7 +594,29 @@ export default function GrantDetail() {
   }
   if (isErrorGrant) { return <div className="p-4">Error loading grant: {toMessage(grantError)}</div>; }
   if (isErrorOrg && grant?.organization_id) { return <div className="p-4">Error loading organization: {toMessage(orgError)}</div>; }
-  if (!grant) { return <div className="p-4">Grant not found.</div>; }
+  if (!grant) {
+    // Friendly empty state — reachable via a stale link, a deleted grant, or
+    // the bare /GrantDetail route. Never a dead end: always offer a way on.
+    return (
+      <div data-testid="grant-not-found" className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+        <FileText className="h-10 w-10 text-slate-300" aria-hidden="true" />
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">We couldn't find that funding source</h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-slate-600">
+            It may have been removed, or the link is out of date. Everything you're working on is still in your pipeline.
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-center gap-3">
+          <Button asChild>
+            <Link to={createPageUrl('Pipeline')}>Go to my pipeline</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to={createPageUrl('DiscoverGrants')}>Discover funding</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
   
   const handleStarToggle = () => { updateGrantMutation.mutate({ starred: !grant.starred }); };
 

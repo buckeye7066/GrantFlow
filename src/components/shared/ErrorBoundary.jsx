@@ -25,6 +25,12 @@ class ErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
+      // An explicit fallback (including null) wins — overlays like the guided
+      // tour must vanish on error rather than replace themselves with an
+      // error card in the middle of the app.
+      if ('fallback' in this.props) {
+        return this.props.fallback
+      }
       return (
         <Card className="border-red-500 bg-red-50">
           <CardHeader>
