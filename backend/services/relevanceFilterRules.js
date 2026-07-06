@@ -150,13 +150,28 @@ function _isStudentProfile(pd) {
   return t === 'student' || t === 'high_school_student' || t === 'college_student'
 }
 
-// A research-capable institution (university, medical center, research institute).
-// GrantFlow's clients (individuals, families, churches, small community nonprofits,
-// K-12 schools, businesses, VFDs) are NOT these, so NIH/CDC research mechanisms and
-// "research center/resource" cooperative agreements do not apply to them.
+// A research-capable institution (university, medical center, research institute,
+// or a declared research organization). Most GrantFlow clients (individuals,
+// families, churches, small community nonprofits, K-12 schools, VFDs) are NOT
+// these, so NIH/CDC research mechanisms and "research center/resource"
+// cooperative agreements do not apply to them.
 function _isResearchInstitution(pd) {
   const t = (pd.primary_type || '').toLowerCase()
-  return ['university', 'college_institution', 'research_institution', 'hospital', 'medical_center', 'academic_medical_center'].includes(t)
+  if (['university', 'college_institution', 'research_institution', 'hospital', 'medical_center', 'academic_medical_center'].includes(t)) {
+    return true
+  }
+  // A profile can DECLARE research capability via its organization type
+  // (Axiom BioLabs: primary_type 'organization', organization_type
+  // "Biotechnology / research organization"). Research mechanisms are exactly
+  // what such an org exists to pursue — rejecting them was the 2026-07-06
+  // research-org false-rejection class. Signals come ONLY from declared
+  // identity fields (organization_type / entity_type), never free text,
+  // mirroring the deriveApplicantTypes declared-identity rule (#618).
+  const declared = [pd.organization_type, pd.entity_type, pd.entityType]
+    .filter((v) => typeof v === 'string')
+    .join(' ')
+    .toLowerCase()
+  return /\b(research|biotech(?:nology)?|life[\s_-]?sciences?|laborator(?:y|ies)|r&d|institute)\b/.test(declared)
 }
 
 // A tribal government / Native organization. Tribal-only cooperative agreements
@@ -1055,7 +1070,7 @@ export const RELEVANCE_RULES = [
     profileCheck: (pd) => {
       const t = (pd.primary_type || '').toLowerCase()
       return !_isNonprofitProfile(pd) && !_isBusinessProfile(pd) && !_isStudentProfile(pd) &&
-        t !== 'researcher' && t !== 'school'
+        !_isResearchInstitution(pd) && t !== 'researcher' && t !== 'school'
     },
     reason: 'Content type mismatch: PI/institution-only academic call, not open to individual profiles',
   },

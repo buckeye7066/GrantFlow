@@ -876,7 +876,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(15)
+    expect(summary.ran).toBe(16)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -888,6 +888,7 @@ describe('enforceInvariants — runner', () => {
       'grant_amount_backfill',
       'individual_amount_ceiling',
       'student_aid_eligibility',
+      'no_dangling_matches',
       'profession_eligibility',
       'funder_backfill',
       'profile_display_name_not_doubled',
@@ -1747,6 +1748,81 @@ describe('enforceGrantAmountBackfill — pipeline-$ visibility', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', match_score: 90 })
 
     const result = await enforceGrantAmountBackfill(db)
+    expect(result.ok).toBe(true)
+    expect(result.skipped).toBe('schema')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// INVARIANT: no dangling profile-opportunity matches (a surfaced match must
+// point at a catalog row that still exists; ghosts inflate the matches view
+// and waste promote passes with opportunity_not_found).
+// ---------------------------------------------------------------------------
+
+function makeMatchesDb() {
+  const db = makeAmountDb()
+  db.exec(`
+    CREATE TABLE profile_opportunity_matches (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      matcher_version TEXT
+    );
+  `)
+  return db
+}
+
+describe('enforceNoDanglingMatches — surface-table hygiene', () => {
+  const { enforceNoDanglingMatches } = __testables
+
+  function insertMatch(db, { id, profileId, oppId, score = 80, version = 'crawler-os' }) {
+    db.prepare('INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, matcher_version) VALUES (?, ?, ?, ?, ?)')
+      .run(id, profileId, oppId, score, version)
+  }
+
+  it('deletes matches whose catalog row is gone; keeps resolvable ones (any matcher_version)', async () => {
+    const db = makeMatchesDb()
+    db.prepare('INSERT INTO funding_opportunities (id, title) VALUES (?, ?)').run('opp-live', 'Real Grant')
+    insertMatch(db, { id: 'm1', profileId: 'p1', oppId: 'opp-live' })
+    insertMatch(db, { id: 'm2', profileId: 'p1', oppId: 'opp-deleted' })
+    insertMatch(db, { id: 'm3', profileId: 'p2', oppId: 'opp-also-gone', version: 'web-llm' })
+
+    const result = await enforceNoDanglingMatches(db)
+    expect(result.ok).toBe(true)
+    expect(result.repaired).toBe(2)
+    const left = db.prepare('SELECT id FROM profile_opportunity_matches ORDER BY id').all().map((r) => r.id)
+    expect(left).toEqual(['m1'])
+  })
+
+  it('count-only when ENFORCE_NO_DANGLING_MATCHES=0', async () => {
+    const db = makeMatchesDb()
+    insertMatch(db, { id: 'm1', profileId: 'p1', oppId: 'opp-gone' })
+    process.env.ENFORCE_NO_DANGLING_MATCHES = '0'
+    try {
+      const result = await enforceNoDanglingMatches(db)
+      expect(result.repaired).toBe(0)
+      expect(result.scanned).toBe(1)
+      expect(result.enforced).toBe(false)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM profile_opportunity_matches').get().n).toBe(1)
+    } finally {
+      delete process.env.ENFORCE_NO_DANGLING_MATCHES
+    }
+  })
+
+  it('is idempotent and a no-op on a clean table', async () => {
+    const db = makeMatchesDb()
+    db.prepare('INSERT INTO funding_opportunities (id, title) VALUES (?, ?)').run('opp-live', 'Real Grant')
+    insertMatch(db, { id: 'm1', profileId: 'p1', oppId: 'opp-live' })
+    const first = await enforceNoDanglingMatches(db)
+    const second = await enforceNoDanglingMatches(db)
+    expect(first.repaired).toBe(0)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('degrades to skip when the matches table is absent (never throws)', async () => {
+    const db = makeAmountDb() // no profile_opportunity_matches table
+    const result = await enforceNoDanglingMatches(db)
     expect(result.ok).toBe(true)
     expect(result.skipped).toBe('schema')
   })

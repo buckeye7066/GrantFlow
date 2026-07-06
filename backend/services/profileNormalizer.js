@@ -351,6 +351,22 @@ export const ENTITY_TYPE_ALIAS_MAP = {
   library: 'organization',
   housing_authority: 'organization',
   tribal_organization: 'organization',
+
+  // Research-capable organizations (the Axiom BioLabs class, 2026-07-06):
+  // these raw types used to leak through unmapped as literal entityTypes
+  // ('biotechnology'), breaking every entityType === '...' comparison in the
+  // eligibility gates — a declared research org was then rejected from the
+  // research-institution mechanisms it exists to pursue.
+  biotechnology: 'organization',
+  biotech: 'organization',
+  research_organization: 'organization',
+  research_institution: 'organization',
+  research_institute: 'organization',
+  laboratory: 'organization',
+  life_sciences: 'organization',
+  university: 'organization',
+  hospital: 'organization',
+  medical_center: 'organization',
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +384,16 @@ export function normalizeNeedCategory(raw) {
 export function normalizeEntityType(raw) {
   if (!raw || typeof raw !== 'string') return null
   const key = raw.toLowerCase().trim().replace(/[\s-]+/g, '_')
-  return ENTITY_TYPE_ALIAS_MAP[key] ?? key
+  if (ENTITY_TYPE_ALIAS_MAP[key]) return ENTITY_TYPE_ALIAS_MAP[key]
+  // Unmapped free-text org types ("Biotechnology / research organization")
+  // used to leak through as literal entityTypes, silently failing every
+  // entityType === '...' gate downstream. Recognizably org-shaped strings
+  // collapse to the canonical org bucket; anything else keeps the raw key
+  // (compat with callers that pass custom types).
+  if (/(organi[sz]ation|institut|universit|hospital|laborator|research|biotech|life_scien|foundation|agency|coalition|consortium)/.test(key)) {
+    return 'organization'
+  }
+  return key
 }
 
 // ---------------------------------------------------------------------------

@@ -1994,6 +1994,75 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
  * read the boot summary) without fabricating data.
  */
 /**
+ * INVARIANT: NO DANGLING PROFILE-OPPORTUNITY MATCHES
+ * (a surfaced match must point at a catalog row that still exists).
+ *
+ * THE BUG THIS CLOSES (2026-07-06)
+ * --------------------------------
+ * Catalog rows are deleted by several paths (dedupe collapse, reality-gate
+ * purges, the Amy reaper, manual cleanups) and NONE of them cleaned up
+ * `profile_opportunity_matches` rows pointing at the deleted opportunity.
+ * 271 dangling matches had accumulated; Avanell Leamon's matches view showed
+ * 96 candidates ≥65 of which 62 were unusable ghosts — every read path joins
+ * to funding_opportunities, so they inflate counts, waste promote passes
+ * (`opportunity_not_found`), and misrepresent discovery quality to the
+ * coverage flywheel.
+ *
+ * THE RULE: a match row whose opportunity_id no longer resolves to a
+ * funding_opportunities row is deleted. Nothing of value is lost — the match
+ * is unusable everywhere (all surfacing paths join the catalog). Idempotent;
+ * ON by default; ENFORCE_NO_DANGLING_MATCHES=0 for count-only.
+ */
+export async function enforceNoDanglingMatches(db) {
+  return runInvariant('no_dangling_matches', async () => {
+    // Both tables must exist (minimal test DBs may lack either) — probe first.
+    try {
+      await db.prepare('SELECT 1 FROM profile_opportunity_matches LIMIT 1').get()
+      await db.prepare('SELECT 1 FROM funding_opportunities LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const DANGLING_WHERE = `NOT EXISTS (
+      SELECT 1 FROM funding_opportunities fo
+       WHERE fo.id = profile_opportunity_matches.opportunity_id
+    )`
+
+    let violators = 0
+    try {
+      const row = await db
+        .prepare(`SELECT COUNT(*) AS n FROM profile_opportunity_matches WHERE ${DANGLING_WHERE}`)
+        .get()
+      violators = Number(row?.n) || 0
+    } catch (err) {
+      log.warn('no_dangling_matches: count query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+    if (violators === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_NO_DANGLING_MATCHES) === false
+    if (disabled) {
+      log.warn('dangling profile-opportunity matches present (delete DISABLED via ENFORCE_NO_DANGLING_MATCHES=0)', { violators })
+      return { scanned: violators, repaired: 0, enforced: false }
+    }
+
+    let repaired = 0
+    try {
+      const result = await db
+        .prepare(`DELETE FROM profile_opportunity_matches WHERE ${DANGLING_WHERE}`)
+        .run()
+      repaired = changesOf(result)
+    } catch (err) {
+      log.warn('no_dangling_matches: delete failed (non-fatal)', { error: String(err?.message || err) })
+    }
+    if (repaired > 0) {
+      log.info('purged dangling profile-opportunity matches (catalog row gone)', { repaired })
+    }
+    return { scanned: violators, repaired, enforced: true }
+  })
+}
+
+/**
  * INVARIANT: PIPELINE GRANTS CARRY A DOLLAR VALUE WHEN ONE IS KNOWABLE
  * (pipeline-$ visibility — the "$6,500 pipeline with 118 real sources" bug).
  *
@@ -2411,6 +2480,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // caps below the floor, e.g. web-llm rows that the reconcile never re-scores).
   // Operates on profile_opportunity_matches, so it complements the grants sweeps.
   steps.push(await enforceStudentAidEligibility(db))
+  // Surface-table hygiene: a persisted match whose catalog row was deleted
+  // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
+  // unusable ghost that inflates the matches view and wastes promote passes.
+  steps.push(await enforceNoDanglingMatches(db))
   // Profession-eligibility net: cancel the Hamilton tasks + purge the early-status
   // grants for opportunities LOCKED to a profession the profile does not practise
   // (e.g. a nursing scholarship in a paramedic student's pipeline). Reuses the
@@ -2486,6 +2559,7 @@ export const __testables = {
   enforceProfileEligibility,
   enforceFunderBackfill,
   enforceGrantAmountBackfill,
+  enforceNoDanglingMatches,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,
