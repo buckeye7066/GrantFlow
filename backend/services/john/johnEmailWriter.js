@@ -17,7 +17,7 @@
  * crisp call-to-action. No filler, no generic flattery, no hype.
  */
 
-import { fillTemplate, pickSubjectTemplate, TEMPLATES, frameForType, OPT_OUT_LINE } from './johnEmailTemplates.js'
+import { fillTemplate, pickSubjectTemplate, TEMPLATES, frameForType, OPT_OUT_LINE, buildNoConflictParagraph } from './johnEmailTemplates.js'
 import { DEFAULT_SALUTATION, interpretLead } from './johnLeadInterpreter.js'
 import { getJohnConfig } from './johnOutreachSafety.js'
 import { aiComposerEnabled, composeEmailWithAI } from './johnEmailComposerAI.js'
@@ -233,6 +233,7 @@ export function composeWithTemplate(lead, opts = {}) {
     ORGANIZATION_NAME: orgName,
     OPENING_LINE: openingLine,
     VALUE_PARAGRAPH: valueParagraph,
+    NO_CONFLICT_PARAGRAPH: buildNoConflictParagraph(interpretation.organization_name),
     CTA_PARAGRAPH: ctaParagraph,
     PROSPECT_LINK: prospectLink,
     OPT_OUT_LINE,

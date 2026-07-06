@@ -30,6 +30,25 @@ export const APPROVED_SUBJECT_TEMPLATES = [
 export const OPT_OUT_LINE = `If this is not relevant, just reply "no thanks" and I won't follow up.`
 
 /**
+ * The "no conflict with your grant writer" paragraph (owner directive,
+ * 2026-07-06). Many recipients already have a grant writer or consultant
+ * under contract; the email must acknowledge that professionally and make
+ * the risk-free mechanics explicit: the 7-day free trial means LOOKING
+ * involves no money changing hands (so it cannot breach an existing
+ * agreement), and if they like GrantFlow there is never a contract — just
+ * weekly, biweekly, or monthly billing. Present in BOTH composer paths
+ * (deterministic template + AI footer) so every draft carries it verbatim.
+ */
+export function buildNoConflictParagraph(orgName) {
+  const org = String(orgName || '').trim() || 'your organization'
+  return (
+    `And if ${org} already works with a grant writer or has a consultant under contract, that is a good position to be in, and nothing here asks you to change it. ` +
+    `GrantFlow starts with a 7-day free trial, so you can see everything it finds with no money changing hands, and simply looking will not step on any agreement you have in place. ` +
+    `If you like what you see, consider us: we never require a contract, and billing is weekly, biweekly, or monthly, whichever suits you.`
+  )
+}
+
+/**
  * Body template.
  *
  * The writer (johnEmailWriter) composes {{OPENING_LINE}}, {{VALUE_PARAGRAPH}},
@@ -57,6 +76,8 @@ const DEFAULT_BODY_TEMPLATE = [
   '{{VALUE_PARAGRAPH}}',
   '',
   'I should be straight about where GrantFlow comes from. Our founder, Dr. John White, never set out to build software. He built it to fund his own research lab, Axiom BioLabs. When it worked, he pointed the same engine at the nonprofit and ministry work he cares about, and later at scholarships and college funding for his own kids. The lesson never changed: the work was never the hard part. Paying for it was.',
+  '',
+  '{{NO_CONFLICT_PARAGRAPH}}',
   '',
   '{{CTA_PARAGRAPH}}',
   '',

@@ -162,3 +162,29 @@ test('no their-work paragraph is faked when the facts are thin', async () => {
     restore()
   }
 })
+
+// ── Grant-writer no-conflict + trial/billing paragraph (owner, 2026-07-06) ────
+// Every draft must acknowledge the recipient may already have a grant writer
+// under contract, and state the risk-free mechanics: 7-day free trial with no
+// money changing hands (so looking cannot breach an agreement), no contract
+// required, weekly/biweekly/monthly billing.
+test('every draft carries the grant-writer no-conflict + trial/billing paragraph', async () => {
+  const restore = applyDefaultJohnEnv()
+  try {
+    const cfg = getJohnConfig()
+    const lead = makeQualifiedLead({})
+    const r = await composeEmailFromLead(lead, { config: cfg })
+    assert.equal(r.ok, true)
+    assert.match(r.body_text, /grant writer/i, 'acknowledges an existing grant writer')
+    assert.match(r.body_text, /7-day free trial/i, 'names the 7-day free trial')
+    assert.match(r.body_text, /no money changing hands/i, 'no money changes hands while looking')
+    assert.match(r.body_text, /never require a contract/i, 'no contract required')
+    assert.match(r.body_text, /weekly, biweekly, or monthly/i, 'billing cycles named')
+    // No em/en dashes anywhere (John's hard formatting rule).
+    assert.doesNotMatch(r.body_text, /[–—]/)
+    // The first test in this file already asserts the full composed body
+    // (including this paragraph) passes the outbound safety classifier.
+  } finally {
+    restore()
+  }
+})
