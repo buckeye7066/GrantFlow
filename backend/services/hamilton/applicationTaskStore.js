@@ -938,6 +938,31 @@ export async function listMissingInfo(db, taskId, { includeResolved = true } = {
   return (rows || []).map(rowToMissing)
 }
 
+/**
+ * Batched variant of listMissingInfo: ONE query for many tasks instead of one
+ * query per task. The profile-summary endpoint reads up to 200 tasks; serial
+ * per-task reads under a contended pool were slow enough to trip proxy
+ * timeouts. Returns a Map of taskId -> missing-info items (same item shape as
+ * listMissingInfo); tasks with no rows are simply absent from the map.
+ */
+export async function listMissingInfoForTasks(db, taskIds, { includeResolved = true } = {}) {
+  const ids = [...new Set((taskIds || []).filter(Boolean).map(String))]
+  const byTask = new Map()
+  if (ids.length === 0) return byTask
+  await ensureApplicationTaskSchema(db)
+  const ph = ids.map(() => '?').join(',')
+  const sql = includeResolved
+    ? `SELECT * FROM application_missing_info WHERE task_id IN (${ph}) ORDER BY created_at ASC`
+    : `SELECT * FROM application_missing_info WHERE task_id IN (${ph}) AND resolved = 0 ORDER BY created_at ASC`
+  const rows = await db.prepare(sql).all(...ids)
+  for (const row of rows || []) {
+    const key = String(row.task_id)
+    if (!byTask.has(key)) byTask.set(key, [])
+    byTask.get(key).push(rowToMissing(row))
+  }
+  return byTask
+}
+
 export async function resolveMissingInfoItem(db, taskId, { kind, key, value, resolvedBy = null } = {}) {
   if (!taskId || !kind || !key) throw new Error('taskId/kind/key required')
   await ensureApplicationTaskSchema(db)
