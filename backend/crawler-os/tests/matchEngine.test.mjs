@@ -72,7 +72,12 @@ test('a multi-need profile is NOT penalized for a focused grant — one real spe
   });
   const m = computeMatchDecision(focused, multiNeed);
   assert.ok(m.match_explain.matched_needs.includes('capital'), 'focused grant should name the matched profile need');
-  assert.ok(m.match_score >= 70, `focused grant should still score strongly, got ${m.match_score}`);
+  // NEED-ANCHORED scale (2026-07-06): one fully-matched main need out of 4 IS
+  // 25 — exactly the pipeline bar (AUTO_ADD/DISCOVERY_MIN_SCORE_FLOOR). The
+  // old ≥70 expectation belonged to the retired additive scale. The intent
+  // this test protects is unchanged: a genuinely-relevant focused grant must
+  // reach the pipeline and must never be REJECTED for being focused.
+  assert.ok(m.match_score >= 25, `focused grant must reach the pipeline bar (25 = one main need), got ${m.match_score}`);
   assert.notEqual(m.decision, MATCH_DECISION.REJECT, `a real specific-need match must not be rejected (got ${m.decision} @ ${m.match_score})`);
 });
 

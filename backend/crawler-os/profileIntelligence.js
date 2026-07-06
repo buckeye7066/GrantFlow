@@ -11,6 +11,7 @@
 // (geoRadius reads the static `zipcodes` dataset — deterministic, no I/O.)
 
 import { nearbyCities } from './geoRadius.js';
+import { containsTermWholeWord } from '../services/shared/textMatch.js';
 
 const APPLICANT_TYPE_SYNONYMS = {
   individual: ['individual', 'person', 'resident'],
@@ -852,8 +853,16 @@ function addNeedPhrase(found, phrase) {
   if (!text) return;
   const token = key(text);
   if (NEED_KEYWORDS[token] || NEED_IMPLICATIONS[token]) found.add(token);
+  // Whole-word matching only: plain includes() let fragments claim needs —
+  // "parental support" derived a housing need because 'rent' ⊂ "parental",
+  // the same substring-explosion class as the 13-bucket applicant-type case.
+  // The underscore token is compared in its spaced form so multi-word canon
+  // keywords ("food assistance") still match phrases keyed to underscores.
+  const spacedToken = token.replace(/_+/g, ' ');
   for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
-    if (kws.some((k) => text.includes(k) || token.includes(key(k)))) found.add(canon);
+    if (kws.some((k) => containsTermWholeWord(text, k) || containsTermWholeWord(spacedToken, key(k).replace(/_+/g, ' ')))) {
+      found.add(canon);
+    }
   }
 }
 
@@ -891,11 +900,20 @@ function deriveNeeds(profile, blob) {
     .concat(profile?.needs ?? [])
     .concat(profile?.need_categories ?? [])
     .map(lc)
-    .filter(Boolean);
+    .filter(Boolean)
+    // Bookkeeping tags mark HOW a profile is managed, not WHAT it needs —
+    // 'designated'/'synthetic'/'individual' must never seed a need scan.
+    .filter((e) => !RESERVED_PROFILE_TAGS.has(e) && !RESERVED_PROFILE_TAGS.has(key(e)));
   const found = new Set();
   for (const e of explicit) addNeedPhrase(found, e);
+  // WHOLE-WORD blob scan. Substring includes() was the phantom-need driver:
+  // 'rent' ⊂ "parent"/"current" → housing for nearly every profile, 'ets' ⊂
+  // "targets"/"assets" → military_transition, 'sud' ⊂ "sudden" →
+  // substance_recovery, 'coa' ⊂ "coach"/"coast" → tuition. Phantom needs are
+  // doubly harmful on the need-anchored scale: they dilute the coverage
+  // denominator for the profile's REAL needs and they spawn junk web queries.
   for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
-    if (kws.some((k) => blob.includes(k))) found.add(canon);
+    if (kws.some((k) => containsTermWholeWord(blob, k))) found.add(canon);
   }
   if (found.size === 0) addProfileTypeDefaultNeeds(found, profile);
   applyNeedImplications(found);

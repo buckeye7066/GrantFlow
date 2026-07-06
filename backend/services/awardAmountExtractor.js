@@ -253,16 +253,64 @@ export function extractAwardAmountsFromText(text) {
   return none
 }
 
+// Source shapes whose structured numbers come from an OFFICIAL feed (grants.gov
+// / sam.gov / agency APIs). Official per-award ceilings can legitimately be
+// enormous (state DOT infrastructure awards), so the plausibility window below
+// never second-guesses them. Everything else (web_search / LLM-extracted /
+// aggregator rows) gets the same window text extraction already obeys.
+const RE_OFFICIAL_SOURCE = /^(grants[._]?gov|sam[._]?gov|sbir[._]?gov|federal[._]?register|usaspending|simpler[._]?grants|nih|nsf|usda(_rd)?|fema(_afg)?|hud|hrsa|ed[._]?gov|doe|dot|epa|imls)$/i
+
+export function isOfficialAmountSource(opportunity) {
+  const tier = String(opportunity?.source_trust_tier ?? opportunity?.trust_tier ?? '').toLowerCase()
+  if (tier.includes('official')) return true
+  return RE_OFFICIAL_SOURCE.test(String(opportunity?.source ?? '').trim())
+}
+
+/** Plausibility window bounds, exported for the boot-sweep net. */
+export const AMOUNT_MIN_PLAUSIBLE = MIN_PLAUSIBLE
+export const AMOUNT_MAX_PLAUSIBLE = MAX_PLAUSIBLE
+
+function formatUsd(n) {
+  return `$${Number(n).toLocaleString('en-US')}`
+}
+
 /**
  * Resolve an opportunity's amount fields for persistence: structured numeric
- * fields ALWAYS win; text extraction (title + amount_description + description)
+ * fields win; text extraction (title + amount_description + description)
  * fills in ONLY when both are absent. Always yields amount_status (+ text /
  * confidence when knowable) so no row is left blank when something is known.
+ *
+ * PLAUSIBILITY GUARD (2026-07-06): structured numbers used to be trusted
+ * unconditionally, so a web/LLM-extracted row could carry a federal PROGRAM
+ * APPROPRIATION as its per-award ceiling — HUD Section 4's $42,000,000 landed
+ * in amount_max off an aggregator page, was defaulted into amount_requested,
+ * and single-handedly fabricated ~99% of two org pipelines' dollar value.
+ * Untrusted-source structured amounts outside the same window text extraction
+ * obeys ($100–$10M) are now demoted to TEXT: the figure is preserved as the
+ * honest best-available excerpt, but no numeric per-award claim is made
+ * (per-award figure genuinely unknown → status 'not_listed').
  */
 export function resolveOpportunityAmounts(opportunity) {
   const structuredMin = typeof opportunity?.amount_min === 'number' ? opportunity.amount_min : null
   const structuredMax = typeof opportunity?.amount_max === 'number' ? opportunity.amount_max : null
   if (structuredMin !== null || structuredMax !== null) {
+    const ceiling = structuredMax ?? structuredMin
+    const floor = structuredMin ?? structuredMax
+    const implausible = ceiling > MAX_PLAUSIBLE || floor > MAX_PLAUSIBLE || ceiling < MIN_PLAUSIBLE
+    if (implausible && !isOfficialAmountSource(opportunity)) {
+      const rangeText =
+        structuredMin !== null && structuredMax !== null && structuredMin !== structuredMax
+          ? `${formatUsd(structuredMin)} – ${formatUsd(structuredMax)} (program funding level)`
+          : `${formatUsd(ceiling)} (program funding level)`
+      return {
+        amount_min: null,
+        amount_max: null,
+        extracted: false,
+        amount_text: rangeText,
+        amount_status: 'not_listed',
+        amount_confidence: null,
+      }
+    }
     const status =
       structuredMin !== null && structuredMax !== null && structuredMin === structuredMax
         ? 'known'

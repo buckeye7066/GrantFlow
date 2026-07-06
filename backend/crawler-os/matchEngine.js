@@ -101,7 +101,18 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   });
 
   const score = Number.isFinite(Number(canonical?.score)) ? Math.round(Number(canonical.score)) : 0;
-  const decision = toCrawlerDecision(canonical?.decision);
+  let decision = toCrawlerDecision(canonical?.decision);
+  const warnings = collectWarnings(canonical);
+  // A PROGRAM/listing row with no direct apply_url cannot be applied to as-is:
+  // the reality gate stores such rows for REVIEW, and the match decision must
+  // not out-promote the row's own lifecycle — however strong the topical fit,
+  // a human (or the URL-rescue lane) has to produce an application target
+  // before this can be an apply-now ACCEPT.
+  const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
+  if (!hasApplyUrl && decision === 'accept') {
+    decision = 'review';
+    warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
+  }
 
   return {
     profile_id: thesis?.profile_id ?? profile?.id ?? null,
@@ -113,7 +124,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
       matched_location: describeLocationMatch(canonical),
       eligibility_fit: canonical?.eligible ?? 'maybe',
       why: canonical?.explanation ?? `Canonical ${MATCHER_VERSION} decision: ${String(canonical?.decision ?? 'REVIEW')}`,
-      warnings: collectWarnings(canonical),
+      warnings,
       matched_needs: canonical?.matchedNeeds ?? [],
       matched_profile_facts: canonical?.matched_profile_facts ?? [],
       missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],

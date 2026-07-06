@@ -8,6 +8,7 @@ import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
 import { resolveStudentFundingLocation } from './college/committedCollege.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
 import { normalizeProfile } from './profileNormalizer.js'
+import { containsTermWholeWord } from './shared/textMatch.js'
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -1537,8 +1538,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       business: ['business', 'startup', 'equipment', 'inventory'],
       legal: ['legal', 'attorney', 'court'],
     }
+    // Whole-word only: 'rent' ⊂ "parent", 'car' ⊂ "care", 'bus' ⊂ "business"
+    // were fabricating needs out of unrelated funding_needs narratives.
     for (const [need, triggers] of Object.entries(fundingNeedKeywords)) {
-      if (triggers.some(t => fnLower.includes(t))) needs.add(need)
+      if (triggers.some(t => containsTermWholeWord(fnLower, t))) needs.add(need)
     }
   }
   if (financialSection.funding_purpose && typeof financialSection.funding_purpose === 'string') {
@@ -2785,9 +2788,14 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   const allKws = Array.from(keywordSet)
   const allPhrases = Array.from(phraseSet)
   const allSignals = [...allKws, ...allPhrases]
+  // Whole-word only (suffix-tolerant): substring includes() fabricated needs
+  // from fragments — 'bus' ⊂ "business" gave every business profile a
+  // transportation need; 'rent' ⊂ "current"/"parent" gave nearly everyone a
+  // housing need. Phantom needs dilute the need-anchored coverage denominator
+  // AND mis-steer discovery queries, so precision here is scoring-critical.
   for (const signal of allSignals) {
     for (const [need, triggers] of Object.entries(NEED_MAP)) {
-      if (triggers.some(t => signal.includes(t))) needs.add(need)
+      if (triggers.some(t => containsTermWholeWord(signal, t))) needs.add(need)
     }
   }
   if (assistanceSet.has('medicaid') || assistanceSet.has('medicare')) needs.add('healthcare')
@@ -3080,8 +3088,26 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // Previously this also required keywordSet.size === 0, but display-name-derived
   // keywords (e.g. "melissa", "justus") are not meaningful needs signals and were
   // preventing the fallback from firing for sparse individual profiles.
+  //
+  // The fallback is TYPE-SHAPED (2026-07-06): the person-benefit set
+  // (utilities/housing/food/healthcare/cash_assistance) was injected for EVERY
+  // needs-silent profile, so a church/VFD/biotech "needed" rent and food help.
+  // On the need-anchored scale those phantom needs became the org's whole
+  // coverage denominator — person-benefit programs scored as strong fits while
+  // the org's real mission funding looked like a partial match (the Focus
+  // Forward disability-skew class). Orgs now fall back to org-generic fundable
+  // needs; person/household (and untyped, per the safe default) profiles keep
+  // the benefit set.
   if (needs.size === 0) {
-    ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
+    const RE_ORG_SHAPED = /(non.?profit|501c3|501\(c\)|church|ministry|congregation|organi[sz]ation|coalition|consortium|foundation|charity|ngo|business|company|llc|corp|cooperative|school|district|universit|college|government|municipal|county|tribal|fire|ems|first responder|law enforcement|hospital|clinic|laborator|institute|research|biotech|agency|shelter|food bank|food pantry|library|museum|workforce board|chamber)/i
+    const declaredTypeText = [profile?.primary_type, profile?.profile_type, profile?.type, ...applicantTypeSet]
+      .filter((v) => typeof v === 'string')
+      .join(' ')
+    if (RE_ORG_SHAPED.test(declaredTypeText)) {
+      ;['operations','programs','capacity_building'].forEach(n => needs.add(n))
+    } else {
+      ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
+    }
   }
 
   // ============ IMMIGRATION SIGNALS ============

@@ -103,3 +103,54 @@ test('an empty profile still yields a usable, safe thesis (no crash)', () => {
   assert.ok(Array.isArray(th.needs));
   assert.equal(th.raw_profile_present, false);
 });
+
+test('needs are derived from whole-word evidence only — fragments cannot fabricate needs', () => {
+  // Regression (2026-07-06): substring scanning fabricated phantom needs —
+  // 'rent' ⊂ "parents"/"current" → housing, 'ets' ⊂ "targets"/"assets" →
+  // military_transition, 'sud' ⊂ "sudden" → substance_recovery, 'coa' ⊂
+  // "coach" → tuition. On the need-anchored scale phantom needs dilute the
+  // coverage denominator AND spawn junk web queries.
+  const th = buildThesis({
+    id: 'p_org_fragments',
+    profile_type: 'nonprofit',
+    applicant_types: ['nonprofit'],
+    sections: [{
+      title: 'about',
+      body: 'We coach mentors for parents in our community. Our current strategy sets targets, manages assets, and plans for sudden growth.',
+    }],
+    location: { state: 'TN' },
+  });
+  for (const junk of ['housing', 'military_transition', 'substance_recovery', 'tuition', 'medical', 'mental_health']) {
+    assert.ok(!th.needs.includes(junk), `fragment must not derive need '${junk}' (got ${th.needs.join(',')})`);
+  }
+});
+
+test('real whole-word need evidence still derives needs (recall preserved, incl. plurals)', () => {
+  const th = buildThesis({
+    id: 'p_real_needs',
+    profile_type: 'individual',
+    applicant_types: ['individual'],
+    sections: [{
+      title: 'situation',
+      body: 'Behind on rent and utilities; needs food assistance, gas cards, and help with prescriptions.',
+    }],
+    location: { state: 'TN' },
+  });
+  for (const need of ['housing', 'energy', 'food', 'transportation', 'medication']) {
+    assert.ok(th.needs.includes(need), `whole-word evidence must derive '${need}' (got ${th.needs.join(',')})`);
+  }
+});
+
+test('bookkeeping tags in explicit needs/need_categories never seed the need scan', () => {
+  const th = buildThesis({
+    id: 'p_reserved_tags',
+    profile_type: 'nonprofit',
+    applicant_types: ['nonprofit'],
+    needs: ['designated', 'synthetic', 'food assistance'],
+    need_categories: ['individual'],
+    location: { state: 'TN' },
+  });
+  assert.ok(th.needs.includes('food'), `explicit real need survives (got ${th.needs.join(',')})`);
+  assert.ok(!th.needs.includes('designated'), 'reserved tag is not a need');
+  assert.ok(!th.needs.includes('synthetic'), 'reserved tag is not a need');
+});

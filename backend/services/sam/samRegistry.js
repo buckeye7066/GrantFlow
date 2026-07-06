@@ -388,11 +388,63 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           ok: false,
           summary: `Pipeline-$ coverage LOW: ${summary}`,
           evidence: { active_grants: total, with_value: withValue, coverage_pct: pct, catalog_total: catTotal, catalog_with_amount: catWith, catalog_pct: catPct },
-          recommended_fix: 'The boot net (enforceGrantAmountBackfill) already copies catalog amounts onto pipeline rows, so a low residual means INGEST never captured amounts: extend awardAmountExtractor patterns for the text phrasings on failing sources, and make structured adapters map their award-size fields into amount_min/amount_max. Amy\'s amount_recall_miss findings name the profile shapes/sources where the gap concentrates.',
+          recommended_fix: 'The boot nets now ACQUIRE amounts, not just copy them: enforceAmountEnrichment fetches the funder\'s own page for active-pipeline sources with no dollar figure (bounded per boot; see pipeline.invariantSweepOutcomes for what it learned), and enforceGrantAmountBackfill mirrors catalog amounts onto pipeline rows. A persistently low residual after those means INGEST never captured amounts: extend awardAmountExtractor patterns for the text phrasings on failing sources, and make structured adapters map their award-size fields into amount_min/amount_max. Amy\'s amount_recall_miss findings name the profile shapes/sources where the gap concentrates.',
           confidence: 0.85,
         }
       }
       return { ok: true, summary }
+    },
+  },
+  {
+    // Discovery-fit sweep outcomes (2026-07-06): the boot invariant runner
+    // persists its latest summary to system_kv so the rescue/enrichment/
+    // honesty nets are observable by Sam (and through Sam, Anya's daily owner
+    // digest) instead of living only in boot logs. This is the read side of
+    // the agent-observability rule for: application_url_rescue (real
+    // candidates un-blocked from missing_application_url), amount_enrichment
+    // (per-award $ learned from funder pages), imported_status_honesty
+    // (import-stamped "submitted" rows demoted so purge/re-score nets can
+    // judge them), and the wide-range program-envelope default guard.
+    id: 'pipeline.invariantSweepOutcomes',
+    label: 'Boot invariant sweep outcomes (rescue / enrichment / honesty nets)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the persisted enforce-invariants summary (system_kv enforce_invariants_last_run) and flags failed sweeps. Surfaces what the URL-rescue, amount-enrichment, and status-honesty nets actually did on the last boot so discovery-supply repairs are observable.',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; sweep outcomes read skipped' }
+      let parsed
+      try {
+        const row = await db.prepare("SELECT value FROM system_kv WHERE key = 'enforce_invariants_last_run'").get()
+        parsed = row?.value ? JSON.parse(row.value) : null
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `sweep summary unavailable: ${err?.message || err}` }
+      }
+      if (!parsed || !Array.isArray(parsed.steps)) {
+        return { ok: true, summary: 'No persisted invariant-sweep summary yet (pre-observability boot).' }
+      }
+      const failedSteps = parsed.steps.filter((s) => s && s.ok === false)
+      const interesting = ['application_url_rescue', 'amount_enrichment', 'imported_status_honesty', 'grant_amount_backfill', 'pipeline_refill', 'grant_score_backfill']
+      const highlights = parsed.steps
+        .filter((s) => interesting.includes(s.name) && (Number(s.repaired) > 0 || Number(s.scanned) > 0))
+        .map((s) => `${s.name}: repaired ${s.repaired}/${s.scanned} scanned`)
+      const when = parsed.at ? ` (as of ${parsed.at})` : ''
+      if (failedSteps.length > 0) {
+        return {
+          ok: false,
+          summary: `${failedSteps.length} invariant sweep(s) FAILED on the last boot: ${failedSteps.map((s) => s.name).join(', ')}${when}`,
+          evidence: { failed: failedSteps, highlights, ran: parsed.ran, totalRepaired: parsed.totalRepaired },
+          recommended_fix: 'Read the failed step names against backend/startup/enforceInvariants.js — each sweep is isolated (runInvariant never throws), so a failure is a real query/dependency error on that net, not a boot crash. Fix the sweep; the data class it guards is accumulating unrepaired until it runs.',
+          confidence: 0.9,
+        }
+      }
+      return {
+        ok: true,
+        summary: highlights.length
+          ? `invariant sweeps healthy${when}: ${highlights.join('; ')}`
+          : `invariant sweeps healthy${when}: nothing needed repair.`,
+        evidence: { highlights, ran: parsed.ran, totalRepaired: parsed.totalRepaired },
+      }
     },
   },
   {

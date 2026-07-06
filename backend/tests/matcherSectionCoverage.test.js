@@ -138,7 +138,11 @@ describe('matcher per-section coverage (audit fix)', () => {
       { organization_details: { population_served: ['youth'] } },
       opp
     )
-    expect(withPop.score).toBeGreaterThan(base.score)
+    // Ported to the need-anchored expectLift (like tests 1-4/7): with orgs now
+    // deriving REAL fundable needs (operations/programs) instead of person-
+    // benefit boilerplate, generic program grants earn genuine need credit for
+    // both profiles, and population alignment ranks via the tie-break.
+    expectLift(withPop, base)
     const reasonText = withPop.reasons.join(' ').toLowerCase()
     expect(reasonText).toMatch(/ownership|mission|youth|serves/)
   })
@@ -156,7 +160,7 @@ describe('matcher per-section coverage (audit fix)', () => {
       { organization_details: { mission_focus: ['workforce development'] } },
       opp
     )
-    expect(withFocus.score).toBeGreaterThan(base.score)
+    expectLift(withFocus, base)
   })
 
   it('7. capacity signals (employee_count / annual_revenue / years_in_operation) lift score for matching-stage opportunities', () => {

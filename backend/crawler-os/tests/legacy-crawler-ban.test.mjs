@@ -52,6 +52,10 @@ const LEGACY_DENYLIST = [
 const ALLOWED_SHARED_IMPORTS = new Set([
   'shared/pipelineStages.js',
   'backend/services/matchEngine.js',
+  // Pure, dependency-free whole-word term matcher — the shared contract that
+  // keeps need/keyword scanning precision identical across the OS thesis
+  // builder and the legacy engine (the phantom-need substring class).
+  'backend/services/shared/textMatch.js',
 ]);
 
 function listFiles(dir) {

@@ -33,6 +33,7 @@ import { normalizeProfile } from './profileNormalizer.js'
 import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
 import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
+import { containsTermWholeWord } from './shared/textMatch.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('matchEngine')
 
@@ -1641,9 +1642,14 @@ function countNeedSynonymHits(rawNeeds, oppText, allOppSignals) {
   let hits = 0
   for (const need of rawNeeds) {
     const synonyms = NEED_SYNONYMS[need] || [need]
+    // Whole-word only: substring includes() handed synonym credit to
+    // fragments — 'car' ⊂ "care"/"career" (transportation), 'aid' ⊂
+    // "said"/"paid", 'rent' ⊂ "current"/"parent" (housing) — inflating
+    // scores of unrelated opportunities.
     const matched =
-      synonyms.some((syn) => oppText.includes(syn)) ||
-      allOppSignals.some((signal) => synonyms.some((syn) => signal.includes(syn) || syn.includes(signal)))
+      synonyms.some((syn) => containsTermWholeWord(oppText, syn)) ||
+      allOppSignals.some((signal) =>
+        synonyms.some((syn) => containsTermWholeWord(signal, syn) || containsTermWholeWord(syn, signal)))
     if (matched) hits++
   }
   return hits
@@ -2863,9 +2869,15 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       .filter((n) => coverageNeeds.includes(n)),
   )
   let needCreditTotal = matchedNeedSet.size
+  // Whole-word (suffix-tolerant) matching. This is the need-anchored score's
+  // credit test — substring includes() here awarded phantom coverage: 'rent'
+  // ⊂ "current" claimed a housing need against any opportunity whose text
+  // said "current", 'pace'/'map'/'tap' hid inside ordinary words. Word
+  // boundaries keep credit to real, on-topic hits.
   const textHas = (syn) =>
-    oppText.includes(syn) ||
-    oppSignalsForCoverage.some((signal) => signal.includes(syn) || syn.includes(signal))
+    containsTermWholeWord(oppText, syn) ||
+    oppSignalsForCoverage.some((signal) =>
+      containsTermWholeWord(signal, syn) || containsTermWholeWord(syn, signal))
   for (const rawNeed of coverageNeeds) {
     if (matchedNeedSet.has(rawNeed)) continue
     const spaced = rawNeed.replace(/[_-]+/g, ' ')
