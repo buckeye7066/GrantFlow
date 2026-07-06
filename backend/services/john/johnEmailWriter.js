@@ -83,6 +83,39 @@ function buildOpeningLine(orgName, signals, hookPhrase, lane) {
 }
 
 /**
+ * A second paragraph that dwells on THE ORG'S OWN WORK (2026-07-06, owner
+ * feedback: the notes "don't speak enough about what the potential client is
+ * doing"). Built ONLY from facts Yana actually supplied — their mission in
+ * their own words, and/or their focus/program areas — and omitted entirely
+ * when we have nothing specific, so it can never pad with fake familiarity.
+ */
+function buildTheirWorkParagraph(orgName, signals, hookPhrase, detailUsedInOpening) {
+  const org = orgName || 'your organization'
+  const sentences = []
+
+  const mission = String(signals.mission || '').trim()
+  if (mission) {
+    const trimmed = mission.length <= 220 ? mission : mission.slice(0, 220).trim() + '…'
+    const quoted = trimmed.replace(/^"+|"+$/g, '')
+    sentences.push(`Your own words say it better than I could: "${quoted}"`)
+  }
+
+  // Focus/program areas — skip when the opening already led with the same
+  // phrase (hookPhrase without a specific detail), so we never repeat ourselves.
+  if (hookPhrase && (detailUsedInOpening || mission)) {
+    sentences.push(
+      `Between ${hookPhrase}, ${org} is carrying real weight for the people you serve, and that kind of work almost never comes with a funding department behind it.`,
+    )
+  } else if (!hookPhrase && mission) {
+    sentences.push(
+      `Work like that is easy to admire and hard to fund, and it deserves better than hoping the right grant happens to come along.`,
+    )
+  }
+
+  return sentences.length ? sentences.join(' ') : null
+}
+
+/**
  * Compose the value paragraph: what funding actually exists for an org like
  * this one (the lane), and what GrantFlow concretely does about it. When no
  * lane matches we stay honest and general rather than inventing a fit.
@@ -159,7 +192,11 @@ export function composeWithTemplate(lead, opts = {}) {
   const hookPhrase = deriveHookPhrase(signals)
   const evidenceTopic = deriveEvidenceTopic(signals, hookPhrase)
   const detail = evidenceDetail(signals)
-  const openingLine = buildOpeningLine(interpretation.organization_name, signals, hookPhrase, lane)
+  const openingHook = buildOpeningLine(interpretation.organization_name, signals, hookPhrase, lane)
+  const theirWork = buildTheirWorkParagraph(interpretation.organization_name, signals, hookPhrase, !!detail)
+  // The opening SLOT carries both paragraphs (hook + their-work) so the
+  // template shape stays fixed and the safety surface unchanged.
+  const openingLine = theirWork ? `${openingHook}\n\n${theirWork}` : openingHook
   const valueParagraph = buildValueParagraph(interpretation.organization_name, hookPhrase, lane, !!detail)
   const ctaParagraph = buildCtaParagraph(interpretation.organization_name)
   const recipientEmail = interpretation?.contact?.email || null
@@ -219,6 +256,7 @@ export function composeWithTemplate(lead, opts = {}) {
     evidence_topic: evidenceTopic,
     evidence_hook_phrase: hookPhrase,
     evidence_specific: signals.hasSpecific,
+    their_work_paragraph_included: !!theirWork,
     evidence_signals: {
       has_mission: !!signals.mission,
       focus_areas: signals.focusAreas,

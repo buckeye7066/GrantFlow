@@ -31,6 +31,24 @@ describe('makeOpenStreetMapSource', () => {
     expect(called).toBe(false)
   })
 
+  it('anchors on EACH area when `locations` is supplied (owner geographic focus)', async () => {
+    const calls = []
+    const src = makeOpenStreetMapSource({
+      searchPlaces: async ({ location, limit }) => {
+        calls.push({ location, limit })
+        return [{ name: `Org near ${location}`, source: 'openstreetmap', place_id: `osm:node/${location}` }]
+      },
+    })
+    const out = await src.discover({
+      locations: ['Bradley County, TN', 'Lorain County, OH', 'Erie County, OH'],
+      limit: 30,
+    })
+    expect(calls.map((c) => c.location)).toEqual(['Bradley County, TN', 'Lorain County, OH', 'Erie County, OH'])
+    // the limit is split across the anchors
+    expect(calls.every((c) => c.limit === 10)).toBe(true)
+    expect(out.length).toBe(3)
+  })
+
   it('respects the limit', async () => {
     const many = Array.from({ length: 20 }, (_, i) => ({ name: `Org ${i}`, source: 'openstreetmap', place_id: `osm:node/${i}` }))
     const src = makeOpenStreetMapSource({ searchPlaces: async () => many })

@@ -8,7 +8,7 @@
  *
  * All templates explicitly include:
  *   - opt-out language ("If this is not relevant, you can reply 'no thanks'…")
- *   - Ellie / GrantFlow signature (Ellie@axiombiolabs.org)
+ *   - Annie / GrantFlow signature (Annie@axiombiolabs.org)
  *   - {{PHYSICAL_ADDRESS}} placeholder for the configured postal address
  *
  * Subject templates are also enumerated so we can map each lead to an
@@ -64,9 +64,9 @@ const DEFAULT_BODY_TEMPLATE = [
   '',
   'Warmly,',
   '',
-  'Ellie',
+  'Annie',
   'GrantFlow (founded by Dr. John White at Axiom BioLabs)',
-  'Ellie@axiombiolabs.org',
+  'Annie@axiombiolabs.org',
   '',
   '{{OPT_OUT_LINE}}',
   '',

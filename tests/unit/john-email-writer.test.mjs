@@ -31,7 +31,7 @@ test('composeEmailFromLead produces an email that passes the safety classifier',
 
     // Signature, never promise funding, never claim prior relationship.
     assert.match(r.body_text, /Dr\. John White/)
-    assert.match(r.body_text, /Ellie@axiombiolabs\.org/)
+    assert.match(r.body_text, /Annie@axiombiolabs\.org/)
     assert.doesNotMatch(r.body_text, /\bguarantee\b/i)
     assert.doesNotMatch(r.body_text, /\bas we discussed\b/i)
 
@@ -108,6 +108,56 @@ test('composeEmailFromLead body_html escapes HTML correctly', async () => {
     const r = await composeEmailFromLead(lead, { config: getJohnConfig() })
     assert.ok(r.body_html.startsWith('<!doctype html>'))
     assert.ok(r.body_html.includes('A&amp;B &lt;Test&gt;'))
+  } finally {
+    restore()
+  }
+})
+
+test('the template dwells on THE ORG\'S OWN WORK when mission/focus facts exist (2026-07-06 warmth pass)', async () => {
+  const restore = applyDefaultJohnEnv()
+  try {
+    const cfg = getJohnConfig()
+    const lead = makeQualifiedLead({
+      public_evidence: [
+        { summary: 'replacing 25-year-old SCBA gear', source_url: 'https://riverbendvfd.test/news', specificity: 'high' },
+        { type: 'mission_statement', text: 'Protecting the families of Riverbend through rapid response and fire prevention education.' },
+        { type: 'focus_areas', value: ['fire response', 'community safety education'] },
+      ],
+    })
+    const r = await composeEmailFromLead(lead, { config: cfg })
+    assert.equal(r.ok, true)
+    // The their-work paragraph quotes their mission in THEIR OWN words...
+    assert.match(r.body_text, /Protecting the families of Riverbend/)
+    // ...and reflects their focus areas back to them.
+    assert.match(r.body_text, /fire response and community safety education/i)
+    assert.equal(r.personalization.their_work_paragraph_included, true)
+    // The their-work content appears BEFORE GrantFlow is ever mentioned.
+    const firstGrantFlow = r.body_text.indexOf('GrantFlow builds')
+    const missionAt = r.body_text.indexOf('Protecting the families')
+    assert.ok(missionAt !== -1 && missionAt < firstGrantFlow, 'their work must come before the pitch')
+    // Still passes the safety classifier.
+    const safety = evaluateDraftSafety({
+      lead,
+      draft: { subject: r.subject, body: r.body_text, recipient_email: r.recipient_email },
+      config: cfg,
+    })
+    assert.equal(safety.status, SAFETY_STATUS.PASSED, JSON.stringify(safety.reasons))
+  } finally {
+    restore()
+  }
+})
+
+test('no their-work paragraph is faked when the facts are thin', async () => {
+  const restore = applyDefaultJohnEnv()
+  try {
+    const lead = makeQualifiedLead({
+      public_evidence: [
+        { summary: 'replacing 25-year-old SCBA gear', source_url: 'https://riverbendvfd.test/news', specificity: 'high' },
+      ],
+    })
+    const r = await composeEmailFromLead(lead, { config: getJohnConfig() })
+    assert.equal(r.ok, true)
+    assert.equal(r.personalization.their_work_paragraph_included, false)
   } finally {
     restore()
   }

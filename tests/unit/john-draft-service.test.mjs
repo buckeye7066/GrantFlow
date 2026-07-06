@@ -25,7 +25,7 @@ import { AUDIT_STATUS, BLOCK_REASONS, DRAFT_STATUS } from '../../backend/service
 async function seedAliasCheck(db, supported = true) {
   await recordAliasCheck(db, {
     primary_mailbox: 'dr.johnwhite@axiombiolabs.org',
-    from_alias: 'Ellie@axiombiolabs.org',
+    from_alias: 'Annie@axiombiolabs.org',
     alias_verified: true,
     alias_send_supported: supported,
     test_draft_provider_id: 'tdraft-1',
@@ -46,7 +46,7 @@ test('draftEmailForLead creates a draft and an audit row when the alias is suppo
     const drafts = await listDrafts(db, { limit: 50 })
     assert.equal(drafts.length, 1)
     assert.equal(drafts[0].draft_status, DRAFT_STATUS.CREATED)
-    assert.equal(drafts[0].from_alias, 'Ellie@axiombiolabs.org')
+    assert.equal(drafts[0].from_alias, 'Annie@axiombiolabs.org')
     assert.equal(drafts[0].fallback_used, false)
 
     const audit = await listAudit(db, { limit: 10 })

@@ -100,10 +100,10 @@ function buildFooter(config, organizationName) {
   const physical = String(config.physicalAddress || '').trim()
   const link = String(config.prospectLink || '').trim()
   const org = String(organizationName || '').trim() || 'your organization'
-  // ONE sender identity: Ellie. The email appears to come from Ellie and the
-  // single reply/return address is Ellie@axiombiolabs.org — no competing
+  // ONE sender identity: Annie. The email appears to come from Annie and the
+  // single reply/return address is Annie@axiombiolabs.org — no competing
   // Dr. John White / GrantFlow@ / Axiom addresses to confuse the recipient.
-  const ellieAddress = String(config.replyTo || 'Ellie@axiombiolabs.org').trim()
+  const annieAddress = String(config.replyTo || 'Annie@axiombiolabs.org').trim()
   return [
     '',
     `The best way to see whether it is worth your time is to try it, so I would rather show you than keep describing it. If you follow the link below, you can talk through your work with Anya, our assistant, and she will run a live scan of funding that fits ${org}, no account or commitment needed just to look. If what comes back is useful, you can take it from there:`,
@@ -111,9 +111,9 @@ function buildFooter(config, organizationName) {
     '',
     'Warmly,',
     '',
-    'Ellie',
+    'Annie',
     'GrantFlow (founded by Dr. John White at Axiom BioLabs)',
-    ellieAddress,
+    annieAddress,
     '',
     'If this is not the right fit, just reply "no thanks" and I will not follow up.',
     ...(physical ? ['', physical] : []),
@@ -155,14 +155,14 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '', 
     likely_funding_categories: lane?.categories || null,
   }
   const system = [
-    'You are Ellie, a warm, thoughtful person on the GrantFlow team who reaches out to organizations on behalf of the founder, Dr. John White. You are writing a short, personable note to an organization you have NOT spoken with before. Write the way a sharp, generous, well-read person writes one real human a genuine note: warm, plain-spoken, specific, and a little human. Never like a marketing template. You write as "I" (Ellie); when you mention the founder or GrantFlow’s origin, refer to Dr. John White in the third person.',
+    'You are Annie, a warm, thoughtful person on the GrantFlow team who reaches out to organizations on behalf of the founder, Dr. John White. You are writing a short, personable note to an organization you have NOT spoken with before. Write the way a sharp, generous, well-read person writes one real human a genuine note: warm, plain-spoken, specific, and a little human. Never like a marketing template. You write as "I" (Annie); when you mention the founder or GrantFlow’s origin, refer to Dr. John White in the third person.',
     '',
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',
     'Write to one decision-maker, not to a mailing list. If a recipient/contact name is available, the body must read as if written to that individual. If no person is known, write as one thoughtful note to the organization without using a team/list greeting. The system adds the final salutation separately.',
     '',
     'The email body MUST, in this order:',
-    '1. LEAD WITH THEM. Spend the FIRST ONE TO TWO PARAGRAPHS genuinely on what THIS organization (and this person) is doing: their mission, the specific programs/work/population they serve, and why it matters, drawn from the supplied facts and web_research (what we found about them on the public web). This is the heart of the email and must make it unmistakable the note was written for them, not blasted to a list. Be specific and warm, like someone who actually looked into their work and respects it. Use ONLY facts present in the supplied data (including web_research snippets); NEVER invent achievements, dollar figures, programs, names, or events, and do not treat a web_research snippet as more certain than it is. If the facts are genuinely thin, write honestly and specifically about their sector and the kind of work they appear to do, rather than padding with vague praise.',
+    '1. LEAD WITH THEM. Spend the FIRST TWO PARAGRAPHS, at least HALF of the email\'s words, genuinely on what THIS organization (and this person) is doing: their mission, the specific programs/work/population they serve, and why it matters, drawn from the supplied facts and web_research (what we found about them on the public web). Name at least TWO concrete specifics from the supplied data (a program, a population served, a stated mission phrase, a project, a place) and dwell on them; when their mission statement is available, echo a short phrase of it in their own words. This is the heart of the email and must make it unmistakable the note was written for them, not blasted to a list. Be specific and warm, like someone who actually looked into their work, respects it, and is a little moved by it; let the warmth come from specific observation, never from stacked adjectives. Use ONLY facts present in the supplied data (including web_research snippets); NEVER invent achievements, dollar figures, programs, names, or events, and do not treat a web_research snippet as more certain than it is. If the facts are genuinely thin, write honestly and specifically about their sector and the kind of work they appear to do, rather than padding with vague praise.',
     '2. BRIDGE. Transition naturally from their work into what GrantFlow is and its honest origin, told about the founder in 1-2 sentences (third person): Dr. John White did not set out to build software. He first built GrantFlow to find funding for his own research lab, Axiom BioLabs, then found the same engine helped the mission and nonprofit work he cares about, and even helped him find scholarships and college funding for his own children. Keep it human and a little self-aware, not a sales boast.',
     '3. Explain concretely how GrantFlow can help THIS organization given the specific mission/work/needs you named in step 1. Tie it directly back to them. Be specific, never generic. When "likely_funding_categories" is provided, name those categories as the kind of funding GrantFlow surfaces for organizations like theirs (they are curated and honest); do NOT invent other named programs, funders, or dollar amounts beyond them.',
     '',
@@ -181,7 +181,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '', 
     '- Do NOT use urgency, pressure, scarcity, or "act now" language.',
     '- No hype, no exclamation-heavy marketing voice. Credible, peer-to-peer, respectful.',
     '- Do NOT use em-dashes or en-dashes (— or –) anywhere. Use commas, periods, parentheses, or a colon instead.',
-    '- 200-300 words for the body (enough for one to two real paragraphs about them, then the bridge and how GrantFlow helps). Plain text with paragraph breaks.',
+    '- 220-340 words for the body: at least half about THEM (two real paragraphs), then the brief bridge and how GrantFlow helps. Plain text with paragraph breaks.',
     '- Do NOT write a call to action, an offer to run a scan, a link, a signature, a sign-off, an opt-out line, or a postal address. ALL of those are added separately by the system. End immediately after explaining how GrantFlow can help this organization (step 3).',
     '- Write a subject line that is specific and non-deceptive: it must name the organization or a concrete element of its mission/work (never a generic "funding opportunity" line that could be sent to anyone). Plainspoken, no clickbait, no words in ALL CAPS, no exclamation points. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
     '',

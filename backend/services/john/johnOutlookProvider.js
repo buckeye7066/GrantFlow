@@ -296,7 +296,7 @@ export function createOutlookProvider({
       }
     }
     // Re-apply the sender identity so a refreshed draft picks up the CURRENT
-    // from-alias + display name (e.g. Ellie) instead of keeping whatever it was
+    // from-alias + display name (e.g. Annie) instead of keeping whatever it was
     // created with. `from` here is the alias address; the display name comes from
     // config.displayName. replyTo defaults to the configured reply address.
     const fromAddr = from || config.fromAlias

@@ -162,7 +162,7 @@ router.post('/create-test-draft', adminAuth, async (_req, res) => {
     if (!provider.ready) {
       await insertAudit(db, {
         recipient_email: cfg.testRecipient,
-        subject: 'Ellie alias verification (test draft)',
+        subject: 'Annie alias verification (test draft)',
         from_mailbox: cfg.primaryMailbox,
         from_alias: cfg.fromAlias,
         reply_to: cfg.replyTo,
