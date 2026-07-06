@@ -38,9 +38,12 @@ describe('admin queue ops', () => {
     resetDb(db)
   })
 
-  it('rejects unauthenticated callers with 403', async () => {
+  it('rejects unauthenticated callers with 401', async () => {
+    // The /api/admin choke-point gate (server.js) runs ensureAuth first, so a
+    // caller with NO credentials gets 401 (unauthenticated); an authenticated
+    // non-admin gets 403 from ensureAdmin.
     const res = await request(app).get('/api/admin/queue/stats')
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
   })
 
   it('returns stats and status counts for admin', async () => {

@@ -46,8 +46,11 @@ function timingSafeEq(a, b) {
 }
 
 function adminAuth(req, res, next) {
+  // Canonical admin truth is DB-backed req.ctx.isAdmin (requestContext.js).
+  // Token-claim fallbacks (req.user.role/is_admin) are deliberately NOT
+  // honored — a JWT claiming admin for a user whose DB row says otherwise
+  // must not pass. The explicit bearer-token path below remains for devices.
   if (req.ctx && req.ctx.isAdmin === true) return next()
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) return next()
   const configured = resolveAdminToken()
   if (!configured) return res.status(401).json({ error: 'Admin token not configured' })
   const headerToken =
@@ -61,7 +64,7 @@ function adminAuth(req, res, next) {
 
 // Device ingest accepts the ingest token OR full admin auth.
 function ingestAuth(req, res, next) {
-  if (req.ctx?.isAdmin === true || req.user?.is_admin === true) return next()
+  if (req.ctx?.isAdmin === true) return next()
   const configured = resolveIngestToken()
   if (!configured) return res.status(401).json({ error: 'Ingest token not configured (set BLOCKLIST_INGEST_TOKEN)' })
   const headerToken =

@@ -65,20 +65,17 @@ function getInternalBaseUrl(req) {
 /**
  * Admin authentication middleware for Anya routes.
  * Uses req.ctx.isAdmin (DB-backed) as the canonical source of truth.
- * Falls back to token-based checks for backward compatibility.
+ * Token-claim fallbacks (req.user.role/is_admin) are deliberately NOT
+ * honored — a JWT claiming admin for a user whose DB row says otherwise
+ * must not pass. Explicit admin-token headers remain for autonomous ops.
  */
 function adminAuth(req, res, next) {
   // Priority 1: Use req.ctx if available (preferred, DB-backed)
   if (req.ctx && req.ctx.isAdmin === true) {
     return next()
   }
-  
-  // Priority 2: Check if user has admin role in token
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) {
-    return next()
-  }
-  
-  // Priority 3: Check admin token headers (for autonomous operations)
+
+  // Priority 2: Check admin token headers (for autonomous operations)
   const configuredToken = resolveAdminToken()
   if (!configuredToken) {
     return res.status(401).json({ error: 'Admin token not configured' })

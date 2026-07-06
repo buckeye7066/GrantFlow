@@ -64,6 +64,7 @@ import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../util
 import { isSearchEngineUrl } from '../config/urlRules.js'
 import { resolveOpportunityAmounts } from '../services/awardAmountExtractor.js'
 import { AUTO_ADD_SCORE } from '../config/matchThresholds.js'
+import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -2837,6 +2838,30 @@ export async function enforcePipelineRefill(db) {
  *
  * @returns {Promise<{ steps: Array<object>, ran: number, failed: number, totalRepaired: number }>}
  */
+/**
+ * INVARIANT: A 'converted' service application MUST point at a live profile.
+ *
+ * "Convert to Profile" used to only flip the status flag — the admin saw
+ * "converted" while NO profile existed anywhere (the invisible-Anita bug,
+ * 2026-07-06): the profile list showed nothing and the applicant's email
+ * couldn't pass the production login gate. The per-call gate is the PATCH
+ * route (routes/serviceApplication.js) calling convertApplicationToProfile;
+ * this sweep is the net that heals rows converted by any other path (or
+ * before the fix shipped). Conservative: ambiguous email/name matches are
+ * flagged for human review, never guessed.
+ */
+export async function enforceConvertedApplicationsHaveProfiles(db) {
+  return runInvariant('converted_applications_have_profiles', async () => {
+    const result = await reconcileConvertedApplications(db)
+    return {
+      scanned: result.scanned,
+      repaired: result.repaired,
+      createdProfiles: result.createdProfiles,
+      flagged: result.flagged,
+    }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -2912,6 +2937,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // source allowlist, duplicate guard all enforced). Runs LAST so it refills
   // on the post-purge, post-backfill truth.
   steps.push(await enforcePipelineRefill(db))
+  // Intake integrity net: every 'converted' service application must point at a
+  // live profile (create-or-link); otherwise a real applicant is invisible to
+  // the admin and locked out of login.
+  steps.push(await enforceConvertedApplicationsHaveProfiles(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -2930,6 +2959,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.profilesAffected !== undefined ? { profilesAffected: s.profilesAffected } : {}),
       ...(s.flagged !== undefined ? { flagged: s.flagged } : {}),
       ...(s.missingFunder !== undefined ? { missingFunder: s.missingFunder } : {}),
+      ...(s.createdProfiles !== undefined ? { createdProfiles: s.createdProfiles } : {}),
       ...(s.missingAmount !== undefined ? { missingAmount: s.missingAmount } : {}),
       ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
     })),

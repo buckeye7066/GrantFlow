@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
 import { sensitiveRateLimiter } from '../middleware/rateLimiting.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
+import { convertApplicationToProfile } from '../services/serviceApplicationConversion.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:serviceApplication')
@@ -338,11 +339,14 @@ router.patch('/:id', async (req, res) => {
 
     const { id } = req.params
     const { status, notes, profile_id } = req.body
-    
+
     const updates = []
     const params = []
 
-    const ALLOWED_STATUSES = ['new', 'reviewed', 'contacted', 'converted', 'approved', 'rejected', 'archived']
+    // Must match the service_applications.status CHECK constraint (schema.sql /
+    // postgres 0001_init.sql) — 'approved'/'rejected' were listed here once but
+    // violate the DB CHECK and 500'd the request.
+    const ALLOWED_STATUSES = ['new', 'reviewed', 'contacted', 'converted', 'archived']
     if (status) {
       if (!ALLOWED_STATUSES.includes(status)) {
         return res.status(400).json({ success: false, message: `Invalid status value. Allowed: ${ALLOWED_STATUSES.join(', ')}` })
@@ -353,6 +357,31 @@ router.patch('/:id', async (req, res) => {
         updates.push('reviewed_by = ?')
         params.push(req.ctx?.userId || null)
         updates.push('reviewed_at = CURRENT_TIMESTAMP')
+      }
+    }
+
+    // "Convert" must actually convert: create-or-link the client profile so it
+    // shows up in the admin profile list and the applicant's email can log in.
+    // (Previously this route only flipped the status flag — the application
+    // read "converted" while no profile existed anywhere.)
+    let conversion = null
+    if (status === 'converted') {
+      const app = await req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
+      if (!app) {
+        return res.status(404).json({ success: false, message: 'Application not found' })
+      }
+      const requestedProfileId = profile_id ? String(profile_id).trim() : null
+      conversion = await convertApplicationToProfile(
+        req.db,
+        { ...app, profile_id: requestedProfileId || app.profile_id },
+        { actor: req.ctx?.email || req.ctx?.userId || 'admin' },
+      )
+      if (!conversion.ok) {
+        return res.status(409).json({
+          success: false,
+          message: 'Multiple existing profiles match this applicant; link one explicitly via profile_id.',
+          candidates: conversion.candidates,
+        })
       }
     }
 
@@ -381,13 +410,22 @@ router.patch('/:id', async (req, res) => {
     `).run(...params)
     
     const updated = await req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
-if (!updated) {
-  return res.status(404).json({ success: false, message: 'Application not found' })
-}
-res.json({
-  success: true,
-  application: updated,
-})
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Application not found' })
+    }
+    res.json({
+      success: true,
+      application: updated,
+      ...(conversion
+        ? {
+            conversion: {
+              profile_id: conversion.profileId,
+              created: conversion.created,
+              matched_by: conversion.matchedBy,
+            },
+          }
+        : {}),
+    })
   } catch (error) {
     routeLogger.error('[serviceApplication] Error updating application:', error)
     res.status(500).json({
