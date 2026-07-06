@@ -801,6 +801,22 @@ const ORG_LIKE_ENTITY_TYPES = new Set([
 // benefit programs + person-directed emergency assistance phrasing): as an
 // org-side penalty a broad "assistance" match would wrongly cap real org
 // grants like FEMA "Hazard Mitigation Assistance" or TA-provider funding.
+// Explicit "organizations are the APPLICANT" phrasing in eligibility prose —
+// the only thing that exempts an assistance-shaped row from the org ×
+// individual-assistance guard. Deliberately requires applicant-role context so
+// "faith-based aid" / "church assistance" vocabulary (aid FROM an org) and
+// funder names cannot satisfy it.
+const RE_ORG_APPLICANT_PROSE = new RegExp(
+  [
+    '(?:nonprofit|non-profit|501\\(c\\)|charitable|community|faith-based|tribal)\\s+(?:organizations?|agencies|entities)\\s+(?:may|can|are\\s+(?:eligible|invited|encouraged)|should)\\s+(?:to\\s+)?apply',
+    'eligible\\s+(?:applicants?|entities|organizations?)\\s*(?::|include|are)[^.]{0,120}\\b(?:nonprofits?|non-profits?|organizations?|agencies|501\\(c\\)|governments?|institutions?)',
+    'open\\s+to\\s+(?:nonprofits?|non-profits?|organizations?|agencies|501\\(c\\))',
+    'grants?\\s+to\\s+(?:nonprofits?|non-profits?|organizations?|agencies)',
+    '(?:organizations?|nonprofits?|agencies)\\s+(?:operating|running|providing|that\\s+(?:operate|run|provide|serve))',
+  ].join('|'),
+  'i',
+)
+
 const RE_INDIVIDUAL_ASSISTANCE = new RegExp(
   [
     'supplemental security income', '\\bssi\\b', '\\bssdi\\b',
@@ -2771,18 +2787,27 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
         ['benefit', 'benefit_program'].includes(oppTypeForGuard) ||
         RE_INDIVIDUAL_ASSISTANCE.test(oppText) ||
         isStudentAidOpportunity(opportunity, oppNorm)
-      // "Organizations may apply" must come from the PROGRAM's text, not the
-      // FUNDER's name: "Emmanuel Lutheran Church – Emergency Rent Assistance"
-      // reads as org-eligible only because the sponsor's name contains
-      // "Church" — which is how person/household rent funds kept scoring 80+
-      // for other churches. Re-normalize with the sponsor blanked so entity
-      // signals derive from title/description/eligibility text alone.
-      // (Cost: one extra normalize, only for org profiles × assistance rows.)
-      const targetsOrgsBySubstance = looksLikeIndividualAssistance
-        ? verificationTargetsOrganizations(
-            normalizeOpportunity({ ...effectiveOpp, sponsor: null, funder: null }),
-          )
-        : verificationTargetsOrganizations(oppNorm)
+      // For an assistance-shaped row, "organizations may apply" must be STATED
+      // — in the structured entity types, the eligibility bullets, or the
+      // description — not inferred from vocabulary. Sponsor-blanking (#881)
+      // was insufficient: "Emmanuel Lutheran Church – Emergency Rent
+      // Assistance" still read as org-eligible because its TITLE contains
+      // "Church" and its categories say "church assistance" (= assistance
+      // FROM a church). Eligibility bullets like "Residents of Lorain County /
+      // Low income households / Single parents" describe PEOPLE; the guard
+      // fires unless org applicants are explicitly named in prose.
+      let targetsOrgsBySubstance = verificationTargetsOrganizations(oppNorm)
+      if (looksLikeIndividualAssistance) {
+        const structuredEntities = safeParseArrayField(effectiveOpp?.entity_types_allowed, [])
+          .map((t) => normalizeString(t))
+        const structuredAllowsOrgs = structuredEntities.some((t) => ORG_LIKE_ENTITY_TYPES.has(t))
+        const substanceText = [
+          effectiveOpp?.description,
+          ...safeParseArrayField(effectiveOpp?.eligibility_bullets, []),
+        ].filter(Boolean).join(' ')
+        const proseAllowsOrgs = RE_ORG_APPLICANT_PROSE.test(substanceText)
+        targetsOrgsBySubstance = structuredAllowsOrgs || proseAllowsOrgs
+      }
       if (looksLikeIndividualAssistance && !targetsOrgsBySubstance) {
         rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
         eligibilityMismatches.push('org_profile_individual_assistance')
