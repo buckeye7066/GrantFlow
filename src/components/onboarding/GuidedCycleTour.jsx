@@ -56,11 +56,17 @@ export default function GuidedCycleTour() {
   const stepIdx = GUIDED_TOUR_STEPS.findIndex((s) => s.id === currentStepId)
   const step = stepIdx >= 0 ? GUIDED_TOUR_STEPS[stepIdx] : null
 
-  // Auto-navigate to the current step's route.
+  // Auto-navigate to the current step's route. The /GrantDetail steps need a
+  // concrete grant id (the bare route is a not-found state) — use the grant
+  // the tour captured when the user added/dragged it. With no captured grant
+  // (zero-result search path) the bare route's friendly empty state plus the
+  // missing-target fallback below keep the tour walkable.
   useEffect(() => {
     if (!isActive || !step) return
     if (location.pathname !== step.route) {
-      navigate(step.route)
+      const tourGrantId = useGuidedTourStore.getState().tourGrantId
+      const needsGrantId = step.route === '/GrantDetail' && tourGrantId !== null && tourGrantId !== undefined
+      navigate(needsGrantId ? `${step.route}?id=${encodeURIComponent(tourGrantId)}` : step.route)
     }
   }, [isActive, step?.id, step?.route, location.pathname])
 

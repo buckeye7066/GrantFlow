@@ -248,6 +248,10 @@ export default function KanbanBoard({ grants, organizations, onGrantUpdate, onGr
       toast({ variant: 'destructive', title: 'Update Failed', description: e?.message || 'Could not update grant status.' });
       return;
     }
+    // Order matters: capture the grant BEFORE reportCompletion — completing
+    // 'pipeline-drag' advances the tour toward the /GrantDetail steps, which
+    // read tourGrantId to open this exact grant.
+    useGuidedTourStore.getState().setTourGrantId(draggableId);
     useGuidedTourStore.getState().reportCompletion('pipeline-drag');
 
     // Trigger AI assessment when a grant enters the "interested" stage \of the legacy "Assess" / "Discovery" column.

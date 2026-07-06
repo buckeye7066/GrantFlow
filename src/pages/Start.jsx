@@ -387,12 +387,16 @@ export default function Start() {
 
   const scrollerRef = useRef(null)
 
-  // --- Authenticated users skip onboarding entirely ---------------------
+  // --- Already-authenticated users skip onboarding entirely --------------
+  // Gated on !completionPayload: the moment OTP verification succeeds at the
+  // END of the interview, isAuthenticated flips true — ungated, this effect
+  // yanked brand-new users straight to /Dashboard and the "You're in!" tour
+  // handoff panel (an explicit owner requirement) was unreachable dead code.
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !completionPayload) {
       navigate('/Dashboard', { replace: true })
     }
-  }, [isAuthenticated, navigate])
+  }, [isAuthenticated, completionPayload, navigate])
 
   // --- Resume an in-flight session if we have one ------------------------
   useEffect(() => {
@@ -554,6 +558,15 @@ export default function Start() {
             <span className="text-base font-semibold tracking-tight">GrantFlow</span>
           </Link>
           <div className="flex items-center gap-3 text-xs text-slate-500">
+            {!completionPayload ? (
+              <Link
+                to="/"
+                className="hover:text-blue-700"
+                title="Your answers save automatically — come back to this page anytime to pick up where you left off."
+              >
+                Save &amp; finish later
+              </Link>
+            ) : null}
             <Link to="/login" className="hover:text-blue-700">Returning user? Sign in</Link>
           </div>
         </header>
@@ -633,8 +646,13 @@ export default function Start() {
           )}
         </div>
 
-        <footer className="mt-4 text-center text-xs text-slate-400">
+        <footer className="mt-4 text-center text-xs text-slate-500">
           We never share or sell your information. Your answers stay tied to your profile.
+          {!completionPayload ? (
+            <>
+              {' '}Answers save automatically — you can close this page and pick up right where you left off.
+            </>
+          ) : null}
         </footer>
       </div>
 

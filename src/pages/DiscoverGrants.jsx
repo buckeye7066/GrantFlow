@@ -1355,6 +1355,9 @@ export default function DiscoverGrants() {
           description: `${opportunity.title} has been added to your grants pipeline.`,
         })
       }
+      // Capture BEFORE reportCompletion — completing 'discover-add' can
+      // advance the tour, and the /GrantDetail steps read tourGrantId.
+      useGuidedTourStore.getState().setTourGrantId(newGrant?.id ?? null)
       useGuidedTourStore.getState().reportCompletion('discover-add')
       return { status: 'added', grant: newGrant }
     } catch (error) {
