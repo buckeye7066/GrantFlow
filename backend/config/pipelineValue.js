@@ -1,0 +1,70 @@
+/**
+ * CHOKE POINT: pipeline dollar-value semantics.
+ *
+ * Every surface that shows "Pipeline $X" / "Pipeline Potential" (dashboard
+ * stats, ProfileCard, profile detail, /:id/pipeline-potential breakdown) MUST
+ * derive a grant's dollar value and the set of "active pipeline" statuses from
+ * THIS module. Do not re-inline a status list or a SUM(amount_requested)
+ * expression at a call site — that is exactly the drift class this closes.
+ *
+ * THE BUG THIS CLOSES (2026-07-05)
+ * --------------------------------
+ * Pipeline totals were computed as SUM(amount_requested) in four separately
+ * maintained copies (routes/stats.js, routes/profiles.js ×2, scripts). But the
+ * canonical auto-add saver (opportunityMatcher.saveToProfilePipeline) only set
+ * amount_requested when the OPPORTUNITY carried one — and catalog opportunities
+ * carry amount_min/amount_max, essentially never amount_requested (that is a
+ * pipeline-side concept the manual /from-opportunity path defaults from
+ * amount_max ?? amount_min). Result fleet-wide: 15 of 489 active pipeline
+ * grants had amount_requested, so a student with 118 active sources showed
+ * "$6,500 in pipeline" while the same rows carried ~$1.8M of award ceilings in
+ * amount_max/amount_min the display never read.
+ *
+ * THE RULE
+ * --------
+ * A grant's displayed pipeline value = amount_requested when the user (or the
+ * promote-time default) set one, else the award ceiling (amount_max), else the
+ * award floor (amount_min), else 0. This is the SAME fallback the frontend
+ * breakdown (PipelinePotentialBreakdown.estimatedValue) and the Pipeline page
+ * already use — the backend totals had to reconcile with it.
+ *
+ * Defense in depth (each layer independently correct):
+ *   1. READ  — the SQL/JS helpers here coalesce at display time.
+ *   2. WRITE — saveToProfilePipeline defaults amount_requested from max/min.
+ *   3. NET   — enforceGrantAmountBackfill (startup/enforceInvariants.js)
+ *              re-derives missing amounts against the live DB on every boot.
+ */
+
+/**
+ * Pipeline stages whose dollar values count toward "in-pipeline" totals.
+ * Terminal stages (awarded/declined/closed/deadline_passed/archived) are
+ * excluded — awarded money is "funds secured", not pipeline potential.
+ */
+export const PIPELINE_ACTIVE_STATUSES = Object.freeze([
+  'discovery', 'discovered', 'interested', 'auto_applied', 'drafting',
+  'application_prep', 'app_prep', 'revision', 'portal', 'submitted',
+  'pending_review', 'under_review', 'follow_up', 'report',
+])
+
+/**
+ * SQL expression for one grant row's pipeline dollar value.
+ * Compile-time literal (no user input), safe to inline in SQL; works on both
+ * SQLite and Postgres (NULLIF/COALESCE are common dialect).
+ *
+ * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
+ */
+export function pipelineValueSql(alias = 'g') {
+  const p = alias ? `${alias}.` : ''
+  return `COALESCE(NULLIF(${p}amount_requested, 0), NULLIF(${p}amount_max, 0), NULLIF(${p}amount_min, 0), 0)`
+}
+
+/** JS twin of pipelineValueSql for rows already in memory. */
+export function grantPipelineValue(grant) {
+  for (const key of ['amount_requested', 'amount_max', 'amount_min']) {
+    const v = Number(grant?.[key])
+    if (Number.isFinite(v) && v > 0) return v
+  }
+  return 0
+}
+
+export default { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue }

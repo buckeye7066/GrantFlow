@@ -531,6 +531,23 @@ export async function saveToProfilePipeline(
     const canonicalUrl = chooseGrantUrl(opportunity)
     const canonicalFingerprint = candidateFp
 
+    // Pipeline-$ visibility: default amount_requested from the opportunity's
+    // award ceiling/floor (amount_max ?? amount_min), exactly like the manual
+    // POST /from-opportunity path does. Opportunities essentially never carry
+    // an amount_requested of their own (that is a pipeline-side concept), and
+    // every "Pipeline Potential" surface sums this column — leaving it NULL
+    // here was the root cause of profiles showing near-$0 pipelines while
+    // holding 100+ real sources. See backend/config/pipelineValue.js.
+    const toPositiveMoney = (v) => {
+      const n = Number(v)
+      return Number.isFinite(n) && n > 0 ? n : null
+    }
+    const amountMinValue = toPositiveMoney(opportunity.amount_min ?? opportunity.amountMin)
+    const amountMaxValue = toPositiveMoney(opportunity.amount_max ?? opportunity.amountMax)
+    const amountRequestedValue =
+      toPositiveMoney(opportunity.amount_requested ?? opportunity.requestedAmount) ??
+      amountMaxValue ?? amountMinValue
+
     if (grantCols.decision) {
       const cols = [
         'id',
@@ -580,9 +597,9 @@ export async function saveToProfilePipeline(
         contactInfo.name,
         contactInfo.email,
         contactInfo.phone,
-        opportunity.amount_requested || opportunity.requestedAmount || null,
-        opportunity.amount_min || opportunity.amountMin || null,
-        opportunity.amount_max || opportunity.amountMax || null,
+        amountRequestedValue,
+        amountMinValue,
+        amountMaxValue,
         decision?.decision ?? 'review',
         decision?.explanation ?? null,
         JSON.stringify(decision?.matchedNeeds ?? []),
@@ -644,9 +661,9 @@ export async function saveToProfilePipeline(
         contactInfo.name,
         contactInfo.email,
         contactInfo.phone,
-        opportunity.amount_requested || opportunity.requestedAmount || null,
-        opportunity.amount_min || opportunity.amountMin || null,
-        opportunity.amount_max || opportunity.amountMax || null,
+        amountRequestedValue,
+        amountMinValue,
+        amountMaxValue,
       ]
       if (grantCols.url) { cols.push('url'); vals.push(canonicalUrl) }
       if (grantCols.fingerprint) {

@@ -27,6 +27,7 @@
  */
 
 import { SAM_CATEGORIES, SEVERITY } from './samTypes.js'
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../../config/pipelineValue.js'
 
 // ---------------------------------------------------------------------------
 // Shape constants
@@ -334,6 +335,64 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         }
       }
       return { ok: true, summary: `${label} — no issues so far; cohort not yet at target.` }
+    },
+  },
+  {
+    // Pipeline-$ visibility (2026-07-05 "$6,500 pipeline with 118 real
+    // sources" class): a pipeline can be full of real grants yet display ~$0
+    // when rows carry no usable dollar value. Three layers keep this honest —
+    // read-time fallback (config/pipelineValue.js), write-time default
+    // (saveToProfilePipeline), boot backfill (enforceGrantAmountBackfill).
+    // This check watches the RESIDUAL: how many active rows still have no
+    // amount anywhere (an ingest/extraction gap Amy's amount_recall_miss
+    // findings and the awardAmountExtractor patterns are meant to close).
+    id: 'pipeline.amountCoverage',
+    label: 'Pipeline dollar-value coverage (active grants with a knowable amount)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Measures what share of active pipeline grants carry a usable dollar value (amount_requested/max/min) and what share of the active catalog has amounts. Flags when coverage is low enough that profile Pipeline Potential figures materially understate reality.',
+    async run({ db } = {}) {
+      if (!db) return { ok: true, skipped: true, summary: 'no db handle; amount coverage read skipped' }
+      const statusesSql = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      let grants
+      let catalog
+      try {
+        grants = await db
+          .prepare(
+            `SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN ${pipelineValueSql('grants')} > 0 THEN 1 ELSE 0 END) AS with_value
+               FROM grants WHERE status IN (${statusesSql})`,
+          )
+          .get()
+        catalog = await db
+          .prepare(
+            `SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN COALESCE(amount_max, 0) > 0 OR COALESCE(amount_min, 0) > 0 THEN 1 ELSE 0 END) AS with_amount
+               FROM funding_opportunities WHERE is_active`,
+          )
+          .get()
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `amount coverage query failed: ${err?.message || err}` }
+      }
+      const total = Number(grants?.total) || 0
+      const withValue = Number(grants?.with_value) || 0
+      const catTotal = Number(catalog?.total) || 0
+      const catWith = Number(catalog?.with_amount) || 0
+      if (total < 20) return { ok: true, summary: `Only ${total} active pipeline grants — coverage check not meaningful yet.` }
+      const pct = Math.round((withValue / total) * 100)
+      const catPct = catTotal > 0 ? Math.round((catWith / catTotal) * 100) : 0
+      const summary = `${withValue}/${total} (${pct}%) active pipeline grants carry a dollar value; catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+      if (pct < 60) {
+        return {
+          ok: false,
+          summary: `Pipeline-$ coverage LOW: ${summary}`,
+          evidence: { active_grants: total, with_value: withValue, coverage_pct: pct, catalog_total: catTotal, catalog_with_amount: catWith, catalog_pct: catPct },
+          recommended_fix: 'The boot net (enforceGrantAmountBackfill) already copies catalog amounts onto pipeline rows, so a low residual means INGEST never captured amounts: extend awardAmountExtractor patterns for the text phrasings on failing sources, and make structured adapters map their award-size fields into amount_min/amount_max. Amy\'s amount_recall_miss findings name the profile shapes/sources where the gap concentrates.',
+          confidence: 0.85,
+        }
+      }
+      return { ok: true, summary }
     },
   },
   {

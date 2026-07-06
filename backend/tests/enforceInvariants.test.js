@@ -876,7 +876,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(14)
+    expect(summary.ran).toBe(15)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -885,6 +885,7 @@ describe('enforceInvariants — runner', () => {
       'profile_scoped_pipeline',
       'no_duplicate_grants',
       'relevance_floor',
+      'grant_amount_backfill',
       'individual_amount_ceiling',
       'student_aid_eligibility',
       'profession_eligibility',
@@ -1623,6 +1624,131 @@ describe('enforceFunderBackfill — grants.funder from linked catalog sponsor', 
     expect(result.ok).toBe(true)
     expect(result.repaired).toBe(0)
     expect(result.missingFunder).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// INVARIANT: pipeline grants carry a dollar value when one is knowable
+// (amount_min/max inherited from the linked catalog row; amount_requested
+// defaulted from the ceiling/floor — the pipeline-$ visibility class; never
+// invents a value).
+// ---------------------------------------------------------------------------
+
+function makeAmountDb() {
+  const db = makeDb()
+  db.exec(`
+    ALTER TABLE grants ADD COLUMN amount_min NUMERIC;
+    ALTER TABLE grants ADD COLUMN amount_max NUMERIC;
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      sponsor TEXT,
+      amount_min NUMERIC,
+      amount_max NUMERIC
+    );
+  `)
+  return db
+}
+
+function amountRow(db, id) {
+  return db.prepare('SELECT amount_requested, amount_min, amount_max FROM grants WHERE id = ?').get(id)
+}
+
+describe('enforceGrantAmountBackfill — pipeline-$ visibility', () => {
+  const { enforceGrantAmountBackfill } = __testables
+
+  it('defaults amount_requested from the grant\'s own ceiling (amount_max wins over amount_min)', async () => {
+    const db = makeAmountDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', match_score: 90 })
+    db.prepare('UPDATE grants SET amount_min = 1000, amount_max = 5000 WHERE id = ?').run(gid)
+
+    const result = await enforceGrantAmountBackfill(db)
+    expect(result.ok).toBe(true)
+    expect(result.repaired).toBe(1)
+    expect(amountRow(db, gid).amount_requested).toBe(5000)
+  })
+
+  it('inherits amount_min/max from the linked catalog row, then defaults amount_requested', async () => {
+    const db = makeAmountDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, amount_min, amount_max) VALUES (?, ?, ?, ?)')
+      .run('opp-1', 'Scholarship', 500, 2500)
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Scholarship', match_score: 90,
+    })
+
+    const result = await enforceGrantAmountBackfill(db)
+    const row = amountRow(db, gid)
+    expect(result.repaired).toBe(2) // catalog-inherit + requested-default
+    expect(row.amount_min).toBe(500)
+    expect(row.amount_max).toBe(2500)
+    expect(row.amount_requested).toBe(2500)
+  })
+
+  it('NEVER invents an amount: unlinked no-amount rows are counted, not guessed', async () => {
+    const db = makeAmountDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', status: 'discovered', match_score: 90 })
+
+    const result = await enforceGrantAmountBackfill(db)
+    expect(result.repaired).toBe(0)
+    expect(result.missingAmount).toBe(1)
+    expect(amountRow(db, gid).amount_requested).toBeNull()
+  })
+
+  it('never overwrites a user-entered amount_requested', async () => {
+    const db = makeAmountDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1', title: 'A',
+      amount_requested: 1234, match_score: 90,
+    })
+    db.prepare('UPDATE grants SET amount_max = 99999 WHERE id = ?').run(gid)
+
+    const result = await enforceGrantAmountBackfill(db)
+    expect(result.repaired).toBe(0)
+    expect(amountRow(db, gid).amount_requested).toBe(1234)
+  })
+
+  it('is idempotent (second run repairs nothing)', async () => {
+    const db = makeAmountDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', match_score: 90 })
+    db.prepare('UPDATE grants SET amount_max = 5000 WHERE id = ?').run(gid)
+
+    const first = await enforceGrantAmountBackfill(db)
+    const second = await enforceGrantAmountBackfill(db)
+    expect(first.repaired).toBe(1)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('count-only when ENFORCE_GRANT_AMOUNT_BACKFILL=0', async () => {
+    const db = makeAmountDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', match_score: 90 })
+    db.prepare('UPDATE grants SET amount_max = 5000 WHERE id = ?').run(gid)
+
+    process.env.ENFORCE_GRANT_AMOUNT_BACKFILL = '0'
+    try {
+      const result = await enforceGrantAmountBackfill(db)
+      expect(result.repaired).toBe(0)
+      expect(result.enforced).toBe(false)
+      expect(amountRow(db, gid).amount_requested).toBeNull()
+    } finally {
+      delete process.env.ENFORCE_GRANT_AMOUNT_BACKFILL
+    }
+  })
+
+  it('degrades to skip on a legacy schema without amount_max (never throws)', async () => {
+    const db = makeDb() // grants table has no amount_min/amount_max
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', match_score: 90 })
+
+    const result = await enforceGrantAmountBackfill(db)
+    expect(result.ok).toBe(true)
+    expect(result.skipped).toBe('schema')
   })
 })
 

@@ -35,6 +35,10 @@ import { countSeats, describeSeatTier, evaluateSeatChange, billableSeatEmails } 
 import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
 import { normalizeAutomationToggles, AUTOMATION_TOGGLES } from '../../shared/automationPreferences.js'
 import { normalizeLanguageCode, isSupportedLanguage } from '../../shared/languages.js'
+// Choke point for pipeline-$ semantics: canonical active-status list + the
+// per-grant value fallback (amount_requested → amount_max → amount_min).
+// Never re-inline a status list or a SUM(amount_requested) here.
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue } from '../config/pipelineValue.js'
 import { buildAwardSummary } from '../services/awardSummary.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
@@ -514,28 +518,13 @@ async function enrichProfileWithSummary(db, profile) {
   // Prefer profile-scoped totals when grants.profile_id exists; fall back to organization totals.
   // This keeps the ProfileCard "Pipeline $X" consistent with the Pipeline page when a user switches profiles.
   let pipelineTotal = 0
-  const activeStatuses = [
-    'discovery',
-    'discovered',
-    'interested',
-    'auto_applied',
-    'drafting',
-    'app_prep',
-    'application_prep',
-    'revision',
-    'portal',
-    'submitted',
-    'pending_review',
-    'under_review',
-    'follow_up',
-    'report',
-  ]
+  const activeStatuses = PIPELINE_ACTIVE_STATUSES
   try {
     const placeholders = activeStatuses.map(() => '?').join(',')
     const row = await db
       .prepare(
         `
-        SELECT COALESCE(SUM(g.amount_requested), 0) as total
+        SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total
         FROM grants g
         WHERE g.profile_id = ?
           AND g.status IN (${placeholders})
@@ -554,7 +543,7 @@ async function enrichProfileWithSummary(db, profile) {
       const row = await db
         .prepare(
           `
-          SELECT COALESCE(SUM(g.amount_requested), 0) as total
+          SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total
           FROM grants g
           WHERE g.organization_id = ?
             AND g.status IN (${placeholders})
@@ -1838,27 +1827,10 @@ router.get('/:id/report-packet', async (req, res) => {
   })
 })
 
-// Canonical "active pipeline" statuses that count toward a profile's Pipeline
-// Potential. Both the headline `pipeline_funds_total` and the per-source
-// breakdown (GET /:id/pipeline-potential) read from this one list, so the
-// breakdown always sums to the figure shown on the card. Awarded / declined /
-// archived are intentionally excluded — Pipeline Potential is unrealized money.
-const PIPELINE_ACTIVE_STATUSES = Object.freeze([
-  'discovery',
-  'discovered',
-  'interested',
-  'auto_applied',
-  'drafting',
-  'app_prep',
-  'application_prep',
-  'revision',
-  'portal',
-  'submitted',
-  'pending_review',
-  'under_review',
-  'follow_up',
-  'report',
-])
+// PIPELINE_ACTIVE_STATUSES / pipelineValueSql are imported from
+// backend/config/pipelineValue.js (the single choke point) so the headline
+// `pipeline_funds_total`, the per-source breakdown below, and the dashboard
+// stats can never drift apart again.
 
 router.get('/:id', async (req, res) => {
   const { id } = req.params
@@ -1937,7 +1909,7 @@ router.get('/:id', async (req, res) => {
   try {
     const pipelineRow = await req.db
       .prepare(
-        `SELECT COALESCE(SUM(g.amount_requested), 0) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
       )
       .get(row.id, ...activeStatuses)
     pipelineTotal = pipelineRow?.total ?? 0
@@ -1950,7 +1922,7 @@ router.get('/:id', async (req, res) => {
     try {
       const pipelineRow = await req.db
         .prepare(
-          `SELECT COALESCE(SUM(g.amount_requested), 0) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+          `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
         )
         .get(row.organization_id, ...activeStatuses)
       pipelineTotal = pipelineRow?.total ?? 0
@@ -2054,7 +2026,9 @@ router.get('/:id/pipeline-potential', async (req, res) => {
     items = []
   }
 
-  const total = items.reduce((sum, g) => sum + (Number(g.amount_requested) || 0), 0)
+  // Same value fallback as the headline total and the frontend's
+  // estimatedValue(), so the breakdown reconciles with the card.
+  const total = items.reduce((sum, g) => sum + grantPipelineValue(g), 0)
   return res.json({ profile_id: id, total, count: items.length, items })
 })
 
