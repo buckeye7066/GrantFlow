@@ -851,6 +851,17 @@ export function buildThesis(profile = {}) {
   const isOrg = applicant_types.some((t) =>
     ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal'].includes(t));
 
+  // Research-capable organization (the Axiom BioLabs archetype, 2026-07-06):
+  // a biotech/life-science/R&D org whose funding universe (SBIR/STTR, federal
+  // research solicitations, state innovation matching funds) is reached by
+  // NONE of the generic org queries — the whole catalog had ZERO SBIR-class
+  // rows because no lane ever searched for them. This flag is QUERY BREADTH
+  // ONLY (like interest_terms — never used for scoring/eligibility), so a
+  // text scan is safe here: worst case an org that merely mentions research
+  // gets a few extra SBIR queries whose results still face the match gates.
+  const RE_RESEARCH_ORG = /\b(biotech(?:nology)?|life sciences?|biomedical|bioscience|genomic(?:s)?|laborator(?:y|ies)|r&d|research (?:and development|organi[sz]ation|institute|laboratory))\b/i;
+  const is_research_org = isOrg && RE_RESEARCH_ORG.test(blob);
+
   // Free-text interest / field-of-study / career-goal / talent seeds the applicant
   // entered (major, intended career, demographic scholarship tags). These do NOT
   // affect matching — they are ONLY searchable seeds for the open-web query
@@ -877,6 +888,7 @@ export function buildThesis(profile = {}) {
     cost_share_allowed,
     is_student: isStudent,
     is_org: isOrg,
+    is_research_org,
     school: profile?.school ?? null,
     // Concrete institution / field-of-study / employer seeds — the highest-signal
     // way to reach institution-specific endowments/departmental scholarships and
@@ -893,7 +905,14 @@ export function buildThesis(profile = {}) {
       ? profile.min_match_score
       : (isOrg ? 60 : 55),
     // Searchable keyword seeds (deduped) for the planner's query builders.
-    keywords: [...new Set([...needs, ...applicant_types])],
+    // Research orgs add the terms that reach SBIR/STTR and research NOFOs in
+    // the structured feeds (grants.gov keyword search) — absent these, a
+    // biotech org's federal query set looks identical to a food pantry's.
+    keywords: [...new Set([
+      ...needs,
+      ...applicant_types,
+      ...(is_research_org ? ['sbir', 'biotechnology', 'research'] : []),
+    ])],
     // Field-of-study / interest seeds for the open-web query builder (breadth
     // only; never used for scoring). See buildWebQueries.
     interest_terms,
