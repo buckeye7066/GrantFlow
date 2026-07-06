@@ -85,3 +85,39 @@ describe('RELEVANCE_RULES structure', () => {
     expect(RELEVANCE_RULES.length).toBeGreaterThanOrEqual(15)
   })
 })
+
+// ── Research-org recognition (the Axiom BioLabs false-rejection class) ────────
+// A profile that DECLARES research capability via organization_type must not be
+// rejected by the research-institution content gates, while individuals,
+// families, and community nonprofits still are.
+describe('research-institution rules recognize declared research organizations', () => {
+  const researchRule = RELEVANCE_RULES.find((r) => r.id === 'research_institution_only')
+  const piRule = RELEVANCE_RULES.find((r) => r.id === 'content_pi_institution_restricted')
+
+  const axiomLike = {
+    primary_type: 'organization',
+    organization_type: 'Biotechnology / research organization',
+  }
+  const family = { primary_type: 'family' }
+  const church = { primary_type: 'church' }
+
+  it('research_institution_only PASSES a declared research org and still rejects individuals', () => {
+    // profileCheck returns true = REJECT
+    expect(researchRule.profileCheck(axiomLike, '', {})).toBe(false)
+    expect(researchRule.profileCheck(family, '', {})).toBe(true)
+  })
+
+  it('research_institution_only still rejects a church (no research declaration)', () => {
+    expect(researchRule.profileCheck(church, '', {})).toBe(true)
+  })
+
+  it('PI/institution-restricted rule passes a declared research org', () => {
+    expect(piRule.profileCheck(axiomLike, '', {})).toBe(false)
+  })
+
+  it('classic institution primary_types still pass', () => {
+    for (const t of ['university', 'hospital', 'research_institution']) {
+      expect(researchRule.profileCheck({ primary_type: t }, '', {})).toBe(false)
+    }
+  })
+})
