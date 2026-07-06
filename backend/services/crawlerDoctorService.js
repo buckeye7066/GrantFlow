@@ -15,7 +15,7 @@
  */
 
 import { getDb } from '../db/index.js'
-import { buildThesisForProfile, attachLearnedGaps } from './crawlerOsService.js'
+import { buildThesisForProfile } from './crawlerOsService.js'
 import { buildWebQueries } from '../crawler-os/webQueries.js'
 import { auditProfileResultCoverage } from './coverageAudit/profileResultCoverageAudit.js'
 import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS } from '../config/matchSurfacing.js'
@@ -116,9 +116,22 @@ function explainMatchRow(row, floor) {
 export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {}) {
   const limit = Math.max(1, Math.min(500, Number(opts.limit) || 100))
 
-  const thesis = opts.thesis ?? await buildThesisForProfile(db, profileId)
+  let thesis = opts.thesis ?? null
+  if (!thesis) {
+    try {
+      // buildThesisForProfile also attaches learned gaps (the closed loop).
+      thesis = await buildThesisForProfile(db, profileId)
+    } catch (err) {
+      // loadProfileContext THROWS for an unknown id (it does not return null)
+      // — same contract as crawlerPlanService: map to a clean not-found so the
+      // admin route answers 404, never 500.
+      if (/not found|no such|does not exist/i.test(String(err?.message || ''))) {
+        return { error: 'profile_not_found', profile_id: profileId }
+      }
+      throw err
+    }
+  }
   if (!thesis) return { error: 'profile_not_found', profile_id: profileId }
-  if (!opts.thesis) await attachLearnedGaps(db, profileId, thesis)
 
   // The queries the NEXT web-lane crawl will run (seed 0 = the deterministic
   // base set; live runs rotate the EXTRA pool on top of the same CORE).
