@@ -31,6 +31,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
+import { inferCandidateProfile } from '../../crawler-os/crawlerVocabulary.js'
 
 const log = createLogger('coverage:surfacedEligibility')
 
@@ -54,12 +55,26 @@ function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null }
  * drive eligibility/scoring are needed; the facade rebuilds the canonical opp.
  */
 export function liveOppToOs(row = {}) {
+  // The live funding_opportunities table does NOT persist the OS matching
+  // fields (applicant_types lives only in-memory during a crawl). Passing []
+  // here made the engine treat the opportunity as serving NOBODY and
+  // hard-reject at 0 — the sweep then falsely demoted REAL eligible matches
+  // (2026-07-06: NIH Parent STTR for a biotech scored reject@0 with [] but
+  // review@80 with honest types). Reconstruct like ingest does: conservative
+  // text inference, else '*' (unknown = NEUTRAL, never a penalty — canonical
+  // missing-data doctrine; the engine still scores actual relevance).
+  const storedApplicants = parseListMaybe(row.applicant_types)
+  let applicantTypes = storedApplicants
+  if (applicantTypes.length === 0) {
+    try { applicantTypes = inferCandidateProfile(row, {}).applicant_types ?? [] } catch { applicantTypes = [] }
+  }
+  if (!Array.isArray(applicantTypes) || applicantTypes.length === 0) applicantTypes = ['*']
   return {
     id: row.id,
     title: row.title,
     sponsor: row.sponsor,
     summary: row.description ?? row.summary ?? null,
-    applicant_types: parseListMaybe(row.applicant_types),
+    applicant_types: applicantTypes,
     need_categories: parseListMaybe(row.categories),
     geography: {
       national: row.is_national === 1 || row.is_national === true,

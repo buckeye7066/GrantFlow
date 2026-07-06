@@ -127,4 +127,27 @@ describe('reScoreSurfacedIneligible', () => {
     expect(os.need_categories).toEqual(['housing'])
     expect(os.funding.amount_max).toBe(500)
   })
+
+  // The false-demotion class (2026-07-06): live rows never persist the OS
+  // applicant_types field; passing [] made the faithful engine treat the
+  // opportunity as serving NOBODY and hard-reject at 0, so the sweep demoted
+  // REAL eligible matches (NIH Parent STTR for a biotech: reject@0 with []
+  // vs review@80 with honest types).
+  it('liveOppToOs never emits an empty applicant list: inferred from text, else broad-neutral', () => {
+    // Inferable from text: small-business phrasing → business bucket.
+    const sbir = liveOppToOs({
+      id: 's', title: 'NIH Small Business Technology Transfer Grant (Parent STTR)',
+      description: 'For small business concerns partnering with research institutions.',
+    })
+    expect(sbir.applicant_types.length).toBeGreaterThan(0)
+    expect(sbir.applicant_types).not.toEqual([])
+
+    // Nothing inferable: unknown is NEUTRAL ('*'), never a hard exclusion.
+    const opaque = liveOppToOs({ id: 'o', title: 'Community Betterment Fund', description: 'Support for local efforts.' })
+    expect(opaque.applicant_types.length).toBeGreaterThan(0)
+
+    // A persisted list is passed through untouched.
+    const stored = liveOppToOs({ id: 'p', title: 'T', applicant_types: '["veteran"]' })
+    expect(stored.applicant_types).toEqual(['veteran'])
+  })
 })
