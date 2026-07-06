@@ -18,7 +18,24 @@ import {
   deriveEvidenceUrl,
   persistEvidence,
 } from './provenanceAudit.js'
+import { maybeEmbedOpportunity } from './embeddings/embeddingService.js'
 const log = createLogger('opportunityInserter')
+
+/**
+ * Lazy semantic-recall embedding (SEMANTIC_RECALL=1 only; no-op otherwise).
+ * Fire-and-forget by design: an embedding is a recall-booster side artifact —
+ * it must never slow down or fail an opportunity upsert. Backfill for rows
+ * inserted while the flag was off: backend/scripts/backfill-opportunity-embeddings.mjs.
+ */
+function scheduleOpportunityEmbedding(db, opportunityId, opportunity) {
+  try {
+    maybeEmbedOpportunity(db, opportunityId, opportunity).catch((err) => {
+      log.warn(`lazy embedding failed for ${opportunityId} (non-blocking): ${err?.message || err}`)
+    })
+  } catch {
+    /* never let embedding scheduling affect the insert path */
+  }
+}
 
 /**
  * Best-effort: log a rejection row, then return the skip verdict unchanged.
@@ -822,6 +839,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     // Capture per-result evidence snippets (best-effort, never blocks).
     await persistEvidence(db, existing.id, opportunity)
 
+    // Refresh the semantic-recall embedding for the updated row (flag-gated no-op).
+    scheduleOpportunityEmbedding(db, existing.id, opportunity)
+
     return { id: existing.id, inserted: false, updated: true, skipped: false }
   }
 
@@ -1177,6 +1197,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   // evidence is the source text (title + matched description / eligibility)
   // and the source URL that justify this stored opportunity.
   await persistEvidence(db, id, opportunity)
+
+  // Lazy semantic-recall embedding for the new row (flag-gated no-op).
+  scheduleOpportunityEmbedding(db, id, opportunity)
 
   return { id, inserted: true, skipped: false }
 }

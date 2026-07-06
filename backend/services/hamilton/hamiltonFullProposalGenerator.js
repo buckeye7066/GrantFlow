@@ -231,7 +231,40 @@ export function buildFunderRequirements(opportunity, grant) {
 
 // ── prompt ───────────────────────────────────────────────────────────
 
-function buildProposalPrompt({ kind, rubric, evidence, funder }) {
+/**
+ * Render comparable funded awards as a clearly-labeled REFERENCE block.
+ * These are OTHER applicants' real awards (NIH RePORTER) — structure/framing
+ * references ONLY. They are deliberately NOT part of the evidence pack, so
+ * the fabrication guard keeps treating the profile as the sole source of
+ * applicant truth; nothing in this block can launder an award fact into an
+ * applicant claim.
+ */
+function buildComparableAwardsBlock(comparableAwards) {
+  const awards = (Array.isArray(comparableAwards) ? comparableAwards : [])
+    .filter((a) => a && a.title)
+    .slice(0, 5)
+  if (awards.length === 0) return ''
+  const lines = awards.map((a) => {
+    const bits = [
+      `- "${String(a.title).slice(0, 160)}"`,
+      a.recipient ? `recipient: ${String(a.recipient).slice(0, 120)}` : null,
+      typeof a.amount === 'number' ? `amount: $${a.amount.toLocaleString('en-US')}` : null,
+      a.agency ? `funder: ${String(a.agency).slice(0, 80)}` : null,
+    ].filter(Boolean)
+    return bits.join(' | ')
+  })
+  return `
+=== COMPARABLE FUNDED AWARDS (REFERENCE ONLY — NOT APPLICANT FACTS) ===
+These are REAL awards previously made to OTHER applicants (source: NIH RePORTER).
+Use them ONLY to mirror structure, scope, and framing of successful proposals.
+ABSOLUTE: none of these belong to the applicant. NEVER claim, imply, adapt, or
+copy their institutions, amounts, outcomes, or credentials into the applicant's
+narrative. Applicant claims must come from the APPLICANT EVIDENCE alone.
+${lines.join('\n')}
+`
+}
+
+function buildProposalPrompt({ kind, rubric, evidence, funder, comparableAwards = null }) {
   const rubricList = rubric.map((s) => `  - ${s.key}: ${s.title}`).join('\n')
   return `You are ${PERSONA}
 You are drafting a COMPLETE, submission-ready grant proposal for ${kind === 'organization' ? 'an ORGANIZATION' : 'an INDIVIDUAL / STUDENT'} applicant.
@@ -253,6 +286,7 @@ ${JSON.stringify(funder, null, 2)}
 
 === APPLICANT EVIDENCE ===
 ${JSON.stringify(evidence, null, 2)}
+${buildComparableAwardsBlock(comparableAwards)}
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -367,10 +401,14 @@ function normalizeProposal(json, { kind, rubric }) {
  */
 export async function generateMbaProposal(db, {
   profile, opportunity = null, grant = null, taskId = null,
+  // Optional REAL comparable awards (reference context only — see
+  // buildComparableAwardsBlock). When omitted and COMPARABLE_AWARDS=1 is set,
+  // they are fetched here (best-effort) so every generator call site gains
+  // the grounding through this single choke point.
+  comparableAwards = null,
   // Test seam: inject a stub LLM so unit tests stay hermetic.
   _deps = null,
 } = {}) {
-  void db
   void taskId
   if (!profile || typeof profile !== 'object') throw new Error('profile required')
 
@@ -378,7 +416,19 @@ export async function generateMbaProposal(db, {
   const rubric = rubricForProfileKind(kind)
   const evidence = buildEvidencePack(profile, kind)
   const funder = buildFunderRequirements(opportunity, grant)
-  const prompt = buildProposalPrompt({ kind, rubric, evidence, funder })
+
+  let awards = Array.isArray(comparableAwards) ? comparableAwards : null
+  if (awards === null && grant) {
+    try {
+      const { fetchComparableAwardsForGrant } = await import('../comparableAwardsService.js')
+      const result = await fetchComparableAwardsForGrant(db, grant, { limit: 5 })
+      awards = result.awards // [] when flag off / lookup failed — block is omitted
+    } catch {
+      awards = []
+    }
+  }
+
+  const prompt = buildProposalPrompt({ kind, rubric, evidence, funder, comparableAwards: awards })
 
   const invokeJson = _deps?.invokeJson || invokeJsonWithFallback
   const openaiFactory = _deps?.getOpenAIOptional || getOpenAIOptional
@@ -435,6 +485,9 @@ export async function generateMbaProposal(db, {
       section_keys: guarded.sections.map((s) => s.key),
       funder: funder.funder || null,
       fabrication_flag_count: fabricationFlags.length,
+      // Traceability: how many real reference awards grounded this draft
+      // (0 when the COMPARABLE_AWARDS flag is off or lookup found nothing).
+      comparable_award_count: (awards || []).length,
     },
   }
 }
@@ -658,6 +711,7 @@ export const _internal = {
   buildEvidencePack,
   buildFunderRequirements,
   buildProposalPrompt,
+  buildComparableAwardsBlock,
   normalizeProposal,
   getProposalStorageDir,
   hasEvidencePlaceholder,

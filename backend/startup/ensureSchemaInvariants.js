@@ -947,6 +947,39 @@ export async function ensureAnyaRunLiveColumns(db, { logger = console } = {}) {
 }
 
 /**
+ * opportunity_embeddings sidecar table (migration 131 / pg 0135) — semantic
+ * recall (SEMANTIC_RECALL, default OFF). The embedding service tolerates a
+ * missing table (returns zero extra candidates), but the lazy-embed hook on
+ * opportunityInserter and the backfill script both write on paths that may
+ * run before the operator applied migrations, so we re-assert the shape at
+ * the single boot choke point. Portable JSON-vector shape only — the
+ * OPTIONAL pgvector column stays in the guarded pg migration (extension DDL
+ * is not safe to attempt on every boot).
+ */
+export async function ensureOpportunityEmbeddingsTable(db, { logger = console } = {}) {
+  return runStep(
+    'opportunity_embeddings (semantic recall sidecar)',
+    '[database]',
+    logger,
+    async () => {
+      const timestampType = db?.dialect === 'postgres' ? 'TIMESTAMPTZ DEFAULT now()' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS opportunity_embeddings (
+          opportunity_id TEXT PRIMARY KEY REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+          model TEXT NOT NULL,
+          dims INTEGER NOT NULL,
+          vector TEXT NOT NULL,
+          updated_at ${timestampType}
+        );
+      `)
+      await db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_opportunity_embeddings_updated ON opportunity_embeddings(updated_at)',
+      )
+    },
+  )
+}
+
+/**
  * The canonical, ordered registry of schema-invariant steps.
  *
  * SINGLE SOURCE OF TRUTH: this is the only place a step is declared. The boot
@@ -978,6 +1011,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['anya_run_live_columns', ensureAnyaRunLiveColumns],
   ['onboarding_tour_state_columns', ensureOnboardingTourStateColumns],
   ['guided_cycle_tour_status_column', ensureGuidedCycleTourStatusColumn],
+  ['opportunity_embeddings_table', ensureOpportunityEmbeddingsTable],
   ['perf_indexes', ensurePerfIndexes],
 ]
 

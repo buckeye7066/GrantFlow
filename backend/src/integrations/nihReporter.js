@@ -50,6 +50,80 @@ export async function fetchOpportunities(query = {}) {
   return rows.map((row) => normalizeNihReporterRow(row)).filter((row) => row !== null)
 }
 
+/**
+ * Comparable funded awards for proposal grounding (Deliverable: comparable-
+ * awards panel + Hamilton drafting reference context).
+ *
+ * Returns CLEAN reference rows — real, historical NIH awards — labeled for
+ * "reference only" use. These are OTHER applicants' awards: they may inform
+ * structure/framing of a draft but must NEVER be asserted as applicant facts
+ * (G0). Same live RePORTER API as fetchOpportunities; no key required.
+ *
+ * @param {Object=} query
+ * @param {string=} query.text free-text search (profile/opportunity keywords)
+ * @param {number=} query.limit max rows to return (default 5)
+ * @returns {Promise<Array<{title:string, recipient:string|null, recipient_state:string|null,
+ *   amount:number|null, agency:string|null, detail_url:string|null,
+ *   project_start:string|null, project_end:string|null, source:'nih.reporter',
+ *   reference_only:true}>>}
+ */
+export async function fetchComparableAwards(query = {}) {
+  const { text = '', limit = 5 } = query
+  const body = {
+    criteria: {
+      ...(text ? { advanced_text_search: { operator: 'and', search_field: 'all', search_text: text } } : {}),
+    },
+    offset: 0,
+    // Over-fetch a little so rows dropped for missing title/id still leave
+    // enough clean references.
+    limit: Math.min(25, Math.max(10, limit * 2)),
+  }
+
+  /** @type {any} */
+  const data = await requestJson({
+    provider: 'nih.reporter',
+    url: NIH_REPORTER_PROJECTS_SEARCH_URL,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: body,
+    timeoutMs: 25_000,
+    maxRetries: 2,
+  })
+
+  const rows = Array.isArray(data?.results) ? data.results : []
+  const out = []
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    const title = firstString(row?.project_title)
+    const projectNum = firstString(row?.project_num, row?.appl_id, row?.core_project_num)
+    if (!title || !projectNum) continue // no invented/placeholder rows (G0)
+
+    const orgObj = row?.organization && typeof row.organization === 'object' ? row.organization : null
+    const icObj = row?.agency_ic_admin && typeof row.agency_ic_admin === 'object' ? row.agency_ic_admin : null
+    const applId = firstString(row?.appl_id)
+    out.push({
+      title,
+      recipient: firstString(orgObj?.org_name),
+      recipient_state: firstString(orgObj?.org_state),
+      amount:
+        typeof row?.award_amount === 'number' && Number.isFinite(row.award_amount)
+          ? row.award_amount
+          : null,
+      agency: firstString(icObj?.name, icObj?.abbreviation, row?.agency_code) || 'National Institutes of Health',
+      detail_url: firstString(
+        row?.project_detail_url,
+        applId ? `https://reporter.nih.gov/project-details/${encodeURIComponent(applId)}` : null,
+      ),
+      project_start: firstString(row?.project_start_date),
+      project_end: firstString(row?.project_end_date),
+      source: 'nih.reporter',
+      reference_only: true,
+    })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 function firstString(...candidates) {
   for (const c of candidates) {
     const v = toTrimmedStringOrNull(c)

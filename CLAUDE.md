@@ -40,6 +40,7 @@ npm run doctor       # Project health check
 - **Frontend** (`src/`): React 18 + Vite + TypeScript + Tailwind + Radix UI. State via Zustand (`stores/`). Feature-based components under `components/`. API calls go through `api/`.
 - **Backend** (`backend/`): Express, 30+ route files under `backend/routes/`, business logic in `backend/services/`, DB access via `backend/db/`. Entry: `backend/server.js`. Boot tasks in `backend/startup/`.
 - **AI**: Claude (`@anthropic-ai/sdk`) + OpenAI for drafting, discovery, and the "Anya" assistant. Prompts in `backend/prompts/`.
+- **Recall/grounding/critic lanes (flag-gated, default OFF)**: `SEMANTIC_RECALL` (embedding recall booster — ADDITIVE candidates only; `backend/services/embeddings/embeddingService.js`; matchEngine stays the sole decision authority), `COMPARABLE_AWARDS` (real NIH RePORTER awards as labeled reference-only drafting context), `PROPOSAL_CRITIC` (multi-pass draft critic). Contracts + off-state behavior: `docs/canonical_rules.md` ("Feature flags" section).
 - **DB**: SQLite for local/test (`backend/db/schema.sql`), Postgres in prod via a shim. Tests use vitest with `.js` (`backend/tests/`); a few runners use `node:test` with `.mjs` — match the convention of the file you're editing.
 - **Deployment**: Frontend → Vercel, Backend → Railway (PostgreSQL).
 - **Canonical product rules + goals**: `docs/canonical_rules.md` is the single source of truth. Read it before changing matching, discovery, pipeline, or tenancy behavior.
