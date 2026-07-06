@@ -60,9 +60,10 @@ export default function AnyaCoachmark({
   let cardStyle
   if (!centered) {
     const spacing = 12
-    const cardWidth = 340
     const vw = window.innerWidth
     const vh = window.innerHeight
+    // Clamp to the viewport — a fixed 340px card overflows narrow phones.
+    const cardWidth = Math.min(340, vw - 24)
     const estimatedCardHeight = 220
     const fitsBelow = rect.bottom + spacing + estimatedCardHeight <= vh
     let left = rect.left + rect.width / 2 - cardWidth / 2
@@ -76,9 +77,11 @@ export default function AnyaCoachmark({
       top: '50%',
       left: '50%',
       transform: 'translate(-50%, -50%)',
-      width: 380,
+      width: 'min(380px, calc(100vw - 24px))',
     }
   }
+
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
 
   const content = (
     <>
@@ -97,7 +100,9 @@ export default function AnyaCoachmark({
                 boxShadow: '0 0 0 9999px rgba(15, 23, 42, 0.55)',
                 zIndex: 9998,
                 pointerEvents: 'none',
-                transition: 'top 150ms ease, left 150ms ease, width 150ms ease, height 150ms ease',
+                transition: prefersReducedMotion
+                  ? 'none'
+                  : 'top 150ms ease, left 150ms ease, width 150ms ease, height 150ms ease',
               }
         }
       />
@@ -151,8 +156,8 @@ export default function AnyaCoachmark({
             ) : null}
           </div>
         </div>
-        {isNextDisabled && nextHint ? (
-          <p className="mt-2 text-right text-[11px] text-slate-400">{nextHint}</p>
+        {nextHint ? (
+          <p className="mt-2 text-right text-xs text-slate-600">{nextHint}</p>
         ) : null}
       </div>
     </>

@@ -6,12 +6,18 @@ import { GUIDED_TOUR_STEPS } from '@/config/guidedCycleTourSteps'
 import AnyaCoachmark from '@/components/onboarding/AnyaCoachmark'
 import AutomationChoiceBody from '@/components/onboarding/AutomationChoiceBody'
 
+// Keyed by STEP id (what isNextDisabled checks), not by event name.
 const EVENT_HINTS = {
   'discover-crawl': "Waiting for real matches to come in — this only takes a moment.",
   'discover-add': 'Add a funding source above to continue.',
   'pipeline-drag': 'Drag the card into the next column to continue.',
-  'hamilton-portal-opened': 'Click the button above to continue.',
+  'hamilton-open': 'Click the button above to continue.',
 }
+
+// Shown instead of a locked Next when the step's anchor element never mounted
+// (nothing in the pipeline yet, no grant selected, ...) — the action the step
+// waits on can't be performed, so the user may move on.
+const TARGET_MISSING_NOTE = "This part isn't on your screen right now — that's okay, we can keep going."
 
 /**
  * Route-following orchestrator for the guided first-cycle tour. Mounted
@@ -28,12 +34,18 @@ export default function GuidedCycleTour() {
   const currentStepId = useGuidedTourStore((s) => s.currentStepId)
   const targets = useGuidedTourStore((s) => s.targets)
   const completedStepIds = useGuidedTourStore((s) => s.completedStepIds)
+  const stepNotes = useGuidedTourStore((s) => s.stepNotes)
   const advance = useGuidedTourStore((s) => s.advance)
   const back = useGuidedTourStore((s) => s.back)
   const skip = useGuidedTourStore((s) => s.skip)
   const start = useGuidedTourStore((s) => s.start)
 
   const [targetReady, setTargetReady] = useState(false)
+  // True once the target poll below gives up: the step's anchor never mounted
+  // (empty pipeline, no grant selected, ...). Rather than stranding the user
+  // with nothing but the skip button, we fall back to a centered card with
+  // Next enabled so the tour can continue without the spotlight.
+  const [targetMissing, setTargetMissing] = useState(false)
 
   // Start the tour exactly once, on mount (OnboardingSequencer only mounts
   // this component while the tour is pending, so mounting IS the trigger).
@@ -56,6 +68,7 @@ export default function GuidedCycleTour() {
   // destination page's own useEffect registers it shortly after mount).
   useEffect(() => {
     setTargetReady(false)
+    setTargetMissing(false)
     if (!step || !step.targetKey) {
       setTargetReady(true)
       return undefined
@@ -69,11 +82,14 @@ export default function GuidedCycleTour() {
       const ref = targets[step.targetKey]
       if (ref?.current) {
         setTargetReady(true)
+        setTargetMissing(false)
         return
       }
       attempts += 1
       if (attempts < 40) {
         setTimeout(check, 150)
+      } else {
+        setTargetMissing(true)
       }
     }
     check()
@@ -96,13 +112,16 @@ export default function GuidedCycleTour() {
     </button>
   )
 
-  if (location.pathname !== step.route || !targetReady) {
+  if (location.pathname !== step.route || (!targetReady && !targetMissing)) {
     return exitAffordance
   }
 
-  const targetRef = step.targetKey ? targets[step.targetKey] ?? null : null
+  // A missing anchor renders as a centered card (targetRef null) with Next
+  // enabled — never leave Next locked on an action the user cannot take.
+  const targetRef = !targetMissing && step.targetKey ? targets[step.targetKey] ?? null : null
   const isEventGated = step.completion?.startsWith('event:')
-  const isNextDisabled = isEventGated && !completedStepIds[step.id]
+  const isNextDisabled = isEventGated && !completedStepIds[step.id] && !targetMissing
+  const unblockNote = stepNotes[step.id] ?? (targetMissing ? TARGET_MISSING_NOTE : null)
 
   const body = step.kind === 'automation-choice'
     ? <AutomationChoiceBody onDone={advance} />
@@ -120,7 +139,7 @@ export default function GuidedCycleTour() {
         onBack={stepIdx > 0 ? back : null}
         onSkip={skip}
         isNextDisabled={isNextDisabled}
-        nextHint={isNextDisabled ? EVENT_HINTS[step.id] : null}
+        nextHint={isNextDisabled ? EVENT_HINTS[step.id] : unblockNote}
       />
       {exitAffordance}
     </>

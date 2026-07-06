@@ -125,32 +125,35 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
         <DialogHeader>
           <DialogTitle>Welcome to GrantFlow!</DialogTitle>
           <DialogDescription>
-            Watch this quick walkthrough to get started with GrantFlow. Learn about authentication, 
-            crawler automation, document ingestion, and the Anya AI assistant.
+            Watch this quick walkthrough to see how GrantFlow finds real funding for you — and how
+            Anya, your in-app guide, helps at every step.
           </DialogDescription>
         </DialogHeader>
 
         <div className="py-4">
           {videoError ? (
-            <Alert variant="destructive">
+            <Alert>
               <Info className="h-4 w-4" />
               <AlertDescription>
-                <p className="font-medium mb-2">Onboarding video failed to load</p>
-                <p className="text-sm mb-3">
-                  This is a real configuration issue (the MP4 is missing or the URL is wrong).
+                <p className="font-medium mb-1">The welcome video couldn't load right now</p>
+                <p className="text-sm">
+                  No problem — you don't need it to get started. Anya will walk you through
+                  everything the video covers. Just continue below.
                 </p>
-                <div className="text-sm space-y-2">
-                  <p className="font-medium">Tried these URL(s):</p>
-                  <ul className="list-disc list-inside space-y-1">
-                    {(videoError?.tried || []).map((u) => (
-                      <li key={u} className="break-all">{u}</li>
-                    ))}
-                  </ul>
-                  <p className="mt-3">
-                    Fix by adding the file to <code className="px-1 py-0.5 bg-white/60 rounded">public/Grant Flow_ Get Started.mp4</code> and redeploying,
-                    or set <code className="px-1 py-0.5 bg-white/60 rounded">VITE_ONBOARDING_VIDEO_URL</code> to a hosted MP4 URL at build time.
-                  </p>
-                </div>
+                {import.meta.env.DEV ? (
+                  <div className="text-sm space-y-2 mt-3 border-t pt-3">
+                    <p className="font-medium">Dev-only details — tried these URL(s):</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {(videoError?.tried || []).map((u) => (
+                        <li key={u} className="break-all">{u}</li>
+                      ))}
+                    </ul>
+                    <p className="mt-3">
+                      Fix by adding the file to <code className="px-1 py-0.5 bg-white/60 rounded">public/Grant Flow_ Get Started.mp4</code> and redeploying,
+                      or set <code className="px-1 py-0.5 bg-white/60 rounded">VITE_ONBOARDING_VIDEO_URL</code> to a hosted MP4 URL at build time.
+                    </p>
+                  </div>
+                ) : null}
               </AlertDescription>
             </Alert>
           ) : (
@@ -174,10 +177,10 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
               <div className="text-sm text-blue-900">
                 <p className="font-medium mb-1">What you'll learn:</p>
                 <ul className="list-disc list-inside space-y-1 ml-2">
-                  <li>How to authenticate and manage your account</li>
-                  <li>Using AI-powered crawlers to find funding opportunities</li>
-                  <li>Uploading and processing application documents</li>
-                  <li>Working with the Anya AI assistant</li>
+                  <li>Finding real funding that matches your situation</li>
+                  <li>Tracking the opportunities you're pursuing, from found to submitted</li>
+                  <li>Uploading documents so applications can fill themselves in</li>
+                  <li>Getting help from Anya, your in-app guide, anytime</li>
                 </ul>
               </div>
             </div>
