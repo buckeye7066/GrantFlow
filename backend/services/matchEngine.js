@@ -500,7 +500,16 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     }
   }
 
-  if (oppNorm.diseaseSpecific && !profileNorm.hasChronicIllness && !profileNorm.hasDisabilityNeed) {
+  // Condition-targeted funding is a PATIENT-side gate for people; a research
+  // organization applies for condition-targeted RESEARCH funding as its core
+  // business (NIH Parent SBIR/STTR "Clinical Trial Optional", disease-area
+  // program announcements). Blocking Axiom-class biotechs here was the
+  // 2026-07-06 false-rejection class ("medical condition not indicated") —
+  // the crawler-os engine ACCEPTed@71 while this gate refused the pipeline add.
+  const profileIsResearchOrg =
+    /\b(research|biotech\w*|life[\s_-]?sciences?|biomedical|bioscience|laborator\w*|institute|r&d)\b/i
+      .test(`${profileNorm.organizationType ?? ''} ${profileNorm.entityType ?? ''}`)
+  if (oppNorm.diseaseSpecific && !profileIsResearchOrg && !profileNorm.hasChronicIllness && !profileNorm.hasDisabilityNeed) {
     ineligibilityReasons.push('Opportunity targets a specific medical condition not indicated in profile')
   }
   if (oppNorm.requiresDisasterContext && !profileNorm.hasEmergencyNeed) {

@@ -235,3 +235,41 @@ describe('BUG B — multi-state geographic matching', () => {
     expect(geoComponent).toBeLessThan(75)
   })
 })
+
+// ── Research-org exemption from the patient-side disease gate (2026-07-06) ────
+// Condition-targeted RESEARCH funding (NIH Parent SBIR/STTR, disease-area
+// program announcements) is a research org's core business; the disease gate
+// exists to keep patient-aid away from people without the condition.
+import { computeMatchDecision as _cmd } from '../services/matchEngine.js'
+
+describe('disease-specific gate — research-org exemption', () => {
+  const sttrOpp = {
+    title: 'NIH Small Business Technology Transfer Grant (Parent STTR) — Clinical Trial Optional',
+    description: 'Research funding for small business concerns advancing treatments for cancer and rare diseases.',
+    is_national: 1,
+  }
+
+  it('does NOT flag a declared research org for condition-targeted research funding', () => {
+    const d = _cmd(
+      {
+        primary_type: 'organization',
+        display_name: 'Axiom BioLabs',
+        sections: {
+          organization_details: { organization_type: 'Biotechnology / research organization' },
+        },
+      },
+      sttrOpp,
+    )
+    const reasons = (d.ineligibilityReasons ?? []).join(' | ')
+    expect(reasons).not.toContain('specific medical condition')
+  })
+
+  it('still flags an ordinary individual without the condition', () => {
+    const d = _cmd(
+      { primary_type: 'individual', display_name: 'Jane Doe', sections: {} },
+      { title: 'Cancer Patient Assistance Fund', description: 'Financial help for cancer patients.', is_national: 1 },
+    )
+    const reasons = (d.ineligibilityReasons ?? []).join(' | ')
+    expect(reasons).toContain('specific medical condition')
+  })
+})
