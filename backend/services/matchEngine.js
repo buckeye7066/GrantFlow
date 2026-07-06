@@ -509,6 +509,83 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   if (oppNorm.isCaregiverProgram && !profileNorm.isCaregiver && !profileNorm.hasFosterIndicator) {
     missingFields.push('caregiver_status')
   }
+
+  // -- Explicit population / sector restrictions (2026-07-06) --
+  // The persistent ineligible_surfaced_match / relevance_precision classes
+  // (DV survivor, agricultural cooperative, CDC, faith, age, income). Per G4:
+  // hard-reject ONLY on explicit exclusivity with a clear profile
+  // contradiction; an unknown trait is a MISSING field (→ REVIEW + score cap).
+  const orgLikeProfile = profileNorm.isNonprofit || profileNorm.isBusiness ||
+    ['organization', 'nonprofit', 'business', 'government', 'school', 'institution'].includes(String(profileNorm.entityType))
+  if (oppNorm.requiresDvSurvivor) {
+    if (orgLikeProfile) {
+      ineligibilityReasons.push('Program serves domestic violence survivors (individuals); profile is an organization')
+    } else if (!profileNorm.isDvSurvivor) {
+      // Sensitive, often-undisclosed trait — never hard-reject a person on its absence.
+      missingFields.push('dv_survivor_status')
+    }
+  }
+  if (oppNorm.requiresFarmer && !profileNorm.isFarmer) {
+    const clearlyNotAgricultural =
+      String(profileNorm.entityType) !== 'farm' &&
+      !profileNorm.isBusiness &&
+      (profileNorm.needCategories?.length ?? 0) > 0 &&
+      !profileNorm.needCategories.includes('agriculture')
+    if (clearlyNotAgricultural) {
+      ineligibilityReasons.push('Requires agricultural producer (farm/ranch/cooperative) status')
+    } else {
+      missingFields.push('agricultural_producer_status')
+    }
+  }
+  if (oppNorm.requiresFaithBased) {
+    const faithAffiliated = profileNorm.hasFaithIndicator || profileNorm.isFaithBased ||
+      (profileNorm.affiliations ?? []).includes('faith_based') ||
+      (profileNorm.affiliations ?? []).includes('church')
+    if (!faithAffiliated) {
+      // "Churches only" is a hard exclusivity for a declared secular ORG; an
+      // individual's church membership may simply be undisclosed → REVIEW.
+      if (profileNorm.isNonprofit || profileNorm.isBusiness) {
+        ineligibilityReasons.push('Restricted to churches / faith-based organizations')
+      } else {
+        missingFields.push('faith_based_affiliation')
+      }
+    }
+  }
+  if (oppNorm.requiresCdc) {
+    if (!profileNorm.isNonprofit && orgLikeProfile) {
+      ineligibilityReasons.push('Restricted to community development corporations (nonprofit CDCs)')
+    } else if (!profileNorm.isNonprofit) {
+      ineligibilityReasons.push('Restricted to community development corporations; profile is an individual')
+    } else {
+      const cdSignal =
+        (profileNorm.needCategories ?? []).some((n) => /housing|community|economic/i.test(String(n))) ||
+        /community development/i.test(`${profileNorm.missionFocus ?? ''} ${profileNorm.organizationType ?? ''}`)
+      if (!cdSignal) missingFields.push('cdc_certification')
+    }
+  }
+  // Age restriction applies to PEOPLE; org profiles are governed by entity gates.
+  if (oppNorm.ageRestriction && !orgLikeProfile) {
+    const ageNum = Number(profileNorm.age)
+    const { min: ageMin, max: ageMax } = oppNorm.ageRestriction
+    if (Number.isFinite(ageNum) && ageNum > 0) {
+      if (ageMin !== null && ageNum < ageMin) {
+        ineligibilityReasons.push(`Age restriction: applicants must be ${ageMin}+ (profile age ${ageNum})`)
+      } else if (ageMax !== null && ageNum > ageMax) {
+        ineligibilityReasons.push(`Age restriction: applicants must be ${ageMax} or younger (profile age ${ageNum})`)
+      }
+    } else {
+      missingFields.push('age')
+    }
+  }
+  if (oppNorm.requiresLowIncome && !orgLikeProfile) {
+    const lowIncomeSignal =
+      profileNorm.financial?.belowPovertyLine === true ||
+      (profileNorm.assistanceFlags ?? []).length > 0 ||
+      (profileNorm.enrolledPrograms ?? []).length > 0
+    // Missing income is NEUTRAL (G4) — an explicit means-test with no
+    // qualifying signal is a missing field, never a hard reject.
+    if (!lowIncomeSignal) missingFields.push('income_eligibility')
+  }
   if (profileNorm.isUnableToWork && oppNorm.needTypesSupported?.includes('education')) {
     const isWorkforceFocused = oppNorm.needTypesSupported?.every(n => ['education', 'business'].includes(n))
     if (isWorkforceFocused && !oppNorm.needTypesSupported?.includes('disability')) {
@@ -2570,6 +2647,36 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     if (!hasSeniorSignal) {
       rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
       housingBonusReasons.push(`No senior/caregiver signal × senior-services program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
+    }
+  }
+
+  // ── Population-program mismatch caps (same LAST placement + G4 doctrine as
+  // the senior cap above): a domestic-violence victim-services program or an
+  // agriculture-producers program must not ACCEPT for a profile with no
+  // matching signal anywhere. Survivors / shelters / farms keep full score.
+  if (oppNorm?.isDvProgram) {
+    const dvNeedList = Array.isArray(profileNorm?.needCategories)
+      ? profileNorm.needCategories.map((n) => String(n).toLowerCase()) : []
+    const servesDv = /domestic violence|victim|survivor/i.test(
+      `${profileNorm?.missionFocus ?? ''} ${profileNorm?.populationServed ?? ''}`,
+    )
+    const hasDvSignal = Boolean(profileNorm?.isDvSurvivor) || servesDv ||
+      dvNeedList.some((n) => /domestic|violence|victim|abuse/.test(n))
+    if (!hasDvSignal) {
+      rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      housingBonusReasons.push(`No domestic-violence signal × victim-services program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
+    }
+  }
+  if (oppNorm?.requiresFarmer) {
+    const agNeedList = Array.isArray(profileNorm?.needCategories)
+      ? profileNorm.needCategories.map((n) => String(n).toLowerCase()) : []
+    const hasAgSignal = Boolean(profileNorm?.isFarmer) ||
+      String(profileNorm?.entityType) === 'farm' ||
+      /agricultur|farm|ranch/i.test(String(profileNorm?.industry ?? '')) ||
+      agNeedList.some((n) => /agricultur|farm|ranch|livestock|crop/.test(n))
+    if (!hasAgSignal) {
+      rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
+      housingBonusReasons.push(`No agriculture signal × producers-only program (capped at ${SENIOR_PROGRAM_MISMATCH_CAP})`)
     }
   }
 

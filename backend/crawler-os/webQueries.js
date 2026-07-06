@@ -99,6 +99,13 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   const year = Number.isFinite(opts.year) ? opts.year : new Date().getFullYear();
   const seed = Number.isFinite(opts.seed) ? opts.seed : 0;
   const word = typeWord(thesis.applicant_types);
+  const types = Array.isArray(thesis.applicant_types) ? thesis.applicant_types : [];
+  // Org-shaped profile: no person bucket present. Orgs get the institution
+  // entity lane below INSTEAD of the individual safety-net lane — benefits.gov
+  // / 211 / church-assistance queries are person searches and were crowding
+  // institution-class program queries out of the per-run query cap.
+  const isOrgProfile = thesis.is_org === true ||
+    (types.length > 0 && !types.some((t) => ['individual', 'family', 'student', 'veteran', 'senior', 'caregiver'].includes(t)));
   const geo = geoPhrase(thesis.location);
   const county = countyPhrase(thesis.location);
   const state = thesis.location?.state ? String(thesis.location.state).trim() : '';
@@ -196,6 +203,20 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // student's largest single non-federal source — CORE, never rotated out (was
   // in the rotated EXTRA pool, so runs under the query cap could drop it).
   if (isStudent && state) add(core, `${state} state scholarship programs`);
+  // Hyperlocal scholarship ENTITIES (2026-07-06, hyperlocal_recall_miss fix):
+  // county education foundations, civic clubs (Rotary/Lions/Elks), Dollars for
+  // Scholars chapters, and local churches run most small-town scholarships, and
+  // no geo/need phrase reaches their pages — the ENTITY name is the search
+  // term. County education foundation is CORE (the single best hyperlocal
+  // scholarship source); the clubs broaden via the rotated EXTRA pool.
+  if (isStudent) {
+    if (county) add(core, `${county} education foundation scholarships`);
+    add(extra, `Rotary Club scholarship ${county || geo}`);
+    add(extra, `Lions Club scholarship ${geo}`);
+    if (state) add(extra, `Dollars for Scholars ${state}`);
+    add(extra, `church scholarships ${geo}`);
+    if (geo) add(extra, `${geo} school district education foundation`);
+  }
   // Research-org lane (the Axiom BioLabs archetype, 2026-07-06): SBIR/STTR and
   // state innovation matching funds are a biotech/R&D org's PRIMARY funding
   // universe, and no generic org query ever reaches them (the catalog held
@@ -258,7 +279,9 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // qualify for PROGRAMS/BENEFITS/referral services (benefits.gov, 211, Area
   // Agencies on Aging, state HHS, community action, vocational rehab), not
   // competitive "grants", so emit the searches that actually reach them.
-  if (!isStudent) {
+  // Org profiles skip this lane (see isOrgProfile above) — they get the
+  // institution entity lane instead.
+  if (!isStudent && !isOrgProfile) {
     const needSet = needs.map((n) => n.toLowerCase());
     const kw = (Array.isArray(thesis.keywords) ? thesis.keywords : []).join(' ').toLowerCase();
     const signal = (re) => re.test(kw) || needSet.some((n) => re.test(n));
@@ -301,6 +324,137 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       if (state) add(core, `caregiver support program ${state}`);
       add(extra, `respite care assistance ${geo}`);
     }
+    // Hyperlocal safety-net ENTITIES (2026-07-06, hyperlocal_recall_miss fix).
+    // A profile with an immediate-need signal (rent, food, utilities, medical,
+    // transport, emergency) must NOT stop at state/national programs: churches,
+    // county emergency funds, and utility assistance funds are where local help
+    // actually lives, and only entity-phrased searches reach them.
+    const safetyNet = signal(/food|housing|rent|energy|utilit|medical|transport|emergency|homeless/);
+    if (safetyNet && (geo || county)) {
+      const topNeed = needs[0] || 'emergency';
+      // "churches that help with X near Y" is the real-world search phrasing
+      // that surfaces congregation assistance ministries.
+      add(core, `churches that help with ${topNeed} ${geo || county}`);
+      add(core, `${county || geo} emergency assistance fund`);
+      add(extra, `Salvation Army assistance ${geo || county}`);
+      add(extra, `St Vincent de Paul assistance ${geo}`);
+      add(extra, `church assistance programs ${county || geo}`);
+    }
+    if (signal(/energy|utilit|electric|heating/) && (geo || state)) {
+      add(extra, `utility bill assistance ${geo || state}`);
+      if (state) add(extra, `${state} weatherization assistance program`);
+    }
+    if (signal(/food|nutrition|grocer/) && (county || geo)) {
+      add(extra, `food pantry ${county || geo}`);
+    }
+    if (signal(/housing|rent|homeless/) && (county || geo)) {
+      add(extra, `housing assistance programs ${county || geo}`);
+    }
+    if (signal(/transport/) && (county || geo)) {
+      add(extra, `transportation assistance ${county || geo}`);
+    }
+    // Employment/workforce → the local workforce board / American Job Center.
+    if (signal(/employ|workforce|job|career/) && (county || state)) {
+      add(extra, `workforce development board ${county || state}`);
+      add(extra, `American Job Center ${geo || state}`);
+    }
+    // Domestic-violence survivor lane (relevance_precision archetype fix):
+    // victim services are county/state-programmatic, never generic "grants".
+    if (signal(/domestic violence|family violence|abuse|victim/)) {
+      add(core, `domestic violence assistance ${county || geo || state}`);
+      if (state) add(extra, `crime victim compensation ${state}`);
+      add(extra, `domestic violence shelter services ${geo || state}`);
+    }
+  }
+
+  // ── Institution / org-type entity lane (2026-07-06, institution_recall_miss
+  // fix). An organization's real funding universe is keyed to its INSTITUTION
+  // CLASS (fire grants for a VFD, CDBG for a CDC, HRSA for a clinic, OVW for a
+  // DV shelter, USDA co-op programs for an agricultural cooperative) — generic
+  // "${word} grants ${geo}" phrasing structurally cannot reach these programs.
+  {
+    const has = (t) => types.includes(t);
+    const needSet = needs.map((n) => n.toLowerCase());
+    const needSignal = (re) => needSet.some((n) => re.test(n));
+
+    if (has('vfd')) {
+      // Fire/EMS: AFG is the sector's primary program; state fire grants next.
+      add(core, `Assistance to Firefighters Grant ${year}`);
+      if (state) add(extra, `${state} fire department grants`);
+      add(extra, `volunteer fire department equipment grants`);
+      add(extra, `EMS equipment grants ${state || year}`);
+      add(extra, `Firehouse Subs Public Safety Foundation grant`);
+    }
+    if (has('government') && !has('vfd') && !has('law_enforcement')) {
+      if (state) add(extra, `USDA community facilities grant ${state}`);
+      if (state) add(extra, `${state} municipal grants ${year}`);
+      if (state) add(extra, `community development block grant ${state}`);
+    }
+    if (has('nonprofit')) {
+      // CDC / housing & economic development orgs.
+      if (needSignal(/housing development|economic development|community facilit/)) {
+        if (state) add(core, `community development block grant ${state}`);
+        add(extra, `CDFI Fund grant programs`);
+        if (state) add(extra, `HOME CHDO funding ${state}`);
+        if (state) add(extra, `Federal Home Loan Bank affordable housing program ${state}`);
+      }
+      // DV shelters / victim-services orgs.
+      if (needSignal(/domestic violence|victim/)) {
+        if (state) add(core, `domestic violence shelter grants ${state}`);
+        add(extra, `OVW grant programs ${year}`);
+        add(extra, `Family Violence Prevention and Services grants`);
+        if (state) add(extra, `VOCA victim assistance funding ${state}`);
+      }
+      // Disability service providers.
+      if (needSignal(/disab/)) {
+        if (state) add(extra, `developmental disabilities council grants ${state}`);
+        if (state) add(extra, `disability services provider grants ${state}`);
+      }
+      // Workforce boards / job-training orgs.
+      if (needSignal(/workforce|employment/)) {
+        if (state) add(extra, `WIOA workforce development funding ${state}`);
+      }
+      // Hospitals / clinics / health centers.
+      if (needSignal(/medical|health/) && (has('government') || needSignal(/equipment|capital|operations/))) {
+        if (state) add(core, `rural health grants ${state}`);
+        add(extra, `HRSA funding opportunities ${year}`);
+        if (state) add(extra, `rural health clinic funding ${state}`);
+      }
+      // Libraries / museums.
+      if (needSignal(/library/)) {
+        add(extra, `IMLS grants for libraries ${year}`);
+        if (state) add(extra, `${state} library grants`);
+      }
+    }
+    if (has('church') || has('ministry')) {
+      add(extra, `grants for churches ${year}`);
+      if (state) add(extra, `faith-based organization grants ${state}`);
+      add(extra, `church building grants`);
+    }
+    if (has('school') && !isStudent) {
+      if (county) add(core, `${county} education foundation`);
+      if (state) add(extra, `${state} education grants for schools ${year}`);
+      add(extra, `teacher classroom grants ${year}`);
+    }
+    if (has('farm')) {
+      if (state) add(core, `USDA rural development grants ${state}`);
+      // Agricultural cooperatives (relevance_precision archetype fix).
+      if (has('business') || needSignal(/economic development|cooperative/)) {
+        add(extra, `USDA value-added producer grant ${year}`);
+        add(extra, `USDA rural cooperative development grant`);
+      }
+      if (state) add(extra, `${state} department of agriculture grants ${year}`);
+      if (state) add(extra, `Farm Service Agency programs ${state}`);
+    }
+    if (has('business') && !has('farm')) {
+      add(extra, `chamber of commerce small business grants ${county || geo}`);
+      if (state) add(extra, `${state} small business grant programs ${year}`);
+    }
+    // County extension office: the local front door for both farm and family
+    // programs — relevant to ag profiles and to rural family/individual needs.
+    if ((has('farm') || needSignal(/agricultur/)) && county) {
+      add(extra, `${county} extension office programs`);
+    }
   }
 
   // ── Closed-loop gap targeting ───────────────────────────────────────────────
@@ -321,10 +475,14 @@ export function buildWebQueries(thesis = {}, opts = {}) {
         add(core, `${s} foundation scholarships`);
       }
     }
-    // hyperlocal_gap → re-emit county-scoped queries even if a prior run tried them.
+    // hyperlocal_gap → re-emit county-scoped queries even if a prior run tried
+    // them, AND escalate to the hyperlocal entity classes (education foundation
+    // / churches / civic clubs) that plain county phrasing misses.
     if (classes.includes('hyperlocal_gap') && county) {
       add(core, isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
+      add(core, isStudent ? `${county} education foundation scholarships` : `${county} emergency assistance fund`);
       add(extra, `community foundation grants ${county}`);
+      add(extra, isStudent ? `Rotary Club scholarship ${county}` : `church assistance programs ${county}`);
     }
     // low_results → broaden with national + state fallbacks keyed to the needs.
     if (classes.includes('low_results')) {

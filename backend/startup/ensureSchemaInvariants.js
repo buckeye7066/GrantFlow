@@ -573,6 +573,54 @@ export async function ensureProfilePreferredLanguageColumn(db, { logger = consol
 }
 
 /**
+ * Amount-visibility columns (both dialects): amount_text / amount_status /
+ * amount_confidence on funding_opportunities AND grants (migrations 132 /
+ * pg 0136). When no per-award dollar figure is knowable, rows carry the best
+ * available TEXT + an explicit status ('varies', 'contact_required',
+ * 'not_listed', ...) instead of a silent blank — populated at ingest by
+ * awardAmountExtractor.resolveOpportunityAmounts and mirrored onto grants by
+ * enforceGrantAmountBackfill(). Re-asserted at boot so prod heals without a
+ * manual migrate.
+ */
+export async function ensureAmountVisibilityColumns(db, { logger = console } = {}) {
+  return runStep(
+    'amount_visibility_columns',
+    '[database]',
+    logger,
+    async () => {
+      const columns = [
+        ['amount_text', 'TEXT'],
+        ['amount_status', 'TEXT'],
+        ['amount_confidence', 'REAL'],
+      ]
+      for (const table of ['funding_opportunities', 'grants']) {
+        if (db?.dialect === 'postgres') {
+          for (const [col, type] of columns) {
+            // audit:allow dynamic-sql — table/col/type come from hardcoded module-local constants
+            await db.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${type}`)
+          }
+          continue
+        }
+        // sqlite: probe once, add only what's missing.
+        let existing = new Set()
+        try {
+          const cols = await db.prepare(`PRAGMA table_info(${table})`).all() // audit:allow dynamic-sql
+          existing = new Set((Array.isArray(cols) ? cols : []).map((c) => c?.name))
+        } catch {
+          existing = new Set()
+        }
+        for (const [col, type] of columns) {
+          if (!existing.has(col)) {
+            // audit:allow dynamic-sql — table/col/type come from hardcoded module-local constants
+            await db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`)
+          }
+        }
+      }
+    },
+  )
+}
+
+/**
  * profiles.deleted_at column (both dialects).
  *
  * Older production databases can predate this column even though fresh schemas
@@ -1004,6 +1052,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['profile_soft_delete_column', ensureProfileSoftDeleteColumn],
   ['users_last_login_at_column', ensureUsersLastLoginAtColumn],
   ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
+  ['amount_visibility_columns', ensureAmountVisibilityColumns],
   ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
   ['profile_portal_status', ensurePortalCompletionStatusTable],
   ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],

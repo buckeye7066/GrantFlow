@@ -63,6 +63,20 @@ describe('FundingResultCard', () => {
     expect(screen.getByTestId('funding-result-card-broken')).toBeTruthy()
   })
 
+  it('shows an honest amount STATUS when no dollar figure is knowable (2026-07-06)', () => {
+    render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified', amount_status: 'varies' }} />)
+    expect(screen.getByText('Amount varies')).toBeTruthy()
+  })
+
+  it('shows the stored amount excerpt when only text is knowable (2026-07-06)', () => {
+    render(
+      <FundingResultCard
+        result={{ ...BASE, kind: 'direct', link_status: 'verified', amount_text: 'Total funding available: $500,000', amount_status: 'not_listed' }}
+      />,
+    )
+    expect(screen.getByText('Total funding available: $500,000')).toBeTruthy()
+  })
+
   it('warns when an opportunity is a loan (RC-15)', () => {
     render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified', is_loan: true }} />)
     const banner = screen.getByTestId('funding-result-card-loan')

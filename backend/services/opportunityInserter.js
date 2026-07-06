@@ -662,6 +662,14 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       amount_min: resolvedAmounts.amount_min,
       amount_max: resolvedAmounts.amount_max,
       amount_description: opportunity.amount_description ?? null,
+      amount_text: resolvedAmounts.amount_text,
+      // Persist NULL (not 'not_listed') when this pass learned nothing, so the
+      // COALESCE update/conflict paths never downgrade an honest stored status.
+      amount_status:
+        resolvedAmounts.amount_status === 'not_listed' && !resolvedAmounts.amount_text
+          ? null
+          : resolvedAmounts.amount_status,
+      amount_confidence: resolvedAmounts.amount_confidence,
       // Postgres DATE cannot accept empty string; normalize to null.
       deadline: normalizeDateLikeOrNull(opportunity.deadline),
       deadline_type: opportunity.deadline_type ?? null,
@@ -718,6 +726,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         amount_min = ?,
         amount_max = ?,
         amount_description = ?,
+        amount_text = ?,
+        amount_status = ?,
+        amount_confidence = ?,
         deadline = ?,
         deadline_type = ?,
         application_url = ?,
@@ -764,6 +775,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         amount_min = COALESCE(?, amount_min),
         amount_max = COALESCE(?, amount_max),
         amount_description = COALESCE(?, amount_description),
+        amount_text = COALESCE(?, amount_text),
+        amount_status = COALESCE(?, amount_status),
+        amount_confidence = COALESCE(?, amount_confidence),
         deadline = COALESCE(?, deadline),
         deadline_type = COALESCE(?, deadline_type),
         application_url = ?,
@@ -810,6 +824,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.amount_min,
       record.amount_max,
       record.amount_description,
+      record.amount_text,
+      record.amount_status,
+      record.amount_confidence,
       record.deadline,
       record.deadline_type,
       record.application_url,
@@ -902,6 +919,13 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     amount_min: resolvedAmounts.amount_min,
     amount_max: resolvedAmounts.amount_max,
     amount_description: opportunity.amount_description ?? null,
+    amount_text: resolvedAmounts.amount_text,
+    // NULL (not 'not_listed') when nothing was learned — see update path above.
+    amount_status:
+      resolvedAmounts.amount_status === 'not_listed' && !resolvedAmounts.amount_text
+        ? null
+        : resolvedAmounts.amount_status,
+    amount_confidence: resolvedAmounts.amount_confidence,
     // Postgres rejects empty-string dates (e.g. ""), so normalize to null.
     deadline: normalizeDateLikeOrNull(opportunity.deadline),
     deadline_type: opportunity.deadline_type ?? null,
@@ -971,6 +995,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       amount_min,
       amount_max,
       amount_description,
+      amount_text,
+      amount_status,
+      amount_confidence,
       deadline,
       deadline_type,
       application_url,
@@ -1031,6 +1058,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @amount_min,
       @amount_max,
       @amount_description,
+      @amount_text,
+      @amount_status,
+      @amount_confidence,
       @deadline,
       @deadline_type,
       @application_url,
@@ -1090,6 +1120,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       amount_min = COALESCE(excluded.amount_min, funding_opportunities.amount_min),
       amount_max = COALESCE(excluded.amount_max, funding_opportunities.amount_max),
       amount_description = COALESCE(excluded.amount_description, funding_opportunities.amount_description),
+      amount_text = COALESCE(excluded.amount_text, funding_opportunities.amount_text),
+      amount_status = COALESCE(excluded.amount_status, funding_opportunities.amount_status),
+      amount_confidence = COALESCE(excluded.amount_confidence, funding_opportunities.amount_confidence),
       deadline = COALESCE(excluded.deadline, funding_opportunities.deadline),
       deadline_type = COALESCE(excluded.deadline_type, funding_opportunities.deadline_type),
       opportunity_type = COALESCE(excluded.opportunity_type, funding_opportunities.opportunity_type),
@@ -1149,6 +1182,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     amount_min: record.amount_min,
     amount_max: record.amount_max,
     amount_description: record.amount_description,
+    amount_text: record.amount_text,
+    amount_status: record.amount_status,
+    amount_confidence: record.amount_confidence,
     deadline: record.deadline,
     deadline_type: record.deadline_type,
     application_url: record.application_url,

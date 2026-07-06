@@ -40,8 +40,9 @@ describe('buildWebQueries', () => {
       keywords: ['senior', 'has disability', 'caregiver'],
       location: { state: 'TN', county: 'Bradley', city: 'Cleveland' },
     }
-    // max high enough to include the rotated EXTRA pool (state programs live there).
-    const qs = buildWebQueries(thesis, { year: 2026, max: 30 })
+    // max high enough to include the FULL rotated EXTRA pool (state programs
+    // live there; the 2026-07-06 hyperlocal entity lanes widened the pool).
+    const qs = buildWebQueries(thesis, { year: 2026, max: 60 })
     // Universal safety-net locators (help even a sparse profile).
     expect(qs.some((q) => /benefits\.gov/i.test(q))).toBe(true)
     expect(qs.some((q) => /\b211\b/.test(q))).toBe(true)

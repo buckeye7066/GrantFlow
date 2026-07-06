@@ -56,5 +56,11 @@ import { SCHEMA_DDL } from './storage.js';
 export function applySchema(db) {
   if (!db || typeof db.exec !== 'function') throw new Error('applySchema: db with .exec required');
   db.exec(SCHEMA_DDL);
+  // Heal pre-existing DBs that predate additive columns (CREATE IF NOT EXISTS
+  // above never alters an existing table). Tolerant: errors mean "exists".
+  for (const col of ['source_query TEXT', 'discovered_via TEXT']) {
+    // audit:allow dynamic-sql — col comes from the hardcoded list above
+    try { db.exec(`ALTER TABLE profile_opportunity_matches ADD COLUMN ${col}`); } catch { /* exists */ }
+  }
   return db;
 }

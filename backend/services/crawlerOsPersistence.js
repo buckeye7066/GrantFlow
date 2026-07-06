@@ -18,6 +18,7 @@ import { storage } from '../crawler-os/index.js';
 import { recordDismissal, reconcileDismissedGrants } from './pipelineDismissals.js';
 import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
 import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
+import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
 
 const nowIso = () => new Date().toISOString();
@@ -276,6 +277,16 @@ function osOppToLiveRow(o) {
   const geo = jparse(o.geography_json, {});
   const needCats = jparse(o.need_categories_json, []);
   const state = Array.isArray(geo.states) && geo.states.length ? geo.states[0] : null;
+  // Amount visibility: structured OS amounts win; otherwise conservatively
+  // extract per-award dollars / status ("varies", "contact funder") from the
+  // title+summary text so web-lane rows never land amount-blank when the page
+  // said something. NULL status = nothing learned (never downgrades on upsert).
+  const amounts = resolveOpportunityAmounts({
+    amount_min: typeof o.amount_min === 'number' ? o.amount_min : null,
+    amount_max: typeof o.amount_max === 'number' ? o.amount_max : null,
+    title: o.title,
+    description: o.summary,
+  });
   return {
     id: o.id,
     title: o.title ?? '(untitled opportunity)', // only NOT NULL column
@@ -287,8 +298,12 @@ function osOppToLiveRow(o) {
     application_url: o.apply_url ?? null,
     apply_url: o.apply_url ?? null,
     deadline: o.deadline ?? null,
-    amount_min: o.amount_min ?? null,
-    amount_max: o.amount_max ?? null,
+    amount_min: amounts.amount_min,
+    amount_max: amounts.amount_max,
+    amount_text: amounts.amount_text,
+    amount_status:
+      amounts.amount_status === 'not_listed' && !amounts.amount_text ? null : amounts.amount_status,
+    amount_confidence: amounts.amount_confidence,
     is_loan: o.is_loan ? 1 : 0,
     requires_match: o.requires_cost_share ? 1 : 0,
     is_national: geo.national ? 1 : 0,
@@ -349,12 +364,19 @@ async function ensureOsTables(db) {
   // additive columns (tolerant — may already exist)
   const addCols = [
     ['funding_opportunities', 'canonical_opportunity_key', 'TEXT'],
+    // Amount visibility (migration 132 / pg 0136).
+    ['funding_opportunities', 'amount_text', 'TEXT'],
+    ['funding_opportunities', 'amount_status', 'TEXT'],
+    ['funding_opportunities', 'amount_confidence', 'REAL'],
     ['profile_opportunity_matches', 'match_explanation', 'TEXT'],
     ['profile_opportunity_matches', 'match_reasons', 'TEXT'],
     ['profile_opportunity_matches', 'match_explain_json', 'TEXT'],
     ['profile_opportunity_matches', 'matcher_version', 'TEXT'],
     ['profile_opportunity_matches', 'computed_at', ts],
     ['profile_opportunity_matches', 'updated_at', ts],
+    // Crawler-doctor provenance (migration 133 / pg 0137).
+    ['profile_opportunity_matches', 'source_query', 'TEXT'],
+    ['profile_opportunity_matches', 'discovered_via', 'TEXT'],
   ];
   for (const [t, c, type] of addCols) {
     try { await db.prepare(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`).run(); } catch { /* exists */ }
@@ -450,6 +472,8 @@ export async function persistRun(db, memStore, run, opts = {}) {
         match_reasons: JSON.stringify(explain.matched_needs ?? []),
         match_explain_json: m.match_explain_json ?? '{}',
         matcher_version: 'crawler-os',
+        source_query: m.source_query ?? null,
+        discovered_via: m.discovered_via ?? null,
         computed_at: nowIso(), updated_at: nowIso(), evaluated_at: nowIso(),
       });
       matches += 1;
@@ -464,13 +488,14 @@ export async function persistRun(db, memStore, run, opts = {}) {
       try {
         await db.prepare(
           `INSERT INTO profile_opportunity_matches
-             (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, match_explain_json, matcher_version, computed_at, updated_at, evaluated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'crawler-os-xmatch', ${nowFn}, ${nowFn}, ${nowFn})
+             (id, profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, match_explain_json, source_query, discovered_via, matcher_version, computed_at, updated_at, evaluated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'crawler-os-xmatch', ${nowFn}, ${nowFn}, ${nowFn})
            ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
         ).run(
           `xm:${m.profile_id}:${oppId}`, m.profile_id, oppId,
           m.match_score, m.decision ?? null, explain.why ?? null,
           JSON.stringify(explain.matched_needs ?? []), m.match_explain_json ?? '{}',
+          m.source_query ?? null, m.discovered_via ?? null,
         );
         crossMatches += 1;
       } catch { /* opp may not be persisted (rejected at catalog) — skip */ }

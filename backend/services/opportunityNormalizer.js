@@ -463,6 +463,125 @@ function matchesExclusiveEntityRequirement(text, type) {
 }
 
 // ---------------------------------------------------------------------------
+// Population / sector restriction flags (2026-07-06 — the persistent
+// ineligible_surfaced_match / relevance_precision classes: domestic-violence
+// survivor, agricultural cooperative, community development corporation, faith
+// affiliation, age, income).
+//
+// Two tiers, mirroring the veteran/senior precedent:
+//   - `is*Program` TOPICAL flags: the opportunity is ABOUT this population.
+//     Used by the engine to CAP (not reject) scores for profiles with no
+//     matching signal (G4: mismatches reduce score).
+//   - `requires*` EXCLUSIVE flags: the text explicitly restricts eligibility.
+//     Only these may hard-gate, and only when the profile clearly lacks the
+//     trait (unknown = neutral, per G4 "missing fields are neutral").
+// ---------------------------------------------------------------------------
+
+// Topical DV mention — victim services, shelters, VAWA/OVW programs.
+const DV_PROGRAM_PATTERNS = [
+  /\bdomestic\s+violence\b/i,
+  /\bintimate\s+partner\s+violence\b/i,
+  /\bfamily\s+violence\b/i,
+  /\bvictim\s+services\b/i,
+  /\bvawa\b/i,
+  /\bbattered\s+women\b/i,
+]
+// Explicit individual-side survivor restriction ("must be a survivor of...").
+// Deliberately does NOT match "organizations serving victims of domestic
+// violence" — that is an ORG grant, not a survivor-only individual program.
+const DV_SURVIVOR_RESTRICTION_PATTERNS = [
+  /\bmust\s+be\s+a?\s*(?:survivor|victim)\s+of\s+(?:domestic|intimate\s+partner|family)\s+(?:violence|abuse)\b/i,
+  /\b(?:for|to)\s+(?:survivors?|victims?)\s+of\s+(?:domestic|intimate\s+partner|family)\s+(?:violence|abuse)\s+(?:only|and\s+their\s+children)?\b/i,
+  /\bsurvivors?\s+of\s+(?:domestic|family)\s+(?:violence|abuse)\s+(?:only|are\s+eligible)\b/i,
+  /\bfleeing\s+(?:domestic|family)\s+(?:violence|abuse)\b/i,
+]
+
+// Agriculture-only restriction ("farmers and ranchers only", "must operate a farm").
+const FARMER_RESTRICTION_PATTERNS = [
+  /\b(?:farmers?|ranchers?|agricultural\s+producers?)\s+(?:only|are\s+eligible)\b/i,
+  /\bmust\s+(?:be|operate)\s+(?:an?\s+)?(?:farm|ranch|agricultural\s+(?:producer|operation|cooperative))\b/i,
+  /\beligible\s+(?:applicants?|producers?)\s+(?:are|include)\s+(?:farmers?|ranchers?|agricultural\s+producers?)\b/i,
+  /\bfamily\s+farms?\s+only\b/i,
+  /\b(?:limited|exclusively|only)\s+(?:to|for)\s+(?:farmers?|ranchers?|agricultural\s+producers?)\b/i,
+  /\bfsa\s+farm\s+number\s+(?:is\s+)?required\b/i,
+]
+
+// Faith-affiliation restriction (org-side "churches only" AND individual-side
+// "must be an active member of a church/congregation").
+const FAITH_RESTRICTION_PATTERNS = [
+  /\b(?:churches|congregations|faith[-\s]based\s+organizations?|ministries|religious\s+organizations?)\s+(?:only|are\s+eligible)\b/i,
+  /\bmust\s+be\s+a\s+(?:church|congregation|ministry|faith[-\s]based\s+organization|religious\s+organization)\b/i,
+  /\b(?:limited|exclusively|only)\s+(?:to|for)\s+(?:churches|congregations|faith[-\s]based|religious)\b/i,
+  /\bmust\s+be\s+an?\s+(?:active\s+)?member\s+of\s+(?:a\s+)?(?:church|congregation|parish)\b/i,
+]
+
+// Community-development-corporation restriction ("certified CHDOs", "CDCs only").
+const CDC_RESTRICTION_PATTERNS = [
+  /\bcommunity\s+development\s+corporations?\s+(?:only|are\s+eligible)\b/i,
+  /\bmust\s+be\s+a\s+(?:certified\s+)?(?:community\s+development\s+corporation|chdo)\b/i,
+  /\bcertified\s+chdos?\b/i,
+  /\b(?:limited|exclusively|only)\s+(?:to|for)\s+(?:certified\s+)?(?:community\s+development\s+corporations?|chdos?)\b/i,
+]
+
+// Income restriction — explicit means-tests only ("income at or below 200% of
+// FPL", "low-income households only"). A passing mention of serving low-income
+// communities is NOT a restriction.
+const INCOME_RESTRICTION_PATTERNS = [
+  /\bincome\s+(?:at\s+or\s+)?below\s+\d{1,3}\s*%/i,
+  /\b\d{1,3}\s*%\s+of\s+(?:the\s+)?(?:federal\s+poverty|area\s+median\s+income|ami\b|fpl\b)/i,
+  /\blow[-\s]income\s+(?:households?|families|individuals?)\s+only\b/i,
+  /\bincome\s+eligibility\s+(?:limits?|requirements?|guidelines?)\s+appl/i,
+  /\bmeans[-\s]tested\b/i,
+  /\bmust\s+meet\s+income\s+(?:eligibility\s+)?(?:limits?|requirements?|guidelines?)\b/i,
+]
+
+// RegExp-array matcher (matchesAnyPattern above takes string PHRASES; the
+// restriction corpora in this section are anchored regexes).
+function matchesAnyRegex(text, patterns) {
+  const t = String(text || '')
+  if (!t) return false
+  return patterns.some((rx) => rx.test(t))
+}
+
+/**
+ * Detect an explicit AGE restriction ("must be at least 60 years of age",
+ * "ages 14 to 18", "under the age of 25", "65+"). Returns { min, max } (either
+ * side may be null) or null when the text states no age restriction. Bounds
+ * are sanity-clamped to 5–99; anything else is ignored (likely a false hit).
+ */
+export function detectAgeRestriction(text) {
+  const t = String(text || '')
+  const plausible = (n) => (Number.isFinite(n) && n >= 5 && n <= 99 ? n : null)
+  let min = null
+  let max = null
+  const range =
+    /\bages?\s+(\d{1,2})\s*(?:to|through|[-–])\s*(\d{1,2})\b/i.exec(t) ||
+    /\bbetween\s+(?:the\s+ages\s+of\s+)?(\d{1,2})\s+and\s+(\d{1,2})\s+years?\b/i.exec(t)
+  if (range) {
+    min = plausible(Number(range[1]))
+    max = plausible(Number(range[2]))
+  }
+  if (min === null) {
+    const atLeast =
+      /\bmust\s+be\s+(?:at\s+least\s+)?(\d{1,2})\s+years?\s+(?:of\s+age|old)/i.exec(t) ||
+      /\b(\d{1,2})\s+years?\s+of\s+age\s+or\s+older\b/i.exec(t) ||
+      /\bages?\s+(\d{1,2})\s+(?:and|or)\s+(?:older|above|up)\b/i.exec(t) ||
+      /\b([5-9]\d)\s*\+/.exec(t)
+    if (atLeast) min = plausible(Number(atLeast[1]))
+  }
+  if (max === null) {
+    const under = /\bunder\s+(?:the\s+)?age\s+(?:of\s+)?(\d{1,2})\b/i.exec(t)
+    if (under) {
+      const n = plausible(Number(under[1]))
+      max = n === null ? null : n - 1
+    }
+  }
+  if (min === null && max === null) return null
+  if (min !== null && max !== null && min > max) return null
+  return { min, max }
+}
+
+// ---------------------------------------------------------------------------
 // Explicit identity restriction detection (ethnicity / heritage / gender).
 //
 // Canonical rule (docs/canonical_rules.md G4): "Population/eligibility
@@ -706,6 +825,22 @@ export function normalizeOpportunity(rawOpp) {
   // -- Senior/aging program (score-capped for profiles with no senior signal) --
   const isSeniorProgram = matchesAnyPattern(text, SENIOR_PROGRAM_PATTERNS)
 
+  // -- Population / sector restrictions (2026-07-06) --
+  // Topical flags cap; requires* flags may hard-gate (explicit exclusivity only).
+  const isDvProgram = Boolean(rawOpp.is_dv_program) ||
+    matchesAnyRegex(text, DV_PROGRAM_PATTERNS)
+  const requiresDvSurvivor = Boolean(rawOpp.requires_dv_survivor) ||
+    matchesAnyRegex(text, DV_SURVIVOR_RESTRICTION_PATTERNS)
+  const requiresFarmer = Boolean(rawOpp.requires_farmer) ||
+    matchesAnyRegex(text, FARMER_RESTRICTION_PATTERNS)
+  const requiresFaithBased = Boolean(rawOpp.requires_faith_based) ||
+    matchesAnyRegex(text, FAITH_RESTRICTION_PATTERNS)
+  const requiresCdc = Boolean(rawOpp.requires_cdc) ||
+    matchesAnyRegex(text, CDC_RESTRICTION_PATTERNS)
+  const requiresLowIncome = Boolean(rawOpp.requires_low_income) ||
+    matchesAnyRegex(text, INCOME_RESTRICTION_PATTERNS)
+  const ageRestriction = detectAgeRestriction(text)
+
   // -- Veteran/student/nonprofit requirements --
   const requiresVeteran =
     Boolean(rawOpp.requires_veteran) ||
@@ -809,6 +944,13 @@ export function normalizeOpportunity(rawOpp) {
     isDmeOrEquipment,
     isCaregiverProgram,
     isSeniorProgram,
+    isDvProgram,
+    requiresDvSurvivor,
+    requiresFarmer,
+    requiresFaithBased,
+    requiresCdc,
+    requiresLowIncome,
+    ageRestriction,
     requiresVeteran,
     requiresStudent,
     requiresWomen,

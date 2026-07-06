@@ -1725,6 +1725,93 @@ describe('enforceGrantAmountBackfill — pipeline-$ visibility', () => {
     expect(second.repaired).toBe(0)
   })
 
+  // ── Amount VISIBILITY (migrations 132/0136): amount_text/status/confidence ──
+
+  function makeAmountStatusDb() {
+    const db = makeAmountDb()
+    db.exec(`
+      ALTER TABLE grants ADD COLUMN amount_text TEXT;
+      ALTER TABLE grants ADD COLUMN amount_status TEXT;
+      ALTER TABLE grants ADD COLUMN amount_confidence NUMERIC;
+      ALTER TABLE funding_opportunities ADD COLUMN amount_text TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN amount_status TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN amount_confidence NUMERIC;
+    `)
+    return db
+  }
+
+  function statusRow(db, id) {
+    return db.prepare('SELECT amount_text, amount_status, amount_confidence FROM grants WHERE id = ?').get(id)
+  }
+
+  it('mirrors amount_text/status from the linked catalog row (the "varies / contact funder" class)', async () => {
+    const db = makeAmountStatusDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, amount_text, amount_status) VALUES (?, ?, ?, ?)')
+      .run('opp-1', 'Local Fund', 'amounts vary based on need', 'varies')
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Local Fund', status: 'discovered', match_score: 90,
+    })
+
+    const result = await enforceGrantAmountBackfill(db)
+    expect(result.ok).toBe(true)
+    const row = statusRow(db, gid)
+    expect(row.amount_status).toBe('varies')
+    expect(row.amount_text).toBe('amounts vary based on need')
+    // no numeric value was invented
+    expect(amountRow(db, gid).amount_requested).toBeNull()
+  })
+
+  it('derives amount_status from numeric amounts (catalog + grant) when the column is blank', async () => {
+    const db = makeAmountStatusDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    db.prepare('INSERT INTO funding_opportunities (id, title, amount_min, amount_max) VALUES (?, ?, ?, ?)')
+      .run('opp-1', 'Scholarship', 500, 2500)
+    const gid = insertGrant(db, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Scholarship', status: 'discovered', match_score: 90,
+    })
+
+    await enforceGrantAmountBackfill(db)
+    const catStatus = db.prepare('SELECT amount_status FROM funding_opportunities WHERE id = ?').get('opp-1')
+    expect(catStatus.amount_status).toBe('range')
+    expect(statusRow(db, gid).amount_status).toBe('range')
+  })
+
+  it('stamps truly amount-less ACTIVE grants not_listed (honest label, never a number)', async () => {
+    const db = makeAmountStatusDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    const gid = insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'A', status: 'discovered', match_score: 90 })
+
+    const result = await enforceGrantAmountBackfill(db)
+    expect(result.missingAmount).toBe(1)
+    expect(statusRow(db, gid).amount_status).toBe('not_listed')
+    expect(amountRow(db, gid).amount_requested).toBeNull()
+  })
+
+  it('status mirroring is idempotent and skips cleanly when the columns are absent', async () => {
+    const withCols = makeAmountStatusDb()
+    insertProfile(withCols, { id: 'p1', orgId: 'org1' })
+    withCols.prepare('INSERT INTO funding_opportunities (id, title, amount_status) VALUES (?, ?, ?)')
+      .run('opp-1', 'Fund', 'contact_required')
+    const gid = insertGrant(withCols, {
+      profile_id: 'p1', organization_id: 'org1',
+      funding_opportunity_id: 'opp-1', title: 'Fund', status: 'discovered', match_score: 90,
+    })
+    await enforceGrantAmountBackfill(withCols)
+    const second = await enforceGrantAmountBackfill(withCols)
+    expect(statusRow(withCols, gid).amount_status).toBe('contact_required')
+    expect(second.repaired).toBe(0)
+
+    // legacy DB without the columns: guarded skip, never throws
+    const legacy = makeAmountDb()
+    insertProfile(legacy, { id: 'p1', orgId: 'org1' })
+    insertGrant(legacy, { profile_id: 'p1', organization_id: 'org1', title: 'A', match_score: 90 })
+    const legacyResult = await enforceGrantAmountBackfill(legacy)
+    expect(legacyResult.ok).toBe(true)
+  })
+
   it('count-only when ENFORCE_GRANT_AMOUNT_BACKFILL=0', async () => {
     const db = makeAmountDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })

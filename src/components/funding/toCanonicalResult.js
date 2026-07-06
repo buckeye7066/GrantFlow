@@ -136,6 +136,9 @@ export function toCanonicalResult(opp) {
     amount_min: pickNumber(opp.amount_min, opp.awardMin, opp.min_amount),
     amount_max: pickNumber(opp.amount_max, opp.awardMax, opp.max_amount),
     amount_description: pickString(opp.amount_description, opp.amount, opp.award_description),
+    // Amount visibility (migrations 132/0136): honest text/status when no number.
+    amount_text: pickString(opp.amount_text),
+    amount_status: pickString(opp.amount_status),
     eligibility_summary: pickString(opp.eligibility_summary, opp.eligibility, opp.eligibilitySummary),
     match_score: score ?? 0,
     // The accept/review/reject decision is the backend canonical match engine's

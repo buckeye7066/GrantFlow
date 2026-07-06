@@ -2,8 +2,8 @@
  * awardAmountExtractor.js — conservative PER-AWARD dollar extraction from
  * opportunity text.
  *
- * THE GAP THIS CLOSES (2026-07-05)
- * --------------------------------
+ * THE GAP THIS CLOSES (2026-07-05, extended 2026-07-06)
+ * -----------------------------------------------------
  * Only ~19% of the funding_opportunities catalog carried amount_min/amount_max,
  * because amounts survived ingest ONLY when a structured source API provided
  * numeric fields — nothing ever read the text ("Scholarships of $2,500",
@@ -12,13 +12,26 @@
  * pipeline-value choke point (backend/config/pipelineValue.js) honestly shows
  * $0 for the row, so profile pipeline totals looked absurdly low.
  *
+ * 2026-07-06 extension: even when no per-award NUMBER is knowable, the row
+ * should carry the best available TEXT and an explicit status instead of a
+ * blank. Every extraction now also yields:
+ *   - amount_text        best matched excerpt ("up to $10,000", "amounts vary")
+ *   - amount_status      'known' | 'range' | 'estimated' | 'varies' |
+ *                        'contact_required' | 'not_listed'
+ *   - amount_confidence  0..1 for numeric extractions, null otherwise
+ *
  * DESIGN: precision over recall. A wrong dollar figure is worse than none —
  * it inflates pipeline totals and (for individual profiles) can trip the
  * individual-amount-ceiling purge. So:
- *   - Only explicit per-award phrasings match (range / "up to" / "award of").
+ *   - Only explicit per-award phrasings match (range / "up to" / "award of" /
+ *     "minimum award" / "average award" / "award amount: $X").
  *   - Program-total phrasings are rejected via a look-behind/ahead exclusion
  *     window ("$2 million in scholarships awarded annually" is a program
- *     total, not an award).
+ *     total, not an award) — but a program-total-only page still preserves
+ *     the excerpt as amount_text (status stays 'not_listed': the per-award
+ *     figure is genuinely unknown; the text is the honest best-available).
+ *   - "average award" figures are stored as status 'estimated' with LOWER
+ *     confidence — an average is a real signal, not an entitlement.
  *   - Values outside $100–$10,000,000 are ignored.
  *   - Structured numeric fields from an adapter ALWAYS win; extraction runs
  *     only when both amount_min and amount_max are absent.
@@ -27,6 +40,26 @@
 const MULTIPLIERS = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6 }
 const MIN_PLAUSIBLE = 100
 const MAX_PLAUSIBLE = 10_000_000
+
+// Confidence per extraction route. Numeric-only; status-only routes carry null.
+const CONFIDENCE = Object.freeze({
+  structured: 0.95,
+  range: 0.9,
+  labeled: 0.9,
+  up_to: 0.85,
+  single: 0.75,
+  minimum: 0.7,
+  average: 0.6,
+})
+
+export const AMOUNT_STATUSES = Object.freeze([
+  'known',
+  'estimated',
+  'range',
+  'varies',
+  'not_listed',
+  'contact_required',
+])
 
 // "$1,234", "$1,234.56", "$1.5 million", "$10k"
 const MONEY = String.raw`\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k|thousand|m|million)?\b`
@@ -39,8 +72,23 @@ const RE_UP_TO = new RegExp(
   String.raw`\b(?:up\s+to|a\s+maximum\s+of|maximum(?:\s+award)?\s+of|max(?:imum)?\s*:?|as\s+much\s+as|not\s+(?:to\s+)?exceed(?:ing)?)\s*${MONEY}`,
   'i',
 )
+// Explicitly labeled amount ("award amount: $2,500", "scholarship amount is $1,000").
+const RE_LABELED = new RegExp(
+  String.raw`\b(?:awards?|scholarships?|grants?|stipends?|reimbursements?)\s+amounts?\s*(?:is|are|:)?\s*${MONEY}`,
+  'i',
+)
+// Floor-only phrasings ("minimum award of $500", "awards start at $1,000").
+const RE_MINIMUM = new RegExp(
+  String.raw`\b(?:minimum(?:\s+award)?\s+(?:of|:)?|awards?\s+(?:start|begin)\s+at|starting\s+at|at\s+least)\s*${MONEY}`,
+  'i',
+)
+// Average/typical award ("average award of $5,000") — an ESTIMATE, not a ceiling.
+const RE_AVERAGE = new RegExp(
+  String.raw`\b(?:average|typical|median)\s+(?:(?:award|grant|scholarship|stipend)\s+)?(?:(?:amount|size|value)\s+)?(?:of\s+|is\s+|:\s*)?${MONEY}`,
+  'i',
+)
 // Exact-award phrasings, both orders: "award of $2,500" and "$2,500 scholarship".
-const AWARD_NOUN = String.raw`(?:awards?|scholarships?|grants?|prizes?|stipends?|fellowships?)`
+const AWARD_NOUN = String.raw`(?:awards?|scholarships?|grants?|prizes?|stipends?|fellowships?|reimbursements?)`
 const RE_SINGLE = [
   new RegExp(String.raw`${AWARD_NOUN}\s+(?:of|worth|valued\s+at)\s+${MONEY}`, 'i'),
   new RegExp(String.raw`${MONEY}\s+${AWARD_NOUN}\b`, 'i'),
@@ -48,10 +96,19 @@ const RE_SINGLE = [
   new RegExp(String.raw`${MONEY}\s+(?:per|each)\s+(?:year|recipient|student|awardee|winner|semester)`, 'i'),
 ]
 
+// Status-only phrasings — no dollar figure required.
+const RE_VARIES =
+  /\b(?:awards?|amounts?|funding|grant\s+amounts?|scholarship\s+amounts?)\s+(?:will\s+)?(?:vary|varies)\b|\bamounts?\s*:\s*varies\b|\bvaries\s+(?:by|depending|based)\b|^\s*varies\.?\s*$/i
+const RE_CONTACT =
+  /\bcontact\s+(?:the\s+)?(?:funder|foundation|sponsor|program|organization|office)\s+for\s+(?:award|funding|amount|grant)\b|\b(?:amounts?|awards?)\s+(?:are\s+)?(?:available|determined|provided)\s+(?:up)?on\s+request\b/i
+
 // A dollar figure in these contexts is a PROGRAM total / org financial, never a
 // per-award amount. Checked in a window around the match.
-const RE_EXCLUDE_BEFORE = /(?:total(?:ing|s)?|in\s+total|aggregate|annually\s+(?:awards?|distributes?)|has\s+(?:awarded|distributed|given)|over|more\s+than|assets|revenue|budget|endowment|raised)\s*(?:of|:)?\s*$/i
+const RE_EXCLUDE_BEFORE = /(?:total(?:ing|s)?|in\s+total|aggregate|annually\s+(?:awards?|distributes?)|has\s+(?:awarded|distributed|given)|over|more\s+than|assets|revenue|incomes?|sales|budgets?|endowment|raised|available)\s*(?:of|:|is)?\s*$/i
 const RE_EXCLUDE_AFTER = /^\s+in\s+(?:total\s+)?(?:funding|grants?|scholarships?|awards?)/i
+// Subset of the exclusion contexts that identify a PROGRAM TOTAL specifically
+// (worth preserving as amount_text) vs. org financials (assets/revenue — noise).
+const RE_PROGRAM_TOTAL_BEFORE = /(?:total(?:ing|s)?|in\s+total|aggregate|annually\s+(?:awards?|distributes?)|total\s+funding\s+available|available)\s*(?:of|:|is)?\s*$/i
 
 function parseMoney(numStr, unit) {
   const base = Number(String(numStr).replace(/,/g, ''))
@@ -79,56 +136,170 @@ function firstUnexcluded(text, re, opts) {
   return m
 }
 
+// Best-available excerpt for display: the matched phrase, whitespace-collapsed,
+// bounded so a runaway match can never bloat the column.
+function excerpt(raw) {
+  const s = String(raw || '').replace(/\s+/g, ' ').trim()
+  return s ? s.slice(0, 140) : null
+}
+
+// Program-total-only text ("$2 million in scholarships awarded annually",
+// "Total funding available: $500,000"): the per-award figure is unknown, but
+// the text is worth preserving. Returns the contextual excerpt or null.
+function findProgramTotalText(text) {
+  const re = new RegExp(MONEY, 'gi')
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 56), m.index)
+    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 40)
+    if (RE_PROGRAM_TOTAL_BEFORE.test(before) || RE_EXCLUDE_AFTER.test(after)) {
+      const start = Math.max(0, m.index - 40)
+      const end = Math.min(text.length, m.index + m[0].length + 40)
+      return excerpt(text.slice(start, end))
+    }
+  }
+  return null
+}
+
+function numericResult(min, max, matched, status, matchText) {
+  return {
+    amount_min: min,
+    amount_max: max,
+    matched,
+    amount_text: excerpt(matchText),
+    amount_status: status,
+    amount_confidence: CONFIDENCE[matched] ?? null,
+  }
+}
+
 /**
- * Extract a per-award amount (or range) from free text.
- * @returns {{ amount_min: number|null, amount_max: number|null, matched: string|null }}
+ * Extract a per-award amount (or range) — or, failing that, the best available
+ * amount TEXT + status — from free text.
+ * @returns {{ amount_min: number|null, amount_max: number|null, matched: string|null,
+ *             amount_text: string|null, amount_status: string, amount_confidence: number|null }}
  */
 export function extractAwardAmountsFromText(text) {
-  const none = { amount_min: null, amount_max: null, matched: null }
   const t = String(text || '')
-  if (!t.includes('$')) return none
+  const none = {
+    amount_min: null,
+    amount_max: null,
+    matched: null,
+    amount_text: null,
+    amount_status: 'not_listed',
+    amount_confidence: null,
+  }
 
-  const range = firstUnexcluded(t, RE_RANGE)
-  if (range) {
-    const lo = parseMoney(range[1], range[2])
-    const hi = parseMoney(range[3], range[4])
-    if (lo !== null && hi !== null && lo < hi) {
-      return { amount_min: lo, amount_max: hi, matched: 'range' }
+  if (t.includes('$')) {
+    const range = firstUnexcluded(t, RE_RANGE)
+    if (range) {
+      const lo = parseMoney(range[1], range[2])
+      const hi = parseMoney(range[3], range[4])
+      if (lo !== null && hi !== null && lo < hi) {
+        return numericResult(lo, hi, 'range', 'range', range[0])
+      }
+    }
+
+    const upTo = firstUnexcluded(t, RE_UP_TO)
+    if (upTo) {
+      const hi = parseMoney(upTo[1], upTo[2])
+      if (hi !== null) return numericResult(null, hi, 'up_to', 'range', upTo[0])
+    }
+
+    // Labeled amount ("award amount: $2,500") — exact, high confidence.
+    const labeled = firstUnexcluded(t, RE_LABELED)
+    if (labeled) {
+      const v = parseMoney(labeled[1], labeled[2])
+      if (v !== null) return numericResult(v, v, 'labeled', 'known', labeled[0])
+    }
+
+    // Floor-only ("minimum award of $500") — must run BEFORE RE_SINGLE, whose
+    // "award of $X" pattern would otherwise claim it as an exact amount.
+    const minOnly = firstUnexcluded(t, RE_MINIMUM)
+    if (minOnly) {
+      const lo = parseMoney(minOnly[1], minOnly[2])
+      if (lo !== null) return numericResult(lo, null, 'minimum', 'range', minOnly[0])
+    }
+
+    // Average award — an ESTIMATE. Also must precede RE_SINGLE ("average award
+    // of $5,000" contains "award of $5,000").
+    const avg = firstUnexcluded(t, RE_AVERAGE)
+    if (avg) {
+      const v = parseMoney(avg[1], avg[2])
+      if (v !== null) return numericResult(v, v, 'average', 'estimated', avg[0])
+    }
+
+    for (const re of RE_SINGLE) {
+      const single = firstUnexcluded(t, re, { checkAfter: true })
+      if (single) {
+        const v = parseMoney(single[1], single[2])
+        if (v !== null) return numericResult(v, v, 'single', 'known', single[0])
+      }
     }
   }
 
-  const upTo = firstUnexcluded(t, RE_UP_TO)
-  if (upTo) {
-    const hi = parseMoney(upTo[1], upTo[2])
-    if (hi !== null) return { amount_min: null, amount_max: hi, matched: 'up_to' }
+  // No per-award number. Preserve the best available signal instead of blank.
+  const varies = RE_VARIES.exec(t)
+  if (varies) {
+    return { ...none, amount_text: excerpt(varies[0]), amount_status: 'varies' }
   }
-
-  for (const re of RE_SINGLE) {
-    const single = firstUnexcluded(t, re, { checkAfter: true })
-    if (single) {
-      const v = parseMoney(single[1], single[2])
-      if (v !== null) return { amount_min: v, amount_max: v, matched: 'single' }
-    }
+  const contact = RE_CONTACT.exec(t)
+  if (contact) {
+    return { ...none, amount_text: excerpt(contact[0]), amount_status: 'contact_required' }
+  }
+  if (t.includes('$')) {
+    const totalText = findProgramTotalText(t)
+    if (totalText) return { ...none, amount_text: totalText }
   }
   return none
 }
 
 /**
- * Resolve an opportunity's amount_min/amount_max for persistence: structured
- * numeric fields ALWAYS win; text extraction (title + amount_description +
- * description) fills in ONLY when both are absent.
+ * Resolve an opportunity's amount fields for persistence: structured numeric
+ * fields ALWAYS win; text extraction (title + amount_description + description)
+ * fills in ONLY when both are absent. Always yields amount_status (+ text /
+ * confidence when knowable) so no row is left blank when something is known.
  */
 export function resolveOpportunityAmounts(opportunity) {
   const structuredMin = typeof opportunity?.amount_min === 'number' ? opportunity.amount_min : null
   const structuredMax = typeof opportunity?.amount_max === 'number' ? opportunity.amount_max : null
   if (structuredMin !== null || structuredMax !== null) {
-    return { amount_min: structuredMin, amount_max: structuredMax, extracted: false }
+    const status =
+      structuredMin !== null && structuredMax !== null && structuredMin === structuredMax
+        ? 'known'
+        : 'range'
+    return {
+      amount_min: structuredMin,
+      amount_max: structuredMax,
+      extracted: false,
+      amount_text: null,
+      amount_status: status,
+      amount_confidence: CONFIDENCE.structured,
+    }
   }
   const text = [opportunity?.title, opportunity?.amount_description, opportunity?.description]
     .filter(Boolean)
     .join(' \n ')
-  const { amount_min, amount_max, matched } = extractAwardAmountsFromText(text)
-  return { amount_min, amount_max, extracted: matched !== null }
+  const result = extractAwardAmountsFromText(text)
+  // A short human amount_description ("Varies", "Contact funder") is the best
+  // display text when extraction found nothing better.
+  if (!result.amount_text && opportunity?.amount_description) {
+    const desc = excerpt(opportunity.amount_description)
+    if (desc && desc.length <= 80) {
+      result.amount_text = desc
+      if (result.amount_status === 'not_listed') {
+        if (/\bvar(?:y|ies)\b/i.test(desc)) result.amount_status = 'varies'
+        else if (/\bcontact\b/i.test(desc)) result.amount_status = 'contact_required'
+      }
+    }
+  }
+  return {
+    amount_min: result.amount_min,
+    amount_max: result.amount_max,
+    extracted: result.matched !== null,
+    amount_text: result.amount_text,
+    amount_status: result.amount_status,
+    amount_confidence: result.amount_confidence,
+  }
 }
 
-export default { extractAwardAmountsFromText, resolveOpportunityAmounts }
+export default { extractAwardAmountsFromText, resolveOpportunityAmounts, AMOUNT_STATUSES }

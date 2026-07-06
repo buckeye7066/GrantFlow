@@ -130,6 +130,10 @@ export function upsertMatch(store, match) {
     profile_id: match.profile_id, opportunity_id: match.opportunity_id,
     match_score: match.match_score, decision: match.decision,
     match_explain_json: JSON.stringify(match.match_explain ?? {}),
+    // Crawler-doctor provenance: which query/lane produced this match (null
+    // when the lane doesn't supply it — e.g. registry adapters keyed by source).
+    source_query: match.source_query ?? null,
+    discovered_via: match.discovered_via ?? null,
     created_at: now, updated_at: now,
   });
 }
@@ -380,7 +384,9 @@ CREATE TABLE IF NOT EXISTS opportunity_evidence (
 -- PROFILE-SCOPED. Match score lives ONLY here.
 CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
   profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL, match_score INTEGER NOT NULL,
-  decision TEXT NOT NULL, match_explain_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  decision TEXT NOT NULL, match_explain_json TEXT,
+  source_query TEXT, discovered_via TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   PRIMARY KEY (profile_id, opportunity_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pom_profile ON profile_opportunity_matches(profile_id);

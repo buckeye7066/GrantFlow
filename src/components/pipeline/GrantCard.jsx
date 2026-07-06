@@ -23,6 +23,7 @@ import HamiltonTaskDrawer from '@/components/hamilton/HamiltonTaskDrawer';
 import { useHamiltonSelection } from '@/components/hamilton/HamiltonSelectionContext';
 import PortalLoginButton from '@/components/portal/PortalLoginButton';
 import { safeHttpUrl } from '@/lib/safeUrl';
+import { amountTextFallback } from '@/lib/amountDisplay';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant && grant.id !== null && grant.id !== undefined && grant.id !== '') {
@@ -458,11 +459,18 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
                   </HelpTip>
             )}
 
-            {awardAmount !== null && (
+            {awardAmount !== null ? (
               <div className="flex items-center gap-1 text-xs text-slate-600">
                 <DollarSign className="w-3 h-3" />
                 <span>~${awardAmount.toLocaleString()}</span>
               </div>
+            ) : (
+              amountTextFallback(grant) && (
+                <div className="flex items-center gap-1 text-xs text-slate-500">
+                  <DollarSign className="w-3 h-3" />
+                  <span>{amountTextFallback(grant)}</span>
+                </div>
+              )
             )}
           </div>
 

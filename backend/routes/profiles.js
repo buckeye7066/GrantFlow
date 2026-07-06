@@ -1979,6 +1979,8 @@ router.get('/:id/pipeline-potential', async (req, res) => {
       .prepare(
         `SELECT g.id, g.title, g.funder, g.status, g.deadline,
                 g.amount_requested, g.amount_min, g.amount_max,
+                COALESCE(g.amount_text, fo.amount_text) AS amount_text,
+                COALESCE(g.amount_status, fo.amount_status) AS amount_status,
                 g.notes, fo.description AS opportunity_description,
                 g.contact_name, g.contact_email, g.contact_phone,
                 g.funder_fax, g.funder_address,

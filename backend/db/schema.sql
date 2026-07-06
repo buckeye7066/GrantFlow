@@ -151,7 +151,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   amount_min REAL,
   amount_max REAL,
   amount_description TEXT,
-  
+  -- Best-available amount TEXT + explicit status when no per-award number is
+  -- knowable (awardAmountExtractor.js): a row is never silently blank.
+  amount_text TEXT,
+  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
+  amount_confidence REAL,
+
   deadline DATE,
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),
   
@@ -473,7 +478,13 @@ CREATE TABLE IF NOT EXISTS grants (
   amount_awarded REAL,
   amount_min REAL,
   amount_max REAL,
-  
+  -- Mirrored from the linked catalog row by enforceGrantAmountBackfill() so
+  -- pipeline cards can show honest "varies / contact funder / not listed"
+  -- states instead of a blank when no dollar figure is knowable.
+  amount_text TEXT,
+  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
+  amount_confidence REAL,
+
   status TEXT DEFAULT 'discovered' CHECK(status IN (
         -- Canonical pipeline (RC-13, shared/pipelineStages.js):
         'discovered', 'saved', 'interested', 'gathering_documents',
