@@ -179,3 +179,35 @@ test('primary school gets an endowed-scholarships query (CORE)', () => {
   const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 40, seed: 0 });
   assert.ok(qs.includes('Cleveland State Community College endowed scholarships'));
 });
+
+// ── Research-org lane (the Axiom BioLabs archetype, 2026-07-06) ──────────────
+const RESEARCH_ORG_THESIS = {
+  applicant_types: ['nonprofit', 'business'],
+  is_org: true,
+  is_research_org: true,
+  needs: ['research_funding'],
+  location: { state: 'TN', city: 'Cleveland' },
+  interest_terms: ['biotechnology research', 'genetic engineering', 'bioinformatics'],
+};
+
+test('a research org gets SBIR/STTR queries keyed to its top interest (CORE, seed-stable)', () => {
+  for (const seed of [0, 3, 11]) {
+    const qs = buildWebQueries(RESEARCH_ORG_THESIS, { year: 2026, max: 12, seed });
+    assert.ok(
+      qs.includes('SBIR STTR biotechnology research solicitation 2026'),
+      `SBIR core query present at seed ${seed}`,
+    );
+    assert.ok(
+      qs.includes('TN SBIR matching funds program'),
+      `state matching-funds query present at seed ${seed}`,
+    );
+  }
+});
+
+test('a non-research org gets NO SBIR queries', () => {
+  const qs = buildWebQueries(
+    { applicant_types: ['nonprofit'], is_org: true, needs: ['food'], location: { state: 'TN' } },
+    { year: 2026, max: 40, seed: 0 },
+  );
+  assert.ok(!qs.some((q) => /sbir/i.test(q)), 'no SBIR queries for a food pantry');
+});

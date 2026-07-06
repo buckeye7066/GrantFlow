@@ -196,6 +196,20 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // student's largest single non-federal source — CORE, never rotated out (was
   // in the rotated EXTRA pool, so runs under the query cap could drop it).
   if (isStudent && state) add(core, `${state} state scholarship programs`);
+  // Research-org lane (the Axiom BioLabs archetype, 2026-07-06): SBIR/STTR and
+  // state innovation matching funds are a biotech/R&D org's PRIMARY funding
+  // universe, and no generic org query ever reaches them (the catalog held
+  // ZERO SBIR-class rows). Keyed to the org's top interest term so a genomics
+  // shop and an ag-tech shop search different solicitations.
+  if (thesis.is_research_org) {
+    const topic = interests[0] || 'biotechnology';
+    add(core, `SBIR STTR ${topic} solicitation ${year}`);
+    add(core, `${topic} research grants small business ${year}`);
+    if (state) add(core, `${state} SBIR matching funds program`);
+    for (const term of interests.slice(1, 4)) add(extra, `SBIR ${term} funding opportunity`);
+    add(extra, `NIH SBIR ${topic} ${year}`);
+    add(extra, `NSF SBIR ${topic}`);
+  }
 
   // ── EXTRA (broadening pool, rotated by seed) ──
   // Remaining needs + an alternate phrasing for each need.
