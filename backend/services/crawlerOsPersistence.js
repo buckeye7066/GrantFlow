@@ -218,7 +218,7 @@ function extractEducationEmployment(sections = {}) {
  *     must never inject the fact's words).
  */
 export function sectionSignalText(data, depth = 0) {
-  if (data == null || data === false || data === true || depth > 4) return '';
+  if (data === null || data === undefined || data === false || data === true || depth > 4) return '';
   if (typeof data === 'string' || typeof data === 'number') return String(data).trim();
   if (Array.isArray(data)) return data.map((v) => sectionSignalText(v, depth + 1)).filter(Boolean).join(' ');
   if (typeof data === 'object') {
