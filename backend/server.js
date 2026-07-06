@@ -2108,6 +2108,12 @@ app.use('/api/comms', lazyRouter('./routes/comms.js'));
 app.use('/api/stats', responseCache(60_000), statsRouter);
 app.use('/api/services', servicesRouter);
 app.use('/api/stripe', stripeRouter);
+// SINGLE CHOKE POINT for admin features: every current and future /api/admin/*
+// sub-router is auth+admin gated here, so no individual router can leak by
+// forgetting its own `router.use(ensureAdmin)`. Per-router gates below remain
+// as defense-in-depth. Public signup reads /api/services (not /api/admin/*),
+// and the public health probes live under /api/sam + /api/anya — unaffected.
+app.use('/api/admin', ensureAuth, ensureAdmin)
 app.use('/api/admin/service-catalog', adminServiceCatalogRouter)
 app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/organizations', organizationsRouter);

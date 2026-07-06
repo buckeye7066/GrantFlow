@@ -93,26 +93,37 @@ export default function AdminServiceApplications() {
     try {
       const body = { status };
       if (notes) body.notes = notes;
-      
-      await apiFetch(`/api/service-application/${id}`, {
+
+      const response = await apiFetch(`/api/service-application/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      
+
+      // Converting creates (or links) a real client profile server-side —
+      // surface which one so the admin can find it in the profile list.
+      const conversion = response?.conversion;
       toast({
-        title: 'Updated',
-        description: `Application marked as ${STATUS_LABELS[status]}`,
+        title: status === 'converted' ? 'Converted to profile' : 'Updated',
+        description:
+          status === 'converted' && conversion
+            ? conversion.created
+              ? 'A new client profile was created and linked. It now appears in Profiles.'
+              : `Linked to existing profile (matched by ${conversion.matched_by}).`
+            : `Application marked as ${STATUS_LABELS[status]}`,
       });
-      
+
       fetchApplications();
       setSelectedApp(null);
     } catch (error) {
       console.error('Failed to update application:', error);
+      const candidates = error?.details?.candidates;
       toast({
         variant: 'destructive',
         title: 'Error',
-        description: 'Failed to update application',
+        description: candidates?.length
+          ? 'Multiple existing profiles match this applicant — open Profiles and link one manually.'
+          : (error?.message || 'Failed to update application'),
       });
     }
   };
@@ -403,7 +414,7 @@ export default function AdminServiceApplications() {
                     variant="default"
                     onClick={() => {
                       const ok = window.confirm(
-                        'Convert this application to a profile?\n\nThis will mark the application as converted.',
+                        'Convert this application to a profile?\n\nThis creates (or links) a real client profile, adds the applicant email for login access, and marks the application converted.',
                       );
                       if (!ok) return;
                       updateApplicationStatus(selectedApp.id, 'converted');
