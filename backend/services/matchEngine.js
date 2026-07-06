@@ -3400,6 +3400,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
 
   // Need-anchored copy: the score IS need coverage after eligibility/geography
   // gates, so the explanation states that in plain language.
+  //
+  // Conservative applicability rule (was implicit in the old additive model's
+  // eligibility penalties): a source that states NOTHING about who may apply
+  // never auto-ACCEPTs for an ORGANIZATION — org eligibility is too often
+  // restricted for silence to be treated as consent. Individuals keep the
+  // soft-match behavior (consumer programs rarely enumerate entity types).
+  if (score >= ACCEPT_SCORE && on.applicabilityUnknown && !isIndividualOrCaregiver) {
+    reasons.push('Source does not state who may apply — needs review before ACCEPT for a non-individual profile')
+    return {
+      decision: 'REVIEW',
+      explanation: `Covers about ${score}% of this profile's main needs, but the source does not state who may apply — confirm eligibility before pursuing.`,
+      reasons,
+    }
+  }
   if (score >= ACCEPT_SCORE) {
     reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
     return { decision: 'ACCEPT', explanation: `Covers about ${score}% of this profile's main needs (eligibility and location check out).`, reasons }

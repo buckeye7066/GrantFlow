@@ -224,11 +224,19 @@ test('inclusion: Russian-heritage profile scores higher on a Russian-heritage sc
     categories: ['education', 'scholarship'],
   }
 
-  const scoredTargeted = scoreOpportunity(base, targeted).score
-  const scoredGeneric = scoreOpportunity(base, generic).score
+  // Need-anchored scale: equal need coverage legitimately reads the same
+  // score; targeting ranks via the topical-evidence tie-break (see
+  // matchOpportunities sort).
+  const scoredTargeted = scoreOpportunity(base, targeted)
+  const scoredGeneric = scoreOpportunity(base, generic)
   assert.ok(
-    scoredTargeted > scoredGeneric,
-    `expected heritage-targeted (${scoredTargeted}) > generic (${scoredGeneric})`,
+    scoredTargeted.score >= scoredGeneric.score,
+    `expected heritage-targeted (${scoredTargeted.score}) >= generic (${scoredGeneric.score})`,
+  )
+  assert.ok(
+    scoredTargeted.match_explain.scoreBreakdown.topical_evidence >
+      scoredGeneric.match_explain.scoreBreakdown.topical_evidence,
+    'expected heritage-targeted to out-rank generic on the topical tie-break',
   )
 })
 
@@ -258,10 +266,16 @@ test('inclusion: faith profile scores higher on a Catholic scholarship', () => {
     is_national: true,
     categories: ['education', 'scholarship'],
   }
-  const scoredFaith = scoreOpportunity(faithProfile, catholicOpp).score
-  const scoredGeneric = scoreOpportunity(faithProfile, genericOpp).score
+  // Same tie-break contract as the heritage scenario above.
+  const scoredFaith = scoreOpportunity(faithProfile, catholicOpp)
+  const scoredGeneric = scoreOpportunity(faithProfile, genericOpp)
   assert.ok(
-    scoredFaith > scoredGeneric,
-    `expected faith-targeted (${scoredFaith}) > generic (${scoredGeneric})`,
+    scoredFaith.score >= scoredGeneric.score,
+    `expected faith-targeted (${scoredFaith.score}) >= generic (${scoredGeneric.score})`,
+  )
+  assert.ok(
+    scoredFaith.match_explain.scoreBreakdown.topical_evidence >
+      scoredGeneric.match_explain.scoreBreakdown.topical_evidence,
+    'expected faith-targeted to out-rank generic on the topical tie-break',
   )
 })

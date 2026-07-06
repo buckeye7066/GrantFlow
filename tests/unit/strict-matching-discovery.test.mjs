@@ -97,6 +97,7 @@ function createDb() {
       sponsor TEXT,
       source TEXT,
       source_id TEXT,
+      canonical_opportunity_key TEXT,
       source_url TEXT,
       evidence_url TEXT,
       record_origin TEXT DEFAULT 'live_crawl',
