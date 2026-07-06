@@ -2765,13 +2765,25 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     ORG_LIKE_ENTITY_TYPES.has(profileEntityTypeForGuards) ||
     Boolean(profileNorm?.isNonprofit) || Boolean(profileNorm?.isBusiness)
   {
-    if (profileIsOrgLike && !verificationTargetsOrganizations(oppNorm)) {
+    if (profileIsOrgLike) {
       const oppTypeForGuard = String(effectiveOpp?.funding_category || opportunity?.opportunity_type || '').toLowerCase()
       const looksLikeIndividualAssistance =
         ['benefit', 'benefit_program'].includes(oppTypeForGuard) ||
         RE_INDIVIDUAL_ASSISTANCE.test(oppText) ||
         isStudentAidOpportunity(opportunity, oppNorm)
-      if (looksLikeIndividualAssistance) {
+      // "Organizations may apply" must come from the PROGRAM's text, not the
+      // FUNDER's name: "Emmanuel Lutheran Church – Emergency Rent Assistance"
+      // reads as org-eligible only because the sponsor's name contains
+      // "Church" — which is how person/household rent funds kept scoring 80+
+      // for other churches. Re-normalize with the sponsor blanked so entity
+      // signals derive from title/description/eligibility text alone.
+      // (Cost: one extra normalize, only for org profiles × assistance rows.)
+      const targetsOrgsBySubstance = looksLikeIndividualAssistance
+        ? verificationTargetsOrganizations(
+            normalizeOpportunity({ ...effectiveOpp, sponsor: null, funder: null }),
+          )
+        : verificationTargetsOrganizations(oppNorm)
+      if (looksLikeIndividualAssistance && !targetsOrgsBySubstance) {
         rawScore = Math.min(rawScore, SENIOR_PROGRAM_MISMATCH_CAP)
         eligibilityMismatches.push('org_profile_individual_assistance')
         housingBonusReasons.push('Organization profile × person/household assistance program (recipient-type mismatch)')
