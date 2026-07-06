@@ -16,6 +16,7 @@ import { env } from '@/config/env.js'
 function App() {
   const [bootstrapped, setBootstrapped] = useState(false)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
   const fetchPreferences = useSettingsStore((state) => state.fetchPreferences)
   const isPreferencesInitialized = useSettingsStore((state) => state.isInitialized)
   // Ref guard: ensures bootstrap runs exactly once, even if the component re-renders
@@ -102,7 +103,13 @@ function App() {
       <SessionExpiredDialog />
       <HamiltonToastBridge />
       <HamiltonAuthPrimingToast />
-      <LoginGapInterviewLauncher />
+      {/* ResetOnboardingFlow (mounted via OnboardingSequencer in Layout.jsx)
+          renders its OWN LoginGapInterviewLauncher instance, sequenced
+          explicitly after the video and before the guided tour, while
+          guidedCycleTourStatus === 'pending_reinterview'. Suppress this
+          global instance during that window so the two don't double-mount;
+          it resumes its normal recurring behavior once that finishes. */}
+      {guidedCycleTourStatus !== 'pending_reinterview' && <LoginGapInterviewLauncher />}
     </Router>
   )
 }

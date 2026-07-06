@@ -1987,6 +1987,22 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           primary_phone: dbUser.primary_phone,
           avatar_url: dbUser.avatar_url,
           is_admin: Boolean(dbUser.is_admin),
+          // Durable onboarding/tour state (has_completed_onboarding,
+          // guided_cycle_tour_status, ...) -- THIS is the handler that actually
+          // serves every GET /api/auth/me request (registered on `app` before
+          // authRouter is mounted at /api/auth, so it wins routing over the
+          // near-identical handler in routes/auth.js, which was found to be
+          // fully unreachable dead code and removed). Omitting these fields
+          // here meant guidedCycleTourStatus/lastCompletedTourVersion silently
+          // reset to their defaults on every page refresh / new-tab bootstrap,
+          // even though the login-response path (buildUserPayload) had them
+          // right all along.
+          has_completed_onboarding: Boolean(dbUser.has_completed_onboarding),
+          onboarding_completed_at: dbUser.onboarding_completed_at ?? null,
+          last_seen_manual_version: Number(dbUser.last_seen_manual_version ?? 0),
+          last_completed_tour_version: Number(dbUser.last_completed_tour_version ?? 0),
+          tour_dismissed_at: dbUser.tour_dismissed_at ?? null,
+          guided_cycle_tour_status: dbUser.guided_cycle_tour_status ?? null,
         },
         profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: safeActiveProfileId,
