@@ -17,6 +17,9 @@ export default function AIGrantScorer() {
   const [proposalText, setProposalText] = useState("");
   const [isScoring, setIsScoring] = useState(false);
   const [scoringResult, setScoringResult] = useState(null);
+  // Additive multi-pass critic (server flag PROPOSAL_CRITIC; hidden when off).
+  const [criticResult, setCriticResult] = useState(null);
+  const [isCriticRunning, setIsCriticRunning] = useState(false);
   const [error, setError] = useState(null);
 
   const { data: grants = [] } = useQuery({
@@ -34,6 +37,7 @@ export default function AIGrantScorer() {
     setIsScoring(true);
     setError(null);
     setScoringResult(null);
+    setCriticResult(null);
 
     // FIX: Implement prompt injection defense. The existing prompt structure
     // already incorporates best practices to mitigate prompt injection by
@@ -94,10 +98,41 @@ Return a JSON object with your complete analysis.`;
         missing_information: Array.isArray(response.missing_information) ? response.missing_information : [],
       };
       setScoringResult(validated);
+
+      // Additive critic passes — never block or fail the main score card.
+      // Server returns { enabled:false } when the PROPOSAL_CRITIC flag is off.
+      setIsCriticRunning(true);
+      try {
+        const critic = await client.post('/api/ai/proposal-critic', {
+          grant_id: selectedGrantId,
+          proposal_text: proposalText,
+        });
+        if (critic?.enabled) setCriticResult(critic);
+      } catch (criticErr) {
+        console.warn('Proposal critic unavailable:', criticErr?.message || criticErr);
+      } finally {
+        setIsCriticRunning(false);
+      }
     } catch (err) {
       setError(`Scoring failed: ${err.message}`);
     } finally {
       setIsScoring(false);
+    }
+  };
+
+  const criticStatusStyle = (status) => {
+    switch (status) {
+      case 'addressed':
+      case 'supported':
+        return 'bg-green-100 text-green-700';
+      case 'partial':
+      case 'unsupported':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'missing':
+      case 'contradicted':
+        return 'bg-red-100 text-red-700';
+      default:
+        return 'bg-slate-100 text-slate-700';
     }
   };
 
@@ -178,6 +213,65 @@ Return a JSON object with your complete analysis.`;
             <ScoringResultCard result={scoringResult} />
           </div>
         )}
+
+        {scoringResult && isCriticRunning && (
+          <div className="mt-6 flex items-center gap-2 text-slate-500 text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Running additional critic passes (compliance & evidence consistency)…
+          </div>
+        )}
+
+        {criticResult?.deterministic_flags?.length > 0 && (
+          <Alert variant="destructive" className="mt-6">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <strong>Unevidenced identity claims detected:</strong> the draft asserts{' '}
+              {criticResult.deterministic_flags.map((f) => f.label).join(', ')} but your profile contains no
+              supporting evidence. Remove the claim or add real evidence — never assert it to fit a funder's priorities.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {criticResult?.passes?.map((pass) => (
+          <Card key={pass.key} className="mt-6 shadow-lg border-0">
+            <CardHeader>
+              <CardTitle className="text-lg">{pass.title}</CardTitle>
+              {pass.available && pass.key === 'compliance' && typeof pass.responsiveness_score === 'number' && (
+                <CardDescription>Responsiveness score: {pass.responsiveness_score}/100</CardDescription>
+              )}
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!pass.available ? (
+                <p className="text-sm text-slate-500">
+                  This critic pass was unavailable (AI provider not configured or timed out). No feedback was invented in its place.
+                </p>
+              ) : (
+                <>
+                  {pass.summary && <p className="text-sm text-slate-700">{pass.summary}</p>}
+                  {(pass.findings || []).length === 0 && (
+                    <p className="text-sm text-slate-500">No issues flagged in this pass.</p>
+                  )}
+                  {(pass.findings || []).map((finding, idx) => (
+                    <div key={idx} className="border border-slate-200 rounded-lg p-3 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${criticStatusStyle(finding.status)}`}>
+                          {finding.status}
+                        </span>
+                        <span className="text-xs text-slate-500 uppercase">{finding.severity} priority</span>
+                      </div>
+                      <p className="text-sm font-medium text-slate-900">
+                        {finding.criterion || finding.claim}
+                      </p>
+                      {finding.recommendation && (
+                        <p className="text-sm text-slate-600">{finding.recommendation}</p>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ))}
       </div>
     </div>
   );

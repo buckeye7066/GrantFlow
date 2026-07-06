@@ -329,6 +329,21 @@ CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_opportunity_id
 CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_crawl_ts
   ON opportunity_evidence(crawl_timestamp);
 
+-- Semantic-recall embeddings sidecar (SEMANTIC_RECALL feature, default OFF).
+-- One vector per catalog row, stored as JSON text; cosine similarity is
+-- computed in JS over a bounded scan (Postgres may add a pgvector column via
+-- migration 0135). Embeddings only ADD candidates into the canonical
+-- matcher's scan — matchEngine remains the sole scoring/decision authority.
+CREATE TABLE IF NOT EXISTS opportunity_embeddings (
+  opportunity_id TEXT PRIMARY KEY REFERENCES funding_opportunities(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  vector TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_embeddings_updated
+  ON opportunity_embeddings(updated_at);
+
 -- Rejection log (ingestion provenance & quality layer).
 -- Today the ingest gates (policy / validation / reviewer / reality / quality /
 -- provenance) reject rows but only console.warn. This append-only log makes

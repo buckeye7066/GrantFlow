@@ -1,6 +1,6 @@
 # GrantFlow Canonical Rules & Goals
 
-_Last updated: 2026-06-27_
+_Last updated: 2026-07-05_
 
 This document is the **single source of truth** for GrantFlow’s product rules, correctness invariants, and acceptance criteria.
 
@@ -32,6 +32,34 @@ Sources:
 - `OPS_AUTOFIX.md`
 - Current implementation in `backend/services/*.js` and `src/pages/*.jsx`
 
+### Evolved product goals (2026-07)
+
+The G-rules below remain binding, but the product has evolved past
+"discovery catalog + pipeline" — every new feature should also serve these
+evolved goals:
+
+1. **End-to-end funding cycle, not just discovery.** Discover → match →
+   pipeline → draft → apply (Hamilton live portal automation, packets,
+   mail/fax) → track awards. Features that stop at "here's a list" are
+   half-done; features that move a user one step closer to submitted are the
+   priority.
+2. **Grounded drafting quality.** Drafts must be competitive AND honest:
+   grounded in the profile's real evidence, informed by REAL comparable funded
+   awards (reference-only lane), and audited by critic passes (compliance
+   responsiveness + evidence consistency, `PROPOSAL_CRITIC`) on top of the
+   deterministic fabrication guard. Quality tooling is additive — it explains
+   and flags; it never silently rewrites or invents.
+3. **Recall without junk.** Keyword/rule matching is the deterministic
+   authority; approved additive recall lanes (threshold relaxation, semantic
+   recall) may only WIDEN the candidate set feeding it. Precision is enforced
+   by the canonical gates, never by dropping recall.
+4. **Agent ecosystem observability.** Amy/Anya/Sam/Hamilton/Robert/Yana
+   actions must be visible to Sam diagnostics and usable by Anya; new
+   automation ships with structured logs and result_meta counters.
+5. **Paying-customer readiness.** Stripe billing tiers are live; features are
+   tier-gated server-side (G8), flag-gated when new (default OFF in prod until
+   proven), and reversible.
+
 ### G0. Truthful data, truthful proof, no fake shortcuts
 
 Hard rules:
@@ -42,6 +70,7 @@ Hard rules:
 - **Missing evidence is a gap, not a license to invent.** If a source, foundation grant list, portal, award amount, document field, profile answer, or live endpoint cannot be verified, GrantFlow must say so and either ask Anya/Hamilton/the admin for the missing proof or mark the item as unverified.
 - **Mocks, fakes, and fixtures are allowed only inside tests and clearly labeled tooling.** They must never seed production, masquerade as crawler output, or be used as the sole basis for declaring a live workflow production-ready.
 - **AI may summarize, classify, and draft from supplied facts; it may not invent facts, relationships, amounts, eligibility, deadlines, portal access, funder history, or prior contact.**
+- **Grounding references must be real and labeled.** Retrieved text used for drafting (KB documents, the profile's own prior content, or real RePORTER awards via the comparable-awards lane) must come from a live/verified source and be presented as *reference context*, never as applicant facts. Comparable awards are OTHER applicants' awards: the drafting prompt labels them "REFERENCE ONLY — NOT APPLICANT FACTS", they are excluded from the applicant evidence pack, and the deterministic fabrication guard (`proposalFabricationGuard.js`) continues to treat the profile as the only source of applicant truth. Zero comparable awards renders an honest empty state — never placeholder examples.
 
 ### G1. Non-fragile, observable, and testable
 
@@ -69,6 +98,29 @@ This repo’s UX and automation pages present crawlers as a system that should p
 
 Hard rule:
 - **Zero results is a failure state** for discovery operations. If an operation evaluates candidates but includes none, the system must **log why items were removed** and then **relax constraints and/or re-score** rather than returning a silent empty set.
+
+Approved recall-relaxation mechanisms (both ADDITIVE-ONLY — they may widen a
+result set, never narrow it):
+- **Threshold relaxation** (`RELAX_THRESHOLDS` → `FALLBACK_TOP_N` in `config/matchThresholds.js`).
+- **Semantic recall** (`SEMANTIC_RECALL=1`, default OFF): embeds the profile
+  thesis and ADDS the top-K nearest embedded catalog rows into the match
+  routes' candidate scan *before* canonical scoring
+  (`backend/services/embeddings/embeddingService.js`). Contract:
+  - Embeddings NEVER accept, reject, filter, or override a deterministic
+    verdict — every added candidate goes through the same
+    `scoreOpportunity`/`computeMatchDecision` gates as a keyword candidate
+    ("rules over score" holds).
+  - The semantic query reuses the calling route's EXACT WHERE fragment
+    (is_active + trusted origin/source + `profile_id IS NULL OR profile_id = ?`
+    isolation + any state/deadline filters), so it can never cross profile
+    isolation or widen the trust surface.
+  - Keyword rows are structurally a prefix of the augmented candidate list —
+    semantic recall can never produce an empty set where keyword matching had
+    results.
+  - Degrades to a clean no-op without `OPENAI_API_KEY`, without the
+    `opportunity_embeddings` table, or with the flag off; responses carry an
+    additive `semantic_recall { keyword_candidates, semantic_added }` counter
+    and routes log keyword vs semantic vs accepted counts.
 
 ### G3. Crawl results must appear in the “Discover Grants / Funding Opportunities” UI
 
@@ -182,6 +234,20 @@ DDL stays in `ensureSchemaInvariants.js`; data-repair invariants go here.
 - **Source allowlist / denylist** — blocklist currently matches 0 grant funders in prod; auto-purge needs a confirmed funder→blocklist match rule before it's safe to delete on.
 - **Zero-result-but-no-junk** (G2) — "relax constraints and re-score on empty" is a request-time behavior, not a stored-state invariant; can't be reconciled by a boot sweep.
 - **Agent observability rule** — any change in an agent's scope must be visible to Sam (diagnostics) + usable by Anya; this is a wiring/process rule, enforced in review, not by a DB sweep.
+
+## Feature flags for recall/grounding/critic lanes (all default OFF; reversible)
+
+| Flag | Feature | Off-state behavior |
+| --- | --- | --- |
+| `SEMANTIC_RECALL=1` (+ `SEMANTIC_RECALL_TOP_K`, `SEMANTIC_RECALL_SCAN_LIMIT`, `EMBEDDING_MODEL`) | Semantic recall booster on `/api/ai/match` + `/api/ai/comprehensive-match`; lazy embeds on `upsertFundingOpportunity`; backfill via `backend/scripts/backfill-opportunity-embeddings.mjs` | Pure keyword path, zero embedding calls |
+| `COMPARABLE_AWARDS=1` | `GET /api/ai/comparable-awards` (real NIH RePORTER awards, reference-only) + comparable-awards block in Hamilton proposal prompts | Endpoint answers `{ enabled:false, data:[] }`; UI panel explains; prompts omit the block |
+| `PROPOSAL_CRITIC=1` | `POST /api/ai/proposal-critic` multi-pass critic (compliance + evidence consistency + deterministic fabrication scan) behind the AI Grant Scorer | Endpoint answers `{ enabled:false }`; scorer UI unchanged |
+
+All three degrade cleanly without `OPENAI_API_KEY` (no-op / honest
+"unavailable" — never invented output). Schema shape for
+`opportunity_embeddings` is re-asserted at the boot choke point
+(`ensureSchemaInvariants.js` → `opportunity_embeddings_table` step; migrations
+131 / pg 0135, pgvector optional + guarded).
 
 ## Known gaps / TODOs (must become hard rules once implemented)
 

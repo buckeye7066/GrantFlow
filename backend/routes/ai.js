@@ -13,6 +13,20 @@ import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../c
 // compatible while moving off the legacy matchingEngine.js shim.
 import { scoreOpportunity as calculateMatchScore } from '../services/matchEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
+// Semantic recall (SEMANTIC_RECALL=1, default OFF): a RECALL BOOSTER that may
+// only ADD candidate rows into the keyword scan before canonical scoring.
+// It never accepts, rejects, filters, or re-ranks past the deterministic
+// engine, and it reuses the routes' own isolation + trust WHERE fragments so
+// it can never widen the tenancy or trust surface.
+import {
+  augmentCandidatesWithSemanticRecall,
+  buildProfileEmbeddingText,
+} from '../services/embeddings/embeddingService.js';
+import {
+  COMPARABLE_AWARDS_LABEL,
+  fetchComparableAwardsForGrant,
+} from '../services/comparableAwardsService.js';
+import { isProposalCriticEnabled, runProposalCritic } from '../services/proposalCritic.js';
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
@@ -242,8 +256,27 @@ router.post('/comprehensive-match', async (req, res) => {
       LIMIT 500
     `).all(...isolationParams)
 
+    // Semantic recall augmentation (ADDITIVE ONLY — see import note). The
+    // helper returns a SUPERSET of the keyword rows; on any failure or when
+    // the flag/key is absent it returns them untouched, so the keyword path
+    // can never lose a result to this step (G2-safe by construction).
+    let candidateRows = opportunities
+    let semanticMeta = null
+    try {
+      const recall = await augmentCandidatesWithSemanticRecall(req.db, {
+        keywordRows: opportunities,
+        queryText: buildProfileEmbeddingText(profile),
+        whereSql: `fo.is_active = ${activeVal} AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')} ${isolationClause}`,
+        whereParams: isolationParams,
+      })
+      candidateRows = recall.rows
+      semanticMeta = recall.meta
+    } catch (recallErr) {
+      routeLogger.warn(`[ai/comprehensive-match] semantic recall skipped: ${recallErr?.message || recallErr}`)
+    }
+
     // Calculate match scores using deterministic algorithm
-    const scoredOpps = opportunities.map(opp => {
+    const scoredOpps = candidateRows.map(opp => {
       const matchResult = calculateMatchScore(profile, opp);
       return {
         ...opp,
@@ -287,11 +320,20 @@ router.post('/comprehensive-match', async (req, res) => {
       }
     }
 
+    if (semanticMeta?.enabled) {
+      routeLogger.info(
+        `[ai/comprehensive-match] semantic recall: keyword=${semanticMeta.keyword_candidates} semantic_added=${semanticMeta.semantic_added} accepted=${matched.length} threshold=${matchThreshold}`,
+      )
+    }
+
     res.json({
       opportunities: matched,
       total: scoredOpps.length,
       threshold_used: matchThreshold,
       threshold_relaxed: matchThreshold < DEFAULT_MIN_SCORE ? true : undefined,
+      // Additive observability (never breaks existing consumers): how many
+      // candidates each recall lane contributed before canonical scoring.
+      semantic_recall: semanticMeta || undefined,
       profile
     })
   } catch (error) {
@@ -413,18 +455,42 @@ router.post('/match', async (req, res) => {
     params.push(limit * 2); // Get more than needed for AI scoring
     
     const opportunities = await req.db.prepare(query).all(...params);
-    
-    if (opportunities.length === 0) {
+
+    // Semantic recall augmentation (ADDITIVE ONLY; SEMANTIC_RECALL=1, default
+    // OFF). Reuses this route's EXACT WHERE fragment — active + trusted +
+    // state/deadline + the profile isolation clause — so a semantic candidate
+    // can never come from outside the surface the keyword scan was allowed to
+    // read. Added rows are scored by the same canonical engine below.
+    let candidateRows = opportunities
+    let semanticMeta = null
+    try {
+      const recall = await augmentCandidatesWithSemanticRecall(req.db, {
+        keywordRows: opportunities,
+        queryText: buildProfileEmbeddingText(profile),
+        whereSql: `fo.is_active = ${activeMatch}
+          AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')}
+          AND (fo.is_national = ${activeMatch} OR fo.state = ? OR fo.state IS NULL)
+          ${isolationClause}
+          AND (fo.deadline >= CURRENT_DATE OR fo.deadline IS NULL OR fo.deadline_type = 'rolling')`,
+        whereParams: profileIdForIsolation ? [profile.state, profileIdForIsolation] : [profile.state],
+      })
+      candidateRows = recall.rows
+      semanticMeta = recall.meta
+    } catch (recallErr) {
+      routeLogger.warn(`[ai/match] semantic recall skipped: ${recallErr?.message || recallErr}`)
+    }
+
+    if (candidateRows.length === 0) {
       return res.json({ opportunities: [], count: 0, profile_id });
     }
-    
+
     // Canonical scoring ONLY. matchEngine.scoreOpportunity (imported as
     // calculateMatchScore) is the sole match authority — this route previously
     // hand-rolled a keyword scorer with a hardcoded 50-point base + ad-hoc
     // bonuses, which is a forbidden competing match authority (mission Goals
     // 6 & 7). We now delegate to the canonical engine and use the canonical
     // threshold config instead of a hardcoded number.
-    const scoredOpportunities = opportunities.map(opp => {
+    const scoredOpportunities = candidateRows.map(opp => {
       const matchResult = calculateMatchScore(profile, opp);
       return {
         ...opp,
@@ -437,10 +503,39 @@ router.post('/match', async (req, res) => {
     });
 
     // Sort by canonical score and limit (threshold from canonical config).
+    let thresholdUsed = DEFAULT_MIN_SCORE;
     let topMatches = scoredOpportunities
       .filter(o => o.match_score >= DEFAULT_MIN_SCORE)
       .sort((a, b) => b.match_score - a.match_score)
       .slice(0, limit);
+
+    // G2: zero-results is a FAILURE state. Mirror comprehensive-match's
+    // canonical relax ladder — when nothing clears the default threshold but
+    // candidates exist, progressively lower the bar (and log why) instead of
+    // returning a silent empty set. Display-only ranking; the pipeline
+    // writer's hard floor (saveToProfilePipeline) is unaffected.
+    if (topMatches.length === 0 && scoredOpportunities.length > 0) {
+      for (const fallback of RELAX_THRESHOLDS) {
+        const relaxed = scoredOpportunities
+          .filter(o => o.match_score >= fallback)
+          .sort((a, b) => b.match_score - a.match_score)
+          .slice(0, limit);
+        if (relaxed.length > 0) {
+          topMatches = relaxed;
+          thresholdUsed = fallback;
+          break;
+        }
+      }
+      if (topMatches.length === 0) {
+        topMatches = [...scoredOpportunities]
+          .sort((a, b) => b.match_score - a.match_score)
+          .slice(0, Math.min(limit, FALLBACK_TOP_N));
+        thresholdUsed = 0;
+      }
+      routeLogger.info(
+        `[ai/match] zero results at threshold ${DEFAULT_MIN_SCORE} — relaxed to ${thresholdUsed} (candidates=${scoredOpportunities.length}, returned=${topMatches.length}) per G2`,
+      );
+    }
 
     // Profile-scoped result surface: collapse duplicates + drop pipeline
     // members / dismissed grants via the canonical helpers.
@@ -458,11 +553,21 @@ router.post('/match', async (req, res) => {
       }
     }
 
+    if (semanticMeta?.enabled) {
+      routeLogger.info(
+        `[ai/match] semantic recall: keyword=${semanticMeta.keyword_candidates} semantic_added=${semanticMeta.semantic_added} accepted=${topMatches.length}`,
+      )
+    }
+
     res.json({
       opportunities: topMatches,
       count: topMatches.length,
       profile_id,
-      profile_state: profile.state
+      profile_state: profile.state,
+      // Additive observability: threshold + per-lane candidate counts.
+      threshold_used: thresholdUsed,
+      threshold_relaxed: thresholdUsed < DEFAULT_MIN_SCORE ? true : undefined,
+      semantic_recall: semanticMeta || undefined,
     });
     
   } catch (error) {
@@ -1761,6 +1866,76 @@ router.get('/profile-todo', async (req, res) => {
  * this endpoint exposes the whole thing (Anya's profile.thresholdReport tool
  * reads it too).
  */
+/**
+ * POST /api/ai/proposal-critic
+ * Body: { grant_id, proposal_text }
+ *
+ * Multi-pass proposal critic (PROPOSAL_CRITIC flag, default OFF): additive
+ * compliance-responsiveness + evidence-consistency passes on top of the
+ * existing AI Grant Scorer card, plus the deterministic fabrication-guard
+ * scan. When the flag is off, responds { enabled:false } so the UI stays
+ * silent. Token cost bounded in proposalCritic.js.
+ */
+router.post('/proposal-critic', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
+  try {
+    if (!isProposalCriticEnabled()) {
+      return res.json({ enabled: false, passes: [] })
+    }
+    const { grant_id, proposal_text } = req.body ?? {}
+    if (!grant_id) return res.status(400).json({ error: 'grant_id is required' })
+    if (!proposal_text || typeof proposal_text !== 'string' || !proposal_text.trim()) {
+      return res.status(400).json({ error: 'proposal_text is required' })
+    }
+    const grant = await ensureGrantAccess(req, res, String(grant_id))
+    if (!grant) return // ensureGrantAccess already responded (404/403)
+
+    const critic = await runProposalCritic(req.db, { grant, proposalText: proposal_text })
+    routeLogger.info(
+      `[ai/proposal-critic] grant=${grant.id} passes=${critic.passes.filter((p) => p.available).length}/${critic.passes.length} deterministic_flags=${critic.deterministic_flags?.length ?? 0}`,
+    )
+    res.json({ grant_id: grant.id, ...critic })
+  } catch (error) {
+    routeLogger.error('proposal-critic error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * GET /api/ai/comparable-awards?grant_id=...
+ *
+ * REAL comparable funded awards (NIH RePORTER) for the drafting editor —
+ * grounding references only, never applicant facts (G0). Flag-gated via
+ * COMPARABLE_AWARDS (default OFF): when off, responds { enabled:false,
+ * data:[] } so the UI hides the panel cleanly. Access: authenticated (router
+ * gate above) + ensureGrantAccess on the requested grant.
+ */
+router.get('/comparable-awards', async (req, res) => {
+  try {
+    const grantId = String(req.query.grant_id || '').trim()
+    if (!grantId) {
+      return res.status(400).json({ error: 'grant_id is required' })
+    }
+    const grant = await ensureGrantAccess(req, res, grantId)
+    if (!grant) return // ensureGrantAccess already responded (404/403)
+
+    const result = await fetchComparableAwardsForGrant(req.db, grant, { limit: 5 })
+    res.json({
+      data: result.awards,
+      total: result.awards.length,
+      enabled: result.enabled,
+      label: COMPARABLE_AWARDS_LABEL,
+      source: 'nih_reporter',
+      query: result.query,
+      // Honest degradation (G1): a live-API failure is reported, not hidden —
+      // and never backfilled with invented rows (G0).
+      lookup_error: result.error || undefined,
+    })
+  } catch (error) {
+    routeLogger.error('comparable-awards error:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 router.get('/threshold-report', async (req, res) => {
   try {
     const profile_id = String(req.query.profile_id || '');

@@ -9,12 +9,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, Filter, Plus, DollarSign, Calendar, Building2, Search } from "lucide-react";
+import { FileText, Filter, Plus, DollarSign, Calendar, Building2, Search, Award } from "lucide-react";
 import { format } from "date-fns";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
+import ComparableAwardsPanel from "@/components/proposals/ComparableAwardsPanel";
 
 export default function Proposals() {
   const [filterOrg, setFilterOrg] = useState("all");
+  // Comparable-awards side panel (real NIH RePORTER awards, reference only).
+  const [awardsProposal, setAwardsProposal] = useState(null); // { id, title } | null
   const [filters, setFilters] = useState({
     search: '',
     minAmount: '',
@@ -220,7 +223,8 @@ export default function Proposals() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="flex flex-col-reverse lg:flex-row gap-6 items-start">
+          <div className={`grid md:grid-cols-2 ${awardsProposal ? 'lg:grid-cols-2' : 'lg:grid-cols-3'} gap-6 flex-1`}>
             {filteredProposals.map(proposal => {
               const org = organizations.find(o => o.id === proposal.organization_id);
               const expired = isExpired(proposal);
@@ -280,14 +284,34 @@ export default function Proposals() {
                       </div>
                     )}
                   </CardContent>
-                  <CardFooter className="bg-slate-50 p-4 border-t">
+                  <CardFooter className="bg-slate-50 p-4 border-t flex flex-col gap-2">
                     <Link to={createPageUrl("GrantDetail", { id: proposal.id, tab: "proposal" })} className="w-full">
                       <Button variant="outline" className="w-full bg-white">View Proposal</Button>
                     </Link>
+                    <Button
+                      variant="ghost"
+                      className="w-full text-amber-700 hover:text-amber-800 hover:bg-amber-50"
+                      onClick={() => setAwardsProposal(
+                        awardsProposal?.id === proposal.id ? null : { id: proposal.id, title: proposal.title }
+                      )}
+                    >
+                      <Award className="w-4 h-4 mr-2" />
+                      {awardsProposal?.id === proposal.id ? 'Hide Comparable Awards' : 'Comparable Awards'}
+                    </Button>
                   </CardFooter>
                 </Card>
               );
             })}
+          </div>
+          {awardsProposal && (
+            <aside className="w-full lg:w-96 lg:shrink-0 lg:sticky lg:top-6">
+              <ComparableAwardsPanel
+                grantId={awardsProposal.id}
+                grantTitle={awardsProposal.title}
+                onClose={() => setAwardsProposal(null)}
+              />
+            </aside>
+          )}
           </div>
         )}
       </div>
