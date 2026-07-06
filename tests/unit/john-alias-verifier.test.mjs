@@ -13,7 +13,7 @@ import { getLatestAliasCheck } from '../../backend/services/john/johnRunStore.js
 test('verifyAlias reports not-configured when MICROSOFT_* env is missing', async () => {
   const restore = applyEnv({
     JOHN_PRIMARY_MAILBOX: 'dr.johnwhite@axiombiolabs.org',
-    JOHN_FROM_ALIAS: 'Ellie@axiombiolabs.org',
+    JOHN_FROM_ALIAS: 'Annie@axiombiolabs.org',
     MICROSOFT_TENANT_ID: undefined,
     MICROSOFT_CLIENT_ID: undefined,
     MICROSOFT_CLIENT_SECRET: undefined,
@@ -45,7 +45,7 @@ test('verifyAlias records alias_send_supported=true when Graph accepts the From 
     const last = await getLatestAliasCheck(db)
     assert.equal(last.alias_verified, true)
     assert.equal(last.alias_send_supported, true)
-    assert.equal(last.from_alias, 'Ellie@axiombiolabs.org')
+    assert.equal(last.from_alias, 'Annie@axiombiolabs.org')
     assert.ok(last.test_draft_provider_id)
   } finally {
     restore()

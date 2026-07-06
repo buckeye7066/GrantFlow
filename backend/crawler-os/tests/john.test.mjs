@@ -6,7 +6,7 @@ import { createYana } from '../agents/yana.js';
 import { createJohn } from '../agents/john.js';
 import { storage } from '../index.js';
 
-const ALIAS = 'Ellie@axiombiolabs.org';
+const ALIAS = 'Annie@axiombiolabs.org';
 
 function seedQualifiedLead(store, i = 1, over = {}) {
   return storage.saveLead(store, {
@@ -23,7 +23,7 @@ function seedQualifiedLead(store, i = 1, over = {}) {
   });
 }
 
-test('John drafts from qualified leads and uses the Ellie alias', async () => {
+test('John drafts from qualified leads and uses the Annie alias', async () => {
   const store = createMemoryStore();
   seedQualifiedLead(store, 1);
   const john = createJohn({ store });

@@ -102,7 +102,7 @@ export async function verifyAlias({
     const draft = await p.createDraft({
       toEmail: config.testRecipient || config.primaryMailbox,
       toName: 'GrantFlow Alias Verification',
-      subject: 'Ellie alias verification (test draft, do not send)',
+      subject: 'Annie alias verification (test draft, do not send)',
       bodyText:
         'This is an automated test draft created by John to verify the From alias configuration. Do not send.\n\nIf you received this in your sent folder, that means John attempted to set the From alias and Microsoft Graph accepted it.',
       requestedFromAlias: config.fromAlias,

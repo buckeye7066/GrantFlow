@@ -63,9 +63,9 @@ export function getJohnConfig() {
       'JOHN_PRIMARY_MAILBOX',
       'dr.johnwhite@axiombiolabs.org'
     ),
-    fromAlias: readEnvString('JOHN_FROM_ALIAS', 'Ellie@axiombiolabs.org'),
-    replyTo: readEnvString('JOHN_REPLY_TO', 'Ellie@axiombiolabs.org'),
-    displayName: readEnvString('JOHN_DISPLAY_NAME', 'Ellie | GrantFlow'),
+    fromAlias: readEnvString('JOHN_FROM_ALIAS', 'Annie@axiombiolabs.org'),
+    replyTo: readEnvString('JOHN_REPLY_TO', 'Annie@axiombiolabs.org'),
+    displayName: readEnvString('JOHN_DISPLAY_NAME', 'Annie | GrantFlow'),
 
     draftOnly: draftOnly,
     // John is draft-only in this version. Even if an operator flips

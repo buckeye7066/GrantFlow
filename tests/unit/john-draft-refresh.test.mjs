@@ -107,7 +107,7 @@ test('refresh replaces old generic team salutations with the warm org-specific g
     assert.equal(provider.patches.length, 1, 'Outlook draft PATCHed once')
 
     const after = await getDraft(db, id)
-    // Since the Ellie identity pass (#782/#783), a lead with NO named contact
+    // Since the sender-identity pass (#782/#783), a lead with NO named contact
     // gets the warm org-specific greeting — never the old bland "Hey Team,"
     // and not the cold bare "Hello," either.
     assert.match(after.body_text, /^Hello Riverbend Volunteer Fire Department team,/)

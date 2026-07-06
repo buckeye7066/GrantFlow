@@ -147,7 +147,7 @@ test('getJohnStatus returns the safety posture used by the admin console', async
     assert.equal(status.draft_only, true)
     assert.equal(status.allow_send, false)
     assert.equal(status.daily_cap, 50)
-    assert.equal(status.from_alias, 'Ellie@axiombiolabs.org')
+    assert.equal(status.from_alias, 'Annie@axiombiolabs.org')
   } finally {
     restore()
     db.close()

@@ -100,10 +100,10 @@ function buildFooter(config, organizationName) {
   const physical = String(config.physicalAddress || '').trim()
   const link = String(config.prospectLink || '').trim()
   const org = String(organizationName || '').trim() || 'your organization'
-  // ONE sender identity: Ellie. The email appears to come from Ellie and the
-  // single reply/return address is Ellie@axiombiolabs.org — no competing
+  // ONE sender identity: Annie. The email appears to come from Annie and the
+  // single reply/return address is Annie@axiombiolabs.org — no competing
   // Dr. John White / GrantFlow@ / Axiom addresses to confuse the recipient.
-  const ellieAddress = String(config.replyTo || 'Ellie@axiombiolabs.org').trim()
+  const annieAddress = String(config.replyTo || 'Annie@axiombiolabs.org').trim()
   return [
     '',
     `The best way to see whether it is worth your time is to try it, so I would rather show you than keep describing it. If you follow the link below, you can talk through your work with Anya, our assistant, and she will run a live scan of funding that fits ${org}, no account or commitment needed just to look. If what comes back is useful, you can take it from there:`,
@@ -111,9 +111,9 @@ function buildFooter(config, organizationName) {
     '',
     'Warmly,',
     '',
-    'Ellie',
+    'Annie',
     'GrantFlow (founded by Dr. John White at Axiom BioLabs)',
-    ellieAddress,
+    annieAddress,
     '',
     'If this is not the right fit, just reply "no thanks" and I will not follow up.',
     ...(physical ? ['', physical] : []),
@@ -155,7 +155,7 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '', 
     likely_funding_categories: lane?.categories || null,
   }
   const system = [
-    'You are Ellie, a warm, thoughtful person on the GrantFlow team who reaches out to organizations on behalf of the founder, Dr. John White. You are writing a short, personable note to an organization you have NOT spoken with before. Write the way a sharp, generous, well-read person writes one real human a genuine note: warm, plain-spoken, specific, and a little human. Never like a marketing template. You write as "I" (Ellie); when you mention the founder or GrantFlow’s origin, refer to Dr. John White in the third person.',
+    'You are Annie, a warm, thoughtful person on the GrantFlow team who reaches out to organizations on behalf of the founder, Dr. John White. You are writing a short, personable note to an organization you have NOT spoken with before. Write the way a sharp, generous, well-read person writes one real human a genuine note: warm, plain-spoken, specific, and a little human. Never like a marketing template. You write as "I" (Annie); when you mention the founder or GrantFlow’s origin, refer to Dr. John White in the third person.',
     '',
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',

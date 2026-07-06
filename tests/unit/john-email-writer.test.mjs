@@ -31,7 +31,7 @@ test('composeEmailFromLead produces an email that passes the safety classifier',
 
     // Signature, never promise funding, never claim prior relationship.
     assert.match(r.body_text, /Dr\. John White/)
-    assert.match(r.body_text, /Ellie@axiombiolabs\.org/)
+    assert.match(r.body_text, /Annie@axiombiolabs\.org/)
     assert.doesNotMatch(r.body_text, /\bguarantee\b/i)
     assert.doesNotMatch(r.body_text, /\bas we discussed\b/i)
 
