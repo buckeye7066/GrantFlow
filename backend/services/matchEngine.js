@@ -2998,13 +2998,21 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     // pages otherwise miss it — the ECF CHOICES class).
     oppSourceId: opportunity?.source ?? opportunity?.source_id ?? opportunity?.record_origin ?? '',
   })
+  // Specialized fit evidence (individual↔benefit-program alignment, GPA×merit,
+  // faith×faith-based, housing-usable×housing-need, talent, workforce,
+  // population/mission) is real, data-derived relevance the plain text scan
+  // misses — a low-income disabled individual genuinely matches LIHEAP even
+  // when the page text doesn't echo their exact need word. It counts as at
+  // most ONE coverage point (bounded), so it refines the ratio without
+  // recreating the old additive boost stack.
+  const dataPointCredit = dataPointEval.credit + (hasFitEvidence ? Math.min(1, fitEvidencePoints / 12) : 0)
   let dataPointCoverage
   if (dataPointInventory.total === 0) {
     // Empty inventory (bare profile row): same bounded topical fallback as the
     // no-needs case — an empty profile can never claim real coverage.
     dataPointCoverage = Math.max(0, Math.min(100, rawScore)) * (NO_NEEDS_TOPICAL_CAP / 100)
   } else {
-    dataPointCoverage = Math.min(100, (dataPointEval.credit / dataPointInventory.total) * 100)
+    dataPointCoverage = Math.min(100, (dataPointCredit / dataPointInventory.total) * 100)
   }
 
   // Behavior nudge (soft preference learning) still tips borderline scores.
