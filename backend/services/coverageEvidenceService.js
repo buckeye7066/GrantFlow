@@ -88,6 +88,12 @@ export const LANE_OF_SOURCE = Object.freeze({
   cops_grants: 'federal_grants',
   // Federal campaign-finance guidance (compliance resource, federal lane).
   fec_candidate_resources: 'federal_grants',
+  // Orphaned lanes ported 2026-07-07: federal agency grant programs.
+  arc_dra: 'federal_grants',
+  dol_eta_workforce: 'federal_grants',
+  nea_neh_arts: 'federal_grants',
+  usda_conservation: 'federal_grants',
+  hrsa_health_workforce: 'federal_grants',
   // ── Federal benefits / federal support programs for people ──
   benefits_gov: 'federal_benefits',
   liheap: 'federal_benefits',
@@ -107,6 +113,11 @@ export const LANE_OF_SOURCE = Object.freeze({
   military_onesource: 'federal_benefits',
   dol_tap: 'federal_benefits',
   sba_boots_to_business: 'federal_benefits',
+  // Orphaned lanes ported 2026-07-07: federal support programs for people.
+  orr_refugee: 'federal_benefits',
+  acf_chafee_foster: 'federal_benefits',
+  ccdf_childcare: 'federal_benefits',
+  va_housing_grants: 'federal_benefits',
   // ── State programs (state-specific portals & resources) ──
   // TennCare ECF CHOICES — TN Medicaid HCBS waiver (ported legacy ECF lane).
   tn_ecf_choices: 'state_programs',
@@ -133,9 +144,13 @@ export const LANE_OF_SOURCE = Object.freeze({
   petco_love_grants: 'private_charities',
   aspca_grants: 'private_charities',
   feeding_america: 'private_charities',
+  // IRS 990 grantmakers (ProPublica) — the private-foundation funder universe.
+  propublica_990: 'private_charities',
   // ── Disease-specific support ──
   cancer_care: 'disease_specific',
   alzheimers_gov_services: 'disease_specific',
+  // Copay/patient-assistance foundation finder (diagnosis-based aid).
+  copay_assistance_foundations: 'disease_specific',
   // ── 211 / local safety net ──
   community_211: 'local_211',
   united_way_211: 'local_211',
@@ -460,9 +475,13 @@ export async function buildCoverageEvidence(db, profileId) {
     }
   }
 
-  // (c1) Profile state with no state-specific source covering it.
+  // (c1) Profile state with no state-specific source covering it. Scoped to
+  // the state_programs LANE: a multi-state FEDERAL source (e.g. arc_dra, the
+  // Appalachian Regional Commission's 13-state footprint) is not a state
+  // benefits/scholarship/agency source and must not suppress this gap.
   if (state) {
     const stateCovered = registry.some((s) => {
+      if (laneForSource(s.source_id, s) !== 'state_programs') return false;
       const states = s.geography?.states;
       return Array.isArray(states) && states.map((x) => String(x).toUpperCase()).includes(state);
     });

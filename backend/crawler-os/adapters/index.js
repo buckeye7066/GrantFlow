@@ -16,6 +16,7 @@ import { createSbirGovAdapter } from "./sbirGovAdapter.js";
 import { createAgencyRssAdapter } from "./agencyRssAdapter.js";
 import { createOfficialDirectoryAdapter } from "./officialDirectoryAdapter.js";
 import { createEcfChoicesAdapter } from "./ecfChoicesAdapter.js";
+import { createPropublica990Adapter } from "./propublica990Adapter.js";
 
 const officialDirectory = (sourceId) => () => createOfficialDirectoryAdapter(sourceId);
 
@@ -105,6 +106,20 @@ const FACTORIES = Object.freeze({
   cops_grants: officialDirectory('cops_grants'),
   fec_candidate_resources: officialDirectory('fec_candidate_resources'),
   pa_campaign_finance: officialDirectory('pa_campaign_finance'),
+  // --- Orphaned funding lanes ported into the OS (2026-07-07). propublica_990
+  //     is a real API adapter (IRS 990 grantmakers, NTEE+state driven); the
+  //     rest are honest official program/directory rows.
+  propublica_990: createPropublica990Adapter,
+  arc_dra: officialDirectory('arc_dra'),
+  orr_refugee: officialDirectory('orr_refugee'),
+  acf_chafee_foster: officialDirectory('acf_chafee_foster'),
+  ccdf_childcare: officialDirectory('ccdf_childcare'),
+  dol_eta_workforce: officialDirectory('dol_eta_workforce'),
+  nea_neh_arts: officialDirectory('nea_neh_arts'),
+  usda_conservation: officialDirectory('usda_conservation'),
+  hrsa_health_workforce: officialDirectory('hrsa_health_workforce'),
+  copay_assistance_foundations: officialDirectory('copay_assistance_foundations'),
+  va_housing_grants: officialDirectory('va_housing_grants'),
 });
 /** @returns {object|null} an adapter instance, or null if none is implemented. */
 export function getAdapter(sourceId) {
