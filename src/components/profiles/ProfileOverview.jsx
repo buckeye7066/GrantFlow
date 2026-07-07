@@ -1460,7 +1460,7 @@ export default function ProfileOverview({
       ) : null}
 
       {isRealProfileId(profile.id) ? (
-        <section>
+        <section id="profile-automations" className="scroll-mt-24">
           <ProfileAutomationsCard profileId={profile.id} />
         </section>
       ) : null}

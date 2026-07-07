@@ -20,6 +20,7 @@ import { formatReasonText } from '@/utils/reasonText';
 import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelineStageHelp';
 import HamiltonTaskBadge from '@/components/hamilton/HamiltonTaskBadge';
 import HamiltonTaskDrawer from '@/components/hamilton/HamiltonTaskDrawer';
+import TailoredApplicationPanel from '@/components/hamilton/TailoredApplicationPanel';
 import { useHamiltonSelection } from '@/components/hamilton/HamiltonSelectionContext';
 import PortalLoginButton from '@/components/portal/PortalLoginButton';
 import { safeHttpUrl } from '@/lib/safeUrl';
@@ -617,6 +618,17 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
                 onOpenDrawer={(t) => { setHamiltonTask(t); setHamiltonDrawerOpen(true); }}
               />
             </div>
+          )}
+
+          {/* Per-funder tailored application narrative Hamilton wrote — reviewed
+              inline (approve / edit / regenerate). Lazy: fetches only when the
+              owner expands it, and hides itself if the endpoint isn't live yet. */}
+          {isInPipeline && grant.id && grant.profile_id && (
+            <TailoredApplicationPanel
+              profileId={grant.profile_id}
+              grantId={grant.id}
+              grantTitle={grant.title || ''}
+            />
           )}
         </div>
       </Link>
