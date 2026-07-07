@@ -57,7 +57,7 @@ describe("TailoredApplicationPanel", () => {
 
   it("blocks approval while funder questions remain and deep-links each to the profile", async () => {
     apiFetchMock.mockImplementation(async (endpoint) => {
-      if (endpoint.includes("/tailored-application?grant_id=")) {
+      if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
           fields: { primary: "Draft narrative for Acme." },
           status: "pending",
@@ -95,7 +95,7 @@ describe("TailoredApplicationPanel", () => {
 
   it("shows read-only text + 'auto-submit when automation on' when approved but automation is off", async () => {
     apiFetchMock.mockImplementation(async (endpoint) => {
-      if (endpoint.includes("/tailored-application?grant_id=")) {
+      if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
           fields: { primary: "Approved narrative body." },
           status: "approved",
@@ -125,7 +125,7 @@ describe("TailoredApplicationPanel", () => {
 
   it("edit mode posts the edited fields to the edit endpoint", async () => {
     apiFetchMock.mockImplementation(async (endpoint, options = {}) => {
-      if (endpoint.includes("/tailored-application?grant_id=")) {
+      if (endpoint.includes("/hamilton/tailored/application?grant_id=")) {
         return {
           fields: { primary: "Original draft." },
           status: "pending",
@@ -135,7 +135,7 @@ describe("TailoredApplicationPanel", () => {
           gate_reason: "not_approved",
         }
       }
-      if (endpoint.endsWith("/tailored-application/edit") && options.method === "POST") {
+      if (endpoint.endsWith("/hamilton/tailored/edit") && options.method === "POST") {
         return { ok: true, status: "edited" }
       }
       return { ok: true }
@@ -150,11 +150,11 @@ describe("TailoredApplicationPanel", () => {
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith(
-        "/api/profiles/profile-1/tailored-application/edit",
+        "/api/hamilton/tailored/edit",
         expect.objectContaining({ method: "POST", body: expect.any(String) }),
       )
     })
-    const editCall = apiFetchMock.mock.calls.find(([e]) => e.endsWith("/tailored-application/edit"))
+    const editCall = apiFetchMock.mock.calls.find(([e]) => e.endsWith("/hamilton/tailored/edit"))
     const body = JSON.parse(editCall[1].body)
     expect(body.grant_id).toBe("grant-9")
     expect(body.fields.primary).toBe("My edited narrative.")

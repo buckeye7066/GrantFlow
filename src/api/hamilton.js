@@ -163,19 +163,18 @@ export function portalTypeLabel(portalType) {
 //           missing_questions:[{requirement, question, field?, section_key?}],
 //           funder_requirements:[...], can_auto_submit:bool,
 //           gate_reason:'not_approved'|'automation_off'|'missing_info'|null }
+// NOTE: the backend mounts these at /api/hamilton/tailored/* keyed on grant_id
+// (the portal-card = pipeline grant). profileId is accepted for call-site
+// compatibility but the backend resolves the profile from the grant + auth.
 export function getTailoredApplication(profileId, grantId) {
-  if (!profileId) return Promise.reject(new Error('profileId required'))
   if (!grantId) return Promise.reject(new Error('grantId required'))
-  return apiFetch(
-    `/api/profiles/${encodeURIComponent(profileId)}/tailored-application?grant_id=${encodeURIComponent(grantId)}`,
-  )
+  return apiFetch(`/api/hamilton/tailored/application?grant_id=${encodeURIComponent(grantId)}`)
 }
 
 // Approve the current draft as-is → status 'approved'.
 export function approveTailoredApplication(profileId, grantId) {
-  if (!profileId) return Promise.reject(new Error('profileId required'))
   if (!grantId) return Promise.reject(new Error('grantId required'))
-  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/tailored-application/approve`, {
+  return apiFetch(`/api/hamilton/tailored/approve`, {
     method: 'POST',
     body: JSON.stringify({ grant_id: grantId }),
   })
@@ -183,9 +182,8 @@ export function approveTailoredApplication(profileId, grantId) {
 
 // Save owner edits → status 'edited' (editing == approved-as-edited).
 export function editTailoredApplication(profileId, grantId, fields) {
-  if (!profileId) return Promise.reject(new Error('profileId required'))
   if (!grantId) return Promise.reject(new Error('grantId required'))
-  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/tailored-application/edit`, {
+  return apiFetch(`/api/hamilton/tailored/edit`, {
     method: 'POST',
     body: JSON.stringify({ grant_id: grantId, fields: fields && typeof fields === 'object' ? fields : {} }),
   })
@@ -193,9 +191,8 @@ export function editTailoredApplication(profileId, grantId, fields) {
 
 // Ask Hamilton to re-draft the funder-tailored narrative from scratch.
 export function regenerateTailoredApplication(profileId, grantId) {
-  if (!profileId) return Promise.reject(new Error('profileId required'))
   if (!grantId) return Promise.reject(new Error('grantId required'))
-  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/tailored-application/regenerate`, {
+  return apiFetch(`/api/hamilton/tailored/regenerate`, {
     method: 'POST',
     body: JSON.stringify({ grant_id: grantId }),
   })
