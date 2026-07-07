@@ -103,6 +103,33 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     coverage = { ok: false, error: err?.message }
   }
 
+  // Google-bar web-parity benchmark: for each golden profile, run a BOUNDED
+  // web-search session (≤6 queries × ≤10 results) and score GrantFlow's stored
+  // top matches against it (owner directive: GrantFlow must beat a plain web
+  // search, and the system must only get better). Persists parity history to
+  // system_kv `web_parity_benchmark` (Sam's coverage.webParityBenchmark ratchet
+  // + Anya's morning report read it) and appends web-only finds to the
+  // `web_parity_gap_queue` candidate queue — never auto-inserts to the catalog.
+  // Env-gated (WEB_PARITY_BENCHMARK, on by default). Best-effort — never
+  // blocks the sweep.
+  let webParity = null
+  try {
+    const { runWebParityBenchmark, isWebParityBenchmarkEnabled } = await import('../webParityBenchmark.js')
+    if (isWebParityBenchmarkEnabled()) {
+      webParity = await runWebParityBenchmark(db, { now })
+      log.info('nightly web-parity benchmark complete', {
+        ran: webParity?.ran ?? false,
+        reason: webParity?.reason ?? null,
+        fleet_parity: webParity?.fleet_parity ?? null,
+        profiles: webParity?.per_profile?.length ?? 0,
+        gap_candidates_appended: webParity?.gap_queue?.appended ?? 0,
+      })
+    }
+  } catch (err) {
+    log.warn('nightly web-parity benchmark failed (non-fatal)', { error: err?.message })
+    webParity = { ran: false, error: err?.message }
+  }
+
   // Gap-email review drafts: when a profile is incomplete, draft a warm "a few
   // quick questions" email (Ellie voice) into the owner's mailbox for review.
   // DRAFT-ONLY, never sends. No-op unless GAP_EMAIL_DRAFTS_ENABLED=true, so this
@@ -256,6 +283,15 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
           needs_rediscovery: coverage.summary?.needs_rediscovery ?? 0,
           surfacing_regressions: coverage.summary?.surfacing_regressions ?? 0,
           healed: coverage.healed_count ?? 0,
+        }
+      : null,
+    web_parity: webParity
+      ? {
+          ran: webParity.ran === true,
+          reason: webParity.reason ?? webParity.error ?? null,
+          fleet_parity: webParity.fleet_parity ?? null,
+          profiles: webParity.per_profile?.length ?? 0,
+          gap_candidates_appended: webParity.gap_queue?.appended ?? 0,
         }
       : null,
     at: now.toISOString(),

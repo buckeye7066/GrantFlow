@@ -788,6 +788,108 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Liveness/readiness probe — DB ping, schema columns, JWT secret strength, uploads writable.',
   },
   {
+    // The "Google bar" regression ratchet (owner directive: for each golden
+    // profile GrantFlow must beat a plain web-search session, and the system
+    // must ONLY get better). The nightly webParityBenchmark persists parity
+    // history to system_kv `web_parity_benchmark`; this check goes red when the
+    // fleet parity REGRESSES vs the previous run (> REGRESSION_POINTS), when
+    // the benchmark is stale, or when it has never run at all. Fails open on
+    // environment gaps (db/system_kv/module unavailable) like the other
+    // internal coverage checks.
+    id: 'coverage.webParityBenchmark',
+    label: 'Google-bar web-parity benchmark',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the nightly web-parity benchmark (system_kv web_parity_benchmark: golden-profile GrantFlow-vs-web-search parity) and flags a fleet-parity regression vs the previous run, a stale benchmark (>8 days), or a benchmark that never ran. Evidence carries per-profile parity + the top web-only finds; the fix points at the web_parity_gap_queue candidate queue.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'web-parity benchmark: db unavailable' }
+      let mod
+      try {
+        mod = await import('../webParityBenchmark.js')
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `web-parity module unavailable: ${err?.message || err}` }
+      }
+      if (!mod.isWebParityBenchmarkEnabled()) {
+        return { ok: true, skipped: true, summary: 'web-parity benchmark disabled (WEB_PARITY_BENCHMARK=false)' }
+      }
+      // Direct KV read so an environment gap (system_kv not migrated yet) fails
+      // OPEN, while a MISSING key is the honest never-run alert below.
+      let row
+      try {
+        row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(mod.KV_KEY)
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      let store = null
+      if (row?.value) {
+        try { store = JSON.parse(row.value) } catch { store = null }
+        if (!store || typeof store !== 'object') {
+          return { ok: false, summary: 'web_parity_benchmark exists but is unparseable JSON.', evidence: { raw: String(row.value).slice(0, 200) } }
+        }
+      }
+      const recommendedFix =
+        'Review system_kv `web_parity_gap_queue` (the web-only funding pages GrantFlow lacks — Amy\'s work queue; drive real candidates through upsertFundingOpportunity) and confirm the nightly sweep is running runWebParityBenchmark (WEB_PARITY_BENCHMARK on, golden_outcome_expectations seeded).'
+      if (!store?.latest) {
+        return {
+          ok: false,
+          summary: 'The Google-bar web-parity benchmark has NEVER run — GrantFlow-vs-web-search quality is unmeasured for the golden profiles.',
+          evidence: { kv_key: mod.KV_KEY, golden_kv_key: mod.GOLDEN_KV_KEY },
+          recommended_fix: 'Seed system_kv `golden_outcome_expectations` and let the nightly sweep run runWebParityBenchmark (or invoke it on demand); then this check ratchets parity run-over-run.',
+          confidence: 0.9,
+        }
+      }
+      const latest = store.latest
+      const generatedMs = Date.parse(latest.generated_at || store.generated_at || '') || 0
+      const ageMs = Date.now() - generatedMs
+      const perProfile = Array.isArray(latest.per_profile) ? latest.per_profile : []
+      const topWebOnly = perProfile
+        .flatMap((p) => (Array.isArray(p.web_only_top) ? p.web_only_top.map((w) => ({ ...w, profile: p.label || p.profile_id })) : []))
+        .slice(0, 6)
+      const evidence = {
+        generated_at: latest.generated_at || null,
+        fleet_parity: latest.fleet_parity ?? null,
+        per_profile: perProfile.map((p) => ({
+          profile_id: p.profile_id,
+          label: p.label,
+          parity: p.parity,
+          web_only_count: p.web_only_count ?? 0,
+          overlap_count: p.overlap_count ?? 0,
+          error: p.error ?? null,
+        })),
+        top_web_only: topWebOnly,
+      }
+      if (!generatedMs || ageMs > mod.STALE_MS) {
+        return {
+          ok: false,
+          summary: `The web-parity benchmark is STALE (${generatedMs ? Math.round(ageMs / 86400000) + 'd old' : 'no timestamp'} > 8 days) — the Google-bar ratchet is not being measured.`,
+          evidence,
+          recommended_fix: recommendedFix,
+          confidence: 0.85,
+        }
+      }
+      const runs = Array.isArray(store.runs) ? store.runs : []
+      const prev = runs.length >= 2 ? runs[runs.length - 2] : null
+      const latestParity = Number(latest.fleet_parity)
+      const prevParity = Number(prev?.fleet_parity)
+      if (Number.isFinite(latestParity) && Number.isFinite(prevParity) && prevParity - latestParity > mod.REGRESSION_POINTS) {
+        return {
+          ok: false,
+          summary: `Google-bar REGRESSION: fleet web-parity dropped ${Math.round((prevParity - latestParity) * 10) / 10} points (${prevParity} → ${latestParity}) — the system got WORSE vs a plain web search.`,
+          evidence: { ...evidence, previous_fleet_parity: prevParity },
+          recommended_fix: recommendedFix,
+          confidence: 0.85,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Web-parity benchmark fresh (${Math.round(ageMs / 3600000)}h old): fleet parity ${latest.fleet_parity ?? 'n/a'} across ${perProfile.length} golden profile(s)` +
+          `${Number.isFinite(prevParity) ? ` (prev ${prevParity})` : ''}; ${topWebOnly.length} web-only find(s) queued for review.`,
+        evidence,
+      }
+    },
+  },
+  {
     id: 'http.health.mission',
     label: 'GET /api/health/mission',
     category: SAM_CATEGORIES.PRODUCTION_CONFIG,

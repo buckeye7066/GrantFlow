@@ -85,6 +85,21 @@ async function defaultLoadCoverageGaps(db, { now = null } = {}) {
   }
 }
 
+/**
+ * Load the Google-bar web-parity benchmark for the digest (system_kv
+ * `web_parity_benchmark`, refreshed by the nightly maintenance sweep).
+ * Best-effort — the digest sends without the section when it has never run.
+ */
+async function defaultLoadWebParity(db) {
+  try {
+    const { readWebParityBenchmark } = await import('../webParityBenchmark.js')
+    const store = await readWebParityBenchmark(db).catch(() => null)
+    return store?.latest ? store : null
+  } catch {
+    return null
+  }
+}
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -209,13 +224,65 @@ export function summarizeCoverageGaps(gaps) {
 }
 
 /**
+ * Summarize the Google-bar web-parity benchmark for the owner: the latest
+ * parity per golden profile, the trend arrow vs the prior run, and the top
+ * web-only finds awaiting the owner's judgment (candidates in the
+ * web_parity_gap_queue — never auto-inserted). Pure; exported for tests.
+ *
+ * @param {{latest?:object|null, runs?:Array|null}} parity  the system_kv
+ *        `web_parity_benchmark` store
+ * @returns {{headline:string, perProfile:string[], webOnlyTop:string[]}|null}
+ */
+export function summarizeWebParity(parity) {
+  const latest = parity?.latest
+  if (!latest || !Array.isArray(latest.per_profile)) return null
+  const runs = Array.isArray(parity.runs) ? parity.runs : []
+  const prev = runs.length >= 2 ? runs[runs.length - 2] : null
+
+  const arrow = (nowVal, prevVal) => {
+    if (!Number.isFinite(nowVal) || !Number.isFinite(prevVal)) return ''
+    const d = Math.round((nowVal - prevVal) * 10) / 10
+    if (d > 0) return ` ▲ +${d} vs prior`
+    if (d < 0) return ` ▼ ${d} vs prior`
+    return ' → unchanged vs prior'
+  }
+
+  const fleet = Number(latest.fleet_parity)
+  const headline = Number.isFinite(fleet)
+    ? `Fleet parity ${fleet}/100 vs a plain web-search session${arrow(fleet, Number(prev?.fleet_parity))}.`
+    : 'Benchmark ran but no golden profile could be scored.'
+
+  const prevByProfile = new Map(
+    (Array.isArray(prev?.per_profile) ? prev.per_profile : []).map((p) => [p.profile_id, Number(p.parity)]),
+  )
+  const perProfile = latest.per_profile.map((p) => {
+    const name = p.label || p.profile_id
+    if (!Number.isFinite(Number(p.parity))) return `${name}: not scored (${p.error || 'error'})`
+    return (
+      `${name}: parity ${p.parity}/100${arrow(Number(p.parity), prevByProfile.get(p.profile_id))}` +
+      ` — ${p.overlap_count ?? 0} shared, ${p.web_only_count ?? 0} web-only, ${p.grantflow_only ?? 0} GrantFlow-only` +
+      (p.web_outage_suspected ? ' (0 web results — provider outage suspected)' : '')
+    )
+  })
+
+  const webOnlyTop = latest.per_profile
+    .flatMap((p) => (Array.isArray(p.web_only_top) ? p.web_only_top.map((w) => ({ ...w, profile: p.label || p.profile_id })) : []))
+    .slice(0, 3)
+    .map((w) => `"${w.title || w.url}" (${w.domain || 'unknown site'}) — found for ${w.profile}${w.need ? `, need: ${w.need}` : ''}`)
+
+  return { headline, perProfile, webOnlyTop }
+}
+
+/**
  * Build the owner email from a Sam run. Exported for tests.
  * `autoFixed` is an optional count of issues handled by the autofix Action.
  * `amy` (optional) adds the Amy-flywheel section (see summarizeAmyFlywheel).
  * `gaps` (optional) adds the "Coverage gaps & what changed overnight" section
  * (see summarizeCoverageGaps).
+ * `parity` (optional) adds the "Google-bar benchmark" section
+ * (see summarizeWebParity).
  */
-export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -316,6 +383,20 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     if (gapSummary.needsOwner.length) {
       t.push('Blocked or failed (needs you):')
       gapSummary.needsOwner.forEach((n) => t.push(`  • ${n}`))
+    }
+  }
+  const paritySummary = summarizeWebParity(parity)
+  if (paritySummary) {
+    t.push('')
+    t.push('GOOGLE-BAR BENCHMARK (GrantFlow vs a web-search session)')
+    t.push('========================================================')
+    t.push(paritySummary.headline)
+    paritySummary.perProfile.forEach((p) => t.push(`  • ${p}`))
+    if (paritySummary.webOnlyTop.length) {
+      t.push('Top web-only finds awaiting your judgment (candidate queue — nothing auto-added):')
+      paritySummary.webOnlyTop.forEach((w) => t.push(`  • ${w}`))
+    } else {
+      t.push('No real web-only finds — GrantFlow covered everything the web session produced.')
     }
   }
   t.push('')
@@ -429,6 +510,21 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         ${needsOwnerHtml}
       </div>`
       })()}
+      ${(() => {
+        const ps = summarizeWebParity(parity)
+        if (!ps) return ''
+        const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+        const webOnlyHtml = ps.webOnlyTop.length
+          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds awaiting your judgment (candidate queue — nothing auto-added):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
+          : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
+        return `
+      <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Google-bar benchmark</h3>
+      <div style="font-size:13px;">
+        <div style="font-weight:600;color:#334155;">${esc(ps.headline)}</div>
+        ${list(ps.perProfile)}
+        ${webOnlyHtml}
+      </div>`
+      })()}
 
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
@@ -451,6 +547,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
  * @param {Function} [opts.loadLatest] injectable db->run (defaults to samAuditStore.latestRun)
  * @param {Function} [opts.loadGaps] injectable db->{scoreboard,events} (defaults to
  *        the gap scoreboard + 24h amy/sam/anya activity loader)
+ * @param {Function} [opts.loadParity] injectable db->web_parity_benchmark store
+ *        (defaults to the system_kv reader; section omitted when never run)
  * @param {Date} [opts.now]
  * @returns {Promise<{ran:boolean, sent:boolean, reason?:string, run_id?:string|null, to?:string, stats?:object}>}
  */
@@ -461,6 +559,7 @@ export async function runAnyaDailyOwnerReport(db, {
   loadLatest = defaultLatestRun,
   loadAmy = defaultLoadAmy,
   loadGaps = defaultLoadCoverageGaps,
+  loadParity = defaultLoadWebParity,
   now = null,
 } = {}) {
   try {
@@ -474,7 +573,8 @@ export async function runAnyaDailyOwnerReport(db, {
 
     const amy = await loadAmy(db).catch(() => null)
     const gaps = await loadGaps(db, { now }).catch(() => null)
-    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps })
+    const parity = await loadParity(db).catch(() => null)
+    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps, parity })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {
