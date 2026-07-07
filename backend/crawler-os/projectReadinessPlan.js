@@ -143,10 +143,18 @@ function detectArchetype(profile, thesis, sections, blob) {
   // and the "Student funding and portal action plan".
   const NON_STUDENT_PERSON_TYPES = ['individual', 'family', 'senior', 'veteran', 'disabled_adult', 'medical_need', 'individual_need'];
   const isExplicitNonStudentPerson = NON_STUDENT_PERSON_TYPES.includes(primary);
+  // Same class of bug for ORGANIZATIONS: Focus Forward Ministries (primary_type
+  // 'organization', which profileIntelligence maps to the 'nonprofit' applicant
+  // bucket) got the student plan because it had an education-shaped section.
+  // Any profile whose applicant_types resolve to an org bucket must never be
+  // inferred as a student from section presence alone — mirrors ORG_APPLICANT_TYPES
+  // in crawler-os/profileIntelligence.js.
+  const ORG_LIKE_APPLICANT_TYPES = ['nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'business', 'farm', 'government', 'tribal'];
+  const isOrgLikeProfile = (thesis.applicant_types ?? []).some((t) => ORG_LIKE_APPLICANT_TYPES.includes(t));
   const isStudent =
     thesis.is_student ||
     primary.includes('student') ||
-    (!isExplicitNonStudentPerson && (hasValue(sections.education) || hasValue(sections.university_applications)));
+    (!isExplicitNonStudentPerson && !isOrgLikeProfile && (hasValue(sections.education) || hasValue(sections.university_applications)));
   const isFoodTruck = /\bfood truck|mobile food|food trailer\b/.test(blob);
   const isStartup = thesis.needs?.includes('startup') || /\b(startup|start a business|starting a business|entrepreneur|launch)\b/.test(`${blob} ${needText}`);
   const applicantHas = (types) => types.some((type) => thesis.applicant_types?.includes(type));
