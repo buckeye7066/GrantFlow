@@ -1,17 +1,23 @@
 import React, { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/api/client';
 import { listProfiles } from '@/api/profiles';
+import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   Radar,
   AlertTriangle,
   CheckCircle2,
+  Clock,
+  DollarSign,
+  ExternalLink,
   HelpCircle,
   ListChecks,
   Loader2,
   ShieldCheck,
+  Sparkles,
+  Target,
   XCircle,
   ChevronDown,
   ChevronRight,
@@ -25,6 +31,12 @@ import {
  *   2. WHAT DID WE MISS   — concrete gap statements per lane / profile fact
  *   3. WHY DID EACH MATCH SURVIVE — per-match evidence from match_explain
  *   4. WHAT SHOULD THE USER ANSWER NEXT — prioritized missing fields/questions
+ *
+ * Plus two owner-directed card sections, both fully clickable:
+ *   - "Almost qualifies for" — the `near` slice of GET /api/ai/threshold-report
+ *     (thresholdAnalyzer.js) with the exact gap and what closes it.
+ *   - "Similar funding sources you might qualify for" — merged, deduped
+ *     GET /api/opportunities/:id/similar for the profile's top scored matches.
  *
  * Data: GET /api/profiles/:id/coverage-evidence (coverageEvidenceService.js).
  */
@@ -100,9 +112,11 @@ export default function CoverageEvidence() {
         <>
           <ProfileSummary data={data} />
           <LanesPanel lanes={data.lanes || []} />
-          <GapsPanel gaps={data.gaps || []} />
+          <GapsPanel gaps={data.gaps || []} profileId={profileId} />
           <MatchesPanel matches={data.matches || []} />
-          <AnswerNextPanel items={data.answer_next || []} />
+          <AlmostQualifiesPanel profileId={profileId} />
+          <SimilarSourcesPanel matches={data.matches || []} />
+          <AnswerNextPanel items={data.answer_next || []} profileId={profileId} />
         </>
       ) : null}
     </div>
@@ -231,7 +245,7 @@ function ExcludedSourcesDisclosure({ sources }) {
 }
 
 // ── 2. WHAT DID WE MISS ──────────────────────────────────────────────────────
-function GapsPanel({ gaps }) {
+function GapsPanel({ gaps, profileId }) {
   return (
     <Card>
       <CardHeader>
@@ -249,18 +263,41 @@ function GapsPanel({ gaps }) {
             <CheckCircle2 className="h-4 w-4 text-emerald-500" /> No coverage gaps detected for this profile.
           </div>
         ) : (
-          gaps.map((g, i) => (
-            <div key={`${g.lane || 'general'}-${i}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                {g.lane && <Chip tone="red">{g.lane.replace(/_/g, ' ')}</Chip>}
-                <span className="text-sm font-medium text-slate-800">{g.statement}</span>
+          gaps.map((g, i) => {
+            // A gap whose fix lives on the PROFILE (add a need/fact) links to
+            // the profile editor; registry-level gaps (new source adapter) are
+            // owner work with no in-app target, so they stay plain.
+            const action = String(g.suggested_action || '');
+            const profileActionable = /profile/i.test(action) && !/sourceRegistry/i.test(action);
+            const body = (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  {g.lane && <Chip tone="red">{g.lane.replace(/_/g, ' ')}</Chip>}
+                  <span className="text-sm font-medium text-slate-800">{g.statement}</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+                  {g.profile_fact && <span className="mr-3 font-mono">{g.profile_fact}</span>}
+                  {g.suggested_action}
+                  {profileActionable && (
+                    <span className="ml-2 font-medium text-indigo-600">Open profile →</span>
+                  )}
+                </div>
+              </>
+            );
+            return profileActionable && profileId ? (
+              <Link
+                key={`${g.lane || 'general'}-${i}`}
+                to={createPageUrl('ProfileDetail', { id: profileId })}
+                className="block rounded-md border border-amber-200 bg-amber-50 px-3 py-2 transition hover:border-indigo-300 hover:bg-indigo-50"
+              >
+                {body}
+              </Link>
+            ) : (
+              <div key={`${g.lane || 'general'}-${i}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                {body}
               </div>
-              <div className="mt-1 text-xs text-slate-600">
-                {g.profile_fact && <span className="mr-3 font-mono">{g.profile_fact}</span>}
-                {g.suggested_action}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </CardContent>
     </Card>
@@ -299,17 +336,27 @@ function MatchRow({ match }) {
   const scoreTone = Number(match.score) >= 50 ? 'emerald' : Number(match.score) >= 25 ? 'amber' : 'slate';
   return (
     <div className="rounded-md border border-slate-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        {open ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{match.title}</span>
+      <div className="flex w-full items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-label={open ? 'Hide match evidence' : 'Show match evidence'}
+          className="shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+        >
+          {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+        <Link
+          to={createPageUrl('GrantDetail', { id: match.id })}
+          className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800 hover:text-indigo-700 hover:underline"
+          title="Open this grant"
+        >
+          {match.title}
+        </Link>
         {match.sponsor && <span className="hidden truncate text-xs text-slate-500 md:inline">{match.sponsor}</span>}
         <Chip tone={scoreTone}>{match.score === null || match.score === undefined ? 'not scored' : `score ${Math.round(match.score)}`}</Chip>
         {match.decision && <Chip>{String(match.decision).toLowerCase()}</Chip>}
-      </button>
+      </div>
       {open && (
         <div className="grid grid-cols-1 gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-600 md:grid-cols-2 xl:grid-cols-3">
           <EvidenceCell label="Data points">
@@ -392,8 +439,188 @@ function EvidenceCell({ label, children }) {
   );
 }
 
+// ── ALMOST QUALIFIES FOR (owner directive) ───────────────────────────────────
+// The `near` slice of the canonical threshold report (thresholdAnalyzer.js via
+// GET /api/ai/threshold-report): sources where one explicit number (ACT / SAT /
+// GPA / income / age) stands between the profile and eligibility. The analysis
+// is NOT re-implemented here — cards render the report verbatim.
+function AlmostQualifiesPanel({ profileId }) {
+  const { data } = useQuery({
+    queryKey: ['threshold-report', profileId],
+    queryFn: () => apiFetch(`/api/ai/threshold-report?profile_id=${encodeURIComponent(profileId)}`),
+    enabled: Boolean(profileId),
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  const near = Array.isArray(data?.near) ? data.near : [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Target className="h-4 w-4 text-amber-600" /> Almost qualifies for
+        </CardTitle>
+        <CardDescription>
+          Sources where one number stands between this profile and eligibility — with the exact gap
+          and what closes it. Update the profile fact and this list re-checks itself.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {near.length === 0 ? (
+          <div className="flex items-center gap-2 py-2 text-sm text-slate-500">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            No near-miss thresholds right now
+            {Number(data?.qualified?.length) > 0
+              ? ` — and this profile already clears the stated thresholds on ${data.qualified.length} source${data.qualified.length === 1 ? '' : 's'}.`
+              : '.'}
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {near.map((item) => {
+              const gaps = (item.requirements || []).filter((r) => r.status === 'near');
+              const inner = (
+                <>
+                  <p className="mb-1 text-sm font-medium text-slate-900 line-clamp-2">{item.title}</p>
+                  {gaps.map((r, i) => (
+                    <div key={`${r.kind}-${i}`} className="mt-1">
+                      <Chip tone="amber">needs {r.label} {r.need}, has {r.have}</Chip>
+                      {r.advice && <p className="mt-1 text-xs text-slate-600 line-clamp-3">{r.advice}</p>}
+                    </div>
+                  ))}
+                </>
+              );
+              const cardClass =
+                'block rounded-lg border border-amber-200 bg-amber-50/60 p-4 transition hover:border-amber-400 hover:shadow-sm';
+              if (item.grant_id) {
+                return (
+                  <Link key={item.grant_id} to={createPageUrl('GrantDetail', { id: item.grant_id })} className={cardClass}>
+                    {inner}
+                  </Link>
+                );
+              }
+              if (item.link) {
+                return (
+                  <a key={item.title} href={item.link} target="_blank" rel="noreferrer" className={cardClass}>
+                    {inner}
+                    <span className="mt-1 inline-flex items-center gap-1 text-xs text-indigo-600">
+                      <ExternalLink className="h-3 w-3" /> Open source page
+                    </span>
+                  </a>
+                );
+              }
+              return (
+                <div key={item.title} className={cardClass}>
+                  {inner}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── SIMILAR FUNDING SOURCES (owner directive) ────────────────────────────────
+// For the profile's top 3 scored matches, reuse GET /api/opportunities/:id/similar
+// and render a merged, deduped card row — excluding anything already shown in
+// the matches panel. Card layout mirrors GrantDetail's SimilarGrants sidebar.
+function SimilarSourcesPanel({ matches }) {
+  const topIds = useMemo(
+    () => (matches || [])
+      .filter((m) => m.id && /^[A-Za-z0-9_-]+$/.test(String(m.id)))
+      .slice(0, 3)
+      .map((m) => String(m.id)),
+    [matches],
+  );
+  const knownIds = useMemo(() => new Set((matches || []).map((m) => String(m.id))), [matches]);
+
+  const { data: similar = [] } = useQuery({
+    queryKey: ['coverage-similar', topIds],
+    queryFn: async () => {
+      const results = await Promise.all(
+        topIds.map((id) =>
+          apiFetch(`/api/opportunities/${encodeURIComponent(id)}/similar`)
+            .then((r) => (Array.isArray(r?.similar) ? r.similar : []))
+            .catch(() => []),
+        ),
+      );
+      const seen = new Set();
+      const merged = [];
+      for (const opp of results.flat()) {
+        const id = String(opp?.id || '');
+        if (!id || seen.has(id) || knownIds.has(id)) continue;
+        seen.add(id);
+        merged.push(opp);
+      }
+      return merged.slice(0, 9);
+    },
+    enabled: topIds.length > 0,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
+  if (topIds.length === 0 || similar.length === 0) return null;
+
+  const fmtAmount = (min, max) => {
+    const f = (n) => (n >= 1000000 ? `$${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `$${(n / 1000).toFixed(0)}K` : `$${n}`);
+    if (max && min) return `${f(min)}–${f(max)}`;
+    if (max) return `Up to ${f(max)}`;
+    if (min) return `From ${f(min)}`;
+    return null;
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="h-4 w-4 text-blue-500" /> Similar funding sources you might qualify for
+        </CardTitle>
+        <CardDescription>
+          Related to this profile&apos;s top matches by sponsor, category, and keywords — not yet in
+          the matches list above.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {similar.map((opp) => {
+            const hasValidDeadline = opp.deadline && !Number.isNaN(Date.parse(opp.deadline));
+            const amount = fmtAmount(opp.amount_min, opp.amount_max);
+            return (
+              <Link
+                key={opp.id}
+                to={createPageUrl('GrantDetail', { id: opp.id })}
+                className="block rounded-lg border border-slate-200 bg-white p-4 transition-all hover:border-blue-300 hover:shadow-sm"
+              >
+                <p className="mb-1 text-sm font-medium text-slate-900 line-clamp-2">{opp.title}</p>
+                {opp.sponsor && <p className="mb-2 text-xs text-slate-500">{opp.sponsor}</p>}
+                <div className="flex flex-wrap gap-1.5">
+                  {amount && (
+                    <Chip>
+                      <DollarSign className="mr-0.5 inline h-3 w-3" />
+                      {amount}
+                    </Chip>
+                  )}
+                  {hasValidDeadline && (
+                    <Chip>
+                      <Clock className="mr-0.5 inline h-3 w-3" />
+                      {new Date(opp.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </Chip>
+                  )}
+                  {opp.link_status === 'broken' && <Chip tone="red">Link issue</Chip>}
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── 4. WHAT SHOULD THE USER ANSWER NEXT ──────────────────────────────────────
-function AnswerNextPanel({ items }) {
+function AnswerNextPanel({ items, profileId }) {
   return (
     <Card>
       <CardHeader>
@@ -411,22 +638,44 @@ function AnswerNextPanel({ items }) {
             <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Nothing outstanding — the profile has every high-value fact.
           </div>
         ) : (
-          items.map((item, i) => (
-            <div key={item.field} className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-semibold text-indigo-700">
-                {i + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium text-slate-800">{item.question}</span>
-                  {item.blocked_matches > 0 && (
-                    <Chip tone="amber">unblocks {item.blocked_matches} match{item.blocked_matches === 1 ? '' : 'es'}</Chip>
-                  )}
+          items.map((item, i) => {
+            const target = profileId
+              ? createPageUrl('ProfileDetail', {
+                  id: profileId,
+                  ...(item.section_key ? { section: item.section_key } : {}),
+                })
+              : null;
+            const body = (
+              <>
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-semibold text-indigo-700">
+                  {i + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-slate-800">{item.question}</span>
+                    {item.blocked_matches > 0 && (
+                      <Chip tone="amber">unblocks {item.blocked_matches} match{item.blocked_matches === 1 ? '' : 'es'}</Chip>
+                    )}
+                    <span className="text-xs font-medium text-indigo-600">Answer in profile →</span>
+                  </div>
+                  {item.why && <p className="mt-0.5 text-xs text-slate-500">{item.why}</p>}
                 </div>
-                {item.why && <p className="mt-0.5 text-xs text-slate-500">{item.why}</p>}
+              </>
+            );
+            return target ? (
+              <Link
+                key={item.field}
+                to={target}
+                className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 transition hover:border-indigo-300 hover:bg-indigo-50"
+              >
+                {body}
+              </Link>
+            ) : (
+              <div key={item.field} className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                {body}
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </CardContent>
     </Card>

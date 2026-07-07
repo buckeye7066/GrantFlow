@@ -265,14 +265,22 @@ export async function buildThresholdReport(db, profileId) {
     const reqs = extractThresholds(requirementText(g, opp))
     if (reqs.length === 0) { noExplicit += 1; continue }
 
-    const evaluated = reqs.map((r) => ({
-      kind: r.kind,
-      label: KIND_LABEL[r.kind] || r.kind,
-      need: r.value,
-      have: facts[FACT_FOR_KIND[r.kind]],
-      raw: r.raw,
-      status: classifyRequirement(r, facts),
-    }))
+    const evaluated = reqs.map((r) => {
+      const have = facts[FACT_FOR_KIND[r.kind]]
+      const status = classifyRequirement(r, facts)
+      return {
+        kind: r.kind,
+        label: KIND_LABEL[r.kind] || r.kind,
+        need: r.value,
+        have,
+        raw: r.raw,
+        status,
+        // "What closes the gap" — the canonical crossing advice, included on
+        // near misses so report consumers (the Coverage & Evidence dashboard's
+        // "Almost qualifies for" cards) never re-implement the analysis.
+        ...(status === 'near' ? { advice: crossingAdvice(r, have) } : {}),
+      }
+    })
 
     const item = {
       grant_id: g.id,
