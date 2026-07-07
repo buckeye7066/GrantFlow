@@ -204,6 +204,30 @@ test('individual with education history is NOT classified as a student plan', ()
   assert.doesNotMatch(rendered, /Student funding and portal action plan/);
 });
 
+test('organization with education-shaped section data is NOT classified as a student plan', () => {
+  // Regression: Focus Forward Ministries (primary_type 'organization', which
+  // profileIntelligence.js maps to the 'nonprofit' applicant bucket) got the
+  // "Student funding and portal action plan" (FAFSA / college / work-study
+  // questions) merely because it had an education/university_applications
+  // section with data. Any org-bucketed profile must never be inferred as a
+  // student from section presence alone, the same way explicit non-student
+  // person types already are.
+  const plan = buildProjectReadinessPlan({
+    id: 'focus-forward-ministries',
+    profile_type: 'organization',
+    display_name: 'Focus Forward Ministries',
+    description: 'Faith-based ministry seeking program funding.',
+    sections: [
+      { section_key: 'education', data: { school_name: 'Community partner university' } },
+      { section_key: 'university_applications', data: { applications: [{ school: 'Community partner university' }] } },
+    ],
+  });
+
+  assert.notEqual(plan.plan_id, 'student_portal_plan');
+  const rendered = renderProjectPlanDocument(plan);
+  assert.doesNotMatch(rendered, /Student funding and portal action plan/);
+});
+
 test('explicit student type still gets the student plan', () => {
   const plan = buildProjectReadinessPlan({
     id: 'student-still-works',

@@ -63,6 +63,11 @@ Desktop.ini
 # (installed via `impeccable skills install`). Negation must follow `.cursor/*`.
 !.cursor/skills/
 !.cursor/skills/**
+
+# Impeccable runtime/live-session state (machine-local, not tooling)
+.impeccable/
+.impeccable-live.json
+.impeccable-live/
 *.suo
 *.user
 

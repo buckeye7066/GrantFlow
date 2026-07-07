@@ -1288,6 +1288,135 @@ export async function enforceProfileIncomeReconciliation(db) {
 }
 
 /**
+ * INVARIANT: INDIVIDUAL/ORG SECTION CONFLICT (the Kimberly Botts class, found
+ * 2026-07-06). A bad Base44/AI-enrichment import can hallucinate an
+ * organization identity (organization_details.organization_type: "nonprofit",
+ * a small_business_details.business_name) onto a person-type profile
+ * (individual/family/student/veteran). resolveEffectiveProfileType()
+ * (profileHelpers.js) treats organization_details.organization_type as MORE
+ * specific than a generic 'individual'/'family' primary_type and promotes the
+ * whole profile — and its buildThesis() applicant_types — to an org, which
+ * then surfaces institutional federal RFPs instead of individual-benefit
+ * programs and can hard-reject genuinely eligible individual opportunities
+ * via the applicant-type gate.
+ *
+ * A later correction pass sometimes fixes the free-text `occupation.notes`
+ * ("Not a business owner, not a nonprofit employee...") and the STRUCTURED
+ * `occupation.nonprofit_employee` / `occupation.small_business_owner` flags,
+ * but never clears the org_details/small_business_details fields those flags
+ * directly contradict. That structured contradiction (occupation says
+ * nonprofit_employee=false AND small_business_owner=false, while
+ * organization_details still declares an organization_type) is the ONLY
+ * trigger here — deliberately conservative, text-free, and structured-signal-
+ * only, matching enforceProfileIncomeReconciliation's posture. A person-type
+ * profile that genuinely ALSO runs a nonprofit/business (no such flags, or
+ * flags left true/absent) is never touched — ambiguous cases are left alone,
+ * same as the income conflict's "no need signal" case.
+ */
+export async function enforceIndividualOrgSectionConflict(db) {
+  return runInvariant('individual_org_section_conflict', async () => {
+    const profileCols = await listProfileColumns(db)
+    const typeCols = ['applicant_type', 'primary_type'].filter((c) => profileCols.has(c))
+    if (typeCols.length === 0) return { scanned: 0, repaired: 0, flagged: 0 }
+    const selectCols = ['id', ...typeCols].join(', ')
+
+    let profileRows
+    try {
+      profileRows = await db.prepare(`SELECT ${selectCols} FROM profiles`).all()
+    } catch (err) {
+      const msg = String(err?.message || '')
+      if (/no such (table|column)|does not exist|relation .* does not exist/i.test(msg)) {
+        return { scanned: 0, repaired: 0, flagged: 0 }
+      }
+      throw err
+    }
+
+    let sectionRows = []
+    try {
+      sectionRows = await db
+        .prepare(
+          `SELECT profile_id, section_key, data FROM profile_sections
+           WHERE section_key IN (?, ?, ?)`,
+        )
+        .all('organization_details', 'occupation', 'small_business_details')
+    } catch {
+      return { scanned: 0, repaired: 0, flagged: 0 }
+    }
+
+    const byProfile = new Map()
+    const parseData = (raw) => {
+      try {
+        return typeof raw === 'object' && raw ? raw : JSON.parse(raw || '{}')
+      } catch {
+        return null
+      }
+    }
+    for (const row of sectionRows) {
+      const data = parseData(row.data)
+      if (!data || typeof data !== 'object' || Array.isArray(data)) continue
+      if (!byProfile.has(row.profile_id)) byProfile.set(row.profile_id, {})
+      byProfile.get(row.profile_id)[row.section_key] = data
+    }
+
+    let scanned = 0
+    let repaired = 0
+    let flagged = 0
+    for (const profile of profileRows) {
+      const rawType = profile.applicant_type || profile.primary_type
+      if (!isIndividualProfileType(rawType)) continue // ORGS ARE OFF-LIMITS
+
+      const sections = byProfile.get(profile.id)
+      if (!sections) continue
+      const orgDetails = sections.organization_details
+      if (!orgDetails || typeof orgDetails !== 'object') continue
+      const orgType = String(orgDetails.organization_type || '').trim()
+      if (!orgType) continue
+      scanned += 1
+
+      const occupation = sections.occupation
+      const contradicts =
+        occupation && typeof occupation === 'object' &&
+        occupation.nonprofit_employee === false &&
+        occupation.small_business_owner === false
+      if (!contradicts) {
+        // Genuinely ambiguous: no explicit structured denial. Do NOT guess —
+        // this person-type profile may legitimately also run the org.
+        flagged += 1
+        log.warn('ambiguous individual/org section conflict left for human review (no structured denial)', {
+          profileId: profile.id,
+          orgType,
+        })
+        continue
+      }
+
+      const nextOrgDetails = { ...orgDetails, organization_type: null }
+      await db
+        .prepare('UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?')
+        .run(JSON.stringify(nextOrgDetails), profile.id, 'organization_details')
+
+      const smallBiz = sections.small_business_details
+      if (smallBiz && typeof smallBiz === 'object' && smallBiz.business_name) {
+        const nextSmallBiz = { ...smallBiz, business_name: null }
+        await db
+          .prepare('UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?')
+          .run(JSON.stringify(nextSmallBiz), profile.id, 'small_business_details')
+      }
+
+      repaired += 1
+      log.info('cleared contradicted org-section fields on individual-type profile', {
+        profileId: profile.id,
+        clearedOrgType: orgType,
+      })
+    }
+
+    if (repaired > 0 || flagged > 0) {
+      log.info('[individual-org-conflict] summary', { scanned, repaired, flagged })
+    }
+    return { scanned, repaired, flagged }
+  })
+}
+
+/**
  * INVARIANT: PROFILE_ID INTEGRITY (canonical_rules.md — profile-scoped pipeline;
  * every grant/task binds to a REAL profile, by its canonical id).
  *
@@ -3417,6 +3546,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // profile down to the applicant's own (need-consistent / lower) figure, so
   // need-based matching can't be poisoned by a captured parent/household income.
   steps.push(await enforceProfileIncomeReconciliation(db))
+  // Profile-level data repair (not pipeline): clear a contradicted org identity
+  // (organization_details.organization_type / small_business_details.business_name)
+  // hallucinated onto a person-type profile whose OWN occupation flags already
+  // deny it (nonprofit_employee=false, small_business_owner=false) — the class
+  // that promoted a disabled individual to an org applicant type and surfaced
+  // institutional RFPs instead of individual-benefit programs.
+  steps.push(await enforceIndividualOrgSectionConflict(db))
   // Hamilton lifecycle self-heal: re-queue blocked tasks whose missing-profile-
   // field preflight blocker no longer reproduces, and collapse already-stacked
   // duplicate OPEN hard-stops (keep oldest, resolve extras as 'duplicate').
@@ -3509,6 +3645,7 @@ export const __testables = {
   INDIVIDUAL_AMOUNT_CEILING_DEFAULT,
   enforceProfileScopedPipeline,
   enforceProfileIncomeReconciliation,
+  enforceIndividualOrgSectionConflict,
   enforceIndividualAmountCeiling,
   enforceStudentAidEligibility,
   enforceProfileEligibility,

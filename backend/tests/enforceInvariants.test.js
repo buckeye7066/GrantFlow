@@ -41,6 +41,7 @@ import {
   enforceProfileScopedPipeline,
   enforceProfileDisplayNameNotDoubled,
   enforceProfileIncomeReconciliation,
+  enforceIndividualOrgSectionConflict,
   enforceProfileIdIntegrity,
   enforceNoSearchEngineApplicationTargets,
   enforceApplicationUrlRescue,
@@ -868,6 +869,97 @@ describe('enforceProfileIncomeReconciliation', () => {
   })
 })
 
+describe('enforceIndividualOrgSectionConflict', () => {
+  it('clears organization_type + business_name — the Kimberly Botts class (structured self-denial)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'individual' })
+    setSection(db, 'p1', 'organization_details', {
+      organization_type: 'nonprofit',
+      mission: 'To support underrepresented founders...',
+      is_minority_serving: true,
+    })
+    setSection(db, 'p1', 'small_business_details', { business_name: 'Kimberly Botts Nonprofit' })
+    setSection(db, 'p1', 'occupation', {
+      nonprofit_employee: false,
+      small_business_owner: false,
+      notes: 'Not a business owner, not a nonprofit employee. Disabled and unable to work.',
+    })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(1)
+    expect(res.flagged).toBe(0)
+    expect(getSection(db, 'p1', 'organization_details').organization_type).toBe(null)
+    expect(getSection(db, 'p1', 'small_business_details').business_name).toBe(null)
+    // Untouched fields survive.
+    expect(getSection(db, 'p1', 'organization_details').is_minority_serving).toBe(true)
+  })
+
+  it('NEVER touches an actual organization/business profile', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'org1', primaryType: 'nonprofit' })
+    setSection(db, 'org1', 'organization_details', { organization_type: 'nonprofit' })
+    setSection(db, 'org1', 'occupation', { nonprofit_employee: false, small_business_owner: false })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(0)
+    expect(getSection(db, 'org1', 'organization_details').organization_type).toBe('nonprofit')
+  })
+
+  it('FLAGS (does not change) an individual with an org section but no structured denial — genuinely may run both', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'individual' })
+    setSection(db, 'p1', 'organization_details', { organization_type: 'nonprofit' })
+    // No occupation section at all — nothing contradicts the org claim.
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(0)
+    expect(res.flagged).toBe(1)
+    expect(getSection(db, 'p1', 'organization_details').organization_type).toBe('nonprofit')
+  })
+
+  it('FLAGS when occupation flags are present but do not both explicitly deny', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'family' })
+    setSection(db, 'p1', 'organization_details', { organization_type: 'nonprofit' })
+    setSection(db, 'p1', 'occupation', { nonprofit_employee: true, small_business_owner: false })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(0)
+    expect(res.flagged).toBe(1)
+  })
+
+  it('is a no-op when organization_details has no organization_type', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'individual' })
+    setSection(db, 'p1', 'organization_details', { is_minority_serving: true })
+    setSection(db, 'p1', 'occupation', { nonprofit_employee: false, small_business_owner: false })
+
+    const res = await enforceIndividualOrgSectionConflict(db)
+    expect(res.repaired).toBe(0)
+    expect(res.scanned).toBe(0)
+  })
+
+  it('is idempotent (a second run repairs nothing)', async () => {
+    const db = makeProfileDb()
+    insertTypedProfile(db, { id: 'p1', primaryType: 'individual' })
+    setSection(db, 'p1', 'organization_details', { organization_type: 'nonprofit' })
+    setSection(db, 'p1', 'occupation', { nonprofit_employee: false, small_business_owner: false })
+
+    const first = await enforceIndividualOrgSectionConflict(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforceIndividualOrgSectionConflict(db)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('degrades silently when profile_sections is absent (no crash at boot)', async () => {
+    const raw = new Database(':memory:')
+    raw.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, primary_type TEXT, applicant_type TEXT);')
+    raw.prepare('INSERT INTO profiles (id, primary_type) VALUES (?, ?)').run('p1', 'individual')
+    const res = await enforceIndividualOrgSectionConflict(raw)
+    expect(res.ok).toBe(true)
+    expect(res.repaired).toBe(0)
+  })
+})
+
 describe('enforceInvariants — runner', () => {
   beforeEach(() => {
     delete process.env.ENFORCE_RELEVANCE_FLOOR
@@ -884,7 +976,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(22)
+    expect(summary.ran).toBe(23)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -903,6 +995,7 @@ describe('enforceInvariants — runner', () => {
       'funder_backfill',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
+      'individual_org_section_conflict',
       'hamilton_task_self_heal',
       'no_search_engine_application_targets',
       'application_url_rescue',
