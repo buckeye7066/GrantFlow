@@ -696,6 +696,87 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // GOLDEN-OUTCOME SENTINEL (owner directive 2026-07-07: "how do mistakes
+    // like this keep happening" — the 12-lost-lanes class). Owner-verified
+    // expectations for REAL profiles live in system_kv
+    // 'golden_outcome_expectations' as
+    //   [{ profile_id, label, require_sources: ['tn_ecf_choices', ...] }]
+    // and this check asserts each golden profile still has at least one
+    // stored match from every required source. A regression that silently
+    // drops a lane for a profile the owner has personally verified (the
+    // Gilbert/Kim ECF class) becomes a red finding in Anya's morning email
+    // instead of a discovery the owner has to make by hand. Expectations are
+    // DATA, not code: verify a fix live, then append the expectation.
+    id: 'coverage.goldenOutcomes',
+    label: 'Golden-profile outcome sentinel',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Asserts every owner-verified golden profile (system_kv golden_outcome_expectations) still holds ≥1 stored match from each required source. Catches silent lane/coverage regressions on real profiles. Fails open when no expectations are recorded yet or system_kv is unavailable.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'golden outcomes: db unavailable' }
+      let row
+      try {
+        row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('golden_outcome_expectations')
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!row?.value) {
+        return { ok: true, skipped: true, summary: 'No golden outcome expectations recorded yet (system_kv golden_outcome_expectations absent).' }
+      }
+      let expectations = null
+      try { expectations = JSON.parse(row.value) } catch { expectations = null }
+      if (!Array.isArray(expectations) || expectations.length === 0) {
+        return { ok: false, summary: 'golden_outcome_expectations exists but is not a non-empty JSON array.', evidence: { raw: String(row.value).slice(0, 200) } }
+      }
+      const failures = []
+      let assertions = 0
+      for (const exp of expectations) {
+        const profileId = String(exp?.profile_id || '')
+        const sources = Array.isArray(exp?.require_sources) ? exp.require_sources : []
+        if (!profileId || sources.length === 0) continue
+        let profile
+        try {
+          profile = await db.prepare(
+            `SELECT id FROM profiles WHERE id = ? AND deleted_at IS NULL AND (status IS NULL OR LOWER(status) NOT IN ('deleted','archived','merged','inactive'))`,
+          ).get(profileId)
+        } catch { profile = null }
+        if (!profile) {
+          failures.push({ profile: exp.label || profileId, missing: ['<profile not found/active>'] })
+          continue
+        }
+        const missing = []
+        for (const source of sources) {
+          assertions += 1
+          let hit = null
+          try {
+            hit = await db.prepare(
+              `SELECT m.id FROM profile_opportunity_matches m
+                 JOIN funding_opportunities o ON o.id = m.opportunity_id
+                WHERE m.profile_id = ? AND o.source = ? LIMIT 1`,
+            ).get(profileId, String(source))
+          } catch { hit = null }
+          if (!hit) missing.push(String(source))
+        }
+        if (missing.length > 0) failures.push({ profile: exp.label || profileId, missing })
+      }
+      if (failures.length > 0) {
+        return {
+          ok: false,
+          summary: `GOLDEN OUTCOME REGRESSION: ${failures.length} verified profile(s) lost required coverage — ${failures.map((f) => `${f.profile}: missing ${f.missing.join('/')}`).join('; ')}.`,
+          evidence: { failures, expectations: expectations.length },
+          recommended_fix: 'A lane/scoring/purge change removed owner-verified results. Check the named source lanes in the crawler plan for these profiles (Coverage & Evidence dashboard) and recent merges; re-run discovery for the affected profiles after fixing.',
+          confidence: 0.9,
+        }
+      }
+      return {
+        ok: true,
+        summary: `All golden outcomes hold: ${expectations.length} profile(s), ${assertions} source assertion(s) verified.`,
+        evidence: { profiles: expectations.length, assertions },
+      }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,
