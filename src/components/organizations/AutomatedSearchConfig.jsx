@@ -14,11 +14,19 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Loader2, Zap, CheckCircle, Info } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AUTO_ADD_SCORE,
+  MIN_SCORE_SLIDER_MAX,
+  MIN_SCORE_SLIDER_HELP,
+  minScoreBandLabel,
+  translateLegacyMinScore,
+} from '@/lib/matchDisplayThresholds';
 
-// Platform default display floor (backend DEFAULT_MIN_SCORE); shown when the
-// profile has no stored preference. The stored preference feeds run-smart's
-// explicit-min path server-side — it never changes the platform floor itself.
-const PLATFORM_DEFAULT_MIN_SCORE = 75;
+// Platform default display floor (backend DEFAULT_MIN_SCORE = the pipeline bar
+// on the data-point scale); shown when the profile has no stored preference.
+// The stored preference feeds run-smart's explicit-min path server-side — it
+// never changes the platform floor itself.
+const PLATFORM_DEFAULT_MIN_SCORE = AUTO_ADD_SCORE;
 
 /**
  * Per-profile discovery settings. The min-match-score slider persists to the
@@ -41,7 +49,10 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
   useEffect(() => {
     if (!open) { setRunResult(null); return; }
     const stored = prefs?.discovery?.min_match_score;
-    setMinScore(typeof stored === 'number' ? stored : PLATFORM_DEFAULT_MIN_SCORE);
+    // Old-scale stored preferences (>30, e.g. a stuck 85) are translated to
+    // the equivalent data-point band on read — the backend persists the
+    // translation, this keeps the dialog honest even against a stale response.
+    setMinScore(typeof stored === 'number' ? translateLegacyMinScore(stored) : PLATFORM_DEFAULT_MIN_SCORE);
   }, [prefs, open]);
 
   const saveMutation = useMutation({
@@ -105,22 +116,22 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
               <Info className="h-4 w-4 text-blue-600" />
               <AlertDescription className="text-blue-800 text-sm">
                 This preference is saved to the profile and applied automatically whenever a smart funding
-                search runs without its own threshold. The platform default is {PLATFORM_DEFAULT_MIN_SCORE}%.
+                search runs without its own threshold. The platform default is a score of {PLATFORM_DEFAULT_MIN_SCORE}.
               </AlertDescription>
             </Alert>
 
             <div className="space-y-3">
-              <Label>Minimum match score: {minScore}%</Label>
+              <Label>Minimum match score: Score &ge; {minScore} &middot; {minScoreBandLabel(minScore)}</Label>
               <Slider
                 value={[minScore]}
                 onValueChange={(values) => setMinScore(values[0])}
                 min={0}
-                max={100}
-                step={5}
+                max={MIN_SCORE_SLIDER_MAX}
+                step={1}
                 className="w-full"
               />
               <p className="text-xs text-slate-500">
-                Lower values return more (but weaker) matches; higher values return fewer, stronger ones.
+                {MIN_SCORE_SLIDER_HELP}
               </p>
             </div>
 

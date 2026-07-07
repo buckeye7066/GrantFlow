@@ -35,6 +35,7 @@ import NeedsDiscoveryPanel from "@/components/ai/NeedsDiscoveryPanel"
 const NOT_AVAILABLE = 'N/A'
 import { listProfiles, getProfile } from "@/api/profiles"
 import { searchSpecificNeed } from "@/api/crawlers"
+import { MODERATE_MATCH_SCORE, SCORE_FLOOR } from "@/lib/matchDisplayThresholds"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { useTierEntitlements } from "@/hooks/useTierEntitlements"
@@ -369,7 +370,7 @@ export default function ItemFunding() {
   // the "donation or gift programs" action flips the web-query variant. Both
   // re-run the SAME live endpoint (the old item_search/item_gift_search crawler
   // jobs were retired with the legacy crawlers and no longer exist server-side).
-  const [liveOptions, setLiveOptions] = useState({ minMatchScore: 15, variant: "funding" })
+  const [liveOptions, setLiveOptions] = useState({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
 
   const statesQuery = useQuery({
     queryKey: ["opportunity-states"],
@@ -547,7 +548,7 @@ export default function ItemFunding() {
       })
       return
     }
-    setLiveOptions({ minMatchScore: 15, variant: "funding" })
+    setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem(filters.item.trim())
   }
 
@@ -555,7 +556,7 @@ export default function ItemFunding() {
     const next = String(name || "").trim()
     if (!next) return
     setFilters((prev) => ({ ...prev, item: next }))
-    setLiveOptions({ minMatchScore: 15, variant: "funding" })
+    setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem(next)
   }
 
@@ -566,7 +567,7 @@ export default function ItemFunding() {
       includeNational: true,
       profileId: "all",
     })
-    setLiveOptions({ minMatchScore: 15, variant: "funding" })
+    setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
     setSubmittedItem("")
   }
 
@@ -616,7 +617,7 @@ export default function ItemFunding() {
   // pretending to queue a job that would never run.
   const handleRequestItemCrawler = () => {
     if (!canRunDeeperSearch("running a deeper sweep")) return
-    setLiveOptions((prev) => ({ ...prev, minMatchScore: 5 }))
+    setLiveOptions((prev) => ({ ...prev, minMatchScore: SCORE_FLOOR }))
     toast({
       title: "Deeper live search running",
       description: `Searching more sources for ${submittedItem} with a lower match floor.`,
@@ -799,7 +800,7 @@ export default function ItemFunding() {
           profileId={filters.profileId}
           onSearchItem={(searchText) => {
             setFilters((prev) => ({ ...prev, item: searchText }))
-            setLiveOptions({ minMatchScore: 15, variant: "funding" })
+            setLiveOptions({ minMatchScore: MODERATE_MATCH_SCORE, variant: "funding" })
             setSubmittedItem(searchText)
           }}
         />

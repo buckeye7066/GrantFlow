@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/api/client';
 import { listProfiles } from '@/api/profiles';
 import { createPageUrl } from '@/utils';
+import { scoreToMatchTier } from '@/lib/matchDisplayThresholds';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   Radar,
@@ -333,7 +334,9 @@ function MatchesPanel({ matches }) {
 function MatchRow({ match }) {
   const [open, setOpen] = useState(false);
   const ev = match.evidence || {};
-  const scoreTone = Number(match.score) >= 50 ? 'emerald' : Number(match.score) >= 25 ? 'amber' : 'slate';
+  // Tone bands come from the canonical scoreToMatchTier — never inline cutoffs.
+  const scoreTier = scoreToMatchTier(match.score);
+  const scoreTone = scoreTier === 'excellent' || scoreTier === 'good' ? 'emerald' : scoreTier === 'fair' || scoreTier === 'potential' ? 'amber' : 'slate';
   return (
     <div className="rounded-md border border-slate-200 bg-white">
       <div className="flex w-full items-center gap-2 px-3 py-2">

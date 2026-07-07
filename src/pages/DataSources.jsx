@@ -13,6 +13,7 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { listProfiles } from '@/api/profiles';
 import { runRealCrawler } from '@/api/crawlers';
+import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
 import { apiFetch } from '@/api/client';
 import { createLogger } from '@/utils/logger'
 
@@ -172,8 +173,8 @@ function OpportunityDrawer({ crawlerType, result, onClose }) {
                       <p className="text-xs text-slate-500 mt-0.5">{opp.sponsor || 'Unknown sponsor'}</p>
                     </div>
                     {typeof opp.match_score === 'number' && (
-                      <Badge variant="outline" className={`shrink-0 ${opp.match_score >= 70 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                        {opp.match_score}%
+                      <Badge variant="outline" className={`shrink-0 ${opp.match_score >= GOOD_MATCH_SCORE ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                        Score {opp.match_score}
                       </Badge>
                     )}
                   </div>
@@ -251,7 +252,7 @@ export default function DataSources() {
       return runRealCrawler({
         profileId: selectedProfileId,
         crawlerType,
-        minMatchScore: 50,
+        minMatchScore: AUTO_ADD_SCORE,
         itemRequest: itemReq || null,
       });
     },

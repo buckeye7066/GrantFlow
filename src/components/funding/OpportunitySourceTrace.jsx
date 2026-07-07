@@ -196,8 +196,8 @@ export default function OpportunitySourceTrace({ opportunity, match, profileName
           </p>
           {matchScore !== null ? (
             <p className="text-sm text-slate-700">
-              Scored against <span className="font-semibold">{profileName || "the selected profile"}</span> at{" "}
-              <span className="font-semibold">{matchScore}%</span>.
+              Scored against <span className="font-semibold">{profileName || "the selected profile"}</span> with a match score of{" "}
+              <span className="font-semibold">{matchScore}</span>.
             </p>
           ) : (
             <p className="text-sm text-slate-600">

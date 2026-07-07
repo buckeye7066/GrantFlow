@@ -7,6 +7,7 @@ import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 
 import { matchProfileToOpportunities } from '@/api/matching'
+import { AUTO_ADD_SCORE } from '@/lib/matchDisplayThresholds'
 import { apiFetch } from '@/api/client'
 import { pricingApi } from '@/api/pricing'
 
@@ -79,7 +80,7 @@ export function AnyaIntakeResults({
       return
     }
     setLoadingMatches(true)
-    matchProfileToOpportunities(profileId, { minScore: 40, limit: 25 })
+    matchProfileToOpportunities(profileId, { minScore: AUTO_ADD_SCORE, limit: 25 })
       .then((res) => {
         if (cancelled) return
         const list = Array.isArray(res?.opportunities)

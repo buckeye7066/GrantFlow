@@ -6,6 +6,7 @@ import {
 } from "@/api/foundations"
 import { listProfiles } from "@/api/profiles"
 import { apiFetch } from "@/api/client"
+import { scoreToMatchTier } from "@/lib/matchDisplayThresholds"
 import { useToast } from "@/components/ui/use-toast"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -55,11 +56,19 @@ function buildScoreMap(scoreData) {
   return map
 }
 
+// Bands come from the canonical scoreToMatchTier — never inline cutoffs (the
+// old 70/50 ladder was on the retired need-anchored scale).
+const SCORE_TIER_CLASSES = {
+  excellent: "bg-emerald-100 text-emerald-700",
+  good: "bg-emerald-100 text-emerald-700",
+  fair: "bg-amber-100 text-amber-700",
+  potential: "bg-amber-100 text-amber-700",
+  low: "bg-slate-100 text-slate-600",
+}
+
 function scoreColor(score) {
   if (score === null || score === undefined) return "bg-slate-100 text-slate-500"
-  if (score >= 70) return "bg-emerald-100 text-emerald-700"
-  if (score >= 50) return "bg-amber-100 text-amber-700"
-  return "bg-slate-100 text-slate-600"
+  return SCORE_TIER_CLASSES[scoreToMatchTier(score)]
 }
 
 /** Small inline match-score chip. */
@@ -70,7 +79,7 @@ function MatchBadge({ score, loading }) {
   if (score === null || score === undefined) return null
   return (
     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${scoreColor(score)}`}>
-      <Target className="w-3 h-3" /> {score}% match
+      <Target className="w-3 h-3" /> match score {score}
     </span>
   )
 }
@@ -362,7 +371,7 @@ export default function FoundationSearch() {
       } else {
         toast({
           title: "Added to pipeline",
-          description: `${opp.title} added${hasScore(scored?.match_score) ? ` (${scored.match_score}% match)` : ""}.`,
+          description: `${opp.title} added${hasScore(scored?.match_score) ? ` (match score ${scored.match_score})` : ""}.`,
         })
       }
     } catch (error) {
@@ -790,7 +799,7 @@ function DetailDialog({ target, onClose, foundationDetail, detailLoading, scores
         {hasScore(scored?.match_score) && (
           <div className="flex items-center gap-2">
             <span className={`text-sm font-semibold px-3 py-1 rounded-full flex items-center gap-1 ${scoreColor(scored.match_score)}`}>
-              <Target className="w-4 h-4" /> {scored.match_score}% match for this profile
+              <Target className="w-4 h-4" /> match score {scored.match_score} for this profile
             </span>
             {scored.decision && <Badge variant="outline" className="text-xs">{scored.decision}</Badge>}
           </div>

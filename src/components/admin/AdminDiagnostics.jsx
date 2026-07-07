@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { createPageUrl } from '@/utils';
+import { AUTO_ADD_SCORE } from '@/lib/matchDisplayThresholds';
 import {
   Dialog,
   DialogContent,
@@ -115,7 +116,7 @@ export default function AdminDiagnostics() {
   const [crawlerAuditProfiles, setCrawlerAuditProfiles] = useState([]);
   const [crawlerAuditProfilesError, setCrawlerAuditProfilesError] = useState(null);
   const [crawlerAuditTimeout, setCrawlerAuditTimeout] = useState(20000);
-  const [crawlerAuditMinScore, setCrawlerAuditMinScore] = useState(50);
+  const [crawlerAuditMinScore, setCrawlerAuditMinScore] = useState(AUTO_ADD_SCORE);
   const [crawlerAuditItemRequest, setCrawlerAuditItemRequest] = useState('');
   const [fundingSources, setFundingSources] = useState([]);
   const [fundingSourcesError, setFundingSourcesError] = useState(null);
@@ -279,7 +280,7 @@ export default function AdminDiagnostics() {
       }
 
       const timeout = parseClamp(crawlerAuditTimeout, { min: 1000, max: 600000, fallback: 20000 });
-      const minScore = parseClamp(crawlerAuditMinScore, { min: 0, max: 100, fallback: 50 });
+      const minScore = parseClamp(crawlerAuditMinScore, { min: 0, max: 100, fallback: AUTO_ADD_SCORE });
       const limit = parseClamp(crawlerAuditLimit, { min: 1, max: 200, fallback: 25 });
 
       const payload = {

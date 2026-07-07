@@ -57,6 +57,7 @@ import GeoFundingView from "@/components/funding/GeoFundingView"
 import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
 import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, parseBooleanQuery } from "@/hooks/useGrantTools"
+import { scoreToMatchTier, MIN_SCORE_SLIDER_MAX } from "@/lib/matchDisplayThresholds"
 
 const NOT_AVAILABLE = 'N/A'
 
@@ -306,14 +307,19 @@ function OpportunityCard({
   const typeBadge = getTypeBadge(opportunity.type)
 
   // Get match color based on score. Guard against non-numeric input.
+  // Bands come from the canonical scoreToMatchTier — never inline cutoffs.
   const getMatchColor = (score) => {
     if (typeof score !== "number" || !Number.isFinite(score)) {
       return "text-slate-600 bg-slate-50 border-slate-200"
     }
-    if (score >= 80) return "text-emerald-600 bg-emerald-50 border-emerald-200"
-    if (score >= 60) return "text-blue-600 bg-blue-50 border-blue-200"
-    if (score >= 40) return "text-amber-600 bg-amber-50 border-amber-200"
-    return "text-slate-600 bg-slate-50 border-slate-200"
+    const tierClasses = {
+      excellent: "text-emerald-600 bg-emerald-50 border-emerald-200",
+      good: "text-blue-600 bg-blue-50 border-blue-200",
+      fair: "text-amber-600 bg-amber-50 border-amber-200",
+      potential: "text-amber-600 bg-amber-50 border-amber-200",
+      low: "text-slate-600 bg-slate-50 border-slate-200",
+    }
+    return tierClasses[scoreToMatchTier(score)]
   }
 
   const handleQuickAdd = async (event) => {
@@ -453,9 +459,9 @@ function OpportunityCard({
                       <Target className="w-4 h-4" />
                       <span className="text-sm font-semibold uppercase tracking-wide">Match Score</span>
                     </div>
-                    <span className="text-2xl font-bold">{matchScore}%</span>
+                    <span className="text-2xl font-bold">{matchScore}</span>
                   </div>
-                  <Progress value={matchScore} className="h-2" />
+                  <Progress value={Math.min(100, (matchScore / MIN_SCORE_SLIDER_MAX) * 100)} className="h-2" />
                   {match.reasons && match.reasons.length > 0 && (
                     <p className="text-xs opacity-80 line-clamp-1">{match.reasons[0]} {match.reasons.length > 1 && `+${match.reasons.length - 1} more`}</p>
                   )}
@@ -824,9 +830,9 @@ function OpportunityDetail({
                     <Target className="w-4 h-4" />
                     Match Score
                   </p>
-                  {matchScore !== null ? <Badge className="bg-blue-600 text-white">{matchScore}%</Badge> : null}
+                  {matchScore !== null ? <Badge className="bg-blue-600 text-white">Score {matchScore}</Badge> : null}
                 </div>
-                {matchScore !== null ? <Progress value={matchScore} className="h-2" /> : null}
+                {matchScore !== null ? <Progress value={Math.min(100, (matchScore / MIN_SCORE_SLIDER_MAX) * 100)} className="h-2" /> : null}
                 <ul className="list-disc list-inside text-xs text-blue-800 space-y-1">
                   {reasonList.length > 0 ? (
                     reasonList.map((reason, index) => {

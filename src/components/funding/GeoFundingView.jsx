@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { getGeoSummary, getGeoScored } from "@/api/opportunities"
 import { formatReasonList } from "@/utils/reasonText"
+import { scoreToMatchTier } from "@/lib/matchDisplayThresholds"
 
 const STATE_NAMES = {
   AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",
@@ -31,11 +32,18 @@ const STATE_NAMES = {
   DC:"District of Columbia",
 }
 
+// Bands come from the canonical scoreToMatchTier — never inline cutoffs (the
+// old 75/50/25 ladder was on the retired need-anchored scale).
+const SCORE_BADGE_TIER_CLASSES = {
+  excellent: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  good: "bg-blue-100 text-blue-800 border-blue-200",
+  fair: "bg-amber-100 text-amber-800 border-amber-200",
+  potential: "bg-amber-100 text-amber-800 border-amber-200",
+  low: "bg-slate-100 text-slate-600 border-slate-200",
+}
+
 function scoreBadgeColor(score) {
-  if (score >= 75) return "bg-emerald-100 text-emerald-800 border-emerald-200"
-  if (score >= 50) return "bg-blue-100 text-blue-800 border-blue-200"
-  if (score >= 25) return "bg-amber-100 text-amber-800 border-amber-200"
-  return "bg-slate-100 text-slate-600 border-slate-200"
+  return SCORE_BADGE_TIER_CLASSES[scoreToMatchTier(score)]
 }
 
 function ScoreBadge({ score }) {

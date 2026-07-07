@@ -32,7 +32,14 @@ import {
   collectAddressTextForInference,
 } from '@/utils/inferLocationFromAddress';
 import { useFundingResultsStore } from '@/stores/fundingResultsStore';
-import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
+import {
+  AUTO_ADD_SCORE,
+  GOOD_MATCH_SCORE,
+  MIN_SCORE_SLIDER_MAX,
+  minScoreBandLabel,
+  translateLegacyMinScore,
+} from '@/lib/matchDisplayThresholds';
+import MatchScoreGuidanceBand from '@/components/discovery/MatchScoreGuidanceBand';
 import { dedupeFundingResults } from '@/utils/fundingDedupe';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
@@ -43,21 +50,25 @@ import { dedupeFundingResults } from '@/utils/fundingDedupe';
 const DISCOVERY_POLL_MS = 12000         // how often to refetch catalog + status (gentle: heavy query)
 const DISCOVERY_MAX_WAIT_MS = 5 * 60 * 1000 // stop polling after 5 min (jobs keep running server-side)
 
-// Default minimum match score (owner directive 2026-06-23).
-const DEFAULT_MIN_MATCH_SCORE = 75
+// Default minimum match score \u2014 the pipeline bar on the data-point scale
+// (mirrors backend DEFAULT_MIN_SCORE). The retired need-anchored default of 75
+// is beyond this scale's max real score (~58) and would return nothing.
+const DEFAULT_MIN_MATCH_SCORE = AUTO_ADD_SCORE
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * Clamp a match-score value to 0\u2013100, falling back to the intended default
- * (75) when the value is non-finite \u2014 NOT 0 (which would silently widen the
- * search to the broadest possible floor and return thousands of low-quality
- * matches).
+ * Clamp a match-score value to the live slider range (0..MIN_SCORE_SLIDER_MAX),
+ * falling back to the intended default when the value is non-finite \u2014 NOT 0
+ * (which would silently widen the search to the broadest possible floor and
+ * return thousands of low-quality matches). Old-scale values (>30, e.g. a
+ * stale 85) are translated to their data-point-scale band first so they can
+ * never starve results.
  */
 function clampMinScore(value, fallback = DEFAULT_MIN_MATCH_SCORE) {
-  const n = Number(value)
+  const n = translateLegacyMinScore(Number(value))
   const base = Number.isFinite(n) ? n : fallback
-  return Math.min(100, Math.max(0, base))
+  return Math.min(MIN_SCORE_SLIDER_MAX, Math.max(0, base))
 }
 
 /**
@@ -207,86 +218,6 @@ function extractDiagnostics(payload) {
 }
 
 // Category taxonomy imported from @/constants/needCategories
-
-/**
- * Color-coded, NOTCHED guidance band rendered ABOVE the match-score slider.
- * Data-driven from the matching endpoint's `score_histogram`
- * ([{ min, max, count, top_source }] across 0\u201380). Greener = more results in
- * that zone (density), fading as fewer; each notch is labeled with a friendly
- * quality label + the dominant source family. Degrades gracefully: when no
- * histogram is provided (older response) it renders nothing.
- *
- * @param {{ histogram: Array<{min:number,max:number,count:number,top_source:string|null}>, max?: number, value?: number }} props
- */
-// Fixed 0\u201380 guidance zones, ALWAYS rendered so the band is a visible guide
-// even before any results exist. Each zone is enriched with live counts + the
-// dominant source from `score_histogram` (buckets are 0-20/20-40/40-60/60-80,
-// matching these zones) when the matching response provides it.
-// Match-score scale upper bound. Aligned to the full 0-100 scale (matching the
-// Smart Matcher control) so the slider can reach the highest matches (85+) and
-// the axis + thumb track the same range. Previously capped at 80, which
-// mislabeled the axis and diverged from Smart Matcher.
-const SCORE_MAX = 100
-
-const GUIDANCE_ZONES = [
-  { min: 0, max: 40, label: 'Broad matches', hint: 'Wide net' },
-  { min: 40, max: 70, label: 'Good matches', hint: 'Worth a look' },
-  { min: 70, max: 85, label: 'Strong matches', hint: 'Solid fit' },
-  { min: 85, max: 100, label: 'Best matches', hint: 'Closest fit' },
-]
-
-function MatchScoreGuidanceBand({ histogram, max = SCORE_MAX, value }) {
-  const buckets = Array.isArray(histogram) ? histogram : []
-  const byMin = new Map(buckets.map((b) => [Number(b?.min) || 0, b]))
-  const maxCount = buckets.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
-  const hasData = maxCount > 0
-  return (
-    <div className="mt-3">
-      <div className="flex w-full gap-1">
-        {GUIDANCE_ZONES.map((z) => {
-          const live = byMin.get(z.min)
-          const count = Number(live?.count) || 0
-          const topSource = live?.top_source ? String(live.top_source) : null
-          const isActiveZone = typeof value === 'number' && value >= z.min && value < z.max
-          // With live data: green by result density (gray when a zone has 0).
-          // Without data: a static confidence gradient (higher zone = stronger
-          // fit = deeper green) so the guide still reads as "right = closer fit".
-          const ratio = hasData ? count / maxCount : 0
-          const staticRatio = z.min / max // 0 \u2192 0.75
-          const intensity = hasData ? 0.2 + 0.65 * ratio : 0.16 + 0.5 * staticRatio
-          const bg = hasData && count === 0
-            ? 'rgb(241 245 249)' // slate-100 \u2014 searched, nothing here
-            : `rgba(34, 197, 94, ${intensity})`
-          const sub = hasData
-            ? (count > 0 ? `${count}${topSource ? ` \u00b7 ${topSource.toLowerCase()}` : ''}` : z.hint)
-            : z.hint
-          return (
-            <div
-              key={`band-${z.min}`}
-              className="flex flex-col"
-              style={{ flexGrow: 1, flexBasis: 0 }}
-              title={`${z.label} (${z.min}\u2013${z.max}%)${hasData ? ` \u00b7 ${count} match${count === 1 ? '' : 'es'}` : ''}${topSource ? ` \u00b7 mostly ${topSource.toLowerCase()}` : ` \u00b7 ${z.hint}`}`}
-            >
-              <div
-                className={`h-2.5 rounded-sm ${isActiveZone ? 'ring-2 ring-emerald-600' : ''}`}
-                style={{ backgroundColor: bg }}
-              />
-              <div className="mt-1 text-[10px] leading-tight text-muted-foreground text-center">
-                <div className="font-medium text-foreground/80">{z.label}</div>
-                <div className="truncate">{sub}</div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-        <span>0%</span>
-        <span>Higher % = closer fit to this profile</span>
-        <span>{max}%</span>
-      </div>
-    </div>
-  )
-}
 
 /**
  * Architecture P1: friendly, dismissible "Improve your matches" card.
@@ -1179,8 +1110,8 @@ export default function DiscoverGrants() {
         title: 'Search complete',
         description: `Found ${uniqueOpportunities.length} opportunities.${collapseNote} ${
           attempted > 0
-            ? `Auto-added the ${attempted} strongest (${AUTO_ADD_SCORE}%+ match): ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed.`
-            : `None reached the ${AUTO_ADD_SCORE}%+ auto-add bar — browse the results below and add any you want.`
+            ? `Auto-added the ${attempted} strongest (score ${AUTO_ADD_SCORE}+): ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed.`
+            : `None reached the score-${AUTO_ADD_SCORE} auto-add bar — browse the results below and add any you want.`
         }`,
       })
     }
@@ -1439,7 +1370,7 @@ export default function DiscoverGrants() {
     if (combinedOpportunities.length > 0) {
       const highMatches = combinedOpportunities.filter(r => (r.match_score || r.match || 0) >= GOOD_MATCH_SCORE);
       if (highMatches.length > 0) {
-        items.push({ id: 'review-top', icon: CheckCircle2, text: 'Review your top ' + highMatches.length + ' high-match opportunities', detail: 'These opportunities scored 80%+ match with your profile. Consider adding them to your pipeline.' });
+        items.push({ id: 'review-top', icon: CheckCircle2, text: 'Review your top ' + highMatches.length + ' high-match opportunities', detail: `These opportunities scored ${GOOD_MATCH_SCORE}+ (Good or better) against your profile. Consider adding them to your pipeline.` });
       }
       items.push({ id: 'add-pipeline', icon: ArrowRight, text: 'Add promising grants to your pipeline', detail: 'Use the checkboxes to select opportunities, then click Add to Pipeline to track and manage them.' });
     }
@@ -1754,25 +1685,26 @@ export default function DiscoverGrants() {
                   <div>
                     <div className="font-medium text-foreground inline-flex items-center gap-1">
                       Minimum match score
-                      <HelpTip text="How closely a grant must fit your profile to appear. Lower = more results; higher = only the best fits." />
+                      <HelpTip text="How closely a source must fit your profile to appear. Lower = more results; higher = only the best fits. Real matches mostly score between 5 and 25." />
                     </div>
                     <div className="text-xs text-muted-foreground">
                       Lower this to see more results; raise it to keep only the strongest matches.
                     </div>
                   </div>
-                  <div className="text-sm font-semibold text-foreground">{minMatchScore}%</div>
+                  <div className="text-sm font-semibold text-foreground">
+                    Score &ge; {minMatchScore} &middot; {minScoreBandLabel(minMatchScore)}
+                  </div>
                 </div>
                 {/* Color-coded, notched guidance band (Feature B). Data-driven
-                    from score_histogram; degrades gracefully (hidden) when the
-                    backend response predates it. Spans the full 0-100 scale to
-                    match the slider and the Smart Matcher control. */}
-                <MatchScoreGuidanceBand histogram={scoreHistogram} max={SCORE_MAX} value={minMatchScore} />
+                    from score_histogram; band zones come from the canonical
+                    thresholds. Track spans 0..30+ on the data-point scale. */}
+                <MatchScoreGuidanceBand histogram={scoreHistogram} max={MIN_SCORE_SLIDER_MAX} value={minMatchScore} />
                 <input
                   type="range"
                   min={0}
-                  max={SCORE_MAX}
-                  step={5}
-                  value={Math.min(SCORE_MAX, minMatchScore)}
+                  max={MIN_SCORE_SLIDER_MAX}
+                  step={1}
+                  value={Math.min(MIN_SCORE_SLIDER_MAX, minMatchScore)}
                   onChange={(e) => setMinMatchScore(Number(e.target.value))}
                   disabled={isSearching}
                   className="mt-3 w-full"
@@ -1896,13 +1828,13 @@ export default function DiscoverGrants() {
                 <div className="flex items-center gap-3 rounded-md bg-blue-50 border border-blue-200 p-3">
                   <span className="text-blue-600 text-lg">&#x1F50D;</span>
                   <div className="flex-1 text-sm text-blue-900">
-                    <strong>{scoreHint.totalScored}</strong> opportunities were found but scored below your <strong>{minMatchScore}%</strong> threshold (best match: <strong>{scoreHint.bestScore}%</strong>).
+                    <strong>{scoreHint.totalScored}</strong> opportunities were found but scored below your minimum score of <strong>{minMatchScore}</strong> (best score: <strong>{scoreHint.bestScore}</strong>).
                     {' '}
                     <button
                       className="underline font-medium hover:text-blue-700"
-                      onClick={() => { setMinMatchScore(scoreHint.suggestedThreshold); }}
+                      onClick={() => { setMinMatchScore(clampMinScore(scoreHint.suggestedThreshold)); }}
                     >
-                      Lower to {scoreHint.suggestedThreshold}% to see ~{scoreHint.countAtSuggested} results
+                      Lower to {clampMinScore(scoreHint.suggestedThreshold)} to see ~{scoreHint.countAtSuggested} results
                     </button>
                     {' '}then re-run the search.
                   </div>
@@ -1915,13 +1847,13 @@ export default function DiscoverGrants() {
                 <div className="flex items-center gap-3 rounded-md bg-blue-50 border border-blue-200 p-3">
                   <span className="text-blue-600 text-lg">&#x1F50D;</span>
                   <div className="flex-1 text-sm text-blue-900">
-                    <strong>{subThresholdHint.belowCount}</strong> {subThresholdHint.belowCount === 1 ? 'opportunity' : 'opportunities'} scored below your <strong>{minMatchScore}%</strong> threshold.
+                    <strong>{subThresholdHint.belowCount}</strong> {subThresholdHint.belowCount === 1 ? 'opportunity' : 'opportunities'} scored below your minimum score of <strong>{minMatchScore}</strong>.
                     {' '}
                     <button
                       className="underline font-medium hover:text-blue-700"
-                      onClick={() => { setMinMatchScore(subThresholdHint.suggested); }}
+                      onClick={() => { setMinMatchScore(clampMinScore(subThresholdHint.suggested)); }}
                     >
-                      Lower to {subThresholdHint.suggested}% to see them
+                      Lower to {clampMinScore(subThresholdHint.suggested)} to see them
                     </button>
                     {' '}then re-run the search.
                   </div>

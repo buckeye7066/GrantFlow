@@ -12,7 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
 import { formatReasonText } from '@/utils/reasonText';
-import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
+import { scoreToMatchLabel, scoreToMatchTier } from '@/lib/matchDisplayThresholds';
 import { openWithHamiltonWatching } from '@/components/hamilton/hamiltonWatchedOpen';
 import { useGuidedTourStore } from '@/stores/guidedTourStore';
 
@@ -61,15 +61,20 @@ const getApplicationMethodColor = (method) => {
 };
 
 // Label comes from the shared scoreToMatchLabel so this card and the GrantDetail
-// header never disagree (the old local copy mislabeled 50–64 as "Good"/65–79 as
-// "Strong"). Colors/icons stay local but track the same 80/65/50/35 tiers.
+// header never disagree. Colors/icons stay local but the bands come from the
+// canonical scoreToMatchTier — never inline numeric cutoffs.
+const MATCH_TIER_STYLES = {
+    excellent: { bg: 'from-emerald-500 to-emerald-600', icon: '🎯' },
+    good: { bg: 'from-green-500 to-green-600', icon: '✨' },
+    fair: { bg: 'from-blue-500 to-blue-600', icon: '👍' },
+    potential: { bg: 'from-amber-500 to-amber-600', icon: '⚠️' },
+    low: { bg: 'from-slate-400 to-slate-500', icon: '❓' },
+};
+
 const getMatchScoreColor = (score) => {
     const label = scoreToMatchLabel(score);
-    if (score >= 80) return { bg: 'from-emerald-500 to-emerald-600', text: 'text-white', label, icon: '🎯' };
-    if (score >= 65) return { bg: 'from-green-500 to-green-600', text: 'text-white', label, icon: '✨' };
-    if (score >= 50) return { bg: 'from-blue-500 to-blue-600', text: 'text-white', label, icon: '👍' };
-    if (score >= 35) return { bg: 'from-amber-500 to-amber-600', text: 'text-white', label, icon: '⚠️' };
-    return { bg: 'from-slate-400 to-slate-500', text: 'text-white', label, icon: '❓' };
+    const tier = MATCH_TIER_STYLES[scoreToMatchTier(score)];
+    return { bg: tier.bg, text: 'text-white', label, icon: tier.icon };
 };
 
 const capitalize = (s) => (s && s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')) || "";
@@ -368,7 +373,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 )}
                             </div>
                             <div className="text-center">
-                                <div className="text-6xl font-bold mb-1">{matchScore}%</div>
+                                <div className="text-6xl font-bold mb-1">{matchScore}</div>
                                 <div className="text-2xl">{matchColor.icon}</div>
                             </div>
                         </div>
@@ -503,9 +508,9 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         color="text-amber-600"
                     />
                     {hasMatchScore && (
-                        <StatCard 
+                        <StatCard
                             label="Match Score"
-                            value={`${matchScore}%`}
+                            value={`${matchScore}`}
                             icon={Target}
                             color="text-purple-600"
                         />

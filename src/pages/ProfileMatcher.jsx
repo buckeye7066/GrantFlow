@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
+import { scoreToMatchLabel, scoreToMatchTier } from '@/lib/matchDisplayThresholds';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Target, AlertTriangle, CheckCircle2, Calendar, DollarSign, ExternalLink, Sparkles, User, Plus, Check } from 'lucide-react';
@@ -143,11 +143,16 @@ export default function ProfileMatcher() {
     }
   };
 
+  // Bands come from the canonical scoreToMatchTier — never inline cutoffs.
   const getMatchColor = (score) => {
-    if (score >= 80) return 'text-emerald-600 bg-emerald-50 border-emerald-200';
-    if (score >= 60) return 'text-blue-600 bg-blue-50 border-blue-200';
-    if (score >= 40) return 'text-amber-600 bg-amber-50 border-amber-200';
-    return 'text-slate-600 bg-slate-50 border-slate-200';
+    const tierClasses = {
+      excellent: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+      good: 'text-blue-600 bg-blue-50 border-blue-200',
+      fair: 'text-amber-600 bg-amber-50 border-amber-200',
+      potential: 'text-amber-600 bg-amber-50 border-amber-200',
+      low: 'text-slate-600 bg-slate-50 border-slate-200',
+    };
+    return tierClasses[scoreToMatchTier(score)];
   };
 
   const getMatchLabel = (score) => scoreToMatchLabel(score);
