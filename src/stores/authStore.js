@@ -242,6 +242,12 @@ const initialState = {
   // video + Anya's gap interview + tour, via an admin bulk operation) |
   // 'completed' | 'skipped' | null (not eligible, e.g. un-reset existing user)
   guidedCycleTourStatus: null,
+  // One-time FORCED WELCOME VIDEO gate. `{ id, url, label } | null`. When set,
+  // OnboardingSequencer renders it full-screen ABOVE every other first-run
+  // branch; the user POSTs consume + we clear it (setForcedWelcomeVideo(null))
+  // so the sequencer falls through. null for everyone with no unconsumed forced
+  // row → zero behavior change.
+  forcedWelcomeVideo: null,
 }
 
 function normalizeId(value) {
@@ -447,6 +453,8 @@ export const useAuthStore = create((set, get) => ({
         lastCompletedTourVersion: Number(payload.lastCompletedTourVersion ?? 0),
         tourDismissedAt: payload.tourDismissedAt ?? null,
         guidedCycleTourStatus: payload.guidedCycleTourStatus ?? null,
+        forcedWelcomeVideo:
+          payload.forcedWelcomeVideo ?? payload.user?.forced_welcome_video ?? null,
       }))
 
       // Always refresh profiles after canonical auth bootstrap.
@@ -547,6 +555,8 @@ export const useAuthStore = create((set, get) => ({
         needsProfileCreation,
         hasSeenOnboarding: userCompletedOnboarding,
         guidedCycleTourStatus: payload.user?.guided_cycle_tour_status ?? null,
+        forcedWelcomeVideo:
+          payload.user?.forced_welcome_video ?? payload.forcedWelcomeVideo ?? null,
         onboardingCompletedAt: payload.user?.onboarding_completed_at ?? null,
         lastSeenManualVersion: Number(payload.user?.last_seen_manual_version ?? 0),
         lastCompletedTourVersion: Number(payload.user?.last_completed_tour_version ?? 0),
@@ -1112,6 +1122,21 @@ export const useAuthStore = create((set, get) => ({
 
   setNeedsProfileCreation: (needs) => {
     set({ needsProfileCreation: needs })
+  },
+
+  /**
+   * Set/replace the pending one-time forced welcome video, or clear it.
+   * ForcedWelcomeVideo calls setForcedWelcomeVideo(null) after the user finishes
+   * (and POSTs consume) so OnboardingSequencer falls through to the normal
+   * onboarding branches. `clearForcedWelcomeVideo()` is a convenience alias.
+   * @param {{ id: string, url: string, label?: string|null }|null} video
+   */
+  setForcedWelcomeVideo: (video) => {
+    set({ forcedWelcomeVideo: video ?? null })
+  },
+
+  clearForcedWelcomeVideo: () => {
+    set({ forcedWelcomeVideo: null })
   },
 
   triggerOnboardingVideo: () => {

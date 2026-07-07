@@ -37,6 +37,7 @@ import {
 import { canonicalizeProfileTypeId } from '../../shared/profileTypeOptions.js'
 import { resolveZipLocation } from '../services/geo/zipCountyResolver.js'
 import { upsertProfileSections } from '../services/profileSectionWriter.js'
+import { ensureAuth } from '../middleware/auth.js'
 import { createLogger } from '../utils/logger.js'
 const qualityLog = createLogger('routes:onboarding')
 
@@ -549,5 +550,47 @@ router.post('/complete', async (req, res) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// POST /api/onboarding/welcome-video/consume  (auth required)
+//
+// The per-call gate that retires a one-time forced welcome video: stamps
+// consumed_at + consumed_by_user_id on the forced_welcome_videos row by id.
+// Monotonic + idempotent — an already-consumed row (or a re-POST) returns
+// 200 { ok: true }. Once consumed, resolveForcedWelcomeVideo stops matching it,
+// so the frontend sequencer falls through to the normal onboarding branches and
+// the video never replays. There is no boot net: "consumed stays consumed" is
+// the whole invariant, and consume only ever moves in one direction.
+// ---------------------------------------------------------------------------
+router.post('/welcome-video/consume', ensureAuth, async (req, res) => {
+  const id = req.body?.id
+  const userId = req.user?.userId ?? req.user?.id ?? null
+  if (!id || typeof id !== 'string') {
+    return res.status(400).json({ error: 'id is required.' })
+  }
+
+  try {
+    const row = await req.db
+      .prepare('SELECT id, consumed_at FROM forced_welcome_videos WHERE id = ?')
+      .get(id)
+    if (!row) {
+      return res.status(404).json({ error: 'Forced welcome video not found.' })
+    }
+    if (row.consumed_at) {
+      // Idempotent: already retired.
+      return res.json({ ok: true, already_consumed: true })
+    }
+    await req.db
+      .prepare(
+        `UPDATE forced_welcome_videos
+            SET consumed_at = ?, consumed_by_user_id = ?
+          WHERE id = ? AND consumed_at IS NULL`,
+      )
+      .run(nowISO(), userId, id)
+    return res.json({ ok: true })
+  } catch (err) {
+    qualityLog.error('[onboarding/welcome-video/consume] failed:', err)
+    return res.status(500).json({ error: 'Could not consume welcome video.' })
+  }
+})
 
 export default router

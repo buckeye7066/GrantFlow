@@ -10,7 +10,7 @@ import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlo
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { recordSuccessfulLogin } from '../services/firstLoginNotifier.js'
-import { resolveGuidedCycleTourStatus } from '../services/onboardingGates.js'
+import { resolveGuidedCycleTourStatus, resolveForcedWelcomeVideo } from '../services/onboardingGates.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
@@ -515,7 +515,11 @@ async function getUserProfiles(db, userId) {
     .all(userId)
 }
 
-function buildUserPayload(userRow, profiles, activeProfileId) {
+async function buildUserPayload(db, userRow, profiles, activeProfileId) {
+  // One-time forced welcome video gate (services/onboardingGates.js). Fail-open
+  // (returns null on any error) so login can never break on this lookup. null
+  // for everyone with no unconsumed forced row → zero behavior change.
+  const forcedWelcomeVideo = await resolveForcedWelcomeVideo(db, userRow)
   return {
     id: userRow.id,
     display_name: userRow.display_name,
@@ -534,6 +538,10 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
     // not re-trigger Anya's interview (owner-directed, 2026-07-06). Non-admin
     // behavior is unchanged.
     guided_cycle_tour_status: resolveGuidedCycleTourStatus(userRow),
+    // One-time forced welcome video — the frontend renders this above every
+    // onboarding branch (new HIGHEST priority in OnboardingSequencer), then
+    // POSTs consume so it never replays. null for everyone with no forced row.
+    forced_welcome_video: forcedWelcomeVideo,
     // Pre-existing gap found alongside the above: this was never returned here,
     // so setAuthenticatedUser's `payload.user?.has_completed_onboarding` read
     // (used for hasSeenOnboarding/needsProfileCreation) was always reading
@@ -2186,7 +2194,7 @@ router.post('/email/verify', async (req, res) => {
     accessExpires: session.accessExpires,
     refreshExpires: session.refreshExpires,
     tokenType: 'Bearer',
-    user: buildUserPayload(user, profiles, activeProfileId),
+    user: await buildUserPayload(req.db, user, profiles, activeProfileId),
   }
 
   if (anyaInfo) {
@@ -2495,7 +2503,7 @@ router.post('/phone/verify', async (req, res) => {
     accessExpires: session.accessExpires,
     refreshExpires: session.refreshExpires,
     tokenType: 'Bearer',
-    user: buildUserPayload(user, profiles, activeProfileId),
+    user: await buildUserPayload(req.db, user, profiles, activeProfileId),
   }
 
   // Include Anya session info if available
@@ -2981,7 +2989,7 @@ router.post('/password/setup/complete', passwordRateLimiter, async (req, res) =>
       accessExpires: session.accessExpires,
       refreshExpires: session.refreshExpires,
       tokenType: 'Bearer',
-      user: buildUserPayload(user, profiles, activeProfileId),
+      user: await buildUserPayload(req.db, user, profiles, activeProfileId),
     })
   } catch (error) {
     routeLogger.error('[auth/password/setup/complete] Unexpected error:', error)
@@ -3079,7 +3087,7 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
       accessExpires: session.accessExpires,
       refreshExpires: session.refreshExpires,
       tokenType: 'Bearer',
-      user: buildUserPayload(user, profiles, activeProfileId),
+      user: await buildUserPayload(req.db, user, profiles, activeProfileId),
     })
   } catch (error) {
     routeLogger.error('[auth/password/login] Unexpected error:', error)
@@ -3325,11 +3333,15 @@ router.patch('/onboarding-state', async (req, res) => {
     // Return updated state (is_admin + last_login_at feed the admin
     // reinterview gate so this echo matches what login//me will serve).
     const row = await req.db.prepare(
-      `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
-              last_completed_tour_version, tour_dismissed_at, guided_cycle_tour_status,
-              is_admin, last_login_at
+      `SELECT id, primary_email, has_completed_onboarding, onboarding_completed_at,
+              last_seen_manual_version, last_completed_tour_version, tour_dismissed_at,
+              guided_cycle_tour_status, is_admin, last_login_at
        FROM users WHERE id = ?`
     ).get(userId)
+
+    // Mirror the forced welcome video gate so this echo matches what login//me
+    // serves. Fail-open to null (resolveForcedWelcomeVideo swallows errors).
+    const forcedWelcomeVideo = await resolveForcedWelcomeVideo(req.db, row)
 
     return res.json({
       hasCompletedOnboarding: Boolean(row?.has_completed_onboarding),
@@ -3338,6 +3350,7 @@ router.patch('/onboarding-state', async (req, res) => {
       lastCompletedTourVersion: Number(row?.last_completed_tour_version ?? 0),
       tourDismissedAt: row?.tour_dismissed_at ?? null,
       guidedCycleTourStatus: resolveGuidedCycleTourStatus(row),
+      forcedWelcomeVideo,
     })
   } catch (error) {
     routeLogger.error('[auth/onboarding-state] Unexpected error:', error)
@@ -3409,7 +3422,7 @@ router.post('/refresh', async (req, res) => {
   return res.json({
     ...tokens,
     tokenType: 'Bearer',
-    user: buildUserPayload(user, profiles, sessionRow.profile_id),
+    user: await buildUserPayload(req.db, user, profiles, sessionRow.profile_id),
   })
 })
 
