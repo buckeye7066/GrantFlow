@@ -169,10 +169,15 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
 
   if (organizationIds && organizationIds.length > 0) {
     const placeholders = organizationIds.map(() => '?').join(',')
-    const whereClause = `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})`
+    const orgClause = `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})`
+    // Inject the org scope before `AND m.due_date IS NOT NULL`, which is present
+    // in BOTH dialect queries. The old code replaced 'WHERE m.completed', which
+    // (a) built `WHERE AND COALESCE…` on Postgres (`WHERE m.completed = FALSE`)
+    // → invalid SQL → 500 → Dashboard failed to load, and (b) matched nothing on
+    // SQLite (`WHERE NOT m.completed`) → the org scope was silently dropped.
     milestoneSqlWithScope = milestoneSqlWithScope.replace(
-      'WHERE m.completed',
-      `WHERE ${whereClause} AND m.completed`
+      'AND m.due_date IS NOT NULL',
+      `${orgClause}\n            AND m.due_date IS NOT NULL`
     )
     milestoneParams.push(...organizationIds)
   }
