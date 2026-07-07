@@ -233,6 +233,72 @@ export const SOURCES = Object.freeze([
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 67,
   },
   {
+    // TennCare ECF CHOICES — Tennessee's Medicaid HCBS waiver (employment and
+    // community-living supports for people with intellectual/developmental
+    // disabilities + Essential Family Supports for family caregivers). Ported
+    // from the legacy ecfBenefitsCrawler on 2026-07-07: the legacy crawler was
+    // never registered here, so after the crawler-os cutover the ECF lane was
+    // structurally uncrawlable — actual ECF CHOICES members (the Gilbert/Kim
+    // class) never had their own program crawled. NOTE: tn.gov intermittently
+    // ECONNRESETs automated fetchers; the adapter degrades honestly
+    // (FETCH_ERROR), never fabricates.
+    source_id: 'tn_ecf_choices',
+    name: 'TennCare Employment and Community First CHOICES (ECF CHOICES)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
+    sponsor_name: 'TennCare',
+    resource_title: 'Employment and Community First CHOICES (ECF CHOICES)',
+    resource_summary: 'Official TennCare ECF CHOICES program page: employment and independent-community-living supports for Tennesseans with intellectual or developmental disabilities, including Essential Family Supports for family caregivers.',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'disabled', 'caregiver'],
+    need_categories: ['disability', 'healthcare', 'medical', 'employment', 'caregiving'],
+    geography: { national: false, states: ['TN'] },
+    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 14, priority_score: 78,
+  },
+  {
+    // Every state's Medicaid HCBS waiver universe (the legacy
+    // stateWaiverBenefitsCrawler's generic scope): the medicaid.gov HCBS index
+    // is the authoritative national locator for state waiver programs — each
+    // state's ECF-CHOICES-equivalent. An honest DIRECTORY, so a waiver-family
+    // profile outside TN still reaches its own state's program.
+    source_id: 'state_hcbs_waivers',
+    name: 'Medicaid Home & Community-Based Services (HCBS) waivers by state',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.medicaid.gov/medicaid/home-community-based-services/index.html',
+    sponsor_name: 'Centers for Medicare & Medicaid Services',
+    resource_title: 'Medicaid HCBS waiver programs (state directory)',
+    resource_summary: 'Official CMS index of Home and Community-Based Services waiver programs — the entry point for finding your state\'s Medicaid waiver (employment supports, community living, respite, and caregiver services).',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'senior', 'veteran', 'disabled', 'caregiver'],
+    need_categories: ['disability', 'healthcare', 'medical', 'caregiving', 'aging'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 69,
+  },
+  {
+    // SSA disability benefits (SSDI/SSI) — the federal branch of the legacy ECF
+    // crawler's individual sources. NOTE: ssa.gov intermittently 403s automated
+    // fetchers (seen in CI); as a directory-kind locator the honest row survives
+    // a failed fetch (link_unverified ≠ dead) while the run records fetch_error.
+    source_id: 'ssa_disability',
+    name: 'Social Security disability benefits (SSDI / SSI)',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.ssa.gov/disability',
+    sponsor_name: 'Social Security Administration',
+    resource_title: 'Social Security disability benefits (SSDI/SSI)',
+    resource_summary: 'Official Social Security disability-benefits information and application entry point: SSDI for workers with a qualifying disability and SSI for people with limited income and resources. This is a benefits lane, not a grant.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'disabled'],
+    need_categories: ['disability', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
+  },
+  {
     // Seniors + their caregivers: the Eldercare Locator connects older adults to
     // their local Area Agency on Aging (meals, transportation, in-home support,
     // caregiver respite). An authoritative national locator — surfaced as an
