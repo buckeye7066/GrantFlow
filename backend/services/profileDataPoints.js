@@ -56,6 +56,65 @@ export const DATA_POINT_KINDS = Object.freeze([
 
 const norm = (v) => String(v ?? '').toLowerCase().replace(/[_\s-]+/g, ' ').trim()
 
+/**
+ * DECLARED-PROGRAM AFFINITY (owner directive 2026-07-07).
+ *
+ * A profile that DECLARES enrolling in / operating a specific program or funder
+ * should match that program's OWN source lane even when the lane's page text is
+ * keyword-thin. The data-point text scan alone missed this: an ECF CHOICES
+ * member carries the assistance flag `medicaid_waiver`, but the TennCare ECF
+ * page never literally says "medicaid waiver", so the declared-program data
+ * point went uncredited and the member's single most relevant program scored
+ * below the surfacing floor (the Gilbert/Kim class).
+ *
+ * This map bridges a declared token → the crawler-os source_id(s) that ARE that
+ * program's registered lane. It is EVIDENCE-BASED and TYPE-AGNOSTIC: the credit
+ * fires only when the profile actually carries the declaration (the data point
+ * exists) AND the opportunity is genuinely that program's source. It is purely
+ * ADDITIVE — it can only credit a data point the profile already declares, so
+ * it never inflates an unrelated profile and stays rescore-safe.
+ *
+ * Direct name matches (an org whose mission names a program/funder that appears
+ * in the source's title/sponsor/keywords) are ALREADY handled by the text scan;
+ * this map is only for SEMANTIC bridges where the declared token and the
+ * source's own vocabulary differ. Keys are normalized (norm()) so `snap`,
+ * `snap_recipient`, and `SNAP Recipient` all resolve identically. Add org
+ * program/funder bridges here as new lanes register — no code change needed.
+ */
+const _RAW_PROGRAM_SOURCE_AFFINITY = {
+  medicaid_waiver: ['tn_ecf_choices', 'state_hcbs_waivers'],
+  ecf_choices: ['tn_ecf_choices'],
+  employment_and_community_first: ['tn_ecf_choices'],
+  hcbs: ['state_hcbs_waivers'],
+  medicaid: ['medicaid', 'state_hcbs_waivers'],
+  medicaid_enrolled: ['medicaid'],
+  ssi: ['ssa_disability'],
+  ssi_recipient: ['ssa_disability'],
+  ssdi: ['ssa_disability'],
+  ssdi_recipient: ['ssa_disability'],
+  liheap: ['liheap'],
+  snap: ['snap'],
+  snap_recipient: ['snap'],
+}
+
+const PROGRAM_SOURCE_AFFINITY = new Map(
+  Object.entries(_RAW_PROGRAM_SOURCE_AFFINITY).map(([token, sourceIds]) => [
+    norm(token),
+    new Set(sourceIds.map((s) => String(s).toLowerCase().trim())),
+  ]),
+)
+
+/**
+ * Does a declared data-point value have registered affinity to this source lane?
+ * @param {string} declaredValue the data point's value (declaration token)
+ * @param {string} normSourceId  lowercased opportunity source_id
+ */
+export function declaredProgramMatchesSource(declaredValue, normSourceId) {
+  if (!normSourceId) return false
+  const sourceIds = PROGRAM_SOURCE_AFFINITY.get(norm(declaredValue))
+  return Boolean(sourceIds && sourceIds.has(normSourceId))
+}
+
 function toValueList(setOrArray) {
   if (setOrArray instanceof Set) return [...setOrArray]
   if (Array.isArray(setOrArray)) return setOrArray
@@ -222,9 +281,11 @@ export function evaluateDataPointMatches({
   applicantTypeMatch = false,
   amountEligible = false,
   primaryApplicantType = '',
+  oppSourceId = '',
 } = {}) {
   const matched = []
   let credit = 0
+  const normSourceId = String(oppSourceId ?? '').toLowerCase().trim()
   const textHas = (term) =>
     containsTermWholeWord(oppText, term) ||
     (Array.isArray(oppSignals) &&
@@ -272,7 +333,16 @@ export function evaluateDataPointMatches({
         break
       }
       default: {
-        if (scanValue(dp.value)) { matched.push({ ...dp, credit: 1, via: 'text' }); credit += 1 }
+        if (scanValue(dp.value)) {
+          matched.push({ ...dp, credit: 1, via: 'text' }); credit += 1
+          break
+        }
+        // Declared-program affinity: the profile declares this program/funder and
+        // the opportunity IS that program's own registered source lane, even
+        // though the lane's text is keyword-thin. Type-agnostic + additive.
+        if (declaredProgramMatchesSource(dp.value, normSourceId)) {
+          matched.push({ ...dp, credit: 1, via: 'declared_program' }); credit += 1
+        }
       }
     }
   }

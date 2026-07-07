@@ -145,8 +145,21 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
   // mode), it rejects. This is what lets a tight hard-exclusivity rule
   // (e.g. demographic_veteran_exclusive) override a broader soft rule
   // (demographic_veteran_focused) that happens to match the same text first.
+  // Callers can suppress specific rule IDs (e.g. the NO-FIT content-shape family
+  // for a row the matchEngine already scored above the surfacing floor). We keep
+  // scanning the remaining rules so a real eligibility/demographic mismatch that
+  // sits LATER in the list still rejects — suppression removes only the named
+  // no-fit rules, never the hard-ineligibility ones underneath them.
+  const skipRuleIds =
+    opts.skipRuleIds instanceof Set
+      ? opts.skipRuleIds
+      : Array.isArray(opts.skipRuleIds)
+        ? new Set(opts.skipRuleIds)
+        : null
+
   let softMatch = null
   for (const rule of RELEVANCE_RULES) {
+    if (skipRuleIds && skipRuleIds.has(rule.id)) continue
     const patternMatches = (rule.oppPattern === null || rule.oppPattern === undefined) || rule.oppPattern.test(oppText)
     if (!(patternMatches && rule.profileCheck(profileData, oppText, opportunity))) continue
 

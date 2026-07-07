@@ -155,4 +155,47 @@ describe('evaluateDataPointMatches', () => {
     expect(r.credit).toBe(44)
     expect(Math.round((r.credit / inv.total) * 100)).toBe(50)
   })
+
+  // ── Declared-program affinity (FIX 2) ──────────────────────────────────────
+  describe('declared-program affinity', () => {
+    // A medicaid_waiver / ecf_choices member's assistance points that the ECF
+    // page text never literally states.
+    const waiverInv = {
+      dataPoints: [
+        { id: 'assistance:medicaid_waiver', kind: 'assistance', value: 'medicaid_waiver' },
+        { id: 'assistance:ecf_choices', kind: 'assistance', value: 'ecf_choices' },
+      ],
+      total: 2,
+    }
+
+    it('credits a declared program point when the opp IS that program source lane, even with keyword-thin text', () => {
+      const r = evaluateDataPointMatches({
+        inventory: waiverInv,
+        oppText: 'employment and community first choices', // never says "medicaid waiver"
+        oppSourceId: 'tn_ecf_choices',
+      })
+      const mw = r.matched.find((m) => m.id === 'assistance:medicaid_waiver')
+      expect(mw, 'medicaid_waiver must be credited via declared-program affinity').toBeTruthy()
+      expect(mw.via).toBe('declared_program')
+    })
+
+    it('does NOT credit the affinity for an unrelated source lane (evidence-based)', () => {
+      const r = evaluateDataPointMatches({
+        inventory: waiverInv,
+        oppText: 'a generic small business grant',
+        oppSourceId: 'sba_microloan',
+      })
+      expect(r.matched.find((m) => m.id === 'assistance:medicaid_waiver')).toBeUndefined()
+    })
+
+    it('prefers a direct text match (via:text) over affinity when the text does state it', () => {
+      const r = evaluateDataPointMatches({
+        inventory: waiverInv,
+        oppText: 'this is a medicaid waiver program (ecf choices)',
+        oppSourceId: 'tn_ecf_choices',
+      })
+      const mw = r.matched.find((m) => m.id === 'assistance:medicaid_waiver')
+      expect(mw.via).toBe('text')
+    })
+  })
 })

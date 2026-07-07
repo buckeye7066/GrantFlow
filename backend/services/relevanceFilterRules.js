@@ -988,6 +988,12 @@ export const RELEVANCE_RULES = [
   {
     id: 'referral_directory',
     category: 'content_type',
+    // NO-FIT family: this rejects on CONTENT-SHAPE ("a directory, not a direct
+    // funding source"), not on any eligibility/demographic mismatch. When the
+    // matchEngine has ALREADY scored the row above the surfacing floor, that
+    // affirmative score is the authority — a keyword-shape "no fit" must not
+    // un-surface it. See profileSpecificGate.SUPPRESSIBLE_NO_FIT_RULE_IDS.
+    kind: 'no_fit',
     description: 'Resource directories that are not direct funding sources',
     oppPattern: /\b(benefits\.gov|211\.org|tennessee 211|connect to help|resource directory|benefit (finder|screener))\b/i,
     profileCheck: (_pd, _oppText, opportunity) => !opportunity?.application_url,
@@ -1150,6 +1156,9 @@ export const RELEVANCE_RULES = [
   {
         id: 'generic_directory_page',
         category: 'content_type',
+        // NO-FIT family (content-shape, not eligibility) — suppressed for rows
+        // the matchEngine already scored above the surfacing floor.
+        kind: 'no_fit',
         description: 'Generic organizational directory or homepage, not a specific funding program',
         oppPattern: /\b(resource directory|service directory|agency listing|department homepage|find your local)\b/i,
         profileCheck: (pd, oppText, opp) => {
@@ -1234,3 +1243,26 @@ export const RELEVANCE_RULES = [
   // Many real assistance programs, benefits, and directory resources operate
   // on a rolling basis and do not have concrete deadlines.
 ]
+
+/**
+ * Rule-family classification.
+ *
+ * `no_fit` rules reject on CONTENT SHAPE — "this is a directory / generic
+ * homepage / we couldn't find a concrete keyword profile match." They are the
+ * older keyword gate. When the matchEngine (the sole decision authority) has
+ * already scored a stored row above the surfacing floor, that affirmative score
+ * is dispositive and a no_fit shape-rule must NOT re-adjudicate it away at
+ * display time (the benefits_gov-scored-52-but-dropped class).
+ *
+ * Every OTHER rule here is an eligibility / demographic / geographic / entity /
+ * data-quality mismatch — real hard-ineligibility (foster-youth-only,
+ * seniors-only, veterans-only, wrong state, org-vs-individual, no actionable
+ * URL). Those STILL drop even for a stored above-floor row: a high topical
+ * score never overrides "the profile literally cannot apply."
+ *
+ * IDs are derived from the rule's `kind` tag so a new no_fit rule cannot fall
+ * out of the suppression allowlist by being forgotten in a second place.
+ */
+export const NO_FIT_RELEVANCE_RULE_IDS = Object.freeze(
+  RELEVANCE_RULES.filter((rule) => rule.kind === 'no_fit').map((rule) => rule.id),
+)

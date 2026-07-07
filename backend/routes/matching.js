@@ -502,6 +502,22 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       })
       let mapped = canonical.kept
 
+      // Reconciliation sentinel: a stored above-floor match dropped for a NO-FIT
+      // (content-shape) reason is a silent un-surfacing (the benefits_gov-52
+      // class). After the display-gate fix this is always 0; a non-zero count is
+      // an observable regression signal. Bounded (already computed during
+      // canonicalization — no extra per-request work) and surfaced in
+      // diagnostics for Sam/telemetry. TODO(sam): alert when > 0 across profiles.
+      const unsurfacedAboveFloorNoFit = Array.isArray(canonical.unsurfacedAboveFloorNoFit)
+        ? canonical.unsurfacedAboveFloorNoFit
+        : []
+      if (unsurfacedAboveFloorNoFit.length > 0) {
+        routeLogger.warn(
+          `[matching] unsurfaced_above_floor_nofit=${unsurfacedAboveFloorNoFit.length} for ` +
+            `profile ${profileId}: ${JSON.stringify(unsurfacedAboveFloorNoFit.slice(0, 10))}`,
+        )
+      }
+
       const deduped = dedupeOpportunityList(mapped)
       mapped = deduped.results
       let pipelineExcludedCount = 0
@@ -677,6 +693,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           duplicate_results_collapsed: deduped.removed || undefined,
           excluded_already_in_pipeline: pipelineExcludedCount || undefined,
           dropped_reasons: canonical.dropped && Object.keys(canonical.dropped).length > 0 ? canonical.dropped : undefined,
+          unsurfaced_above_floor_nofit: unsurfacedAboveFloorNoFit.length || undefined,
           relaxation_applied: relaxation ? true : undefined,
         },
         coverage_summary: {

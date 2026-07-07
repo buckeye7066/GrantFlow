@@ -1,4 +1,52 @@
 import { applyRelevanceFilter, extractProfileData } from '../relevanceFilter.js'
+import { NO_FIT_RELEVANCE_RULE_IDS } from '../relevanceFilterRules.js'
+import { REVIEW_SCORE } from '../../config/matchThresholds.js'
+
+/**
+ * The NO-FIT rule family: rules that reject on CONTENT SHAPE ("directory /
+ * generic homepage / no concrete keyword profile match"), NOT on eligibility or
+ * demographic mismatch. When a row carries an AUTHORITATIVE stored decision from
+ * the matchEngine (the sole decision authority) AND that stored score is at or
+ * above the surfacing floor AND the decision is ACCEPT/REVIEW, the affirmative
+ * score is dispositive — these keyword-shape rules must NOT re-adjudicate it
+ * away at display time. This is the direct fix for the class where the
+ * data-point scorer scored a row (e.g. Benefits.gov = 52) but the older keyword
+ * gate dropped it for "no keyword profile fit."
+ *
+ * This is TYPE-AGNOSTIC by construction: the suppression keys only on
+ * "authoritative stored above-floor decision", never on profile type or
+ * opportunity kind — so it protects an org's foundation grant, a student's
+ * scholarship, a veteran's benefit, a business's SBA match, and an individual's
+ * directory identically.
+ *
+ * It deliberately does NOT include eligibility/demographic mismatch rules
+ * (foster-youth-only, seniors-only, veterans-only, applicant-type, geography,
+ * student-aid-vs-nonstudent): those are real hard-ineligibility and STILL drop
+ * however high the stored score (Chafee-for-a-non-foster-adult must stay
+ * dropped).
+ */
+export const SUPPRESSIBLE_NO_FIT_RULE_IDS = new Set([
+  // relevanceFilter (applyRelevanceFilter) content-shape rejections
+  ...NO_FIT_RELEVANCE_RULE_IDS, // referral_directory, generic_directory_page
+  // profileSpecificGate-local content-shape rejections (below)
+  'directory_no_profile_fit',
+  'web_lead_no_profile_fit',
+  'generic_only_no_profile_fit',
+])
+
+/**
+ * Does this row carry an authoritative stored match decision at/above the
+ * surfacing floor? Only such rows earn no-fit suppression — a raw web lead or an
+ * unscored candidate keeps the strict keyword gate (it is the only filter those
+ * unvetted rows have).
+ */
+export function hasAuthoritativeStoredDecision(opportunity, opts = {}) {
+  if (opts.useStoredDecision !== true) return false
+  const score = Number(opportunity?.match_score)
+  if (!Number.isFinite(score) || score < REVIEW_SCORE) return false
+  const decision = String(opportunity?.match_decision ?? 'REVIEW').toUpperCase()
+  return decision === 'ACCEPT' || decision === 'REVIEW'
+}
 
 const NEGATIVE_TEXT_VALUES = new Set([
   '',
@@ -353,9 +401,18 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
   const directory = isDirectoryRecord(opportunity)
   const webLead = isWebLead(opportunity)
 
+  // A row the matchEngine already scored above the surfacing floor is immune to
+  // the NO-FIT (content-shape) rule family — the affirmative score is the
+  // authority. Eligibility/demographic mismatches are NOT suppressed and still
+  // drop below.
+  const storedAuthoritative = hasAuthoritativeStoredDecision(opportunity, opts)
+
   const relevance = applyRelevanceFilter(opportunity, profileData, {
     mode: 'strict',
     allowDirectories: false,
+    // Skip only the no-fit content-shape rules when authoritative; a real
+    // eligibility/demographic rule LATER in the list still fires and rejects.
+    skipRuleIds: storedAuthoritative ? SUPPRESSIBLE_NO_FIT_RULE_IDS : null,
   })
   if (!relevance.pass) {
     return {
@@ -380,7 +437,9 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
     matched.length === 0 &&
     !/\b(fafsa|pell|scholarship|tuition|rent|housing|utility|food|medical|business|veteran|disability|farm|classroom|student aid)\b/.test(text)
 
-  if (genericOnly) {
+  // NO-FIT suppression: a stored above-floor row keeps surfacing even when its
+  // short text hit no keyword rule — the scorer already found the fit.
+  if (genericOnly && !storedAuthoritative) {
     return {
       pass: false,
       ruleId: 'generic_only_no_profile_fit',
@@ -388,7 +447,7 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
     }
   }
 
-  if ((directory || webLead) && matched.length === 0) {
+  if ((directory || webLead) && matched.length === 0 && !storedAuthoritative) {
     const allowUnmatchedDirectoryFallback =
       mode === 'fallback' && opts.allowUnmatchedDirectoryFallback === true
     if (!allowUnmatchedDirectoryFallback) {
