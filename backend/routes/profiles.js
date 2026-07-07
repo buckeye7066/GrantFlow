@@ -3917,6 +3917,7 @@ router.get('/:id/gap-plan', async (req, res) => {
     const plan = buildProfileGapPlan(normalized, sections, {
       displayName: firstName,
       minCoverage: Number.isFinite(Number(req.query.min_coverage)) ? Number(req.query.min_coverage) : 0.5,
+      profile,
     })
     return res.json({ ok: true, profile_id: id, ...plan })
   } catch (error) {

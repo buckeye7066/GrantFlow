@@ -19,6 +19,8 @@ import {
   getExplicitStateZip,
   collectAddressTextForInference,
 } from '../utils/inferLocationFromAddress.js'
+import { isOrganizationProfileType } from '../../shared/profileSectionApplicability.js'
+import { profileAlreadyAnswers } from './profileKnownFacts.js'
 
 /**
  * @param {object} db
@@ -346,10 +348,22 @@ export async function computeDetailedReadiness(db, profileId) {
 
   const categories = []
 
+  // Known-facts choke point (profileKnownFacts.js): a category's PRESENCE
+  // check must see the fact wherever it actually lives (canonical home OR any
+  // alias section — e.g. veteran in demographics.veteran_status, income in
+  // financial_information.household_income, amount in
+  // financial_information.funding_amount_needed). The narrow per-category
+  // clue lists below stay as the first-line check; `known()` is the net so a
+  // present fact is never counted as missing (which both re-asked the user
+  // AND under-scored readiness — the owner's duplicate-qualifier-question
+  // class).
+  const factCtx = { profile, sections }
+  const known = (factId) => profileAlreadyAnswers(factId, factCtx)
+
   // 1. Identity / applicant type ─────────────────────────────────────────────
   {
     const primaryType = resolveApplicantType(profile) || basic.profile_category || null
-    const present = Boolean(primaryType)
+    const present = Boolean(primaryType) || known('applicant_type')
     categories.push({
       key: 'identity',
       label: 'Identity / applicant type',
@@ -376,11 +390,12 @@ export async function computeDetailedReadiness(db, profileId) {
     const state = explicit.state || profile.state || inferred.state || null
     const zip = explicit.zip || profile.postal_code || profile.zip || inferred.zip || null
     const city = pickFirstString(basic.city, locationFocus.city, profile.city)
-    const present = Boolean(state || zip)
-    const earned = present ? (city ? 12 : 9) : 0
+    const present = Boolean(state || zip) || known('state_zip')
+    const hasCity = Boolean(city) || known('city')
+    const earned = present ? (hasCity ? 12 : 9) : 0
     const missing = []
     if (!present) missing.push('Add a state or ZIP code in Basic Information.')
-    else if (!city) missing.push('Add a city for sharper geographic matching.')
+    else if (!hasCity) missing.push('Add a city for sharper geographic matching.')
     categories.push({
       key: 'location',
       label: 'Location',
@@ -398,7 +413,7 @@ export async function computeDetailedReadiness(db, profileId) {
     const keywords = isPresentArray(programsServices.keywords) || isPresentArray(profile.keywords)
     const interests = isPresentArray(programsServices.interests) || isPresentArray(profile.interests)
     const goal = pickFirstString(narrative.primary_goal, narrative.target_population)
-    const present = focus || keywords || interests || Boolean(goal)
+    const present = focus || keywords || interests || Boolean(goal) || known('primary_need')
     const earned = present ? 12 : 0
     categories.push({
       key: 'funding_needs',
@@ -423,7 +438,12 @@ export async function computeDetailedReadiness(db, profileId) {
       programsServices.amount_requested,
       small.requested_amount,
     )
-    const present = Boolean(amt) || (Number(profile.amount_requested) > 0)
+    // known('funding_amount') closes the alias gap: the gap interview and the
+    // profile editor store the amount under narrative/financial_information
+    // `funding_amount_needed`, which the original clue list never read — the
+    // user was re-asked for an amount they had already given AND the category
+    // scored 0 (present-fact-counted-as-missing bug).
+    const present = Boolean(amt) || (Number(profile.amount_requested) > 0) || known('funding_amount')
     categories.push({
       key: 'amount',
       label: 'Amount requested',
@@ -448,7 +468,13 @@ export async function computeDetailedReadiness(db, profileId) {
       education.school_type,
       health.health_status,
     ]
-    const has = clues.some((v) => typeof v === 'string' && v.trim())
+    // known('eligibility_traits') closes the alias gap: veteran status lives in
+    // demographics.veteran_status / military_service.veteran, disability in
+    // demographics/health_medical, income in financial_information — none of
+    // which the original clue list read, so a profile with those facts filled
+    // was still asked the eligibility question AND lost the 10 points
+    // (present-fact-counted-as-missing bug).
+    const has = clues.some((v) => typeof v === 'string' && v.trim()) || known('eligibility_traits')
     categories.push({
       key: 'eligibility',
       label: 'Eligibility clues',
@@ -472,13 +498,25 @@ export async function computeDetailedReadiness(db, profileId) {
       small.legal_form,
       basic.organization_type,
     )
+    // Tax status may be free text OR the boolean 501(c)(3) toggles the profile
+    // editor writes — check all of them so a filled nonprofit is not told to
+    // "add tax status" it already provided (present-fact-counted-as-missing).
     const taxStatus = pickFirstString(
       nonprofitCompliance.tax_exempt_status,
       orgDetails.tax_status,
       small.tax_classification,
+    ) ||
+      nonprofitCompliance.is_501c3 === true ||
+      nonprofitCompliance.is_501c3_public_charity === true ||
+      nonprofitCompliance.is_501c3_private_foundation === true ||
+      orgDetails.is_501c3_public_charity === true ||
+      orgDetails.is_501c3_private_foundation === true
+    // Canonical org classifier (shared/profileSectionApplicability) instead of
+    // a stale hardcoded 6-type list — county_government, library, food_pantry
+    // etc. are org profiles too and should be asked for org/tax status.
+    const isOrgProfile = isOrganizationProfileType(
+      resolveApplicantType(profile) || basic.profile_category,
     )
-    const isOrgProfile = ['nonprofit', 'school', 'church', 'ministry', 'business', 'volunteer_fire_department']
-      .includes(String(profile.primary_type || '').toLowerCase())
     const present = Boolean(orgType || taxStatus)
     let earned
     if (!isOrgProfile) {
