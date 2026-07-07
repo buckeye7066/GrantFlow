@@ -45,6 +45,33 @@ npm run doctor       # Project health check
 - **Deployment**: Frontend → Vercel, Backend → Railway (PostgreSQL).
 - **Canonical product rules + goals**: `docs/canonical_rules.md` is the single source of truth. Read it before changing matching, discovery, pipeline, or tenancy behavior.
 
+## MIGRATION PARITY — superseding a system requires proving coverage, not just cutover
+
+The 2026-07 crawler-os cutover silently stranded 12+ discovery lanes: the
+migration verified the OLD paths stopped running (superseded job types) but
+never enumerated what those paths could REACH and asserted the new system
+reached it too. The standing rule:
+
+> A PR that supersedes/replaces a subsystem MUST ship a mechanical parity
+> check: enumerate the old system's reachable surface (sources, job types,
+> domains, fields — whatever the unit is) in a test or script, and assert the
+> replacement covers every item or explicitly lists each exclusion with a
+> reason. "The old code no longer runs" is not evidence of parity.
+
+Companion rule for enumerable inventories: any set whose members live in more
+than one place (sources ↔ adapters ↔ dashboard lanes; thresholds ↔ display
+tiers; profile facts ↔ question fields) gets a REGISTRY plus a TOTALITY test
+so a new member cannot silently fall out of any consumer (precedents:
+`LANE_OF_SOURCE` totality in `coverageEvidenceService.test.js`,
+`check-env-examples`, `profileKnownFacts` field-map guard).
+
+Owner-verified outcomes on real profiles are protected by the
+**golden-outcome sentinel** (`coverage.goldenOutcomes` in
+`backend/services/sam/samRegistry.js`, expectations in `system_kv
+golden_outcome_expectations`): after live-verifying a coverage fix, append the
+expectation so a future regression reds Anya's morning report instead of
+waiting for the owner to notice.
+
 ## INVARIANTS — enforce at a choke point, never trust per-call discipline
 
 GrantFlow's recurring bugs came from canonical RULES being enforced only by
