@@ -22,6 +22,7 @@
  */
 
 import { computeProfileCoverage } from './profileCoverage.js'
+import { shouldAskProfileQuestion } from './profileKnownFacts.js'
 
 /**
  * Dichotomous (yes/no) facet questions. Each answer populates the field that
@@ -48,7 +49,9 @@ export const FACET_QUESTIONS = Object.freeze([
     type: 'yes_no',
     prompt: 'Are you 60 years old or older?',
     facet: 'senior',
-    writes: { section: 'demographics', field: 'age_group', yes: 'Senior 60+', no: null },
+    // A "no" must persist too ('Under 60'), or the question is re-asked on
+    // every login — the duplicate-qualifier-question class.
+    writes: { section: 'demographics', field: 'age_group', yes: 'Senior 60+', no: 'Under 60' },
   },
   {
     id: 'is_student',
@@ -62,7 +65,10 @@ export const FACET_QUESTIONS = Object.freeze([
     type: 'yes_no',
     prompt: 'Have you (or the person you are applying for) served in the military?',
     facet: 'veteran',
-    writes: { section: 'demographics', field: 'veteran_status', yes: true, no: false },
+    // String values: buildProfileSignals reads demographics.veteran_status as
+    // a STRING ('not a veteran' is recognised as an explicit no), so a boolean
+    // true here silently fed nothing into matching.
+    writes: { section: 'demographics', field: 'veteran_status', yes: 'Veteran', no: 'Not a veteran' },
   },
   {
     id: 'is_caregiver',
@@ -78,11 +84,18 @@ export const FACET_QUESTIONS = Object.freeze([
  * the coverage field key; only asked when that field is missing.
  */
 export const GAP_QUESTIONS = Object.freeze({
-  state: { id: 'state', type: 'text', prompt: 'Which state do you live in (or primarily serve)?', writes: { section: 'location_focus', field: 'state' } },
-  city: { id: 'city', type: 'text', prompt: 'What city or town?', writes: { section: 'location_focus', field: 'city' } },
-  zip: { id: 'zip', type: 'text', prompt: 'What is your ZIP code? (this unlocks local funding)', writes: { section: 'location_focus', field: 'zip_code' } },
+  // Location answers persist to the CANONICAL home (basic_information — what
+  // readiness, field prompts, and buildProfileSignals read first), not the
+  // location_focus alias that some readers never saw (an answered ZIP was
+  // re-asked by the other surfaces — the duplicate-qualifier-question class).
+  state: { id: 'state', type: 'text', prompt: 'Which state do you live in (or primarily serve)?', writes: { section: 'basic_information', field: 'state' } },
+  city: { id: 'city', type: 'text', prompt: 'What city or town?', writes: { section: 'basic_information', field: 'city' } },
+  zip: { id: 'zip', type: 'text', prompt: 'What is your ZIP code? (this unlocks local funding)', writes: { section: 'basic_information', field: 'zip' } },
   needCategories: { id: 'needs', type: 'text', prompt: 'What do you most need help with right now? (for example: housing, utilities, medical bills, food, education, disability support, emergency assistance)', writes: { section: 'funding_needs', field: 'need_categories' } },
-  fundingAmountNeeded: { id: 'funding_amount', type: 'number', prompt: 'Roughly how much funding are you looking for?', writes: { section: 'financial_information', field: 'funding_amount_needed' } },
+  // Canonical home is narrative.funding_amount_needed (PROFILE_SCHEMA), which
+  // signals/keyword extraction actually read; financial_information was an
+  // alias only profileFieldPrompts knew about.
+  fundingAmountNeeded: { id: 'funding_amount', type: 'number', prompt: 'Roughly how much funding are you looking for?', writes: { section: 'narrative', field: 'funding_amount_needed' } },
   organizationType: { id: 'org_type', type: 'text', prompt: 'What kind of organization is it? (nonprofit, church, school, business, agency…)', writes: { section: 'organization_details', field: 'organization_type' } },
   populationServed: { id: 'population', type: 'text', prompt: 'Who do you serve?', writes: { section: 'organization_details', field: 'population_served' } },
   missionFocus: { id: 'mission', type: 'text', prompt: 'In a sentence, what is your mission or main focus?', writes: { section: 'organization_details', field: 'mission_focus' } },
@@ -118,6 +131,8 @@ function facetAnswered(q, normalized, sections) {
  * @param {number} [opts.minCoverage=0.5]  below this, the profile is "incomplete"
  * @param {number} [opts.maxQuestions=8]
  * @param {string} [opts.displayName]
+ * @param {object} [opts.profile]  raw profile row — lets the known-facts gate
+ *   resolve the org/person side from the declared type
  */
 export function buildProfileGapPlan(normalized, sections = {}, opts = {}) {
   const minCoverage = Number.isFinite(opts.minCoverage) ? opts.minCoverage : 0.5
@@ -126,13 +141,23 @@ export function buildProfileGapPlan(normalized, sections = {}, opts = {}) {
 
   const coverage = computeProfileCoverage(normalized, sections)
 
+  // Known-facts choke point (profileKnownFacts.js): never ask a question the
+  // profile already answers under ANY alias spelling, and never ask a
+  // person-demographic question of an organization (or an org question of an
+  // individual). facetAnswered stays as the facet-specific first line;
+  // shouldAskProfileQuestion is the net across all alias locations + the
+  // org/person applicability matrix.
+  const factCtx = { profile: opts.profile ?? null, sections, normalized }
+
   // Unanswered dichotomous facet questions first — they establish the type from
   // data (no manual type pick), and they are quick yes/no.
-  const facetQs = FACET_QUESTIONS.filter((q) => !facetAnswered(q, normalized, sections))
+  const facetQs = FACET_QUESTIONS.filter(
+    (q) => !facetAnswered(q, normalized, sections) && shouldAskProfileQuestion(q.id, factCtx),
+  )
 
   // Then the matching-critical value gaps, worst (highest weight) first.
   const missing = (coverage.fieldSignals || [])
-    .filter((f) => !f.present && GAP_QUESTIONS[f.key])
+    .filter((f) => !f.present && GAP_QUESTIONS[f.key] && shouldAskProfileQuestion(f.key, factCtx))
     .sort((a, b) => (b.weight || 0) - (a.weight || 0))
   const gapQs = missing.map((f) => ({ ...GAP_QUESTIONS[f.key], label: f.label, weight: f.weight }))
 

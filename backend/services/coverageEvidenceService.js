@@ -29,6 +29,7 @@ import { computeDetailedReadiness } from './profileReadinessService.js';
 import { getProfileFieldPrompts } from './profileFieldPrompts.js';
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js';
 import { normalizeState } from '../utils/stateNormalization.js';
+import { shouldAskProfileQuestion } from './profileKnownFacts.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lane taxonomy — the 9 owner-defined source lanes.
@@ -561,10 +562,17 @@ export async function buildCoverageEvidence(db, profileId) {
   });
 
   // ── 4. answer_next — merged, deduped, priority-ordered ──
+  // Known-facts choke point (profileKnownFacts.js): a question is emitted only
+  // when the profile does not already answer it (under ANY alias section) and
+  // it applies to this profile's org/person side. This also neutralises STALE
+  // match_explain_json — an explain computed before the user supplied their
+  // gender/faith/income must not re-ask for it here.
+  const factCtx = { profile: ctx.profile, sections: ctx.sections, signals: ctx.signals, normalized: ctx.profileNorm };
   const answerNextByField = new Map();
   const pushItem = (item) => {
     const key = canonicalField(item.field);
     if (!key || NON_USER_FIELDS.has(key)) return;
+    if (!shouldAskProfileQuestion(key, factCtx)) return;
     const existing = answerNextByField.get(key);
     if (existing) {
       // merge: keep first question/why, fill in missing metadata.

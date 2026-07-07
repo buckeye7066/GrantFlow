@@ -33,6 +33,7 @@ import {
   isOrganizationProfileType,
   isStudentProfileType,
 } from '../../shared/profileSectionApplicability.js'
+import { shouldAskProfileQuestion } from './profileKnownFacts.js'
 
 function normType(value) {
   return String(value || '')
@@ -265,7 +266,13 @@ export async function getProfileFieldPrompts(db, profileId) {
       })
     }
 
-    return prompts
+    // Known-facts choke point (profileKnownFacts.js): the per-field checks
+    // above are the first line; this net drops any prompt whose fact is
+    // already answered under an ALIAS spelling the checks above don't read
+    // (e.g. ZIP stored as location_focus.zip_code by the gap interview), and
+    // any prompt that doesn't apply to this profile's org/person side.
+    const factCtx = { profile, sections }
+    return prompts.filter((p) => shouldAskProfileQuestion(p.field, factCtx))
   } catch {
     // Never let prompt derivation break the matching response.
     return []

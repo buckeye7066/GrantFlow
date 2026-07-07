@@ -87,7 +87,7 @@ export async function draftGapEmailsForIncompleteProfiles(db, {
       for (const s of rows) { try { sections[s.section_key] = JSON.parse(s.data) } catch { sections[s.section_key] = {} } }
       const normalized = _normalize(p, sections)
       const firstName = String(p.display_name || '').trim().split(/\s+/)[0] || 'there'
-      const plan = buildProfileGapPlan(normalized, sections, { displayName: firstName, minCoverage })
+      const plan = buildProfileGapPlan(normalized, sections, { displayName: firstName, minCoverage, profile: p })
       if (plan.complete || !plan.email) { summary.skipped.complete += 1; continue }
 
       const contacts = await _resolve(db, p.id)
