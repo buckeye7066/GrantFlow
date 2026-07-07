@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { formatReasonText } from '@/utils/reasonText';
-import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
+import { scoreToMatchLabel, scoreToMatchTier } from '@/lib/matchDisplayThresholds';
 import { Button } from '@/components/ui/button';
 import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock, FileText, Target, Link2Off, AlertTriangle, CalendarClock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -61,11 +61,14 @@ function MatchIntelligenceBanner({ grant }) {
 
   const getScoreStyle = (s) => {
     const label = scoreToMatchLabel(s)
-    if (s >= 80) return { bg: 'bg-emerald-500', label }
-    if (s >= 65) return { bg: 'bg-green-500', label }
-    if (s >= 50) return { bg: 'bg-blue-500', label }
-    if (s >= 35) return { bg: 'bg-amber-500', label }
-    return { bg: 'bg-slate-400', label }
+    const tierBg = {
+      excellent: 'bg-emerald-500',
+      good: 'bg-green-500',
+      fair: 'bg-blue-500',
+      potential: 'bg-amber-500',
+      low: 'bg-slate-400',
+    }
+    return { bg: tierBg[scoreToMatchTier(s)], label }
   }
 
   const hasAnything = matchScore > 0 || matchReasons.length > 0 || linkStatus === 'broken' || (daysUntil !== null && daysUntil <= 14)
@@ -81,7 +84,7 @@ function MatchIntelligenceBanner({ grant }) {
           <div className="flex items-center gap-2">
             <div className={`${style.bg} text-white text-sm font-bold px-3 py-1 rounded-full flex items-center gap-1.5`}>
               <Target className="w-3.5 h-3.5" />
-              {Math.round(matchScore)}%
+              Score {Math.round(matchScore)}
             </div>
             <span className="text-sm font-medium text-slate-700">{style.label}</span>
           </div>

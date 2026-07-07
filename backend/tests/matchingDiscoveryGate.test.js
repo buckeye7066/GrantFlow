@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import matchingRouter from '../routes/matching.js'
 import { stampLastDiscoveryAt } from '../services/autoDiscoveryCrawlers.js'
+import { MIN_SCORE_SLIDER_MAX } from '../config/matchThresholds.js'
 
 /**
  * Feature A (discovery-pending gate) + Feature B (score_histogram) tests for
@@ -246,9 +247,10 @@ describe('matching score_histogram (Feature B)', () => {
       const hist = response.body.score_histogram
       expect(Array.isArray(hist)).toBe(true)
       expect(hist.length).toBeGreaterThan(0)
-      // Buckets span the 0–80 range contiguously.
+      // Buckets span the display bands contiguously up to the slider max
+      // (data-point scale; edges = the canonical Broad/Good/Strong/Best bands).
       expect(hist[0].min).toBe(0)
-      expect(hist[hist.length - 1].max).toBe(80)
+      expect(hist[hist.length - 1].max).toBe(MIN_SCORE_SLIDER_MAX)
       let totalCount = 0
       for (const bucket of hist) {
         expect(typeof bucket.min).toBe('number')

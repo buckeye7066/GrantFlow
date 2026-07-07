@@ -403,3 +403,31 @@ export const GOOD_MATCH_SCORE = 11
 
 /** Moderate match bucket threshold (some coverage, review-worthy; old 15). */
 export const MODERATE_MATCH_SCORE = 7
+
+// ── Legacy-scale preference migration ────────────────────────────────────
+
+/**
+ * Upper bound of the "Minimum match score" slider track (sync with
+ * src/lib/matchDisplayThresholds.js MIN_SCORE_SLIDER_MAX). 30 sits above the
+ * prod p99 (23); no data-point-scale minimum above it makes sense, so any
+ * PERSISTED min-score preference beyond it must be a retired-scale value.
+ */
+export const MIN_SCORE_SLIDER_MAX = 30
+
+/**
+ * One-time translation for persisted OLD-SCALE minimum-score preferences
+ * (need-anchored 0–100 values, e.g. a stored "85" that starved discovery
+ * forever — max real score on this scale is ≈58 and >23 is the top 1%):
+ *   ≥75 (old strong/best) → STRONG_MATCH_SCORE (14)
+ *   31–74 (old good and everything between) → GOOD_MATCH_SCORE (11)
+ * Values ≤ MIN_SCORE_SLIDER_MAX pass through untouched (already live-scale).
+ * Non-numeric input is returned as-is (callers decide the null/NaN policy).
+ * Mirrors translateLegacyMinScore in src/lib/matchDisplayThresholds.js.
+ */
+export function translateLegacyMinScore(value) {
+  const v = Number(value)
+  if (!Number.isFinite(v)) return value
+  if (v <= MIN_SCORE_SLIDER_MAX) return v
+  if (v >= 75) return STRONG_MATCH_SCORE
+  return GOOD_MATCH_SCORE
+}

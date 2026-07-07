@@ -12,7 +12,14 @@ import {
   sanitizeSearchTerm,
 } from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
-import { DEFAULT_MIN_SCORE, REVIEW_SCORE } from '../config/matchThresholds.js'
+import {
+  DEFAULT_MIN_SCORE,
+  REVIEW_SCORE,
+  MODERATE_MATCH_SCORE,
+  GOOD_MATCH_SCORE,
+  STRONG_MATCH_SCORE,
+  MIN_SCORE_SLIDER_MAX,
+} from '../config/matchThresholds.js'
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
@@ -105,31 +112,36 @@ function friendlySourceFamily(source, recordOrigin) {
 
 /**
  * Build a score histogram from ALL scored opportunities (BEFORE the slider's
- * min-score filter) so the frontend can render a data-driven guidance band
- * across the 0–80 range. Each bucket reports its [min,max) range, how many
- * scored opportunities fell in it, and the dominant friendly source family.
- * The 0–80 cap mirrors the slider's realistic strong-match ceiling; anything
- * scored above 80 folds into the top bucket so no result is invisible.
+ * min-score filter) so the frontend can render a data-driven guidance band.
+ * Bucket edges are the CANONICAL display bands on the data-point scale
+ * (Broad < MODERATE ≤ Good < GOOD ≤ Strong < STRONG ≤ Best), capped at the
+ * slider's track max (MIN_SCORE_SLIDER_MAX, above the prod p99) — matching
+ * the guidance-band zones in src/lib/matchDisplayThresholds.js exactly so
+ * per-band counts line up. Anything scored above the cap folds into the top
+ * bucket so no result is invisible. Each bucket reports its [min,max) range,
+ * how many scored opportunities fell in it, and the dominant friendly source
+ * family.
  *
  * @param {Array<{ match_score?: number, source?: string, record_origin?: string }>} scoredList
- * @param {{ bucketSize?: number, max?: number }} [opts]
+ * @param {{ edges?: number[] }} [opts]
  * @returns {Array<{ min: number, max: number, count: number, top_source: string|null }>}
  */
-function buildScoreHistogram(scoredList, { bucketSize = 20, max = 80 } = {}) {
+const HISTOGRAM_BAND_EDGES = [0, MODERATE_MATCH_SCORE, GOOD_MATCH_SCORE, STRONG_MATCH_SCORE, MIN_SCORE_SLIDER_MAX]
+
+function buildScoreHistogram(scoredList, { edges = HISTOGRAM_BAND_EDGES } = {}) {
   if (!Array.isArray(scoredList) || scoredList.length === 0) return []
-  const bucketCount = Math.max(1, Math.ceil(max / bucketSize))
-  const buckets = Array.from({ length: bucketCount }, (_, i) => ({
-    min: i * bucketSize,
-    max: i === bucketCount - 1 ? max : (i + 1) * bucketSize,
-    count: 0,
-    _families: new Map(),
-  }))
+  const buckets = []
+  for (let i = 0; i < edges.length - 1; i++) {
+    buckets.push({ min: edges[i], max: edges[i + 1], count: 0, _families: new Map() })
+  }
   for (const opp of scoredList) {
     const score = Number(opp?.match_score)
     if (!Number.isFinite(score)) continue
-    let idx = Math.floor(score / bucketSize)
-    if (idx >= bucketCount) idx = bucketCount - 1
-    if (idx < 0) idx = 0
+    let idx = buckets.length - 1
+    for (let i = 0; i < buckets.length; i++) {
+      if (score < buckets[i].max || i === buckets.length - 1) { idx = i; break }
+    }
+    if (score < buckets[0].min) idx = 0
     const bucket = buckets[idx]
     bucket.count++
     const family = friendlySourceFamily(opp?.source, opp?.record_origin)

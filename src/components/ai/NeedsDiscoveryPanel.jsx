@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { apiFetch } from '@/api/client';
 import { searchSpecificNeed } from '@/api/crawlers';
+import { MODERATE_MATCH_SCORE } from '@/lib/matchDisplayThresholds';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -58,7 +59,7 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
       const data = await searchSpecificNeed({
         profileId,
         needText: item.search_terms || item.name,
-        minMatchScore: 15,
+        minMatchScore: MODERATE_MATCH_SCORE,
         maxResults: 8,
       });
       setSources(data?.opportunities || []);
@@ -156,7 +157,7 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           {src.combined_score || src.match_score ? (
-                            <Badge variant="outline" className="text-[10px]">{src.combined_score || src.match_score}%</Badge>
+                            <Badge variant="outline" className="text-[10px]">Score {src.combined_score || src.match_score}</Badge>
                           ) : null}
                           <ExternalLink className="w-3 h-3 text-slate-400" />
                         </div>

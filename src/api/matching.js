@@ -1,7 +1,8 @@
 import { apiFetch } from '@/api/client'
+import { AUTO_ADD_SCORE } from '@/lib/matchDisplayThresholds'
 
 // Owner-facing curated funding-sources list (Crawler OS per-profile matches).
-export async function listProfileFundingSources(profileId, { minScore = 50 } = {}) {
+export async function listProfileFundingSources(profileId, { minScore = AUTO_ADD_SCORE } = {}) {
   if (!profileId) throw new Error('profileId is required')
   const params = new URLSearchParams({ min_score: String(minScore) })
   return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/funding-sources?${params}`)
@@ -12,7 +13,7 @@ export async function matchProfileToGrants(profileId) {
   return apiFetch(`/api/matching/profile/${profileId}/grants`)
 }
 
-export async function matchProfileToOpportunities(profileId, { minScore = 50, limit = 200 } = {}) {
+export async function matchProfileToOpportunities(profileId, { minScore = AUTO_ADD_SCORE, limit = 200 } = {}) {
   if (!profileId) throw new Error('profileId is required')
   const params = new URLSearchParams({ min_score: minScore, limit })
   return apiFetch(`/api/matching/profile/${profileId}/opportunities?${params}`)

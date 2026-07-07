@@ -22,6 +22,14 @@ import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
 import { formatReasonText } from "@/utils/reasonText"
 import { safeHttpUrl } from "@/lib/safeUrl"
+import {
+  AUTO_ADD_SCORE,
+  GOOD_MATCH_SCORE,
+  STRONG_MATCH_SCORE,
+  MIN_SCORE_SLIDER_MAX,
+  minScoreBandLabel,
+} from "@/lib/matchDisplayThresholds"
+import MatchScoreGuidanceBand from "@/components/discovery/MatchScoreGuidanceBand"
 
 // ---------------------------------------------------------------------------
 // Persistent needs helpers \u2013 stored in localStorage keyed per profile
@@ -73,68 +81,10 @@ const IMPACT_COLORS = {
   medium: "bg-blue-100 text-blue-700 border-blue-200",
 }
 
-// Match score scale upper bound. Aligned to the full 0\u2013100 scale so the
-// slider can reach the very highest matches (85+).
-const SCORE_MAX = 100
-
-// Guidance zones spanning the full 0\u2013100 scale, ALWAYS rendered (a visible
-// guide even before results exist), enriched with live counts + dominant source
-// from `score_histogram` when available.
-const GUIDANCE_ZONES = [
-  { min: 0, max: 40, label: "Broad matches", hint: "Wide net" },
-  { min: 40, max: 70, label: "Good matches", hint: "Worth a look" },
-  { min: 70, max: 85, label: "Strong matches", hint: "Solid fit" },
-  { min: 85, max: 100, label: "Best matches", hint: "Closest fit" },
-]
-
-function MatchScoreGuidanceBand({ histogram, max = SCORE_MAX, value }) {
-  const buckets = Array.isArray(histogram) ? histogram : []
-  const byMin = new Map(buckets.map((b) => [Number(b?.min) || 0, b]))
-  const maxCount = buckets.reduce((m, b) => Math.max(m, Number(b?.count) || 0), 0)
-  const hasData = maxCount > 0
-  return (
-    <div className="mt-2 mb-1 w-full">
-      <div className="flex w-full gap-1">
-        {GUIDANCE_ZONES.map((z) => {
-          const live = byMin.get(z.min)
-          const count = Number(live?.count) || 0
-          const topSource = live?.top_source ? String(live.top_source) : null
-          const isActiveZone = typeof value === "number" && value >= z.min && value < z.max
-          const ratio = hasData ? count / maxCount : 0
-          // When we have no data, render a neutral uniform color rather than a
-          // gradient that would imply high-score matches already exist.
-          const intensity = hasData ? 0.2 + 0.65 * ratio : 0
-          const bg = hasData
-            ? (count === 0 ? "rgb(241 245 249)" : `rgba(34, 197, 94, ${intensity})`)
-            : "rgb(226 232 240)"
-          const sub = hasData ? (count > 0 ? `${count}${topSource ? ` \u00b7 ${topSource.toLowerCase()}` : ""}` : z.hint) : z.hint
-          return (
-            <div
-              key={`band-${z.min}`}
-              className="flex flex-col"
-              style={{ flexGrow: 1, flexBasis: 0 }}
-              title={`${z.label} (${z.min}\u2013${z.max}%)${hasData ? ` \u00b7 ${count} match${count === 1 ? "" : "es"}` : ""}${topSource ? ` \u00b7 mostly ${topSource.toLowerCase()}` : ` \u00b7 ${z.hint}`}`}
-            >
-              <div
-                className={`h-2.5 rounded-sm ${isActiveZone ? "ring-2 ring-emerald-600" : ""}`}
-                style={{ backgroundColor: bg }}
-              />
-              <div className="mt-1 text-[10px] leading-tight text-slate-500 text-center">
-                <div className="font-medium text-slate-700">{z.label}</div>
-                <div className="truncate">{sub}</div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div className="mt-1 flex justify-between text-[10px] text-slate-500">
-        <span>0%</span>
-        <span>Higher % = closer fit to this profile</span>
-        <span>{max}%</span>
-      </div>
-    </div>
-  )
-}
+// Slider track upper bound + guidance zones come from the canonical
+// src/lib/matchDisplayThresholds.js (data-point scale, 0..30+) and the shared
+// MatchScoreGuidanceBand component \u2014 this page previously carried its own
+// 0\u2013100 copy with dead 40/70/85 zone stops.
 
 /**
  * Architecture P1: friendly, dismissible "Improve your matches" card.
@@ -348,7 +298,9 @@ export default function SmartMatcher() {
     const [intentBrandedProgram, setIntentBrandedProgram] = useState(null)
     const [intentCredentials, setIntentCredentials] = useState([])
     const [freeTextNeed, setFreeTextNeed] = useState("")
-    const [minScore, setMinScore] = useState(50)
+    // Pipeline bar on the data-point scale (the old default of 50 sits beyond
+    // the top 1% of real scores and returned near-nothing).
+    const [minScore, setMinScore] = useState(AUTO_ADD_SCORE)
     const [selectedOpp, setSelectedOpp] = useState(null)
     // Architecture P1: lets the user dismiss the "Improve your matches" prompts.
     const [improvePromptsDismissed, setImprovePromptsDismissed] = useState(false)
@@ -724,7 +676,7 @@ export default function SmartMatcher() {
   const filteredOpportunities = useMemo(() => {
         // Defense in depth: even if any backend path leaks a sub-threshold row,
         // the UI honors the slider as a HARD floor \u2014 nothing below minScore shows.
-        const floor = Math.min(SCORE_MAX, Math.max(0, Number(minScore) || 0))
+        const floor = Math.min(MIN_SCORE_SLIDER_MAX, Math.max(0, Number(minScore) || 0))
         return [...scoredOpportunities]
           .filter((o) => {
             const score = Number(o.match_score ?? o.match ?? -Infinity)
@@ -733,8 +685,8 @@ export default function SmartMatcher() {
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
   }, [scoredOpportunities, minScore])
 
-  const topMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 85)
-    const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 70 && (o.match_score ?? 0) < 85)
+  const topMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= STRONG_MATCH_SCORE)
+    const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= GOOD_MATCH_SCORE && (o.match_score ?? 0) < STRONG_MATCH_SCORE)
     const allQualified = filteredOpportunities
 
   const handleOpenOpp = (opp) => { setSelectedOpp(opp) }
@@ -874,17 +826,17 @@ export default function SmartMatcher() {
                                                           </div>
                                                           <div>
                                                                           <Label>Minimum match score</Label>
-                                                                          {/* Feature B: data-driven, color-coded guidance band (0\u2013100). */}
-                                                                          <MatchScoreGuidanceBand histogram={scoreHistogram} max={SCORE_MAX} value={minScore} />
+                                                                          {/* Feature B: data-driven, color-coded guidance band (data-point scale, 0..30+). */}
+                                                                          <MatchScoreGuidanceBand histogram={scoreHistogram} max={MIN_SCORE_SLIDER_MAX} value={minScore} />
                                                                           <div className="flex items-center gap-2">
                                                                                             <SlidersHorizontal className="w-4 h-4 text-slate-400" />
                                                                                             <input
-                                                                                                                  type="range" min="0" max="100"
-                                                                                                                  value={Math.min(SCORE_MAX, minScore)}
+                                                                                                                  type="range" min="0" max={MIN_SCORE_SLIDER_MAX} step="1"
+                                                                                                                  value={Math.min(MIN_SCORE_SLIDER_MAX, minScore)}
                                                                                                                   onChange={(e) => setMinScore(Number(e.target.value))}
                                                                                                                   className="flex-1"
                                                                                                                 />
-                                                                                            <span className="text-sm font-medium w-12 text-right">{minScore}%</span>
+                                                                                            <span className="text-sm font-medium whitespace-nowrap text-right">Score &ge; {minScore} &middot; {minScoreBandLabel(minScore)}</span>
                                                                           </div>
                                                           </div>
                                             </div>
@@ -1228,7 +1180,7 @@ export default function SmartMatcher() {
                           </CardHeader>
                           <CardContent>
                             <div className="text-2xl font-bold">{topMatches.length}</div>
-                            <p className="text-xs text-slate-600 mt-1">85%+ match score</p>
+                            <p className="text-xs text-slate-600 mt-1">Score {STRONG_MATCH_SCORE}+ &middot; Best matches</p>
                           </CardContent>
                         </Card>
                         <Card>
@@ -1239,7 +1191,7 @@ export default function SmartMatcher() {
                           </CardHeader>
                           <CardContent>
                             <div className="text-2xl font-bold">{goodMatches.length}</div>
-                            <p className="text-xs text-slate-600 mt-1">70-84% match score</p>
+                            <p className="text-xs text-slate-600 mt-1">Score {GOOD_MATCH_SCORE}&ndash;{STRONG_MATCH_SCORE - 1}</p>
                           </CardContent>
                         </Card>
                         <Card>
@@ -1250,7 +1202,7 @@ export default function SmartMatcher() {
                           </CardHeader>
                           <CardContent>
                             <div className="text-2xl font-bold">{allQualified.length}</div>
-                            <p className="text-xs text-slate-600 mt-1">{minScore}%+ match score</p>
+                            <p className="text-xs text-slate-600 mt-1">Score {minScore}+</p>
                           </CardContent>
                         </Card>
                         {profileFundingSources.length > 0 && (
@@ -1290,7 +1242,7 @@ export default function SmartMatcher() {
                                         <div className="flex items-center gap-2 mb-2">
                                           <h3 className="font-semibold text-slate-900">{opp.title}</h3>
                                           <Badge variant="default" className="bg-green-600">
-                                            {opp.match_score ?? 0}% Match
+                                            Score {opp.match_score ?? 0}
                                           </Badge>
                                         </div>
                                         <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>
@@ -1335,8 +1287,8 @@ export default function SmartMatcher() {
                                       <div className="flex-1">
                                         <div className="flex items-center gap-2 mb-2">
                                           <h3 className="font-semibold text-slate-900">{opp.title}</h3>
-                                          <Badge variant={(opp.match_score ?? 0) >= 85 ? "default" : "secondary"}>
-                                            {opp.match_score ?? 0}%
+                                          <Badge variant={(opp.match_score ?? 0) >= STRONG_MATCH_SCORE ? "default" : "secondary"}>
+                                            Score {opp.match_score ?? 0}
                                           </Badge>
                                         </div>
                                         <p className="text-sm text-slate-600 mb-2 line-clamp-2">{opp.description}</p>

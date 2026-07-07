@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2, FileEdit, Link2Off, UserCheck } from 'lucide-react';
-import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds';
+import { scoreToMatchLabel, scoreToMatchTier, STRONG_MATCH_SCORE, GOOD_MATCH_SCORE, AUTO_ADD_SCORE } from '@/lib/matchDisplayThresholds';
 import { format, isPast } from 'date-fns';
 import { parseLocalDate } from '@/components/shared/dateUtils';
 import { Link, useNavigate } from 'react-router-dom';
@@ -100,16 +100,18 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
   // legacy import). It must read "Not scored", never like an endorsed match.
   const isUnscored = (grant.match ?? grant.match_score) === null || (grant.match ?? grant.match_score) === undefined;
 
-  // Get match score color and label (need-anchored scale: 75 strong / 50 good
-  // / 25 one full need / 15 partial — keep bands aligned with
-  // src/lib/matchDisplayThresholds.js MATCH_DISPLAY_TIERS).
+  // Get match score color and label — bands come from the canonical
+  // scoreToMatchTier (src/lib/matchDisplayThresholds.js), never inline cutoffs.
   const getMatchScoreColor = (score) => {
     const label = scoreToMatchLabel(score);
-    if (score >= 75) return { bg: 'bg-emerald-500', text: 'text-white', label };
-    if (score >= 50) return { bg: 'bg-green-500', text: 'text-white', label };
-    if (score >= 25) return { bg: 'bg-blue-500', text: 'text-white', label };
-    if (score >= 15) return { bg: 'bg-amber-500', text: 'text-white', label };
-    return { bg: 'bg-slate-400', text: 'text-white', label };
+    const tierBg = {
+      excellent: 'bg-emerald-500',
+      good: 'bg-green-500',
+      fair: 'bg-blue-500',
+      potential: 'bg-amber-500',
+      low: 'bg-slate-400',
+    };
+    return { bg: tierBg[scoreToMatchTier(score)], text: 'text-white', label };
   };
 
   const matchColor = getMatchScoreColor(matchScore);
@@ -195,10 +197,10 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
           {/* Match Score Badge - PROMINENT */}
           {hasMatchScore && (
             <div className="flex items-center gap-1">
-              <HelpTip text={"Match Score: " + Math.round(matchScore) + "% — the share of this profile's main needs the source addresses, after eligibility and location checks. 75%+ = Strong, 50%+ = Good (half your main needs), 25%+ = one full need."}>
+              <HelpTip text={"Match Score: " + Math.round(matchScore) + " — the share of everything in this profile the source matches, after eligibility and location checks. Real matches mostly land between 5 and 25; " + STRONG_MATCH_SCORE + "+ = Excellent, " + GOOD_MATCH_SCORE + "+ = Good, " + AUTO_ADD_SCORE + "+ = Fair."}>
                 <Badge className={"text-xs font-bold " + matchColor.bg + " " + matchColor.text + " cursor-help"}>
                   <Target className="w-3 h-3 mr-1" />
-                  {Math.round(matchScore)}% Match
+                  Score {Math.round(matchScore)}
                 </Badge>
               </HelpTip>
               {/* Info toggle for match breakdown — only show when there are reasons to display */}

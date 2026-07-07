@@ -1,4 +1,5 @@
 import { apiFetch } from "@/api/client"
+import { AUTO_ADD_SCORE, MODERATE_MATCH_SCORE } from "@/lib/matchDisplayThresholds"
 
 export async function listCrawlerJobs(params = {}) {
   const searchParams = new URLSearchParams()
@@ -96,7 +97,7 @@ export async function listRealCrawlers() {
  */
 export async function runSmartCrawler({
   profileId,
-  minMatchScore = 50,
+  minMatchScore = AUTO_ADD_SCORE,
   state,
   city,
   applicantType,
@@ -143,7 +144,7 @@ export async function runSmartCrawler({
 export async function searchSpecificNeed({
   profileId,
   needText,
-  minMatchScore = 20,
+  minMatchScore = MODERATE_MATCH_SCORE,
   maxResults = 30,
   variant = 'funding',
 }) {
@@ -173,7 +174,7 @@ export async function searchSpecificNeed({
  * @param {string} opts.profileId - Required. Profile ID for context/signals.
  * @param {string} opts.crawlerType - Crawler type key.
  * @param {Object} [opts.profileData] - Optional pre-fetched profile data.
- * @param {number} [opts.minMatchScore] - Minimum match score threshold (default 50).
+ * @param {number} [opts.minMatchScore] - Minimum match score threshold (default AUTO_ADD_SCORE).
  * @param {boolean} [opts.strictMinScore] - When true, do not relax threshold if nothing meets min (Discover).
  * @param {Object|null} [opts.itemRequest] - Optional specific item request.
  * @returns {Promise<Object>}
@@ -182,7 +183,7 @@ export async function runRealCrawler({
   profileId,
   crawlerType,
   profileData,
-  minMatchScore = 50,
+  minMatchScore = AUTO_ADD_SCORE,
   strictMinScore = false,
   itemRequest = null,
 }) {
