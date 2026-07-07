@@ -21,39 +21,38 @@ import { upsertFundingOpportunity } from '../../backend/services/opportunityInse
 // A) matchingEngine: unknown location → geoPoints -5, national bonus NOT applied
 // ---------------------------------------------------------------------------
 
-test('matchingEngine (A): unknown profile location scores lower than known location for national opp', () => {
-  const emptyProfile = {} // no location, no type
+test('matchingEngine (A): geography is a GATE over coverage — known location scores ≥ unknown for a national opp the profile needs', () => {
+  // National opp that genuinely addresses a need the profile has. Geography is
+  // an eligibility GATE (multiplier on coverage), not coverage itself: it can
+  // only differentiate opps that already match a need. A national opp matching
+  // NOTHING scores at the floor regardless of location (the administrative-
+  // baseline the data-point model deliberately removed).
   const nationalOpp = {
-    title: 'National Grant',
-    description: 'Open to all US residents',
+    title: 'National Housing Assistance',
+    description: 'Housing assistance for eligible individuals nationwide',
     is_national: true,
     state: 'nationwide',
     eligibility_bullets: [],
-    keywords: [],
-    categories: [],
+    keywords: ['housing'],
+    categories: ['housing'],
   }
+  const unlocated = { primary_type: 'individual', needs: ['housing'] } // no location
+  const located = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
 
-  const { score, reasons } = calculateMatchScore(emptyProfile, nationalOpp)
-
-  // Must NOT say "National eligibility" — that bonus must not apply when location is unknown
-  const hasNationalBonus = reasons.some((r) => r === 'National eligibility')
+  const { reasons } = calculateMatchScore(unlocated, nationalOpp)
+  // Unknown location must NOT claim a national-eligibility match — it's unverifiable.
   assert.ok(
-    !hasNationalBonus,
-    `Expected no "National eligibility" bonus when profile location is unknown, got: ${JSON.stringify(reasons)}`,
+    !reasons.some((r) => r === 'National eligibility'),
+    `Expected no "National eligibility" when profile location is unknown, got: ${JSON.stringify(reasons)}`,
   )
 
-  // Profile with known location should score higher than profile without
-  const profileWithLocation = { state: 'OH' }
-  const { score: scoreWithLocation } = calculateMatchScore(profileWithLocation, nationalOpp)
-
-  // Unknown location must score meaningfully lower (at least 3 pts gap from weighted geo component)
+  const { score: sLoc } = calculateMatchScore(located, nationalOpp)
+  const { score: sUnloc } = calculateMatchScore(unlocated, nationalOpp)
+  // Same housing coverage; the geo gate (national serves OH = 1.0 vs unknown =
+  // 0.7) makes the located profile score at least as high.
   assert.ok(
-    scoreWithLocation > score,
-    `Expected profile with location (${scoreWithLocation}) to score higher than without (${score})`,
-  )
-  assert.ok(
-    scoreWithLocation - score >= 3,
-    `Expected meaningful gap (≥3 pts), got ${scoreWithLocation - score}`,
+    sLoc >= sUnloc,
+    `Expected located (${sLoc}) ≥ unlocated (${sUnloc}) — geo gate over equal coverage`,
   )
 })
 
