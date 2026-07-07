@@ -189,12 +189,11 @@ export const PROFILE_SCHEMA = {
         description: 'Short descriptor of need (low/moderate/high/urgent/unknown).',
       },
       funding_needs: {
-        type: 'array<string>',
-        format: 'tags',
-        vocabulary: 'needs',
-        default: [],
+        type: 'string',
+        format: 'text',
+        default: '',
         description:
-          'What the applicant needs funding for, as controlled need tags (canonical matcher buckets). Replaces the old free-text funding_needs narrative so every value scores. Legacy free-text is preserved and migrated to the nearest tag; unmatched text is kept as a custom tag.',
+          'A working ESTIMATE or RANGE of the funding this profile needs (e.g. "$15,000–$250,000") — a planning range, NOT a list of needs and NOT the single target goal. The applicant\'s need CATEGORIES are controlled tags on programs_services.focus_areas/interests and the matcher\'s derived needs; do not repurpose this dollar-range field.',
       },
       low_income: { type: 'boolean', default: false, description: 'True if the applicant is explicitly low-income.' },
       unemployed: {

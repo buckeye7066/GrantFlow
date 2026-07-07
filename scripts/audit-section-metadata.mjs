@@ -24,7 +24,16 @@ const SUPPORTED_FORMATS = new Set([
   'phone',
   'boolean_tri',
   'enum',
+  // Schema redesign 2026-07-07: controlled multi-select tag arrays (drawn from
+  // the matcher's own vocabulary) and drafting-only prose (scored:false, used
+  // by Hamilton/Anya, excluded from the scoring inventory).
+  'tags',
+  'prose',
 ])
+
+// Array-shaped metadata formats: a PROFILE_SCHEMA array<*> field may declare any
+// of these (NOT a scalar format, which is the "shape lie" this audit catches).
+const ARRAY_COMPATIBLE_FORMATS = new Set(['string_array', 'tags', 'json'])
 
 // A profile section key is "declared" if it matches a metadata field's
 // canonical name OR one of that field's legacy_aliases. Seed fixtures and the
@@ -144,9 +153,9 @@ async function main() {
       if (!schemaField) continue
       const schemaType = String(schemaField.type ?? '').toLowerCase()
       const isArrayType = schemaType.startsWith('array')
-      if (isArrayType && SCALAR_FORMATS.has(field.format)) {
+      if (isArrayType && !ARRAY_COMPATIBLE_FORMATS.has(field.format)) {
         failures.push(
-          `${sectionKey}.${field.name}: SECTION_METADATA format="${field.format}" but PROFILE_SCHEMA type="${schemaField.type}" — change format to "string_array"`,
+          `${sectionKey}.${field.name}: SECTION_METADATA format="${field.format}" but PROFILE_SCHEMA type="${schemaField.type}" — use "tags" (controlled vocabulary) or "string_array"`,
         )
       }
     }

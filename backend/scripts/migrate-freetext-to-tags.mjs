@@ -89,18 +89,10 @@ async function main() {
     let changed = false
     const changes = []
 
-    if (row.section_key === 'financial_information' && data.funding_needs != null) {
-      const tokens = toTokens(data.funding_needs)
-      if (tokens.length) {
-        const { tags, mapped, kept } = migrateTokens(tokens, mapFreeTextToNeedTag)
-        // Change if it wasn't already an equal array of these tags.
-        if (!sameArray(data.funding_needs, tags)) {
-          next.funding_needs = tags
-          changed = true
-          changes.push({ field: 'funding_needs', from: data.funding_needs, to: tags, mapped, kept })
-        }
-      }
-    }
+    // NOTE: financial_information.funding_needs is a DOLLAR-RANGE estimate
+    // ("$15,000–$250,000"), NOT a needs list — it is deliberately NOT migrated
+    // to tags (doing so would corrupt dollar ranges into garbage need tags).
+    // Need CATEGORIES live on programs_services.focus_areas/interests below.
 
     if (row.section_key === 'programs_services') {
       for (const field of ['focus_areas', 'interests']) {
