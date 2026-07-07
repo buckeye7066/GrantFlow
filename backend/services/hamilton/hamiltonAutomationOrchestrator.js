@@ -57,6 +57,8 @@ import {
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
+import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
+import { getTailoredApplication } from './tailoredApplicationStore.js'
 import {
   getDecryptedCredentialWithFallback,
   listCredentialedDomains,
@@ -1036,6 +1038,44 @@ async function runAutopilotPathway(db, {
       allowAutoSubmit = false
     }
   }
+
+  // ── TAILORED-APPLICATION AUTO-SUBMIT GATE (single choke point) ──────
+  // Owner directive: Hamilton may auto-submit a portal card ONLY when its
+  // per-funder tailored narrative is APPROVED (or approved-as-edited), has NO
+  // outstanding missing questions, and the profile's auto-submit toggle is on.
+  // This is the ONE place the autopilot consults before it is permitted to
+  // submit — it NEVER submits an unapproved or gap-blocked card, regardless of
+  // the per-application authorization or the toggle. When the gate blocks, we
+  // force allowAutoSubmit=false (Hamilton still fills + saves a draft) and
+  // record the reason so the UI + preflight blocker can explain it.
+  let autoSubmitGate = null
+  if (allowAutoSubmit && grant?.id) {
+    try {
+      autoSubmitGate = await evaluateAutoSubmitGate(db, {
+        profileId: task.profile_id,
+        grantId: grant.id,
+        profile,
+        opportunity,
+        grant,
+      })
+    } catch (err) {
+      // Fail CLOSED: if the gate can't be evaluated we do NOT auto-submit.
+      autoSubmitGate = { submit: false, reason: 'gate_error', enforced: true, error: String(err?.message || err) }
+    }
+    if (autoSubmitGate && autoSubmitGate.enforced && !autoSubmitGate.submit) {
+      allowAutoSubmit = false
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'filling_portal', step: 'auto_submit_gate',
+        message: `Auto-submit withheld (${autoSubmitGate.reason}): Hamilton will fill and save a draft but not submit until the tailored application is approved.`,
+        actorUserId: userId, actorRole: 'agent',
+        details: { gate_reason: autoSubmitGate.reason, tailored_status: autoSubmitGate.status || null },
+      }).catch(() => {})
+      await updateAutopilotRun(db, run.id, {
+        result: { auto_submit_gate: { blocked: true, reason: autoSubmitGate.reason, status: autoSubmitGate.status || null } },
+      }).catch(() => {})
+    }
+  }
+
   let engineResult = null
   let degradedDirective = null
 
@@ -1102,6 +1142,20 @@ async function runAutopilotPathway(db, {
       const answers = buildPortalNarrativeAnswers(proposal)
       if (answers.essay || answers.goals) narrativeAnswers = answers
     }
+  }
+
+  // When the auto-submit gate approved this card, prefer the APPROVED/EDITED
+  // tailored text as the portal's essay/goals answers — so what Hamilton
+  // submits is exactly what the applicant signed off on, not a fresh
+  // unreviewed re-draft. Best-effort; falls back to the drafted/profile essays.
+  if (autoSubmitGate?.submit && autoSubmitGate.enforced && grant?.id) {
+    try {
+      const approved = await getTailoredApplication(db, { profileId: task.profile_id, grantId: grant.id })
+      const approvedAnswers = approved ? buildPortalAnswersFromTailored(approved.fields) : null
+      if (approvedAnswers && (approvedAnswers.essay || approvedAnswers.goals)) {
+        narrativeAnswers = { ...(narrativeAnswers || {}), ...approvedAnswers }
+      }
+    } catch { /* best-effort */ }
   }
 
   // Sink for the engine to hand back the authenticated storageState after a

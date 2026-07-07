@@ -2239,6 +2239,11 @@ app.use('/api/hamilton/automation', lazyRouter('./routes/hamiltonAutomation.js')
 // login; WRITE pushes GrantFlow funding sources/awards into the portal. Gated by
 // HAMILTON_ENABLE_BROWSER_AUTOMATION + host allowlist inside the service.
 app.use('/api/hamilton/portal-sync', lazyRouter('./routes/hamiltonPortalSync.js'));
+// Hamilton Tailored Application — the per-funder, MBA-level, fabrication-guarded
+// application narrative stored ON each portal card with an approval state.
+// Auto-submit runs ONLY when approved/edited + no missing questions + the
+// profile's auto-submit toggle is on (evaluateAutoSubmitGate is the choke point).
+app.use('/api/hamilton/tailored', lazyRouter('./routes/hamiltonTailoredApplication.js'));
 // Backwards-compatible alias so any in-flight client still works during
 // the rollout. Both paths resolve to the same router.
 app.use('/api/yana/automation', lazyRouter('./routes/hamiltonAutomation.js'));

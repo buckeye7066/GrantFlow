@@ -1220,6 +1220,34 @@ CREATE TABLE IF NOT EXISTS profile_documents (
   PRIMARY KEY (profile_id, document_id)
 );
 
+-- Per-(profile × pipeline grant / portal card) tailored application record.
+-- Holds the funding-source-specific, MBA-level, fabrication-guarded narrative
+-- Hamilton drafted (fields_json = section_key → tailored text), its review
+-- state (pending → approved/edited), the funder requirements extracted, and any
+-- missing questions the applicant must answer before the card can be submitted.
+-- The auto-submit gate (tailoredNarrative.evaluateAutoSubmitGate) consults this
+-- as the single choke point before Hamilton submits. Portal cards key on
+-- grant_id, so the record is UNIQUE per (profile_id, grant_id).
+CREATE TABLE IF NOT EXISTS tailored_applications (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  grant_id TEXT,
+  opportunity_id TEXT,
+  fields_json TEXT,
+  status TEXT DEFAULT 'pending',
+  approved_by TEXT,
+  approved_at DATETIME,
+  missing_questions_json TEXT,
+  funder_requirements_json TEXT,
+  generated_from_hash TEXT,
+  matcher_version TEXT,
+  generator_version TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(profile_id, grant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tailored_applications_profile ON tailored_applications(profile_id, grant_id);
+
 -- School-portal bridge — see docs/school-portal-integration.md.
 -- Lets a registered school's student-information system (Banner / Workday /
 -- PeopleSoft / Slate / Anthology Apply) push student records into GrantFlow
