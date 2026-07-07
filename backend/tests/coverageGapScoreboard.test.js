@@ -23,14 +23,19 @@ import Database from 'better-sqlite3'
 import {
   KV_KEY,
   GAP_CLASSES,
+  STRUCTURAL_GAP_CLASSES,
+  STRUCTURAL_MATRIX_LANE,
   classifyGap,
   aggregateGapResults,
+  buildStructuralMatrixSection,
+  matrixWishlistEntries,
   buildFleetGapScoreboard,
   readGapScoreboard,
   isScoreboardStale,
   deriveAmyGapActions,
   weightCategoriesByGaps,
 } from '../services/coverageGapScoreboard.js'
+import { CRITICAL_NEEDS, US_STATES } from '../crawler-os/coverageMatrix.js'
 import { planVariantCounts } from '../services/amy/syntheticProfileCatalog.js'
 import { getCheckById } from '../services/sam/samRegistry.js'
 import { runAmyTraining } from '../services/amy/amyAgent.js'
@@ -177,6 +182,108 @@ describe('buildFleetGapScoreboard', () => {
       })
       expect(board.profiles_scanned).toBe(1) // ghost errored out, synth name-filtered
       expect(board.gaps[0].gap_class).toBe(GAP_CLASSES.NEED_UNCOVERED)
+    } finally { db.close() }
+  })
+})
+
+// ── Structural matrix section (fleet-independent registry holes) ────────────
+
+describe('structural_matrix scoreboard section', () => {
+  it('buildStructuralMatrixSection reflects the real registry: full critical coverage today', () => {
+    const section = buildStructuralMatrixSection()
+    expect(section.states_checked).toBe(US_STATES.length)
+    expect(section.needs_checked).toBeGreaterThan(50)
+    expect(section.total_cells).toBe(section.needs_checked * section.states_checked)
+    expect(section.critical_needs).toEqual([...CRITICAL_NEEDS])
+    // The coverageMatrix guard test (crawler-os) fails the build before these
+    // could ever be non-empty; the scoreboard must agree.
+    expect(section.uncovered_critical_cells).toEqual([])
+    expect(section.undocumented_gap_cells).toEqual([])
+    expect(section.uncovered_cells).toBe(0)
+  })
+
+  it('matrixWishlistEntries maps uncovered critical cells to structural wishlist entries', () => {
+    const entries = matrixWishlistEntries({ uncovered_critical_cells: [{ need: 'disability', state: 'TN' }] })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      lane: STRUCTURAL_MATRIX_LANE,
+      gap_class: GAP_CLASSES.MATRIX_UNCOVERED_CRITICAL,
+      detail: 'disability×TN',
+      affected_profiles_count: 0,
+    })
+    expect(entries[0].statement).toMatch(/critical need 'disability' × TN has NO dedicated source/)
+    expect(entries[0].suggested_action).toMatch(/sourceRegistry\.js/)
+    expect(STRUCTURAL_GAP_CLASSES.has(GAP_CLASSES.MATRIX_UNCOVERED_CRITICAL)).toBe(true)
+    // Degrades to no entries on a missing/null section.
+    expect(matrixWishlistEntries(null)).toEqual([])
+  })
+
+  it('the fleet scoreboard carries the section, and a critical hole LEADS the adapter wishlist even with zero affected profiles', async () => {
+    const db = fleetDb()
+    try {
+      db.prepare("INSERT INTO profiles (id, display_name, status, created_by) VALUES ('real1', 'Jane Doe', 'active', 'admin')").run()
+      const fakeSection = {
+        needs_checked: 67, states_checked: 51, total_cells: 3417, uncovered_cells: 0,
+        critical_needs: [...CRITICAL_NEEDS],
+        uncovered_critical_cells: [{ need: 'disability', state: 'TN' }],
+        documented_gaps: 0, undocumented_gap_cells: [],
+      }
+      const board = await buildFleetGapScoreboard(db, {
+        buildEvidence: async (_db, id) => ({ profile_id: id, gaps: [GAP_NO_STATE], lanes: [], answer_next: [] }),
+        buildMatrixSection: () => fakeSection,
+        now: new Date('2026-07-07T12:00:00Z'),
+      })
+
+      expect(board.structural_matrix).toEqual(fakeSection)
+      // Matrix hole is FIRST on the wishlist, ahead of the profile-derived
+      // no_state_source entry (which has a real affected-profile count).
+      expect(board.adapter_wishlist[0]).toMatchObject({
+        lane: STRUCTURAL_MATRIX_LANE,
+        gap_class: GAP_CLASSES.MATRIX_UNCOVERED_CRITICAL,
+        detail: 'disability×TN',
+        affected_profiles_count: 0,
+      })
+      expect(board.adapter_wishlist.some((w) => w.gap_class === GAP_CLASSES.NO_STATE_SOURCE)).toBe(true)
+
+      // Persisted section round-trips through system_kv.
+      const stored = await readGapScoreboard(db)
+      expect(stored.structural_matrix.uncovered_critical_cells).toEqual([{ need: 'disability', state: 'TN' }])
+
+      // Amy's structural wishlist includes the registry hole (highest priority).
+      const actions = deriveAmyGapActions(board)
+      expect(actions.structural[0]).toMatchObject({
+        gap_class: GAP_CLASSES.MATRIX_UNCOVERED_CRITICAL,
+        detail: 'disability×TN',
+        lever: 'adapter_wishlist',
+      })
+      expect(actions.structural.some((s) => s.gap_class === GAP_CLASSES.NO_STATE_SOURCE)).toBe(true)
+    } finally { db.close() }
+  })
+
+  it('a matrix-section failure degrades to structural_matrix:null and never blocks the scoreboard', async () => {
+    const db = fleetDb()
+    try {
+      db.prepare("INSERT INTO profiles (id, display_name, status, created_by) VALUES ('real1', 'Jane Doe', 'active', 'admin')").run()
+      const board = await buildFleetGapScoreboard(db, {
+        buildEvidence: async (_db, id) => ({ profile_id: id, gaps: [GAP_NO_STATE], lanes: [], answer_next: [] }),
+        buildMatrixSection: () => { throw new Error('matrix exploded') },
+      })
+      expect(board.structural_matrix).toBeNull()
+      expect(board.gaps.length).toBe(1)
+      // No matrix entries; profile-derived wishlist still present.
+      expect(board.adapter_wishlist.every((w) => w.lane !== STRUCTURAL_MATRIX_LANE)).toBe(true)
+    } finally { db.close() }
+  })
+
+  it('the REAL registry produces a clean wishlist (no matrix entries) on a default build', async () => {
+    const db = fleetDb()
+    try {
+      db.prepare("INSERT INTO profiles (id, display_name, status, created_by) VALUES ('real1', 'Jane Doe', 'active', 'admin')").run()
+      const board = await buildFleetGapScoreboard(db, {
+        buildEvidence: async (_db, id) => ({ profile_id: id, gaps: [], lanes: [], answer_next: [] }),
+      })
+      expect(board.structural_matrix.uncovered_critical_cells).toEqual([])
+      expect(board.adapter_wishlist).toEqual([])
     } finally { db.close() }
   })
 })
