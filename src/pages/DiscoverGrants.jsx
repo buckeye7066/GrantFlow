@@ -41,6 +41,11 @@ import {
 } from '@/lib/matchDisplayThresholds';
 import MatchScoreGuidanceBand from '@/components/discovery/MatchScoreGuidanceBand';
 import { dedupeFundingResults } from '@/utils/fundingDedupe';
+import {
+  selectVisibleCatalog,
+  mergeDiscoveryResults,
+  buildResultsReconciliation,
+} from '@/pages/discoverResultsMerge';
 
 // Discovery is now asynchronous: a click dispatches the profile-aware crawler
 // fleet to the background dispatcher (which runs each relevant crawler to
@@ -322,10 +327,20 @@ export default function DiscoverGrants() {
   const navigate = useNavigate()
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  // Owner directive (2026-06-23): default the match-score slider to 75 \u2014 the
-  // quality bar below which a match is treated as a "bad match" for this profile
-  // (kept in the master catalog, not surfaced here).
-  const [minMatchScore, setMinMatchScore] = useState(DEFAULT_MIN_MATCH_SCORE);
+  // Minimum-match-score slider default. On the data-point scale the pipeline bar
+  // is AUTO_ADD_SCORE (8); real matches land ~5\u201325, so the default MUST stay low
+  // or mid-band matches are silently hidden (Gilbert saw "Score \u2265 19" from the
+  // retired 0\u2013100 scale). clampMinScore migrates any stale legacy value (>30)
+  // down to a live-scale band so an inflated stored default can never starve.
+  const [minMatchScore, setMinMatchScore] = useState(() => clampMinScore(DEFAULT_MIN_MATCH_SCORE));
+  // Last catalog result set that loaded SUCCESSFULLY. Rendered whenever the live
+  // catalog query is mid-error / mid-load so a transient 503 (catalog_busy) from
+  // a concurrent crawl \u2014 or an in-flight live run \u2014 can never blank the stored
+  // matches (the "20 matched, 2 shown" collapse). Reset on profile change.
+  const [lastGoodCatalog, setLastGoodCatalog] = useState([]);
+  // "N sources with matches" reported by the coverage panel, lifted up so the
+  // results view can reconcile it honestly against the count actually rendered.
+  const [matchedSourceCount, setMatchedSourceCount] = useState(0);
   // Debounce the slider value used to KEY the catalog query so dragging the
   // slider through intermediate values doesn't fire a heavy 2000-row matching
   // query per step (that thundering herd saturated the DB \u2192 503/504 cascade).
@@ -496,6 +511,8 @@ export default function DiscoverGrants() {
   useEffect(() => {
     pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
     setSearchResults([]);
+    setLastGoodCatalog([]);
+    setMatchedSourceCount(0);
     setCrawlerResultMeta(null);
     setCoverageInfo(null);
     setHasSearched(false);
@@ -526,7 +543,11 @@ export default function DiscoverGrants() {
   const profileForSearch = profileDetailForUi ?? selectedOrg ?? selectedProfile;
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
-  const { data: catalogMatchResponse } = useQuery({
+  const {
+    data: catalogMatchResponse,
+    isSuccess: catalogIsSuccess,
+    isFetching: catalogIsFetching,
+  } = useQuery({
     // Keyed by the DEBOUNCED slider value \u2014 one query per settled value, not per
     // drag step.
     queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore],
@@ -686,10 +707,46 @@ export default function DiscoverGrants() {
     return Number.isFinite(n) ? n : 0
   }, [profileFundingSources])
 
-  const combinedOpportunities = useMemo(() => {
-    return dedupeFundingResults([...catalogOpportunities, ...searchResults])
-      .sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
-  }, [catalogOpportunities, searchResults])
+  // Capture the last SUCCESSFUL catalog result so a later transient error or an
+  // in-flight live run cannot blank the stored matches. Only a real success
+  // (isSuccess && not still fetching) updates it — an empty success legitimately
+  // clears it (the user raised the score floor).
+  useEffect(() => {
+    if (catalogIsSuccess && !catalogIsFetching) {
+      setLastGoodCatalog(catalogOpportunities)
+    }
+  }, [catalogIsSuccess, catalogIsFetching, catalogOpportunities])
+
+  // The catalog list to actually render: fresh success replaces; error/loading
+  // keeps the last good set (profile-type-agnostic — no branching on primary_type).
+  const visibleCatalogOpportunities = useMemo(
+    () =>
+      selectVisibleCatalog({
+        hasFreshSuccess: catalogIsSuccess,
+        fresh: catalogOpportunities,
+        lastGood: lastGoodCatalog,
+      }),
+    [catalogIsSuccess, catalogOpportunities, lastGoodCatalog],
+  )
+
+  const combinedOpportunities = useMemo(
+    () => mergeDiscoveryResults(visibleCatalogOpportunities, searchResults),
+    [visibleCatalogOpportunities, searchResults],
+  )
+
+  // Honest reconciliation between the coverage panel's "N sources with matches"
+  // and what is actually on screen, so a silent "20 matched / 2 shown" can't
+  // recur. Below-floor count comes from the score histogram (subThresholdHint).
+  const resultsReconciliation = useMemo(
+    () =>
+      buildResultsReconciliation({
+        shownCount: combinedOpportunities.length,
+        matchedSourceCount,
+        belowFloorCount: subThresholdHint?.belowCount ?? 0,
+        minScore: minMatchScore,
+      }),
+    [combinedOpportunities.length, matchedSourceCount, subThresholdHint, minMatchScore],
+  )
 
   // Guided first-cycle tour: advance past the 'discover-crawl' step the
   // moment real results first appear.
@@ -1385,6 +1442,12 @@ export default function DiscoverGrants() {
     });
   };
 
+  // Stable so SourceLaneCoverage's lift-up effect doesn't loop. Only updates
+  // state when the reported matched-source count actually changes.
+  const handleCoverageReport = useCallback(({ matchedSources }) => {
+    setMatchedSourceCount((prev) => (prev === matchedSources ? prev : matchedSources))
+  }, [])
+
   const scrollToRef = (ref) => {
     if (!ref?.current) return false;
     ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2023,7 +2086,11 @@ export default function DiscoverGrants() {
             for this profile and which were checked with no current match. Only
             renders once a search has run for a selected profile. */}
         {hasSearched && effectiveProfileId ? (
-          <SourceLaneCoverage profileId={effectiveProfileId} refreshKey={crawlerResultMeta} />
+          <SourceLaneCoverage
+            profileId={effectiveProfileId}
+            refreshKey={crawlerResultMeta}
+            onCoverage={handleCoverageReport}
+          />
         ) : null}
 
         {/* Live discovery progress: the profile-aware crawler fleet runs in the
@@ -2055,6 +2122,35 @@ export default function DiscoverGrants() {
             variant="banner"
             onDismiss={() => setImprovePromptsDismissed(true)}
           />
+        )}
+
+        {/* Count reconciliation: keep the coverage panel's "N sources with
+            matches" honest against what is actually on screen, so a silent
+            "20 matched / 2 shown" can't recur. Profile-type-agnostic. Also
+            surfaces a subtle "updating" state so a mid-crawl catalog refetch
+            never reads as an empty search. */}
+        {combinedOpportunities.length > 0 && resultsReconciliation && (resultsReconciliation.hidden || resultsReconciliation.matched > 0) && (
+          <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+            <span>
+              Showing <strong>{combinedOpportunities.length}</strong> match{combinedOpportunities.length === 1 ? '' : 'es'}
+              {resultsReconciliation.matched > 0 && (
+                <> · <strong>{resultsReconciliation.matched}</strong> of your searched sources {resultsReconciliation.matched === 1 ? 'has' : 'have'} matches</>
+              )}
+              {catalogIsFetching && <span className="ml-1 text-xs text-slate-400">(updating…)</span>}
+            </span>
+            {resultsReconciliation.hidden && (
+              <span className="text-slate-600">
+                {resultsReconciliation.belowFloorCount} more scored below your filter (≥{resultsReconciliation.minScore}).{' '}
+                <button
+                  type="button"
+                  className="underline font-medium text-blue-700 hover:text-blue-800"
+                  onClick={() => setMinMatchScore(clampMinScore(subThresholdHint?.suggested ?? 0))}
+                >
+                  Lower the score to view all
+                </button>
+              </span>
+            )}
+          </div>
         )}
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
