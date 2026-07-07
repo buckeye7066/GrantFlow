@@ -48,14 +48,14 @@ jobs:
 
       - name: Checkout main
         if: steps.guard.outputs.proceed == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
       - name: Setup Node
         if: steps.guard.outputs.proceed == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
