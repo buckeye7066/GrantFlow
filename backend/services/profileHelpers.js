@@ -7,8 +7,16 @@ import { createLogger } from '../utils/logger.js'
 import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
 import { resolveStudentFundingLocation } from './college/committedCollege.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
-import { normalizeProfile } from './profileNormalizer.js'
+import { normalizeProfile, normalizeNeedCategory } from './profileNormalizer.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
+import { getUnscoredProseFieldNames } from '../config/profileSchema.js'
+
+// Field NAMES that are drafting-only prose / unscored across the whole schema
+// (mission, narrative.*, every *.notes, essays, deprecated fields). The keyword
+// miner MUST NOT feed these into the scoring keyword inventory — owner directive
+// 2026-07-07: free-text prose is drafting-only and never floods scoring. Computed
+// once from PROFILE_SCHEMA so a new scored:false field is auto-excluded.
+const UNSCORED_PROSE_FIELD_NAMES = getUnscoredProseFieldNames()
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -939,6 +947,11 @@ function collectNarrativeKeywords(section = {}, register) {
     'notes',
   ]
   fields.forEach((field) => {
+    // Owner directive 2026-07-07: scored:false drafting-only prose (mission,
+    // narrative.*, *.notes, essays, deprecated) is NEVER mined into the scoring
+    // keyword inventory. It stays fully readable for Hamilton/Anya drafting — it
+    // just no longer creates keyword data points.
+    if (UNSCORED_PROSE_FIELD_NAMES.has(field)) return
     const value = section[field]
     if (!value || typeof value !== 'string') return
     value
@@ -1522,6 +1535,18 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (financialSection.underemployed) { assistanceSet.add('underemployed'); registerKeyword('underemployed'); registerKeyword('workforce'); registerKeyword('job_training') }
 
   // --- Funding needs / purpose: what the applicant needs money for ---
+  // Controlled TAG form (2026-07-07): funding_needs is now a tags array of
+  // canonical need buckets (backend/config/profileVocabulary.js `needs`). Each
+  // tag is read as a clean need data point — normalized through the matcher's
+  // own NEED_ALIAS_MAP so a custom/legacy value still resolves. Tags are NOT
+  // mined as free-text keywords (structured, not prose).
+  if (Array.isArray(financialSection.funding_needs)) {
+    for (const tag of financialSection.funding_needs) {
+      if (typeof tag !== 'string') continue
+      const canonical = normalizeNeedCategory(tag)
+      if (canonical) needs.add(canonical)
+    }
+  }
   if (financialSection.funding_needs && typeof financialSection.funding_needs === 'string') {
     collectNarrativeKeywords({ funding_needs: financialSection.funding_needs }, registerKeyword)
     const fnLower = financialSection.funding_needs.toLowerCase()

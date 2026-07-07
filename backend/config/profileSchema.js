@@ -6,6 +6,30 @@
  * - Provide human-readable explanations for each data point
  * - Provide defaults so we can reliably "repair" profiles to include every key
  *
+ * FIELD METADATA CONTRACT (2026-07-07 profile schema redesign — owner directive:
+ * "every profile field must feed the matcher as a clean structured data point or
+ * be explicitly drafting-only"):
+ *
+ *   - `format: 'enum'` + `options: [...]`   → single-select dropdown (scored)
+ *   - `format: 'tags'`  + `vocabulary: '<name>'` → controlled multi-select tag
+ *       picker (scored); options come from backend/config/profileVocabulary.js,
+ *       which is derived from the matcher's OWN vocabulary so every pickable tag
+ *       is guaranteed to score.
+ *   - `format: 'prose'` + `scored: false`   → free text used for DRAFTING ONLY
+ *       (Hamilton / Anya). Excluded from the data-point scoring inventory and
+ *       NOT mined into the scoring keyword inventory. NEVER removed — drafting
+ *       still reads it.
+ *   - `scored: false` on ANY field          → excluded from scoring / mining.
+ *   - `deprecated: true`                     → dead field: stop collecting /
+ *       scoring / showing it, but the column/section stays (non-destructive).
+ *   - existing boolean/number/date/single-line-text (`type`) unchanged; their
+ *       format is derived from `type` (see resolveFieldFormat).
+ *
+ * A field's format is EITHER an explicit `format` key OR derived from `type`.
+ * `profileSchemaContract.test.js` asserts every field has a resolvable format,
+ * that enum fields carry non-empty options, that tag fields point at a real
+ * vocabulary, and that no field is both scored (default) and `format:'prose'`.
+ *
  * Notes:
  * - Sections are stored as JSON in `profile_sections.data`; adding keys is backwards compatible.
  * - Keep this file as the single source of truth; prompts, validation, and crawlers should derive from it.
@@ -19,6 +43,46 @@ import {
   ALL_PERSON_TYPES,
   ALL_ORG_TYPES,
 } from '../../shared/profileSectionApplicability.js'
+
+// --- Enum option arrays (mirror src/config/sectionMetadata.js so backend
+//     validation matches what the frontend renders). Single source is kept in
+//     sync via profileSchemaContract.test.js. ---
+export const EMPLOYMENT_STATUS_OPTIONS = [
+  'student',
+  'not_in_labor_force',
+  'unemployed_seeking',
+  'employed_full_time',
+  'employed_part_time',
+  'self_employed',
+  'retired',
+]
+export const FINANCIAL_NEED_LEVEL_OPTIONS = ['low', 'moderate', 'high', 'urgent', 'unknown']
+export const IMMIGRATION_STATUS_OPTIONS = [
+  'us_citizen',
+  'permanent_resident',
+  'refugee',
+  'undocumented',
+  'other',
+  'unknown',
+]
+export const PLAN_TYPE_OPTIONS = ['HMO', 'PPO', 'Medicaid', 'Medicare', 'Marketplace', 'other', 'unknown']
+export const HOUSING_STATUS_OPTIONS = ['stable', 'at_risk', 'homeless', 'temporary', 'unknown']
+export const HOUSING_TYPE_OPTIONS = ['rent', 'own', 'shelter', 'transitional', 'temporary', 'unknown']
+export const ECF_CHOICES_ROLE_OPTIONS = ['participant', 'caregiver', 'provider', 'unknown']
+// profile_type lives on the profiles table (primary_type column), not in a
+// section — mirrored here for backend validation parity with the frontend enum.
+export const PROFILE_TYPE_OPTIONS = [
+  'individual', 'family', 'student', 'high_school_student', 'college_student', 'graduate_student',
+  'teacher', 'classroom_teacher', 'school_district', 'public_school', 'library', 'nonprofit',
+  'church', 'ministry', 'food_pantry', 'homeless_shelter', 'animal_rescue', 'volunteer_fire_department',
+  'county_government', 'municipality', 'public_agency', 'tribal_government', 'public_health_department',
+  'business', 'medium_corporation', 'large_corporation', 'minority_owned_business', 'women_owned_business',
+  'senior', 'veteran', 'disabled_adult', 'pta_pto', 'school_food_service', 'school_transportation',
+  'special_education_program', 'museum', 'parks_department', 'community_center', 'reentry_program',
+  'substance_recovery_org', 'mental_health_nonprofit', 'local_housing_authority', 'regional_planning_agency',
+  'economic_development_agency', 'medical_need', 'homeschool_family', 'organization', 'small_business',
+  'government', 'medical_assistance', 'individual_need', 'other',
+]
 
 export const PROFILE_SCHEMA = {
   basic_information: {
@@ -41,10 +105,12 @@ export const PROFILE_SCHEMA = {
       profile_category: {
         type: 'string',
         default: '',
+        deprecated: true,
+        scored: false,
         description:
-          'High-level category for the applicant (e.g., individual_need, high_school_student, nonprofit, small_business).',
+          'DEPRECATED (superseded by the canonical profile_type / profiles.primary_type column, which drives type-specific matching). Preserved for back-compat; no longer collected or scored.',
       },
-      notes: { type: 'string', default: '', description: 'Freeform notes relevant to intake, context, and matching.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Freeform intake/context notes — DRAFTING ONLY, not scored or mined.' },
     },
   },
 
@@ -63,8 +129,8 @@ export const PROFILE_SCHEMA = {
       cage_code: { type: 'string', default: '', description: 'CAGE code (federal contractor identifier) if applicable.' },
       annual_budget: { type: 'number|null', default: null, description: 'Annual operating budget (USD) if known.' },
       staff_count: { type: 'number|null', default: null, description: 'Number of staff (FTE or headcount) if known.' },
-      mission: { type: 'string', default: '', description: 'Organization mission statement or concise purpose.' },
-      notes: { type: 'string', default: '', description: 'Additional org context (service area, programs, awards, etc.).' },
+      mission: { type: 'string', format: 'prose', scored: false, default: '', description: 'Organization mission statement or concise purpose. DRAFTING ONLY (Hamilton reads it); not scored or mined.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional org context (service area, programs, awards, etc.). DRAFTING ONLY; not scored or mined.' },
       // --- Compliance & Registrations ---
       sam_gov_registered: { type: 'boolean', default: false, description: 'True if registered in SAM.gov; required for ALL federal grants.' },
       grants_gov_account: { type: 'boolean', default: false, description: 'True if the org has a Grants.gov account; improves federal grant eligibility.' },
@@ -117,15 +183,27 @@ export const PROFILE_SCHEMA = {
       household_size: { type: 'number|null', default: null, description: 'Number of people in the household (integer).' },
       financial_need_level: {
         type: 'string',
+        format: 'enum',
+        options: FINANCIAL_NEED_LEVEL_OPTIONS,
         default: '',
-        description: 'Short descriptor of need (e.g., high, moderate, unknown).',
+        description: 'Short descriptor of need (low/moderate/high/urgent/unknown).',
+      },
+      funding_needs: {
+        type: 'array<string>',
+        format: 'tags',
+        vocabulary: 'needs',
+        default: [],
+        description:
+          'What the applicant needs funding for, as controlled need tags (canonical matcher buckets). Replaces the old free-text funding_needs narrative so every value scores. Legacy free-text is preserved and migrated to the nearest tag; unmatched text is kept as a custom tag.',
       },
       low_income: { type: 'boolean', default: false, description: 'True if the applicant is explicitly low-income.' },
       unemployed: {
         type: 'enum',
-        values: ['student', 'not_in_labor_force', 'unemployed_seeking', 'employed_full_time', 'employed_part_time', 'self_employed', 'retired'],
+        format: 'enum',
+        values: EMPLOYMENT_STATUS_OPTIONS,
+        options: EMPLOYMENT_STATUS_OPTIONS,
         default: '',
-        description: 'Employment status aligned with employment.current_status.',
+        description: 'Employment status aligned with employment.current_status (the frontend "employment_status" field).',
       },
       displaced_worker: {
         type: 'boolean',
@@ -137,7 +215,8 @@ export const PROFILE_SCHEMA = {
       bankruptcy_foreclosure: { type: 'boolean', default: false, description: 'True if the applicant has experienced bankruptcy or foreclosure.' },
       first_time_homebuyer: { type: 'boolean', default: false, description: 'True if the applicant is a first-time homebuyer; unlocks down-payment assistance programs.' },
       underemployed: { type: 'boolean', default: false, description: 'True if the applicant is underemployed (working below skill level or part-time involuntarily).' },
-      notes: { type: 'string', default: '', description: 'Concise context about income/need (max ~2 sentences).' },
+      funding_purpose: { type: 'string', format: 'prose', scored: false, default: '', description: 'How funds will be used (narrative). DRAFTING ONLY; not scored or mined — use funding_needs tags for scoring.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Concise context about income/need. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -156,9 +235,11 @@ export const PROFILE_SCHEMA = {
       },
       ecf_choices_role: {
         type: 'string',
+        format: 'enum',
+        options: ECF_CHOICES_ROLE_OPTIONS,
         default: '',
         description:
-          "ECF CHOICES role for unlocking the crawler. Use: 'participant', 'caregiver', or 'provider'. Leave blank if not applicable.",
+          "ECF CHOICES role for unlocking the crawler: participant, caregiver, or provider. Leave blank if not applicable.",
       },
       medicare_recipient_self: { type: 'boolean_tri', default: null, description: 'True if the applicant personally receives Medicare.' },
       medicare_recipient_household: { type: 'boolean_tri', default: null, description: 'True if someone in the applicant household receives Medicare.' },
@@ -218,9 +299,11 @@ export const PROFILE_SCHEMA = {
       },
       mobility_or_transport_notes: {
         type: 'string',
+        format: 'prose',
+        scored: false,
         default: '',
         description:
-          'Optional notes about mobility or transportation needs for appointments (informational; no medical advice).',
+          'Optional notes about mobility or transportation needs for appointments. DRAFTING ONLY; not scored or mined.',
       },
       dialysis_patient: { type: 'boolean', default: false, description: 'True if on dialysis.' },
       organ_transplant: { type: 'boolean', default: false, description: 'True if transplant recipient/candidate.' },
@@ -233,7 +316,7 @@ export const PROFILE_SCHEMA = {
       wheelchair_user: { type: 'boolean', default: false, description: 'True if wheelchair user.' },
       substance_recovery: { type: 'boolean', default: false, description: 'True if in recovery/substance use recovery stated.' },
       mental_health_condition: { type: 'boolean', default: false, description: 'True if a mental health condition is stated.' },
-      notes: { type: 'string', default: '', description: 'Brief medical context (<= ~3 sentences).' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Brief medical context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -249,7 +332,13 @@ export const PROFILE_SCHEMA = {
         description: 'Primary insurance provider name (e.g., BlueCross, Aetna, Medicaid managed-care plan).',
       },
       plan_name: { type: 'string', default: '', description: 'Plan name (e.g., HMO/PPO plan name) if known.' },
-      plan_type: { type: 'string', default: '', description: 'Plan type (e.g., HMO, PPO, Medicaid, Medicare, Marketplace).' },
+      plan_type: {
+        type: 'string',
+        format: 'enum',
+        options: PLAN_TYPE_OPTIONS,
+        default: '',
+        description: 'Plan type (HMO, PPO, Medicaid, Medicare, Marketplace, other, unknown).',
+      },
       member_id: {
         type: 'string',
         default: '',
@@ -266,8 +355,10 @@ export const PROFILE_SCHEMA = {
       phone_for_claims: { type: 'string', default: '', description: 'Member services / claims phone number if known.' },
       notes: {
         type: 'string',
+        format: 'prose',
+        scored: false,
         default: '',
-        description: 'High-level notes about coverage gaps, copays, prior auth needs, etc. (no fabricated details).',
+        description: 'High-level notes about coverage gaps, copays, prior auth needs, etc. DRAFTING ONLY; not scored or mined.',
       },
     },
   },
@@ -301,7 +392,7 @@ export const PROFILE_SCHEMA = {
         default: false,
         description: 'True if a letter of medical necessity / support letter is needed for coverage or assistance.',
       },
-      notes: { type: 'string', default: '', description: 'Concise medical history context (<= ~5 sentences).' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Concise medical history context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -315,7 +406,7 @@ export const PROFILE_SCHEMA = {
       fiscal_sponsor_name: { type: 'string', default: '', description: 'Fiscal sponsor name if applicable.' },
       sam_registered: { type: 'boolean', default: false, description: 'True if SAM.gov registration is confirmed.' },
       insurance_coverage: { type: 'string', default: '', description: 'General insurance coverage (GL, D&O) if known.' },
-      compliance_notes: { type: 'string', default: '', description: 'Notes about audits, policies, and compliance gaps.' },
+      compliance_notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Notes about audits, policies, and compliance gaps. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -334,7 +425,7 @@ export const PROFILE_SCHEMA = {
         default: [],
         description: 'Certifications (e.g., WOSB, HUBZone, MBE) when explicitly stated.',
       },
-      notes: { type: 'string', default: '', description: 'Notes about products/services, capacity, and priorities.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Notes about products/services, capacity, and priorities. DRAFTING ONLY; not scored or mined.' },
     },
   },
   demographics: {
@@ -350,8 +441,10 @@ export const PROFILE_SCHEMA = {
       lgbtq: { type: 'boolean', default: false, description: 'True if LGBTQ+ identity stated.' },
       immigrant_status: {
         type: 'string',
+        format: 'enum',
+        options: IMMIGRATION_STATUS_OPTIONS,
         default: 'unknown',
-        description: 'One of us_citizen, permanent_resident, refugee, undocumented, other, unknown.',
+        description: 'Immigration status (us_citizen, permanent_resident, refugee, undocumented, other, unknown). Frontend canonical field is "immigration_status"; this is its stored key.',
       },
       // --- Cultural/Ethnic Heritage ---
       jewish_heritage: { type: 'boolean', default: false, description: 'True if Jewish heritage or identity stated; unlocks Jewish federation and Hillel scholarships.' },
@@ -368,7 +461,7 @@ export const PROFILE_SCHEMA = {
       },
       // --- Financial Identity ---
       good_credit_score: { type: 'boolean', default: false, description: 'True if applicant has a credit score of 700 or above; relevant for loan-based programs.' },
-      notes: { type: 'string', default: '', description: 'Additional demographic context (<= ~2 sentences).' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional demographic context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -395,7 +488,7 @@ export const PROFILE_SCHEMA = {
       trafficking_survivor: { type: 'boolean', default: false, description: 'True if human trafficking survivor.' },
       disaster_survivor: { type: 'boolean', default: false, description: 'True if disaster survivor (fire/flood/storm/etc.).' },
       formerly_incarcerated: { type: 'boolean', default: false, description: 'True if formerly incarcerated.' },
-      notes: { type: 'string', default: '', description: 'Brief life situation context (<= ~2 sentences).' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Brief life situation context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -411,7 +504,7 @@ export const PROFILE_SCHEMA = {
       military_spouse: { type: 'boolean', default: false, description: 'True if military spouse.' },
       military_dependent: { type: 'boolean', default: false, description: 'True if military dependent/child.' },
       gold_star_family: { type: 'boolean', default: false, description: 'True if Gold Star family.' },
-      notes: { type: 'string', default: '', description: 'Branch/years/disability rating context when relevant.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Branch/years/disability rating context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -436,7 +529,7 @@ export const PROFILE_SCHEMA = {
       union_member: { type: 'boolean', default: false, description: 'True if union member.' },
       farmer: { type: 'boolean', default: false, description: 'True if farmer/agriculture.' },
       truck_driver: { type: 'boolean', default: false, description: 'True if truck driver.' },
-      notes: { type: 'string', default: '', description: 'Other roles/certifications relevant to eligibility.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Other roles/certifications relevant to eligibility. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -448,7 +541,7 @@ export const PROFILE_SCHEMA = {
       appalachian_region: { type: 'boolean', default: false, description: 'True if in/serving Appalachia.' },
       urban_underserved: { type: 'boolean', default: false, description: 'True if in/serving an underserved urban area.' },
       geographic_focus: { type: 'string', default: '', description: 'Primary geography served or targeted.' },
-      notes: { type: 'string', default: '', description: 'County/census tract/other location qualifiers.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'County/census tract/other location qualifiers. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -485,7 +578,7 @@ export const PROFILE_SCHEMA = {
       efc_sai_band: { type: 'string', default: '', description: 'Expected Family Contribution (EFC) / Student Aid Index (SAI) band (e.g., $0, $1-3000, $3001-6000) for need-based targeting.' },
       first_generation_college_student: { type: 'boolean', default: false, description: 'True if the student is the first in their immediate family to attend college; unlocks first-gen scholarships and TRIO programs.' },
       dual_enrollment: { type: 'boolean', default: false, description: 'True if the student is dual-enrolled in high school and college courses simultaneously.' },
-      notes: { type: 'string', default: '', description: 'Additional education context.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional education context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -496,13 +589,15 @@ export const PROFILE_SCHEMA = {
     fields: {
       current_status: {
         type: 'enum',
-        values: ['student', 'not_in_labor_force', 'unemployed_seeking', 'employed_full_time', 'employed_part_time', 'self_employed', 'retired'],
+        format: 'enum',
+        values: EMPLOYMENT_STATUS_OPTIONS,
+        options: EMPLOYMENT_STATUS_OPTIONS,
         default: '',
         description: 'Current employment status.',
       },
-      career_goal: { type: 'string', default: '', description: 'Career goal (freeform).' },
-      experience: { type: 'string', default: '', description: 'Brief experience summary (freeform).' },
-      notes: { type: 'string', default: '', description: 'Additional employment context.' },
+      career_goal: { type: 'string', format: 'prose', scored: false, default: '', description: 'Career goal (freeform). DRAFTING ONLY; not scored or mined.' },
+      experience: { type: 'string', format: 'prose', scored: false, default: '', description: 'Brief experience summary (freeform). DRAFTING ONLY; not scored or mined.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional employment context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -511,8 +606,20 @@ export const PROFILE_SCHEMA = {
     title: 'Housing',
     description: 'Housing status and qualifiers relevant to assistance programs.',
     fields: {
-      status: { type: 'string', default: '', description: 'Housing status (e.g., stable, at-risk, homeless, unknown).' },
-      type: { type: 'string', default: '', description: 'Housing type (rent, own, shelter, transitional, etc.).' },
+      status: {
+        type: 'string',
+        format: 'enum',
+        options: HOUSING_STATUS_OPTIONS,
+        default: '',
+        description: 'Housing status (stable, at_risk, homeless, temporary, unknown).',
+      },
+      type: {
+        type: 'string',
+        format: 'enum',
+        options: HOUSING_TYPE_OPTIONS,
+        default: '',
+        description: 'Housing type (rent, own, shelter, transitional, temporary, unknown).',
+      },
       address: { type: 'string', default: '', description: 'Housing address when explicitly provided.' },
       broadband_speed: { type: 'string', default: '', description: 'Broadband speed / connectivity details if relevant.' },
       geographic_designation: {
@@ -520,7 +627,7 @@ export const PROFILE_SCHEMA = {
         default: [],
         description: 'Geographic designations (e.g., rural/urban/frontier).',
       },
-      notes: { type: 'string', default: '', description: 'Additional housing context.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional housing context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -530,9 +637,9 @@ export const PROFILE_SCHEMA = {
     description: 'Household structure and support system (distinct from eligibility flags).',
     fields: {
       household_size: { type: 'number|null', default: null, description: 'Household size when known.' },
-      responsibilities: { type: 'string', default: '', description: 'Primary household responsibilities/caregiving context.' },
-      support_system: { type: 'string', default: '', description: 'Support system description.' },
-      notes: { type: 'string', default: '', description: 'Additional household context.' },
+      responsibilities: { type: 'string', format: 'prose', scored: false, default: '', description: 'Primary household responsibilities/caregiving context. DRAFTING ONLY; not scored or mined.' },
+      support_system: { type: 'string', format: 'prose', scored: false, default: '', description: 'Support system description. DRAFTING ONLY; not scored or mined.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional household context. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
@@ -541,28 +648,70 @@ export const PROFILE_SCHEMA = {
     title: 'Programs & Services',
     description: 'Program focus areas, services, and keywords used for opportunity matching.',
     fields: {
-      focus_areas: { type: 'array<string>', default: [], description: 'Focus areas (strings).' },
-      interests: { type: 'array<string>', default: [], description: 'Interests (strings).' },
+      focus_areas: {
+        type: 'array<string>',
+        format: 'tags',
+        vocabulary: 'focus',
+        default: [],
+        description: 'Program focus areas as controlled tags (browse-by-category vocabulary). Legacy free-text is preserved and migrated to the nearest tag; unmatched text is kept as a custom tag.',
+      },
+      interests: {
+        type: 'array<string>',
+        format: 'tags',
+        vocabulary: 'focus',
+        default: [],
+        description: 'Interests as controlled tags (browse-by-category vocabulary). Legacy free-text is preserved and migrated to the nearest tag; unmatched text is kept as a custom tag.',
+      },
       keywords: { type: 'array<string>', default: [], description: 'Keywords/tags (strings).' },
-      notes: { type: 'string', default: '', description: 'Additional program/service notes.' },
+      notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional program/service notes. DRAFTING ONLY; not scored or mined.' },
     },
   },
 
   narrative: {
     title: 'Story & Goals',
-    description: 'Narrative fields that drive mission/fit matching and keyword extraction.',
+    description:
+      'Narrative fields used for DRAFTING (Hamilton/Anya proposals). Per owner directive these are drafting-only prose: they are NOT scored and NOT mined into the keyword inventory — matching reads the structured fields (needs tags, focus tags, enums, flags). Kept fully readable for drafting.',
     fields: {
-      mission: { type: 'string', default: '', description: 'Mission statement or personal mission.' },
-      primary_goal: { type: 'string', default: '', description: 'Primary goal of the applicant/project.' },
-      target_population: { type: 'string', default: '', description: 'Who benefits from the work (population served).' },
-      funding_amount_needed: { type: 'string', default: '', description: 'Requested/needed funding amount (numeric or descriptive).' },
-      timeline: { type: 'string', default: '', description: 'Timeline for project/need.' },
-      past_experience: { type: 'string', default: '', description: 'Past experience relevant to the request.' },
-      unique_qualities: { type: 'string', default: '', description: 'Unique qualities/strengths.' },
-      collaboration_partners: { type: 'string', default: '', description: 'Partner organizations/coalitions.' },
-      sustainability_plan: { type: 'string', default: '', description: 'How work continues after funding.' },
-      barriers_faced: { type: 'string', default: '', description: 'Barriers/challenges faced.' },
-      special_circumstances: { type: 'string', default: '', description: 'Special circumstances that unlock eligibility.' },
+      mission: { type: 'string', format: 'prose', scored: false, default: '', description: 'Mission statement or personal mission. DRAFTING ONLY.' },
+      primary_goal: { type: 'string', format: 'prose', scored: false, default: '', description: 'Primary goal of the applicant/project. DRAFTING ONLY.' },
+      target_population: { type: 'string', format: 'prose', scored: false, default: '', description: 'Who benefits from the work (population served). DRAFTING ONLY.' },
+      funding_amount_needed: { type: 'string', default: '', description: 'Requested/needed funding amount (numeric or descriptive). Structured financial data point (funding amount stated).' },
+      timeline: { type: 'string', format: 'prose', scored: false, default: '', description: 'Timeline for project/need. DRAFTING ONLY.' },
+      past_experience: { type: 'string', format: 'prose', scored: false, default: '', description: 'Past experience relevant to the request. DRAFTING ONLY.' },
+      unique_qualities: { type: 'string', format: 'prose', scored: false, default: '', description: 'Unique qualities/strengths. DRAFTING ONLY.' },
+      collaboration_partners: { type: 'string', format: 'prose', scored: false, default: '', description: 'Partner organizations/coalitions. DRAFTING ONLY.' },
+      sustainability_plan: { type: 'string', format: 'prose', scored: false, default: '', description: 'How work continues after funding. DRAFTING ONLY.' },
+      barriers_faced: { type: 'string', format: 'prose', scored: false, default: '', description: 'Barriers/challenges faced. DRAFTING ONLY.' },
+      special_circumstances: { type: 'string', format: 'prose', scored: false, default: '', description: 'Special circumstances that unlock eligibility. DRAFTING ONLY.' },
+    },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Essays (Hamilton's prose source) — first-class since 2026-07-07.
+  //
+  // Hamilton's proposal/packet generators (hamiltonFullProposalGenerator.js,
+  // hamiltonApplicationPacketGenerator.js, hamiltonAutopilotEngine.js) draft from
+  // essays.primary / personal_statement / statement_of_need / goals /
+  // career_goals / financial_hardship (with back-compat fallbacks to top-level
+  // personal_statement / goals / career_goals / narrative and
+  // organization_details.mission). This section formalizes those keys.
+  //
+  // ALL fields are drafting-only prose (`format:'prose', scored:false`): never
+  // scored, never mined. Keep this section + its scored flags STABLE — Hamilton
+  // and Anya drafting depend on it.
+  // ---------------------------------------------------------------------------
+  essays: {
+    title: 'Essays & Narrative Drafts',
+    drafting_only: true,
+    description:
+      "Long-form applicant prose used by Hamilton/Anya for DRAFTING only. Never scored or mined into the matcher. Hamilton reads essays.primary / personal_statement / statement_of_need / goals / career_goals / financial_hardship, falling back to top-level personal_statement/goals and organization_details.mission.",
+    fields: {
+      primary: { type: 'string', format: 'prose', scored: false, default: '', description: "Primary personal statement / applicant story (Hamilton's main narrative source). DRAFTING ONLY." },
+      personal_statement: { type: 'string', format: 'prose', scored: false, default: '', description: 'Personal statement / narrative for applications. DRAFTING ONLY.' },
+      statement_of_need: { type: 'string', format: 'prose', scored: false, default: '', description: 'Statement of need narrative. DRAFTING ONLY.' },
+      financial_hardship: { type: 'string', format: 'prose', scored: false, default: '', description: 'Financial hardship narrative for statement-of-need sections. DRAFTING ONLY.' },
+      goals: { type: 'string', format: 'prose', scored: false, default: '', description: 'Goals / outcomes narrative. DRAFTING ONLY.' },
+      career_goals: { type: 'string', format: 'prose', scored: false, default: '', description: 'Career goals narrative. DRAFTING ONLY.' },
     },
   },
 }
@@ -581,6 +730,74 @@ export function getDefaultSectionData(sectionKey) {
     defaults[key] = meta?.default
   }
   return defaults
+}
+
+// ---------------------------------------------------------------------------
+// Field-metadata contract helpers (shared by validation, the frontend contract,
+// the keyword miner gate, and profileSchemaContract.test.js).
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a field's rendering/scoring format. Prefers an explicit `format`, else
+ * derives one from `type` so every field has a resolvable format.
+ * @returns {string} one of enum|tags|prose|boolean|boolean_tri|number|date|text|object|array
+ */
+export function resolveFieldFormat(meta) {
+  if (!meta || typeof meta !== 'object') return 'text'
+  if (typeof meta.format === 'string' && meta.format) return meta.format
+  const t = String(meta.type ?? '')
+  if (t === 'enum') return 'enum'
+  if (t === 'boolean') return 'boolean'
+  if (t === 'boolean_tri') return 'boolean_tri'
+  if (/^number/.test(t) || t.includes('number')) return 'number'
+  if (t.startsWith('array') || t === 'array') return 'array'
+  if (t.startsWith('object') || t === 'object' || t === 'object|string') return 'object'
+  // date is stored as a string with a date default convention; treat plain
+  // string/identifier fields as single-line text.
+  return 'text'
+}
+
+/**
+ * Is a field counted by the matcher (data-point inventory + keyword mining)?
+ * `scored:false` explicitly excludes; deprecated fields are never scored.
+ * Prose is drafting-only and therefore unscored even without an explicit flag.
+ */
+export function isFieldScored(meta) {
+  if (!meta || typeof meta !== 'object') return true
+  if (meta.deprecated) return false
+  if (meta.scored === false) return false
+  if (resolveFieldFormat(meta) === 'prose') return false
+  return true
+}
+
+/**
+ * The set of field NAMES that are drafting-only prose / unscored across the whole
+ * schema. The keyword miner (collectNarrativeKeywords) skips any field whose name
+ * is in this set, so `scored:false` prose (mission, narrative.*, *.notes, essays)
+ * never floods the scoring keyword inventory. Field names like `notes` recur
+ * across sections and are ALL unscored, so a global name set is safe.
+ */
+export function getUnscoredProseFieldNames() {
+  const names = new Set()
+  for (const schema of Object.values(PROFILE_SCHEMA)) {
+    for (const [name, meta] of Object.entries(schema?.fields ?? {})) {
+      if (resolveFieldFormat(meta) === 'prose' || meta?.scored === false || meta?.deprecated) {
+        names.add(name)
+      }
+    }
+  }
+  return names
+}
+
+/** All tag-field vocabulary names referenced by the schema (for validation). */
+export function getReferencedVocabularyNames() {
+  const names = new Set()
+  for (const schema of Object.values(PROFILE_SCHEMA)) {
+    for (const meta of Object.values(schema?.fields ?? {})) {
+      if (resolveFieldFormat(meta) === 'tags' && meta?.vocabulary) names.add(meta.vocabulary)
+    }
+  }
+  return names
 }
 
 /**

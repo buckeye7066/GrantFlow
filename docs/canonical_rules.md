@@ -110,6 +110,25 @@ The loop, concretely:
   backed up, and auto-reverted on mismatch.
 - **Migration parity** — the migration-parity rule in `CLAUDE.md` (SQLite +
   Postgres migrations move together) keeps the loop's stores portable.
+- **Every profile field feeds the matcher or is drafting-only prose** (owner
+  directive 2026-07-07 profile schema redesign). Every field in
+  `backend/config/profileSchema.js` is EITHER a structured, matcher-consumed
+  data point (`format:'enum'` + `options`, `format:'tags'` + `vocabulary`,
+  boolean/number/date) OR explicitly `format:'prose', scored:false`
+  drafting-only prose. No field collects free text that floods the scoring
+  inventory: `scored:false` prose (mission, `narrative.*`, every `*.notes`, the
+  `essays` section) is NEVER scored and NEVER mined into the keyword inventory
+  (the miner `collectNarrativeKeywords` is gated on the schema's scored flag),
+  yet stays fully readable for Hamilton/Anya drafting. Controlled vocabularies
+  are SOURCED FROM THE MATCHER'S OWN VOCABULARY (`backend/config/profileVocabulary.js`,
+  derived from `NEED_ALIAS_MAP` / `CANONICAL_NEED_CATEGORIES`) so every collected
+  value is guaranteed to score. A field a source cannot match on shouldn't be
+  collected. **New fields require a matcher use or a `scored:false` marker** —
+  `backend/tests/profileSchemaContract.test.js` asserts every field has a
+  resolvable format, enum fields carry non-empty options, tag fields point at a
+  real vocabulary, and no field is both scored and `format:'prose'`. "Remove a
+  field" means stop collecting/scoring/showing it (`deprecated:true`) — never
+  drop the column or stored data.
 
 ### Evolved product goals (2026-07)
 

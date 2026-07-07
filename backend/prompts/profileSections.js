@@ -349,6 +349,19 @@ Rules:
     `.trim(),
     keys: ['focus_areas', 'interests', 'keywords', 'notes'],
   },
+  essays: {
+    title: PROFILE_SCHEMA.essays.title,
+    instructions: `
+Carry forward the applicant's long-form narrative essays used for DRAFTING proposals and packets.
+Return JSON with: ${Object.keys(PROFILE_SCHEMA.essays.fields).join(', ')}.
+
+Rules:
+- These are DRAFTING-ONLY fields (never scored or matched). Preserve the applicant's own words.
+- NEVER fabricate a personal statement, statement of need, or hardship narrative. Return an empty string when the applicant has not provided one.
+- Prefer existing essay text and the applicant's own uploaded statements verbatim.
+    `.trim(),
+    keys: Object.keys(PROFILE_SCHEMA.essays.fields),
+  },
 }
 
 export function buildProfileSectionPrompt(sectionKey, { profile, sections, documents }) {

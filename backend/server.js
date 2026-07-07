@@ -2178,6 +2178,19 @@ app.use('/api/anya', anyaRouter);
 // reviewable candidate inbox (lead/funding/profile_field). Lazy so the
 // Anthropic SDK only loads when the connector is actually used.
 app.use('/api/laptop-connector', lazyRouter('./routes/laptopConnector.js'));
+// Controlled-vocabulary catalog for profile TAG pickers (needs / focus). Sourced
+// from the matcher's OWN vocabulary (backend/config/profileVocabulary.js) so every
+// pickable tag is guaranteed to score. Mounted BEFORE the profiles router so the
+// explicit path can never be shadowed by its `/:id` route. Public/read-only.
+app.get('/api/profiles/vocabulary', async (_req, res) => {
+  try {
+    const { PROFILE_VOCABULARIES } = await import('./config/profileVocabulary.js')
+    res.set('Cache-Control', 'public, max-age=3600')
+    res.json({ ok: true, vocabularies: PROFILE_VOCABULARIES, ...PROFILE_VOCABULARIES })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'vocabulary_unavailable', message: err?.message || String(err) })
+  }
+})
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
