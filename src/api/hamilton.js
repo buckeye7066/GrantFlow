@@ -147,6 +147,70 @@ export function portalTypeLabel(portalType) {
   return PORTAL_TYPE_LABELS[portalType] || portalType || 'Portal'
 }
 
+// ── Per-funder tailored application narrative ───────────────────────────────
+// Hamilton drafts a funder-SPECIFIC application narrative per opportunity. The
+// owner reviews it on the pipeline/portal card: read the current draft + status
+// + any blocking "missing info" questions, then approve / edit / regenerate.
+// Submission itself is done by the backend autopilot once approved AND the
+// profile's automation toggle is on — the UI only reflects that gate.
+//
+// Endpoint path is owned by the sibling backend agent; we assume the profile-
+// scoped REST shape used by every other Hamilton surface in this file
+// (/api/profiles/:profileId/...). If the endpoint is not deployed yet the GET
+// 404s and callers hide the panel gracefully (err.status === 404).
+//
+// GET   → { fields:{essay_key:text}, status:'pending'|'approved'|'edited',
+//           missing_questions:[{requirement, question, field?, section_key?}],
+//           funder_requirements:[...], can_auto_submit:bool,
+//           gate_reason:'not_approved'|'automation_off'|'missing_info'|null }
+export function getTailoredApplication(profileId, grantId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!grantId) return Promise.reject(new Error('grantId required'))
+  return apiFetch(
+    `/api/profiles/${encodeURIComponent(profileId)}/tailored-application?grant_id=${encodeURIComponent(grantId)}`,
+  )
+}
+
+// Approve the current draft as-is → status 'approved'.
+export function approveTailoredApplication(profileId, grantId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!grantId) return Promise.reject(new Error('grantId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/tailored-application/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ grant_id: grantId }),
+  })
+}
+
+// Save owner edits → status 'edited' (editing == approved-as-edited).
+export function editTailoredApplication(profileId, grantId, fields) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!grantId) return Promise.reject(new Error('grantId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/tailored-application/edit`, {
+    method: 'POST',
+    body: JSON.stringify({ grant_id: grantId, fields: fields && typeof fields === 'object' ? fields : {} }),
+  })
+}
+
+// Ask Hamilton to re-draft the funder-tailored narrative from scratch.
+export function regenerateTailoredApplication(profileId, grantId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!grantId) return Promise.reject(new Error('grantId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/tailored-application/regenerate`, {
+    method: 'POST',
+    body: JSON.stringify({ grant_id: grantId }),
+  })
+}
+
+export const TAILORED_STATUS_LABELS = Object.freeze({
+  pending: 'Pending review',
+  approved: 'Approved',
+  edited: 'Approved (edited)',
+})
+
+export function tailoredStatusLabel(status) {
+  return TAILORED_STATUS_LABELS[status] || 'Pending review'
+}
+
 // -- Scheduled runs on the calendar + login readiness --------------------
 
 // Hamilton's scheduled application runs as calendar events (each flagged
