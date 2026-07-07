@@ -3,7 +3,7 @@
  *
  * Pure-data module — no I/O, no env reads. Safe to import from anywhere.
  *
- * Six canonical agent names map onto six concerns:
+ * Seven canonical agent names map onto seven concerns:
  *   - anya     user/admin assistant + workflow helper
  *   - sam      production readiness / code health
  *   - robert   funding discovery + recommendation
@@ -11,13 +11,17 @@
  *   - hamilton application autopilot / funding completion (separate
  *              agent — do NOT confuse with Yana lead discovery)
  *   - john     outreach drafting (Outlook drafts)
+ *   - amy      synthetic crawler training + fleet gap learning (unified
+ *              events only — Amy has no per-agent dashboard panel; her gap
+ *              scoreboard / wishlist events flow to Sam's checks and Anya's
+ *              morning report per the Agent Observability Rule)
  *
  * The dashboard never assumes per-agent tables exist. The unified
  * `agent_activity_events` table is always queried first, agent-specific
  * tables are read only when a `tableExists` check returns true.
  */
 
-export const AGENT_NAMES = Object.freeze(['anya', 'sam', 'robert', 'yana', 'hamilton', 'john'])
+export const AGENT_NAMES = Object.freeze(['anya', 'sam', 'robert', 'yana', 'hamilton', 'john', 'amy'])
 
 export const AGENT_LABELS = Object.freeze({
   anya: 'Anya',
@@ -26,6 +30,7 @@ export const AGENT_LABELS = Object.freeze({
   yana: 'Yana',
   hamilton: 'Hamilton',
   john: 'John',
+  amy: 'Amy',
 })
 
 export const AGENT_TAGLINES = Object.freeze({
@@ -35,6 +40,7 @@ export const AGENT_TAGLINES = Object.freeze({
   yana: 'Client Discovery',
   hamilton: 'Application Autopilot / Funding Completion',
   john: 'Outreach Drafts',
+  amy: 'Crawler Training / Fleet Gap Learning',
 })
 
 export const RANGE_KEYS = Object.freeze(['24h', '7d', '30d', 'custom'])

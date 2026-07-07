@@ -822,19 +822,33 @@ export const CATEGORY_IDS = Object.freeze(Object.keys(CATEGORY_CATALOG))
  * Compute how many variants to make per category.
  *  - targetCount (when set): distribute EXACTLY that many profiles across the
  *    categories round-robin (e.g. 100/day spread evenly over 27 categories).
- *  - else: `perCategory` variants for every category.
+ *    When `weights` is given (fleet gap-scoreboard pressure, see
+ *    coverageGapScoreboard.weightCategoriesByGaps), the round-robin ring
+ *    repeats a category `weight` times per cycle so training concentrates on
+ *    the gap classes the real fleet proved — every category still keeps at
+ *    least its baseline share (weights are floored at 1), so breadth training
+ *    never stops.
+ *  - else: `perCategory` variants for every category (weights ignored).
  *
  * @returns {Record<string, number>} category id → variant count
  */
-export function planVariantCounts({ categories = CATEGORY_IDS, perCategory = 1, targetCount = null } = {}) {
+export function planVariantCounts({ categories = CATEGORY_IDS, perCategory = 1, targetCount = null, weights = null } = {}) {
   const ids = Array.isArray(categories) && categories.length > 0 ? categories.filter((c) => CATEGORY_CATALOG[c]) : CATEGORY_IDS
   const counts = {}
   for (const c of ids) counts[c] = 0
 
   if (Number.isFinite(Number(targetCount)) && Number(targetCount) > 0) {
     const total = Math.max(1, Math.min(5000, Math.floor(Number(targetCount))))
+    let ring = ids
+    if (weights && typeof weights === 'object') {
+      ring = []
+      for (const c of ids) {
+        const w = Math.max(1, Math.min(8, Math.round(Number(weights[c]) || 1)))
+        for (let k = 0; k < w; k++) ring.push(c)
+      }
+    }
     for (let i = 0; i < total; i++) {
-      const c = ids[i % ids.length]
+      const c = ring[i % ring.length]
       counts[c] += 1
     }
   } else {
@@ -854,12 +868,15 @@ export function planVariantCounts({ categories = CATEGORY_IDS, perCategory = 1, 
  *        targetCount is set).
  * @param {number} [opts.targetCount] - exact total number of profiles to make,
  *        distributed across categories (e.g. 100/day). Takes precedence.
+ * @param {Record<string,number>} [opts.categoryWeights] - fleet gap-scoreboard
+ *        weights (coverageGapScoreboard.weightCategoriesByGaps): categories on
+ *        gap-heavy lanes get proportionally more of the targetCount.
  * @returns {Array<object>} scenarios with { scenario_id, category, label,
  *          primary_type, kind, display_name, sections, expected }.
  */
-export function generateScenarios({ runId, categories = CATEGORY_IDS, perCategory = 1, targetCount = null } = {}) {
+export function generateScenarios({ runId, categories = CATEGORY_IDS, perCategory = 1, targetCount = null, categoryWeights = null } = {}) {
   const ids = Array.isArray(categories) && categories.length > 0 ? categories.filter((c) => CATEGORY_CATALOG[c]) : CATEGORY_IDS
-  const counts = planVariantCounts({ categories: ids, perCategory, targetCount })
+  const counts = planVariantCounts({ categories: ids, perCategory, targetCount, weights: categoryWeights })
   const scenarios = []
 
   for (const category of ids) {

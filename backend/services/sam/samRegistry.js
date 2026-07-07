@@ -626,6 +626,76 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Fleet coverage-gap scoreboard freshness + severity: Amy refreshes the
+    // Coverage & Evidence roll-up (system_kv coverage_gap_scoreboard) at the
+    // start of every training run and derives her task queue from it (owner
+    // directive 2026-07-06 — tasks from gaps, not random). This is the READ
+    // side the Agent Observability Rule requires: a scoreboard that stops
+    // refreshing means the gap-learning loop is dead, and a single gap class
+    // hitting most of the scanned fleet is a systemic coverage failure the
+    // owner must see, not a per-profile anecdote.
+    id: 'coverage.gapScoreboard',
+    label: 'Fleet coverage-gap scoreboard (Coverage & Evidence)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the fleet Coverage & Evidence gap scoreboard (system_kv coverage_gap_scoreboard, refreshed by Amy\'s daily gap-learning run) and flags when it is stale (>48h) or when the top gap class affects a large share of scanned profiles. Evidence carries the top 5 gaps + adapter wishlist; the recommended fix comes from the gap\'s own suggested_action. Fails open when system_kv is not queryable yet.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'gap scoreboard: db unavailable' }
+      const STALE_MS = 48 * 60 * 60 * 1000
+      const LARGE_SHARE = 0.5
+      const MIN_SCANNED = 5
+      let row
+      try {
+        row = await db.prepare('SELECT value, updated_at FROM system_kv WHERE key = ?').get('coverage_gap_scoreboard')
+      } catch (err) {
+        // system_kv not migrated yet — environment gap, not a defect.
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!row?.value) {
+        // Fail-open like crawler.gapLearning: no scoreboard yet just means the
+        // gap-learning loop has not produced data (fresh deploy / Amy pending).
+        return { ok: true, summary: 'No fleet gap scoreboard yet (Amy\'s gap-learning run has not recorded one).' }
+      }
+      let board = null
+      try { board = JSON.parse(row.value) } catch { board = null }
+      if (!board || typeof board !== 'object') {
+        return { ok: false, summary: 'coverage_gap_scoreboard exists but is unparseable JSON.', evidence: { raw: String(row.value).slice(0, 200) } }
+      }
+      const generatedMs = Date.parse(board.generated_at || row.updated_at || '') || 0
+      const ageMs = Date.now() - generatedMs
+      const gaps = Array.isArray(board.gaps) ? board.gaps : []
+      const topGaps = gaps.slice(0, 5)
+      const wishlist = Array.isArray(board.adapter_wishlist) ? board.adapter_wishlist : []
+      if (!generatedMs || ageMs > STALE_MS) {
+        return {
+          ok: false,
+          summary: `The fleet coverage-gap scoreboard is STALE (${generatedMs ? Math.round(ageMs / 3600000) + 'h old' : 'no timestamp'} > 48h) — Amy's daily gap-learning refresh is not landing.`,
+          evidence: { generated_at: board.generated_at || row.updated_at || null, age_hours: generatedMs ? Math.round(ageMs / 3600000) : null, top_gaps: topGaps },
+          recommended_fix: 'Confirm AMY_ENABLED / AMY_GAP_LEARNING are on and the Amy scheduler is running (readLatestAmyReport for the last run); to reseed immediately run buildFleetGapScoreboard via an Amy run.',
+          confidence: 0.85,
+        }
+      }
+      const scanned = Number(board.profiles_scanned) || 0
+      const top = topGaps[0] || null
+      const topShare = top && scanned > 0 ? (Number(top.count) || 0) / scanned : 0
+      if (top && scanned >= MIN_SCANNED && topShare >= LARGE_SHARE) {
+        return {
+          ok: false,
+          summary: `Fleet coverage gap hits ${Math.round(topShare * 100)}% of the ${scanned} scanned profile(s): ${top.statement}`,
+          evidence: { profiles_scanned: scanned, top_gaps: topGaps, adapter_wishlist: wishlist },
+          recommended_fix: top.suggested_action || 'Review the top gap classes on the Coverage & Evidence dashboard and widen the affected source lane.',
+          confidence: 0.85,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Gap scoreboard fresh (${Math.round(ageMs / 3600000)}h old): ${gaps.length} gap class(es) across ${scanned} profile(s); top gap affects ${top ? top.count : 0}; adapter wishlist ${wishlist.length} item(s).`,
+        evidence: { generated_at: board.generated_at, profiles_scanned: scanned, top_gaps: topGaps, adapter_wishlist: wishlist },
+      }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,

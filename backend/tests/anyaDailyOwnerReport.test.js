@@ -13,6 +13,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   buildOwnerReport,
   runAnyaDailyOwnerReport,
+  summarizeCoverageGaps,
   __testing__,
 } from '../services/anya/anyaDailyOwnerReport.js'
 
@@ -73,6 +74,85 @@ describe('buildOwnerReport', () => {
   })
 })
 
+function sampleGaps() {
+  return {
+    scoreboard: {
+      generated_at: '2026-07-06T05:10:00.000Z',
+      profiles_scanned: 12,
+      gaps: [
+        { lane: 'state_programs', gap_class: 'no_state_source', detail: 'TN', statement: 'No TN-specific state-programs source exists in the source registry.', suggested_action: 'Add a TN state source.', count: 7 },
+        { lane: null, gap_class: 'need_uncovered', detail: 'beekeeping', statement: 'No searched source covers the profile need "beekeeping".', suggested_action: 'Broaden a source.', count: 2 },
+      ],
+      adapter_wishlist: [
+        { lane: 'state_programs', gap_class: 'no_state_source', detail: 'TN', statement: 'No TN-specific state-programs source exists in the source registry.', affected_profiles_count: 7, suggested_action: 'Add a TN state source.' },
+      ],
+    },
+    events: [
+      { agent_name: 'amy', event_type: 'amy.gap_scoreboard.refreshed', status: 'succeeded', title: 'Amy refreshed the fleet coverage-gap scoreboard: 2 gap class(es) across 12 profile(s)' },
+      { agent_name: 'amy', event_type: 'amy.adapter_wishlist', status: 'blocked', title: 'Adapter wishlist: 1 structural coverage gap(s) Amy cannot fix (source adapter needed)' },
+      { agent_name: 'sam', event_type: 'agent.sam.step', status: 'succeeded', title: 'sam preflight succeeded' },
+    ],
+  }
+}
+
+describe('summarizeCoverageGaps', () => {
+  it('returns null when there is neither a scoreboard nor overnight activity', () => {
+    expect(summarizeCoverageGaps(null)).toBeNull()
+    expect(summarizeCoverageGaps({ scoreboard: null, events: [] })).toBeNull()
+  })
+
+  it('splits what changed autonomously (succeeded telemetry) from what needs the owner (blocked/failed + wishlist)', () => {
+    const gs = summarizeCoverageGaps(sampleGaps())
+    expect(gs.headline).toMatch(/2 coverage gap class\(es\) across 12 scanned profile\(s\)/)
+    expect(gs.topGaps[0]).toMatch(/7 profile\(s\): No TN-specific/)
+    expect(gs.wishlist[0]).toMatch(/TN —/)
+    expect(gs.changed).toEqual([
+      '[amy] Amy refreshed the fleet coverage-gap scoreboard: 2 gap class(es) across 12 profile(s)',
+      '[sam] sam preflight succeeded',
+    ])
+    expect(gs.needsOwner).toEqual([
+      '[amy] Adapter wishlist: 1 structural coverage gap(s) Amy cannot fix (source adapter needed)',
+    ])
+  })
+
+  it('renders an activity-only summary when no scoreboard exists yet', () => {
+    const gs = summarizeCoverageGaps({ scoreboard: null, events: sampleGaps().events })
+    expect(gs.headline).toMatch(/No fleet gap scoreboard recorded yet/)
+    expect(gs.topGaps).toEqual([])
+    expect(gs.changed.length).toBe(2)
+  })
+})
+
+describe('buildOwnerReport — coverage gaps section', () => {
+  it('renders "Coverage gaps & what changed overnight" in text + HTML when scoreboard data exists', () => {
+    const { text, html } = buildOwnerReport(sampleRun(), { gaps: sampleGaps() })
+    expect(text).toMatch(/COVERAGE GAPS & WHAT CHANGED OVERNIGHT/)
+    expect(text).toMatch(/7 profile\(s\): No TN-specific state-programs source/)
+    expect(text).toMatch(/Changed autonomously overnight/)
+    expect(text).toMatch(/Adapter wishlist — needs you/)
+    expect(text).toMatch(/Blocked or failed \(needs you\)/)
+    expect(html).toMatch(/Coverage gaps &amp; what changed overnight/)
+    expect(html).toMatch(/Changed autonomously overnight/)
+    expect(html).toMatch(/Adapter wishlist/)
+  })
+
+  it('omits the section entirely when there is no gap data', () => {
+    const { text, html } = buildOwnerReport(sampleRun(), {})
+    expect(text).not.toMatch(/COVERAGE GAPS/)
+    expect(html).not.toMatch(/Coverage gaps &amp; what changed overnight/)
+  })
+
+  it('escapes HTML in gap statements and event titles', () => {
+    const gaps = sampleGaps()
+    gaps.scoreboard.gaps[0].statement = '<script>alert(1)</script> gap'
+    gaps.events[0].title = '<img src=x onerror=alert(1)>'
+    const { html } = buildOwnerReport(sampleRun(), { gaps })
+    expect(html).not.toMatch(/<script>alert/)
+    expect(html).not.toMatch(/<img src=x/)
+    expect(html).toMatch(/&lt;script&gt;/)
+  })
+})
+
 describe('recipient', () => {
   it('defaults to the admin email, honours override', () => {
     expect(__testing__.recipient()).toMatch(/@/)
@@ -100,6 +180,25 @@ describe('runAnyaDailyOwnerReport', () => {
     const res = await runAnyaDailyOwnerReport(DB, { send, loadLatest })
     expect(res.sent).toBe(true)
     expect(loadLatest).toHaveBeenCalled()
+  })
+
+  it('includes the coverage-gaps section when the injected gap loader returns data', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true })
+    const loadGaps = vi.fn().mockResolvedValue(sampleGaps())
+    const res = await runAnyaDailyOwnerReport(DB, { runId: 'sam-abc', send, loadRun: async () => sampleRun(), loadGaps })
+    expect(res.sent).toBe(true)
+    expect(loadGaps).toHaveBeenCalled()
+    const arg = send.mock.calls[0][0]
+    expect(arg.html).toMatch(/Coverage gaps &amp; what changed overnight/)
+    expect(arg.text).toMatch(/COVERAGE GAPS & WHAT CHANGED OVERNIGHT/)
+  })
+
+  it('still sends when the gap loader throws (best-effort)', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true })
+    const loadGaps = vi.fn().mockRejectedValue(new Error('kv down'))
+    const res = await runAnyaDailyOwnerReport(DB, { runId: 'sam-abc', send, loadRun: async () => sampleRun(), loadGaps })
+    expect(res.sent).toBe(true)
+    expect(send.mock.calls[0][0].text).not.toMatch(/COVERAGE GAPS/)
   })
 
   it('does not send when disabled', async () => {
