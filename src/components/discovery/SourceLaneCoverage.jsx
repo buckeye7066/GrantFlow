@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { apiFetch } from '@/api/client'
-import { ShieldCheck, Radar } from 'lucide-react'
+import { ShieldCheck, Radar, ChevronRight, ChevronDown } from 'lucide-react'
 
 // Source-lane coverage / "negative evidence" for the user (mission goal #9 —
 // explainable, trustworthy results). Shows which discovery sources GrantFlow
@@ -10,6 +10,7 @@ import { ShieldCheck, Radar } from 'lucide-react'
 // until it has data, and never blocks the results.
 export default function SourceLaneCoverage({ profileId, refreshKey }) {
   const [coverage, setCoverage] = useState(null)
+  const [showExcluded, setShowExcluded] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -25,6 +26,7 @@ export default function SourceLaneCoverage({ profileId, refreshKey }) {
 
   const noMatch = Array.isArray(coverage.sources_no_current_match) ? coverage.sources_no_current_match : []
   const withResults = Array.isArray(coverage.sources_with_results) ? coverage.sources_with_results : []
+  const excluded = Array.isArray(coverage.excluded_sources) ? coverage.excluded_sources : []
 
   return (
     <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
@@ -55,6 +57,29 @@ export default function SourceLaneCoverage({ profileId, refreshKey }) {
         <p className="mt-2 text-xs text-slate-500">
           Checked but no open match right now: {noMatch.map((s) => s.name).join(', ')}. We keep watching these — new opportunities appear as agencies post them.
         </p>
+      )}
+      {excluded.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowExcluded((v) => !v)}
+            className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700"
+            aria-expanded={showExcluded}
+          >
+            {showExcluded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Not searched for this profile: {excluded.length} source{excluded.length === 1 ? '' : 's'} — why
+          </button>
+          {showExcluded && (
+            <ul className="mt-1 space-y-0.5 text-xs text-slate-500">
+              {excluded.map((s) => (
+                <li key={s.source_id}>
+                  <span className="font-medium text-slate-600">{s.name}</span>
+                  {Array.isArray(s.reasons) && s.reasons.length > 0 ? ` — ${s.reasons.join('; ')}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   )
