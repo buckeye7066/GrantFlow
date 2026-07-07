@@ -685,6 +685,42 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_vnext_app ON documents(vnext_application_id);
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
+-- Durable opaque media blobs (durable-on-Railway BYTEA/BLOB precedent:
+-- documents.file_bytes, profiles.avatar_data). Powers the forced welcome video
+-- gate: the 26MB welcome clip lives here, streamed by GET /api/media/:id with
+-- HTTP Range support. Keyed by a stable media_key so re-running the seed script
+-- dedupes instead of inserting a second copy.
+CREATE TABLE IF NOT EXISTS media_assets (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  media_key TEXT UNIQUE,
+  mime_type TEXT,
+  bytes BLOB,
+  size_bytes INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- One-time forced welcome video gate. An UNCONSUMED row (consumed_at IS NULL)
+-- whose match_email = the user's primary_email OR match_profile_id = one of the
+-- user's linked profiles makes that video the FIRST thing the user sees on their
+-- next login (above every onboarding/interview/tour branch). Consuming the row
+-- (POST /api/onboarding/welcome-video/consume) is monotonic, so it never replays.
+CREATE TABLE IF NOT EXISTS forced_welcome_videos (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  media_asset_id TEXT REFERENCES media_assets(id) ON DELETE CASCADE,
+  match_email TEXT,
+  match_profile_id TEXT,
+  label TEXT,
+  created_by TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  consumed_at TEXT DEFAULT NULL,
+  consumed_by_user_id TEXT DEFAULT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_forced_welcome_videos_email
+  ON forced_welcome_videos(consumed_at, match_email);
+CREATE INDEX IF NOT EXISTS idx_forced_welcome_videos_profile
+  ON forced_welcome_videos(consumed_at, match_profile_id);
+
 -- Grant monitoring alert configs (used by Grant Monitoring page)
 CREATE TABLE IF NOT EXISTS grant_monitoring_alerts (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

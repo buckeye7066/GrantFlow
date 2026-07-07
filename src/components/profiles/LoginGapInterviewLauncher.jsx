@@ -61,6 +61,11 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const user = useAuthStore((state) => state.user)
   const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
+  // Belt-and-suspenders: never fire the gap interview while a one-time forced
+  // welcome video is pending. OnboardingSequencer already renders the video as
+  // the sole top-priority overlay, but this global launcher mounts separately
+  // (App.jsx), so gate it here too so nothing races/stacks on top of the video.
+  const forcedWelcomeVideo = useAuthStore((state) => state.forcedWelcomeVideo)
   const isAdmin = normalizeUserAdmin(user)
   // Suppressed for the guided tour's ENTIRE run, and for the rest of the
   // browser tab session it ran in -- a brand-new profile always has gaps, so
@@ -81,6 +86,7 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
   // unchanged: Anya still re-asks them at each login until the gaps close.
   const enabled = isGapGateEnabled() && isAuthenticated
     && guidedCycleTourStatus !== 'pending'
+    && !forcedWelcomeVideo
     && !hasGuidedTourRunThisSession()
     && (!isAdmin || Boolean(onFinished))
 

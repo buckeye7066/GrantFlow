@@ -96,7 +96,7 @@ import { MAX_JSON_BODY_SIZE, GRANT_STATUSES } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
-import { resolveGuidedCycleTourStatus } from './services/onboardingGates.js';
+import { resolveGuidedCycleTourStatus, resolveForcedWelcomeVideo } from './services/onboardingGates.js';
 import { runWithSchedulerLock } from './services/schedulerLock.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
@@ -1986,6 +1986,10 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       const profileIds = new Set((profiles || []).map((p) => p?.id).filter(Boolean))
       const safeActiveProfileId = user.profileId && profileIds.has(user.profileId) ? user.profileId : profiles?.[0]?.id ?? null
 
+      // One-time forced welcome video gate (services/onboardingGates.js).
+      // Fail-open: resolves to null on any error so /me never breaks bootstrap.
+      const forcedWelcomeVideo = await resolveForcedWelcomeVideo(req.db, dbUser)
+
       return res.json({
         user: {
           id: dbUser.id,
@@ -2014,6 +2018,10 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           // never served 'pending_reinterview' — a secondary admin login must
           // not re-trigger Anya's interview. Non-admins get the raw value.
           guided_cycle_tour_status: resolveGuidedCycleTourStatus(dbUser),
+          // One-time forced welcome video (null for everyone with no unconsumed
+          // forced row → zero behavior change). The frontend renders this above
+          // every onboarding branch, then POSTs consume so it never replays.
+          forced_welcome_video: forcedWelcomeVideo,
         },
         profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: safeActiveProfileId,
@@ -2111,6 +2119,10 @@ app.use('/api/activity', activityRouter);
 app.use('/api', maintenanceGuardMw)
 // Public maintenance status + admin schedule/end + run-nightly-sweep.
 app.use('/api/maintenance', lazyRouter('./routes/maintenance.js'));
+// Public opaque media streaming (forced welcome video etc.) — see routes/media.js
+// for why this is intentionally unauthenticated (a <video> tag can't send the
+// bearer token; access is by opaque random id only).
+app.use('/api/media', lazyRouter('./routes/media.js'));
 app.use('/api/onboarding', lazyRouter('./routes/onboarding.js'));
 app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);

@@ -74,7 +74,7 @@ export function hasHadFirstRunAlready(userRow) {
  *   prior sign-in resolves to 'completed', so a secondary login can never
  *   re-open the interview.
  *
- * Pure + synchronous so buildUserPayload (sync) can call it. Expects a users
+ * Pure + synchronous (callable from any payload serializer). Expects a users
  * row that includes is_admin, guided_cycle_tour_status,
  * has_completed_onboarding, onboarding_completed_at, last_login_at (all
  * SELECT * call sites already have them).
@@ -87,8 +87,65 @@ export function resolveGuidedCycleTourStatus(userRow) {
   return raw
 }
 
+/**
+ * Resolve the one-time FORCED WELCOME VIDEO an auth payload should advertise.
+ *
+ * Returns `{ id, url, label }` for the newest UNCONSUMED forced_welcome_videos
+ * row that targets this user — matched by primary_email OR by any profile
+ * currently linked to the user (profiles.user_id = userRow.id) — else null.
+ * `id` is the forced_welcome_videos row id (what the consume endpoint clears);
+ * `url` is the public streaming path for the underlying media asset.
+ *
+ * The frontend's OnboardingSequencer renders this ABOVE every other first-run
+ * branch, so a targeted user sees the video full-screen before any interview /
+ * tour / dashboard. Once consumed, the row stops matching and this returns null
+ * forever after — zero behavior change for everyone with no forced row.
+ *
+ * FAIL-OPEN: any error (missing table on an un-migrated DB, query failure)
+ * resolves to null. A welcome video must NEVER break login.
+ *
+ * Async — every call site (buildUserPayload, GET /api/auth/me, the PATCH echo)
+ * is already async. Works on both dialects (SQLite .get() is sync but awaiting
+ * a non-promise is a no-op; the pg shim returns a promise).
+ *
+ * @param {Object} db - request-scoped DB handle (req.db)
+ * @param {Object} userRow - users row (needs id + primary_email)
+ * @returns {Promise<{id: string, url: string, label: string|null}|null>}
+ */
+export async function resolveForcedWelcomeVideo(db, userRow) {
+  try {
+    if (!db || !userRow?.id) return null
+    const normalizedEmail = String(userRow.primary_email ?? '').trim().toLowerCase()
+    const row = await db
+      .prepare(
+        `SELECT fwv.id AS id, fwv.media_asset_id AS media_asset_id, fwv.label AS label
+           FROM forced_welcome_videos fwv
+          WHERE fwv.consumed_at IS NULL
+            AND (
+              (fwv.match_email IS NOT NULL AND LOWER(TRIM(fwv.match_email)) = ?)
+              OR (fwv.match_profile_id IS NOT NULL AND fwv.match_profile_id IN (
+                    SELECT id FROM profiles WHERE user_id = ?
+                 ))
+            )
+          ORDER BY fwv.created_at DESC
+          LIMIT 1`,
+      )
+      .get(normalizedEmail, userRow.id)
+    if (!row?.id || !row?.media_asset_id) return null
+    return {
+      id: row.id,
+      url: `/api/media/${row.media_asset_id}`,
+      label: row.label ?? null,
+    }
+  } catch {
+    // Fail-open: never let a welcome-video lookup break authentication.
+    return null
+  }
+}
+
 export default {
   isAdminUserRow,
   hasHadFirstRunAlready,
   resolveGuidedCycleTourStatus,
+  resolveForcedWelcomeVideo,
 }

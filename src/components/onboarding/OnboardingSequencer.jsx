@@ -1,5 +1,6 @@
 import React from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import ForcedWelcomeVideo from '@/components/onboarding/ForcedWelcomeVideo'
 import AnyaGuidedTour from '@/components/onboarding/AnyaGuidedTour'
 import GuidedCycleTour from '@/components/onboarding/GuidedCycleTour'
 import ResetOnboardingFlow from '@/components/onboarding/ResetOnboardingFlow'
@@ -10,6 +11,17 @@ import ErrorBoundary from '@/components/shared/ErrorBoundary'
  * Priority router for GrantFlow's first-run experiences -- renders at most
  * ONE thing so nothing stacks:
  *
+ *   forcedWelcomeVideo (set)                        -> ForcedWelcomeVideo, the
+ *                                                      NEW HIGHEST priority: a
+ *                                                      one-time, non-dismissible
+ *                                                      full-screen video that
+ *                                                      must be watched before
+ *                                                      ANY onboarding/interview/
+ *                                                      tour/dashboard. Beats
+ *                                                      'pending_reinterview' so a
+ *                                                      targeted user who is ALSO
+ *                                                      flagged for onboarding
+ *                                                      still sees the video first.
  *   guidedCycleTourStatus === 'pending'             -> the new post-intake
  *                                                      GuidedCycleTour (brand
  *                                                      new signup -- Anya's
@@ -39,9 +51,14 @@ import ErrorBoundary from '@/components/shared/ErrorBoundary'
  */
 export default function OnboardingSequencer() {
   const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
+  const forcedWelcomeVideo = useAuthStore((state) => state.forcedWelcomeVideo)
 
   let content = null
-  if (guidedCycleTourStatus === 'pending') {
+  if (forcedWelcomeVideo?.url) {
+    // NEW HIGHEST priority: the one-time forced welcome video beats every other
+    // first-run branch (incl. 'pending_reinterview').
+    content = <ForcedWelcomeVideo />
+  } else if (guidedCycleTourStatus === 'pending') {
     content = <GuidedCycleTour />
   } else if (guidedCycleTourStatus === 'pending_reinterview') {
     content = <ResetOnboardingFlow />

@@ -1028,6 +1028,60 @@ export async function ensureOpportunityEmbeddingsTable(db, { logger = console } 
 }
 
 /**
+ * media_assets + forced_welcome_videos (one-time forced welcome video gate).
+ *
+ * media_assets stores durable opaque media blobs (the 26MB welcome clip),
+ * streamed by GET /api/media/:id. forced_welcome_videos is the per-user gate:
+ * an unconsumed row matching the user's email or a linked profile forces the
+ * video ahead of every onboarding branch. Without these tables, buildUserPayload
+ * / GET /api/auth/me would 500 on the resolveForcedWelcomeVideo query for
+ * operators who skipped MIGRATE_ON_BOOT (the resolver fails open to null, but we
+ * still want the tables present so the seed script + consume endpoint work).
+ * Durable-blob dialects: BYTEA (postgres) / BLOB (sqlite).
+ */
+export async function ensureForcedWelcomeVideoTables(db, { logger = console } = {}) {
+  return runStep(
+    'media_assets + forced_welcome_videos (forced welcome video gate)',
+    '[database]',
+    logger,
+    async () => {
+      const isPg = db?.dialect === 'postgres'
+      const blobType = isPg ? 'BYTEA' : 'BLOB'
+      const timestampType = isPg ? 'TIMESTAMPTZ DEFAULT now()' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS media_assets (
+          id TEXT PRIMARY KEY,
+          media_key TEXT UNIQUE,
+          mime_type TEXT,
+          bytes ${blobType},
+          size_bytes INTEGER,
+          created_at ${timestampType}
+        );
+      `)
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS forced_welcome_videos (
+          id TEXT PRIMARY KEY,
+          media_asset_id TEXT REFERENCES media_assets(id) ON DELETE CASCADE,
+          match_email TEXT,
+          match_profile_id TEXT,
+          label TEXT,
+          created_by TEXT,
+          created_at ${timestampType},
+          consumed_at TEXT DEFAULT NULL,
+          consumed_by_user_id TEXT DEFAULT NULL
+        );
+      `)
+      await db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_forced_welcome_videos_email ON forced_welcome_videos(consumed_at, match_email)',
+      )
+      await db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_forced_welcome_videos_profile ON forced_welcome_videos(consumed_at, match_profile_id)',
+      )
+    },
+  )
+}
+
+/**
  * The canonical, ordered registry of schema-invariant steps.
  *
  * SINGLE SOURCE OF TRUTH: this is the only place a step is declared. The boot
@@ -1061,6 +1115,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['onboarding_tour_state_columns', ensureOnboardingTourStateColumns],
   ['guided_cycle_tour_status_column', ensureGuidedCycleTourStatusColumn],
   ['opportunity_embeddings_table', ensureOpportunityEmbeddingsTable],
+  ['forced_welcome_video_tables', ensureForcedWelcomeVideoTables],
   ['perf_indexes', ensurePerfIndexes],
 ]
 
