@@ -138,7 +138,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Freeform notes relevant to intake, context, and matching."
       },
       {
@@ -217,19 +218,22 @@ export const SECTION_METADATA = {
         "name": "location",
         "label": "Location",
         "format": "json",
-        "help": "Legacy or quick-intake location value. Prefer city, state, ZIP, county, address, and Location focus > Geographic focus when structured data is available."
+        "deprecated": true,
+        "help": "Legacy or quick-intake location value. Prefer city, state, ZIP, county, address, and Location focus > Geographic focus when structured data is available. Deprecated: hidden from intake/edit; any stored value is preserved on save."
       },
       {
         "name": "keywords",
         "label": "Keywords (intake)",
         "format": "string_array",
-        "help": "Keyword tags lifted from quick intake or onboarding text. Canonical keywords live in programs_services.keywords; this is the legacy/intake mirror so older profiles still render cleanly."
+        "deprecated": true,
+        "help": "Keyword tags lifted from quick intake or onboarding text. Canonical keywords live in programs_services.keywords; this legacy/intake mirror is deprecated (hidden from intake/edit; stored value preserved on save)."
       },
       {
         "name": "interests",
         "label": "Interests (intake)",
         "format": "string_array",
-        "help": "Interest tags lifted from quick intake or onboarding text. Canonical interests live in programs_services.interests; this is the legacy/intake mirror."
+        "deprecated": true,
+        "help": "Interest tags lifted from quick intake or onboarding text. Canonical interests live in programs_services.interests; this legacy/intake mirror is deprecated (hidden from intake/edit; stored value preserved on save)."
       },
       {
         "name": "tags",
@@ -589,13 +593,15 @@ export const SECTION_METADATA = {
       {
         "name": "assistance_notes",
         "label": "Assistance notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Any nuance about benefits or barriers."
       },
       {
         "name": "notes",
         "label": "Notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Concise context about income or need (max ~2 sentences)."
       },
       {
@@ -837,7 +843,8 @@ export const SECTION_METADATA = {
       {
         "name": "mobility_or_transport_notes",
         "label": "Mobility / transportation notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Optional notes about mobility or transportation needs for appointments."
       },
       {
@@ -909,7 +916,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Medical notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Brief medical context (up to ~3 sentences)."
       }
     ]
@@ -979,7 +987,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "High-level notes about coverage gaps, copays, prior auth needs, etc."
       }
     ]
@@ -1034,7 +1043,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Concise medical history context (up to ~5 sentences)."
       }
     ]
@@ -1077,7 +1087,8 @@ export const SECTION_METADATA = {
       {
         "name": "compliance_notes",
         "label": "Compliance notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Notes about audits, policies, and compliance gaps."
       }
     ]
@@ -1126,7 +1137,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Notes about products/services, capacity, and priorities."
       }
     ]
@@ -1256,7 +1268,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Demographic notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Additional demographic context or identities."
       },
       {
@@ -1413,7 +1426,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Life circumstances notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Brief life situation context (up to ~2 sentences)."
       },
       {
@@ -1480,7 +1494,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Service details",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Branch, years of service, disability rating context when relevant."
       }
     ]
@@ -1589,7 +1604,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Occupational notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Additional occupations, certifications, or union local."
       }
     ]
@@ -1625,7 +1641,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Location notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "County, census tract, or other location qualifiers."
       }
     ]
@@ -1723,7 +1740,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Education notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Additional education context."
       },
       {
@@ -1823,7 +1841,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Employment notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Additional employment context."
       }
     ]
@@ -1881,7 +1900,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Housing notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Additional housing context."
       }
     ]
@@ -1912,7 +1932,8 @@ export const SECTION_METADATA = {
       {
         "name": "notes",
         "label": "Household notes",
-        "format": "text",
+        "format": "prose",
+        "scored": false,
         "help": "Additional household context."
       }
     ]
@@ -1924,27 +1945,34 @@ export const SECTION_METADATA = {
     "fields": [
       {
         "name": "focus_areas",
-        "label": "Focus areas (list)",
-        "format": "string_array",
-        "help": "Focus areas the profile cares about. Enter items separated by commas or new lines."
+        "label": "Focus areas",
+        "format": "tags",
+        "vocabulary": "focus",
+        "allow_custom": true,
+        "help": "Pick the focus areas the matcher should use for this profile. Choose from the suggested list; add a custom value only if none fit."
       },
       {
         "name": "interests",
-        "label": "Interests (list)",
-        "format": "string_array",
-        "help": "Interests that help match opportunities. Enter items separated by commas or new lines."
+        "label": "Interests",
+        "format": "tags",
+        "vocabulary": "focus",
+        "allow_custom": true,
+        "help": "Pick interests that help match opportunities. Choose from the suggested list; add a custom value only if none fit."
       },
       {
         "name": "keywords",
-        "label": "Keywords (list)",
-        "format": "string_array",
-        "help": "Keywords or tags used by funding matchers. Enter items separated by commas or new lines."
+        "label": "Keywords",
+        "format": "tags",
+        "vocabulary": "focus",
+        "allow_custom": true,
+        "help": "Keywords used by funding matchers. Choose from the suggested list; add a custom value only if none fit."
       },
       {
         "name": "notes",
         "label": "Programs/Services notes",
-        "format": "text",
-        "help": "Additional program or service notes."
+        "format": "prose",
+        "scored": false,
+        "help": "Additional program or service notes. Used to draft applications — not used for match scoring."
       }
     ]
   },
@@ -1955,20 +1983,23 @@ export const SECTION_METADATA = {
       {
         "name": "mission",
         "label": "Mission",
-        "format": "text",
-        "help": "Mission statement or personal mission."
+        "format": "prose",
+        "scored": false,
+        "help": "Mission statement or personal mission. Used to draft applications — not used for match scoring."
       },
       {
         "name": "primary_goal",
         "label": "Primary goal",
-        "format": "text",
-        "help": "Primary goal of the applicant or project."
+        "format": "prose",
+        "scored": false,
+        "help": "Primary goal of the applicant or project. Used to draft applications — not used for match scoring."
       },
       {
         "name": "target_population",
         "label": "Target population",
-        "format": "text",
-        "help": "Who benefits from the work (population served)."
+        "format": "prose",
+        "scored": false,
+        "help": "Who benefits from the work (population served). Used to draft applications — not used for match scoring."
       },
       {
         "name": "funding_amount_needed",
@@ -1979,74 +2010,136 @@ export const SECTION_METADATA = {
       {
         "name": "timeline",
         "label": "Timeline",
-        "format": "text",
-        "help": "Timeline for the project or need."
+        "format": "prose",
+        "scored": false,
+        "help": "Timeline for the project or need. Used to draft applications — not used for match scoring."
       },
       {
         "name": "past_experience",
         "label": "Past experience",
-        "format": "text",
-        "help": "Relevant past experience or track record."
+        "format": "prose",
+        "scored": false,
+        "help": "Relevant past experience or track record. Used to draft applications — not used for match scoring."
       },
       {
         "name": "unique_qualities",
         "label": "Unique qualities",
-        "format": "text",
-        "help": "What makes the applicant or project unique."
+        "format": "prose",
+        "scored": false,
+        "help": "What makes the applicant or project unique. Used to draft applications — not used for match scoring."
       },
       {
         "name": "collaboration_partners",
         "label": "Collaboration partners",
-        "format": "text",
-        "help": "Partner organizations or individuals."
+        "format": "prose",
+        "scored": false,
+        "help": "Partner organizations or individuals. Used to draft applications — not used for match scoring."
       },
       {
         "name": "sustainability_plan",
         "label": "Sustainability plan",
-        "format": "text",
-        "help": "Plan for sustaining the work beyond this grant."
+        "format": "prose",
+        "scored": false,
+        "help": "Plan for sustaining the work beyond this grant. Used to draft applications — not used for match scoring."
       },
       {
         "name": "barriers_faced",
         "label": "Barriers faced",
-        "format": "text",
-        "help": "Obstacles the applicant is navigating."
+        "format": "prose",
+        "scored": false,
+        "help": "Obstacles the applicant is navigating. Used to draft applications — not used for match scoring."
       },
       {
         "name": "special_circumstances",
         "label": "Special circumstances",
-        "format": "text",
-        "help": "Any special circumstances that should inform the application."
+        "format": "prose",
+        "scored": false,
+        "help": "Any special circumstances that should inform the application. Used to draft applications — not used for match scoring."
       },
       {
         "name": "personal_statement",
         "label": "Personal statement",
-        "format": "long_text",
-        "help": "Long-form personal statement or applicant story for applications."
+        "format": "prose",
+        "scored": false,
+        "help": "Long-form personal statement or applicant story for applications. Used to draft applications — not used for match scoring."
       },
       {
         "name": "goals",
         "label": "Goals",
-        "format": "long_text",
-        "help": "Long-form goals or outcomes the applicant is pursuing."
+        "format": "prose",
+        "scored": false,
+        "help": "Long-form goals or outcomes the applicant is pursuing. Used to draft applications — not used for match scoring."
       },
       {
         "name": "needs_description",
         "label": "Needs description",
-        "format": "long_text",
-        "help": "Long-form description of the funding need and barriers."
+        "format": "prose",
+        "scored": false,
+        "help": "Long-form description of the funding need and barriers. Used to draft applications — not used for match scoring."
       },
       {
         "name": "focus_areas",
         "label": "Focus areas",
-        "format": "string_array",
-        "help": "List of focus areas relevant to the applicant or project."
+        "format": "tags",
+        "vocabulary": "focus",
+        "allow_custom": true,
+        "help": "Focus areas relevant to the applicant or project. Choose from the suggested list; add a custom value only if none fit."
       },
       {
         "name": "supports",
-        "label": "Supports",
-        "format": "string_array",
-        "help": "Support needs or resources mentioned in narrative intake."
+        "label": "Support needs",
+        "format": "tags",
+        "vocabulary": "needs",
+        "allow_custom": true,
+        "help": "Support needs relevant to the applicant. Choose from the suggested list; add a custom value only if none fit."
+      }
+    ]
+  },
+  "essays": {
+    "title": "Application essays",
+    "description": "Long-form essays Hamilton uses to draft your applications. Editing these controls exactly what Hamilton writes from. Used for drafting only — not used for match scoring.",
+    "fields": [
+      {
+        "name": "primary",
+        "label": "Primary essay",
+        "format": "prose",
+        "scored": false,
+        "help": "Your main application essay / applicant story. Hamilton grounds every draft in this. Used for drafting — not used for match scoring."
+      },
+      {
+        "name": "personal_statement",
+        "label": "Personal statement",
+        "format": "prose",
+        "scored": false,
+        "help": "Long-form personal statement. Used for drafting — not used for match scoring."
+      },
+      {
+        "name": "statement_of_need",
+        "label": "Statement of need",
+        "format": "prose",
+        "scored": false,
+        "help": "Why you need this funding, in your own words. Used for drafting — not used for match scoring."
+      },
+      {
+        "name": "goals",
+        "label": "Goals",
+        "format": "prose",
+        "scored": false,
+        "help": "What you hope to achieve with this funding. Used for drafting — not used for match scoring."
+      },
+      {
+        "name": "career_goals",
+        "label": "Career goals",
+        "format": "prose",
+        "scored": false,
+        "help": "Your longer-term career or organizational goals. Used for drafting — not used for match scoring."
+      },
+      {
+        "name": "financial_hardship",
+        "label": "Financial hardship",
+        "format": "prose",
+        "scored": false,
+        "help": "Describe any financial hardship in your own words. Used for drafting — not used for match scoring."
       }
     ]
   }

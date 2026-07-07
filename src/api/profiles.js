@@ -123,6 +123,27 @@ export async function requestProfileSectionAI(profileId, sectionKey) {
   })
 }
 
+// Controlled vocabulary for tag-picker profile fields (needs / focus).
+// The endpoint is owned by the backend schema-redesign branch and may not exist
+// yet on older deploys — callers MUST treat a rejection (404 pre-deploy) as
+// "no controlled list available" and fall back to free-text entry so the form
+// never breaks. The result is memoized module-side (one fetch per session);
+// a failed fetch is NOT cached, so a later mount can retry once the endpoint ships.
+let _vocabularyPromise = null
+export async function getProfileVocabulary() {
+  if (_vocabularyPromise) return _vocabularyPromise
+  _vocabularyPromise = apiFetch('/api/profiles/vocabulary').catch((err) => {
+    _vocabularyPromise = null
+    throw err
+  })
+  return _vocabularyPromise
+}
+
+// Test-only hook: reset the module-level vocabulary memo between test cases.
+export function __resetProfileVocabularyCache() {
+  _vocabularyPromise = null
+}
+
 export async function requestProfileFieldAI(context) {
   const { profileId, sectionKey, fieldName } = context
   assertRealProfileId(profileId, 'requestProfileFieldAI')
