@@ -49,6 +49,7 @@ import {
   enforceImportedStatusHonesty,
   enforceAmountEnrichment,
   enforceGrantAmountBackfill,
+  enforceAmySyntheticExpiry,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -986,7 +987,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(24)
+    expect(summary.ran).toBe(25)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1013,6 +1014,7 @@ describe('enforceInvariants — runner', () => {
       'pipeline_refill',
       'converted_applications_have_profiles',
       'admin_reinterview_suppression',
+      'amy_synthetic_expiry',
     ])
   })
 
@@ -2583,5 +2585,158 @@ describe('enforceGrantAmountBackfill catalog amount-sanity net (untrusted implau
     await enforceGrantAmountBackfill(db)
     const fo = db.prepare('SELECT amount_max FROM funding_opportunities WHERE id = ?').get(foId)
     expect(Number(fo.amount_max)).toBe(25000000)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INVARIANT: Amy synthetic profiles expire (owner directive 2026-07-06 — "make
+// sure those profiles are getting deleted afterwards"). The boot net calls the
+// SAME guarded cleanupExpiredAmyProfiles sweep the end-of-run pass uses, so an
+// expired leftover from ANY prior run is reaped regardless of whether Amy's
+// own run-scoped cleanup ever fired (in prod it no-oped every run).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('enforceAmySyntheticExpiry', () => {
+  function makeAmyDb() {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY,
+        display_name TEXT,
+        primary_type TEXT,
+        status TEXT DEFAULT 'active',
+        tags TEXT DEFAULT '[]',
+        created_by TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      );
+      CREATE TABLE profile_sections (
+        profile_id TEXT NOT NULL,
+        section_key TEXT NOT NULL,
+        data TEXT NOT NULL,
+        updated_by TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        UNIQUE(profile_id, section_key)
+      );
+    `)
+    return db
+  }
+
+  async function seedExpiredCrawledSynthetic(db, { hoursAgo = 30, ttlHours = 24, runId = 'amy-prior-run' } = {}) {
+    const { createAmyProfile, markProfileCrawled } = await import('../services/amy/amyProfileStore.js')
+    const { generateScenarios } = await import('../services/amy/syntheticProfileCatalog.js')
+    const past = new Date(Date.now() - hoursAgo * 60 * 60 * 1000)
+    const { profileId } = await createAmyProfile(db, generateScenarios({ runId })[0], { runId, ttlHours, now: past })
+    await markProfileCrawled(db, profileId, { now: past })
+    return profileId
+  }
+
+  beforeEach(() => {
+    delete process.env.ENFORCE_AMY_SYNTHETIC_EXPIRY
+    delete process.env.AMY_NEVER_CRAWLED_MAX_AGE_HOURS
+  })
+  afterEach(() => {
+    delete process.env.ENFORCE_AMY_SYNTHETIC_EXPIRY
+    delete process.env.AMY_NEVER_CRAWLED_MAX_AGE_HOURS
+  })
+
+  it('reaps an EXPIRED, crawled leftover from a prior run; never touches real profiles; idempotent', async () => {
+    const db = makeAmyDb()
+    try {
+      // Real (non-Amy) profile that must survive no matter what.
+      db.prepare(
+        `INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by, created_at, updated_at)
+         VALUES ('real-1', 'Real Org', 'nonprofit', 'active', '[]', 'real-user', '2020-01-01', '2020-01-01')`,
+      ).run()
+      const expired = await seedExpiredCrawledSynthetic(db, { hoursAgo: 30, ttlHours: 24 })
+
+      const first = await enforceAmySyntheticExpiry(db)
+      expect(first.ok).toBe(true)
+      expect(first.enforced).toBe(true)
+      expect(first.repaired).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(expired)).toBeUndefined()
+      expect(db.prepare(`SELECT id FROM profiles WHERE id = 'real-1'`).get()).toBeTruthy()
+
+      // Idempotent: a second boot sweep finds nothing left to repair.
+      const second = await enforceAmySyntheticExpiry(db)
+      expect(second.repaired).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps a NOT-yet-expired synthetic and a never-crawled one inside the TTL escape window', async () => {
+    const db = makeAmyDb()
+    try {
+      const { createAmyProfile } = await import('../services/amy/amyProfileStore.js')
+      const { generateScenarios } = await import('../services/amy/syntheticProfileCatalog.js')
+      // Fresh, crawled, unexpired.
+      const fresh = await seedExpiredCrawledSynthetic(db, { hoursAgo: 1, ttlHours: 48, runId: 'amy-fresh' })
+      // Never crawled, 10h old — far below the 96h never-crawled cutoff.
+      const { profileId: young } = await createAmyProfile(db, generateScenarios({ runId: 'amy-young' })[0], {
+        runId: 'amy-young',
+        ttlHours: 48,
+        now: new Date(Date.now() - 10 * 60 * 60 * 1000),
+      })
+
+      const res = await enforceAmySyntheticExpiry(db)
+      expect(res.repaired).toBe(0)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(fresh)).toBeTruthy()
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(young)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('reaps a never-crawled leftover ONLY once far past TTL (96h escape hatch)', async () => {
+    const db = makeAmyDb()
+    try {
+      const { createAmyProfile } = await import('../services/amy/amyProfileStore.js')
+      const { generateScenarios } = await import('../services/amy/syntheticProfileCatalog.js')
+      const { profileId: stale } = await createAmyProfile(db, generateScenarios({ runId: 'amy-stale' })[0], {
+        runId: 'amy-stale',
+        ttlHours: 48,
+        now: new Date(Date.now() - 100 * 60 * 60 * 1000), // 100h > 96h cutoff
+      })
+      const res = await enforceAmySyntheticExpiry(db)
+      expect(res.repaired).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(stale)).toBeUndefined()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('is count-only when ENFORCE_AMY_SYNTHETIC_EXPIRY=0 (reports wouldReap, deletes nothing)', async () => {
+    const db = makeAmyDb()
+    try {
+      const expired = await seedExpiredCrawledSynthetic(db)
+      process.env.ENFORCE_AMY_SYNTHETIC_EXPIRY = '0'
+      const off = await enforceAmySyntheticExpiry(db)
+      expect(off.enforced).toBe(false)
+      expect(off.repaired).toBe(0)
+      expect(off.wouldReap).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(expired)).toBeTruthy()
+
+      // Flip back on: the same row is reaped.
+      delete process.env.ENFORCE_AMY_SYNTHETIC_EXPIRY
+      const on = await enforceAmySyntheticExpiry(db)
+      expect(on.repaired).toBe(1)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(expired)).toBeUndefined()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('degrades to a schema skip (never a failure) on DBs without the Amy profile shape', async () => {
+    const db = makeDb() // the minimal grants/profiles schema (no created_by / profile_sections)
+    try {
+      const res = await enforceAmySyntheticExpiry(db)
+      expect(res.ok).toBe(true)
+      expect(res.skipped).toBe('schema')
+      expect(res.repaired).toBe(0)
+    } finally {
+      db.close()
+    }
   })
 })

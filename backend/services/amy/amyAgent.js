@@ -18,7 +18,11 @@
  *      to Anya (root cause) → Sam (verified safe fixes); stage deeper levers
  *      (source coverage, scoring weights) into an approval queue.
  *   6. Persist a combined report (admin panel) + JSON artifacts.
- *   7. Clean up ONLY profiles that were crawled at least once (never before).
+ *   7. Clean up ONLY profiles that were crawled at least once (never before),
+ *      then run the UNscoped expired-only sweep (cleanupExpiredAmyProfiles) so
+ *      expired leftovers from ANY prior run are reaped too — the run-scoped
+ *      pass alone deleted nothing when discovery skipped/errored, and prior
+ *      runs' leftovers were permanently out of its onlyIds scope.
  *
  * Everything is dependency-injected so the agent is unit-testable offline.
  */
@@ -29,7 +33,7 @@ import { createLogger } from '../../utils/logger.js'
 import { DEFAULT_MIN_SCORE, TOPICAL_EVIDENCE_STRONG_BAR } from '../../config/matchThresholds.js'
 import { newRunId, clampTtlHours } from './amyMetadata.js'
 import { generateScenarios, CATEGORY_IDS } from './syntheticProfileCatalog.js'
-import { createAmyProfile, cleanupAmyProfiles, markProfileCrawled } from './amyProfileStore.js'
+import { createAmyProfile, cleanupAmyProfiles, cleanupExpiredAmyProfiles, markProfileCrawled } from './amyProfileStore.js'
 import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations } from './amyReport.js'
 import { cohortMetricsAtFloor, sweepFloors, summarizeCohort } from './crawlerMetrics.js'
 import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue } from './crawlerTuner.js'
@@ -43,6 +47,35 @@ import { buildFleetGapScoreboard, weightCategoriesByGaps, deriveAmyGapActions } 
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
 
 const defaultLog = createLogger('services:amy:agent')
+
+/**
+ * Read profiles.last_discovery_at for one profile (tolerant: older/test
+ * schemas without the column read as null). Used as the belt-and-suspenders
+ * "the crawl really happened" signal: persistRun stamps last_discovery_at on
+ * every live discovery flush, so if the stamp ADVANCED across a runDiscovery
+ * call whose result said skipped — or that threw AFTER persisting (the prod
+ * failure mode: post-persist steps erroring left crawled profiles counted as
+ * not-crawled) — the profile was genuinely crawled and must be reapable.
+ */
+async function readLastDiscoveryAt(db, profileId) {
+  try {
+    const row = await db.prepare('SELECT last_discovery_at FROM profiles WHERE id = ?').get(profileId)
+    return row?.last_discovery_at ?? null
+  } catch {
+    return null
+  }
+}
+
+/** True when the profile's last_discovery_at stamp advanced past `before`. */
+async function discoveryStampAdvanced(db, profileId, before) {
+  const after = await readLastDiscoveryAt(db, profileId)
+  if (!after) return false
+  if (!before) return true
+  const a = Date.parse(after)
+  const b = Date.parse(before)
+  if (Number.isFinite(a) && Number.isFinite(b)) return a > b
+  return String(after) !== String(before)
+}
 
 /**
  * @param {object} options  (all optional)
@@ -227,18 +260,37 @@ export async function runAmyTraining(options = {}) {
       continue
     }
 
+    // Snapshot the real discovery stamp BEFORE the run so a skipped/thrown
+    // result can still be recognized as crawled when the stamp advanced.
+    const stampBefore = await readLastDiscoveryAt(db, profileId)
     try {
       // The slider-floor crawler event: at least one real discovery run per profile.
       const result = await runDiscovery({ db, profileId, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher })
       evaluations.push(evaluateDiscovery(scenario, profileId, result, { runId }))
-      // Only count it as crawled when discovery actually ran (not skipped).
+      // Only count it as crawled when discovery actually ran (not skipped) —
+      // with a belt-and-suspenders check: if the result SAID skipped but the
+      // profile's last_discovery_at advanced during the call, the crawl really
+      // happened (persistRun stamps it) and the profile must count as crawled,
+      // or cleanup would skip a genuinely-crawled synthetic forever.
       if (result && !result?.run?.skipped) {
+        await markProfileCrawled(db, profileId, { now: clock(), floor: sliderFloor })
+        crawledProfileIds.push(profileId)
+      } else if (await discoveryStampAdvanced(db, profileId, stampBefore)) {
         await markProfileCrawled(db, profileId, { now: clock(), floor: sliderFloor })
         crawledProfileIds.push(profileId)
       }
     } catch (err) {
       logger.warn('discovery threw for synthetic profile', { scenario_id: scenario.scenario_id, profile_id: profileId, error: err?.message })
       evaluations.push(evaluateDiscovery(scenario, profileId, null, { error: err?.message, runId }))
+      // Same belt-and-suspenders for the THROW path (the prod failure mode:
+      // discovery persisted — stamping last_discovery_at — then errored in a
+      // post-persist step, leaving a crawled profile counted as not-crawled).
+      try {
+        if (await discoveryStampAdvanced(db, profileId, stampBefore)) {
+          await markProfileCrawled(db, profileId, { now: clock(), floor: sliderFloor })
+          crawledProfileIds.push(profileId)
+        }
+      } catch { /* crawled-signal rescue is best-effort, never fatal */ }
     }
   }
 
@@ -563,6 +615,53 @@ export async function runAmyTraining(options = {}) {
   }
   combined.cleanup = cleanup
 
+  // ── CLEANUP NET (owner directive 2026-07-06 "make sure those profiles are
+  // getting deleted afterwards"): the pass above is scoped to THIS run's
+  // crawled ids — when discovery skipped/errored for every profile the id list
+  // is EMPTY and it deletes nothing, and leftovers from PRIOR runs are
+  // permanently out of its scope (prod accumulated 13 live synthetics with a
+  // lifetime reap count of 0). This second, UNscoped expired-only pass sweeps
+  // expired synthetics from ANY run at the end of EVERY run, with all guards
+  // intact (designated / allow_sam_cleanup / synthetic / crawled + TTL escape
+  // hatch / 6h grace). The boot invariant enforceAmySyntheticExpiry is the
+  // standing net behind this per-run gate.
+  let expiredSweep = null
+  if (!keepProfiles) {
+    try {
+      expiredSweep = await cleanupExpiredAmyProfiles(db, { now: clock() })
+    } catch (err) {
+      logger.warn('Amy expired-synthetic sweep failed (non-fatal)', { error: err?.message })
+      expiredSweep = { error: String(err?.message || err), scanned: 0, deleted: 0, skipped: 0 }
+    }
+  }
+  combined.cleanup_expired = expiredSweep
+
+  // Agent Observability Rule: the sweep outcome must be visible to Sam + Anya,
+  // not just in ephemeral run logs — emit the standard amy telemetry event.
+  if (expiredSweep) {
+    await Promise.resolve(recordActivity(db, {
+      agent_name: 'amy',
+      event_type: 'amy.cleanup.expired_sweep',
+      status: expiredSweep.error ? 'failed' : 'succeeded',
+      severity: expiredSweep.error ? 'medium' : 'info',
+      title: `Amy expired-synthetic sweep: reaped ${expiredSweep.deleted ?? 0} leftover profile(s) (scanned ${expiredSweep.scanned ?? 0})`,
+      description: expiredSweep.error
+        ? `Sweep failed: ${expiredSweep.error}`
+        : `End-of-run expired-only pass (unscoped): ${expiredSweep.deleted ?? 0} reaped, ${expiredSweep.skipped ?? 0} kept by guards; this run's scoped cleanup reaped ${cleanup?.deleted ?? 0}.`,
+      metric_key: 'amy_expired_synthetics_reaped',
+      metric_value: expiredSweep.deleted ?? 0,
+      details_json: {
+        run_id: runId,
+        scanned: expiredSweep.scanned ?? 0,
+        deleted: expiredSweep.deleted ?? 0,
+        skipped: expiredSweep.skipped ?? 0,
+        reaped_ids: expiredSweep.ids ?? [],
+        this_run_cleanup_deleted: cleanup?.deleted ?? 0,
+        ...(expiredSweep.error ? { error: expiredSweep.error } : {}),
+      },
+    })).catch(() => {})
+  }
+
   logger.info('Amy training run complete', {
     run_id: runId,
     ...summary,
@@ -576,6 +675,7 @@ export async function runAmyTraining(options = {}) {
     adapter_wishlist: gapActions.structural.length,
     approval_items: approvalQueue.length,
     cleaned: cleanup?.deleted ?? 0,
+    expired_swept: expiredSweep?.deleted ?? 0,
     kept: keepProfiles,
   })
 
@@ -589,8 +689,9 @@ export async function runAmyTraining(options = {}) {
     crawled_profile_ids: crawledProfileIds,
     kept_profiles: keepProfiles,
     cleanup,
+    cleanup_expired: expiredSweep,
   }
 }
 
-export { cleanupAmyProfiles }
-export default { runAmyTraining, cleanupAmyProfiles }
+export { cleanupAmyProfiles, cleanupExpiredAmyProfiles }
+export default { runAmyTraining, cleanupAmyProfiles, cleanupExpiredAmyProfiles }

@@ -210,3 +210,25 @@ npm run amy:cleanup -- --apply --run=<id>   # delete one run's profiles
 
 The nightly Sam sweep (`backend/services/maintenance/nightlySweep.js`) will call
 the expired-only cleanup when `AMY_AUTO_CLEANUP=true` (off by default).
+
+### Expired-synthetic reaping is guaranteed at THREE choke points
+
+Owner directive (2026-07-06): synthetic profiles MUST get deleted afterwards.
+The end-of-run cleanup inside `runAmyTraining` is scoped to the ids crawled in
+that run — when discovery skips/errors for the cohort it deletes nothing, so
+two additional layers guarantee the rule:
+
+1. **End of every run** — after the scoped pass, `runAmyTraining` runs the
+   UNscoped `cleanupExpiredAmyProfiles()` (expired-only, all prior runs) and
+   emits the `amy.cleanup.expired_sweep` telemetry event so the outcome is
+   visible to Sam + Anya. Counts land in the combined report as
+   `cleanup_expired`.
+2. **Every boot** — the invariant `enforceAmySyntheticExpiry()` in
+   `backend/startup/enforceInvariants.js` runs the same sweep (disable with
+   `ENFORCE_AMY_SYNTHETIC_EXPIRY=0` for count-only).
+3. **Nightly** — the Sam maintenance sweep above.
+
+All three delegate to the same guarded sweep, so the safety guards (designated
+profiles, `allow_sam_cleanup`, `synthetic`, never-delete-uncrawled with the
+bounded `AMY_NEVER_CRAWLED_MAX_AGE_HOURS` escape hatch, crawled grace window)
+hold identically everywhere.

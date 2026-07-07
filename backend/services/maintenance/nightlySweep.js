@@ -145,10 +145,9 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
   // the never-crawled reap while keeping the crawled reap). Best-effort.
   if (String(process.env.AMY_AUTO_CLEANUP ?? 'true').toLowerCase() !== 'false') {
     try {
-      const { cleanupAmyProfiles } = await import('../amy/amyProfileStore.js')
+      const { cleanupAmyProfiles, amyNeverCrawledMaxAgeMs } = await import('../amy/amyProfileStore.js')
       const graceMs = Math.max(0, Number(process.env.AMY_CLEANUP_GRACE_HOURS || 2)) * 60 * 60 * 1000
-      const neverCrawledMaxAgeMs =
-        Math.max(0, Number(process.env.AMY_NEVER_CRAWLED_MAX_AGE_HOURS ?? 96)) * 60 * 60 * 1000
+      const neverCrawledMaxAgeMs = amyNeverCrawledMaxAgeMs()
       const amy = await cleanupAmyProfiles(db, {
         requireCrawled: true,
         minCrawledAgeMs: graceMs,

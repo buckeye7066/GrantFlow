@@ -3545,6 +3545,80 @@ export async function enforceAdminReinterviewSuppression(db) {
   })
 }
 
+/**
+ * INVARIANT: AMY SYNTHETIC PROFILES EXPIRE (owner directive 2026-07-06 —
+ * "make sure those profiles are getting deleted afterwards").
+ *
+ * THE BUG THIS CLOSES
+ * -------------------
+ * Amy's end-of-run cleanup was scoped to the profile ids SHE saw crawled in
+ * THAT run (onlyIds = crawledProfileIds). In prod, discovery results for her
+ * cohort skipped/threw, so the list was EMPTY every run → cleanup deleted
+ * nothing, lifetime reap count 0, and 13 synthetic profiles accumulated —
+ * including rows days past their amy_metadata.expires_at. Leftovers from
+ * prior runs were permanently out of the per-run pass's scope by design.
+ *
+ * THE RULE
+ * --------
+ * A synthetic crawler-training profile (created_by='agent:amy', metadata
+ * synthetic:true + allow_sam_cleanup:true) that is past its expires_at must
+ * not outlive the next boot. This net calls the SAME guarded sweep the
+ * end-of-run second pass and the nightly sweep use — cleanupExpiredAmyProfiles
+ * (backend/services/amy/amyProfileStore.js) — so every safety guard holds
+ * here too and is never re-implemented:
+ *   - non-Amy rows are never scanned (created_by scope inside listAmyProfiles);
+ *   - designated/system profiles are never touched;
+ *   - metadata must say allow_sam_cleanup:true AND synthetic:true;
+ *   - never-crawled rows are reaped ONLY far past TTL
+ *     (AMY_NEVER_CRAWLED_MAX_AGE_HOURS, default 96h; TTL max is 72h);
+ *   - a profile crawled within the last 6h is kept (mid-flight grace).
+ *
+ * Per-call first lines of defense: the end-of-run scoped cleanup + the new
+ * unscoped expired pass in runAmyTraining, and the nightly maintenance sweep.
+ * This boot net guarantees the rule regardless of whether those ran.
+ *
+ * OVERRIDE: ON by default; ENFORCE_AMY_SYNTHETIC_EXPIRY=0 for count-only
+ * (dry-run: reports what WOULD be reaped, deletes nothing). Idempotent:
+ * reaped rows are gone on re-run; a clean DB yields zero repairs.
+ */
+export async function enforceAmySyntheticExpiry(db, deps = {}) {
+  return runInvariant('amy_synthetic_expiry', async () => {
+    // Schema probe: minimal test DBs may lack profiles.created_by or the
+    // profile_sections table the sweep reads — degrade to a skip, not a failure.
+    try {
+      await db.prepare('SELECT created_by FROM profiles LIMIT 1').get()
+      await db.prepare('SELECT 1 FROM profile_sections LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const enforce = _parseBoolEnv(process.env.ENFORCE_AMY_SYNTHETIC_EXPIRY) !== false
+    // Lazy import (same precedent as the relevanceFloor config resolution):
+    // keeps the boot module from statically pulling the services/amy graph.
+    const cleanupExpired =
+      deps.cleanupExpiredAmyProfiles ??
+      (await import('../services/amy/amyProfileStore.js')).cleanupExpiredAmyProfiles
+    const result = await cleanupExpired(db, { dryRun: !enforce })
+    const wouldReap = Number(result?.deleted) || 0
+    if (!enforce) {
+      if (wouldReap > 0) {
+        log.warn('expired Amy synthetic profiles present (reap DISABLED via ENFORCE_AMY_SYNTHETIC_EXPIRY=0)', {
+          wouldReap,
+          scanned: result?.scanned ?? 0,
+        })
+      }
+      return { scanned: Number(result?.scanned) || 0, repaired: 0, wouldReap, enforced: false }
+    }
+    if (wouldReap > 0) {
+      log.info('reaped expired Amy synthetic training profiles', {
+        repaired: wouldReap,
+        scanned: result?.scanned ?? 0,
+      })
+    }
+    return { scanned: Number(result?.scanned) || 0, repaired: wouldReap, enforced: true }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -3649,6 +3723,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // never sits in 'pending_reinterview' — a secondary admin login must not
   // re-open Anya's interview. Cheap single UPDATE on users.
   steps.push(await enforceAdminReinterviewSuppression(db))
+  // Agent-data hygiene net: an EXPIRED Amy synthetic training profile never
+  // outlives the boot — the run-scoped end-of-run cleanup silently no-ops when
+  // discovery skips/errors (empty crawled-id list), so without this net
+  // synthetics accumulate forever (the 13-live/0-reaped prod class).
+  steps.push(await enforceAmySyntheticExpiry(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -3670,6 +3749,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.createdProfiles !== undefined ? { createdProfiles: s.createdProfiles } : {}),
       ...(s.missingAmount !== undefined ? { missingAmount: s.missingAmount } : {}),
       ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
+      ...(s.wouldReap !== undefined ? { wouldReap: s.wouldReap } : {}),
     })),
   })
 

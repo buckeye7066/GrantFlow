@@ -4,7 +4,9 @@ import { runAmyTraining } from '../services/amy/amyAgent.js'
 import os from 'node:os'
 import fsp from 'node:fs/promises'
 import nodePath from 'node:path'
-import { createAmyProfile, cleanupAmyProfiles, listAmyProfiles, markProfileCrawled } from '../services/amy/amyProfileStore.js'
+import { createAmyProfile, cleanupAmyProfiles, cleanupExpiredAmyProfiles, listAmyProfiles, markProfileCrawled } from '../services/amy/amyProfileStore.js'
+import { buildAmyMetadata } from '../services/amy/amyMetadata.js'
+import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { cohortMetricsAtFloor, sweepFloors } from '../services/amy/crawlerMetrics.js'
 import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue } from '../services/amy/crawlerTuner.js'
 import { readCurrentMinScore, applyMinScore, restoreFromBackup, readCurrentWeights, applyWeights, normalizeWeights } from '../services/amy/matchThresholdEditor.js'
@@ -609,6 +611,182 @@ describe('Amy improvement loop (end-to-end, injected)', () => {
       const del = await cleanupAmyProfiles(db, { requireCrawled: true, minCrawledAgeMs: 0 })
       expect(del.deleted).toBe(1)
       expect(db.prepare('SELECT id FROM profiles WHERE id=?').get(profileId)).toBeFalsy()
+    } finally {
+      db.close()
+    }
+  })
+})
+
+// ── Expired-synthetic reaping (owner directive 2026-07-06: "make sure those
+// profiles are getting deleted afterwards") ─────────────────────────────────
+
+describe('Amy end-of-run expired sweep + crawled-signal rescue', () => {
+  const HOUR = 60 * 60 * 1000
+
+  /** Seed a leftover from a "prior run": created hoursAgo ago, crawled then, TTL expired. */
+  async function seedExpiredLeftover(db, { hoursAgo = 30, ttlHours = 24, runId = 'amy-prior' } = {}) {
+    const past = new Date(Date.now() - hoursAgo * HOUR)
+    const { profileId } = await createAmyProfile(db, generateScenarios({ runId })[0], { runId, ttlHours, now: past })
+    await markProfileCrawled(db, profileId, { now: past })
+    return profileId
+  }
+
+  it('PROD REGRESSION: reaps an expired leftover from a PRIOR run even when THIS run crawled nothing', async () => {
+    const db = createDb()
+    try {
+      const leftover = await seedExpiredLeftover(db)
+      const events = []
+      // Discovery that skips for every synthetic — the prod failure mode that
+      // left crawledProfileIds EMPTY so the scoped cleanup deleted nothing.
+      const skippedDiscovery = async ({ profileId }) => ({
+        run: { skipped: true, reason: 'profile_deleted', run_id: 'r', profile_id: profileId, sources: [], recommendations: [] },
+        persisted: { skipped: true },
+        thesis: null,
+      })
+
+      const out = await runAmyTraining({
+        db,
+        categories: ['veteran', 'nonprofit'],
+        perCategory: 1,
+        dryRunDiscovery: true,
+        runDiscovery: skippedDiscovery,
+        recordActivity: (dbArg, event) => { events.push(event) },
+        clock: () => new Date(),
+      })
+
+      // The scoped pass had nothing in scope…
+      expect(out.crawled_profile_ids.length).toBe(0)
+      expect(out.cleanup.deleted).toBe(0)
+      // …but the unscoped expired-only pass reaped the prior run's leftover.
+      expect(out.cleanup_expired.deleted).toBe(1)
+      expect(out.cleanup_expired.ids).toContain(leftover)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(leftover)).toBeUndefined()
+
+      // This run's own never-crawled, unexpired synthetics survive (TTL rule).
+      const remaining = await listAmyProfiles(db)
+      expect(remaining.length).toBe(2)
+      expect(remaining.every((r) => r.id !== leftover)).toBe(true)
+
+      // Agent Observability Rule: the sweep emitted the amy telemetry event.
+      const sweepEvent = events.find((e) => e.event_type === 'amy.cleanup.expired_sweep')
+      expect(sweepEvent).toBeTruthy()
+      expect(sweepEvent.status).toBe('succeeded')
+      expect(sweepEvent.metric_value).toBe(1)
+      expect(sweepEvent.details_json.run_id).toBe(out.run_id)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('counts a profile as CRAWLED when the result said skipped but last_discovery_at advanced (belt and suspenders)', async () => {
+    const db = createDb()
+    db.exec('ALTER TABLE profiles ADD COLUMN last_discovery_at TEXT')
+    try {
+      // Discovery stamps the real stamp (persistRun behavior) but REPORTS skipped.
+      const stampingSkippedDiscovery = async ({ profileId }) => {
+        db.prepare('UPDATE profiles SET last_discovery_at = ? WHERE id = ?').run(new Date().toISOString(), profileId)
+        return {
+          run: { skipped: true, reason: 'post_persist_confusion', run_id: 'r', profile_id: profileId, sources: [], recommendations: [] },
+          persisted: { skipped: true },
+          thesis: null,
+        }
+      }
+      const out = await runAmyTraining({
+        db,
+        categories: ['veteran'],
+        perCategory: 1,
+        dryRunDiscovery: true,
+        runDiscovery: stampingSkippedDiscovery,
+        recordActivity: () => {},
+        clock: () => new Date(),
+      })
+      // The stamp advanced → genuinely crawled → scoped cleanup reaps it.
+      expect(out.crawled_profile_ids.length).toBe(1)
+      expect(out.cleanup.deleted).toBe(1)
+      expect((await listAmyProfiles(db)).length).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('counts a profile as CRAWLED when discovery THREW after persisting (stamp advanced)', async () => {
+    const db = createDb()
+    db.exec('ALTER TABLE profiles ADD COLUMN last_discovery_at TEXT')
+    try {
+      const throwingAfterPersist = async ({ profileId }) => {
+        db.prepare('UPDATE profiles SET last_discovery_at = ? WHERE id = ?').run(new Date().toISOString(), profileId)
+        throw new Error('post-persist step exploded')
+      }
+      const out = await runAmyTraining({
+        db,
+        categories: ['veteran'],
+        perCategory: 1,
+        dryRunDiscovery: true,
+        runDiscovery: throwingAfterPersist,
+        recordActivity: () => {},
+        clock: () => new Date(),
+      })
+      expect(out.summary.error).toBe(1) // the evaluation honestly recorded the throw
+      expect(out.crawled_profile_ids.length).toBe(1)
+      expect(out.cleanup.deleted).toBe(1)
+      expect((await listAmyProfiles(db)).length).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('cleanupExpiredAmyProfiles: idempotent, never touches designated or expired-but-recently-crawled profiles', async () => {
+    const db = createDb()
+    try {
+      const expired = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-a' })
+
+      // Expired, but crawled 1h ago — inside the 6h mid-flight grace.
+      const recent = await seedExpiredLeftover(db, { hoursAgo: 30, ttlHours: 24, runId: 'amy-b' })
+      await markProfileCrawled(db, recent, { now: new Date(Date.now() - 1 * HOUR) })
+
+      // A DESIGNATED profile id maliciously tagged as an expired Amy synthetic
+      // must still be untouchable (guard 1 always wins).
+      const designatedId = DESIGNATED_PROFILES[0].id
+      expect(designatedId).toBeTruthy()
+      const past = new Date(Date.now() - 30 * HOUR)
+      db.prepare(
+        `INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by, created_at, updated_at)
+         VALUES (?, 'Designated', 'individual', 'active', '[]', 'agent:amy', ?, ?)`,
+      ).run(designatedId, past.toISOString(), past.toISOString())
+      const meta = buildAmyMetadata({ runId: 'amy-evil', scenarioId: 's', ttlHours: 24, now: past })
+      meta.crawled_at = past.toISOString()
+      meta.last_crawled_at = past.toISOString()
+      db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)`,
+      ).run(designatedId, METADATA_SECTION_KEY, JSON.stringify(meta))
+
+      const first = await cleanupExpiredAmyProfiles(db)
+      expect(first.deleted).toBe(1)
+      expect(first.ids).toEqual([expired])
+      expect(first.skipped_ids.some((s) => s.id === recent && s.reasons.includes('crawled_too_recently'))).toBe(true)
+      expect(first.skipped_ids.some((s) => s.id === designatedId && s.reasons.includes('designated_profile'))).toBe(true)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(designatedId)).toBeTruthy()
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(recent)).toBeTruthy()
+
+      // Idempotent: nothing new to reap on an immediate second pass.
+      const second = await cleanupExpiredAmyProfiles(db)
+      expect(second.deleted).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('cleanupExpiredAmyProfiles: never-crawled leftovers survive until the TTL escape window, then reap', async () => {
+    const db = createDb()
+    try {
+      const past = new Date(Date.now() - 100 * HOUR) // > 96h default cutoff
+      const { profileId: ancient } = await createAmyProfile(db, generateScenarios({ runId: 'amy-old' })[0], { runId: 'amy-old', ttlHours: 48, now: past })
+      const { profileId: young } = await createAmyProfile(db, generateScenarios({ runId: 'amy-new' })[0], { runId: 'amy-new', ttlHours: 48, now: new Date(Date.now() - 10 * HOUR) })
+
+      const res = await cleanupExpiredAmyProfiles(db)
+      expect(res.deleted).toBe(1)
+      expect(res.ids).toContain(ancient)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(young)).toBeTruthy()
     } finally {
       db.close()
     }

@@ -321,4 +321,67 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
   return result
 }
 
-export default { createAmyProfile, listAmyProfiles, markProfileCrawled, cleanupAmyProfiles }
+/**
+ * Canonical grace window for the standing expired-only sweep: never reap a
+ * profile crawled within the last 6h — its training run (crawl → measure →
+ * learn) could still be mid-flight. Deliberately wider than the nightly
+ * sweep's default 2h (AMY_CLEANUP_GRACE_HOURS) because the expired sweep also
+ * runs INSIDE runAmyTraining, concurrent with other agents' runs.
+ */
+export const AMY_EXPIRED_SWEEP_MIN_CRAWLED_AGE_MS = 6 * 60 * 60 * 1000
+
+/**
+ * Canonical resolution of AMY_NEVER_CRAWLED_MAX_AGE_HOURS (default 96h — far
+ * past the 72h TTL max): the bounded escape hatch that lets a synthetic
+ * profile which was created but NEVER successfully crawled (discovery
+ * skipped/errored, or its run crashed) finally be reaped instead of
+ * accumulating forever. 0 disables the never-crawled reap.
+ */
+export function amyNeverCrawledMaxAgeMs(env = process.env) {
+  return Math.max(0, Number(env.AMY_NEVER_CRAWLED_MAX_AGE_HOURS ?? 96)) * 60 * 60 * 1000
+}
+
+/**
+ * cleanupExpiredAmyProfiles — THE canonical expired-only sweep (no runId /
+ * onlyIds scoping), shared by Amy's end-of-run second pass and the boot
+ * invariant enforceAmySyntheticExpiry (backend/startup/enforceInvariants.js).
+ *
+ * WHY IT EXISTS (owner directive 2026-07-06 "make sure those profiles are
+ * getting deleted afterwards"): the end-of-run cleanup is scoped to the ids
+ * crawled in THAT run — when discovery skips/errors for the whole cohort the
+ * id list is empty and it deletes NOTHING, and leftovers from prior runs are
+ * permanently out of scope. This sweep reaps EXPIRED synthetics from ANY run
+ * with every guard intact:
+ *   - created_by='agent:amy' scope (inside listAmyProfiles) — non-Amy rows are
+ *     never even scanned;
+ *   - designated-profile / allow_sam_cleanup / synthetic guards;
+ *   - requireCrawled with the bounded never-crawled TTL escape hatch;
+ *   - 6h crawled grace so a mid-flight run is never reaped.
+ */
+export async function cleanupExpiredAmyProfiles(
+  db,
+  {
+    now = new Date(),
+    dryRun = false,
+    minCrawledAgeMs = AMY_EXPIRED_SWEEP_MIN_CRAWLED_AGE_MS,
+    neverCrawledMaxAgeMs = amyNeverCrawledMaxAgeMs(),
+  } = {},
+) {
+  return cleanupAmyProfiles(db, {
+    expiredOnly: true,
+    requireCrawled: true,
+    minCrawledAgeMs,
+    neverCrawledMaxAgeMs,
+    dryRun,
+    now,
+  })
+}
+
+export default {
+  createAmyProfile,
+  listAmyProfiles,
+  markProfileCrawled,
+  cleanupAmyProfiles,
+  cleanupExpiredAmyProfiles,
+  amyNeverCrawledMaxAgeMs,
+}
