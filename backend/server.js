@@ -433,8 +433,14 @@ const defaultCorsOrigins = [
 ];
 const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : null;
 
+// The Capacitor mobile app (com.grantflow.app) serves the bundled frontend
+// from these origins. Always allowed, merged after CORS_ORIGIN so an env
+// edit can't silently break mobile login. Auth is Bearer-token, so this
+// grants no cookie-based CSRF surface.
+const capacitorOrigins = ['https://localhost', 'capacitor://localhost'];
+
 const corsOptions = {
-  origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
+  origin: [...new Set([...(configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins), ...capacitorOrigins])],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
