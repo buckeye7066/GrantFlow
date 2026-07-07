@@ -96,6 +96,7 @@ import { MAX_JSON_BODY_SIZE, GRANT_STATUSES } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
+import { resolveGuidedCycleTourStatus } from './services/onboardingGates.js';
 import { runWithSchedulerLock } from './services/schedulerLock.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
@@ -2008,7 +2009,11 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           last_seen_manual_version: Number(dbUser.last_seen_manual_version ?? 0),
           last_completed_tour_version: Number(dbUser.last_completed_tour_version ?? 0),
           tour_dismissed_at: dbUser.tour_dismissed_at ?? null,
-          guided_cycle_tour_status: dbUser.guided_cycle_tour_status ?? null,
+          // Canonical admin reinterview gate (services/onboardingGates.js):
+          // an admin who has completed onboarding or ever signed in before is
+          // never served 'pending_reinterview' — a secondary admin login must
+          // not re-trigger Anya's interview. Non-admins get the raw value.
+          guided_cycle_tour_status: resolveGuidedCycleTourStatus(dbUser),
         },
         profiles: Array.isArray(profiles) ? profiles : [],
         active_profile_id: safeActiveProfileId,

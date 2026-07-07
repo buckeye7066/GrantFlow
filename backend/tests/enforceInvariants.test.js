@@ -986,7 +986,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(23)
+    expect(summary.ran).toBe(24)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1012,6 +1012,7 @@ describe('enforceInvariants — runner', () => {
       'grant_score_backfill',
       'pipeline_refill',
       'converted_applications_have_profiles',
+      'admin_reinterview_suppression',
     ])
   })
 

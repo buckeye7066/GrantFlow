@@ -54,11 +54,11 @@ function fakeStorage(initial = {}) {
   }
 }
 
-function renderLauncher() {
+function renderLauncher(props = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <LoginGapInterviewLauncher />
+      <LoginGapInterviewLauncher {...props} />
     </QueryClientProvider>,
   )
 }
@@ -222,10 +222,23 @@ describe('LoginGapInterviewLauncher component', () => {
     expect(window.sessionStorage.getItem(`${SNOOZE_KEY_PREFIX}p2`)).toBeTruthy()
   })
 
-  it('admin cap: fetches only email-linked profiles via scope=mine', async () => {
+  it('ADMIN GATE: the global login-time mount never interviews an admin (secondary logins must not re-ask)', async () => {
+    authState.user = { id: 'u1', email: 'owner@example.com', is_admin: true }
+    mockApi({
+      profiles: [{ id: 'p1', display_name: 'Owner Profile' }],
+      plans: { p1: GAPPED_PLAN('state') },
+    })
+    renderLauncher() // global App.jsx mount — no onFinished
+    // Give any (incorrect) probe a tick to fire, then assert total silence.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(apiFetch).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('login-gap-interview-dialog')).toBeNull()
+  })
+
+  it('ADMIN GATE exception: the sequenced ResetOnboardingFlow pass (onFinished) still runs, capped to scope=mine', async () => {
     authState.user = { id: 'u1', email: 'owner@example.com', is_admin: true }
     mockApi({ profiles: [] })
-    renderLauncher()
+    renderLauncher({ onFinished: () => {} })
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/profiles?scope=mine'))
   })
 

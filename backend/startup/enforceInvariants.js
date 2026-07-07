@@ -3481,6 +3481,70 @@ export async function enforceConvertedApplicationsHaveProfiles(db) {
   })
 }
 
+/**
+ * INVARIANT: ADMIN ACCOUNTS ARE NEVER RE-INTERVIEWED (owner-directed,
+ * 2026-07-06 — "take away the Anya interview for secondary logins for admin").
+ *
+ * The one-time admin bulk reset stamped `users.guided_cycle_tour_status =
+ * 'pending_reinterview'` to put existing users back through the new-user
+ * experience (video → Anya's gap interview → guided tour). It also stamped
+ * ADMIN accounts — and since the flag only clears when the whole sequence is
+ * completed, every admin login re-opened the interview.
+ *
+ * REPAIR: any ADMIN row sitting in 'pending_reinterview' that has already had
+ * its first-run (completed onboarding, or has EVER signed in before —
+ * last_login_at is stamped at the createSessionAndTokens choke point) is
+ * resolved to 'completed'. A genuinely fresh admin account (never onboarded,
+ * never signed in) keeps its one first-run experience. Non-admin users are
+ * NEVER touched — their reset flow is deliberate product behavior.
+ *
+ * Per-call first line of defense: resolveGuidedCycleTourStatus()
+ * (backend/services/onboardingGates.js), applied wherever an auth payload
+ * serializes guided_cycle_tour_status (buildUserPayload, GET /api/auth/me,
+ * PATCH /api/auth/onboarding-state). This boot net repairs the rows
+ * themselves so the flag cannot outlive a read path that forgot the gate.
+ */
+export async function enforceAdminReinterviewSuppression(db) {
+  return runInvariant('admin_reinterview_suppression', async () => {
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    // is_admin / has_completed_onboarding are BOOLEAN on Postgres but
+    // INTEGER 0/1 on SQLite — spell the truthiness per dialect.
+    const adminTrue = isPg
+      ? 'is_admin IS TRUE'
+      : 'COALESCE(is_admin, 0) = 1'
+    const firstRunAlready = isPg
+      ? '(has_completed_onboarding IS TRUE OR onboarding_completed_at IS NOT NULL OR last_login_at IS NOT NULL)'
+      : '(COALESCE(has_completed_onboarding, 0) = 1 OR onboarding_completed_at IS NOT NULL OR last_login_at IS NOT NULL)'
+    let result
+    try {
+      result = await db
+        .prepare(
+          `UPDATE users
+              SET guided_cycle_tour_status = 'completed'
+            WHERE guided_cycle_tour_status = 'pending_reinterview'
+              AND ${adminTrue}
+              AND ${firstRunAlready}`,
+        )
+        .run()
+    } catch (err) {
+      // Degrade silently on schema-less DBs (stripped test fixtures, partial
+      // restores): ensureSchemaInvariants owns creating users tour columns
+      // BEFORE this sweep runs in prod, so a missing table/column here is a
+      // shape problem, not a data violation. Anything else is a real failure.
+      const msg = String(err?.message || err).toLowerCase()
+      if (msg.includes('no such table') || msg.includes('no such column') || msg.includes('does not exist')) {
+        return { repaired: 0, skipped: 'users_tour_columns_missing' }
+      }
+      throw err
+    }
+    const repaired = changesOf(result)
+    if (repaired > 0) {
+      log.info('cleared pending_reinterview from already-onboarded admin accounts', { repaired })
+    }
+    return { repaired }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -3581,6 +3645,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // live profile (create-or-link); otherwise a real applicant is invisible to
   // the admin and locked out of login.
   steps.push(await enforceConvertedApplicationsHaveProfiles(db))
+  // Admin UX net: an already-onboarded (or previously signed-in) ADMIN account
+  // never sits in 'pending_reinterview' — a secondary admin login must not
+  // re-open Anya's interview. Cheap single UPDATE on users.
+  steps.push(await enforceAdminReinterviewSuppression(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -3662,4 +3730,5 @@ export const __testables = {
   enforceHamiltonTaskSelfHeal,
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
+  enforceAdminReinterviewSuppression,
 }
