@@ -8,7 +8,7 @@ import { ShieldCheck, Radar, ChevronRight, ChevronDown } from 'lucide-react'
 // — so a user sees "we looked here too; nothing open right now" instead of a
 // silent gap. Fetched from the off-hot-path coverage endpoint; renders nothing
 // until it has data, and never blocks the results.
-export default function SourceLaneCoverage({ profileId, refreshKey }) {
+export default function SourceLaneCoverage({ profileId, refreshKey, onCoverage }) {
   const [coverage, setCoverage] = useState(null)
   const [showExcluded, setShowExcluded] = useState(false)
 
@@ -20,6 +20,15 @@ export default function SourceLaneCoverage({ profileId, refreshKey }) {
       .catch(() => { if (!cancelled) setCoverage(null) })
     return () => { cancelled = true }
   }, [profileId, refreshKey])
+
+  // Lift the "sources with matches" count up so the results view can reconcile
+  // it against what is actually rendered (profile-type-agnostic).
+  useEffect(() => {
+    if (typeof onCoverage !== 'function') return
+    const withResults = Array.isArray(coverage?.sources_with_results) ? coverage.sources_with_results : []
+    const searchedSources = Array.isArray(coverage?.sources_searched) ? coverage.sources_searched : []
+    onCoverage({ matchedSources: withResults.length, searchedSources: searchedSources.length })
+  }, [coverage, onCoverage])
 
   const searched = Array.isArray(coverage?.sources_searched) ? coverage.sources_searched : []
   if (!coverage || searched.length === 0) return null
