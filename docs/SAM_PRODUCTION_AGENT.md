@@ -9,6 +9,26 @@ Sam is **not** a grant finder, a user-facing funding assistant, or a
 replacement for Anya. Anya remains focused on user/admin grant workflow
 guidance; Sam owns production health.
 
+## Evolved mission (2026-07): assert the ratchets nightly
+
+On top of the diagnostics and gates below, Sam is the keeper of the
+self-improvement loop's **ratchets** (see `docs/canonical_rules.md`
+"The self-improvement loop" and `docs/AGENTS.md`). Every nightly sweep asserts:
+
+- **Golden outcomes** (`coverage.goldenOutcomes`) — every owner-verified
+  result recorded as a golden expectation still reproduces. Expectations are
+  data, appended after every live-verified fix, never silently removed.
+- **Gap-scoreboard freshness** (`coverage.gapScoreboard`) — the Coverage &
+  Evidence gap scoreboard Amy tasks from is current, not stale.
+- **Web-parity non-regression** (`coverage.webParityBenchmark`) — each golden
+  profile's parity score against a competent 30-minute web-search session
+  (`system_kv web_parity_benchmark`) has not regressed.
+- **Invariant sweep outcomes** — the boot `enforceInvariants` sweep ran and
+  its repair/quarantine counts are sane.
+
+A ratchet regression is a **red finding**, never a trend line — and, as with
+every Sam finding, it **carries a `recommended_fix`**.
+
 ## What Sam is
 
 - A modular, auditable, **admin-controlled** background agent.

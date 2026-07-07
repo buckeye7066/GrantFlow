@@ -1,28 +1,40 @@
-# Amy — Synthetic Crawler-Training & Improvement Agent
+# Amy — Coverage-Gap Closer (Synthetic Crawler-Training & Improvement Agent)
 
-**Goal: improve the crawlers.** Amy generates **highly varied, synthetic**
-GrantFlow profiles, runs a **real crawler event at the 75% slider** against each,
-**measures** crawler quality, and **closes the loop**: it auto-tunes the
-(reversible) match score floor when the cohort proves a better one, hands the
-implicated files to **Anya** (root cause) → **Sam** (verified safe fixes), and
-stages deeper changes (source coverage, scoring weights) into an **approval
-queue** shown in the admin panel. Every profile is tagged so **Sam** can safely
-delete it — and is **never deleted until it has been crawled at least once**.
+**Mission (evolved, 2026-07): close coverage gaps and win the Google-bar.**
+Amy derives **every** training/crawl task from the Coverage & Evidence gap
+scoreboard (`system_kv coverage_gap_scoreboard`), the structural matrix, and
+the web-parity gap queue (`system_kv web_parity_gap_queue`) — never at random.
+Gaps she cannot fix become **adapter-wishlist** proposals; everything she CAN
+fix is tuned **empirically with KEEP/REVERT** (bounded, backed up,
+auto-reverted on mismatch).
+
+Concretely: Amy generates **highly varied, synthetic** GrantFlow profiles
+(cohorts weighted toward the fleet's proven gaps), runs a **real crawler event
+at the discovery slider floor** (`DEFAULT_MIN_SCORE`, data-point scale)
+against each, **measures** crawler quality, and **closes the loop**: it
+auto-tunes the (reversible) match score floor when the cohort proves a better
+one, hands the implicated files to **Anya** (root cause) → **Sam** (verified
+safe fixes), and stages deeper changes (source coverage, scoring weights) into
+an **approval queue** shown in the admin panel. Every profile is tagged so
+**Sam** can safely delete it — and is **never deleted until it has been
+crawled at least once**.
 
 ## The improvement loop
 
-1. **Crawl at 75%** — each synthetic profile gets ≥1 real `runProfileDiscoveryLive`
-   event at `floor = DEFAULT_MIN_SCORE` (the slider). Scored candidates are retained.
+1. **Crawl at the slider floor** — each synthetic profile gets ≥1 real
+   `runProfileDiscoveryLive` event at `floor = DEFAULT_MIN_SCORE` (the
+   discovery slider on the data-point scale). Scored candidates are retained.
 2. **Measure** (`crawlerMetrics.js`) — cohort coverage / zero-result /
    false-positive rates, and a **floor sweep**: because the floor is applied
    after scoring, Amy re-scores the collected candidates at every candidate
    floor to find the threshold that maximizes `quality = coverage − 0.6·false_positives`.
 3. **Tune** (`crawlerTuner.js` + `matchThresholdEditor.js`) — if a better floor
    is proven on a big-enough cohort (≥12) with real gain, Amy applies the change
-   through the live scoring store — bounded (±10, **hard-clamped to ≥75**: the
-   documented display floor can be tightened but never loosened), backed up, and
-   verified (auto-revert on mismatch). This is a genuine, persistent, reversible
-   crawler improvement.
+   through the live scoring store — bounded (±10, **hard-clamped to
+   `DISCOVERY_MIN_SCORE_FLOOR`** on the data-point scale: the documented display
+   floor can be tightened but never loosened), backed up, and verified
+   (auto-revert on mismatch). This is the KEEP/REVERT discipline — a genuine,
+   persistent, reversible crawler improvement, and the only way Amy tunes.
 4. **Learn per archetype** (`archetypeLearning.js` + `crawler-os/archetypes.js`)
    — the cohort's systematic misses (institution recall, hyperlocal recall,
    low-results) are recorded per **archetype** (student / veteran / senior /

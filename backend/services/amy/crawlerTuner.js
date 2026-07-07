@@ -25,8 +25,9 @@ import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
  * @param {object} args.currentMetrics - cohort metrics at currentFloor
  * @param {object} [args.opts] { minCohort=12, maxDelta=10, minGain=0.03,
  *        bounds=[DISCOVERY_MIN_SCORE_FLOOR,85] }. SAFETY: the lower bound is
- *        HARD-clamped to DISCOVERY_MIN_SCORE_FLOOR (25, need-anchored scale) —
- *        no caller-supplied bounds can let a tuning proposal drop the display
+ *        HARD-clamped to DISCOVERY_MIN_SCORE_FLOOR (8 on the 2026-07-06
+ *        data-point scale — see backend/config/matchThresholds.js) — no
+ *        caller-supplied bounds can let a tuning proposal drop the display
  *        floor below the documented product standard. Coverage must come from
  *        better queries/sources, never from loosening the bar.
  * @returns {{ change:boolean, from:number, to:number, reason:string, projected:object, gain:number }}

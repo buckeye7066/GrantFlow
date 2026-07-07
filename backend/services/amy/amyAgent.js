@@ -1,14 +1,22 @@
 /**
  * amyAgent.js
  *
- * Amy — synthetic crawler-training agent (orchestrator). The GOAL is to IMPROVE
- * THE CRAWLERS, provably and reversibly.
+ * Amy — synthetic crawler-training agent (orchestrator). The MISSION is to
+ * CLOSE COVERAGE GAPS AND WIN THE GOOGLE-BAR, provably and reversibly: every
+ * training/crawl task derives from the Coverage & Evidence gap scoreboard,
+ * the structural matrix, and the web-parity gap queue (system_kv
+ * `web_parity_gap_queue`) — never at random. Structural gaps Amy cannot fix
+ * become adapter-wishlist proposals; everything she can fix is tuned
+ * empirically with KEEP/REVERT (bounded, backed up, auto-reverted on
+ * mismatch). See docs/AGENTS.md + canonical_rules.md "The self-improvement
+ * loop".
  *
  * runAmyTraining():
- *   1. Generate varied synthetic profiles across categories (no real PII).
+ *   1. Generate varied synthetic profiles across categories (no real PII),
+ *      cohort-weighted toward the fleet's proven gaps.
  *   2. Insert each (tagged synthetic + Sam-cleanable + traceable).
  *   3. Run a REAL crawler event for each profile at the discovery slider
- *      (floor = DEFAULT_MIN_SCORE, need-anchored scale) via
+ *      (floor = DEFAULT_MIN_SCORE, data-point scale) via
  *      runProfileDiscoveryLive, retaining the scored candidates. Mark each
  *      profile crawled_at.
  *   4. MEASURE cohort crawler quality (coverage / zero / false-positive) and
@@ -80,7 +88,7 @@ async function discoveryStampAdvanced(db, profileId, before) {
 /**
  * @param {object} options  (all optional)
  *   db, categories, perCategory, targetCount, dryRunDiscovery=true,
- *   floor (defaults DEFAULT_MIN_SCORE — the slider, need-anchored scale), keepProfiles=false,
+ *   floor (defaults DEFAULT_MIN_SCORE — the slider, data-point scale), keepProfiles=false,
  *   ttlHours=48, runDiscovery, fetcher, logger, clock, writeArtifact, runId,
  *   improve=false (run the Anya→Sam chain + tuning), applyTuning=false (write
  *   the floor change), anyaApply=false, samApply=false, saveReport=true,
@@ -420,8 +428,10 @@ export async function runAmyTraining(options = {}) {
         const applied = await weightEditor.apply(wd.to, { now: clock() })
         weightTuning.applied = applied
         if (applied?.applied) {
-          // Topical lens (see the need-anchored split note above): weights only
-          // move scoreBreakdown.topical_evidence, never the final score.
+          // Topical lens (see the scale-split note in crawlerMetrics.js):
+          // weights only move scoreBreakdown.topical_evidence, never the
+          // final score (true on the data-point scale as on the retired
+          // need-anchored one).
           const rv = await recrawlQuality({ floor: TOPICAL_EVIDENCE_STRONG_BAR, scoreKey: 'topical' })
           if (rv.quality > baselineTopicalQuality) {
             weightTuning.validation = { kept: true, lens: 'topical_evidence', baseline: baselineTopicalQuality, after: rv.quality }

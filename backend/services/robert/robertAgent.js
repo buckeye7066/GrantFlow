@@ -1,6 +1,12 @@
 /**
  * robertAgent.js
  *
+ * Evolved mission (2026-07): Robert grows pillar 2 of the product thesis —
+ * the official-lane surface ("80+ lanes, simultaneously, continuously").
+ * A lane the registry lacks is a structural gap on the adapter wishlist,
+ * never a silent miss; Robert's source discovery is how those gaps get
+ * retired. See docs/AGENTS.md + canonical_rules.md "The product thesis".
+ *
  * The orchestrator. Coordinates Robert's modes:
  *   observe                — coverage analysis only (no network)
  *   discover-sources       — search for new sources (gated by config)

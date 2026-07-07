@@ -41,9 +41,11 @@ const log = createLogger('robert-catalog-miner')
 /**
  * The relevance floor a scored catalog row must clear before Robert will queue
  * a recommendation for it. Mirrors the canonical INSERT floor used by
- * `saveToProfilePipeline` (need-anchored scale, 2026-07-06): 20 for open-web
- * rows, 12 for vetted/trusted origins (curated catalog, scholarship/school
- * crawlers, federal feeds, verified rows).
+ * `saveToProfilePipeline` (data-point scale, 2026-07-06 evening):
+ * `RELEVANCE_FLOOR` for open-web rows, `TRUSTED_RELEVANCE_FLOOR` for
+ * vetted/trusted origins (curated catalog, scholarship/school crawlers,
+ * federal feeds, verified rows) — current values live in
+ * `backend/config/relevanceFloor.js`, never hardcode them here.
  * A REJECT decision is blocked regardless of origin (the matcher already zeroed
  * the score, but we guard explicitly too).
  */

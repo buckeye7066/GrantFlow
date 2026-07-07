@@ -1,6 +1,6 @@
 # GrantFlow Canonical Rules & Goals
 
-_Last updated: 2026-07-05_
+_Last updated: 2026-07-07_
 
 This document is the **single source of truth** for GrantFlow’s product rules, correctness invariants, and acceptance criteria.
 
@@ -54,11 +54,68 @@ Sources:
 - `OPS_AUTOFIX.md`
 - Current implementation in `backend/services/*.js` and `src/pages/*.jsx`
 
+### The product thesis — GrantFlow's case over a Google search (owner-ratified, 2026-07-06)
+
+GrantFlow's case over a competent web search rests on **four pillars**. Each
+carries its current honest status; a pillar's status may only move forward with
+evidence (a shipped lane, a passing benchmark), never by rewording:
+
+1. **It knows the whole profile.** The match score IS
+   `matched data points ÷ ALL profile data points × eligibility/geo gates`
+   (the 2026-07-06 data-point scale, defined under *Definitions* above), with
+   per-match evidence stored in `match_explain_json.dataPointEvidence`.
+   *Honest status:* ranking is real and explainable; **RECALL (catalog
+   breadth) is now the bottleneck**, not precision.
+2. **It searches 80+ official lanes simultaneously, continuously.**
+   Federal / state / benefits / 990-funder lanes with deadline awareness,
+   running in the background whether or not anyone is logged in.
+   *Honest status:* lanes must keep growing; **a lane the registry lacks is a
+   structural gap** (an adapter-wishlist item on the coverage-gap scoreboard),
+   never a silent miss.
+3. **It acts.** Hamilton live applications, printable packets, portal
+   sign-ins, John/Yana outreach. A Google search ends at links; GrantFlow ends
+   at a submitted application.
+4. **It explains itself.** The Coverage & Evidence dashboard shows what was
+   searched, what was missed and why, why each surviving match survived, and
+   which profile question to answer next.
+
+**THE MEASURED BAR (the product bar):** *for each golden profile, GrantFlow's
+results must beat a competent 30-minute web-search session.* This is
+implemented as the **web-parity benchmark**: per-profile parity scores
+persisted in `system_kv` `web_parity_benchmark`, asserted nightly by Sam's
+`coverage.webParityBenchmark` check, with a **no-regression ratchet**. Every
+benchmark failure feeds Amy's work queue (`system_kv` `web_parity_gap_queue`)
+and the adapter wishlist — a failure is queued work, never a shrug.
+
+### The self-improvement loop (first-class rule: the system may only get better)
+
+> **Every owner-verified outcome becomes a golden expectation; every benchmark
+> failure becomes queued work; no ratchet may regress without a red finding.**
+
+The loop, concretely:
+
+- **Golden-outcome sentinel** — when the owner verifies a result live ("this
+  profile really should find X"), it is appended as a permanent nightly
+  assertion (Sam check `coverage.goldenOutcomes`). Expectations are DATA, not
+  code: they are appended after every live-verified fix and never silently
+  removed.
+- **Gap scoreboard drives Amy** — Amy's training/crawl tasks derive from the
+  Coverage & Evidence gap scoreboard (`system_kv` `coverage_gap_scoreboard`),
+  the structural matrix, and the web-parity gap queue — **never at random**.
+  Structural gaps Amy cannot fix become adapter-wishlist items.
+- **Benchmark ratchet** — the web-parity score must not regress; a regression
+  is a red Sam finding, not a quiet trend line.
+- **Empirical tuning only** — Amy's existing KEEP/REVERT discipline: a tuning
+  change is applied only when proven on a big-enough cohort, is bounded,
+  backed up, and auto-reverted on mismatch.
+- **Migration parity** — the migration-parity rule in `CLAUDE.md` (SQLite +
+  Postgres migrations move together) keeps the loop's stores portable.
+
 ### Evolved product goals (2026-07)
 
 The G-rules below remain binding, but the product has evolved past
-"discovery catalog + pipeline" — every new feature should also serve these
-evolved goals:
+"discovery catalog + pipeline" — every new feature should also serve the four
+pillars above and these evolved goals:
 
 1. **End-to-end funding cycle, not just discovery.** Discover → match →
    pipeline → draft → apply (Hamilton live portal automation, packets,
@@ -75,9 +132,23 @@ evolved goals:
    authority; approved additive recall lanes (threshold relaxation, semantic
    recall) may only WIDEN the candidate set feeding it. Precision is enforced
    by the canonical gates, never by dropping recall.
-4. **Agent ecosystem observability.** Amy/Anya/Sam/Hamilton/Robert/Yana
-   actions must be visible to Sam diagnostics and usable by Anya; new
-   automation ships with structured logs and result_meta counters.
+4. **Agent ecosystem observability — with evolved roles.**
+   Amy/Anya/Sam/Hamilton/Robert/Yana actions must be visible to Sam
+   diagnostics and usable by Anya; new automation ships with structured logs
+   and result_meta counters. The agents' roles in the self-improvement loop
+   (full charters: `docs/AGENTS.md`):
+   - **Amy** closes coverage gaps and wins the Google-bar: every training/crawl
+     task derives from the gap scoreboard, structural matrix, and web-parity
+     gap queue; structural gaps become adapter-wishlist proposals; tuning is
+     empirical KEEP/REVERT only.
+   - **Sam** asserts the ratchets nightly: golden outcomes, gap-scoreboard
+     freshness, web-parity non-regression, invariant sweep outcomes — and
+     every finding carries a `recommended_fix`.
+   - **Anya** is the owner's morning brief: what changed autonomously, the
+     benchmark trend, top gaps and web-only finds awaiting judgment, and
+     wishlist items needing owner decisions.
+   - **Robert** grows the official-lane surface: discovered sources feed the
+     lane registry and retire adapter-wishlist items.
 5. **Paying-customer readiness.** Stripe billing tiers are live; features are
    tier-gated server-side (G8), flag-gated when new (default OFF in prod until
    proven), and reversible.
@@ -263,6 +334,15 @@ DDL stays in `ensureSchemaInvariants.js`; data-repair invariants go here.
 - **Source allowlist / denylist** — blocklist currently matches 0 grant funders in prod; auto-purge needs a confirmed funder→blocklist match rule before it's safe to delete on.
 - **Zero-result-but-no-junk** (G2) — "relax constraints and re-score on empty" is a request-time behavior, not a stored-state invariant; can't be reconciled by a boot sweep.
 - **Agent observability rule** — any change in an agent's scope must be visible to Sam (diagnostics) + usable by Anya; this is a wiring/process rule, enforced in review, not by a DB sweep.
+
+**Nightly ratchets (asserted by Sam checks, not boot sweeps):** the
+self-improvement loop's guarantees — golden-outcome expectations
+(`coverage.goldenOutcomes`), gap-scoreboard freshness
+(`coverage.gapScoreboard`), and web-parity non-regression
+(`coverage.webParityBenchmark`) — are LIVE-state assertions over `system_kv`
+stores, so they run in Sam's nightly sweep rather than the boot enforcer. The
+same standing rule applies: one canonical check each, never per-call
+discipline, and a ratchet regression is a red finding, never a silent trend.
 
 ## Feature flags for recall/grounding/critic lanes (all default OFF; reversible)
 

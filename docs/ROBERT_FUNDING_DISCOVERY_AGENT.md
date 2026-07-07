@@ -11,6 +11,15 @@ Robert never replaces Anya, never replaces Sam, and never invents new
 scoring. Every accept/reject and policy decision is delegated to the
 existing canonical GrantFlow services.
 
+**Evolved role (2026-07):** Robert grows pillar 2 of the product thesis
+("80+ official lanes, simultaneously, continuously" — see
+`docs/canonical_rules.md` "The product thesis" and `docs/AGENTS.md`). A lane
+the registry lacks is a **structural gap** on the adapter wishlist, never a
+silent miss — Robert's source discovery is how those gaps get retired: a
+discovered, verified source feeds the lane/source registry, and a shipped
+lane closes its wishlist item. Web-parity benchmark failures that trace to a
+missing source are demand signals for Robert's search planning.
+
 ## What Robert is
 
 | Aspect | Robert | Anya | Sam |
