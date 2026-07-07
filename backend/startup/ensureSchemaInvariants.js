@@ -1082,6 +1082,33 @@ export async function ensureForcedWelcomeVideoTables(db, { logger = console } = 
 }
 
 /**
+ * tailored_applications table (both dialects).
+ *
+ * Hamilton's per-(profile × portal card) tailored application: the funder-
+ * specific, MBA-level, fabrication-guarded narrative + review state + missing
+ * questions the auto-submit gate reads before submitting. Re-assert the shape
+ * on boot so the gate, routes, and generator never fail on a DB where the
+ * numbered migration did not apply. DDL is shared with the store so the shape
+ * can never drift between the two.
+ */
+export async function ensureTailoredApplicationsTableStep(db, { logger = console } = {}) {
+  return runStep(
+    'tailored_applications (Hamilton per-funder tailored narrative + approval gate)',
+    '[database]',
+    logger,
+    async () => {
+      const { tailoredApplicationsDdl } = await import(
+        '../services/hamilton/tailoredApplicationStore.js'
+      )
+      await db.exec(tailoredApplicationsDdl({ isPg: db?.dialect === 'postgres' }))
+      await db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_tailored_applications_profile ON tailored_applications(profile_id, grant_id)',
+      )
+    },
+  )
+}
+
+/**
  * The canonical, ordered registry of schema-invariant steps.
  *
  * SINGLE SOURCE OF TRUTH: this is the only place a step is declared. The boot
@@ -1116,6 +1143,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['guided_cycle_tour_status_column', ensureGuidedCycleTourStatusColumn],
   ['opportunity_embeddings_table', ensureOpportunityEmbeddingsTable],
   ['forced_welcome_video_tables', ensureForcedWelcomeVideoTables],
+  ['tailored_applications', ensureTailoredApplicationsTableStep],
   ['perf_indexes', ensurePerfIndexes],
 ]
 
