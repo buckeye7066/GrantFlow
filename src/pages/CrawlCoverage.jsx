@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCrawlCoverage } from '@/api/adminDiagnostics';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -57,6 +58,14 @@ export default function CrawlCoverage() {
           <p className="mt-1 text-sm text-slate-500">
             Did the crawler know where to look, did it query, what failed, and what was found vs
             accepted vs rejected.
+          </p>
+          <p className="mt-1 text-sm">
+            <Link
+              to={`/CoverageEvidence${profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ''}`}
+              className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+            >
+              Per-profile coverage &amp; evidence dashboard →
+            </Link>
           </p>
         </div>
         <form onSubmit={applyFilter} className="flex items-center gap-2">

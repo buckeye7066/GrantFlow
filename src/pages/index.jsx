@@ -47,6 +47,7 @@ const Stewardship = lazy(() => import("./Stewardship"), 'Stewardship');
 const ProfileDetail = lazy(() => import("./ProfileDetail"), 'ProfileDetail');
 const Diagnostics = lazy(() => import("./Diagnostics"), 'Diagnostics');
 const CrawlCoverage = lazy(() => import("./CrawlCoverage"), 'CrawlCoverage');
+const CoverageEvidence = lazy(() => import("./CoverageEvidence"), 'CoverageEvidence');
 const ComplianceReportDetail = lazy(() => import("./ComplianceReportDetail"), 'ComplianceReportDetail');
 const ProfileMatcher = lazy(() => import("./ProfileMatcher"), 'ProfileMatcher');
 const SourceDirectory = lazy(() => import("./SourceDirectory"), 'SourceDirectory');
@@ -169,6 +170,8 @@ const PAGES = {
     Diagnostics: Diagnostics,
 
     CrawlCoverage: CrawlCoverage,
+
+    CoverageEvidence: CoverageEvidence,
 
     ComplianceReportDetail: ComplianceReportDetail,
     
@@ -362,6 +365,8 @@ function LayoutRoutes() {
                 <Route path="/Diagnostics" element={withBoundary(<Diagnostics />, "Diagnostics")} />
 
                 <Route path="/CrawlCoverage" element={withBoundary(<CrawlCoverage />, "CrawlCoverage")} />
+
+                <Route path="/CoverageEvidence" element={withGate(<CoverageEvidence />, "CoverageEvidence")} />
 
                 <Route path="/ComplianceReportDetail" element={withBoundary(<ComplianceReportDetail />, "ComplianceReportDetail")} />
 

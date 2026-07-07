@@ -17,6 +17,7 @@ import {
   Loader2,
   Palette,
   Printer,
+  Radar,
   Search,
   Settings2,
   Sparkles,
@@ -199,6 +200,7 @@ function ProfileWorkspaceNav({
   nextEmptySectionTitle,
   onRunDeeperSearch,
   onCompleteProfile,
+  onOpenCoverageEvidence,
 }) {
   const primaryTabs = [
     {
@@ -311,6 +313,17 @@ function ProfileWorkspaceNav({
             onRunDeeperSearch={onRunDeeperSearch}
             onCompleteProfile={onCompleteProfile}
           />
+          {onOpenCoverageEvidence && (
+            <button
+              type="button"
+              onClick={onOpenCoverageEvidence}
+              className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              title="What we searched, what we missed, why each match survived, and what to answer next"
+            >
+              <Radar className="h-3.5 w-3.5 text-indigo-600" />
+              Coverage &amp; evidence
+            </button>
+          )}
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
             <ActiveIcon className="h-3.5 w-3.5" />
             {activeOption.title}
@@ -1332,6 +1345,7 @@ export default function ProfileDetail() {
             completionPct={completionPct}
             nextEmptySectionTitle={nextEmptySectionTitle}
             onRunDeeperSearch={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
+            onOpenCoverageEvidence={() => navigate(createPageUrl("CoverageEvidence", { profile_id: profileId }))}
             onCompleteProfile={() => {
               if (nextEmptySection) {
                 handleOpenSection(nextEmptySection)

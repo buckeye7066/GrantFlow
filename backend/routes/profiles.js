@@ -2078,6 +2078,26 @@ router.get('/:id/readiness/detailed', async (req, res) => {
   }
 })
 
+// GET /api/profiles/:id/coverage-evidence — per-profile "Coverage & Evidence"
+// dashboard (owner directive): which source LANES were searched, which lanes
+// are missing (concrete gap statements), why each stored match survived
+// (per-match evidence), and what the user should answer next. Read-only
+// aggregation over crawlerPlanService + sourceRegistry + readiness + prompts;
+// same auth/gating pattern as the readiness routes above.
+router.get('/:id/coverage-evidence', async (req, res) => {
+  const { id } = req.params
+  try {
+    const { buildCoverageEvidence } = await import('../services/coverageEvidenceService.js')
+    const result = await buildCoverageEvidence(req.db, id)
+    if (result?.error === 'profile_not_found') {
+      return res.status(404).json({ error: 'Profile not found', profile_id: id })
+    }
+    return res.status(200).json(result)
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 router.put('/:id', async (req, res) => {
   const { id } = req.params
   const body = req.body ?? {}
