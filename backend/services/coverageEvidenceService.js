@@ -94,6 +94,10 @@ export const LANE_OF_SOURCE = Object.freeze({
   snap: 'federal_benefits',
   medicaid: 'federal_benefits',
   ssa_survivors: 'federal_benefits',
+  ssa_disability: 'federal_benefits',
+  // National Medicaid HCBS waiver index (CMS) — federal locator for every
+  // state's waiver program (the legacy stateWaiverBenefitsCrawler scope).
+  state_hcbs_waivers: 'federal_benefits',
   dol_black_lung_benefits: 'federal_benefits',
   hrsa_health_centers: 'federal_benefits',
   area_agency_on_aging: 'federal_benefits',
@@ -104,6 +108,8 @@ export const LANE_OF_SOURCE = Object.freeze({
   dol_tap: 'federal_benefits',
   sba_boots_to_business: 'federal_benefits',
   // ── State programs (state-specific portals & resources) ──
+  // TennCare ECF CHOICES — TN Medicaid HCBS waiver (ported legacy ECF lane).
+  tn_ecf_choices: 'state_programs',
   kynect_benefits: 'state_programs',
   wv_sbdc_funding: 'state_programs',
   wv_business_funding_resources: 'state_programs',

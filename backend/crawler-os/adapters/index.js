@@ -15,6 +15,7 @@ import { createFederalRegisterAdapter } from "./federalRegisterAdapter.js";
 import { createSbirGovAdapter } from "./sbirGovAdapter.js";
 import { createAgencyRssAdapter } from "./agencyRssAdapter.js";
 import { createOfficialDirectoryAdapter } from "./officialDirectoryAdapter.js";
+import { createEcfChoicesAdapter } from "./ecfChoicesAdapter.js";
 
 const officialDirectory = (sourceId) => () => createOfficialDirectoryAdapter(sourceId);
 
@@ -29,6 +30,14 @@ const FACTORIES = Object.freeze({
   liheap: officialDirectory('liheap'),
   snap: officialDirectory('snap'),
   medicaid: officialDirectory('medicaid'),
+  // Medicaid-waiver lane (ported from the legacy ecfBenefitsCrawler /
+  // stateWaiverBenefitsCrawler on 2026-07-07 — neither was ever registered
+  // post-cutover, so ECF CHOICES members' own program was structurally
+  // uncrawlable). tn_ecf_choices has a real extraction adapter; the national
+  // HCBS index and SSA disability lanes are honest official locators.
+  tn_ecf_choices: createEcfChoicesAdapter,
+  state_hcbs_waivers: officialDirectory('state_hcbs_waivers'),
+  ssa_disability: officialDirectory('ssa_disability'),
   area_agency_on_aging: officialDirectory('area_agency_on_aging'),
   state_vocational_rehab: officialDirectory('state_vocational_rehab'),
   community_211: officialDirectory('community_211'),

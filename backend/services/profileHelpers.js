@@ -1610,6 +1610,43 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     assistanceSet.add('medicare')
     registerKeyword('medicare')
   }
+  // Waiver membership hides in FREE TEXT: real profiles carry
+  // "Medicaid Waiver Program (ECF CHOICES - TN)" only in
+  // government_assistance.other_programs (or medical_insurance.notes) while
+  // the structured medicaid_waiver_program field stays empty — so the
+  // ECF/HCBS membership never became a signal and the waiver lane never fired
+  // (the Gilbert/Kim class, 2026-07-07). Whole-word scan the free text with
+  // the same canonical markers the structured branch below uses; these
+  // assistance flags become data points automatically (profileDataPoints.js,
+  // kind 'assistance').
+  const deriveWaiverSignalsFromText = (text) => {
+    const value = String(text || '')
+    if (!value.trim()) return
+    const isEcf =
+      containsTermWholeWord(value, 'ecf') ||
+      containsTermWholeWord(value, 'ecf choices') ||
+      containsTermWholeWord(value, 'employment and community first')
+    const isHcbs =
+      containsTermWholeWord(value, 'hcbs') ||
+      containsTermWholeWord(value, 'home and community based services')
+    const isWaiver = isEcf || isHcbs || containsTermWholeWord(value, 'medicaid waiver')
+    if (!isWaiver) return
+    assistanceSet.add('medicaid_waiver')
+    registerKeyword('medicaid waiver')
+    needs.add('disability')
+    needs.add('healthcare')
+    if (isHcbs) {
+      registerKeyword('hcbs')
+      registerKeyword('home community based services')
+    }
+    if (isEcf) {
+      assistanceSet.add('ecf_choices')
+      registerKeyword('ecf choices')
+      registerKeyword('ecf_choices')
+      registerKeyword('employment and community first')
+      needs.add('employment')
+    }
+  }
   // Other programs as free text
   if (government.other_programs && typeof government.other_programs === 'string') {
     collectNarrativeKeywords({ other_programs: government.other_programs }, registerKeyword)
@@ -1617,6 +1654,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     if (government.other_programs.length < 100) {
       registerKeyword(government.other_programs)
     }
+    deriveWaiverSignalsFromText(government.other_programs)
   }
   // Medicaid waiver program — e.g., "ecf_choices", "HCBS", "Katie Beckett"
   if (government.medicaid_waiver_program && typeof government.medicaid_waiver_program === 'string') {
@@ -2512,6 +2550,9 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   }
   if (medicalInsurance.notes) {
     collectNarrativeKeywords({ notes: medicalInsurance.notes }, registerKeyword)
+    // Waiver membership stated in insurance notes (e.g. "HCBS waiver through
+    // TennCare") — same free-text scan as government_assistance.other_programs.
+    deriveWaiverSignalsFromText(medicalInsurance.notes)
   }
 
   // ============ MEDICAL HISTORY ============

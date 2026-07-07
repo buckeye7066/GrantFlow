@@ -188,15 +188,36 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     insertSection(db, profileId, 'narrative', { primary_goal: 'help paying for housing and caregiving' })
   })
 
-  it('emits a TN state-programs gap (no TN-specific source in the registry)', async () => {
+  it('TN is state-covered (tn_ecf_choices) so no TN state-programs gap fires; an uncovered state still gaps', async () => {
+    // The ECF CHOICES lane port (2026-07-07) added tn_ecf_choices — a real
+    // TN-specific state source — so the old "no TN-specific source" gap is
+    // honestly CLOSED for TN profiles...
     const result = await buildCoverageEvidence(db, profileId)
     expect(result.error).toBeUndefined()
-    const stateGap = result.gaps.find(
+    const tnStateGap = result.gaps.find(
       (g) => g.lane === 'state_programs' && /\bTN\b/.test(g.statement),
     )
-    expect(stateGap, 'expected a TN state-programs gap').toBeTruthy()
-    expect(stateGap.profile_fact).toBe('state=TN')
-    expect(stateGap.suggested_action).toMatch(/TN/)
+    expect(tnStateGap, 'TN is covered by tn_ecf_choices — no state gap should fire').toBeUndefined()
+    // ...and the caregiving need selects it for this profile (senior caring
+    // household), so the state lane holds a real selected TN source.
+    const stateLane = result.lanes.find((l) => l.lane === 'state_programs')
+    expect(stateLane.selected_sources.map((s) => s.source_id)).toContain('tn_ecf_choices')
+
+    // The gap detector itself still works: a state with no registry source
+    // (OH has none) must still emit the state-programs gap.
+    const ohId = 'p-oh-dementia'
+    insertProfile(db, { id: ohId, displayName: 'Lorain County Senior', state: 'OH' })
+    insertSection(db, ohId, 'basic_information', {
+      state: 'OH', city: 'Lorain', profile_category: 'individual',
+    })
+    insertSection(db, ohId, 'narrative', { primary_goal: 'help paying for housing and caregiving' })
+    const ohResult = await buildCoverageEvidence(db, ohId)
+    const ohGap = ohResult.gaps.find(
+      (g) => g.lane === 'state_programs' && /\bOH\b/.test(g.statement),
+    )
+    expect(ohGap, 'expected an OH state-programs gap').toBeTruthy()
+    expect(ohGap.profile_fact).toBe('state=OH')
+    expect(ohGap.suggested_action).toMatch(/OH/)
   })
 
   it('covers dementia via alzheimers_gov_services (no false-positive gap) but gaps on parkinsons', async () => {
