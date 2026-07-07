@@ -1,5 +1,8 @@
 /**
- * A community health advocate profile must return funding at 85% strict threshold on Discover.
+ * A community health advocate profile must return funding at the STRONG bar on
+ * Discover. (Authored as "85%" on the retired additive scale; the intent —
+ * a strict, top-tier threshold still yields results for a benefit-heavy
+ * profile — is preserved via STRONG_MATCH_SCORE on the data-point scale.)
  */
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getAppAndDb, resetDb } from './testServer.js'
@@ -9,6 +12,7 @@ import { runCrawler } from '../services/crawlers/crawlerManager.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { extractProfileData, applyRelevanceFilter } from '../services/relevanceFilter.js'
 import { computeMatchDecision } from '../services/matchDecisionEngine.js'
+import { STRONG_MATCH_SCORE } from '../config/matchThresholds.js'
 
 const HEALTH_ADVOCATE = {
   id: 'profile-health-advocate-discover85',
@@ -59,7 +63,7 @@ function seedHealthAdvocate(db) {
   }
 }
 
-describe('community health advocate Discover at 85%', () => {
+describe('community health advocate Discover at the STRONG bar', () => {
   let db
 
   beforeAll(async () => {
@@ -113,12 +117,12 @@ describe('community health advocate Discover at 85%', () => {
         profileSections: ctx.sections,
         signals: ctx.signals,
       })
-      expect(decision.score).toBeLessThan(85)
+      expect(decision.score).toBeLessThan(STRONG_MATCH_SCORE)
       expect(decision.decision).not.toBe('ACCEPT')
     }
   })
 
-  it('returns at least one opportunity at or above 85% after comprehensive crawl', async () => {
+  it('returns at least one opportunity at or above the STRONG bar after comprehensive crawl', async () => {
     const profileContext = await loadProfileContext(db, HEALTH_ADVOCATE.id)
     const profileData = extractProfileData(profileContext)
 
@@ -147,7 +151,7 @@ describe('community health advocate Discover at 85%', () => {
     })
 
     const allMapped = canonicalized.kept
-    const minMatchScore = 85
+    const minMatchScore = STRONG_MATCH_SCORE
 
     const filtered = allMapped
       .filter((opp) => {
@@ -172,7 +176,7 @@ describe('community health advocate Discover at 85%', () => {
 
     expect(
       filtered.length,
-      `expected >=1 at 85%; top scores: ${JSON.stringify(top)}; total=${allMapped.length}`,
+      `expected >=1 at STRONG (${STRONG_MATCH_SCORE}); top scores: ${JSON.stringify(top)}; total=${allMapped.length}`,
     ).toBeGreaterThan(0)
   }, 120_000)
 })

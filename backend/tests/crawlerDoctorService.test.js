@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
 import { buildCrawlerDoctorReport } from '../services/crawlerDoctorService.js'
+import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -86,7 +87,9 @@ function seed(db) {
   db.prepare(`INSERT INTO profile_opportunity_matches
       (id, profile_id, opportunity_id, match_score, match_decision, match_explain_json, matcher_version)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run('p1:opp-varies', 'p1', 'opp-varies', 22, 'review', JSON.stringify({ why: 'weak need overlap' }), 'crawler-os')
+    // Below the display gate (DEFAULT_MIN_SCORE on the data-point scale) and
+    // not ACCEPT → the doctor must explain it as excluded.
+    .run('p1:opp-varies', 'p1', 'opp-varies', DEFAULT_MIN_SCORE - 3, 'review', JSON.stringify({ why: 'weak need overlap' }), 'crawler-os')
 }
 
 describe('buildCrawlerDoctorReport', () => {

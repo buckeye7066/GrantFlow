@@ -44,29 +44,65 @@ const GENERIC_FEDERAL_OPP = {
 }
 
 describe('need-anchored score semantics', () => {
-  it('an opportunity covering 2 of 4 declared needs scores ~50 (the number IS the coverage)', () => {
+  it('the score IS the data-point ratio: 2 of 4 needs + geo + type matched → 4 of 6 points', () => {
     const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, TWO_NEED_OPP)
     expect(match_explain.scoreBreakdown.matched_needs_count).toBe(2)
-    expect(match_explain.scoreBreakdown.need_denominator).toBe(4)
-    // 2/4 needs, eligibility confirmed or unknown (×1.0 / ×0.8), geo national (×1.0)
-    expect(score).toBeGreaterThanOrEqual(40)
-    expect(score).toBeLessThanOrEqual(50)
-    expect(score).toBeGreaterThanOrEqual(GOOD_MATCH_SCORE * 0.8)
+    const dp = match_explain.dataPointEvidence
+    // Inventory: 4 needs + geo:state + applicant_type = 6. Matched: 2 needs
+    // + geo (national serves TN) + nonprofit applicant type = 4.
+    expect(dp.total).toBe(6)
+    expect(dp.matched_count).toBe(4)
+    // score = 4/6 × clean gates ≈ 67; the number and the evidence agree.
+    expect(score).toBeGreaterThanOrEqual(60)
+    expect(score).toBeLessThanOrEqual(70)
+    expect(score).toBeGreaterThanOrEqual(GOOD_MATCH_SCORE)
   })
 
-  it('a generic national opp matching ZERO declared needs scores near the floor — never ~50', () => {
-    const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, GENERIC_FEDERAL_OPP)
+  it('a generic national opp matching ZERO needs on a RICH profile scores near the floor — the Focus Forward class', () => {
+    // The original complaint class: "Prevention of Disease…" scored 50 for a
+    // ministry it didn't help. Real org profiles carry 50–150 data points, so
+    // right-geo + right-entity-type alone is ~2% coverage — near the floor.
+    const richMinistry = {
+      ...MINISTRY_PROFILE,
+      id: 'p-ministry-rich',
+      needs: MINISTRY_PROFILE.needs,
+      keywords: JSON.stringify(Array.from({ length: 40 }, (_, i) => `ministryfact${String(i).padStart(2, '0')}`)),
+    }
+    const { score, match_explain } = scoreOpportunity(richMinistry, GENERIC_FEDERAL_OPP)
     expect(match_explain.scoreBreakdown.matched_needs_count).toBe(0)
-    // The old model gave this exact class 50. It must now sit at/near the floor,
-    // and always below the pipeline bar.
     expect(score).toBeLessThan(AUTO_ADD_SCORE)
     expect(score).toBeLessThanOrEqual(SCORE_FLOOR + 15)
   })
 
-  it('a profile with NO declared needs is capped at NO_NEEDS_TOPICAL_CAP', () => {
-    const bare = { id: 'p-bare', primary_type: 'nonprofit', state: 'TN' }
-    const { score } = scoreOpportunity(bare, TWO_NEED_OPP)
+  it('on a SPARSE profile the same generic opp reads as honest partial coverage (geo+type of what little we know)', () => {
+    const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, GENERIC_FEDERAL_OPP)
+    expect(match_explain.scoreBreakdown.matched_needs_count).toBe(0)
+    // 6-point inventory, geo+type matched → 2/6 ≈ 33 before gates. Sparse
+    // profiles scoring visibly on thin evidence is the owner's intended
+    // reading ("2 data points, source matches 1 → 50").
+    const dp = match_explain.dataPointEvidence
+    expect(dp.total).toBe(6)
+    expect(dp.matched.filter((m) => m.kind === 'need')).toHaveLength(0)
+    expect(score).toBeGreaterThan(SCORE_FLOOR)
+    expect(score).toBeLessThanOrEqual(40)
+  })
+
+  it('a profile with NO usable data points at all is capped at NO_NEEDS_TOPICAL_CAP', () => {
+    const empty = { id: 'p-empty' }
+    const { score, match_explain } = scoreOpportunity(empty, TWO_NEED_OPP)
+    expect(match_explain.dataPointEvidence.total).toBe(0)
     expect(score).toBeLessThanOrEqual(NO_NEEDS_TOPICAL_CAP)
+  })
+
+  it('a near-empty profile (state+type only) scores its full tiny inventory honestly', () => {
+    // Owner arithmetic at the small end: we only know 2 things; a national
+    // nonprofit grant matches both → 2/2. High scores on thin profiles are
+    // by design — the readiness gate, not the scorer, handles onboarding.
+    const bare = { id: 'p-bare', primary_type: 'nonprofit', state: 'TN' }
+    const { score, match_explain } = scoreOpportunity(bare, TWO_NEED_OPP)
+    expect(match_explain.dataPointEvidence.total).toBe(2)
+    expect(match_explain.dataPointEvidence.matched_count).toBe(2)
+    expect(score).toBeGreaterThanOrEqual(90)
   })
 
   it('org × individual-assistance guard: a church never scores high on person/household rent assistance', () => {

@@ -1,14 +1,25 @@
 /**
- * Need-alignment must not be diluted by how MANY needs a profile lists.
+ * Data-point denominator semantics (owner directive 2026-07-06 evening).
  *
- * Regression guard for the 80%-slider fix: before this, scoreNeedComponent
- * divided matched needs by the profile's TOTAL need count, so a complete
- * profile with many needs scored every grant low and the 80%
- * slider returned nothing. A grant that addresses a profile's core needs must
- * score the same whether the profile lists those 4 needs or those 4 + many more.
+ * HISTORY: this file used to guard the OPPOSITE contract. On the retired
+ * scales, dividing by the profile's total need count was a BUG (the
+ * "80%-slider returns nothing" class), so the denominator was capped at 4
+ * and a 13-need profile scored the same as a 4-need profile. The data-point
+ * model deliberately reverses that: the denominator IS the whole inventory —
+ * "a richer profile raises the bar" — and the failure mode the old guard
+ * protected against is prevented by EMPIRICALLY CALIBRATED thresholds
+ * (AUTO_ADD_SCORE=8 etc.) instead of by capping the denominator.
+ *
+ * The contracts that still must hold:
+ *  1. Dilution is bounded and honest: matching the same core needs on a
+ *     richer profile lowers the score (bigger denominator) but NEVER below
+ *     the pipeline bar when the core needs are really addressed.
+ *  2. Monotonicity: matching MORE of a profile's data points never lowers
+ *     the score.
  */
 import { describe, it, expect } from 'vitest'
 import { scoreOpportunity } from '../services/matchEngine.js'
+import { AUTO_ADD_SCORE } from '../config/matchThresholds.js'
 
 const CORE = ['education', 'housing', 'healthcare', 'employment']
 const EXTRA = ['transportation', 'childcare', 'food_assistance', 'legal_aid', 'mental_health', 'dental', 'utilities', 'clothing', 'internet']
@@ -30,19 +41,29 @@ const opp = {
   state: 'nationwide',
 }
 
-describe('need-alignment is not diluted by profile need count', () => {
-  it('a 4-core-need profile and a 13-need profile (same 4 matched) score within a small margin', () => {
+// The same grant, but also covering many of the broad profile's extra needs.
+const broadOpp = {
+  ...opp,
+  title: 'Comprehensive Family Support Grant',
+  description:
+    'Education, housing, healthcare, employment, transportation, childcare, food assistance, legal aid, mental health, dental, utilities, clothing and internet assistance.',
+  keywords: JSON.stringify([...CORE, ...EXTRA]),
+  categories: JSON.stringify([...CORE, ...EXTRA]),
+}
+
+describe('data-point denominator semantics', () => {
+  it('a richer profile scores the same partial match lower — but core-need coverage stays pipeline-worthy', () => {
     const focused = scoreOpportunity(ctx(CORE), opp).score
     const broad = scoreOpportunity(ctx([...CORE, ...EXTRA]), opp).score
-    // The broad profile matches the same 4 core needs; it must NOT be punished
-    // for listing more needs. (Pre-fix, broad scored far lower.)
-    expect(broad).toBeGreaterThanOrEqual(focused - 3)
+    // Deliberate dilution: same 4 matched needs over a larger inventory.
+    expect(broad).toBeLessThan(focused)
+    // But real core-need coverage must remain surfaceable, not floor-crushed.
+    expect(broad).toBeGreaterThanOrEqual(AUTO_ADD_SCORE)
   })
 
-  it('matching the core needs earns real, surfaceable score (not a diluted floor)', () => {
-    const broad = scoreOpportunity(ctx([...CORE, ...EXTRA]), opp).score
-    // 4 matched needs = full need-alignment credit; combined with geo/category
-    // this clears the moderate bar instead of being dragged to the 20s.
-    expect(broad).toBeGreaterThanOrEqual(40)
+  it('matching more of the profile monotonically raises the score', () => {
+    const partial = scoreOpportunity(ctx([...CORE, ...EXTRA]), opp).score
+    const fuller = scoreOpportunity(ctx([...CORE, ...EXTRA]), broadOpp).score
+    expect(fuller).toBeGreaterThan(partial)
   })
 })

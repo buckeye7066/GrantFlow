@@ -23,8 +23,53 @@
 // how national/generic/nonprofit-eligible it is. The old model's ~45 points
 // of administrative baseline (right entity type + right country) are gone.
 
-/** Minimum score any validated opportunity can receive (floor guarantee) */
-export const SCORE_FLOOR = 5
+/** Minimum score any validated opportunity can receive (floor guarantee).
+ *  DATA-POINT scale: prod median is 8 and p25 is 5, so the old floor of 5
+ *  would lift junk to the pipeline bar's doorstep — 2 keeps the guarantee
+ *  ("validated ≠ zero") without manufacturing relevance. */
+export const SCORE_FLOOR = 2
+
+// ── DATA-POINT scoring model (owner directive 2026-07-06 evening) ────────
+//
+// Supersedes the need-anchored denominator: the score is the share of the
+// profile's ENTIRE data-point inventory the source matches, gated by
+// eligibility and geography:
+//
+//   score = round( matchedDataPointCredit / totalDataPoints × 100
+//                  × eligibilityFactor × geoFactor )
+//
+// "88 data points in the profile, source matches 44 → 50." The inventory
+// (backend/services/profileDataPoints.js) is the single source of truth for
+// what counts as a data point; the per-match evidence list stored in
+// match_explain_json.dataPointEvidence IS the score's explanation. A richer
+// profile raises the bar (denominator grows), so absolute scores run much
+// lower than the need-anchored scale — the bars below this block are
+// EMPIRICALLY recalibrated against the real prod distribution, not reused.
+//
+// CALIBRATION (prod, 2026-07-06, 10,859 stored matches across 86 profiles,
+// backend/scripts/score-distribution.mjs; inventories ran 51–146 points):
+//   p50=8  p75=11  p90=15  p95=17  p99=23  max=47
+// Population-preserving mapping from the need-anchored bars:
+//   purge 12→5 · review 15→7 · pipeline bar 25→8 · good 50→11 · strong 75→14
+// Every band below uses this mapping. If the distribution shifts (richer
+// profiles, better amount/eligibility acquisition), re-run the script and
+// re-map — do not hand-tune individual bars.
+//
+// Escape hatch: GRANTFLOW_SCORING_MODEL=need_anchored restores the previous
+// scale (kept for A/B verification during the migration window).
+export const SCORING_MODEL =
+  process.env.GRANTFLOW_SCORING_MODEL === 'need_anchored' ? 'need_anchored' : 'data_point'
+
+/**
+ * Scale identity stamp for persisted score-adjacent state (live tuning,
+ * scoreboards). Persisted numbers from a DIFFERENT scale must be ignored on
+ * hydrate, not reinterpreted — a stale need-anchored minScore of 25 is p99 on
+ * this scale and would empty discovery.
+ */
+export const SCORE_SCALE_ID = 'data_point_v1'
+
+/** Minimum term length for a value to count as a data point. */
+export const DATA_POINT_MIN_TERM_LENGTH = 3
 
 /**
  * Number of "main needs" the coverage denominator counts, so a profile that
@@ -35,11 +80,13 @@ export const SCORE_FLOOR = 5
 export const NEED_DENOMINATOR_CAP = 4
 
 /**
- * Ceiling for profiles with NO declared needs: topical evidence alone
- * (keywords/categories/facets) may score at most this, so an empty profile
- * can never look like "half my needs are met".
+ * Ceiling for profiles with NO usable data points (and, on the legacy
+ * need-anchored path, no declared needs): topical evidence alone may score at
+ * most this, so an empty profile can never outrank evidenced coverage. 13 on
+ * the data-point scale preserves the old cap's position relative to the
+ * pipeline bar (40/25 ≈ 13/8).
  */
-export const NO_NEEDS_TOPICAL_CAP = 40
+export const NO_NEEDS_TOPICAL_CAP = 13
 
 /**
  * Specialized fit evidence (GPA×merit, faith×faith-based, housing-usable ×
@@ -84,13 +131,12 @@ export const TOPICAL_EVIDENCE_STRONG_BAR = 75
 // ── Discovery / Comprehensive Match ─────────────────────────────────────
 
 /**
- * Hard floor for the discovery bar, ON THE NEED-ANCHORED SCALE.
- * 25 = one fully-matched main need with clean eligibility + geography
- * (1 of NEED_DENOMINATOR_CAP=4). That is the new definition of
- * "pipeline-worthy" (owner directive 2026-07-06). The previous 75 bar
- * belonged to the retired additive scale where ~45 points were baseline.
+ * Hard floor for the discovery bar, ON THE DATA-POINT SCALE.
+ * 8 keeps the same share of matches pipeline-worthy as the need-anchored 25
+ * did (55% of stored prod matches — see the calibration block above). On a
+ * typical 100-point profile that is ~8 matched data points with clean gates.
  */
-export const DISCOVERY_MIN_SCORE_FLOOR = 25
+export const DISCOVERY_MIN_SCORE_FLOOR = 8
 
 /**
  * Default minimum score for discovery results — the "slider" default.
@@ -126,23 +172,23 @@ export const DEFAULT_MIN_SCORE = resolveDefaultMinScore()
 export const NEED_FULL_CREDIT_HITS = 4
 
 /** Progressive relaxation steps when results are too few.
- *  Tried in order; first to yield results wins. (Need-anchored scale:
- *  15 ≈ a partially-covered need or a discounted full need.) */
-export const RELAX_THRESHOLDS = [15, 8, 0]
+ *  Tried in order; first to yield results wins. (Data-point scale mapping of
+ *  the former [15, 8, 0].) */
+export const RELAX_THRESHOLDS = [7, 4, 0]
 
 /** When all thresholds exhausted, return top N by score */
 export const FALLBACK_TOP_N = 20
 
-// ── Decision Engine (need-anchored scale) ───────────────────────────────
+// ── Decision Engine (data-point scale; population-preserving mapping) ───
 
-/** ACCEPT: addresses at least half of the profile's main needs. */
-export const ACCEPT_SCORE = 50
+/** ACCEPT: top ~quarter of real matches (old 50 ≡ new 11). */
+export const ACCEPT_SCORE = 11
 
-/** REVIEW: some real need coverage worth a human look (below = weak). */
-export const REVIEW_SCORE = 15
+/** REVIEW: some real coverage worth a human look (old 15 ≡ new 7). */
+export const REVIEW_SCORE = 7
 
-/** Minimum score for ACCEPT in the structured decision pipeline */
-export const DECISION_ACCEPT_MIN = 25
+/** Minimum score for ACCEPT in the structured decision pipeline (old 25). */
+export const DECISION_ACCEPT_MIN = 8
 
 /** Minimum confidence for ACCEPT in the structured decision pipeline */
 export const DECISION_CONFIDENCE_MIN = 50
@@ -327,24 +373,33 @@ export const NEED_GEO_FIT_MIN_GEO_SUBSCALE = 75
 
 // ── Admin / Seeding ─────────────────────────────────────────────────────
 
-/** Minimum score for admin seed-to-pipeline operations (need-anchored). */
-export const ADMIN_SEED_MIN_SCORE = 20
+/** Minimum score for admin seed-to-pipeline operations (data-point scale). */
+export const ADMIN_SEED_MIN_SCORE = 7
+
+/**
+ * Score stamped on rows a corrective sweep DEMOTES (stale student-aid
+ * ACCEPTs, surfaced-but-ineligible matches). MUST sit below REVIEW_SCORE and
+ * AUTO_ADD_SCORE so a demoted row actually stops surfacing — on the retired
+ * scale this was a hardcoded 10 under a 25 bar; when the bar moved to 8 the
+ * un-translated 10 kept demoted rows visible and broke sweep idempotency.
+ */
+export const DEMOTED_MATCH_SCORE = 4
 
 // ── Frontend Display (sync with src/lib/matchDisplayThresholds.js) ──────
 
 /**
  * Score at or above which results are auto-added to a profile's pipeline.
- * Need-anchored scale (owner directive 2026-07-06): 25 = at least one
- * fully-matched main need with clean eligibility + geography. Below that,
- * the source lives in the master catalog only.
+ * Data-point scale: 8 keeps the same admitted population the need-anchored
+ * 25 bar did (calibration block above). Below that, the source lives in the
+ * master catalog only.
  */
-export const AUTO_ADD_SCORE = 25
+export const AUTO_ADD_SCORE = 8
 
-/** Strong match bucket threshold: ~¾ of the profile's main needs. */
-export const STRONG_MATCH_SCORE = 75
+/** Strong match bucket threshold (top ~10% of real matches; old 75). */
+export const STRONG_MATCH_SCORE = 14
 
-/** Good match bucket threshold: at least half of the main needs. */
-export const GOOD_MATCH_SCORE = 50
+/** Good match bucket threshold (top ~quarter; old 50). */
+export const GOOD_MATCH_SCORE = 11
 
-/** Moderate match bucket threshold (some coverage, review-worthy). */
-export const MODERATE_MATCH_SCORE = 15
+/** Moderate match bucket threshold (some coverage, review-worthy; old 15). */
+export const MODERATE_MATCH_SCORE = 7

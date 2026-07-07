@@ -232,7 +232,7 @@ test('centralized configs load without database or filesystem', async () => {
   const u = await import('../../backend/config/urlRules.js')
   const g = await import('../../backend/config/grantsGovEndpoints.js')
 
-  assert.ok(t.SCORE_FLOOR === 5, 'matchThresholds loads cleanly')
+  assert.ok(Number.isInteger(t.SCORE_FLOOR) && t.SCORE_FLOOR > 0, 'matchThresholds loads cleanly')
   assert.ok(u.PLACEHOLDER_HOSTNAMES.has('example.com'), 'urlRules loads cleanly')
   assert.ok(g.GRANTS_GOV_SEARCH2_URL.length > 0, 'grantsGovEndpoints loads cleanly')
 })

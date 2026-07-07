@@ -9,6 +9,11 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
 import { reScoreSurfacedIneligible, liveOppToOs } from '../services/coverageAudit/surfacedEligibility.js'
+import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
+
+// The sweep's surfacing floor (see reScoreSurfacedIneligible): DEFAULT_MIN_SCORE
+// on the data-point scale — the pipeline bar (8).
+const SURFACING_FLOOR = DEFAULT_MIN_SCORE
 
 function makeDb() {
   const raw = new Database(':memory:')
@@ -57,8 +62,9 @@ describe('reScoreSurfacedIneligible', () => {
     expect(res.demoted).toBe(1)
     const row = db.prepare('SELECT match_decision, match_score FROM profile_opportunity_matches WHERE id=?').get(mid)
     expect(row.match_decision).toBe('reject')
-    // Below the display floor (25, need-anchored scale) so it stops surfacing.
-    expect(row.match_score).toBeLessThan(25)
+    // Below the display floor (DEFAULT_MIN_SCORE, data-point scale) so it
+    // stops surfacing.
+    expect(row.match_score).toBeLessThan(SURFACING_FLOOR)
   })
 
   it('leaves a REVIEW-band (below-floor) match ALONE — recall preserved', async () => {
@@ -80,9 +86,9 @@ describe('reScoreSurfacedIneligible', () => {
 
   it('ignores a match that is NOT currently surfacing (review below floor already hidden)', async () => {
     const db = makeDb()
-    // decision review + score 20 (below the 25 display floor, need-anchored
-    // scale) => not surfacing => not a candidate even though scorer would reject.
-    addMatch(db, { title: 'REJECTME Buried', score: 20, decision: 'review' })
+    // decision review + a score below the display floor (data-point scale)
+    // => not surfacing => not a candidate even though scorer would reject.
+    addMatch(db, { title: 'REJECTME Buried', score: SURFACING_FLOOR - 1, decision: 'review' })
     const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp })
     expect(res.demoted).toBe(0)
   })

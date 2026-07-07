@@ -32,17 +32,19 @@
 
 import { createLogger } from '../../utils/logger.js'
 import { inferCandidateProfile } from '../../crawler-os/crawlerVocabulary.js'
+import { DEMOTED_MATCH_SCORE } from '../../config/matchThresholds.js'
 
 const log = createLogger('coverage:surfacedEligibility')
 
 /**
  * Force a demoted match below the display floor so it stops surfacing.
- * Need-anchored scale (owner directive 2026-07-06): display floor
- * (DISCOVERY_MIN_SCORE_FLOOR) = 25, REVIEW band starts at 15 — so 10 keeps a
- * demoted row visible in audits but never on a card. Mirrors
- * STUDENT_AID_DEMOTE_SCORE in startup/enforceInvariants.js.
+ * Canonical DEMOTED_MATCH_SCORE sits below REVIEW and the pipeline bar on
+ * the live scale — a demoted row stays visible in audits but never on a
+ * card. The old hardcoded 10 silently ended up ABOVE the bar when the scale
+ * moved to 8 (demoted rows kept surfacing; sweeps lost idempotency).
+ * Mirrors STUDENT_AID_DEMOTE_SCORE in startup/enforceInvariants.js.
  */
-export const SURFACED_DEMOTE_SCORE = 10
+export const SURFACED_DEMOTE_SCORE = DEMOTED_MATCH_SCORE
 
 function parseListMaybe(v) {
   if (v === null || v === undefined) return []

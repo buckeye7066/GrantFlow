@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { SCORE_FLOOR } from '../../backend/config/matchThresholds.js'
 
 import {
   validateUrlFormat,
@@ -309,7 +310,7 @@ test('BUILD GATE: score floor ensures no zero scores for validated opportunities
     for (const opp of GATE_OPPORTUNITIES) {
       const result = scoreOpportunity(ctx, opp)
       assert.ok(
-        result.score >= 5,
+        result.score >= SCORE_FLOOR,
         `Score floor violated: ${ctx.profile?.applicant_type || 'empty'} + "${opp.title}" → ${result.score}`,
       )
     }

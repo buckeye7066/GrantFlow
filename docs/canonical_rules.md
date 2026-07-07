@@ -19,18 +19,29 @@ Applies to:
 - **Opportunity / Funding Opportunity**: A row in `funding_opportunities` (the “Discover Grants / Funding Opportunities catalog”).
 - **Grant**: A row in `grants` representing a pursued opportunity (pipeline status workflow).
 - **Crawler Job**: A row in `crawler_jobs` representing an automation run (local, scholarship, comprehensive, item_search, document_ingest, profile_enrichment, pipeline_automation, avatar_lookup).
-- **Match score (NEED-ANCHORED SCALE, owner directive 2026-07-06)**: the 0–100 match
-  score IS the share of the profile's main needs (up to 4, `NEED_DENOMINATOR_CAP`)
-  the opportunity addresses, gated multiplicatively by eligibility (1.0 confirmed /
-  0.8 unknown / 0.15 explicit mismatch) and geography (1.0 in-area / 0.7 unknown /
-  0.3 out-of-area). **A 50 literally means "covers about half of what this profile
-  needs."** A source matching ZERO declared needs scores near the floor regardless
-  of how national/generic/entity-eligible it is (the retired additive model gave
-  ~45 baseline points for "right entity type in the right country", which read as
-  half-fit). Bands: 75 strong · 50 good · **25 = pipeline bar** (one fully-matched
-  main need, clean gates) · 15 review-worthy. Profiles with NO declared needs cap
-  at 40 (topical evidence only). Single source of truth:
-  `backend/config/matchThresholds.js` (+ `src/lib/matchDisplayThresholds.js` sync).
+- **Match score (DATA-POINT SCALE, owner directive 2026-07-06 evening)**: the 0–100
+  match score IS the share of the profile's ENTIRE data-point inventory the
+  opportunity matches — `matched data points ÷ total data points × 100` — gated
+  multiplicatively by eligibility (1.0 confirmed / 0.8 unknown / 0.15 explicit
+  mismatch) and geography (1.0 in-area / 0.7 unknown / 0.3 out-of-area).
+  **"88 data points in the profile, source matches 44 → 50."** The canonical
+  inventory (needs, geography components, applicant type, demographic/eligibility
+  traits, interests, academics, financials, document-derived keywords) is built by
+  `backend/services/profileDataPoints.js` — the SAME list feeds the denominator,
+  the stored per-match evidence (`match_explain_json.dataPointEvidence`), and the
+  Coverage & Evidence Dashboard, so a score and its explanation can never drift.
+  Real profiles carry 50–150 data points, so absolute scores run LOW by design;
+  bands are EMPIRICALLY calibrated against the prod distribution (2026-07-06:
+  p50=8 · p90=15 · max=47): **8 = pipeline bar** (`AUTO_ADD_SCORE`) · 11 good ·
+  14 strong · 7 review-worthy · floor 2. Hard ineligibility (seniors-only vs a
+  30-year-old, org × individual assistance) stays a REJECT gate/crush factor —
+  never outrunnable by matching many data points. Profiles with NO usable data
+  points cap at 13 (topical evidence only). Recalibrate by re-running
+  `backend/scripts/score-distribution.mjs` and re-mapping — never hand-tune one
+  bar. Single source of truth: `backend/config/matchThresholds.js`
+  (+ `src/lib/matchDisplayThresholds.js` sync). The need-anchored scale (main
+  needs capped at 4) is retired; `GRANTFLOW_SCORING_MODEL=need_anchored` is a
+  temporary A/B escape hatch only.
 - **Orphan profile**: A `profiles` record that is **not linked to any `users` row** (`profiles.user_id IS NULL`) but is otherwise active.
 
 ## Product goals (from repo docs + implementation)
@@ -232,7 +243,7 @@ DDL stays in `ensureSchemaInvariants.js`; data-repair invariants go here.
 | --- | --- | --- |
 | **Sticky deletes** — a source a user deleted from a profile pipeline stays gone | `reconcileDismissedGrants()` in `backend/services/pipelineDismissals.js`, re-run by `enforceStickyDeletes()` | `backend/tests/enforceInvariants.test.js` ("sticky deletes") |
 | **No cross-profile / cross-tenant bleed** (G4, G8) — a grant's `organization_id` must equal its `profile_id`'s org | `enforceNoCrossProfileBleed()` (re-aligns to the profile's org; profile_id is the authoritative tenancy signal) | `backend/tests/enforceInvariants.test.js` ("no cross-profile / cross-tenant bleed") |
-| **Relevance / match-score floor** (G4 + prune playbook) — pipeline must not accumulate junk (`match_score < 12` on the need-anchored scale, excl. NULL) | `enforceRelevanceFloor()` (never touches NULL scores or protected statuses; `ENFORCE_RELEVANCE_FLOOR=0` for count-only) | `backend/tests/enforceInvariants.test.js` ("relevance floor") |
+| **Relevance / match-score floor** (G4 + prune playbook) — pipeline must not accumulate junk (`match_score < 5` on the data-point scale, excl. NULL) | `enforceRelevanceFloor()` (never touches NULL scores or protected statuses; `ENFORCE_RELEVANCE_FLOOR=0` for count-only) | `backend/tests/enforceInvariants.test.js` ("relevance floor") |
 | **Every pipeline grant carries a match score when computable** — an unscored (NULL) row must not masquerade as an engine-endorsed match (the Eileen-Fisher-on-a-church class) | `enforceGrantScoreBackfill()` (canonical re-score of NULL-score rows, bounded per boot; `ENFORCE_GRANT_SCORE_BACKFILL=0` for count-only). UI first line: "Not scored" badge on NULL-score cards | `backend/tests/enforceInvariants.test.js` ("runner") |
 | **An active profile with above-bar stored matches never shows a near-empty pipeline** (G2 anti-zero-result, the purge-then-refill gap) | `enforcePipelineRefill()` (promotes top `profile_opportunity_matches ≥ AUTO_ADD_SCORE` through the fully-gated `saveToProfilePipeline` — tombstones/source gate/dupe guard enforced; re-scored at promote time; `ENFORCE_PIPELINE_REFILL=0` for count-only; `PIPELINE_REFILL_MIN_ROWS` default 5) | `backend/tests/enforceInvariants.test.js` ("runner") |
 | **No search-engine application targets** (G6 "URL is valid and non-placeholder") — a search-engine RESULTS url (google.com/search?q=…, bing.com/search, …) is never a portal/application target on `application_tasks`, `funding_opportunities`, or `grants` | `enforceNoSearchEngineApplicationTargets()` (nulls the URL, reclassifies non-terminal tasks to blocked/unknown_application_method; bounded + idempotent; disable via `ENFORCE_URL_HYGIENE=0`). Producers gated at `opportunityInserter.upsertFundingOpportunity` + `hamiltonAutomationClassifier.readUrl` via the canonical `isSearchEngineUrl()` (urlRules.js) | `backend/tests/enforceInvariants.test.js` ("enforceNoSearchEngineApplicationTargets") |

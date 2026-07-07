@@ -30,6 +30,7 @@ import {
 
 import { validateOpportunity } from './opportunityValidator.js'
 import { scoreOpportunity, makeDecision } from './matchEngine.js'
+import { SCORE_FLOOR } from '../config/matchThresholds.js'
 import {
   INVALID_URL_PATTERNS,
   NON_ACTIONABLE_DOMAINS as SOCIAL_MEDIA_DOMAINS,
@@ -296,8 +297,9 @@ export function assertMatchingReturnsResults(profileContext, opportunities, opts
     return { ...result, opp }
   })
 
-  // Count results that pass the REVIEW threshold (score >= 25 with v4 model)
-  const meaningful = scored.filter((s) => s.score >= 5)
+  // "Meaningful" = validated (at/above the canonical floor). This was a
+  // hardcoded 5 that silently drifted from SCORE_FLOOR when the scale changed.
+  const meaningful = scored.filter((s) => s.score >= SCORE_FLOOR)
 
   if (meaningful.length < minResults) {
     const topScores = scored

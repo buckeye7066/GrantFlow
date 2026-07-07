@@ -160,12 +160,12 @@ function makeSaveDb() {
   return raw
 }
 
-describe('(a) trusted student aid scoring 12–19 SAVES via the trusted floor (need-anchored scale)', () => {
-  it('saves a trusted-origin aid row scored below 20 but at/above 12', async () => {
+describe('(a) trusted student aid scoring in the trusted band SAVES via the trusted floor (data-point scale)', () => {
+  it('saves a trusted-origin aid row scored below the insert floor but at/above the trusted floor', async () => {
     const db = makeSaveDb()
     // Score deliberately in the dead zone the student-aid caps produce: below
-    // the 20 insert floor, at/above the 12 trusted floor.
-    const score = 15
+    // the insert floor (7), at/above the trusted floor (5).
+    const score = 6
     expect(score).toBeLessThan(RELEVANCE_FLOOR)
     expect(score).toBeGreaterThanOrEqual(TRUSTED_RELEVANCE_FLOOR)
 
@@ -183,10 +183,10 @@ describe('(a) trusted student aid scoring 12–19 SAVES via the trusted floor (n
     expect(Number(db.prepare('SELECT COUNT(*) AS n FROM grants').get().n)).toBe(1)
   })
 
-  it('still BLOCKS an UNTRUSTED open-web aid row at the same below-20 score', async () => {
+  it('still BLOCKS an UNTRUSTED open-web aid row at the same below-floor score', async () => {
     const db = makeSaveDb()
     const untrusted = { ...tnHope, id: 'opp-openweb', record_origin: 'live_crawl' }
-    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 15, 0)
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 6, 0)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)
@@ -222,8 +222,8 @@ describe('(a) trusted student aid scoring 12–19 SAVES via the trusted floor (n
       record_origin: 'live_crawl',
       source_trust_tier: 'OFFICIAL_API',
     }
-    // 15 = inside the trusted band (12–19) on the need-anchored scale.
-    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 15)
+    // 6 = inside the trusted band (5–6) on the data-point scale.
+    const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 6)
     expect(res.saved).toBe(true)
     expect(res.threshold).toBe(TRUSTED_RELEVANCE_FLOOR)
   })
@@ -231,7 +231,7 @@ describe('(a) trusted student aid scoring 12–19 SAVES via the trusted floor (n
   it('default (omitted) caller threshold still floors UNTRUSTED rows at the full floor', async () => {
     const db = makeSaveDb()
     const untrusted = { ...tnHope, id: 'opp-openweb-2', record_origin: 'live_crawl' }
-    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 15)
+    const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 6)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
     expect(res.threshold).toBe(RELEVANCE_FLOOR)
@@ -277,18 +277,18 @@ describe('(a) boot purge exempts trusted-origin aid below the floor', () => {
   it('does NOT purge a trusted-origin aid row scoring below the lenient floor', async () => {
     const db = makePurgeDb()
     db.prepare('INSERT INTO funding_opportunities (id, record_origin) VALUES (?, ?)').run('fo-hope', 'curated_catalog')
-    // Trusted aid at a clearly-low 8 (below the lenient 12 purge floor,
-    // need-anchored scale) — would be purged if untrusted, but the
+    // Trusted aid at a clearly-low 3 (below the lenient 5 purge floor,
+    // data-point scale) — would be purged if untrusted, but the
     // trusted-origin exemption protects it.
     db.prepare(
       `INSERT INTO grants (id, profile_id, organization_id, funding_opportunity_id, title, match_score, status)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run('g-hope', 'p-student', 'org1', 'fo-hope', 'Tennessee HOPE Scholarship', 8, 'discovered')
+    ).run('g-hope', 'p-student', 'org1', 'fo-hope', 'Tennessee HOPE Scholarship', 3, 'discovered')
     // A genuine untrusted junk row alongside (no FK → no trusted origin).
     db.prepare(
       `INSERT INTO grants (id, profile_id, organization_id, title, match_score, status)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run('g-junk', 'p-student', 'org1', 'Random low-score row', 8, 'discovered')
+    ).run('g-junk', 'p-student', 'org1', 'Random low-score row', 3, 'discovered')
 
     const res = await enforceRelevanceFloor(db)
     expect(res.ok).toBe(true)
