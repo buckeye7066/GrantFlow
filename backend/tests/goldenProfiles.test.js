@@ -69,11 +69,15 @@ let db
 // Bands are deliberately wide. They bracket the observed reference score with
 // generous headroom on both sides so calibration moves don't flake the suite,
 // while still pinning "relevant grants stay strong / irrelevant grants stay weak".
+// DATA-POINT SCALE (2026-07-06 evening): these compact golden fixtures carry
+// small inventories, so relevant matches land ~20-55 (vs prod p90=15). Bands
+// re-bracket the observed reference scores: relevant 21-53 at re-authoring
+// time, STRONG bar 14 on the live scale.
 const BAND = {
-  STRONG_MIN: 60, // a clearly-relevant, geo+need-aligned match should clear this
-  WEAK_MAX: 50,   // a clearly-irrelevant or wrong-type opportunity should stay under this
+  STRONG_MIN: 18, // a clearly-relevant, geo+need-aligned match should clear this
+  WEAK_MAX: 12,   // a clearly-irrelevant or wrong-type opportunity should stay under this
   // Meaningful separation: relevant must beat irrelevant by at least this much.
-  MIN_SEPARATION: 15,
+  MIN_SEPARATION: 6,
 }
 
 const seededCtx = {}
@@ -346,10 +350,10 @@ describe('invariant: missing high-value fields downgrade, never hard-reject (G4)
     )
     expect(ctx.profileNorm.state === null || ctx.profileNorm.state === undefined).toBe(true)
     const r = scoreOpportunity(ctx, OPP.emsEducationScholarshipTN)
-    // Missing geo downgrades from ~100 to a still-strong score (~75 reference),
-    // and absolutely must stay well above the engine floor (never ~0).
+    // Missing geo downgrades via the ×0.7 unknown gate (~21 observed vs ~30
+    // with geo), and absolutely must stay well above the engine floor (never ~0).
     expect(r.score).toBeGreaterThan(SCORE_FLOOR)
-    expect(r.score).toBeGreaterThanOrEqual(40)
+    expect(r.score).toBeGreaterThanOrEqual(BAND.STRONG_MIN)
     // Reasons should note the location is unknown rather than vanish.
     expect(r.reasons.length).toBeGreaterThan(0)
   })

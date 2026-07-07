@@ -53,8 +53,8 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..')
 // 1. Heuristic-prefilter conservatism
 // ---------------------------------------------------------------------------
 
-test('SCORE_FLOOR invariant: scoreOpportunity never drops validated opportunities below 5', () => {
-  assert.equal(SCORE_FLOOR, 5, 'SCORE_FLOOR must be 5 — prefilter threshold depends on it')
+test('SCORE_FLOOR invariant: scoreOpportunity never drops validated opportunities below the floor', () => {
+  assert.ok(Number.isInteger(SCORE_FLOOR) && SCORE_FLOOR > 0, 'SCORE_FLOOR must be a positive integer — prefilter threshold depends on it')
 
   // Minimal viable opportunity — no category, no geo, no eligibility keywords.
   // The engine's floor guarantee says this must still score ≥ 5.

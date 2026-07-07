@@ -5,15 +5,17 @@
  * Do not hardcode score cutoffs in components — import from here.
  */
 
-// NEED-ANCHORED SCALE (owner directive 2026-07-06) — keep in sync with
+// DATA-POINT SCALE (owner directive 2026-07-06 evening) — keep in sync with
 // backend/config/matchThresholds.js. The score is the share of the profile's
-// main needs the source addresses, gated by eligibility and geography:
-// 50 literally means "covers about half of what this profile needs".
-export const AUTO_ADD_SCORE = 25
-export const STRONG_MATCH_SCORE = 75
-export const GOOD_MATCH_SCORE = 50
-export const MODERATE_MATCH_SCORE = 15
-export const SCORE_FLOOR = 5
+// ENTIRE data-point inventory the source matches, gated by eligibility and
+// geography ("88 data points, source matches 44 → 50"). Real profiles carry
+// 50–150 data points, so absolute scores run low: bands are empirically
+// calibrated (prod p50=8, p90=15, max=47 — see backend calibration block).
+export const AUTO_ADD_SCORE = 8
+export const STRONG_MATCH_SCORE = 14
+export const GOOD_MATCH_SCORE = 11
+export const MODERATE_MATCH_SCORE = 7
+export const SCORE_FLOOR = 2
 
 /**
  * Map a numeric score to a display label.
@@ -34,10 +36,10 @@ export function scoreToLabel(score) {
  * the matching/auto-add thresholds above.
  */
 export const MATCH_DISPLAY_TIERS = Object.freeze({
-  excellent: 75, // ~¾+ of the profile's main needs
-  good: 50,      // at least half of the main needs
-  fair: 25,      // at least one fully-matched main need
-  potential: 15, // partial coverage worth a look
+  excellent: 14, // top ~10% of real matches (old 75)
+  good: 11,      // top ~quarter (old 50)
+  fair: 8,       // pipeline-bar coverage (old 25)
+  potential: 7,  // partial coverage worth a look (old 15)
 })
 
 export function scoreToMatchLabel(score) {

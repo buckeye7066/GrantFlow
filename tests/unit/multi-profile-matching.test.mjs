@@ -199,10 +199,11 @@ test('individual profile: returns meaningful results from corpus', () => {
     `Individual should match ≥3 opps, got ${meaningful.length}: ${scored.map((s) => `${s.title?.substring(0, 30)}=${s.score}`).join(', ')}`,
   )
 
-  // Housing/utilities/food opps should clear the need-anchored pipeline bar
-  // (25 = one fully-matched main need with clean gates).
+  // Housing/utilities/food opps should clear the DATA-POINT pipeline bar
+  // (AUTO_ADD_SCORE=8; these compact fixtures have small inventories, so
+  // real coverage lands well above it).
   const housingScore = scored.find((s) => s.title.includes('Housing'))?.score ?? 0
-  assert.ok(housingScore >= 25, `Housing opp should score ≥25 for individual (got ${housingScore})`)
+  assert.ok(housingScore >= 8, `Housing opp should score ≥8 for individual (got ${housingScore})`)
 })
 
 test('student profile: returns meaningful education results', () => {
@@ -221,8 +222,8 @@ test('student profile: returns meaningful education results', () => {
   // Education opportunities should rank high
   const stemScore = scored.find((s) => s.title.includes('STEM'))?.score ?? 0
   const pellScore = scored.find((s) => s.title.includes('Pell'))?.score ?? 0
-  assert.ok(stemScore >= 25, `STEM scholarship should score ≥25 for student (got ${stemScore})`)
-  assert.ok(pellScore >= 25, `Pell grant should score ≥25 for student (got ${pellScore})`)
+  assert.ok(stemScore >= 8, `STEM scholarship should score ≥8 for student (got ${stemScore})`)
+  assert.ok(pellScore >= 8, `Pell grant should score ≥8 for student (got ${pellScore})`)
 })
 
 test('nonprofit profile: returns meaningful capacity/funding results', () => {
@@ -240,7 +241,7 @@ test('nonprofit profile: returns meaningful capacity/funding results', () => {
 
   // Nonprofit-specific opps should rank high
   const capacityScore = scored.find((s) => s.title.includes('Capacity'))?.score ?? 0
-  assert.ok(capacityScore >= 25, `Capacity building should score ≥25 for nonprofit (got ${capacityScore})`)
+  assert.ok(capacityScore >= 8, `Capacity building should score ≥8 for nonprofit (got ${capacityScore})`)
 })
 
 test('business profile: returns meaningful business results', () => {
@@ -258,7 +259,7 @@ test('business profile: returns meaningful business results', () => {
 
   // SBA/business opps should rank high
   const sbaScore = scored.find((s) => s.title.includes('SBA'))?.score ?? 0
-  assert.ok(sbaScore >= 25, `SBA grant should score ≥25 for business (got ${sbaScore})`)
+  assert.ok(sbaScore >= 8, `SBA grant should score ≥8 for business (got ${sbaScore})`)
 })
 
 test('no profile type returns zero results when corpus has data', () => {
@@ -318,7 +319,7 @@ test('assertMatchingReturnsResults returns ok for well-matched profile', () => {
   })
   assert.ok(result.ok)
   assert.ok(result.meaningful >= 3)
-  assert.ok(result.topScore >= 30)
+  assert.ok(result.topScore >= 10)
 })
 
 test('validateMultiProfileMatching passes for diverse corpus', () => {

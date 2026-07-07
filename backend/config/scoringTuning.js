@@ -26,6 +26,7 @@ import {
   W_CATEGORY,
   DEFAULT_MIN_SCORE,
   DISCOVERY_MIN_SCORE_FLOOR,
+  SCORE_SCALE_ID,
 } from './matchThresholds.js'
 
 export const WEIGHT_KEYS = ['W_NEED', 'W_ELIGIBILITY', 'W_GEO', 'W_CATEGORY']
@@ -62,7 +63,7 @@ export function getDefaultWeights() {
 }
 
 export function getScoringTuning() {
-  return { weights: { ..._weights }, minScore: _minScore }
+  return { weights: { ..._weights }, minScore: _minScore, scale: SCORE_SCALE_ID }
 }
 
 /**
@@ -128,6 +129,15 @@ export async function hydrateScoringTuning(db) {
     const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(KV_KEY)
     if (!row?.value) return null
     const parsed = JSON.parse(row.value)
+    // SCALE GUARD: a minScore persisted under a different (or unstamped)
+    // score scale must not be reinterpreted on this one — a need-anchored 25
+    // is p99 on the data-point scale and would empty discovery. Weights are
+    // scale-agnostic (they act only inside the topical-evidence blend) and
+    // hydrate regardless; the stale minScore is dropped to the default.
+    if (parsed?.scale !== SCORE_SCALE_ID) {
+      setScoringTuning({ weights: parsed?.weights })
+      return getScoringTuning()
+    }
     setScoringTuning(parsed)
     return getScoringTuning()
   } catch {

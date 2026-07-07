@@ -23,6 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import Database from 'better-sqlite3'
 import crypto from 'crypto'
 import fs from 'node:fs'
@@ -56,6 +57,15 @@ import {
 } from '../startup/enforceInvariants.js'
 import { recordDismissal } from '../services/pipelineDismissals.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
+import {
+  RELEVANCE_FLOOR as INSERT_RELEVANCE_FLOOR,
+  TRUSTED_RELEVANCE_FLOOR,
+} from '../config/relevanceFloor.js'
+
+// The boot purge uses the LENIENT floor min(insertFloor, PURGE_FLOOR_CAP);
+// the cap is pinned to the TRUSTED insert floor by design (data-point scale:
+// insert 7, trusted/purge 5) — see startup/enforceInvariants.js PURGE_FLOOR_CAP.
+const PURGE_FLOOR = Math.min(INSERT_RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR)
 
 function makeDb() {
   const raw = new Database(':memory:')
@@ -389,18 +399,18 @@ describe('enforceInvariants — relevance floor', () => {
     expect(Number.isFinite(value)).toBe(true)
     expect(typeof source).toBe('string')
     // backend/config/relevanceFloor.js is now present (merged) → resolves from it.
-    // Need-anchored scale (2026-07-06): insert floor = 20.
-    expect(value).toBe(20)
+    // Data-point scale (2026-07-06 evening): insert floor = RELEVANCE_FLOOR (7).
+    expect(value).toBe(INSERT_RELEVANCE_FLOOR)
     expect(source).toMatch(/config\/relevanceFloor\.js/)
   })
 
   it('PURGES below-floor discovery grants by DEFAULT (no opt-in needed)', async () => {
-    // The boot purge uses the LENIENT floor (min(insertFloor, 12)) so it can
-    // never delete a row the insert gate admitted. A clearly-junk 8 is below
-    // that lenient floor and is purged.
+    // The boot purge uses the LENIENT floor (min(insertFloor, purge cap)) so it
+    // can never delete a row the insert gate admitted. A clearly-junk score
+    // below that lenient floor is purged.
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 8, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: PURGE_FLOOR - 1, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.ok).toBe(true)
@@ -409,14 +419,14 @@ describe('enforceInvariants — relevance floor', () => {
     expect(count(db)).toBe(0)
   })
 
-  it('does NOT purge a 12–19 row the insert gate would admit (lenient purge floor)', async () => {
+  it('does NOT purge a trusted-band row the insert gate would admit (lenient purge floor)', async () => {
     // Regression for the audit's "floor collapse": purge floor must be <= insert
-    // floor, so a 15 (below the 20 insert floor but at/above the 12 purge floor —
-    // e.g. a trusted-origin row admitted at the 12 trusted floor)
-    // is NOT destroyed by the boot net.
+    // floor, so a row in [TRUSTED_RELEVANCE_FLOOR, RELEVANCE_FLOOR) — e.g. a
+    // trusted-origin row admitted at the trusted floor (data-point scale: 5–6)
+    // — is NOT destroyed by the boot net.
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Borderline', match_score: 15, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Borderline', match_score: TRUSTED_RELEVANCE_FLOOR + 1, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.repaired).toBe(0)
@@ -468,11 +478,11 @@ describe('enforceInvariants — relevance floor', () => {
   it('never deletes MTSU / portal-named rows even when below floor & discovered', async () => {
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    insertGrant(db, { id: 'm1', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Research Award', match_score: 8, status: 'discovered' })
-    insertGrant(db, { id: 'm2', profile_id: 'p1', organization_id: 'org1', title: 'Middle Tennessee State University grant', match_score: 8, status: 'discovered' })
-    insertGrant(db, { id: 'm3', profile_id: 'p1', organization_id: 'org1', title: 'Generic award', funder: 'TN Portal System', match_score: 8, status: 'discovered' })
+    insertGrant(db, { id: 'm1', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Research Award', match_score: PURGE_FLOOR - 1, status: 'discovered' })
+    insertGrant(db, { id: 'm2', profile_id: 'p1', organization_id: 'org1', title: 'Middle Tennessee State University grant', match_score: PURGE_FLOOR - 1, status: 'discovered' })
+    insertGrant(db, { id: 'm3', profile_id: 'p1', organization_id: 'org1', title: 'Generic award', funder: 'TN Portal System', match_score: PURGE_FLOOR - 1, status: 'discovered' })
     // A genuine junk row alongside, to prove the purge still fires for non-protected names.
-    insertGrant(db, { id: 'junk', profile_id: 'p1', organization_id: 'org1', title: 'Random low score', match_score: 8, status: 'discovered' })
+    insertGrant(db, { id: 'junk', profile_id: 'p1', organization_id: 'org1', title: 'Random low score', match_score: PURGE_FLOOR - 1, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.repaired).toBe(1)
@@ -1208,7 +1218,7 @@ describe('enforceStudentAidEligibility — student-aid on non-student profiles',
     expect(res.repaired).toBe(1)
     const row = db.prepare('SELECT match_decision, match_score FROM profile_opportunity_matches WHERE id = ?').get(mid)
     expect(String(row.match_decision).toLowerCase()).toBe('reject')
-    expect(row.match_score).toBeLessThan(75) // below the display floor → no longer surfaces
+    expect(row.match_score).toBeLessThan(DEFAULT_MIN_SCORE) // below the display floor → no longer surfaces
   })
 
   it('demotes a TN HOPE-family award whose title has no generic student-aid word ("HOPE Access Grant")', async () => {

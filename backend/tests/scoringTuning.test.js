@@ -11,6 +11,11 @@ import {
   hydrateScoringTuning,
 } from '../config/scoringTuning.js'
 import { computeMatchDecision } from '../services/matchEngine.js'
+import {
+  DEFAULT_MIN_SCORE,
+  DISCOVERY_MIN_SCORE_FLOOR,
+  SCORE_SCALE_ID,
+} from '../config/matchThresholds.js'
 
 afterEach(() => resetScoringTuning())
 
@@ -35,13 +40,13 @@ describe('live scoring tuning store', () => {
     expect(getEffectiveWeights()).toEqual(defaults.weights)
   })
 
-  it('SAFETY: the effective min score can never drop below the documented 25 bar (need-anchored scale)', () => {
+  it('SAFETY: the effective min score can never drop below the documented pipeline bar (data-point scale)', () => {
     // Loosening attempts (Amy floor sweep, admin call, stale hydrated value)
     // are clamped UP to DISCOVERY_MIN_SCORE_FLOOR; tightening is allowed.
-    setScoringTuning({ minScore: 15 })
-    expect(getEffectiveMinScore()).toBe(25)
+    setScoringTuning({ minScore: DISCOVERY_MIN_SCORE_FLOOR - 1 })
+    expect(getEffectiveMinScore()).toBe(DISCOVERY_MIN_SCORE_FLOOR)
     setScoringTuning({ minScore: 0 })
-    expect(getEffectiveMinScore()).toBe(25)
+    expect(getEffectiveMinScore()).toBe(DISCOVERY_MIN_SCORE_FLOOR)
     setScoringTuning({ minScore: 50 })
     expect(getEffectiveMinScore()).toBe(50)
     setScoringTuning({ minScore: 200 })
@@ -68,18 +73,42 @@ describe('live scoring tuning store', () => {
     }
   })
 
-  it('a persisted sub-25 value is healed up to the floor on hydrate (need-anchored scale)', async () => {
+  it('SCALE GUARD: an UNSTAMPED persisted minScore is ignored on hydrate (weights still hydrate); a stamped sub-floor minScore is clamped up', async () => {
     const db = new Database(':memory:')
     try {
       db.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
-      db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      const insert = db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+      const update = db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?')
+
+      // A payload persisted BEFORE the data-point cutover carries no scale
+      // stamp — its minScore (need-anchored numbers) must be IGNORED entirely,
+      // not reinterpreted; only the scale-agnostic weights hydrate.
+      const unstampedWeights = normalizeWeights({ W_NEED: 0.5, W_ELIGIBILITY: 0.2, W_GEO: 0.2, W_CATEGORY: 0.1 })
+      insert.run(
         'crawler_scoring_tuning',
-        JSON.stringify({ minScore: 20, weights: getScoringTuning().weights }),
+        JSON.stringify({ minScore: 20, weights: unstampedWeights }),
         new Date().toISOString(),
       )
       const hydrated = await hydrateScoringTuning(db)
-      expect(hydrated.minScore).toBe(25)
-      expect(getEffectiveMinScore()).toBe(25)
+      expect(hydrated.minScore).toBe(DEFAULT_MIN_SCORE)
+      expect(getEffectiveMinScore()).toBe(DEFAULT_MIN_SCORE)
+      expect(getEffectiveWeights().W_NEED).toBeCloseTo(unstampedWeights.W_NEED, 3)
+
+      // A payload stamped with the CURRENT scale but a sub-floor minScore is
+      // healed up to DISCOVERY_MIN_SCORE_FLOOR on hydrate.
+      resetScoringTuning()
+      update.run(
+        JSON.stringify({
+          minScore: DISCOVERY_MIN_SCORE_FLOOR - 3,
+          weights: getScoringTuning().weights,
+          scale: SCORE_SCALE_ID,
+        }),
+        new Date().toISOString(),
+        'crawler_scoring_tuning',
+      )
+      const rehydrated = await hydrateScoringTuning(db)
+      expect(rehydrated.minScore).toBe(DISCOVERY_MIN_SCORE_FLOOR)
+      expect(getEffectiveMinScore()).toBe(DISCOVERY_MIN_SCORE_FLOOR)
     } finally {
       db.close()
     }

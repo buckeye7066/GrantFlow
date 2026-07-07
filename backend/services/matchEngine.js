@@ -41,7 +41,7 @@ const log = createLogger('matchEngine')
 // are wasteful and the flag never changes at runtime.
 const FACET_DEBUG = String(process.env.MATCHING_ENGINE_FACET_DEBUG || '').toLowerCase() === 'true'
 import {
-  SCORE_FLOOR,
+  SCORE_FLOOR, AUTO_ADD_SCORE,
   DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N,
   ACCEPT_SCORE, REVIEW_SCORE,
   DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
@@ -71,7 +71,13 @@ import {
   TN_GEO_BOOST, HOUSING_USABLE_BOOST,
   POPULATION_MISSION_BOOST_PER_HIT, POPULATION_MISSION_BOOST_MAX,
   NEED_GEO_FIT_BASE, NEED_GEO_FIT_PER_HIT, NEED_GEO_FIT_MAX, NEED_GEO_FIT_MIN_GEO_SUBSCALE,
+  // Data-point scoring model (owner directive 2026-07-06 evening)
+  SCORING_MODEL,
 } from '../config/matchThresholds.js'
+import {
+  buildProfileDataPointInventory,
+  evaluateDataPointMatches,
+} from './profileDataPoints.js'
 // Live, DB-persisted scoring tuning (Amy's improvement loop writes these). With
 // no override active these return the matchThresholds.js defaults, so default
 // behavior is unchanged.
@@ -2868,6 +2874,11 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       .map((n) => String(n).toLowerCase())
       .filter((n) => coverageNeeds.includes(n)),
   )
+  // Per-need graded credit, keyed by need — feeds BOTH the need-anchored
+  // coverage sum and the data-point evidence list (one graded pass, two
+  // consumers, so score and explanation cannot disagree).
+  const needCredits = new Map()
+  for (const n of matchedNeedSet) needCredits.set(n, 1)
   let needCreditTotal = matchedNeedSet.size
   // Whole-word (suffix-tolerant) matching. This is the need-anchored score's
   // credit test — substring includes() here awarded phantom coverage: 'rent'
@@ -2884,6 +2895,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     // Direct hit on the need itself → full credit.
     if (textHas(rawNeed) || (spaced !== rawNeed && textHas(spaced))) {
       matchedNeedSet.add(rawNeed)
+      needCredits.set(rawNeed, 1)
       needCreditTotal += 1
       continue
     }
@@ -2894,11 +2906,13 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     const synHits = (NEED_SYNONYMS[rawNeed] || []).filter((syn) => textHas(syn)).length
     if (synHits >= 2) {
       matchedNeedSet.add(rawNeed)
+      needCredits.set(rawNeed, 1)
       needCreditTotal += 1
       continue
     }
     if (synHits === 1) {
       matchedNeedSet.add(rawNeed)
+      needCredits.set(rawNeed, 0.5)
       needCreditTotal += 0.5
       continue
     }
@@ -2907,6 +2921,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     const words = spaced.split(/\s+/).filter((w) => w.length >= 4 && !AMBIGUOUS_SINGLE_WORDS.has(w))
     if ((words.length > 1 || (words.length === 1 && words[0] !== spaced)) && words.some((w) => textHas(w))) {
       matchedNeedSet.add(rawNeed)
+      needCredits.set(rawNeed, 0.5)
       needCreditTotal += 0.5
     }
   }
@@ -2953,26 +2968,80 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     ? GEO_MISMATCH_FACTOR
     : (geo.tier === 'unknown' ? GEO_UNKNOWN_FACTOR : GEO_MATCH_FACTOR)
 
+  // Computed once; feeds the data-point evidence, reasons, and breakdown.
+  const amountEligible = amountInRange(effectiveProfile?.funding_amount_needed, opportunity)
+
+  // ══ DATA-POINT SCORE (owner directive 2026-07-06 evening) ══
+  // score = matchedDataPointCredit / totalDataPoints × 100 × elig × geo.
+  // The inventory is the canonical numbered list of everything the profile
+  // tells us (backend/services/profileDataPoints.js); the matched subset is
+  // stored as evidence so the score IS its own explanation. The graded need
+  // pass above supplies per-need credit; geo/eligibility/amount data points
+  // follow the structured gate verdicts rather than re-scanning text.
+  const dataPointInventory = buildProfileDataPointInventory({
+    profile: effectiveProfile,
+    signals: effectiveSignals,
+    profileNorm,
+    coverageNeeds,
+  })
+  const dataPointEval = evaluateDataPointMatches({
+    inventory: dataPointInventory,
+    oppText,
+    oppSignals: oppSignalsForCoverage,
+    needCredits,
+    geoMatched: geoFactor === GEO_MATCH_FACTOR,
+    applicantTypeMatch: Boolean(elig.applicantTypeMatch),
+    amountEligible,
+    primaryApplicantType: effectiveSignals?.applicantType || resolveApplicantType(effectiveProfile) || '',
+  })
+  let dataPointCoverage
+  if (dataPointInventory.total === 0) {
+    // Empty inventory (bare profile row): same bounded topical fallback as the
+    // no-needs case — an empty profile can never claim real coverage.
+    dataPointCoverage = Math.max(0, Math.min(100, rawScore)) * (NO_NEEDS_TOPICAL_CAP / 100)
+  } else {
+    dataPointCoverage = Math.min(100, (dataPointEval.credit / dataPointInventory.total) * 100)
+  }
+
   // Behavior nudge (soft preference learning) still tips borderline scores.
-  // For no-needs profiles it already flowed through rawScore.
-  const anchoredScore = needCoverage * eligFactor * geoFactor +
-    (totalDeclaredNeeds > 0 ? behaviorNudgeValue : 0)
+  // On the fallback path it already flowed through rawScore.
+  const modelUsesDataPoints = SCORING_MODEL === 'data_point'
+  const effectiveCoverage = modelUsesDataPoints ? dataPointCoverage : needCoverage
+  const nudgeApplies = modelUsesDataPoints ? dataPointInventory.total > 0 : totalDeclaredNeeds > 0
+  let anchoredScore = effectiveCoverage * eligFactor * geoFactor +
+    (nudgeApplies ? behaviorNudgeValue : 0)
+
+  // An explicit population/recipient mismatch must never reach the pipeline
+  // bar, however much raw coverage it has. On the retired scales the ×0.15
+  // crush alone guaranteed that (100 × 0.15 = 15 < 25 bar); on the compressed
+  // data-point scale it no longer does (15 > 8 bar — the church-clears-the-bar
+  // -on-rent-assistance class), so the guarantee is enforced explicitly.
+  if (eligibilityMismatches.length > 0) {
+    anchoredScore = Math.min(anchoredScore, AUTO_ADD_SCORE - 1)
+  }
 
   // ── Floor guarantee: validated opportunities always score ≥ SCORE_FLOOR ──
   const finalScore = Math.max(SCORE_FLOOR, Math.min(100, Math.round(anchoredScore)))
 
-  // Computed once; reused by the reasons list and the scoreBreakdown below.
-  const amountEligible = amountInRange(effectiveProfile?.funding_amount_needed, opportunity)
-
   // ── Plain-language score explanation (the score IS this sentence) ──
-  if (totalDeclaredNeeds > 0) {
+  if (modelUsesDataPoints && dataPointInventory.total > 0) {
+    reasons.push(
+      `Matches ${dataPointEval.matched.length} of the profile's ${dataPointInventory.total} data points` +
+      ` — ${Math.round(dataPointCoverage)}% coverage of everything this profile tells us`,
+    )
+    if (matchedNeedSet.size > 0) {
+      reasons.push(
+        `Including ${matchedNeedSet.size} of ${totalDeclaredNeeds || matchedNeedSet.size} stated need${totalDeclaredNeeds === 1 ? '' : 's'}`,
+      )
+    }
+  } else if (!modelUsesDataPoints && totalDeclaredNeeds > 0) {
     reasons.push(
       `Addresses ${matchedNeedSet.size} of the profile's ${needDenominator} main need${needDenominator === 1 ? '' : 's'}` +
       `${hasFitEvidence ? ' (plus specialized fit signals)' : ''} — ${Math.round(needCoverage)}% need coverage`,
     )
   } else {
     reasons.push(
-      `Profile lists no needs yet — showing topical relevance only (capped at ${NO_NEEDS_TOPICAL_CAP})`,
+      `Profile ${modelUsesDataPoints ? 'has no usable data points' : 'lists no needs'} yet — showing topical relevance only (capped at ${NO_NEEDS_TOPICAL_CAP})`,
     )
   }
   if (eligFactor === ELIG_MISMATCH_FACTOR) {
@@ -3068,6 +3137,15 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
 
   const match_explain = {
     matchedNeeds: matchedNeeds.length > 0 ? matchedNeeds : undefined,
+    // The data-point evidence list IS the score: matched/total × gates.
+    // Persisted via match_explain_json; the Coverage & Evidence Dashboard
+    // renders it as "why did this match survive".
+    dataPointEvidence: {
+      total: dataPointInventory.total,
+      matched_count: dataPointEval.matched.length,
+      credit: Math.round(dataPointEval.credit * 10) / 10,
+      matched: dataPointEval.matched,
+    },
     matchedSignals,
     profileSignalsUsed,
     profileReasonLines,
@@ -3077,7 +3155,13 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       ['refund_eligible', 'stipend', 'housing_direct'].includes(effectiveOpp?.funding_category)),
     fundingCategory: effectiveOpp?.funding_category ?? null,
     scoreBreakdown: {
-      // Need-anchored formula inputs (the score = coverage × elig × geo)
+      // Data-point formula inputs (score = matched/total × elig × geo)
+      scoring_model: SCORING_MODEL,
+      data_point_total: dataPointInventory.total,
+      data_point_matched: dataPointEval.matched.length,
+      data_point_credit: Math.round(dataPointEval.credit * 10) / 10,
+      data_point_coverage: Math.round(dataPointCoverage),
+      // Need-anchored formula inputs (legacy scale; still reported)
       need_coverage: Math.round(needCoverage),
       matched_needs_count: matchedNeedSet.size,
       need_denominator: needDenominator,
@@ -3709,6 +3793,21 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     explanation = 'Downgraded from ACCEPT - eligibility is incomplete and needs review.'
     const missing = (eligibilityEval.missingFields ?? []).join(', ') || 'eligibility details'
     decisionReasons = [...decisionReasons, `Incomplete eligibility: ${missing}`]
+  }
+  // SUBSTANTIVE-EVIDENCE gate (data-point scale): the SCORE is the honest
+  // ratio, so a sparse profile (state + entity type only) legitimately posts
+  // a high number when both match. But ACCEPT auto-adds to the pipeline, and
+  // right-geography + right-entity-type alone is exactly the administrative
+  // baseline the scale redesign killed — an ACCEPT must be backed by at
+  // least one substantive matched data point (need/interest/keyword/trait),
+  // otherwise it is a REVIEW ("looks open to you; nothing says it helps").
+  const ADMINISTRATIVE_KINDS = new Set(['geo', 'applicant_type'])
+  const dpMatched = match_explain?.dataPointEvidence?.matched
+  if (decision === 'ACCEPT' && Array.isArray(dpMatched) &&
+      !dpMatched.some((m) => !ADMINISTRATIVE_KINDS.has(m.kind) && m.value !== 'funding amount stated')) {
+    decision = 'REVIEW'
+    explanation = 'Downgraded from ACCEPT — matches this profile\'s location/type but nothing substantive it needs.'
+    decisionReasons = [...decisionReasons, 'No substantive profile evidence (geography/type only)']
   }
 
   // Eligibility

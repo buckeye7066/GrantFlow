@@ -16,6 +16,7 @@ import { generateScenarios, planVariantCounts, CATEGORY_IDS } from '../services/
 import { evaluateDiscovery, buildAnyaHandoff } from '../services/amy/amyReport.js'
 import { ORIGIN_CREATED_BY, METADATA_SECTION_KEY } from '../services/amy/amyConstants.js'
 import { startAmyScheduler, stopAmyScheduler, getAmyConfig } from '../services/amy/amyScheduler.js'
+import { ACCEPT_SCORE, DISCOVERY_MIN_SCORE_FLOOR } from '../config/matchThresholds.js'
 
 function createDb() {
   const db = new Database(':memory:')
@@ -379,19 +380,21 @@ describe('crawlerTuner', () => {
     expect(decision.to).toBe(80)
   })
 
-  it('SAFETY: never proposes dropping the floor below the documented 25 bar (need-anchored scale)', () => {
-    // A cohort whose candidates all sit at 18 would "prove" a lower floor, but
-    // the display floor is a hard product standard — the tuner must refuse,
-    // even when a caller passes looser bounds.
-    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [18] }))
-    const current = cohortMetricsAtFloor(evals, 25)
-    const { best } = sweepFloors(evals, { min: 10, max: 40, step: 5 })
-    expect(best.floor).toBeLessThan(25) // the sweep itself would go lower…
-    const decision = decideFloorChange({ currentFloor: 25, best, currentMetrics: current })
-    expect(decision.change).toBe(false) // …but the tuner clamps to >= 25
-    const loose = decideFloorChange({ currentFloor: 25, best, currentMetrics: current, opts: { bounds: [10, 40] } })
+  it('SAFETY: never proposes dropping the floor below the documented pipeline bar (data-point scale)', () => {
+    // A cohort whose candidates all sit just below the bar would "prove" a
+    // lower floor, but the display floor (DISCOVERY_MIN_SCORE_FLOOR) is a hard
+    // product standard — the tuner must refuse, even when a caller passes
+    // looser bounds.
+    const BAR = DISCOVERY_MIN_SCORE_FLOOR
+    const evals = Array.from({ length: 16 }, () => evalFix({ scores: [BAR - 3] }))
+    const current = cohortMetricsAtFloor(evals, BAR)
+    const { best } = sweepFloors(evals, { min: 2, max: 20, step: 1 })
+    expect(best.floor).toBeLessThan(BAR) // the sweep itself would go lower…
+    const decision = decideFloorChange({ currentFloor: BAR, best, currentMetrics: current })
+    expect(decision.change).toBe(false) // …but the tuner clamps to >= the bar
+    const loose = decideFloorChange({ currentFloor: BAR, best, currentMetrics: current, opts: { bounds: [2, 20] } })
     expect(loose.change).toBe(false)
-    expect(loose.to).toBe(25)
+    expect(loose.to).toBe(BAR)
   })
 
   it('refuses to tune on too-small a cohort', () => {
@@ -433,22 +436,24 @@ describe('matchThresholdEditor (surgical, reversible)', () => {
     }
   })
 
-  it('SAFETY: clamps any attempt to write a floor below the documented 25 bar (need-anchored scale)', async () => {
+  it('SAFETY: clamps any attempt to write a floor below the documented pipeline bar (data-point scale)', async () => {
+    const BAR = DISCOVERY_MIN_SCORE_FLOOR
     const tmp = nodePath.join(os.tmpdir(), `amy-mt-clamp-${Date.now()}.js`)
-    await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 25\n', 'utf8')
+    await fsp.writeFile(tmp, `export const DEFAULT_MIN_SCORE = ${BAR}\n`, 'utf8')
     try {
-      // 10 clamps to 25 == current → refused as a no-op; the file never drops.
-      const refused = await applyMinScore(10, { filePath: tmp })
+      // A sub-bar write clamps to the bar == current → refused as a no-op; the
+      // file never drops.
+      const refused = await applyMinScore(BAR - 5, { filePath: tmp })
       expect(refused.applied).toBe(false)
       expect(refused.reason).toBe('no_change')
-      expect(await readCurrentMinScore(tmp)).toBe(25)
+      expect(await readCurrentMinScore(tmp)).toBe(BAR)
 
-      // From a tightened floor (40), a "lower to 10" lands at the 25 bar, not 10.
+      // From a tightened floor (40), a "lower below the bar" lands AT the bar.
       await fsp.writeFile(tmp, 'export const DEFAULT_MIN_SCORE = 40\n', 'utf8')
-      const clamped = await applyMinScore(10, { filePath: tmp })
+      const clamped = await applyMinScore(BAR - 5, { filePath: tmp })
       expect(clamped.applied).toBe(true)
-      expect(clamped.to).toBe(25)
-      expect(await readCurrentMinScore(tmp)).toBe(25)
+      expect(clamped.to).toBe(BAR)
+      expect(await readCurrentMinScore(tmp)).toBe(BAR)
     } finally {
       await fsp.unlink(tmp).catch(() => {})
     }
@@ -682,18 +687,20 @@ describe('Amy weight tuning with empirical validation', () => {
     const db = createDb()
     return db
   }
-  // NEED-ANCHORED SPLIT (owner directive 2026-07-06): the FINAL match score is
-  // need-coverage × eligibility/geo gates and never moves with a W_* weight
-  // change — weights act only inside the legacy weighted-evidence blend
+  // SCORING SPLIT (owner directives 2026-07-06): the FINAL match score is
+  // data-point coverage × eligibility/geo gates and never moves with a W_*
+  // weight change — weights act only inside the legacy weighted-evidence blend
   // (topical_evidence). So the fake discovery keeps the final score pinned in
-  // the REVIEW band (30, weak cohort → weight symptom fires) and moves ONLY the
-  // topical subscale once the weight edit is "applied": weak topical (55) until
-  // then, strong (80, above TOPICAL_EVIDENCE_STRONG_BAR=75) when it improves.
+  // the REVIEW band (ACCEPT_SCORE - 1 on the data-point scale, weak cohort →
+  // weight symptom fires) and moves ONLY the topical subscale once the weight
+  // edit is "applied": weak topical (55) until then, strong (80, above
+  // TOPICAL_EVIDENCE_STRONG_BAR=75 — that subscale did NOT change scale) when
+  // it improves.
   function discoveryFactory(state, improves) {
     return async ({ profileId }) => {
       const topical = state.applied && improves ? 80 : 55
       return {
-        run: { run_id: 'r', stored: 1, sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 3, stored: 1 }], recommendations: [{ title: 'Specific Grant', match_score: 30, decision: 'REVIEW', topical_evidence: topical }], zero_result: null },
+        run: { run_id: 'r', stored: 1, sources: [{ source_id: 'grants_gov', outcome: 'OK', fetched: 3, stored: 1 }], recommendations: [{ title: 'Specific Grant', match_score: ACCEPT_SCORE - 1, decision: 'REVIEW', topical_evidence: topical }], zero_result: null },
         persisted: { opportunities: 1 },
         thesis: { applicant_types: ['x'], needs: ['funding'], location: { state: 'TN' } },
       }
@@ -715,7 +722,7 @@ describe('Amy weight tuning with empirical validation', () => {
         improve: true, applyTuning: false, applyWeights: true,
         runDiscovery: discoveryFactory(state, true),
         runPipeline: async () => ({ anya: {}, sam: {} }),
-        thresholdEditor: { read: async () => 25, apply: async () => ({ applied: false }) },
+        thresholdEditor: { read: async () => DISCOVERY_MIN_SCORE_FLOOR, apply: async () => ({ applied: false }) },
         weightEditor,
         clock: () => new Date('2026-06-29T12:00:00Z'),
       })
@@ -739,7 +746,7 @@ describe('Amy weight tuning with empirical validation', () => {
         improve: true, applyTuning: false, applyWeights: true,
         runDiscovery: discoveryFactory(state, false), // never improves
         runPipeline: async () => ({ anya: {}, sam: {} }),
-        thresholdEditor: { read: async () => 25, apply: async () => ({ applied: false }) },
+        thresholdEditor: { read: async () => DISCOVERY_MIN_SCORE_FLOOR, apply: async () => ({ applied: false }) },
         weightEditor,
         clock: () => new Date('2026-06-29T12:00:00Z'),
       })

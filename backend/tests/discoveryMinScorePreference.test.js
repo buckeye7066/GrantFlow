@@ -8,7 +8,7 @@
  *   - GET/PUT /api/profiles/:id/discovery-preferences round-trips it;
  *   - run-smart resolves: explicit request min > stored preference > DEFAULT_MIN_SCORE.
  *
- * Canonical guardrail: DEFAULT_MIN_SCORE (display floor >= 25, need-anchored
+ * Canonical guardrail: DEFAULT_MIN_SCORE (display floor >= 8, data-point
  * scale) is never lowered — a stored preference feeds the sanctioned
  * EXPLICIT-min path.
  */
@@ -104,9 +104,10 @@ describe('discoveryPreferences service', () => {
     })
 
     it('never lowers the DISPLAY floor constant itself', () => {
-      // Documented bar (owner directive 2026-07-06, need-anchored scale): 25 =
-      // one fully-matched main need with clean eligibility + geography.
-      expect(DISCOVERY_MIN_SCORE_FLOOR).toBe(25)
+      // Documented bar (owner directive 2026-07-06 evening, data-point scale):
+      // 8 = pipeline-bar data-point coverage with clean eligibility + geography
+      // (population-preserving mapping of the retired need-anchored 25).
+      expect(DISCOVERY_MIN_SCORE_FLOOR).toBe(8)
       expect(DEFAULT_MIN_SCORE).toBeGreaterThanOrEqual(DISCOVERY_MIN_SCORE_FLOOR)
     })
   })

@@ -10,11 +10,12 @@
  * threshold to 0 to fill a result quota) can never lower the bar below the
  * floor and let junk into the pipeline.
  *
- * Value: 20 on the NEED-ANCHORED scale (owner directive 2026-07-06): one
- * fully-matched main need (25) with the unknown-eligibility discount (×0.8)
- * lands at 20, so this floor admits "one real need, unverified eligibility"
- * and blocks anything with less actual need coverage. (The historical 55
- * belonged to the retired additive scale whose baseline was ~45.)
+ * Value: 7 on the DATA-POINT scale (owner directive 2026-07-06 evening):
+ * the pipeline bar (8) with the unknown-eligibility discount (×0.8) lands
+ * just under 7, so this floor admits "bar-worthy coverage, unverified
+ * eligibility" and blocks anything with less matched evidence. Mapping from
+ * the retired need-anchored 20 is population-preserving — see the
+ * calibration block in matchThresholds.js.
  *
  * Relationship to the BOOT-SWEEP purge floor
  * (`RELEVANCE_FLOOR` in startup/enforceInvariants.js, default 15):
@@ -27,37 +28,38 @@
  *     gate (here) is the first line of defense; the boot sweep is the net.
  *
  * Override via env `PIPELINE_INSERT_RELEVANCE_FLOOR` for ops tuning; falls back
- * to 20 if unset or non-numeric.
+ * to 7 if unset or non-numeric.
  *
  * NULL / unknown score handling is the saver's responsibility (see
  * opportunityMatcher.js): a NULL match_score is never "junk" and a clearly
  * eligible ACCEPT is not dropped just because the engine produced no number.
  */
-const parsed = Number.parseInt(process.env.PIPELINE_INSERT_RELEVANCE_FLOOR || '20', 10)
-export const RELEVANCE_FLOOR = Number.isFinite(parsed) && parsed > 0 ? parsed : 20
+const parsed = Number.parseInt(process.env.PIPELINE_INSERT_RELEVANCE_FLOOR || '7', 10)
+export const RELEVANCE_FLOOR = Number.isFinite(parsed) && parsed > 0 ? parsed : 7
 
 /**
  * TRUSTED-SOURCE FLOOR EXEMPTION.
  *
- * The 20 INSERT floor is the right bar for the open web (live/geo crawlers that
+ * The 7 INSERT floor is the right bar for the open web (live/geo crawlers that
  * relax their own threshold to fill a quota). But it silently drops legitimately
- * relevant aid that scores 12–19 from sources we have already vetted — partial
- * need coverage (or a discounted full need) from a curated catalog, scholarship
- * crawler, or federal feed. Those rows are NOT junk.
+ * relevant aid scoring 5–6 from sources we have already vetted — partial
+ * coverage from a curated catalog, scholarship crawler, or federal feed. Those
+ * rows are NOT junk.
  *
  * So: for an opportunity whose `record_origin` is in TRUSTED_RECORD_ORIGINS AND
  * whose decision is NOT REJECT, the effective floor drops to
- * TRUSTED_RELEVANCE_FLOOR (12). Untrusted/open-web rows keep the full 20 floor,
- * and a REJECT decision still blocks the save regardless of origin — so the
- * precision risk is bounded by (a) the origin allowlist and (b) the hard REJECT
- * gate that runs before the threshold.
+ * TRUSTED_RELEVANCE_FLOOR (5, the data-point mapping of the old trusted 12).
+ * Untrusted/open-web rows keep the full 7 floor, and a REJECT decision still
+ * blocks the save regardless of origin — so the precision risk is bounded by
+ * (a) the origin allowlist and (b) the hard REJECT gate that runs before the
+ * threshold.
  *
  * Override the trusted floor via env `PIPELINE_TRUSTED_RELEVANCE_FLOOR`; falls
- * back to 12 if unset or non-numeric. It is clamped to never exceed
+ * back to 5 if unset or non-numeric. It is clamped to never exceed
  * RELEVANCE_FLOOR (a "trusted floor" above the normal floor would be nonsense).
  */
-const parsedTrusted = Number.parseInt(process.env.PIPELINE_TRUSTED_RELEVANCE_FLOOR || '12', 10)
-const trustedRaw = Number.isFinite(parsedTrusted) && parsedTrusted > 0 ? parsedTrusted : 12
+const parsedTrusted = Number.parseInt(process.env.PIPELINE_TRUSTED_RELEVANCE_FLOOR || '5', 10)
+const trustedRaw = Number.isFinite(parsedTrusted) && parsedTrusted > 0 ? parsedTrusted : 5
 export const TRUSTED_RELEVANCE_FLOOR = Math.min(trustedRaw, RELEVANCE_FLOOR)
 
 /**

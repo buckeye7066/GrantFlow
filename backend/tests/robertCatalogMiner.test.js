@@ -26,6 +26,7 @@ import {
 } from '../services/robert/robertCatalogMiner.js'
 import { runEmailFeedForRobert } from '../services/robert/robertEmailFeedBridge.js'
 import { runRobert } from '../services/robert/robertAgent.js'
+import { RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
 
 // ---------------------------------------------------------------------------
 // DB harness
@@ -193,15 +194,16 @@ function makeCtx(db) {
 }
 
 describe('robertCatalogMiner — effectiveFloorFor', () => {
-  // Need-anchored scale (owner directive 2026-07-06): full INSERT floor 20,
-  // trusted-origin floor 12 (see backend/config/relevanceFloor.js).
-  it('uses the trusted floor (12) for vetted record origins', () => {
-    expect(effectiveFloorFor({ record_origin: 'curated_catalog' }, 'ACCEPT')).toBe(12)
-    expect(effectiveFloorFor({ record_origin: 'scholarship_crawler' }, 'REVIEW')).toBe(12)
+  // Data-point scale (owner directive 2026-07-06 evening): full INSERT floor
+  // RELEVANCE_FLOOR (7), trusted-origin floor TRUSTED_RELEVANCE_FLOOR (5) —
+  // see backend/config/relevanceFloor.js.
+  it('uses the trusted floor for vetted record origins', () => {
+    expect(effectiveFloorFor({ record_origin: 'curated_catalog' }, 'ACCEPT')).toBe(TRUSTED_RELEVANCE_FLOOR)
+    expect(effectiveFloorFor({ record_origin: 'scholarship_crawler' }, 'REVIEW')).toBe(TRUSTED_RELEVANCE_FLOOR)
   })
-  it('uses the full floor (20) for open-web origins', () => {
-    expect(effectiveFloorFor({ record_origin: 'live_crawl' }, 'ACCEPT')).toBe(20)
-    expect(effectiveFloorFor({ record_origin: null }, 'ACCEPT')).toBe(20)
+  it('uses the full INSERT floor for open-web origins', () => {
+    expect(effectiveFloorFor({ record_origin: 'live_crawl' }, 'ACCEPT')).toBe(RELEVANCE_FLOOR)
+    expect(effectiveFloorFor({ record_origin: null }, 'ACCEPT')).toBe(RELEVANCE_FLOOR)
   })
   it('blocks any REJECT decision regardless of origin', () => {
     expect(effectiveFloorFor({ record_origin: 'curated_catalog' }, 'REJECT')).toBe(Number.POSITIVE_INFINITY)

@@ -63,7 +63,7 @@ import { resolveProfileType, getParentChain } from '../services/profileTypeRegis
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
 import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE } from '../services/awardAmountExtractor.js'
-import { AUTO_ADD_SCORE } from '../config/matchThresholds.js'
+import { AUTO_ADD_SCORE, DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
@@ -85,31 +85,31 @@ const log = createLogger('startup:enforceInvariants')
  * legacy constant remains a back-compat fallback only.
  */
 export const RELEVANCE_FLOOR = Number.parseInt(
-  process.env.PIPELINE_RELEVANCE_FLOOR || '15',
+  process.env.PIPELINE_RELEVANCE_FLOOR || '6',
   10,
-) || 15
+) || 6
 
 /**
  * Hard fallback if neither the shared config nor an env override is available.
- * Matches the insert-gate default (need-anchored scale, 2026-07-06).
+ * Matches the insert-gate default (data-point scale, 2026-07-06 evening).
  */
-const RELEVANCE_FLOOR_FALLBACK = 20
+const RELEVANCE_FLOOR_FALLBACK = 7
 
 /**
  * LENIENT purge floor. The boot sweep is the destructive NET, so it must be at
  * least as lenient as the insert gate — INSERT floor >= PURGE floor — or it
  * would turn around and delete rows the insert gate just (correctly) admitted
- * (e.g. trusted rows admitted at the 12 trusted floor).
+ * (e.g. trusted rows admitted at the 5 trusted floor).
  *
  * The audit caught a "floor collapse": both the insert gate and this purge
  * resolved to the SAME config value, so the purge could delete rows that
  * should survive. We keep the documented split — the purge uses
- * min(resolvedFloor, 12) so it can never exceed the TRUSTED insert floor.
- * Override the cap via env PIPELINE_PURGE_RELEVANCE_FLOOR.
+ * min(resolvedFloor, 5) so it can never exceed the TRUSTED insert floor
+ * (data-point scale). Override the cap via env PIPELINE_PURGE_RELEVANCE_FLOOR.
  */
 const PURGE_FLOOR_CAP = (() => {
-  const v = Number.parseInt(process.env.PIPELINE_PURGE_RELEVANCE_FLOOR || '12', 10)
-  return Number.isFinite(v) && v > 0 ? v : 12
+  const v = Number.parseInt(process.env.PIPELINE_PURGE_RELEVANCE_FLOOR || '5', 10)
+  return Number.isFinite(v) && v > 0 ? v : 5
 })()
 
 let _floorCache // memoized { value, source }
@@ -1508,9 +1508,10 @@ async function listMatchColumns(db) {
 }
 
 /** Score a demoted match is forced BELOW the display floor to so it stops
- *  surfacing. Need-anchored scale: display floor = 25, REVIEW band starts at
- *  15, so 10 keeps the demoted row visible in audits but never on a card. */
-const STUDENT_AID_DEMOTE_SCORE = 10
+ *  surfacing. Canonical DEMOTED_MATCH_SCORE sits below REVIEW and the
+ *  pipeline bar on the live scale (the old hardcoded 10 ended up ABOVE the
+ *  8 bar when the scale changed, so demoted rows kept surfacing). */
+const STUDENT_AID_DEMOTE_SCORE = DEMOTED_MATCH_SCORE
 
 /**
  * INVARIANT: STUDENT-AID OPPORTUNITIES DO NOT SURFACE TO A NON-STUDENT PROFILE
