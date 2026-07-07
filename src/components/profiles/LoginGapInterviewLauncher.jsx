@@ -67,9 +67,22 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
   // this would otherwise pop up on top of (or right after) the tour. It's
   // meant to resume on the user's next separate login, not stack the moment
   // the tour finishes within that same first session.
+  //
+  // ADMIN GATE (owner-directed, 2026-07-06): an admin/owner is only ever
+  // interviewed at most once -- the recurring at-every-login re-ask (snoozes
+  // are session-only by design) must never re-trigger for admins. The GLOBAL
+  // App.jsx mount therefore never interviews an admin; the ONE allowed admin
+  // interview is the explicitly sequenced ResetOnboardingFlow pass, which is
+  // the only caller that passes `onFinished`. `is_admin` itself is
+  // server-determined (users.is_admin via the auth payload), and the server
+  // additionally never re-serves 'pending_reinterview' to an already
+  // onboarded admin (backend/services/onboardingGates.js), so this is
+  // belt-and-suspenders on top of the backend gate. Non-admin behavior is
+  // unchanged: Anya still re-asks them at each login until the gaps close.
   const enabled = isGapGateEnabled() && isAuthenticated
     && guidedCycleTourStatus !== 'pending'
     && !hasGuidedTourRunThisSession()
+    && (!isAdmin || Boolean(onFinished))
 
   const [gapped, setGapped] = useState(null) // null = not probed yet
   const [index, setIndex] = useState(0)

@@ -10,6 +10,7 @@ import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlo
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { recordSuccessfulLogin } from '../services/firstLoginNotifier.js'
+import { resolveGuidedCycleTourStatus } from '../services/onboardingGates.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
 
@@ -527,7 +528,12 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
     // So the guided first-cycle tour can start immediately on login, without
     // waiting on a separate GET /api/auth/me round-trip (see setAuthenticatedUser's
     // payload.user branch, which maps this into the store's guidedCycleTourStatus).
-    guided_cycle_tour_status: userRow.guided_cycle_tour_status ?? null,
+    // Resolved through the canonical onboardingGates gate: an ADMIN account
+    // that has already been interviewed (or has ever signed in before) is
+    // NEVER served 'pending_reinterview' again — a secondary admin login must
+    // not re-trigger Anya's interview (owner-directed, 2026-07-06). Non-admin
+    // behavior is unchanged.
+    guided_cycle_tour_status: resolveGuidedCycleTourStatus(userRow),
     // Pre-existing gap found alongside the above: this was never returned here,
     // so setAuthenticatedUser's `payload.user?.has_completed_onboarding` read
     // (used for hasSeenOnboarding/needsProfileCreation) was always reading
@@ -1663,7 +1669,16 @@ async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddres
   }
 }
 
-async function rotateSessionTokens(db, { sessionId, user, profileId }) {
+async function rotateSessionTokens(db, {
+  sessionId,
+  user,
+  profileId,
+  // Login-tracker context (all optional; only the /refresh route passes them):
+  priorAccessExpiresAt = null,
+  ipAddress = null,
+  userAgent = null,
+  identifier = null,
+}) {
   const refreshToken = crypto.randomBytes(48).toString('hex')
   const refreshHash = hashValue(refreshToken)
   const accessToken = signAccessToken(user, sessionId, profileId)
@@ -1681,6 +1696,57 @@ async function rotateSessionTokens(db, { sessionId, user, profileId }) {
       WHERE id = ?
     `,
   ).run(refreshHash, accessExpires, refreshExpires, profileId ?? null, sessionId)
+
+  // -------------------------------------------------------------------------
+  // SESSION-RESUME login tracking (the admin "Logins" panel was stale).
+  //
+  // The frontend persists the refresh token in localStorage and this rotation
+  // slides the 30-day refresh window forward every time, so a RETURNING user
+  // can use the app for months without ever hitting a session-mint path —
+  // meaning createSessionAndTokens (the choke point that stamps
+  // users.last_login_at and appends the durable client_sign_in audit the
+  // admin panel reads) never ran again for them. The panel therefore showed
+  // their initial sign-in forever: "logins aren't up to date".
+  //
+  // Semantics (the panel tab is "Logins", events are 'client_sign_in'):
+  //   - An IN-SESSION rotation (the app proactively refreshing BEFORE the
+  //     access token expires, while the user is actively using it) is NOT a
+  //     login and records nothing — token refreshes are not counted.
+  //   - A RESUME (the refresh arrives AFTER the session's access token had
+  //     already lapsed: the user was away and came back, e.g. reopening the
+  //     app tomorrow on a remembered session) IS a returning sign-in: stamp
+  //     last_login_at and append a client_sign_in event (method
+  //     'session_resume') so the admin panel reflects it.
+  //
+  // The discriminator is the session's own pre-rotation access_expires_at,
+  // passed by the /refresh route — no client cooperation needed.
+  // -------------------------------------------------------------------------
+  const priorExpiryMs = priorAccessExpiresAt ? Date.parse(priorAccessExpiresAt) : NaN
+  const resumedAfterExpiry = Number.isFinite(priorExpiryMs) && priorExpiryMs < Date.now()
+  if (resumedAfterExpiry && user?.id) {
+    try {
+      await recordClientSignInEvent({
+        db,
+        identifier: identifier ?? user?.primary_email ?? null,
+        method: 'session_resume',
+        userId: user.id,
+        profileId: profileId ?? null,
+        ip: ipAddress ?? null,
+        userAgent,
+      })
+    } catch (auditErr) {
+      console.warn('[auth] session-resume audit record failed:', auditErr?.message || auditErr)
+    }
+    // Fire-and-forget last_login_at stamp (same helper as the mint choke
+    // point; its atomic NULL→set first-login email can only fire for a user
+    // who somehow never had a recorded login — harmless and honest).
+    void recordSuccessfulLogin({
+      db,
+      user,
+      method: 'session_resume',
+      identifier: identifier ?? user?.primary_email ?? null,
+    })
+  }
 
   return {
     accessToken,
@@ -3256,10 +3322,12 @@ router.patch('/onboarding-state', async (req, res) => {
     values.push(userId)
     await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
 
-    // Return updated state
+    // Return updated state (is_admin + last_login_at feed the admin
+    // reinterview gate so this echo matches what login//me will serve).
     const row = await req.db.prepare(
       `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
-              last_completed_tour_version, tour_dismissed_at, guided_cycle_tour_status
+              last_completed_tour_version, tour_dismissed_at, guided_cycle_tour_status,
+              is_admin, last_login_at
        FROM users WHERE id = ?`
     ).get(userId)
 
@@ -3269,7 +3337,7 @@ router.patch('/onboarding-state', async (req, res) => {
       lastSeenManualVersion: Number(row?.last_seen_manual_version ?? 0),
       lastCompletedTourVersion: Number(row?.last_completed_tour_version ?? 0),
       tourDismissedAt: row?.tour_dismissed_at ?? null,
-      guidedCycleTourStatus: row?.guided_cycle_tour_status ?? null,
+      guidedCycleTourStatus: resolveGuidedCycleTourStatus(row),
     })
   } catch (error) {
     routeLogger.error('[auth/onboarding-state] Unexpected error:', error)
@@ -3328,6 +3396,14 @@ router.post('/refresh', async (req, res) => {
     sessionId: sessionRow.id,
     user,
     profileId: sessionRow.profile_id,
+    // Pre-rotation expiry: lets the rotate choke point distinguish an
+    // in-session token refresh (not a login; records nothing) from a RESUME
+    // of a remembered session after the access token lapsed (a returning
+    // sign-in; stamps last_login_at + client_sign_in for the admin panel).
+    priorAccessExpiresAt: sessionRow.access_expires_at ?? null,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'],
+    identifier: user?.primary_email ?? null,
   })
 
   return res.json({
