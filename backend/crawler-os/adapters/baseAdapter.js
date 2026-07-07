@@ -23,7 +23,11 @@
  * @param {string[]} [cfg.requiredEnv]
  * @param {(thesis:object, source:object, env:object)=>Array<{url:string, init?:object, parseCfg?:object}>} cfg.buildRequests
  * @param {(raw:object, ctx:{thesis:object, source:object})=>object|null} cfg.mapCandidate
- * @returns {{ source_id:string, family:string, missingEnv:Function, buildRequests:Function, mapCandidate:Function }}
+ * @param {(resp:object, req:object)=>boolean} [cfg.benignFetchFailure] declare a
+ *   specific non-ok response as an honest END OF DATA (e.g. ProPublica 404s on
+ *   page overrun) so the pipeline treats it as a clean empty page, never a
+ *   FETCH_ERROR. Optional; default = every failure is a real failure.
+ * @returns {{ source_id:string, family:string, missingEnv:Function, buildRequests:Function, mapCandidate:Function, benignFetchFailure?:Function }}
  */
 export function createBaseAdapter(cfg) {
   if (!cfg || !cfg.source_id) throw new Error('createBaseAdapter: source_id required');
@@ -34,6 +38,9 @@ export function createBaseAdapter(cfg) {
   return {
     source_id: cfg.source_id,
     family: cfg.family ?? 'api',
+    ...(typeof cfg.benignFetchFailure === 'function'
+      ? { benignFetchFailure: cfg.benignFetchFailure }
+      : {}),
     /** Return the subset of required env keys that are missing/empty. */
     missingEnv(env = {}) {
       return requiredEnv.filter((k) => {

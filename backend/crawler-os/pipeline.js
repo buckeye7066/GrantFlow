@@ -126,6 +126,13 @@ export async function runDiscovery(deps, opts = {}) {
       recordFetch(store, runId, { source_id: sourceId, url: req.url, status: resp.status, ok: resp.ok, content_hash: resp.contentHash, error: resp.error });
 
       if (!resp.ok || resp.body == null) {
+        // Adapter-declared benign failure: some APIs signal END OF DATA with a
+        // non-ok status (ProPublica's search 404s on page overrun). The adapter
+        // can declare that specific shape honest — a clean empty page, not a
+        // FETCH_ERROR and not a rejection. Everything else stays a real failure.
+        if (typeof adapter.benignFetchFailure === 'function' && adapter.benignFetchFailure(resp, req)) {
+          continue;
+        }
         sawFetchError = true;
         recordRejection(store, runId, { source_id: sourceId, reason: 'fetch_failed', detail: resp.reason ?? resp.error ?? `status:${resp.status}`, url: req.url });
         // A true DIRECTORY/locator candidate is constructed ENTIRELY from
