@@ -288,7 +288,7 @@ export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION
   }
   if (format === "boolean_tri") return formatBooleanTri(value)
   if (format === "enum") return normalizeDisplayString(value) ?? "—"
-  if (["url", "email", "phone", "long_text", "text", "string"].includes(format)) {
+  if (["url", "email", "phone", "long_text", "text", "string", "prose"].includes(format)) {
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       return normalizeDisplayString(value) ?? "—"
     }
@@ -307,9 +307,10 @@ export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION
     warnMissingMetadata(sectionKey, fieldKey, `format ${format} cannot render ${typeof value}`)
     return "—"
   }
-  if (format === "string_array") {
+  if (format === "string_array" || format === "tags") {
     // De-dupe + split run-together tokens for display so legacy/intake fields
-    // (e.g. keywords) never show repeated, jammed-together values.
+    // (e.g. keywords) and controlled-vocabulary tag pickers never show repeated,
+    // jammed-together values.
     const cleaned = cleanStringArrayForDisplay(value)
     return cleaned.length > 0 ? cleaned.join(", ") : "—"
   }

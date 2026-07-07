@@ -34,6 +34,7 @@ import {
 import { ingestDocument } from "@/api/documents"
 import ProfileOverview from "@/components/profiles/ProfileOverview"
 import ProfileSectionEditor from "@/components/profiles/ProfileSectionEditor"
+import ApplicationEssaysCard from "@/components/profiles/ApplicationEssaysCard"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -1387,6 +1388,14 @@ export default function ProfileDetail() {
               }}
               onRenameProfile={handleRenameProfile}
               isRenamingProfile={renameProfileMutation.isPending}
+            />
+            {/* Application essays — the drafting-only prose Hamilton writes
+                applications from. Surfaced as a dedicated, clearly-labeled card
+                so the owner can "see and edit what Hamilton writes from". */}
+            <ApplicationEssaysCard
+              essays={profile?.sections?.find((section) => section.section_key === "essays")?.data ?? {}}
+              onSaveField={handleInlineSaveField}
+              isSaving={savingSectionKey === "essays"}
             />
           </TabsContent>
 

@@ -800,5 +800,5 @@ export async function generateAndSavePacket(db, {
 
 export const _internal = {
   PERSONA, buildPacketContent, buildMailingInstructions, buildInstructionLines,
-  buildHtml, tryBuildPdfFromHtml, insertDocumentRecord,
+  buildHtml, tryBuildPdfFromHtml, insertDocumentRecord, readNarratives,
 }

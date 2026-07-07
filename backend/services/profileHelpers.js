@@ -7,8 +7,14 @@ import { createLogger } from '../utils/logger.js'
 import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
 import { resolveStudentFundingLocation } from './college/committedCollege.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
-import { normalizeProfile } from './profileNormalizer.js'
+import { normalizeProfile, normalizeNeedCategory } from './profileNormalizer.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
+
+// Field NAMES that are drafting-only prose / unscored across the whole schema
+// (mission, narrative.*, every *.notes, essays, deprecated fields). The keyword
+// miner MUST NOT feed these into the scoring keyword inventory — owner directive
+// 2026-07-07: free-text prose is drafting-only and never floods scoring. Computed
+// once from PROFILE_SCHEMA so a new scored:false field is auto-excluded.
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -939,6 +945,15 @@ function collectNarrativeKeywords(section = {}, register) {
     'notes',
   ]
   fields.forEach((field) => {
+    // NOTE (2026-07-07): drafting-only prose (mission, narrative.*, *.notes,
+    // essays) is NOT excluded from mining here — needs-silent ORGS derive their
+    // need categories FROM their mission/primary_goal/target_population text via
+    // NEED_MAP (the Focus Forward class), so gating the miner on those fields
+    // destroyed org need derivation. The "prose must not flood scoring" rule is
+    // already satisfied at the DENOMINATOR: keyword-kind data points are
+    // excluded from the coverage denominator (backend/services/profileDataPoints
+    // .js), so mission keywords inform need derivation + add matched credit
+    // WITHOUT inflating the denominator. Do not re-add a field-name gate here.
     const value = section[field]
     if (!value || typeof value !== 'string') return
     value
@@ -1522,6 +1537,18 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (financialSection.underemployed) { assistanceSet.add('underemployed'); registerKeyword('underemployed'); registerKeyword('workforce'); registerKeyword('job_training') }
 
   // --- Funding needs / purpose: what the applicant needs money for ---
+  // Controlled TAG form (2026-07-07): funding_needs is now a tags array of
+  // canonical need buckets (backend/config/profileVocabulary.js `needs`). Each
+  // tag is read as a clean need data point — normalized through the matcher's
+  // own NEED_ALIAS_MAP so a custom/legacy value still resolves. Tags are NOT
+  // mined as free-text keywords (structured, not prose).
+  if (Array.isArray(financialSection.funding_needs)) {
+    for (const tag of financialSection.funding_needs) {
+      if (typeof tag !== 'string') continue
+      const canonical = normalizeNeedCategory(tag)
+      if (canonical) needs.add(canonical)
+    }
+  }
   if (financialSection.funding_needs && typeof financialSection.funding_needs === 'string') {
     collectNarrativeKeywords({ funding_needs: financialSection.funding_needs }, registerKeyword)
     const fnLower = financialSection.funding_needs.toLowerCase()

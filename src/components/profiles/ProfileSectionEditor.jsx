@@ -1506,8 +1506,12 @@ function buildMetadataSchema(meta) {
 
 function fieldConfigFromMetadata(field, existingField) {
   const format = field.format ?? "text"
-  const component = existingField?.component ?? (format === "long_text" || format === "json" ? Textarea : Input)
-  const props = existingField?.props ?? (format === "long_text" || format === "json" ? { rows: 3 } : {})
+  const isProse = format === "prose"
+  const component =
+    existingField?.component ??
+    (isProse || format === "long_text" || format === "json" ? Textarea : Input)
+  const props =
+    existingField?.props ?? (isProse || format === "long_text" || format === "json" ? { rows: 3 } : {})
   return {
     ...existingField,
     name: field.name,
@@ -1517,6 +1521,14 @@ function fieldConfigFromMetadata(field, existingField) {
     props,
     type: existingField?.type ?? (format === "boolean_tri" ? "boolean" : format === "json" ? "json" : undefined),
     format,
+    // Schema-redesign contract keys — carry them onto the rendered field so
+    // ProfileFieldWithAI can pick the right control (enum→Select, tags→picker,
+    // prose→labeled textarea) and hide deprecated fields.
+    options: field.options ?? existingField?.options,
+    vocabulary: field.vocabulary ?? existingField?.vocabulary,
+    allow_custom: field.allow_custom ?? existingField?.allow_custom,
+    scored: field.scored ?? existingField?.scored,
+    deprecated: field.deprecated ?? existingField?.deprecated,
     applies_to: field.applies_to ?? existingField?.applies_to,
   }
 }
@@ -1558,8 +1570,15 @@ export default function ProfileSectionEditor({
   // still registered hidden below so an org never loses a value it once had.
   const visibilityProfile = { primary_type: profileType }
   const allFields = Array.isArray(config?.fields) ? config.fields : []
-  const visibleFields = allFields.filter((field) => fieldAppliesToProfileType(field, visibilityProfile))
-  const gatedFields = allFields.filter((field) => !fieldAppliesToProfileType(field, visibilityProfile))
+  // Deprecated fields are never shown as editable inputs, but are still
+  // registered as hidden below so an existing stored value is preserved on save
+  // (never silently dropped from the record).
+  const visibleFields = allFields.filter(
+    (field) => !field.deprecated && fieldAppliesToProfileType(field, visibilityProfile),
+  )
+  const gatedFields = allFields.filter(
+    (field) => field.deprecated || !fieldAppliesToProfileType(field, visibilityProfile),
+  )
   const metadataFieldNames = new Set((config?.fields ?? []).map((field) => field.name))
   const legacyEntries = Object.entries(initialData ?? {}).filter(([key]) => !metadataFieldNames.has(key))
   const [dropLegacyOnSave, setDropLegacyOnSave] = useState(true)

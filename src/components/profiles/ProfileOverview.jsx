@@ -1208,7 +1208,10 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = applicableSectionKeys
+  // `essays` renders as its own dedicated ApplicationEssaysCard in ProfileDetail
+  // (drafting-only prose Hamilton writes from), so keep it out of the generic
+  // section grid to avoid a duplicate card.
+  const orderedSectionKeys = applicableSectionKeys.filter((key) => key !== "essays")
 
   return (
     <div className="space-y-10">
