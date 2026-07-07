@@ -30,19 +30,37 @@ describe('profile schema redesign — signals read tags, prose is not mined', ()
     expect([...(sig.needs ?? [])]).toContain('housing')
   })
 
-  it('scored:false prose (narrative.mission / notes) is NOT mined into the keyword inventory', () => {
+  it('prose keywords are excluded from the scoring DENOMINATOR (but still read for need derivation)', async () => {
+    // Owner directive: free-text prose must not FLOOD scoring. The guarantee is
+    // at the DENOMINATOR — mined keyword data points are excluded from the
+    // coverage total — NOT a refusal to read the text (needs-silent ORGS derive
+    // their need categories from mission/narrative text; gating the miner
+    // destroyed org need derivation — the Focus Forward class).
+    const { buildProfileDataPointInventory } = await import('../services/profileDataPoints.js')
     const sig = buildProfileSignals({
-      profile: {},
+      profile: { primary_type: 'nonprofit' },
       sections: {
-        basic_information: { state: 'TN', notes: 'zqxwobblegonk' },
-        narrative: { mission: 'flibberjibbet', barriers_faced: 'wumptastic' },
-        financial_information: { notes: 'gronktacular' },
+        basic_information: { state: 'TN' },
+        narrative: {
+          mission: 'We provide housing and food assistance to disabled veterans in rural Tennessee.',
+          barriers_faced: 'transportation and utility hardship',
+        },
       },
     })
-    const keywords = (sig.keywords ?? []).map((k) => String(k).toLowerCase())
-    for (const prose of ['zqxwobblegonk', 'flibberjibbet', 'wumptastic', 'gronktacular']) {
-      expect(keywords, `${prose} must not be a mined keyword`).not.toContain(prose)
-    }
+    const inv = buildProfileDataPointInventory({ profile: { primary_type: 'nonprofit' }, signals: sig })
+    // Prose DID inform need derivation (mission → housing/food needs).
+    const needPoints = inv.dataPoints.filter((d) => d.kind === 'need')
+    expect(needPoints.length, 'mission text should derive needs').toBeGreaterThan(0)
+    // Prose words WERE mined as keyword points (so they can add matched credit)...
+    const keywordPoints = inv.dataPoints.filter((d) => d.kind === 'keyword')
+    expect(keywordPoints.length, 'mission words mined as keyword points').toBeGreaterThan(0)
+    // ...but the coverage denominator (total) excludes gate + keyword kinds, so
+    // prose can never flood the score. total = needs + identity/traits only.
+    const denominatorCount = inv.dataPoints.filter(
+      (d) => !['geo', 'applicant_type', 'keyword'].includes(d.kind),
+    ).length
+    expect(inv.total).toBe(denominatorCount)
+    expect(inv.total).toBeLessThan(inv.dataPoints.length)
   })
 
   it('structured tag fields (focus_areas) still feed matchable signals', () => {

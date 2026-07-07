@@ -9,14 +9,12 @@ import { resolveStudentFundingLocation } from './college/committedCollege.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
 import { normalizeProfile, normalizeNeedCategory } from './profileNormalizer.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
-import { getUnscoredProseFieldNames } from '../config/profileSchema.js'
 
 // Field NAMES that are drafting-only prose / unscored across the whole schema
 // (mission, narrative.*, every *.notes, essays, deprecated fields). The keyword
 // miner MUST NOT feed these into the scoring keyword inventory — owner directive
 // 2026-07-07: free-text prose is drafting-only and never floods scoring. Computed
 // once from PROFILE_SCHEMA so a new scored:false field is auto-excluded.
-const UNSCORED_PROSE_FIELD_NAMES = getUnscoredProseFieldNames()
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -947,11 +945,15 @@ function collectNarrativeKeywords(section = {}, register) {
     'notes',
   ]
   fields.forEach((field) => {
-    // Owner directive 2026-07-07: scored:false drafting-only prose (mission,
-    // narrative.*, *.notes, essays, deprecated) is NEVER mined into the scoring
-    // keyword inventory. It stays fully readable for Hamilton/Anya drafting — it
-    // just no longer creates keyword data points.
-    if (UNSCORED_PROSE_FIELD_NAMES.has(field)) return
+    // NOTE (2026-07-07): drafting-only prose (mission, narrative.*, *.notes,
+    // essays) is NOT excluded from mining here — needs-silent ORGS derive their
+    // need categories FROM their mission/primary_goal/target_population text via
+    // NEED_MAP (the Focus Forward class), so gating the miner on those fields
+    // destroyed org need derivation. The "prose must not flood scoring" rule is
+    // already satisfied at the DENOMINATOR: keyword-kind data points are
+    // excluded from the coverage denominator (backend/services/profileDataPoints
+    // .js), so mission keywords inform need derivation + add matched credit
+    // WITHOUT inflating the denominator. Do not re-add a field-name gate here.
     const value = section[field]
     if (!value || typeof value !== 'string') return
     value
