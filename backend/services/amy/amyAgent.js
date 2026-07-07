@@ -39,6 +39,8 @@ import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearn
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
 import { recordFlywheelCohort } from './flywheelCohort.js'
+import { buildFleetGapScoreboard, weightCategoriesByGaps, deriveAmyGapActions } from '../coverageGapScoreboard.js'
+import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
 
 const defaultLog = createLogger('services:amy:agent')
 
@@ -49,7 +51,10 @@ const defaultLog = createLogger('services:amy:agent')
  *   ttlHours=48, runDiscovery, fetcher, logger, clock, writeArtifact, runId,
  *   improve=false (run the Anya→Sam chain + tuning), applyTuning=false (write
  *   the floor change), anyaApply=false, samApply=false, saveReport=true,
- *   runPipeline (inject), thresholdEditor (inject {read,apply}), tuningOpts.
+ *   runPipeline (inject), thresholdEditor (inject {read,apply}), tuningOpts,
+ *   gapLearning=true (derive the cohort + task queue from the fleet
+ *   Coverage & Evidence gap scoreboard instead of uniform random),
+ *   gapScanLimit=100, refreshScoreboard (inject), recordActivity (inject).
  * @returns {Promise<object>} { run_id, summary, report (handoff), combined, ... }
  */
 export async function runAmyTraining(options = {}) {
@@ -115,6 +120,14 @@ export async function runAmyTraining(options = {}) {
     coverageEditor = { read: readLiveOverrides, apply: applyCoverageOverrides, revert: revertCoverageOverrides },
     validationSampleSize = 40,
     tuningOpts = {},
+    // Fleet gap learning (owner directive 2026-07-06): Amy's daily tasks come
+    // from the Coverage & Evidence gap scoreboard, not random selection. The
+    // refresh is bounded + best-effort — a scan failure degrades to the old
+    // uniform round-robin, never blocks training.
+    gapLearning = true,
+    gapScanLimit = 100,
+    refreshScoreboard = buildFleetGapScoreboard,
+    recordActivity = insertActivityEvent,
   } = options
 
   const startedAtDate = clock()
@@ -133,7 +146,67 @@ export async function runAmyTraining(options = {}) {
     keep_profiles: keepProfiles,
   })
 
-  const scenarios = generateScenarios({ runId, categories, perCategory, targetCount })
+  // ── LEARN FROM THE FLEET: refresh the Coverage & Evidence gap scoreboard ──
+  // Amy derives her work queue from the gaps real profiles actually suffer:
+  //  (a) actionable classes (lane_excluded / need_uncovered / disease-source-
+  //      not-selected) WEIGHT the synthetic cohort so her validated levers
+  //      (additive coverage, learned query steering) fire with evidence;
+  //  (b) structural classes (no adapter for a lane/state/disease) become the
+  //      prioritized ADAPTER WISHLIST — Amy cannot write code, so they are
+  //      persisted on the scoreboard + emitted as a blocked telemetry event
+  //      for Sam's check and Anya's morning report (Agent Observability Rule).
+  let fleetGaps = null
+  let categoryWeights = null
+  if (gapLearning) {
+    try {
+      fleetGaps = await refreshScoreboard(db, { limit: gapScanLimit, now: clock() })
+      if (fleetGaps?.profiles_scanned > 0) {
+        categoryWeights = weightCategoriesByGaps(fleetGaps, categories)
+      }
+    } catch (err) {
+      logger.warn('Amy fleet gap-scoreboard refresh failed (falling back to uniform cohort)', { error: err?.message })
+      fleetGaps = null
+    }
+  }
+  const gapActions = deriveAmyGapActions(fleetGaps)
+  if (fleetGaps) {
+    const topGap = fleetGaps.gaps?.[0]
+    await Promise.resolve(recordActivity(db, {
+      agent_name: 'amy',
+      event_type: 'amy.gap_scoreboard.refreshed',
+      status: 'succeeded',
+      severity: 'info',
+      title: `Amy refreshed the fleet coverage-gap scoreboard: ${fleetGaps.gaps?.length || 0} gap class(es) across ${fleetGaps.profiles_scanned} profile(s)`,
+      description: topGap ? `Top gap (${topGap.count} profile(s)): ${topGap.statement}` : 'No fleet coverage gaps detected.',
+      metric_key: 'fleet_gap_classes',
+      metric_value: fleetGaps.gaps?.length || 0,
+      details_json: {
+        run_id: runId,
+        top_gaps: (fleetGaps.gaps || []).slice(0, 5),
+        category_weights: categoryWeights,
+        actionable: gapActions.actionable.length,
+        structural: gapActions.structural.length,
+      },
+    })).catch(() => {})
+    if (gapActions.structural.length > 0) {
+      await Promise.resolve(recordActivity(db, {
+        agent_name: 'amy',
+        event_type: 'amy.adapter_wishlist',
+        status: 'blocked',
+        severity: 'medium',
+        title: `Adapter wishlist: ${gapActions.structural.length} structural coverage gap(s) Amy cannot fix (source adapter needed)`,
+        description: gapActions.structural
+          .slice(0, 3)
+          .map((w) => `${w.detail || w.lane}: ${w.statement} (${w.affected_profiles_count} profile(s))`)
+          .join(' | '),
+        metric_key: 'adapter_wishlist',
+        metric_value: gapActions.structural.length,
+        details_json: { run_id: runId, wishlist: gapActions.structural },
+      })).catch(() => {})
+    }
+  }
+
+  const scenarios = generateScenarios({ runId, categories, perCategory, targetCount, categoryWeights })
   const evaluations = []
   const createdProfileIds = []
   const crawledProfileIds = []
@@ -402,6 +475,25 @@ export async function runAmyTraining(options = {}) {
     tuning: { ...decision, applied: tuningApplied },
     weight_tuning: weightTuning,
     coverage_tuning: coverageTuning,
+    // Fleet gap learning: the scoreboard Amy trained against this run, the
+    // weights it derived, and the actionable/structural split (adapter
+    // wishlist) — the owner-visible record that tasks came from real gaps.
+    fleet_gap_learning: {
+      enabled: gapLearning,
+      scoreboard: fleetGaps
+        ? {
+            generated_at: fleetGaps.generated_at,
+            profiles_scanned: fleetGaps.profiles_scanned,
+            gap_classes: fleetGaps.gaps?.length || 0,
+            top_gaps: (fleetGaps.gaps || []).slice(0, 5),
+            top_missing_lanes: (fleetGaps.top_missing_lanes || []).slice(0, 5),
+            top_unanswered_fields: (fleetGaps.top_unanswered_fields || []).slice(0, 5),
+            adapter_wishlist: fleetGaps.adapter_wishlist || [],
+          }
+        : null,
+      category_weights: categoryWeights,
+      actions: gapActions,
+    },
     // Per-archetype flywheel: this run's measurement + the steering it recorded.
     archetype_metrics: archetypeMetrics,
     archetype_learning: {
@@ -479,6 +571,9 @@ export async function runAmyTraining(options = {}) {
     weights_tuned: weightTuning?.validation?.kept ? 'kept' : weightTuning?.applied?.applied ? 'reverted' : 'none',
     coverage_tuned: coverageTuning?.validation?.kept ? 'kept' : coverageTuning?.applied?.applied ? 'reverted' : 'none',
     archetypes_learned: Object.keys(archetypeUpdate).length,
+    fleet_gap_classes: fleetGaps ? (fleetGaps.gaps?.length || 0) : null,
+    gap_weighted_cohort: Boolean(categoryWeights),
+    adapter_wishlist: gapActions.structural.length,
     approval_items: approvalQueue.length,
     cleaned: cleanup?.deleted ?? 0,
     kept: keepProfiles,

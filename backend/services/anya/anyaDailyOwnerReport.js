@@ -61,6 +61,30 @@ async function defaultLoadAmy(db) {
   }
 }
 
+/**
+ * Load the coverage-gap data for the digest: the fleet Coverage & Evidence
+ * gap scoreboard (system_kv coverage_gap_scoreboard, refreshed by Amy's daily
+ * gap-learning run) + the last 24h of unified agent activity for amy/sam/anya
+ * (the Agent Observability Rule's "what changed overnight" record).
+ * Best-effort — the digest sends without the section when neither exists.
+ */
+async function defaultLoadCoverageGaps(db, { now = null } = {}) {
+  try {
+    const [{ readGapScoreboard }, { readActivityEvents }] = await Promise.all([
+      import('../coverageGapScoreboard.js'),
+      import('../agentTelemetry/agentTelemetryStore.js'),
+    ])
+    const scoreboard = await readGapScoreboard(db).catch(() => null)
+    const endMs = now instanceof Date ? now.getTime() : Date.now()
+    const startIso = new Date(endMs - 24 * 60 * 60 * 1000).toISOString()
+    const events = await readActivityEvents(db, { agents: ['amy', 'sam', 'anya'], startIso, limit: 60 }).catch(() => [])
+    if (!scoreboard && (!Array.isArray(events) || events.length === 0)) return null
+    return { scoreboard, events: Array.isArray(events) ? events : [] }
+  } catch {
+    return null
+  }
+}
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -150,11 +174,48 @@ export function summarizeAmyFlywheel(amy) {
 }
 
 /**
+ * Summarize the fleet coverage gaps + overnight agent activity for the owner:
+ * the top gaps from the Coverage & Evidence scoreboard, the adapter wishlist
+ * (structural gaps only a code change can fix), and — from the unified
+ * agent_activity_events telemetry — what the agents CHANGED autonomously
+ * overnight vs what still needs the owner. Pure; exported for tests.
+ *
+ * @param {{scoreboard?:object|null, events?:Array|null}} gaps
+ * @returns {{headline:string, topGaps:string[], wishlist:string[], changed:string[], needsOwner:string[]}|null}
+ */
+export function summarizeCoverageGaps(gaps) {
+  if (!gaps || (!gaps.scoreboard && !(Array.isArray(gaps.events) && gaps.events.length > 0))) return null
+  const board = gaps.scoreboard || null
+  const events = Array.isArray(gaps.events) ? gaps.events : []
+
+  const boardGaps = Array.isArray(board?.gaps) ? board.gaps : []
+  const headline = board
+    ? `${boardGaps.length} coverage gap class(es) across ${Number(board.profiles_scanned) || 0} scanned profile(s) (scoreboard ${board.generated_at || 'undated'}).`
+    : 'No fleet gap scoreboard recorded yet — showing overnight agent activity only.'
+
+  const topGaps = boardGaps.slice(0, 5).map((g) => `${g.count} profile(s): ${g.statement}`)
+  const wishlist = (Array.isArray(board?.adapter_wishlist) ? board.adapter_wishlist : [])
+    .slice(0, 5)
+    .map((w) => `${w.detail || w.lane || 'lane'} — ${w.statement} (${w.affected_profiles_count} profile(s); ${w.suggested_action || 'add a source adapter'})`)
+
+  // Autonomous vs needs-owner, straight from telemetry: succeeded events are
+  // the changes the agents made themselves; blocked/failed events (plus the
+  // wishlist above) are what still needs a human.
+  const label = (e) => `[${e?.agent_name || 'agent'}] ${maskSecrets(e?.title || e?.event_type || 'activity')}`
+  const changed = events.filter((e) => e?.status === 'succeeded').slice(0, 8).map(label)
+  const needsOwner = events.filter((e) => e?.status === 'blocked' || e?.status === 'failed').slice(0, 8).map(label)
+
+  return { headline, topGaps, wishlist, changed, needsOwner }
+}
+
+/**
  * Build the owner email from a Sam run. Exported for tests.
  * `autoFixed` is an optional count of issues handled by the autofix Action.
  * `amy` (optional) adds the Amy-flywheel section (see summarizeAmyFlywheel).
+ * `gaps` (optional) adds the "Coverage gaps & what changed overnight" section
+ * (see summarizeCoverageGaps).
  */
-export function buildOwnerReport(run = {}, { now = null, amy = null } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -230,6 +291,31 @@ export function buildOwnerReport(run = {}, { now = null, amy = null } = {}) {
     if (flywheel.couldNot.length) {
       t.push('Could NOT auto-edit (needs you):')
       flywheel.couldNot.forEach((e) => t.push(`  • ${e}`))
+    }
+  }
+  const gapSummary = summarizeCoverageGaps(gaps)
+  if (gapSummary) {
+    t.push('')
+    t.push('COVERAGE GAPS & WHAT CHANGED OVERNIGHT')
+    t.push('======================================')
+    t.push(gapSummary.headline)
+    if (gapSummary.topGaps.length) {
+      t.push('Top fleet coverage gaps (from the Coverage & Evidence scoreboard):')
+      gapSummary.topGaps.forEach((g) => t.push(`  • ${g}`))
+    }
+    if (gapSummary.changed.length) {
+      t.push('Changed autonomously overnight (agent telemetry):')
+      gapSummary.changed.forEach((c) => t.push(`  • ${c}`))
+    } else {
+      t.push('No autonomous agent changes were recorded overnight.')
+    }
+    if (gapSummary.wishlist.length) {
+      t.push('Adapter wishlist — needs you / a code change (Amy cannot add adapters):')
+      gapSummary.wishlist.forEach((w) => t.push(`  • ${w}`))
+    }
+    if (gapSummary.needsOwner.length) {
+      t.push('Blocked or failed (needs you):')
+      gapSummary.needsOwner.forEach((n) => t.push(`  • ${n}`))
     }
   }
   t.push('')
@@ -317,6 +403,32 @@ export function buildOwnerReport(run = {}, { now = null, amy = null } = {}) {
         ${couldNotHtml}
       </div>`
       })()}
+      ${(() => {
+        const gs = summarizeCoverageGaps(gaps)
+        if (!gs) return ''
+        const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+        const topGapsHtml = gs.topGaps.length
+          ? `<div style="margin-top:8px;"><strong>Top fleet coverage gaps:</strong>${list(gs.topGaps)}</div>`
+          : ''
+        const changedHtml = gs.changed.length
+          ? `<div style="margin-top:8px;"><strong style="color:#166534;">Changed autonomously overnight:</strong>${list(gs.changed, '#166534')}</div>`
+          : '<div style="margin-top:8px;color:#64748b;">No autonomous agent changes were recorded overnight.</div>'
+        const wishlistHtml = gs.wishlist.length
+          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Adapter wishlist — needs you / a code change:</strong>${list(gs.wishlist, '#78350f')}</div>`
+          : ''
+        const needsOwnerHtml = gs.needsOwner.length
+          ? `<div style="margin-top:8px;"><strong style="color:#b91c1c;">Blocked or failed (needs you):</strong>${list(gs.needsOwner, '#7f1d1d')}</div>`
+          : ''
+        return `
+      <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Coverage gaps &amp; what changed overnight</h3>
+      <div style="font-size:13px;">
+        <div style="color:#334155;">${esc(gs.headline)}</div>
+        ${topGapsHtml}
+        ${changedHtml}
+        ${wishlistHtml}
+        ${needsOwnerHtml}
+      </div>`
+      })()}
 
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
@@ -337,6 +449,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null } = {}) {
  * @param {Function} [opts.send]     injectable sender (defaults to email.sendEmail)
  * @param {Function} [opts.loadRun]  injectable (db,id)->run (defaults to samAuditStore)
  * @param {Function} [opts.loadLatest] injectable db->run (defaults to samAuditStore.latestRun)
+ * @param {Function} [opts.loadGaps] injectable db->{scoreboard,events} (defaults to
+ *        the gap scoreboard + 24h amy/sam/anya activity loader)
  * @param {Date} [opts.now]
  * @returns {Promise<{ran:boolean, sent:boolean, reason?:string, run_id?:string|null, to?:string, stats?:object}>}
  */
@@ -346,6 +460,7 @@ export async function runAnyaDailyOwnerReport(db, {
   loadRun = defaultGetRun,
   loadLatest = defaultLatestRun,
   loadAmy = defaultLoadAmy,
+  loadGaps = defaultLoadCoverageGaps,
   now = null,
 } = {}) {
   try {
@@ -358,7 +473,8 @@ export async function runAnyaDailyOwnerReport(db, {
     if (!run) return { ran: true, sent: false, reason: 'no_sam_run' }
 
     const amy = await loadAmy(db).catch(() => null)
-    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy })
+    const gaps = await loadGaps(db, { now }).catch(() => null)
+    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {
