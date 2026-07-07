@@ -30,6 +30,13 @@
  */
 
 import { buildCoverageEvidence, LANES } from './coverageEvidenceService.js'
+import {
+  buildCoverageMatrix,
+  listUncoveredCells,
+  CRITICAL_NEEDS,
+  DOCUMENTED_GAPS,
+  cellKey,
+} from '../crawler-os/coverageMatrix.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('services:coverageGapScoreboard')
@@ -68,6 +75,12 @@ export const GAP_CLASSES = Object.freeze({
   DISEASE_NOT_SELECTED: 'disease_source_not_selected',
   /** A declared profile need that no searched source covers. */
   NEED_UNCOVERED: 'need_uncovered',
+  /**
+   * A REGISTRY-LEVEL hole from the need×state coverage matrix: a critical
+   * need × US state cell with zero dedicated sources (the ECF-gap class).
+   * Fleet-INDEPENDENT — detected even when no live profile has hit it yet.
+   */
+  MATRIX_UNCOVERED_CRITICAL: 'matrix_uncovered_critical_cell',
   OTHER: 'other',
 })
 
@@ -77,7 +90,12 @@ export const GAP_CLASSES = Object.freeze({
  * instead of silently rotting.
  */
 export const STRUCTURAL_GAP_CLASSES = Object.freeze(
-  new Set([GAP_CLASSES.NO_LANE_ADAPTER, GAP_CLASSES.NO_STATE_SOURCE, GAP_CLASSES.NO_DISEASE_SOURCE]),
+  new Set([
+    GAP_CLASSES.NO_LANE_ADAPTER,
+    GAP_CLASSES.NO_STATE_SOURCE,
+    GAP_CLASSES.NO_DISEASE_SOURCE,
+    GAP_CLASSES.MATRIX_UNCOVERED_CRITICAL,
+  ]),
 )
 
 function factValue(gap) {
@@ -193,6 +211,72 @@ export function aggregateGapResults(results = []) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Structural matrix — the fleet-INDEPENDENT registry-level coverage check
+// (backend/crawler-os/coverageMatrix.js). The per-profile gaps above only see
+// holes a live profile has already hit; the matrix sees "no source can serve a
+// TN disability profile" the moment the registry makes it true, even with an
+// empty fleet. Its guard TEST is coverageMatrix.test.mjs; this section is the
+// same truth surfaced to the agents (Amy wishlist / Sam / Anya's report).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Matrix lane marker used on scoreboard/wishlist entries from this section. */
+export const STRUCTURAL_MATRIX_LANE = 'structural_matrix'
+
+/**
+ * PURE (registry-only, no DB): compute the structural_matrix scoreboard
+ * section from the need×state coverage matrix.
+ *
+ *   uncovered_critical_cells — critical need × state cells with zero DEDICATED
+ *     sources. Should ALWAYS be empty (the coverageMatrix guard test fails the
+ *     build otherwise); if one ever reaches a running fleet it becomes the
+ *     highest-priority adapter-wishlist entries.
+ *   undocumented_gap_cells — non-critical dedicated-tier holes NOT in the
+ *     DOCUMENTED_GAPS backlog (same drift the guard test catches).
+ */
+export function buildStructuralMatrixSection() {
+  const matrix = buildCoverageMatrix()
+  const critical = new Set(CRITICAL_NEEDS)
+  const dedicatedHoles = listUncoveredCells({ dedicatedOnly: true })
+  const documented = new Set(DOCUMENTED_GAPS.map((g) => cellKey(g.need, g.state)))
+
+  const uncovered_critical_cells = dedicatedHoles.filter(({ need }) => critical.has(need))
+  const undocumented_gap_cells = dedicatedHoles.filter(
+    ({ need, state }) => !critical.has(need) && !documented.has(cellKey(need, state)),
+  )
+
+  return {
+    needs_checked: matrix.needs.length,
+    states_checked: matrix.states.length,
+    total_cells: matrix.stats.total_cells,
+    // Wildcard tier: '*'-need national nets counted (planner semantics).
+    uncovered_cells: matrix.stats.uncovered_cells,
+    critical_needs: [...CRITICAL_NEEDS],
+    uncovered_critical_cells,
+    documented_gaps: DOCUMENTED_GAPS.length,
+    undocumented_gap_cells,
+  }
+}
+
+/**
+ * PURE: map uncovered critical matrix cells to adapter-wishlist entries (the
+ * highest-priority wishlist class — a registry-level hole needs no affected
+ * profile to matter).
+ */
+export function matrixWishlistEntries(structuralMatrix) {
+  const cells = Array.isArray(structuralMatrix?.uncovered_critical_cells)
+    ? structuralMatrix.uncovered_critical_cells
+    : []
+  return cells.map(({ need, state }) => ({
+    lane: STRUCTURAL_MATRIX_LANE,
+    gap_class: GAP_CLASSES.MATRIX_UNCOVERED_CRITICAL,
+    detail: `${need}×${state}`,
+    statement: `Registry coverage matrix: critical need '${need}' × ${state} has NO dedicated source — a ${state} profile with this need is structurally uncrawlable (the ECF-gap class).`,
+    affected_profiles_count: 0,
+    suggested_action: `Add a source covering '${need}' for ${state} (a national fallback lane preferred) to backend/crawler-os/sourceRegistry.js.`,
+  }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Persistence (system_kv; UPDATE-then-INSERT — shim-safe, mirrors
 // enforceInvariants.js and the other agent scoreboards)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -267,6 +351,7 @@ async function loadActiveProfileRows(db, cap) {
  * @param {object} [opts]
  * @param {number} [opts.limit=100]           max active profiles to scan (bounded ≤ 500)
  * @param {Function} [opts.buildEvidence]     injectable (db, profileId) → coverage evidence
+ * @param {Function} [opts.buildMatrixSection] injectable () → structural_matrix section
  * @param {Date} [opts.now]
  * @param {boolean} [opts.persist=true]
  * @returns {Promise<object>} the scoreboard
@@ -274,6 +359,7 @@ async function loadActiveProfileRows(db, cap) {
 export async function buildFleetGapScoreboard(db, {
   limit = DEFAULT_SCAN_LIMIT,
   buildEvidence = buildCoverageEvidence,
+  buildMatrixSection = buildStructuralMatrixSection,
   now = new Date(),
   persist = true,
 } = {}) {
@@ -303,10 +389,27 @@ export async function buildFleetGapScoreboard(db, {
   }
 
   const body = aggregateGapResults(results)
+
+  // Fleet-independent structural matrix: registry-level need×state holes join
+  // the scoreboard even when NO live profile has hit them yet. Uncovered
+  // CRITICAL cells become the highest-priority adapter-wishlist entries
+  // (prepended ahead of the profile-derived ones, same WISHLIST_CAP).
+  let structural_matrix = null
+  try {
+    structural_matrix = buildMatrixSection()
+    const matrixEntries = matrixWishlistEntries(structural_matrix)
+    if (matrixEntries.length) {
+      body.adapter_wishlist = [...matrixEntries, ...body.adapter_wishlist].slice(0, WISHLIST_CAP)
+    }
+  } catch (err) {
+    log.warn('structural matrix section failed (scoreboard still built)', { error: err?.message })
+  }
+
   const scoreboard = {
     generated_at: (now instanceof Date ? now : new Date(now)).toISOString(),
     scan_limit: cap,
     profiles_scanned: scanned,
+    structural_matrix,
     ...body,
   }
 
@@ -341,6 +444,15 @@ export function deriveAmyGapActions(scoreboard) {
   const gaps = Array.isArray(scoreboard?.gaps) ? scoreboard.gaps : []
   const actionable = []
   const structural = []
+  // Registry-level matrix holes lead the wishlist: they need no affected
+  // profile to matter, and only a sourceRegistry.js change can close them.
+  for (const entry of matrixWishlistEntries(scoreboard?.structural_matrix)) {
+    structural.push({
+      ...entry,
+      lever: 'adapter_wishlist',
+      reason: 'Registry need×state coverage matrix hole — needs a code change (backend/crawler-os/sourceRegistry.js); Amy cannot add adapters.',
+    })
+  }
   for (const g of gaps) {
     const base = {
       lane: g.lane,
@@ -433,10 +545,13 @@ export default {
   STALE_MS,
   GAP_CLASSES,
   STRUCTURAL_GAP_CLASSES,
+  STRUCTURAL_MATRIX_LANE,
   LANE_CATEGORY_AFFINITY,
   MAX_CATEGORY_WEIGHT,
   classifyGap,
   aggregateGapResults,
+  buildStructuralMatrixSection,
+  matrixWishlistEntries,
   buildFleetGapScoreboard,
   readGapScoreboard,
   isScoreboardStale,
