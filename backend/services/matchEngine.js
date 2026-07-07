@@ -2993,6 +2993,10 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     applicantTypeMatch: Boolean(elig.applicantTypeMatch),
     amountEligible,
     primaryApplicantType: effectiveSignals?.applicantType || resolveApplicantType(effectiveProfile) || '',
+    // Declared-program affinity: credit a declared program/funder data point
+    // when the opportunity IS that program's own source lane (keyword-thin
+    // pages otherwise miss it — the ECF CHOICES class).
+    oppSourceId: opportunity?.source ?? opportunity?.source_id ?? opportunity?.record_origin ?? '',
   })
   let dataPointCoverage
   if (dataPointInventory.total === 0) {

@@ -7,7 +7,11 @@ import {
   deriveMatchReasonCodes,
   MATCH_REASON_CODES,
 } from './reasons.js'
-import { evaluateProfileSpecificGate } from './profileSpecificGate.js'
+import {
+  evaluateProfileSpecificGate,
+  hasAuthoritativeStoredDecision,
+  SUPPRESSIBLE_NO_FIT_RULE_IDS,
+} from './profileSpecificGate.js'
 
 export function isDirectoryRecord(opp) {
   const text = [
@@ -98,6 +102,10 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
   const profileGate = evaluateProfileSpecificGate(profileContext, opportunity, {
     mode: opts.profileGateMode || 'display',
     allowUnmatchedDirectoryFallback: opts.allowUnmatchedDirectoryFallback === true,
+    // Propagate the authoritative-stored-decision context so the gate can
+    // suppress the NO-FIT (content-shape) rule family for rows the matchEngine
+    // already scored above the surfacing floor (type-agnostic).
+    useStoredDecision: opts.useStoredDecision === true,
   })
   if (!profileGate.pass) {
     return {
@@ -235,6 +243,14 @@ export function canonicalResultForProfile(profileContext, opportunity, opts = {}
 export function canonicalizeOpportunityList(profileContext, opportunities = [], opts = {}) {
   const dropped = {}
   const kept = []
+  // Reconciliation sentinel (catches the whole over-drop CLASS at runtime): a
+  // row the matchEngine scored above the surfacing floor that the funnel drops
+  // for a NO-FIT (content-shape) reason is a silent un-surfacing. After this
+  // fix it must always be 0; a non-zero count in route diagnostics/telemetry is
+  // an observable regression signal (Sam-consumable) rather than a bug a human
+  // has to notice. Legitimate drops (eligibility mismatch, trust, dedup,
+  // pipeline) are NOT counted here.
+  const unsurfacedAboveFloorNoFit = []
 
   for (const opp of Array.isArray(opportunities) ? opportunities : []) {
     const result = canonicalResultForProfile(profileContext, opp, opts)
@@ -243,15 +259,52 @@ export function canonicalizeOpportunityList(profileContext, opportunities = [], 
     } else {
       const key = result.dropReason || 'unknown'
       dropped[key] = (dropped[key] || 0) + 1
+      if (
+        SUPPRESSIBLE_NO_FIT_RULE_IDS.has(key) &&
+        hasAuthoritativeStoredDecision(opp, opts)
+      ) {
+        unsurfacedAboveFloorNoFit.push({
+          opportunity_id: opp?.id ?? opp?.opportunity_id ?? null,
+          reason: key,
+          match_score: Number(opp?.match_score ?? 0),
+        })
+      }
     }
   }
 
   kept.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-  return { kept, dropped }
+  return { kept, dropped, unsurfacedAboveFloorNoFit }
+}
+
+/**
+ * Reusable reconciliation assertion. Flags any stored ABOVE-FLOOR match that the
+ * canonical funnel would drop for a NO-FIT (content-shape) reason — the silent
+ * un-surfacing class. Returns the offending rows; when `opts.throwOnViolation`
+ * is set (used by the profile-type matrix guard test) it throws instead, so a
+ * regression reds the test suite. It re-uses the exact production funnel, so it
+ * can never diverge from real behavior.
+ */
+export function assertNoSilentUnsurfacing(profileContext, opportunities = [], opts = {}) {
+  const { unsurfacedAboveFloorNoFit } = canonicalizeOpportunityList(
+    profileContext,
+    opportunities,
+    { useStoredDecision: true, ...opts },
+  )
+  if (opts.throwOnViolation && unsurfacedAboveFloorNoFit.length > 0) {
+    const detail = unsurfacedAboveFloorNoFit
+      .map((r) => `${r.opportunity_id}(${r.reason}, score=${r.match_score})`)
+      .join(', ')
+    throw new Error(
+      `assertNoSilentUnsurfacing: ${unsurfacedAboveFloorNoFit.length} stored above-floor ` +
+        `match(es) dropped for a no-fit reason: ${detail}`,
+    )
+  }
+  return unsurfacedAboveFloorNoFit
 }
 
 export default {
   canonicalResultForProfile,
   canonicalizeOpportunityList,
+  assertNoSilentUnsurfacing,
   isDirectoryRecord,
 }
