@@ -61,7 +61,7 @@ export const EDITABLE_SECTIONS = new Set([
   "government_assistance", "health_medical", "medical_insurance", "medical_history",
   "nonprofit_compliance", "small_business_details", "demographics", "education",
   "employment", "housing", "family", "programs_services", "family_life",
-  "military_service", "occupation", "location_focus", "narrative",
+  "military_service", "occupation", "location_focus", "narrative", "essays",
 ])
 
 /**
