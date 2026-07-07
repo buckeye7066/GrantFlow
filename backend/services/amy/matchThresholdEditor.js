@@ -43,8 +43,8 @@ export async function applyMinScore(value, { filePath = MATCH_THRESHOLDS_PATH, n
   const raw = Math.round(Number(value))
   if (!Number.isFinite(raw)) return { applied: false, from: null, to: value, backup_path: null, reason: 'invalid_value' }
   // SAFETY: the display floor can be tightened but never dropped below the
-  // documented product standard (owner directive 2026-07-06 — the 25 bar on
-  // the need-anchored scale, DISCOVERY_MIN_SCORE_FLOOR).
+  // documented product standard (DISCOVERY_MIN_SCORE_FLOOR — 8 on the
+  // 2026-07-06-evening data-point scale; see backend/config/matchThresholds.js).
   const to = Math.max(DISCOVERY_MIN_SCORE_FLOOR, Math.min(100, raw))
 
   let text

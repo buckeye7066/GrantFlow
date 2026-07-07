@@ -6,7 +6,12 @@
 > charter wins** — update the per-agent doc, not the charter, unless the doctrine
 > itself is changing.
 
-Status: **active** · Owner/admin: `buckeye7066@gmail.com` · Last reviewed: 2026-06-17
+Status: **active** · Owner/admin: `buckeye7066@gmail.com` · Last reviewed: 2026-07-07
+
+The owner-ratified product thesis (four pillars + the measured Google-bar) and
+the self-improvement loop this charter's agents serve are defined in
+[canonical_rules.md](./canonical_rules.md) ("The product thesis"); the per-agent
+mission/inputs/outputs one-pager is [AGENTS.md](./AGENTS.md).
 
 ---
 
@@ -36,7 +41,8 @@ Each agent has exactly one home adapter under
 
 | Agent | Role | Service area | Per-agent doc |
 |-------|------|--------------|---------------|
-| **Anya** | User guide, automation navigator, and code-error repair operator | `backend/services/anya/` | (see Anya services) |
+| **Anya** | User guide, automation navigator, code-error repair operator, and the owner's morning brief | `backend/services/anya/` | (see Anya services) |
+| **Amy** | Coverage-gap closer: synthetic crawler training + empirical KEEP/REVERT tuning (no adapter under `agentAdapters/` — she runs via `amyScheduler.js`) | `backend/services/amy/` | [AMY_AGENT.md](./AMY_AGENT.md) |
 | **Yana** | Client discovery (lead intelligence) | `backend/services/yana/` | this charter §4 |
 | **John** | Outreach draft writer (drafts only — never sends) | `backend/services/john/` | [JOHN_OUTREACH_AGENT.md](./JOHN_OUTREACH_AGENT.md) |
 | **Sam** | Code supervisor / self-healing engineering | `backend/services/sam/` | [SAM_PRODUCTION_AGENT.md](./SAM_PRODUCTION_AGENT.md), [SAM_AGENT_AUDITOR.md](./SAM_AGENT_AUDITOR.md) |
@@ -161,3 +167,30 @@ artifact with a run + audit trail, runs in the background, escalates only true
 hard stops, notifies the right party, resumes after blockers, introduces no fake
 data / placeholder funding / silent failures / duplicate matching authority, and
 ships with passing tests.
+
+---
+
+## 8. Self-Improvement Doctrine — the system only gets better
+
+Binding on every agent (owner directive, 2026-07-06; full rule in
+[canonical_rules.md](./canonical_rules.md) "The self-improvement loop"):
+
+1. **Every owner-verified outcome becomes a golden expectation.** Verified
+   results are appended as permanent nightly assertions (Sam check
+   `coverage.goldenOutcomes`); expectations are data and are never silently
+   removed.
+2. **Every benchmark failure becomes queued work.** The web-parity benchmark
+   (`system_kv` `web_parity_benchmark`, Sam check
+   `coverage.webParityBenchmark`) measures each golden profile against a
+   competent 30-minute web-search session; failures land in `system_kv`
+   `web_parity_gap_queue` and the adapter wishlist — never in a shrug.
+3. **No ratchet may regress without a red finding.** Parity scores, golden
+   outcomes, and gap-scoreboard freshness are ratchets; a regression is a red
+   Sam finding with a `recommended_fix`, not a trend line.
+4. **Agent tasking is evidence-driven, never random.** Amy derives every
+   training/crawl task from the gap scoreboard, structural matrix, and
+   web-parity gap queue; tuning is empirical KEEP/REVERT (bounded, backed up,
+   auto-reverted on mismatch).
+5. **The owner stays in the loop, not on the hook.** Anya's morning brief
+   surfaces what changed autonomously, the benchmark trend, top gaps,
+   web-only finds awaiting judgment, and wishlist items needing a decision.

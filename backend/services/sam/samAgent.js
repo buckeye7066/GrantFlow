@@ -7,6 +7,15 @@
  * fixes (ONLY when the caller is an authorised admin AND mode is
  * `repair-safe`), and persists the run to `sam_runs`.
  *
+ * Evolved mission (2026-07): Sam is the keeper of the self-improvement
+ * loop's RATCHETS — the nightly sweep asserts golden outcomes
+ * (coverage.goldenOutcomes), gap-scoreboard freshness
+ * (coverage.gapScoreboard), web-parity non-regression
+ * (coverage.webParityBenchmark), and invariant sweep outcomes. A ratchet
+ * regression is a red finding, never a trend line, and every finding
+ * carries a recommended_fix. See docs/AGENTS.md + canonical_rules.md
+ * "The self-improvement loop".
+ *
  * Sam never:
  *   - touches grant-matching, scoring, crawler-persistence, payment,
  *     auth, profile-isolation code (see samSafeFixes.FORBIDDEN_PATH_PATTERNS)

@@ -23,12 +23,14 @@ function num(v) {
  * retained `candidates` (each { score, topical, decision, generic }).
  *
  * `scoreKey` selects which retained candidate field the floor is applied to:
- *   - 'score'   (default) — the FINAL need-anchored match score. Right lens for
- *     floor sweeps and coverage validation (the floor gates final scores).
+ *   - 'score'   (default) — the FINAL match score (data-point scale,
+ *     2026-07-06). Right lens for floor sweeps and coverage validation
+ *     (the floor gates final scores).
  *   - 'topical' — the legacy weighted-evidence subscale
  *     (scoreBreakdown.topical_evidence). Right lens for WEIGHT-tuning
- *     validation: on the need-anchored scale the final score no longer moves
- *     with W_* weight changes — weights act only inside the topical blend.
+ *     validation: since the 2026-07 scale changes (need-anchored, then
+ *     data-point) the final score no longer moves with W_* weight changes —
+ *     weights act only inside the topical blend.
  * Candidates missing the requested field fall back to `score`.
  *
  * @returns {{ qualified, accepted, falsePositives, covered }}
