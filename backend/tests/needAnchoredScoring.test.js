@@ -44,17 +44,16 @@ const GENERIC_FEDERAL_OPP = {
 }
 
 describe('need-anchored score semantics', () => {
-  it('the score IS the data-point ratio: 2 of 4 needs + geo + type matched → 4 of 6 points', () => {
+  it('the score IS the coverage ratio: 2 of 4 needs matched → 50% (geo/type are gates, not coverage)', () => {
     const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, TWO_NEED_OPP)
     expect(match_explain.scoreBreakdown.matched_needs_count).toBe(2)
     const dp = match_explain.dataPointEvidence
-    // Inventory: 4 needs + geo:state + applicant_type = 6. Matched: 2 needs
-    // + geo (national serves TN) + nonprofit applicant type = 4.
-    expect(dp.total).toBe(6)
-    expect(dp.matched_count).toBe(4)
-    // score = 4/6 × clean gates ≈ 67; the number and the evidence agree.
-    expect(score).toBeGreaterThanOrEqual(60)
-    expect(score).toBeLessThanOrEqual(70)
+    // Coverage denominator = the 4 needs. geo (national→serves TN) and
+    // applicant_type (nonprofit) are eligibility GATES applied as multipliers,
+    // NOT coverage points — so 2 of 4 needs matched = credit 2, coverage 50%.
+    expect(dp.total).toBe(4)
+    expect(dp.credit).toBe(2)
+    // score = 50 × clean gates (nonprofit type, national geo) — ~40–50.
     expect(score).toBeGreaterThanOrEqual(GOOD_MATCH_SCORE)
   })
 
@@ -74,17 +73,16 @@ describe('need-anchored score semantics', () => {
     expect(score).toBeLessThanOrEqual(SCORE_FLOOR + 15)
   })
 
-  it('on a SPARSE profile the same generic opp reads as honest partial coverage (geo+type of what little we know)', () => {
+  it('a generic opp matching ZERO needs scores at the floor — geo+type can never manufacture coverage', () => {
     const { score, match_explain } = scoreOpportunity(MINISTRY_PROFILE, GENERIC_FEDERAL_OPP)
     expect(match_explain.scoreBreakdown.matched_needs_count).toBe(0)
-    // 6-point inventory, geo+type matched → 2/6 ≈ 33 before gates. Sparse
-    // profiles scoring visibly on thin evidence is the owner's intended
-    // reading ("2 data points, source matches 1 → 50").
+    // Coverage credit from needs/traits = 0. geo (national) + entity-type are
+    // gates, not coverage, so they cannot lift a zero-need opp off the floor —
+    // this is the administrative-baseline inflation the model is built to kill.
     const dp = match_explain.dataPointEvidence
-    expect(dp.total).toBe(6)
+    expect(dp.credit).toBe(0)
     expect(dp.matched.filter((m) => m.kind === 'need')).toHaveLength(0)
-    expect(score).toBeGreaterThan(SCORE_FLOOR)
-    expect(score).toBeLessThanOrEqual(40)
+    expect(score).toBeLessThan(AUTO_ADD_SCORE)
   })
 
   it('a profile with NO usable data points at all is capped at NO_NEEDS_TOPICAL_CAP', () => {
@@ -94,15 +92,14 @@ describe('need-anchored score semantics', () => {
     expect(score).toBeLessThanOrEqual(NO_NEEDS_TOPICAL_CAP)
   })
 
-  it('a near-empty profile (state+type only) scores its full tiny inventory honestly', () => {
-    // Owner arithmetic at the small end: we only know 2 things; a national
-    // nonprofit grant matches both → 2/2. High scores on thin profiles are
-    // by design — the readiness gate, not the scorer, handles onboarding.
+  it('a profile with ONLY gate-facts (state+type, no needs/traits) has no coverage denominator → capped', () => {
+    // state and applicant_type are gates, not coverage. A near-empty profile
+    // with nothing but gates has 0 coverage points → topical fallback cap; it
+    // cannot score high off geography + entity type alone (the old bug).
     const bare = { id: 'p-bare', primary_type: 'nonprofit', state: 'TN' }
     const { score, match_explain } = scoreOpportunity(bare, TWO_NEED_OPP)
-    expect(match_explain.dataPointEvidence.total).toBe(2)
-    expect(match_explain.dataPointEvidence.matched_count).toBe(2)
-    expect(score).toBeGreaterThanOrEqual(90)
+    expect(match_explain.dataPointEvidence.total).toBe(0)
+    expect(score).toBeLessThanOrEqual(NO_NEEDS_TOPICAL_CAP)
   })
 
   it('org × individual-assistance guard: a church never scores high on person/household rent assistance', () => {

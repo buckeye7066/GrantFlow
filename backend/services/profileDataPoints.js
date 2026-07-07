@@ -57,6 +57,26 @@ export const DATA_POINT_KINDS = Object.freeze([
 const norm = (v) => String(v ?? '').toLowerCase().replace(/[_\s-]+/g, ' ').trim()
 
 /**
+ * COVERAGE vs GATES vs NOISE (owner directive 2026-07-07).
+ *
+ * The match score is "how much of what makes this profile fundable does the
+ * source address?" Not every data point answers that question:
+ *  - `geo` and `applicant_type` are ELIGIBILITY GATES — they are already
+ *    applied as the multiplicative geoFactor / eligFactor in matchEngine.
+ *    Counting them a SECOND time as coverage points double-counts and lets a
+ *    generic national grant score off a nonprofit's geography+entity-type
+ *    alone (the administrative-baseline inflation the scale was built to kill).
+ *    They are kept in the inventory as EVIDENCE but excluded from the ratio.
+ *  - `keyword` (document/narrative-mined) points are excluded from the
+ *    DENOMINATOR (a verbose narrative must not dilute every match), but a
+ *    matched keyword still ADDS credit to the numerator (real evidence).
+ * So: denominator = COVERAGE points (needs + identity/traits); numerator =
+ * matched coverage + matched-keyword bonus; geo/eligibility stay as gates.
+ */
+const DENOMINATOR_EXCLUDE_KINDS = new Set(['geo', 'applicant_type', 'keyword'])
+const NUMERATOR_EXCLUDE_KINDS = new Set(['geo', 'applicant_type'])
+
+/**
  * DECLARED-PROGRAM AFFINITY (owner directive 2026-07-07).
  *
  * A profile that DECLARES enrolling in / operating a specific program or funder
@@ -240,11 +260,18 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
 
   // ── keywords (document/narrative-derived facts). Exact-duplicate values of
   //    structured points above are already excluded by the cross-kind dedup.
-  //    UNCAPPED by owner directive: the denominator is EVERYTHING the profile
-  //    tells us — a 10,000-point profile matching 500 points scores 5, and
-  //    that is the intended reading ("this source speaks to 5% of what we
-  //    know about you"). Distinctness, whole-word matching, and the min term
-  //    length keep the list honest; no artificial ceiling. ──
+  //    EXCLUDED FROM THE DENOMINATOR (owner directive 2026-07-07): keywords
+  //    mined from a narrative/document are NOT deliberate facts the profile
+  //    asserts — a verbose applicant can carry 300 of them, and no legitimate
+  //    funding source's thin directory page matches more than a handful, so
+  //    counting them in the denominator crushed EVERY relevant match to
+  //    single digits (Benefits.gov covered 100% of Gilbert's needs yet scored
+  //    4/358 because 300 were narrative keywords). A matched keyword still ADDS
+  //    credit (real evidence in the numerator) — it just no longer dilutes the
+  //    denominator. The denominator is the SALIENT facts the profile actually
+  //    asserts: needs, geography, applicant type, demographics, assistance,
+  //    military, health, family, occupation, credentials, immigration,
+  //    interests, academics, financials. ──
   const keywordList = signals?.keywordSet ?? signals?.keywords
   const keywords = keywordList && (keywordList.size ?? keywordList.length)
     ? toValueList(keywordList)
@@ -253,7 +280,14 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
     push('keyword', k)
   }
 
-  return { dataPoints, total: dataPoints.length }
+  // `total` IS the scoring denominator = COVERAGE points only (needs +
+  // identity/traits): geo and applicant_type are gates, keywords are mined
+  // noise — all excluded from the denominator. `dataPoints` still carries
+  // every point so evaluateDataPointMatches can credit a matched keyword and
+  // the dashboard can show geo/type/keyword as evidence.
+  const denominatorPoints = dataPoints.filter((d) => !DENOMINATOR_EXCLUDE_KINDS.has(d.kind))
+  const keywordCount = dataPoints.filter((d) => d.kind === 'keyword').length
+  return { dataPoints, total: denominatorPoints.length, keywordCount }
 }
 
 /**
@@ -285,6 +319,15 @@ export function evaluateDataPointMatches({
 } = {}) {
   const matched = []
   let credit = 0
+  // geo/applicant_type matches are recorded as EVIDENCE (pushed to `matched`)
+  // but excluded from `credit` — they are the geoFactor/eligFactor gates,
+  // counting them as coverage would double-count. This helper adds a matched
+  // point and only credits it toward the coverage numerator when its kind is
+  // not a gate.
+  const record = (dp, c, via) => {
+    matched.push({ ...dp, credit: c, via })
+    if (!NUMERATOR_EXCLUDE_KINDS.has(dp.kind)) credit += c
+  }
   const normSourceId = String(oppSourceId ?? '').toLowerCase().trim()
   const textHas = (term) =>
     containsTermWholeWord(oppText, term) ||
@@ -302,26 +345,25 @@ export function evaluateDataPointMatches({
     switch (dp.kind) {
       case 'need': {
         const c = needCredits.get(dp.value) ?? needCredits.get(norm(dp.value)) ?? 0
-        if (c > 0) { matched.push({ ...dp, credit: c, via: 'need_scan' }); credit += c }
+        if (c > 0) record(dp, c, 'need_scan')
         break
       }
       case 'geo': {
-        if (geoMatched) { matched.push({ ...dp, credit: 1, via: 'geo_gate' }); credit += 1 }
+        if (geoMatched) record(dp, 1, 'geo_gate') // evidence only (gate, not credit)
         break
       }
       case 'applicant_type': {
         const isPrimary = primaryType && norm(dp.value) === norm(primaryType)
         if ((isPrimary && applicantTypeMatch) || scanValue(dp.value)) {
-          matched.push({ ...dp, credit: 1, via: isPrimary && applicantTypeMatch ? 'eligibility_gate' : 'text' })
-          credit += 1
+          record(dp, 1, isPrimary && applicantTypeMatch ? 'eligibility_gate' : 'text') // evidence only
         }
         break
       }
       case 'financial': {
         if (dp.value === 'funding amount stated') {
-          if (amountEligible) { matched.push({ ...dp, credit: 1, via: 'amount_range' }); credit += 1 }
+          if (amountEligible) record(dp, 1, 'amount_range')
         } else if (scanValue(dp.value)) {
-          matched.push({ ...dp, credit: 1, via: 'text' }); credit += 1
+          record(dp, 1, 'text')
         }
         break
       }
@@ -329,19 +371,19 @@ export function evaluateDataPointMatches({
         // "gpa 3.8" → scan the bare fact name; "major computer science" → scan the major.
         const value = dp.value.replace(/^(gpa|act|sat)\s+[\d.]+$/, '$1')
           .replace(/^(major|school)\s+/, '')
-        if (scanValue(value)) { matched.push({ ...dp, credit: 1, via: 'text' }); credit += 1 }
+        if (scanValue(value)) record(dp, 1, 'text')
         break
       }
       default: {
         if (scanValue(dp.value)) {
-          matched.push({ ...dp, credit: 1, via: 'text' }); credit += 1
+          record(dp, 1, 'text')
           break
         }
         // Declared-program affinity: the profile declares this program/funder and
         // the opportunity IS that program's own registered source lane, even
         // though the lane's text is keyword-thin. Type-agnostic + additive.
         if (declaredProgramMatchesSource(dp.value, normSourceId)) {
-          matched.push({ ...dp, credit: 1, via: 'declared_program' }); credit += 1
+          record(dp, 1, 'declared_program')
         }
       }
     }

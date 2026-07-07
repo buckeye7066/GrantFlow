@@ -34,9 +34,14 @@ describe('buildProfileDataPointInventory', () => {
   it('produces one deterministic data point per distinct profile fact', () => {
     const inv = buildProfileDataPointInventory({ profile: {}, signals: signalsFixture() })
     const ids = inv.dataPoints.map((d) => d.id)
-    // 2 needs + 4 geo + 1 applicant type + rural + snap + veteran + disability
-    // + gardening + 1 keyword = 13 (states:['TN'] dedups against geo:state tn)
-    expect(inv.total).toBe(13)
+    // total is the COVERAGE denominator = needs + identity/traits only.
+    // dataPoints holds 13 (2 need + 4 geo + 1 applicant_type + rural + snap +
+    // veteran + disability + gardening + 1 keyword); the denominator EXCLUDES
+    // the 4 geo + 1 applicant_type (eligibility gates) + 1 keyword (mined) =
+    // 7 coverage points (2 need + rural + snap + veteran + disability + gardening).
+    expect(inv.total).toBe(7)
+    expect(inv.keywordCount).toBe(1)
+    expect(inv.dataPoints).toHaveLength(13)
     expect(ids).toContain('need:housing')
     expect(ids).toContain('geo:state tn')
     expect(ids).toContain('geo:zip 37311')
@@ -59,27 +64,37 @@ describe('buildProfileDataPointInventory', () => {
     expect(inv.dataPoints.filter((d) => /veteran/.test(d.id))).toHaveLength(1)
   })
 
-  it('never caps the denominator — every distinct keyword is a data point (owner directive)', () => {
+  it('mined keywords are matchable but EXCLUDED from the denominator (owner directive 2026-07-07)', () => {
     const many = new Set(Array.from({ length: 500 }, (_, i) => `docterm${String(i).padStart(4, '0')}`))
     const inv = buildProfileDataPointInventory({
       profile: {},
       signals: signalsFixture({ keywordSet: many }),
     })
+    // All 500 keyword points are still present (a source can still match them
+    // for credit)...
     expect(inv.dataPoints.filter((d) => d.kind === 'keyword')).toHaveLength(500)
+    expect(inv.keywordCount).toBe(500)
+    // ...but they do NOT bloat the denominator: total is the coverage count
+    // only (7, same as the base fixture), so 500 narrative words can't crush
+    // every match to single digits (the Gilbert class).
+    expect(inv.total).toBe(7)
   })
 
-  it("owner's arithmetic at scale: 10,000 points with 500 matched → 5", () => {
-    const dataPoints = Array.from({ length: 10000 }, (_, i) => ({
-      id: `keyword:kw${i}`, kind: 'keyword', value: `kw${i}`,
-    }))
-    const inv = { dataPoints, total: 10000 }
-    // Credit 500 of them via the need-credit path (cheap; avoids 10k regex scans).
-    const needPoints = dataPoints.slice(0, 500).map((d) => ({ ...d, kind: 'need' }))
-    const mixed = { dataPoints: [...needPoints, ...dataPoints.slice(500)], total: 10000 }
-    const credits = new Map(needPoints.map((d) => [d.value, 1]))
-    const r = evaluateDataPointMatches({ inventory: mixed, oppText: '', needCredits: credits })
-    expect(r.credit).toBe(500)
-    expect(Math.round((r.credit / mixed.total) * 100)).toBe(5)
+  it("a matched keyword still adds credit — coverage = credit ÷ SALIENT denominator", () => {
+    // 4 salient needs + 6 narrative keywords. A source that matches 2 needs
+    // and 3 keywords earns credit 5, over the salient denominator 4 → clamped
+    // to 100 (keywords add credit; they never dilute).
+    const salient = ['housing', 'food', 'medical', 'employment'].map((v) => ({ id: `need:${v}`, kind: 'need', value: v }))
+    const keywords = Array.from({ length: 6 }, (_, i) => ({ id: `keyword:kw${i}`, kind: 'keyword', value: `kw${i}` }))
+    const inv = { dataPoints: [...salient, ...keywords], total: salient.length, keywordCount: keywords.length }
+    const r = evaluateDataPointMatches({
+      inventory: inv,
+      oppText: 'kw0 kw1 kw2',
+      needCredits: new Map([['housing', 1], ['food', 1]]),
+    })
+    // 2 need credits + 3 keyword text matches = 5
+    expect(r.credit).toBe(5)
+    expect(Math.min(100, Math.round((r.credit / inv.total) * 100))).toBe(100)
   })
 
   it('honors the engine-resolved coverage needs (org-aware) over raw signals', () => {
