@@ -5,6 +5,12 @@
 // checklist/how-to packet. Empty fields become questions, never penalties.
 
 import { buildThesis } from './profileIntelligence.js';
+import {
+  profileAlreadyAnswers,
+  questionAppliesToProfile,
+  resolveProfileSide,
+  shouldAskProfileQuestion,
+} from '../services/profileKnownFacts.js';
 
 function lc(value) { return String(value ?? '').toLowerCase(); }
 function titleCase(value) {
@@ -113,7 +119,7 @@ function uploadedDocumentEvidence(profile, entries) {
   return textEvidence(uploadedDocumentBlob(profile), entries);
 }
 
-function detectMilitaryStatus(profile, sections, blob) {
+function detectMilitaryStatus(profile, sections, blob, side = 'unknown') {
   const explicit = lc(firstValue(profile, sections, [
     'military_service.status',
     'military_service.military_status',
@@ -121,7 +127,13 @@ function detectMilitaryStatus(profile, sections, blob) {
     'demographics.military_status',
     '$.military_status',
   ]));
-  const text = `${explicit} ${blob}`;
+  // Military status is a PERSON fact. An organization's free text ("we serve
+  // veterans and their families", a board bio, population-served notes)
+  // describes who it HELPS, not what it IS — so for org-side profiles only the
+  // explicit military_service fields count, never the document/description blob.
+  // (Focus Forward Ministry class: ministry docs mentioning veterans queued a
+  // DD-214 upload and a personal military-status interview question.)
+  const text = side === 'org' ? explicit : `${explicit} ${blob}`;
   const statuses = [];
   if (/\b(active duty|currently serving|servicemember|service member)\b/.test(text)) statuses.push('active_duty');
   if (/\b(national guard|reservist|reserve)\b/.test(text)) statuses.push('guard_reserve');
@@ -176,9 +188,15 @@ function detectArchetype(profile, thesis, sections, blob) {
   if (isLegalPractice) return 'professional_practice_startup';
   if (applicantHas(['tribal'])) return 'tribal_government_plan';
   if (applicantHas(['farm']) || needHas(['agriculture'])) return 'farm_operation_plan';
-  if (applicantHas(['vfd', 'law_enforcement', 'government']) || needHas(['public_safety', 'infrastructure', 'recreation'])) return 'public_agency_project_plan';
+  // WHO the applicant is outranks need keywords: a declared nonprofit/ministry
+  // with a building or recreation project must get the nonprofit plan, not be
+  // rerouted into public-agency (SAM.gov/jurisdiction) questions by the words
+  // "infrastructure"/"recreation" in its narrative. The need-based public-agency
+  // fallback below only catches profiles with no org identity to route by.
+  if (applicantHas(['vfd', 'law_enforcement', 'government'])) return 'public_agency_project_plan';
   if (applicantHas(['teacher'])) return 'classroom_project_plan';
   if (applicantHas(['nonprofit', 'church', 'ministry', 'school']) || needHas(['animal_welfare', 'capacity_building', 'programs'])) return 'nonprofit_program_plan';
+  if (needHas(['public_safety', 'infrastructure', 'recreation'])) return 'public_agency_project_plan';
   if (isStartup || thesis.applicant_types?.includes('business')) return 'small_business_startup';
   if (thesis.needs?.includes('caregiving') || thesis.needs?.includes('dementia_support')) return 'benefits_and_care_plan';
   if (needHas(['medical', 'medical_bills', 'disability', 'cancer_support', 'black_lung_benefits', 'survivor_benefits'])) return 'benefits_and_care_plan';
@@ -223,7 +241,7 @@ function hasNeed(thesis, needs) {
   return needs.some((need) => set.has(need));
 }
 
-function officialDocumentItems(profile, sections, thesis, archetype, militaryStatuses) {
+function officialDocumentItems(profile, sections, thesis, archetype, militaryStatuses, side = 'unknown') {
   const isStudent = archetype === 'student_portal_plan' || hasApplicant(thesis, ['student']);
   const isBusinessStartup =
     ['food_truck_startup', 'small_business_startup', 'professional_practice_startup', 'farm_operation_plan'].includes(archetype) ||
@@ -261,10 +279,24 @@ function officialDocumentItems(profile, sections, thesis, archetype, militarySta
     'transitioning_service_member',
     'military_spouse',
   ]);
-  const isOrgLike = applicantNeedsTaxId;
+  // Gate for PERSON-ONLY items (photo ID, personal military proof, personal
+  // income proof): the DECLARED org/person side decides. A person-side business
+  // startup keeps them (an active-duty individual launching a food truck really
+  // does need military-program proof); applicantNeedsTaxId must NOT be the gate
+  // — needing an EIN letter says nothing about being an institution. When the
+  // side is undeclared, institutional applicant buckets (never "a person
+  // applying as themselves") still count as org.
+  const isOrgLike = side === 'org' || (side !== 'person' && hasApplicant(thesis, [
+    'nonprofit', 'church', 'ministry', 'school', 'vfd', 'law_enforcement', 'government', 'tribal',
+  ]));
 
-  const items = [
-    item({
+  const items = [];
+
+  // A personal photo ID is a PERSON credential. An organization's identity is
+  // its tax/registration and governance uploads (below) — asking a church or a
+  // county agency for someone's driver license is never a funding-match signal.
+  if (!isOrgLike) {
+    items.push(item({
       id: 'official_identity_upload',
       title: 'Official photo ID upload',
       category: 'document',
@@ -276,8 +308,8 @@ function officialDocumentItems(profile, sections, thesis, archetype, militarySta
       howTo: 'Use the profile document upload area. Do not paste driver license, passport, SSN, or taxpayer ID numbers into chat.',
       hamilton: 'Use the uploaded document only when a task requires identity proof; stop before any signature, attestation, or submission.',
       source_fields: ['documents.official_id', 'profile.documents'],
-    }),
-  ];
+    }));
+  }
 
   if (applicantNeedsTaxId) {
     items.push(item({
@@ -327,7 +359,9 @@ function officialDocumentItems(profile, sections, thesis, archetype, militarySta
     }));
   }
 
-  if (hasMilitaryContext) {
+  // Military-status proof is a PERSON document (the org-side analogue — SDVOSB
+  // and similar certifications — already lives under org certifications).
+  if (hasMilitaryContext && !isOrgLike) {
     const isActiveDuty = militaryStatuses.includes('active_duty') || militaryStatuses.includes('guard_reserve');
     items.push(item({
       id: 'military_verification_upload',
@@ -346,7 +380,11 @@ function officialDocumentItems(profile, sections, thesis, archetype, militarySta
     }));
   }
 
-  if (needsIncomeProof) {
+  // Income/benefit proof is a PERSON's need evidence. An org whose PROGRAMS
+  // cover housing/food/medical needs (a ministry running a food pantry) must
+  // not be asked for personal income proof — its ask is the program budget and
+  // governance items instead.
+  if (needsIncomeProof && !isOrgLike) {
     items.push(item({
       id: 'income_benefit_proof_upload',
       title: 'Income, benefit, bill, and need proof uploads',
@@ -408,7 +446,7 @@ function foodTruckItems(profile, sections, militaryStatuses, blob = '') {
         [/\bcommissary\b/, 'commissary mentioned in profile documents'],
       ]);
   const militaryStatus = militaryStatuses.length ? militaryStatuses.join(', ') : null;
-  return [
+  const items = [
     item({
       id: 'business_location',
       title: 'Confirm service area',
@@ -469,7 +507,13 @@ function foodTruckItems(profile, sections, militaryStatuses, blob = '') {
       hamilton: 'Prepare a funding packet and keep loan-capable sources gated by preference.',
       source_fields: ['financial_information.funding_needed', 'preferences.allow_loans'],
     }),
-    item({
+  ];
+  // Only a profile with a real military signal gets the military-support item.
+  // It used to be unconditional here, which queued a "which military status
+  // applies?" interview question for every food-truck profile with no military
+  // connection at all.
+  if (militaryStatuses.length) {
+    items.push(item({
       id: 'military_context',
       title: 'Military-status-specific support',
       value: militaryStatus,
@@ -478,8 +522,9 @@ function foodTruckItems(profile, sections, militaryStatuses, blob = '') {
       howTo: 'Capture exact status, branch, separation/transition date if any, and spouse status if relevant.',
       hamilton: 'Route to the right military entrepreneurship resources and avoid veteran-only language when it does not apply.',
       source_fields: ['military_service.status', 'military_service.separation_date'],
-    }),
-  ];
+    }));
+  }
+  return items;
 }
 
 function studentItems(profile, sections, blob = '') {
@@ -1076,9 +1121,12 @@ function generalItems(profile, sections) {
   ];
 }
 
-function militaryInterviewQuestions(militaryStatuses, archetype) {
-  if (!militaryStatuses.length && archetype !== 'food_truck_startup') return [];
-  const statusText = militaryStatuses.length ? militaryStatuses.map(titleCase).join(', ') : 'military background';
+function militaryInterviewQuestions(militaryStatuses) {
+  // Ask ONLY when the profile carries a real military signal. (This used to
+  // fire unconditionally for every food-truck profile, and org profiles could
+  // reach it via blob-inferred statuses — both non-profile-specific asks.)
+  if (!militaryStatuses.length) return [];
+  const statusText = militaryStatuses.map(titleCase).join(', ');
   return [
     {
       id: 'military_status_precision',
@@ -1111,7 +1159,12 @@ export function buildProjectReadinessPlan(profile = {}) {
   const blob = profileBlob(profile, sections);
   const documents = documentEvidence(profile);
   const archetype = detectArchetype(profile, thesis, sections, blob);
-  const military_statuses = detectMilitaryStatus(profile, sections, blob);
+  // Declared org/person side from the SAME classifier every question surface
+  // uses (profileKnownFacts.resolveProfileSide) — never inferred from section
+  // presence or free text.
+  const factCtx = { profile, sections };
+  const side = resolveProfileSide(factCtx);
+  const military_statuses = detectMilitaryStatus(profile, sections, blob, side);
   const coreChecklist =
     archetype === 'campaign_compliance_plan'
       ? campaignItems(profile, sections)
@@ -1136,12 +1189,22 @@ export function buildProjectReadinessPlan(profile = {}) {
                         : archetype === 'benefits_and_care_plan'
                           ? benefitsCareItems(profile, sections, thesis)
                           : generalItems(profile, sections);
+  // TYPE-APPLICABILITY NET — the same org/person matrix every other question
+  // surface runs through (#895 choke point, profileKnownFacts). No generator
+  // above may put a person-only item on an organization's checklist (or vice
+  // versa) regardless of how it was produced. Unmapped ids fail open, so this
+  // can only remove demonstrably inapplicable items — never hide a real gap.
   const checklist = [
     ...coreChecklist,
-    ...officialDocumentItems(profile, sections, thesis, archetype, military_statuses),
-  ];
+    ...officialDocumentItems(profile, sections, thesis, archetype, military_statuses, side),
+  ].filter((entry) => questionAppliesToProfile(entry.id, factCtx));
 
-  const missing = checklist.filter((x) => x.status === 'ask_anya');
+  // Anya asks only what the profile does not already answer ANYWHERE (canonical
+  // field or any known alias). Document-upload asks survive a known fact —
+  // proof of a fact is not the fact — but fact questions are deduped.
+  const missing = checklist.filter((x) =>
+    x.status === 'ask_anya' &&
+    (x.category === 'document' || !profileAlreadyAnswers(x.id, factCtx)));
   const interview_questions = [
     ...missing.map((x) => ({
       id: x.id,
@@ -1150,7 +1213,10 @@ export function buildProjectReadinessPlan(profile = {}) {
       fields_to_check: x.source_fields,
       required: ['business_location', 'business_identity', 'school_portals', 'profile_location', 'priority_needs'].includes(x.id),
     })),
-    ...militaryInterviewQuestions(military_statuses, archetype),
+    // Full choke-point check: an org never gets the person-only status question
+    // (applicability), and an explicit military_service.status is never re-asked
+    // (already-answered).
+    ...militaryInterviewQuestions(military_statuses).filter((q) => shouldAskProfileQuestion(q.id, factCtx)),
   ];
 
   return {

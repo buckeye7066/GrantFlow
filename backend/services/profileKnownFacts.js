@@ -109,6 +109,7 @@ function declaredType(ctx) {
     profile?.applicant_type ??
     profile?.primary_type ??
     profile?.primary_profile_type ??
+    profile?.profile_type ??
     basic.profile_category ??
     null
   )
@@ -250,13 +251,15 @@ export const CANONICAL_FACTS = Object.freeze({
     canonical: 'military_service.veteran',
     aliases: [
       'demographics.veteran_status', 'family.veteran_status',
+      'military_service.status', 'military_service.military_status', 'military_service.service_status',
       'military_service.active_duty_military', 'military_service.disabled_veteran',
       'military_service.military_spouse', 'military_service.military_branch',
     ],
     applies_to: 'person',
     answeredBy: (ctx) =>
       anyAnswered(ctx, [
-        ['military_service', 'veteran', 'active_duty_military', 'national_guard',
+        ['military_service', 'veteran', 'status', 'military_status', 'service_status',
+          'active_duty_military', 'national_guard',
           'disabled_veteran', 'military_spouse', 'military_dependent', 'gold_star_family', 'military_branch'],
         ['demographics', 'veteran_status'],
         ['family', 'veteran_status'],
@@ -696,6 +699,15 @@ export const QUESTION_FIELD_TO_FACT = Object.freeze({
   programDescriptions: 'program_descriptions',
   program_descriptions: 'program_descriptions',
   cdc_certification: 'cdc_certification',
+
+  // project-readiness plan (crawler-os/projectReadinessPlan.js) question ids —
+  // person-only military/need items must never survive to an organization's
+  // interview queue, and an explicit military_service.status must suppress the
+  // status-precision re-ask.
+  military_status_precision: 'veteran',
+  military_context: 'veteran',
+  military_verification_upload: 'veteran',
+  income_benefit_proof_upload: 'household_income',
 })
 
 export function factForQuestionField(fieldOrFactId) {

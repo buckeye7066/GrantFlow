@@ -117,6 +117,10 @@ export default function ProfileActionPlanCard({ profileId, profileName }) {
       title: `${plan?.title ?? "Project readiness"} interview`,
       metadata: buildAnyaSessionMetadata(plan, profileId),
       prefillMessage: buildAnyaPrefill(plan, profileName),
+      // The prefill is Anya's PRIVATE interview script (question queue, known
+      // facts). The user must only ever see Anya's greeting and one question at
+      // a time — never the script itself.
+      prefillHidden: true,
     })
   }
 

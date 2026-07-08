@@ -28,6 +28,17 @@ test('food truck plan uses parsed profile documents without assuming veteran sta
   assert.equal(plan.checklist.find((item) => item.id === 'permits_licenses')?.status, 'known');
   assert.equal(plan.checklist.find((item) => item.id === 'truck_equipment')?.status, 'known');
   assert.ok(plan.interview_questions.some((q) => q.id === 'business_identity'), 'missing legal structure should still be asked');
+  assert.ok(
+    plan.interview_questions.some((q) => q.id === 'military_status_precision'),
+    'a person-side fuzzy military signal still needs the status-precision question',
+  );
+  // A PERSON starting a business keeps person-side document asks — the org
+  // gate must key off the declared side, not "needs a tax id".
+  assert.ok(
+    plan.checklist.some((x) => x.id === 'military_verification_upload'),
+    'an active-duty individual keeps the military proof upload ask',
+  );
+  assert.ok(plan.checklist.some((x) => x.id === 'official_identity_upload'));
 });
 
 test('business plan asks for official uploads instead of typed sensitive identifiers', () => {
@@ -235,6 +246,101 @@ test('explicit student type still gets the student plan', () => {
     sections: [{ section_key: 'education', data: { school_name: 'State U' } }],
   });
   assert.equal(plan.plan_id, 'student_portal_plan');
+});
+
+test('ministry whose documents mention veterans gets ONLY org-applicable questions', () => {
+  // Regression (Focus Forward Ministry): the project-readiness interview queued
+  // "Which military status should GrantFlow use?", a DD-214/VA upload request,
+  // a personal photo-ID upload, and personal income-proof uploads for a MINISTRY
+  // whose documents merely said it SERVES veterans and families needing food and
+  // housing help. Anya must only ask profile-specific, match-boosting questions.
+  const plan = buildProjectReadinessPlan({
+    id: 'focus-forward-ministry',
+    profile_type: 'ministry',
+    display_name: 'Focus Forward Ministry',
+    description: 'Faith-based ministry building a community recreation facility and expanding outreach infrastructure.',
+    sections: [
+      { section_key: 'basic_information', data: { state: 'TN', county: 'Bradley' } },
+    ],
+    documents: [
+      {
+        id: 'doc-outreach',
+        name: 'outreach-flyer.pdf',
+        mime_type: 'application/pdf',
+        processing_status: 'completed',
+        extracted_text: 'Our ministry serves veterans, military spouses, and seniors in Bradley County with food, rent, and utility help.',
+      },
+    ],
+  });
+
+  // "Serves veterans" is who the org HELPS, not what it IS.
+  assert.deepEqual(plan.military_statuses, []);
+
+  const ids = new Set([
+    ...plan.checklist.map((x) => x.id),
+    ...plan.interview_questions.map((q) => q.id),
+  ]);
+  for (const personOnly of [
+    'military_status_precision',
+    'military_verification_upload',
+    'military_context',
+    'official_identity_upload',
+    'income_benefit_proof_upload',
+  ]) {
+    assert.ok(!ids.has(personOnly), `org profile must not carry person-only item "${personOnly}"`);
+  }
+
+  // A declared ministry outranks "infrastructure"/"recreation" need keywords —
+  // it gets the nonprofit plan, not public-agency SAM.gov/jurisdiction questions.
+  assert.equal(plan.plan_id, 'nonprofit_program_plan');
+
+  // Org-appropriate document asks survive.
+  assert.ok(plan.checklist.some((x) => x.id === 'tax_identifier_document_upload'));
+  assert.ok(plan.checklist.some((x) => x.id === 'organization_governance_upload'));
+});
+
+test('declared public agency still gets the public-agency plan (and no personal-ID ask)', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'county-parks',
+    profile_type: 'county_government',
+    display_name: 'Bradley County Parks',
+    description: 'County parks department seeking recreation infrastructure funding.',
+  });
+  assert.equal(plan.plan_id, 'public_agency_project_plan');
+  assert.ok(!plan.checklist.some((x) => x.id === 'official_identity_upload'));
+  assert.ok(!plan.interview_questions.some((q) => q.id === 'military_status_precision'));
+});
+
+test('food-truck profile with NO military signal is never asked a military-status question', () => {
+  // Regression: militaryInterviewQuestions fired unconditionally for every
+  // food_truck_startup archetype, and the military_context checklist item was
+  // unconditional — both queued military questions with zero military signal.
+  const plan = buildProjectReadinessPlan({
+    id: 'food-truck-plain',
+    profile_type: 'individual',
+    display_name: 'Plain Tacos',
+    description: 'Wants to start a food truck business selling tacos.',
+  });
+  assert.equal(plan.plan_id, 'food_truck_startup');
+  assert.deepEqual(plan.military_statuses, []);
+  assert.ok(!plan.checklist.some((x) => x.id === 'military_context'));
+  assert.ok(!plan.interview_questions.some((q) => q.id === 'military_status_precision'));
+});
+
+test('explicit military_service.status suppresses the precision re-ask; proof upload still requested', () => {
+  const plan = buildProjectReadinessPlan({
+    id: 'vet-explicit',
+    profile_type: 'veteran',
+    description: 'Veteran seeking help with housing costs.',
+    sections: [{ section_key: 'military_service', data: { status: 'veteran' } }],
+  });
+  assert.ok(plan.military_statuses.includes('veteran'));
+  assert.ok(
+    !plan.interview_questions.some((q) => q.id === 'military_status_precision'),
+    'an explicitly stored military_service.status must never be re-asked',
+  );
+  // The DD-214/VA proof UPLOAD is still a valid ask — proof of a fact is not the fact.
+  assert.ok(plan.checklist.some((x) => x.id === 'military_verification_upload'));
 });
 
 test('empty profile becomes an Anya interview, not a penalty or crash', () => {

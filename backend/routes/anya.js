@@ -342,6 +342,11 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     // "long reply → 504 → dead Anya" failure can't happen. The client polls the
     // run status (GET .../runs/:runId) and pings the user when it's ready.
     const background = req.body?.background === true || req.body?.background === 'true'
+    // hidden=true → this content is Anya's PRIVATE script (an interview seed /
+    // question queue the user must never see). Persist it as role 'system': the
+    // orchestrator already folds system rows into the model conversation, and
+    // the chat UI never renders system rows.
+    const hidden = req.body?.hidden === true || req.body?.hidden === 'true'
     const currentPage = (typeof req.body?.current_page === 'string' && req.body.current_page.trim())
       ? req.body.current_page.trim()
       : null
@@ -364,11 +369,11 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       sessionId: req.params.sessionId,
       userId: req.ctx?.userId ?? null,
       profileId: req.ctx?.activeProfileId ?? null,
-      request: { content, background },
+      request: { content, background, hidden },
     })
 
     const userMessage = await addMessage(req.db, req.ctx, req.params.sessionId, {
-      role: 'user',
+      role: hidden ? 'system' : 'user',
       content,
     })
 

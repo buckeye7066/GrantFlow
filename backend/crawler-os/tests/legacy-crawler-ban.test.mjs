@@ -56,6 +56,12 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // keeps need/keyword scanning precision identical across the OS thesis
   // builder and the legacy engine (the phantom-need substring class).
   'backend/services/shared/textMatch.js',
+  // The ONE question choke point (org/person applicability matrix + canonical
+  // fact aliases). Doctrine: every question-asking surface — including the OS
+  // project-readiness interview — must run its questions through it, the same
+  // way matchEngine is the sole matching authority. Pure module; only reaches
+  // shared/profileSectionApplicability.js (itself dependency-free).
+  'backend/services/profileKnownFacts.js',
 ]);
 
 function listFiles(dir) {
