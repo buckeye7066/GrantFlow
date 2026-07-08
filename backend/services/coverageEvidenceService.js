@@ -127,8 +127,19 @@ export const LANE_OF_SOURCE = Object.freeze({
   wv_business_funding_resources: 'state_programs',
   oregon_parks_rec_grants: 'state_programs',
   pa_campaign_finance: 'state_programs',
-  // ── County & city programs — no adapters yet: a REAL structural gap the
-  //    dashboard is meant to surface. (Intentionally empty.) ──
+  // OH + WA lanes (adapter wishlist 2026-07-08): official state benefits
+  // portals + state financial-aid grants, mirroring the kynect (KY) shape.
+  oh_benefits: 'state_programs',
+  oh_college_opportunity_grant: 'state_programs',
+  wa_connection_benefits: 'state_programs',
+  wa_college_grant: 'state_programs',
+  // ── County & city programs — geo-aware locators (2026-07-08; formerly the
+  //    fleet's #1 structural gap: 22/22 profiles had no county_city source).
+  //    countyCityDirectoryAdapter titles each candidate with the profile's own
+  //    county/city and ZIP-deep-links where the site supports it. ──
+  usa_gov_local_governments: 'county_city',
+  hud_resource_locator: 'county_city',
+  findhelp_local_programs: 'county_city',
   // ── Community foundations ──
   cof_locator: 'community_foundations',
   // ── School & student-aid portals ──
@@ -152,6 +163,10 @@ export const LANE_OF_SOURCE = Object.freeze({
   alzheimers_gov_services: 'disease_specific',
   // Copay/patient-assistance foundation finder (diagnosis-based aid).
   copay_assistance_foundations: 'disease_specific',
+  // Mobility-impairment + neurodivergent lanes (adapter wishlist 2026-07-08);
+  // registry `keywords` feed conditionCoveredBySource for gap detection.
+  reeve_foundation_paralysis: 'disease_specific',
+  autism_speaks_family_support: 'disease_specific',
   // ── 211 / local safety net ──
   community_211: 'local_211',
   united_way_211: 'local_211',

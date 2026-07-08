@@ -17,8 +17,10 @@ import { createAgencyRssAdapter } from "./agencyRssAdapter.js";
 import { createOfficialDirectoryAdapter } from "./officialDirectoryAdapter.js";
 import { createEcfChoicesAdapter } from "./ecfChoicesAdapter.js";
 import { createPropublica990Adapter } from "./propublica990Adapter.js";
+import { createCountyCityDirectoryAdapter } from "./countyCityDirectoryAdapter.js";
 
 const officialDirectory = (sourceId) => () => createOfficialDirectoryAdapter(sourceId);
+const countyCityDirectory = (sourceId) => () => createCountyCityDirectoryAdapter(sourceId);
 
 const FACTORIES = Object.freeze({
   grants_gov: createGrantsGovAdapter,
@@ -120,6 +122,19 @@ const FACTORIES = Object.freeze({
   hrsa_health_workforce: officialDirectory('hrsa_health_workforce'),
   copay_assistance_foundations: officialDirectory('copay_assistance_foundations'),
   va_housing_grants: officialDirectory('va_housing_grants'),
+  // --- County & city programs lane (2026-07-08): geo-aware locators titled
+  //     with the profile's own county/city (countyCityDirectoryAdapter).
+  usa_gov_local_governments: countyCityDirectory('usa_gov_local_governments'),
+  hud_resource_locator: countyCityDirectory('hud_resource_locator'),
+  findhelp_local_programs: countyCityDirectory('findhelp_local_programs'),
+  // --- OH + WA state-programs lanes (adapter wishlist 2026-07-08).
+  oh_benefits: officialDirectory('oh_benefits'),
+  oh_college_opportunity_grant: officialDirectory('oh_college_opportunity_grant'),
+  wa_connection_benefits: officialDirectory('wa_connection_benefits'),
+  wa_college_grant: officialDirectory('wa_college_grant'),
+  // --- Disease-specific lanes: mobility impairment + neurodivergent.
+  reeve_foundation_paralysis: officialDirectory('reeve_foundation_paralysis'),
+  autism_speaks_family_support: officialDirectory('autism_speaks_family_support'),
 });
 /** @returns {object|null} an adapter instance, or null if none is implemented. */
 export function getAdapter(sourceId) {
