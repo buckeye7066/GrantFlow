@@ -56,31 +56,28 @@ export default defineConfig(({ mode }) => {
       target: 'es2020',
       rollupOptions: {
         output: {
-          manualChunks(id) {
-            const n = id.replace(/\\/g, '/')
-            if (!n.includes('node_modules/')) return undefined
-
-            if (
-              /node_modules\/react(-dom)?\//.test(n) &&
-              !n.includes('node_modules/react-router') &&
-              !n.includes('node_modules/react-hook-form') &&
-              !n.includes('node_modules/react-day-picker') &&
-              !n.includes('node_modules/react-markdown') &&
-              !n.includes('node_modules/react-resizable')
-            ) {
-              return 'react-vendor'
-            }
-            if (n.includes('node_modules/zustand/') || n.includes('node_modules/use-sync-external-store/')) {
-              return 'zustand-vendor'
-            }
-            if (n.includes('node_modules/@radix-ui/')) return 'radix-ui'
-            if (n.includes('node_modules/@tanstack/react-query/')) return 'query'
-            if (n.includes('node_modules/recharts/')) return 'recharts'
-            if (n.includes('node_modules/framer-motion/')) return 'framer-motion'
-            if (n.includes('node_modules/date-fns/')) return 'date-fns'
-            if (n.includes('node_modules/lucide-react/')) return 'lucide-react'
-            if (n.includes('node_modules/zod/')) return 'zod'
-            return undefined
+          // Rolldown-native chunk grouping. The previous function-form
+          // manualChunks ran through rolldown's legacy compat shim, which
+          // produced an inverted vendor graph: react-dom's implementation was
+          // hoisted INTO the radix-ui chunk and react-vendor became a 0.18 kB
+          // re-export stub of it, so anonymous deep-links to lazy routes
+          // (/start) could crash with "Cannot read properties of undefined
+          // (reading 'default')" when a CJS-interop namespace was read before
+          // its cyclic chunk finished initializing. codeSplitting groups are
+          // resolved with execution-order constraints, so each package really
+          // lands in its own chunk. Groups match in order; first match wins.
+          codeSplitting: {
+            groups: [
+              { name: 'react-vendor', test: /node_modules[\\/](?:react|react-dom|scheduler|react-is)[\\/]/ },
+              { name: 'zustand-vendor', test: /node_modules[\\/](?:zustand|use-sync-external-store)[\\/]/ },
+              { name: 'radix-ui', test: /node_modules[\\/]@radix-ui[\\/]/ },
+              { name: 'query', test: /node_modules[\\/]@tanstack[\\/]react-query[\\/]/ },
+              { name: 'recharts', test: /node_modules[\\/]recharts[\\/]/ },
+              { name: 'framer-motion', test: /node_modules[\\/]framer-motion[\\/]/ },
+              { name: 'date-fns', test: /node_modules[\\/]date-fns[\\/]/ },
+              { name: 'lucide-react', test: /node_modules[\\/]lucide-react[\\/]/ },
+              { name: 'zod', test: /node_modules[\\/]zod[\\/]/ },
+            ],
           },
         },
       },
