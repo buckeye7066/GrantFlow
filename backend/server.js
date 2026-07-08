@@ -3889,8 +3889,10 @@ if (process.env.NODE_ENV !== 'test') {
   // findings from Sam's 05:00 sweep (via the system_kv run-id pointer; falls back
   // to the latest Sam run) and emails the owner a plain-English digest of the
   // code/function errors/weaknesses/bugs that still need a human, plus a note on
-  // what was auto-corrected. Same hourly-tick + ET-day-key pattern; only marks
+  // what was auto-corrected. Same tick + ET-day-key pattern; only marks
   // done once the email actually sends, so a not-yet-configured mailbox retries.
+  // Ticks every 10 min (not hourly): Railway redeploys re-phase setInterval, and
+  // an hourly tick let the owner's 09:00 email drift as late as 09:59.
   function scheduleAnyaDailyOwnerReport(dbInstance) {
     const MARKER = 'anya_daily_owner_report_last_run'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.ANYA_DAILY_REPORT_HOUR_ET) || 9))
@@ -3923,7 +3925,7 @@ if (process.env.NODE_ENV !== 'test') {
       logger: console,
     }, runOnce)
     setTimeout(lockedRunOnce, 150_000)
-    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 09:00 ET window
+    setInterval(lockedRunOnce, 10 * 60 * 1000) // 10-min check; keeps the owner email within minutes of 09:00 ET and catches up a missed window
   }
 
   if (BACKGROUND_SERVICES_DISABLED) {
