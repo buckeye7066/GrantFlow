@@ -130,6 +130,31 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     webParity = { ran: false, error: err?.message }
   }
 
+  // Award-amount enrichment, at NIGHT-sized bounds. The boot invariant
+  // (enforceAmountEnrichment) reads the funder's own page for active-pipeline
+  // rows with no dollar figure, but its boot budget (10 fetches / 20s) exists
+  // to keep deploys fast — against a ~300-row amount-less active pipeline it
+  // never catches up (Sam's "Pipeline-$ coverage LOW 11%" finding, 2026-07-08).
+  // The nightly window has time: same conservative extractor, same attempted-id
+  // ring (no page is re-fetched), just a real budget. Tune with
+  // NIGHTLY_AMOUNT_ENRICH_LIMIT / NIGHTLY_AMOUNT_ENRICH_TIME_BUDGET_MS; the
+  // pass is skipped entirely when ENFORCE_AMOUNT_ENRICHMENT=0 (the invariant
+  // itself honors that flag). Best-effort — never blocks the sweep.
+  let amountEnrichment = null
+  try {
+    const { enforceAmountEnrichment } = await import('../../startup/enforceInvariants.js')
+    const limit = Math.max(1, Number.parseInt(process.env.NIGHTLY_AMOUNT_ENRICH_LIMIT || '120', 10) || 120)
+    const timeBudgetMs = Math.max(10_000, Number.parseInt(process.env.NIGHTLY_AMOUNT_ENRICH_TIME_BUDGET_MS || '300000', 10) || 300_000)
+    amountEnrichment = await enforceAmountEnrichment(db, { limit, timeBudgetMs })
+    log.info('nightly amount-enrichment pass complete', {
+      scanned: amountEnrichment?.scanned ?? 0,
+      repaired: amountEnrichment?.repaired ?? 0,
+    })
+  } catch (err) {
+    log.warn('nightly amount enrichment failed (non-fatal)', { error: err?.message })
+    amountEnrichment = { ok: false, error: err?.message }
+  }
+
   // Gap-email review drafts: when a profile is incomplete, draft a warm "a few
   // quick questions" email (Ellie voice) into the owner's mailbox for review.
   // DRAFT-ONLY, never sends. No-op unless GAP_EMAIL_DRAFTS_ENABLED=true, so this
@@ -292,6 +317,13 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
           fleet_parity: webParity.fleet_parity ?? null,
           profiles: webParity.per_profile?.length ?? 0,
           gap_candidates_appended: webParity.gap_queue?.appended ?? 0,
+        }
+      : null,
+    amount_enrichment: amountEnrichment
+      ? {
+          ok: amountEnrichment.ok !== false && !amountEnrichment.error,
+          scanned: amountEnrichment.scanned ?? 0,
+          repaired: amountEnrichment.repaired ?? 0,
         }
       : null,
     at: now.toISOString(),

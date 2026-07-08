@@ -203,8 +203,8 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     const stateLane = result.lanes.find((l) => l.lane === 'state_programs')
     expect(stateLane.selected_sources.map((s) => s.source_id)).toContain('tn_ecf_choices')
 
-    // The gap detector itself still works: a state with no registry source
-    // (OH has none) must still emit the state-programs gap.
+    // OH is covered as of 2026-07-08 (oh_benefits + oh_college_opportunity_grant)
+    // — the former OH gap must no longer fire, and the portal is selectable.
     const ohId = 'p-oh-dementia'
     insertProfile(db, { id: ohId, displayName: 'Lorain County Senior', state: 'OH' })
     insertSection(db, ohId, 'basic_information', {
@@ -215,9 +215,23 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     const ohGap = ohResult.gaps.find(
       (g) => g.lane === 'state_programs' && /\bOH\b/.test(g.statement),
     )
-    expect(ohGap, 'expected an OH state-programs gap').toBeTruthy()
-    expect(ohGap.profile_fact).toBe('state=OH')
-    expect(ohGap.suggested_action).toMatch(/OH/)
+    expect(ohGap, 'OH is covered by oh_benefits — no state gap should fire').toBeUndefined()
+
+    // The gap detector itself still works: a state with no registry source
+    // (MT has none) must still emit the state-programs gap.
+    const mtId = 'p-mt-senior'
+    insertProfile(db, { id: mtId, displayName: 'Missoula Senior', state: 'MT' })
+    insertSection(db, mtId, 'basic_information', {
+      state: 'MT', city: 'Missoula', profile_category: 'individual',
+    })
+    insertSection(db, mtId, 'narrative', { primary_goal: 'help paying for housing and caregiving' })
+    const mtResult = await buildCoverageEvidence(db, mtId)
+    const mtGap = mtResult.gaps.find(
+      (g) => g.lane === 'state_programs' && /\bMT\b/.test(g.statement),
+    )
+    expect(mtGap, 'expected an MT state-programs gap').toBeTruthy()
+    expect(mtGap.profile_fact).toBe('state=MT')
+    expect(mtGap.suggested_action).toMatch(/MT/)
   })
 
   it('covers dementia via alzheimers_gov_services (no false-positive gap) but gaps on parkinsons', async () => {
@@ -236,14 +250,20 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     expect(parkinsonsGap.statement).toMatch(/No disease-specific source lane exists/i)
   })
 
-  it('emits a county/city structural gap (no adapters exist for that lane)', async () => {
+  it('the county/city lane is REAL now (2026-07-08 fix): sources exist and get selected', async () => {
     const result = await buildCoverageEvidence(db, profileId)
     const countyLane = result.lanes.find((l) => l.lane === 'county_city')
-    expect(countyLane.status).toBe('missing')
-    expect(countyLane.registry_source_count).toBe(0)
-    const countyGap = result.gaps.find((g) => g.lane === 'county_city')
-    expect(countyGap, 'expected a county/city structural gap').toBeTruthy()
-    expect(countyGap.statement).toMatch(/no .*source adapters exist/i)
+    // The formerly-empty lane (the "22/22 profiles gapped" scoreboard statement)
+    // now has geo-aware locator sources...
+    expect(countyLane.registry_source_count).toBeGreaterThanOrEqual(3)
+    // ...that an individual profile actually selects (usa_gov + findhelp serve
+    // broad applicant/need buckets), so the structural gap must be gone.
+    expect(countyLane.selected_sources.length).toBeGreaterThan(0)
+    expect(countyLane.status).not.toBe('missing')
+    const structuralGap = result.gaps.find(
+      (g) => g.lane === 'county_city' && /source adapters exist/i.test(g.statement),
+    )
+    expect(structuralGap, 'the county/city "no adapters exist" gap must not fire anymore').toBeUndefined()
   })
 
   it('returns all 9 lanes with a status each', async () => {

@@ -256,10 +256,13 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const byClass = windowed ? windowSummary.by_class : store.totals.by_class || {}
       const gapRate = calls > 0 ? withGap / calls : 0
       const scopeLabel = windowed ? `live crawls in the last ${windowSummary.days} days` : 'live crawls (lifetime — pre-window store)'
+      // "×N" not "=N": these summaries land in the owner EMAIL, where a literal
+      // "=" followed by two hex chars ("=56", "=28") is eaten by MIME
+      // quoted-printable decoding and corrupts the text ("hyperlocal_gapV9").
       const topClasses = Object.entries(byClass)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
-        .map(([k, v]) => `${k}=${v}`)
+        .map(([k, v]) => `${k} ×${v}`)
         .join(', ')
       // Alert only with a real sample AND a high gap share — a systemic signal,
       // not the occasional legitimately-narrow profile.
@@ -307,10 +310,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const keys = Object.keys(days).sort()
       if (keys.length === 0) return { ok: true, summary: 'No Amy flywheel cohort data yet.' }
       const latest = days[keys[keys.length - 1]]
+      // "×N" not "=N" — see topClasses above (quoted-printable email corruption).
       const topTypes = Object.entries(latest.finding_types || {})
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4)
-        .map(([k, v]) => `${k}=${v}`)
+        .map(([k, v]) => `${k} ×${v}`)
         .join(', ')
       const label = `${latest.clean}/${latest.evaluated} clean (target ${latest.target}) on ${latest.day}`
       if (latest.evaluated > 0 && latest.issues === 0 && latest.complete) {

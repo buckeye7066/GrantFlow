@@ -2839,13 +2839,15 @@ export async function enforceImportedStatusHonesty(db) {
  *
  * OVERRIDE: ON by default; ENFORCE_AMOUNT_ENRICHMENT=0 for count-only.
  * Bounds: AMOUNT_ENRICH_BOOT_LIMIT (default 10) fetches per boot,
- * AMOUNT_ENRICH_TIME_BUDGET_MS (default 20000).
+ * AMOUNT_ENRICH_TIME_BUDGET_MS (default 20000). Callers with a bigger window
+ * (the nightly sweep's dedicated enrichment pass) may override both via
+ * deps.limit / deps.timeBudgetMs — the boot path stays cheap by default.
  */
 export async function enforceAmountEnrichment(db, deps = {}) {
   return runInvariant('amount_enrichment', async () => {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
-    const LIMIT = Math.max(1, Number.parseInt(process.env.AMOUNT_ENRICH_BOOT_LIMIT || '10', 10) || 10)
-    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(process.env.AMOUNT_ENRICH_TIME_BUDGET_MS || '20000', 10) || 20000)
+    const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.AMOUNT_ENRICH_BOOT_LIMIT ?? '10', 10) || 10)
+    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.AMOUNT_ENRICH_TIME_BUDGET_MS ?? '20000', 10) || 20000)
     const ATTEMPTED_KV_KEY = 'amount_enrich_attempted_ids'
     const ATTEMPTED_MAX_REMEMBERED = 2000
 

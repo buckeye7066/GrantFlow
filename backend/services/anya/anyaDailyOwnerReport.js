@@ -529,7 +529,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
         corrected by Sam's CI and shipped to production overnight (before this email); the items above need a human eye.
-        To stop this email set <code>ANYA_DAILY_REPORT_ENABLED=false</code>.
+        To stop this email set <code>ANYA_DAILY_REPORT_ENABLED</code> to <code>false</code>.
+        <!-- No "KEY=value" literals in email bodies: "=fa" is a quoted-printable
+             hex pair and MIME decoding eats it ("ENABLED�lse" corruption). -->
       </p>
     </div>`
 
