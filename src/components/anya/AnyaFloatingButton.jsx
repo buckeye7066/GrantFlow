@@ -10,6 +10,7 @@ import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore"
 export default function AnyaFloatingButton({ profileId, className }) {
   const [isOpen, setIsOpen] = useState(false)
   const [prefillMessage, setPrefillMessage] = useState(null)
+  const [prefillHidden, setPrefillHidden] = useState(false)
   const [sessionOptions, setSessionOptions] = useState({})
   const [chatKey, setChatKey] = useState(0)
   // Use the canonical admin normalizer so we accept every shape the auth
@@ -34,6 +35,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
       const detail = event?.detail ?? {}
       const msg = detail?.prefillMessage ?? null
       setPrefillMessage(msg)
+      setPrefillHidden(detail?.prefillHidden === true)
       setSessionOptions({
         profileId: detail?.profileId ?? null,
         title: detail?.title ?? null,
@@ -51,6 +53,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
 
   const handleClick = () => {
     setPrefillMessage(null)
+    setPrefillHidden(false)
     setSessionOptions({})
     setChatKey((key) => key + 1)
     setIsOpen(true)
@@ -141,6 +144,7 @@ export default function AnyaFloatingButton({ profileId, className }) {
               profileId={targetProfileId ?? undefined}
               initialSessionOptions={sessionOptions}
               prefillMessage={prefillMessage}
+              prefillHidden={prefillHidden}
               onPrefillConsumed={() => setPrefillMessage(null)}
             />
             ) : (

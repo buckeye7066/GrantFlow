@@ -53,7 +53,7 @@ export async function getAnyaMessages(sessionId, { limit, direction } = {}) {
   })
 }
 
-export async function postAnyaMessage(sessionId, message, { currentPage, pageContext, background } = {}) {
+export async function postAnyaMessage(sessionId, message, { currentPage, pageContext, background, hidden } = {}) {
   if (!sessionId) {
     throw new Error("Session id required")
   }
@@ -63,6 +63,10 @@ export async function postAnyaMessage(sessionId, message, { currentPage, pageCon
   // background=true → the server returns 202 immediately with { pending, run_id }
   // and finishes the reply out of band. Callers poll getAnyaRun(run_id).
   if (background) payload.background = true
+  // hidden=true → the server stamps this as Anya's private interview seed
+  // (tool_name marker; role stays 'user'): the model reads it, the chat UI
+  // never paints it, the audit trail keeps it.
+  if (hidden) payload.hidden = true
   return apiFetch(`/api/anya/sessions/${sessionId}/messages`, {
     method: "POST",
     body: JSON.stringify(payload),

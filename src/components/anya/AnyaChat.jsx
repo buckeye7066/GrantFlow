@@ -450,7 +450,7 @@ function resolvePageName(pathname) {
   return null
 }
 
-export default function AnyaChat({ profileId, currentPage: currentPageProp, initialSessionOptions, prefillMessage, onPrefillConsumed }) {
+export default function AnyaChat({ profileId, currentPage: currentPageProp, initialSessionOptions, prefillMessage, prefillHidden = false, onPrefillConsumed }) {
   const user = useAuthStore((state) => state.user)
   const profiles = useAuthStore((state) => state.profiles)
   // Accept every admin shape the auth store normalizes (is_admin snake_case,
@@ -1085,11 +1085,16 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     isSendingRef.current = true
     setIsSending(true)
     const optimisticId = uuid()
-    setMessages((prev) => [
-      ...prev,
-      { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
-    ])
-    postAnyaMessage(sessionId, trimmed, { currentPage: cp, pageContext: ctx })
+    // A hidden prefill is Anya's PRIVATE script (interview seed / question
+    // queue) — never paint it into the transcript. The server stamps it with
+    // the anya_private_seed marker, which the render filter also hides.
+    if (!prefillHidden) {
+      setMessages((prev) => [
+        ...prev,
+        { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
+      ])
+    }
+    postAnyaMessage(sessionId, trimmed, { currentPage: cp, pageContext: ctx, hidden: prefillHidden })
       .then((response) => {
         if (Array.isArray(response?.messages) && response.messages.length > 0) {
           setMessages((prev) => {
@@ -1111,7 +1116,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
         isSendingRef.current = false
         setIsSending(false)
       })
-  }, [prefillMessage, sessionId])
+  }, [prefillMessage, prefillHidden, sessionId])
 
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
@@ -2082,7 +2087,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                 <p className="whitespace-pre-wrap break-words leading-relaxed">{nudgeMessage}</p>
               </div>
             ) : null}
-            {messages.map((message) => (
+            {/* Rows marked anya_private_seed are Anya's private interview
+                scripts — model context + audit trail only, never painted into
+                the visible chat. */}
+            {messages.filter((message) => message.tool_name !== "anya_private_seed").map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
             {isSending && !awaitingRunId ? (

@@ -176,6 +176,10 @@ describe('profileAlreadyAnswers (fact registry)', () => {
     expect(profileAlreadyAnswers('gender', { sections: { demographics: { gender: 'male' } } })).toBe(true)
     // veteran stored only as the military_service schema flag
     expect(profileAlreadyAnswers('veteran', { sections: { military_service: { veteran: true } } })).toBe(true)
+    // an explicit military_service.status string ("veteran", "active duty") IS
+    // the answer — the readiness-plan precision question must not re-ask it
+    expect(profileAlreadyAnswers('veteran', { sections: { military_service: { status: 'veteran' } } })).toBe(true)
+    expect(profileAlreadyAnswers('military_status_precision', { sections: { military_service: { status: 'active duty' } } })).toBe(true)
     // an EXPLICIT "not a veteran" string is an answer too
     expect(profileAlreadyAnswers('veteran', { sections: { demographics: { veteran_status: 'Not a veteran' } } })).toBe(true)
     // ZIP stored under the location_focus alias the old prompts never read
@@ -255,6 +259,18 @@ describe('questionAppliesToProfile (type-appropriateness matrix)', () => {
     for (const f of ['gender', 'org_status', 'primary_need']) {
       expect(questionAppliesToProfile(f, unknownCtx)).toBe(true)
     }
+  })
+
+  it('project-readiness plan question ids are in the matrix (surface 5 — Focus Forward class)', () => {
+    // A ministry/agency must never be asked personal military status, DD-214
+    // uploads, or personal income proof; a person still is.
+    for (const f of ['military_status_precision', 'military_context', 'military_verification_upload', 'income_benefit_proof_upload']) {
+      expect(questionAppliesToProfile(f, orgCtx), `${f} must not apply to an org`).toBe(false)
+      expect(questionAppliesToProfile(f, personCtx), `${f} must apply to a person`).toBe(true)
+    }
+    // the readiness plan's test fixtures declare identity via profile_type
+    expect(resolveProfileSide({ profile: { profile_type: 'ministry' } })).toBe('org')
+    expect(resolveProfileSide({ profile: { profile_type: 'individual' } })).toBe('person')
   })
 
   it('every askable surface field id resolves to a registered fact', () => {

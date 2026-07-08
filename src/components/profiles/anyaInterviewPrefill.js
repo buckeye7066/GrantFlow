@@ -16,6 +16,13 @@
  * re-ask" reference, and ends the message with a single actionable directive:
  * greet, then ask ONLY the first question now, one at a time, never showing the
  * list. Recency now reinforces the interview instead of fighting it.
+ *
+ * PRIVACY: this seed is Anya's script, not something the user typed. It is sent
+ * with prefillHidden=true (ProfileActionPlanCard → openAnyaPanel); the server
+ * stamps the stored row with the anya_private_seed marker (role stays 'user' —
+ * never client-controlled) and the chat UI collapses marked rows. The model
+ * reads it, the audit trail keeps it, and the user's first sight of the
+ * interview is Anya's greeting.
  */
 
 export function buildAnyaPrefill(plan, profileName) {
