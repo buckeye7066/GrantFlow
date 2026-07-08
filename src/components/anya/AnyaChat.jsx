@@ -1086,8 +1086,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     setIsSending(true)
     const optimisticId = uuid()
     // A hidden prefill is Anya's PRIVATE script (interview seed / question
-    // queue) — never paint it into the transcript. The server stores it as a
-    // role:'system' message, which the render filter below also hides.
+    // queue) — never paint it into the transcript. The server stamps it with
+    // the anya_private_seed marker, which the render filter also hides.
     if (!prefillHidden) {
       setMessages((prev) => [
         ...prev,
@@ -2087,9 +2087,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                 <p className="whitespace-pre-wrap break-words leading-relaxed">{nudgeMessage}</p>
               </div>
             ) : null}
-            {/* role:'system' rows are Anya's private seeds (hidden interview
-                scripts) — model context only, never part of the visible chat. */}
-            {messages.filter((message) => message.role !== "system").map((message) => (
+            {/* Rows marked anya_private_seed are Anya's private interview
+                scripts — model context + audit trail only, never painted into
+                the visible chat. */}
+            {messages.filter((message) => message.tool_name !== "anya_private_seed").map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
             {isSending && !awaitingRunId ? (

@@ -343,9 +343,11 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     // run status (GET .../runs/:runId) and pings the user when it's ready.
     const background = req.body?.background === true || req.body?.background === 'true'
     // hidden=true → this content is Anya's PRIVATE script (an interview seed /
-    // question queue the user must never see). Persist it as role 'system': the
-    // orchestrator already folds system rows into the model conversation, and
-    // the chat UI never renders system rows.
+    // question queue the chat should not paint as a user bubble). SECURITY: the
+    // message ROLE is never client-controlled — the row stays role 'user' (it
+    // reaches the model as an ordinary user turn either way) and `hidden` only
+    // stamps a tool_name marker the chat UI collapses. The full content remains
+    // in the transcript for admin/audit review.
     const hidden = req.body?.hidden === true || req.body?.hidden === 'true'
     const currentPage = (typeof req.body?.current_page === 'string' && req.body.current_page.trim())
       ? req.body.current_page.trim()
@@ -373,8 +375,9 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     })
 
     const userMessage = await addMessage(req.db, req.ctx, req.params.sessionId, {
-      role: hidden ? 'system' : 'user',
+      role: 'user',
       content,
+      toolName: hidden ? 'anya_private_seed' : null,
     })
 
     if (background) {
