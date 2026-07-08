@@ -496,7 +496,15 @@ function assessCase(caseDef) {
   if (!checklist.length) {
     fail(failures, caseDef.name, 'Anya/Hamilton checklist is empty')
   }
-  if (!checklistById.has('official_identity_upload')) {
+  // Sensitive-proof hygiene: every plan carries at least one "upload the
+  // official document instead of typing numbers into chat" ask. PERSON-side
+  // profiles get the personal photo-ID item; ORG-side profiles must NOT be
+  // asked for anyone's personal photo ID (the Focus Forward Ministry class) —
+  // their audit-trail asks are the tax/registration + governance uploads.
+  const hasPersonalIdAsk = checklistById.has('official_identity_upload')
+  const hasOrgUploadAsk =
+    checklistById.has('tax_identifier_document_upload') || checklistById.has('organization_governance_upload')
+  if (!hasPersonalIdAsk && !hasOrgUploadAsk) {
     fail(failures, caseDef.name, 'official upload audit-trail prompt is missing')
   }
 
