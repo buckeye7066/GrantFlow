@@ -4,9 +4,9 @@
  * Anya runs an adaptive conversational quiz here: each question's options and
  * follow-ups depend on the previous answer, so a church doesn't get asked
  * about scholarships and a college student doesn't get asked about 501(c)(3)
- * status. When the conversation finishes the page collects an email, hands
- * off to /api/onboarding/complete (which creates the profile + credential),
- * then asks for the 6-digit sign-in code and signs the user in.
+ * status. When the conversation finishes the page collects an email and hands
+ * off to /api/onboarding/complete, which creates the profile + user and emails
+ * the SAME secure /set-password link the login page uses — no sign-in codes.
  *
  * Mission goals: this is goal #7 (clear discovery UI) and the key onramp for
  * goals 1-6 — we collect the canonical signals the matching engine needs in
@@ -350,8 +350,8 @@ function AnnounceQuestion({ question, onSubmit, busy }) {
 // ---------------------------------------------------------------------------
 export default function Start() {
   const navigate = useNavigate()
-  const verifyEmailCode = useAuthStore((s) => s.verifyEmailCode)
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const startPasswordSetup = useAuthStore((s) => s.startPasswordSetup)
   const { setLanguage } = useLanguage()
 
   const [sessionId, setSessionId] = useState(null)
@@ -359,13 +359,10 @@ export default function Start() {
   const [history, setHistory] = useState([]) // { speaker: 'anya' | 'user', content: ReactNode }[]
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  // Completion + email verify flow
+  // Completion → "check your email for the set-password link" panel
   const [completionPayload, setCompletionPayload] = useState(null)
-  const [otpCode, setOtpCode] = useState('')
-  const [otpBusy, setOtpBusy] = useState(false)
-  const [otpError, setOtpError] = useState(null)
-  // Shown for a moment after sign-in, before handing off to the guided tour on Dashboard.
-  const [showTourHandoff, setShowTourHandoff] = useState(false)
+  const [resendBusy, setResendBusy] = useState(false)
+  const [resendNotice, setResendNotice] = useState(null)
   // How-to video modal (offered on the email step, or auto-played first)
   const [showVideo, setShowVideo] = useState(false)
   // The intro video now plays automatically before the interview begins, once
@@ -388,10 +385,8 @@ export default function Start() {
   const scrollerRef = useRef(null)
 
   // --- Already-authenticated users skip onboarding entirely --------------
-  // Gated on !completionPayload: the moment OTP verification succeeds at the
-  // END of the interview, isAuthenticated flips true — ungated, this effect
-  // yanked brand-new users straight to /Dashboard and the "You're in!" tour
-  // handoff panel (an explicit owner requirement) was unreachable dead code.
+  // Gated on !completionPayload so a signed-in user who somehow lands here
+  // mid-completion isn't yanked away from the "check your email" panel.
   useEffect(() => {
     if (isAuthenticated && !completionPayload) {
       navigate('/Dashboard', { replace: true })
@@ -468,11 +463,27 @@ export default function Start() {
         }),
       })
       if (result?.complete) {
-        // Move to completion: ask backend to create user/profile + send code.
+        // Move to completion: backend creates the user/profile and emails the
+        // secure /set-password link (the same flow as the login page).
         const completed = await apiFetch('/api/onboarding/complete', {
           method: 'POST',
           body: JSON.stringify({ session_id: sessionId }),
         })
+
+        // Dev/smoke convenience: no email service locally, so hop straight to
+        // the set-password page with the previewed token (mirrors EmailSignInForm).
+        const smokeMode = String(import.meta?.env?.VITE_SMOKE_MODE || '').toLowerCase() === 'true'
+        if (completed?.preview_token && (import.meta?.env?.DEV || smokeMode)) {
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem(SESSION_KEY)
+          }
+          navigate(`/set-password?token=${encodeURIComponent(String(completed.preview_token))}`)
+          return
+        }
+
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(SESSION_KEY)
+        }
         setCompletionPayload(completed)
         setQuestion(null)
         setHistory((prev) => [
@@ -480,9 +491,11 @@ export default function Start() {
           {
             speaker: 'anya',
             content:
-              completed.email_sent
-                ? `I just sent a 6-digit sign-in code to ${completed.email}. Drop it in below and we'll start finding matches.`
-                : `I generated a sign-in code for ${completed.email}. Email may be slow — give it a minute and check spam if it doesn't show up. You can paste it below.`,
+              completed.signin_flow === 'password_exists'
+                ? `You already have a GrantFlow password — sign in with ${completed.email} and I'll put your answers to work.`
+                : completed.email_sent
+                  ? `I just emailed a secure sign-in link to ${completed.email}. Open it, set your password, and you're in — I'll take it from there.`
+                  : `I created your sign-in link for ${completed.email}. Email can be slow — give it a minute and check spam, or resend it below.`,
           },
         ])
       } else if (result?.question) {
@@ -497,41 +510,22 @@ export default function Start() {
     } finally {
       setBusy(false)
     }
-  }, [sessionId, question, setLanguage])
+  }, [sessionId, question, setLanguage, navigate])
 
-  // --- Verify the email OTP and finalise sign-in --------------------------
-  const verifyOtp = useCallback(async (e) => {
-    e?.preventDefault?.()
-    if (!completionPayload?.email) return
-    const code = otpCode.replace(/\D/g, '').slice(0, 6)
-    if (code.length !== 6) {
-      setOtpError('Codes are 6 digits.')
-      return
-    }
-    setOtpError(null)
-    setOtpBusy(true)
+  // --- Resend the set-password link (same endpoint the login page uses) ---
+  const resendSetupLink = useCallback(async () => {
+    if (!completionPayload?.email || resendBusy) return
+    setResendBusy(true)
+    setResendNotice(null)
     try {
-      await verifyEmailCode({
-        email: completionPayload.email,
-        code,
-        verificationToken: completionPayload.verification_token,
-        profileId: completionPayload.profile_id,
-      })
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(SESSION_KEY)
-      }
-      setShowTourHandoff(true)
+      await startPasswordSetup(completionPayload.email)
+      setResendNotice(`Sent! Check ${completionPayload.email} (and spam) for the new link.`)
     } catch (err) {
-      setOtpError(err?.message ?? 'That code didn\'t verify. Try again.')
+      setResendNotice(err?.error || err?.message || 'Could not resend the link. Try again in a minute.')
     } finally {
-      setOtpBusy(false)
+      setResendBusy(false)
     }
-  }, [completionPayload, otpCode, verifyEmailCode])
-
-  // --- Hand off from the interview into the guided first-cycle tour -------
-  const continueToGuidedTour = useCallback(() => {
-    navigate('/Dashboard', { replace: true })
-  }, [navigate])
+  }, [completionPayload, resendBusy, startPasswordSetup])
 
   const renderQuestion = () => {
     if (!question) return null
@@ -591,57 +585,49 @@ export default function Start() {
             </Alert>
           ) : null}
 
-          {!completionPayload ? renderQuestion() : showTourHandoff ? (
+          {!completionPayload ? renderQuestion() : completionPayload.signin_flow === 'password_exists' ? (
             <div className="ml-12 max-w-md rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">
               <div className="flex items-start gap-3">
-                <img
-                  src="/images/anya-avatar.svg"
-                  alt="Anya"
-                  className="h-10 w-10 shrink-0 rounded-full shadow-sm"
-                />
+                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-green-600" />
                 <div className="text-sm leading-relaxed text-slate-800">
-                  <p className="font-semibold text-blue-700">You're in!</p>
+                  <p className="font-semibold text-blue-700">Welcome back!</p>
                   <p className="mt-1">
-                    I already have your answers, so let's put them to work. I'll walk you through one
-                    full pass together — finding a real funding match, adding it to your pipeline, moving
-                    it forward, and even watching a portal open — so you know exactly how it all fits
-                    together before you're on your own.
+                    You already have a password for {completionPayload.email}. Sign in and your new
+                    answers go straight to work.
                   </p>
                 </div>
               </div>
-              <Button onClick={continueToGuidedTour} className="mt-4 w-full gap-2">
+              <Button onClick={() => navigate('/login')} className="mt-4 w-full gap-2">
                 <ArrowRight className="h-4 w-4" />
-                Let's go
+                Go to sign in
               </Button>
             </div>
           ) : (
-            <div className="ml-12 max-w-md rounded-2xl border border-blue-200 bg-white p-4 shadow-sm">
-              <form className="space-y-2" onSubmit={verifyOtp}>
-                <Label htmlFor="otp">6-digit sign-in code</Label>
-                <Input
-                  id="otp"
-                  inputMode="numeric"
-                  pattern="\d{6}"
-                  maxLength={6}
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  placeholder="123456"
-                  autoFocus
-                  className="font-mono text-lg tracking-[0.4em]"
-                />
-                {otpError ? (
-                  <p className="text-xs text-red-600">{otpError}</p>
-                ) : null}
-                {completionPayload.preview_code ? (
-                  <p className="text-[11px] text-slate-400">
-                    Dev preview: {completionPayload.preview_code}
+            <div className="ml-12 max-w-md rounded-2xl border border-blue-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <Mail className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+                <div className="text-sm leading-relaxed text-slate-800">
+                  <p className="font-semibold text-blue-700">One last step — check your email</p>
+                  <p className="mt-1">
+                    We sent a secure link to <span className="font-medium">{completionPayload.email}</span>.
+                    Open it to set your password and you'll land right on your dashboard. The link
+                    expires in 30 minutes.
                   </p>
-                ) : null}
-                <Button type="submit" disabled={otpBusy} className="w-full gap-2">
-                  {otpBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                  Sign in & start matching
-                </Button>
-              </form>
+                </div>
+              </div>
+              {resendNotice ? (
+                <p className="mt-3 text-xs text-slate-600">{resendNotice}</p>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={resendSetupLink}
+                disabled={resendBusy}
+                className="mt-4 w-full gap-2"
+              >
+                {resendBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Resend the link
+              </Button>
             </div>
           )}
         </div>
