@@ -299,6 +299,32 @@ function isProductionEnvironment() {
   )
 }
 
+// ---------------------------------------------------------------------------
+// OTP code sign-in is RETIRED in production (2026-07-11). Every sign-in
+// surface uses the password flow: /access/check → /password/login, or an
+// emailed /set-password link for accounts without a password yet. The code
+// endpoints stay available OUTSIDE production for the local/dev/test harness;
+// in production a stale cached frontend (or the pre-password Start.jsx) that
+// still asks for a code gets a clear, actionable 410 instead of silently
+// emailing 6-digit codes that confuse users ("a code popped up at login").
+// Escape hatch: ALLOW_OTP_LOGIN=true re-enables them in production.
+// ---------------------------------------------------------------------------
+function isOtpLoginRetired() {
+  return (
+    isProductionEnvironment() &&
+    String(process.env.ALLOW_OTP_LOGIN || '').toLowerCase() !== 'true'
+  )
+}
+
+function otpLoginRetired(res) {
+  return res.status(410).json({
+    error_type: 'code_login_retired',
+    error:
+      "Sign-in codes are no longer used. Refresh the page and sign in with your email — we'll send you a secure password link instead.",
+    redirect_to: '/Login',
+  })
+}
+
 function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
   const jti = crypto.randomUUID()
   return jwt.sign(
@@ -1766,6 +1792,7 @@ async function rotateSessionTokens(db, {
 }
 
 router.post('/email/start', emailStartLimiter, async (req, res) => {
+  if (isOtpLoginRetired()) return otpLoginRetired(res)
   try {
     // Validate input
     const emailRaw = req.body?.email
@@ -1965,6 +1992,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 })
 
 router.post('/email/verify', async (req, res) => {
+  if (isOtpLoginRetired()) return otpLoginRetired(res)
   const emailRaw = req.body?.email
   const codeRaw = req.body?.code
   const verificationTokenRaw = req.body?.verification_token ?? req.body?.verificationToken ?? null
@@ -2252,6 +2280,7 @@ router.post('/email/verify', async (req, res) => {
 })
 
 router.post('/phone/start', phoneStartLimiter, async (req, res) => {
+  if (isOtpLoginRetired()) return otpLoginRetired(res)
   const phoneRaw = req.body?.phone
   if (typeof phoneRaw !== 'string') {
     return res.status(400).json({ error: 'phone is required' })
@@ -2319,6 +2348,7 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
 })
 
 router.post('/phone/verify', async (req, res) => {
+  if (isOtpLoginRetired()) return otpLoginRetired(res)
   const phoneRaw = req.body?.phone
   const codeRaw = req.body?.code
   const requestedProfileId = req.body?.profile_id ?? null
@@ -2553,6 +2583,74 @@ function buildPasswordSetupLink(req, token) {
 }
 
 /**
+ * Single source of truth for the "secure link" sign-in flow: mint a
+ * password-setup token for `user` and email `email` the /set-password link.
+ * Used by BOTH POST /password/setup/start and the conversational onboarding
+ * funnel (routes/onboarding.js), so login and signup can never drift apart.
+ *
+ * Never throws for email-delivery problems — returns { emailSent, emailSendError }
+ * so callers can decide how loudly to complain. DB failures (after one
+ * schema-ensure retry) DO throw: without a persisted token the link is dead.
+ */
+async function beginPasswordSetup(db, { user, email, req = null }) {
+  const token = base64UrlToken(32)
+  const tokenHash = hashValue(token)
+  const now = new Date()
+  const expiresAt = new Date(now.getTime() + PASSWORD_SETUP_TTL * 1000).toISOString()
+  const id = crypto.randomUUID()
+  const insertToken = () =>
+    db
+      .prepare(
+        `
+          INSERT INTO password_setup_tokens (
+            id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+        `,
+      )
+      .run(id, user.id, tokenHash, expiresAt, req?.ip ?? null, req?.headers?.['user-agent'] ?? null)
+
+  try {
+    await insertToken()
+  } catch (dbError) {
+    // Retry once after best-effort schema ensure (covers deploys where migrations lag).
+    console.warn('[auth/password-setup] Initial DB error, retrying after schema ensure:', dbError?.message || dbError)
+    await ensurePasswordAuthSchema(db)
+    await insertToken()
+  }
+
+  routeLogger.info('[auth/password-setup] Token created:', {
+    user_id: user.id,
+    email,
+    token_id: id,
+    expires_at: expiresAt,
+    ip: req?.ip ?? null,
+  })
+
+  const link = buildPasswordSetupLink(req, token)
+
+  let emailSent = false
+  /** @type {null | { name?: string, status?: any, provider?: any, message?: string }} */
+  let emailSendError = null
+  try {
+    const sendPromise = sendPasswordSetupEmail(email, link)
+    const timeoutPromise = new Promise((resolve) => {
+      setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000))
+    })
+    emailSent = (await Promise.race([sendPromise, timeoutPromise])) === true
+  } catch (err) {
+    emailSendError = {
+      name: err?.name,
+      status: err?.status,
+      provider: err?.provider,
+      message: err?.message || String(err),
+    }
+    emailSent = false
+  }
+
+  return { tokenId: id, token, link, emailSent, emailSendError }
+}
+
+/**
  * POST /api/auth/access/check
  * Check if an email is allowed to login (admin or has matching profile)
  * and whether they already have a password set up.
@@ -2682,98 +2780,24 @@ router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
       })
     }
 
-    const token = base64UrlToken(32)
-    const tokenHash = hashValue(token)
-    const now = new Date()
-    const expiresAt = new Date(now.getTime() + PASSWORD_SETUP_TTL * 1000).toISOString()
-    const id = crypto.randomUUID()
-
+    let setup
     try {
-      await req.db
-        .prepare(
-          `
-            INSERT INTO password_setup_tokens (
-              id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
-            ) VALUES (?, ?, ?, ?, NULL, ?, ?)
-          `,
-        )
-        .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
-      
-      // Structured logging (success) - DO NOT log the token itself
-      routeLogger.info('[auth/password/setup/start] Token created:', {
+      setup = await beginPasswordSetup(req.db, { user, email, req })
+    } catch (dbError) {
+      // Structured logging (failure) - DO NOT log the token itself
+      console.error('[auth/password/setup/start] DB error creating token (after retry):', {
+        error: dbError?.message || dbError,
         user_id: user.id,
         email: email,
-        token_id: id,
-        expires_at: expiresAt,
         ip: req.ip,
       })
-    } catch (dbError) {
-      // Retry once after best-effort schema ensure (covers deploys where migrations lag).
-      console.warn('[auth/password/setup/start] Initial DB error, retrying after schema ensure:', dbError?.message || dbError)
-      await ensurePasswordAuthSchema(req.db)
-      try {
-        await req.db
-          .prepare(
-            `
-              INSERT INTO password_setup_tokens (
-                id, user_id, token_hash, expires_at, consumed_at, request_ip, user_agent
-              ) VALUES (?, ?, ?, ?, NULL, ?, ?)
-            `,
-          )
-          .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
-        
-        // Structured logging (success after retry) - DO NOT log the token itself
-        routeLogger.info('[auth/password/setup/start] Token created (after retry):', {
-          user_id: user.id,
-          email: email,
-          token_id: id,
-          expires_at: expiresAt,
-          ip: req.ip,
-        })
-      } catch (retryError) {
-        // Structured logging (failure) - DO NOT log the token itself
-        console.error('[auth/password/setup/start] DB error creating token (after retry):', {
-          error: retryError?.message || retryError,
-          user_id: user.id,
-          email: email,
-          ip: req.ip,
-        })
-        return res.status(503).json({
-          error_type: 'service_unavailable',
-          error: 'Login is temporarily unavailable. Please try again in a minute.',
-        })
-      }
-    }
-
-    const link = buildPasswordSetupLink(req, token)
-
-    let emailSent = false
-    /** @type {null | { name?: string, status?: any, provider?: any, message?: string }} */
-    let emailSendError = null
-    try {
-      const sendPromise = sendPasswordSetupEmail(email, link)
-      const timeoutPromise = new Promise((resolve) => {
-        setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000))
+      return res.status(503).json({
+        error_type: 'service_unavailable',
+        error: 'Login is temporarily unavailable. Please try again in a minute.',
       })
-      emailSent = await Promise.race([sendPromise, timeoutPromise])
-    } catch (err) {
-      if (err instanceof EmailSendError) {
-        emailSendError = {
-          name: err.name,
-          status: err.status,
-          provider: err.provider,
-          message: err.message,
-        }
-      } else {
-        emailSendError = {
-          name: err?.name,
-          status: err?.status,
-          provider: err?.provider,
-          message: err?.message || String(err),
-        }
-      }
-      emailSent = false
     }
+
+    const { token, link, emailSent, emailSendError } = setup
 
     const response = { ok: true, status: 'password_setup_email_sent', email_sent: emailSent }
     if (emailSent !== true) {
@@ -2784,7 +2808,7 @@ router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
         console.error('[auth/password/setup/start] Email send failed in production:', {
           email: email,
           user_id: user.id,
-          token_id: id,
+          token_id: setup.tokenId,
           error_name: emailSendError?.name,
           error_provider: emailSendError?.provider ?? null,
           error_status: emailSendError?.status ?? null,
@@ -3475,6 +3499,12 @@ export {
   signOtpToken,
   sendVerificationEmail,
   EMAIL_CODE_TTL,
+  // Password-link sign-in flow — the conversational onboarding funnel
+  // (routes/onboarding.js) finishes signup through the SAME flow the login
+  // page uses, so a "6-digit code" can never reappear at any sign-in surface.
+  ensurePasswordAuthSchema,
+  ensureUserForPasswordAuth,
+  beginPasswordSetup,
 }
 
 export default router

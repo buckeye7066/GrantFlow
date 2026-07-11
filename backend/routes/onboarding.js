@@ -4,13 +4,14 @@
  * Public conversational onboarding endpoints driven by `anyaInterviewEngine`.
  * The flow is intentionally usable WITHOUT a logged-in user — anyone landing
  * on /start can complete the interview, hand over an email, and finally have
- * a real profile + email-OTP credential created for them in one step.
+ * a real profile + user account created for them in one step (sign-in is
+ * finished via an emailed /set-password link — the same flow as login).
  *
  * Routes:
  *   POST   /api/onboarding/start           → create session, return first question
  *   POST   /api/onboarding/answer          → submit answer, return next question
  *   GET    /api/onboarding/sessions/:id    → resume an existing session
- *   POST   /api/onboarding/complete        → finalise profile + send sign-in code
+ *   POST   /api/onboarding/complete        → finalise profile + email set-password link
  *
  * Mission alignment:
  *   - Goal 3 / 5: every answer is mapped to canonical profile shapes so
@@ -38,6 +39,7 @@ import { canonicalizeProfileTypeId } from '../../shared/profileTypeOptions.js'
 import { resolveZipLocation } from '../services/geo/zipCountyResolver.js'
 import { upsertProfileSections } from '../services/profileSectionWriter.js'
 import { ensureAuth } from '../middleware/auth.js'
+import { isProductionEnvironment } from '../utils/environment.js'
 import { createLogger } from '../utils/logger.js'
 const qualityLog = createLogger('routes:onboarding')
 
@@ -296,9 +298,11 @@ router.post('/answer', async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/onboarding/complete
 //
-// Creates (or reuses) a user + credential for the email captured during the
-// interview, creates a profile, populates every section the engine collected,
-// and triggers an email-OTP code so the user can sign in immediately.
+// Creates (or reuses) a user for the email captured during the interview,
+// creates a profile, populates every section the engine collected, and emails
+// the SAME secure /set-password link the login page uses — signup and login
+// share one sign-in flow (no 6-digit codes anywhere; see beginPasswordSetup
+// in routes/auth.js).
 // ---------------------------------------------------------------------------
 router.post('/complete', async (req, res) => {
   const { session_id: sessionId } = req.body ?? {}
@@ -325,37 +329,32 @@ router.post('/complete', async (req, res) => {
     // module pulls heavy crypto / smtp dependencies.
     // -------------------------------------------------------------------
     const authHelpers = await import('./auth.js')
-    const ensureEmailCredential = authHelpers.ensureEmailCredential
-      ?? authHelpers.default?.ensureEmailCredential
-    const sendVerificationEmail = authHelpers.sendVerificationEmail
-      ?? authHelpers.default?.sendVerificationEmail
-    const generateSixDigitCode = authHelpers.generateSixDigitCode
-      ?? authHelpers.default?.generateSixDigitCode
-    const hashValue = authHelpers.hashValue
-      ?? authHelpers.default?.hashValue
-    const signOtpToken = authHelpers.signOtpToken
-      ?? authHelpers.default?.signOtpToken
-    const insertVerificationCode = authHelpers.insertVerificationCode
-      ?? authHelpers.default?.insertVerificationCode
-    const EMAIL_CODE_TTL = authHelpers.EMAIL_CODE_TTL
-      ?? authHelpers.default?.EMAIL_CODE_TTL
-      ?? 600
+    const ensurePasswordAuthSchema = authHelpers.ensurePasswordAuthSchema
+      ?? authHelpers.default?.ensurePasswordAuthSchema
+    const ensureUserForPasswordAuth = authHelpers.ensureUserForPasswordAuth
+      ?? authHelpers.default?.ensureUserForPasswordAuth
+    const beginPasswordSetup = authHelpers.beginPasswordSetup
+      ?? authHelpers.default?.beginPasswordSetup
 
     if (
-      typeof ensureEmailCredential !== 'function' ||
-      typeof generateSixDigitCode !== 'function' ||
-      typeof hashValue !== 'function' ||
-      typeof signOtpToken !== 'function' ||
-      typeof insertVerificationCode !== 'function'
+      typeof ensurePasswordAuthSchema !== 'function' ||
+      typeof ensureUserForPasswordAuth !== 'function' ||
+      typeof beginPasswordSetup !== 'function'
     ) {
       qualityLog.error('[onboarding/complete] auth helpers missing exports')
       return res.status(500).json({ error: 'Auth subsystem unavailable.' })
     }
 
     // -------------------------------------------------------------------
-    // 1) Ensure a user + email_otp credential exist.
+    // 1) Ensure a users row exists for this email (password flow — no
+    //    email_otp credential is created anymore).
     // -------------------------------------------------------------------
-    const { user, credential } = await ensureEmailCredential(req.db, email)
+    await ensurePasswordAuthSchema(req.db)
+    const user = await ensureUserForPasswordAuth(req.db, email)
+    if (!user) {
+      qualityLog.error('[onboarding/complete] could not ensure user for', email)
+      return res.status(500).json({ error: 'Could not finish onboarding.' })
+    }
 
     // -------------------------------------------------------------------
     // 2) Create the profile (or reuse the user's existing profile when one
@@ -409,11 +408,10 @@ router.post('/complete', async (req, res) => {
           )
       })
     } else {
-      // Update existing profile with anything new the interview learned.
-      // Note: `assignProfileToUser` (called by `ensureEmailCredential`) creates
-      // a fallback profile with `created_by = NULL` for brand-new users — we
-      // overwrite it here so audits can see this profile came from the Anya
-      // conversational onboarding funnel.
+      // Update existing profile with anything new the interview learned
+      // (they may have onboarded before, or a profile was pre-created for
+      // them by an admin). Stamp created_by so audits can see this profile
+      // was shaped by the Anya conversational onboarding funnel.
       await req.db
         .prepare(
           `UPDATE profiles
@@ -459,49 +457,22 @@ router.post('/complete', async (req, res) => {
     }
 
     // -------------------------------------------------------------------
-    // 5) Generate + persist an email OTP code, mirror the path used by
-    //    /api/auth/email/start so the existing /api/auth/email/verify
-    //    flow accepts it. Also send the code (best-effort).
+    // 5) Email the secure /set-password link — the exact same flow the
+    //    login page uses (beginPasswordSetup in routes/auth.js), so signup
+    //    never shows a code. A returning user who already set a password
+    //    just signs in normally.
     // -------------------------------------------------------------------
-    const code = generateSixDigitCode()
-    const codeHash = hashValue(`${email}:${code}`)
-    const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL * 1000).toISOString()
-    const verificationToken = signOtpToken({
-      kind: 'email',
-      identifier: email,
-      codeHash,
-      ttlSeconds: EMAIL_CODE_TTL,
-    })
-
-    try {
-      await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
-      await req.db
-        .prepare(
-          `UPDATE user_credentials
-              SET secret_hash = ?,
-                  last_sent_at = ?,
-                  attempt_count = 0
-            WHERE id = ?`,
-        )
-        .run(codeHash, nowISO(), credential.id)
-    } catch (codeErr) {
-      console.warn('[onboarding/complete] could not persist OTP:', codeErr?.message ?? codeErr)
-    }
-
-    let emailSent = false
-    if (typeof sendVerificationEmail === 'function') {
+    const hasPassword = typeof user.password_hash === 'string' && user.password_hash.trim().length > 0
+    let setup = null
+    if (!hasPassword) {
       try {
-        const emailPromise = sendVerificationEmail(email, code)
-        const timeoutPromise = new Promise((resolve) => {
-          setTimeout(
-            () => resolve(false),
-            Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000),
-          )
+        setup = await beginPasswordSetup(req.db, { user, email, req })
+      } catch (setupErr) {
+        qualityLog.error('[onboarding/complete] could not create password setup link:', setupErr?.message ?? setupErr)
+        return res.status(500).json({
+          error: 'Could not finish onboarding.',
+          detail: process.env.NODE_ENV === 'production' ? undefined : (setupErr?.message ?? String(setupErr)),
         })
-        emailSent = (await Promise.race([emailPromise, timeoutPromise])) === true
-      } catch (sendErr) {
-        emailSent = false
-        console.warn('[onboarding/complete] email send failed:', sendErr?.message ?? sendErr)
       }
     }
 
@@ -522,23 +493,30 @@ router.post('/complete', async (req, res) => {
       .run(user.id, profileId, email, nowISO(), nowISO(), sessionId)
 
     // -------------------------------------------------------------------
-    // 7) Respond with everything the frontend needs to ask for the OTP
-    //    and complete sign-in via /api/auth/email/verify.
+    // 7) Respond with everything the frontend needs to finish sign-in via
+    //    the emailed /set-password link (or a normal login for returning
+    //    users who already have a password).
     // -------------------------------------------------------------------
+    const emailSent = setup ? setup.emailSent === true : false
     const response = {
       session_id: sessionId,
       status: 'completed',
       profile_id: profileId,
       user_id: user.id,
       email,
+      signin_flow: hasPassword ? 'password_exists' : 'password_setup_email_sent',
       email_sent: emailSent,
-      verification_token: verificationToken,
-      message: emailSent
-        ? "Sent a 6-digit sign-in code to your email."
-        : "We generated a sign-in code. If your inbox is slow, check spam.",
+      message: hasPassword
+        ? 'You already have a password — sign in with your email and password.'
+        : emailSent
+          ? 'Check your email for a secure link to set your password and sign in.'
+          : 'We created your sign-in link. If your inbox is slow, check spam — or request a new link from the sign-in page.',
     }
-    if (process.env.NODE_ENV !== 'production') {
-      response.preview_code = code
+    // Dev/test convenience mirroring /password/setup/start: surface the link
+    // when email delivery isn't available. NEVER in production.
+    if (setup && !isProductionEnvironment()) {
+      response.preview_token = setup.token
+      response.preview_url = setup.link
     }
     return res.status(201).json(response)
   } catch (err) {

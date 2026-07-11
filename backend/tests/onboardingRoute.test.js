@@ -6,14 +6,15 @@
 //   3. POST /answer rejects out-of-order answers (you can't skip ahead).
 //   4. GET /sessions/:id resumes a session in flight.
 //   5. POST /complete with a finished session creates a profile, persists
-//      every section the engine collected, and emits a verification token
-//      the frontend can hand to /api/auth/email/verify.
+//      every section the engine collected, and emails the SAME secure
+//      /set-password link the login page uses (no 6-digit sign-in codes).
 //
 // All scenarios run against an in-memory SQLite DB seeded with the minimum
-// shape the route uses (users, profiles, profile_sections, user_credentials,
-// user_otp_codes, onboarding_sessions). The auth helpers re-exported from
+// shape the route uses (users, profiles, profile_sections,
+// onboarding_sessions; password_setup_tokens is created on demand by
+// ensurePasswordAuthSchema). The auth helpers re-exported from
 // backend/routes/auth.js are exercised live so we catch any drift between
-// the onboarding completion path and the canonical email-OTP flow.
+// the onboarding completion path and the canonical password-link flow.
 import express from 'express'
 import request from 'supertest'
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
@@ -47,6 +48,9 @@ class SqliteShim {
   constructor() {
     this._db = new Database(':memory:')
     this._db.pragma('foreign_keys = ON')
+    // ensurePasswordAuthSchema() branches on dialect to create
+    // password_setup_tokens / add users.password_hash on demand.
+    this.dialect = 'sqlite'
   }
   prepare(sql) {
     const stmt = this._db.prepare(sql)
@@ -257,7 +261,7 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(r.body.next_question_id).toBe('language')
   })
 
-  it('completes a finished interview: creates user, profile, sections, and verification token', { timeout: 30000 }, async () => {
+  it('completes a finished interview: creates user, profile, sections, and a password-setup link (no OTP code)', { timeout: 30000 }, async () => {
     const start = await request(app).post('/api/onboarding/start')
     const sid = start.body.session_id
 
@@ -280,9 +284,18 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(completion.status).toBe(201)
     expect(completion.body.status).toBe('completed')
     expect(completion.body.email).toBe('pastor@hcc.example')
-    expect(completion.body.verification_token).toMatch(/.+/)
     expect(completion.body.profile_id).toMatch(/^[0-9a-f-]{36}$/)
     expect(completion.body.user_id).toMatch(/^[0-9a-f-]{36}$/)
+    // Signup finishes through the SAME password-link flow as the login page —
+    // no OTP verification token, no preview code, ever.
+    expect(completion.body.signin_flow).toBe('password_setup_email_sent')
+    expect(completion.body.verification_token).toBeUndefined()
+    expect(completion.body.preview_code).toBeUndefined()
+    // Outside production the route mirrors /password/setup/start's dev
+    // convenience: a preview token/link so local signups can proceed
+    // without an email service.
+    expect(completion.body.preview_token).toMatch(/.+/)
+    expect(String(completion.body.preview_url)).toContain('/set-password?token=')
 
     // Verify the canonical persisted state.
     const profile = await db.prepare('SELECT id, primary_type, display_name, tags FROM profiles WHERE id = ?')
@@ -303,8 +316,8 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(map.narrative.summary).toMatch(/food pantry/)
 
     // The session row must be marked completed and linked to the new
-    // profile + user — that's how /api/auth/email/start later finds the
-    // profile gate match.
+    // profile + user — that's how the login access gate later finds the
+    // profile match for this email.
     const sessionRow = await db.prepare('SELECT status, profile_id, user_id, email FROM onboarding_sessions WHERE id = ?')
       .get(sid)
     expect(sessionRow.status).toBe('completed')
@@ -320,17 +333,23 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(Number(userRow.has_completed_onboarding)).toBe(1)
     expect(userRow.guided_cycle_tour_status).toBe('pending')
 
-    // A credential + active OTP must exist for the email so /api/auth/email/verify
-    // accepts the token returned to the client.
-    const credential = await db.prepare(
-      `SELECT id, type, identifier, secret_hash FROM user_credentials WHERE user_id = ?`
+    // An unconsumed password-setup token must exist for the user so the
+    // emailed /set-password link (or the preview_token above) completes
+    // sign-in via /api/auth/password/setup/complete.
+    const tokenRow = await db.prepare(
+      `SELECT * FROM password_setup_tokens WHERE user_id = ? AND consumed_at IS NULL`
     ).get(completion.body.user_id)
-    expect(credential?.type).toBe('email_otp')
-    expect(credential?.identifier).toBe('pastor@hcc.example')
+    expect(tokenRow).toBeTruthy()
+
+    // And NO email_otp credential / sign-in code is minted anymore.
+    const credential = await db.prepare(
+      `SELECT id FROM user_credentials WHERE user_id = ?`
+    ).get(completion.body.user_id)
+    expect(credential).toBeUndefined()
     const otpRow = await db.prepare(
-      `SELECT * FROM user_verification_codes WHERE credential_id = ? AND consumed_at IS NULL`
-    ).get(credential.id)
-    expect(otpRow).toBeTruthy()
+      `SELECT * FROM user_verification_codes`
+    ).get()
+    expect(otpRow).toBeUndefined()
   })
 
   it('resolves a known ZIP to city/state/county for location auto-fill', async () => {
