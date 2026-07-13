@@ -271,15 +271,23 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // ONE candidate carries an amount — a single missing amount is normal (many
   // real awards are "amount varies"); a 0% amount rate on 5+ results means the
   // adapter/extractor lane feeding this profile shape drops dollars entirely.
-  const withAmount = recommendations.filter(
+  // DIRECTORY locators never carry a per-award amount BY DESIGN (a pointer to
+  // program lists, not an award) — counting them made this finding fire on
+  // shape alone. Measure dollar recall against grant-shaped candidates only;
+  // recs with no kind (older run shape) stay in the denominator so real
+  // extraction gaps keep firing.
+  const grantShaped = recommendations.filter(
+    (r) => String(r.kind ?? '').toUpperCase() !== 'DIRECTORY',
+  )
+  const withAmount = grantShaped.filter(
     (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0 || num(r.amount) > 0,
   )
-  if (recommendations.length >= 5 && withAmount.length === 0) {
+  if (grantShaped.length >= 5 && withAmount.length === 0) {
     findings.push(
       makeFinding(FINDING_TYPES.AMOUNT_RECALL_MISS, {
-        message: `${scenario.label}: 0 of ${recommendations.length} stored candidates carry an award amount — this profile shape's pipeline value will display ~$0 (amount extraction/adapter gap, not a recall gap).`,
-        excerpt: recommendations.slice(0, 4).map((r) => r.title).filter(Boolean).join('; '),
-        evidence: { ...baseEvidence, results: recommendations.length, with_amount: 0 },
+        message: `${scenario.label}: 0 of ${grantShaped.length} grant-shaped stored candidates carry an award amount — this profile shape's pipeline value will display ~$0 (amount extraction/adapter gap, not a recall gap).`,
+        excerpt: grantShaped.slice(0, 4).map((r) => r.title).filter(Boolean).join('; '),
+        evidence: { ...baseEvidence, results: recommendations.length, grant_shaped: grantShaped.length, with_amount: 0 },
       }),
     )
   }

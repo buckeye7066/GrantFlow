@@ -105,7 +105,51 @@ export const AGGREGATOR_NOISE_DOMAINS = Object.freeze(new Set([
   'fundsforngos.org',
   'pivot.proquest.com',
   'wikipedia.org',
+  // Consumer-health information sites: articles about conditions, never a
+  // funding source. Their homepages kept surfacing as "web-only finds"
+  // (2026-07-12: webmd.com counted as a miss against a TN disability profile).
+  'webmd.com',
+  'healthline.com',
+  'medicalnewstoday.com',
+  'verywellhealth.com',
+  // SEO lead-generation content (law-firm "benefit pay chart" explainers).
+  'sslg.com',
+  'disabilityguidance.org',
 ]))
+
+/**
+ * Well-known state benefit portals that live on their own domains (so the
+ * `*.{st}.gov` / `*.state.{st}.us` patterns can't attribute them to a state).
+ */
+export const STATE_PORTAL_DOMAINS = Object.freeze({
+  'benefitscal.com': 'ca',
+  'mybenefitscalwin.org': 'ca',
+  'yourtexasbenefits.com': 'tx',
+  'accesshra.nyc.gov': 'ny',
+})
+
+/** Two-letter .gov domains that are FEDERAL, not a state (va.gov = Veterans Affairs). */
+const FEDERAL_TWO_LETTER_GOV = Object.freeze(new Set(['va.gov']))
+
+/**
+ * A hit that is clearly ANOTHER state's government/benefits portal is not a
+ * recall miss for this profile — GrantFlow is RIGHT not to surface California
+ * Medi-Cal for a Tennessee profile (2026-07-12: dhcs.ca.gov + benefitscal.com
+ * counted against Gilbert/TN and cratered the parity score). Detects
+ * `*.{st}.gov` and `*.state.{st}.us` domains plus STATE_PORTAL_DOMAINS.
+ * Unknown/unattributable domains are NEVER filtered. Pure; exported for tests.
+ */
+export function isOutOfStateGovHit(url, profileState) {
+  const st = String(profileState || '').trim().toLowerCase()
+  if (!/^[a-z]{2}$/.test(st)) return false
+  const domain = extractHostname(url)
+  if (!domain) return false
+  const govMatch = domain.match(/(?:^|\.)([a-z]{2})\.gov$/)
+  if (govMatch && FEDERAL_TWO_LETTER_GOV.has(`${govMatch[1]}.gov`)) return false
+  const stateUsMatch = domain.match(/(?:^|\.)state\.([a-z]{2})\.us$/)
+  const domainState = govMatch?.[1] ?? stateUsMatch?.[1] ?? STATE_PORTAL_DOMAINS[domain] ?? null
+  return Boolean(domainState && domainState !== st)
+}
 
 /** Text signal that a page is about money an applicant can get. */
 const FUNDING_SIGNAL_RE =
@@ -182,7 +226,7 @@ function needForHit(hit, needs = []) {
  * @param {{needs?:string[]}} [opts]
  * @returns {{overlap:Array, web_only:Array, grantflow_only:number, web_real:number}}
  */
-export function classifyWebResults(webHits, storedMatches, { needs = [] } = {}) {
+export function classifyWebResults(webHits, storedMatches, { needs = [], state = null } = {}) {
   const stored = Array.isArray(storedMatches) ? storedMatches : []
   const storedUrlKeys = new Set()
   const storedTitleKeys = new Set()
@@ -206,6 +250,8 @@ export function classifyWebResults(webHits, storedMatches, { needs = [] } = {}) 
 
   for (const hit of Array.isArray(webHits) ? webHits : []) {
     if (!isRealFundingHit(hit)) continue
+    // Another state's government portal is not a miss for THIS profile.
+    if (isOutOfStateGovHit(hit.url, state)) continue
     const urlKey = normalizeUrlKey(hit.url)
     if (!urlKey || seen.has(urlKey)) continue
     seen.add(urlKey)
@@ -482,7 +528,8 @@ export async function runWebParityBenchmark(db, {
     }
 
     const needs = Array.isArray(thesis.needs) ? thesis.needs : []
-    const { overlap, web_only, grantflow_only, web_real } = classifyWebResults(hits, stored, { needs })
+    const profileState = thesis?.location?.state ?? null
+    const { overlap, web_only, grantflow_only, web_real } = classifyWebResults(hits, stored, { needs, state: profileState })
     const parity = parityScore(overlap.length, web_only.length)
 
     perProfile.push({

@@ -135,6 +135,12 @@ const FACTORIES = Object.freeze({
   // --- Disease-specific lanes: mobility impairment + neurodivergent.
   reeve_foundation_paralysis: officialDirectory('reeve_foundation_paralysis'),
   autism_speaks_family_support: officialDirectory('autism_speaks_family_support'),
+  // --- Disease-specific lanes: adapter wishlist 2026-07-11 (hip replacement,
+  //     PTSD, chronic kidney disease, hypertension).
+  arthritis_foundation_help: officialDirectory('arthritis_foundation_help'),
+  samhsa_findtreatment: officialDirectory('samhsa_findtreatment'),
+  american_kidney_fund: officialDirectory('american_kidney_fund'),
+  needymeds_diagnosis_assistance: officialDirectory('needymeds_diagnosis_assistance'),
 });
 /** @returns {object|null} an adapter instance, or null if none is implemented. */
 export function getAdapter(sourceId) {

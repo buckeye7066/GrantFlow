@@ -167,6 +167,10 @@ export const LANE_OF_SOURCE = Object.freeze({
   // registry `keywords` feed conditionCoveredBySource for gap detection.
   reeve_foundation_paralysis: 'disease_specific',
   autism_speaks_family_support: 'disease_specific',
+  arthritis_foundation_help: 'disease_specific',
+  samhsa_findtreatment: 'disease_specific',
+  american_kidney_fund: 'disease_specific',
+  needymeds_diagnosis_assistance: 'disease_specific',
   // ── 211 / local safety net ──
   community_211: 'local_211',
   united_way_211: 'local_211',
@@ -481,13 +485,25 @@ export async function buildCoverageEvidence(db, profileId) {
         for (const r of s.reasons || []) reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
       }
       const topReason = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'not applicable to this profile';
-      bucket.gap = `None of the ${bucket.registry_source_count} known ${bucket.label.toLowerCase()} sources apply to this profile — ${topReason}`;
-      gaps.push({
-        lane: bucket.lane,
-        statement: bucket.gap,
-        profile_fact: `applicant_types=${(plan.applicant_types || []).join('/') || 'unknown'}`,
-        suggested_action: 'Review the exclusion reasons: either the profile is missing a fact (type, need, location) or the lane needs a broader source.',
-      });
+      // A lane whose sources are excluded because they DON'T SERVE this
+      // applicant type / need is working AS DESIGNED (a nonprofit not getting
+      // FAFSA portals is correct eligibility gating, not missing coverage) —
+      // 2026-07-11 this class alone read as an "86% fleet coverage gap".
+      // Only geography-shaped exclusions (the lane exists but not for this
+      // profile's place) remain a real, actionable gap.
+      const BY_DESIGN_REASONS = new Set(['applicant_type_not_served', 'need_category_not_covered', 'research_org_only']);
+      if (BY_DESIGN_REASONS.has(topReason)) {
+        bucket.status = 'not_applicable';
+        bucket.gap = `None of the ${bucket.registry_source_count} known ${bucket.label.toLowerCase()} sources fund this applicant type/need — correctly skipped, not a coverage gap.`;
+      } else {
+        bucket.gap = `None of the ${bucket.registry_source_count} known ${bucket.label.toLowerCase()} sources apply to this profile — ${topReason}`;
+        gaps.push({
+          lane: bucket.lane,
+          statement: bucket.gap,
+          profile_fact: `applicant_types=${(plan.applicant_types || []).join('/') || 'unknown'}`,
+          suggested_action: 'Review the exclusion reasons: either the profile is missing a fact (type, need, location) or the lane needs a broader source.',
+        });
+      }
     }
   }
 

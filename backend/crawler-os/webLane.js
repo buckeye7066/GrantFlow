@@ -201,7 +201,10 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id) {
           // topical_evidence: legacy weighted-evidence subscale for Amy's
           // weight-tuning validation (weights no longer move the final score).
-          result.recommendations.push({ opportunity_id: matchOpp.id, title: matchOpp.title, sponsor: matchOpp.sponsor, match_score: decision.match_score, source: 'web_search', topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+          // kind + amounts travel with the recommendation so Amy's evaluator
+          // measures award-amount recall against what the run actually found
+          // (a DIRECTORY locator never carries a per-award amount by design).
+          result.recommendations.push({ opportunity_id: matchOpp.id, title: matchOpp.title, sponsor: matchOpp.sponsor, kind: matchOpp.kind ?? null, amount_min: matchOpp.funding?.amount_min ?? null, amount_max: matchOpp.funding?.amount_max ?? null, match_score: decision.match_score, source: 'web_search', topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
         }
       }
     }

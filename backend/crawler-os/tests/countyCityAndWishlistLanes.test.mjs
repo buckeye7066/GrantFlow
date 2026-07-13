@@ -12,6 +12,10 @@ import { getSource } from '../sourceRegistry.js';
 import { getAdapter, implementedAdapterIds } from '../adapters/index.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
 import { createCountyCityDirectoryAdapter } from '../adapters/countyCityDirectoryAdapter.js';
+import { enforceReality } from '../realityGate.js';
+import { normalize } from '../normalizer.js';
+import { computeMatchDecision } from '../matchEngine.js';
+import { MATCH_DECISION } from '../contract.js';
 
 const COUNTY_CITY = ['usa_gov_local_governments', 'hud_resource_locator', 'findhelp_local_programs'];
 const STATE_ROWS = [
@@ -20,7 +24,11 @@ const STATE_ROWS = [
   ['wa_connection_benefits', 'WA'],
   ['wa_college_grant', 'WA'],
 ];
-const DISEASE = ['reeve_foundation_paralysis', 'autism_speaks_family_support'];
+const DISEASE = [
+  'reeve_foundation_paralysis', 'autism_speaks_family_support',
+  // adapter wishlist 2026-07-11
+  'arthritis_foundation_help', 'samhsa_findtreatment', 'american_kidney_fund', 'needymeds_diagnosis_assistance',
+];
 
 test('every new source is registered with an implemented adapter', () => {
   const implemented = new Set(implementedAdapterIds());
@@ -53,6 +61,58 @@ test('disease rows carry the condition keywords the gap detector matches on', ()
   const hay = (src) => [...(src.keywords ?? []), src.source_id, src.name].join(' ').toLowerCase();
   assert.ok(hay(getSource('reeve_foundation_paralysis')).includes('mobility'), 'reeve covers mobility (impairment)');
   assert.ok(hay(getSource('autism_speaks_family_support')).includes('neurodivergent'), 'autism source covers neurodivergent');
+  // adapter wishlist 2026-07-11: the exact condition strings Amy reported.
+  assert.ok(hay(getSource('arthritis_foundation_help')).includes('hip replacement'), 'arthritis source covers hip replacement');
+  assert.ok(hay(getSource('samhsa_findtreatment')).includes('ptsd'), 'samhsa source covers ptsd');
+  assert.ok(hay(getSource('american_kidney_fund')).includes('chronic kidney disease'), 'kidney fund covers chronic kidney disease');
+  assert.ok(hay(getSource('needymeds_diagnosis_assistance')).includes('hypertension'), 'needymeds covers hypertension');
+});
+
+// ── The 2026-07-12 regression: a DIRECTORY locator (apply_url null BY DESIGN)
+//    must be able to reach an ACCEPT match decision. The #886 no-apply-url
+//    demotion held EVERY locator at REVIEW, so the county lane's candidates
+//    never entered recommendations and Amy reported hyperlocal_recall_miss on
+//    all 50 synthetic profiles every day. ──
+const RICH_THESIS = {
+  profile_id: 'p-recall-test',
+  applicant_types: ['individual', 'family'],
+  needs: ['housing', 'food', 'medical', 'utility_assistance'],
+  is_student: false,
+  location: { state: 'TN', county: 'Davidson County', city: 'Nashville', zip: '37203' },
+  loan_allowed: false,
+  cost_share_allowed: false,
+};
+
+function decisionForCountySource(sourceId, thesis) {
+  const source = getSource(sourceId);
+  const adapter = createCountyCityDirectoryAdapter(sourceId);
+  const req = adapter.buildRequests(thesis, source, {})[0];
+  const cand = adapter.mapCandidate(req.parseCfg.directoryCandidate, { thesis, source });
+  const evidence = { url: req.url, content_hash: null, fetched_at: null };
+  const verdict = enforceReality(cand, { thesis, source, evidence });
+  assert.ok(verdict.ok, `${sourceId} locator must clear the reality gate`);
+  const opp = normalize(cand, verdict, { source, evidence });
+  return { opp, decision: computeMatchDecision(opp, thesis, { floor: 8 }) };
+}
+
+test('a county DIRECTORY locator with no apply_url can reach ACCEPT (recommendation-eligible)', () => {
+  const { opp, decision } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
+  assert.equal(opp.apply_url, null, 'locator honesty: apply_url stays null');
+  assert.equal(decision.decision, MATCH_DECISION.ACCEPT,
+    'locator must not be demoted to REVIEW for its by-design missing apply URL');
+  assert.match(opp.title, /Davidson County, TN/, 'title carries the county (hyperlocal recall)');
+});
+
+test('a PROGRAM row with no apply_url is still held at REVIEW (the #886 guard stands)', () => {
+  const { opp, decision } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
+  // Same strong-fit opportunity re-shaped as a PROGRAM without an apply URL.
+  const program = { ...opp, kind: 'PROGRAM', apply_url: null };
+  const d = computeMatchDecision(program, RICH_THESIS, { floor: 8 });
+  if (decision.decision === MATCH_DECISION.ACCEPT) {
+    assert.equal(d.decision, MATCH_DECISION.REVIEW,
+      'non-locator rows without an apply target must still demote to REVIEW');
+    assert.ok(d.match_explain.warnings.some((w) => /no direct application URL/i.test(w)));
+  }
 });
 
 test('countyCityDirectoryAdapter personalizes the candidate to the profile place', () => {

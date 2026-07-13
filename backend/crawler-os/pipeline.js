@@ -79,7 +79,10 @@ export async function runDiscovery(deps, opts = {}) {
         // topical_evidence: legacy weighted-evidence subscale, retained so Amy's
         // weight-tuning validation can measure where the W_* weights still act
         // (the need-anchored final score does not move with weight changes).
-        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+        // kind travels with the recommendation so downstream honesty checks
+        // (Amy's amount-recall evaluator) can tell a DIRECTORY locator — which
+        // never carries a per-award dollar amount by design — from a grant row.
+        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
       }
     }
   }

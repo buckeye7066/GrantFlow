@@ -108,8 +108,16 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   // not out-promote the row's own lifecycle — however strong the topical fit,
   // a human (or the URL-rescue lane) has to produce an application target
   // before this can be an apply-now ACCEPT.
+  //
+  // DIRECTORY locators are exempt: a locator's contract IS its info link —
+  // every directory adapter sets apply_url null BY DESIGN (honesty rule: a
+  // pointer, not an application). Demoting them here locked the whole locator
+  // fleet (county_city, 211, state portals, disease-support) out of the
+  // recommendation list from #886 onward — the 07-08 county lane shipped
+  // structurally unreachable (Amy hyperlocal_recall_miss ×50/day).
   const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
-  if (!hasApplyUrl && decision === 'accept') {
+  const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
+  if (!hasApplyUrl && !isDirectoryLocator && decision === 'accept') {
     decision = 'review';
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
   }
