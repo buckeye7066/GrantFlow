@@ -66,7 +66,16 @@ function verifyRegistry() {
       issues.push({ source_id: source.source_id, issue: 'missing_adapter' })
       continue
     }
-    if (adapter.family === 'directory' && source.directory !== true) {
+    // The directory-family adapter is kind-aware: a `directory:false` registry
+    // row emits its honest `default_kinds[0]` (BENEFIT/SCHOLARSHIP/PROGRAM/…)
+    // and only falls back to DIRECTORY when no default kind is declared. Flag
+    // ONLY the misconfiguration where a non-directory row would still emit a
+    // DIRECTORY kind — not every non-directory source served by this adapter.
+    if (
+      adapter.family === 'directory' &&
+      source.directory !== true &&
+      (!(source.default_kinds || []).length || source.default_kinds[0] === OPPORTUNITY_KIND.DIRECTORY)
+    ) {
       issues.push({ source_id: source.source_id, issue: 'adapter_emits_directory_but_registry_directory_false' })
     }
     if (source.directory && !(source.default_kinds || []).includes(OPPORTUNITY_KIND.DIRECTORY)) {
@@ -213,9 +222,19 @@ async function verifyExistingRowsStillMatch() {
   )
   const matches = storage.getMatchesForProfile(store, thesis.profile_id)
   const matchedExisting = matches.some((match) => match.opportunity_id === canonicalId)
+  // The intent of this check is DEDUP + RE-MATCH: the re-crawled grants_gov
+  // item must collapse into the seeded canonical row (never a second direct
+  // row) and the profile must still match it. Honest DIRECTORY locator rows
+  // from other planned sources are by-design survivors (see pipeline.js) and
+  // must not fail the check — so assert on the non-directory rows, not on the
+  // total catalog count.
+  const directRows = storage.listCatalog(store).filter((row) => row.kind !== OPPORTUNITY_KIND.DIRECTORY)
+  const onlyCanonicalDirect = directRows.length === 1 && directRows[0].id === canonicalId
   return {
-    passed: matchedExisting && storage.countOpportunities(store) === 1 && !run.zero_result,
+    passed: matchedExisting && onlyCanonicalDirect && !run.zero_result,
     catalog_count: storage.countOpportunities(store),
+    direct_row_count: directRows.length,
+    only_canonical_direct: onlyCanonicalDirect,
     match_count: matches.length,
     matched_existing: matchedExisting,
     zero_result_reason: run.zero_result?.zero_result_reason || null,
@@ -240,6 +259,7 @@ function toMarkdown(report) {
   lines.push('', '## Repeat Run')
   lines.push(`- passed: ${report.repeat_existing.passed}`)
   lines.push(`- catalog_count: ${report.repeat_existing.catalog_count}`)
+  lines.push(`- direct_row_count: ${report.repeat_existing.direct_row_count}`)
   lines.push(`- match_count: ${report.repeat_existing.match_count}`)
   lines.push(`- source_existing_total: ${report.repeat_existing.source_existing_total}`)
   lines.push('', '## Failures')

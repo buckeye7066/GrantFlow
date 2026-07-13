@@ -295,7 +295,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'student', 'veteran'],
     need_categories: ['food'],
     geography: { national: true, states: [] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 67,
   },
   {
@@ -362,9 +362,11 @@ export const SOURCES = Object.freeze([
   },
   {
     // SSA disability benefits (SSDI/SSI) — the federal branch of the legacy ECF
-    // crawler's individual sources. NOTE: ssa.gov intermittently 403s automated
-    // fetchers (seen in CI); as a directory-kind locator the honest row survives
-    // a failed fetch (link_unverified ≠ dead) while the run records fetch_error.
+    // crawler's individual sources. A real benefit PROGRAM (apply at ssa.gov),
+    // honestly classified BENEFIT — not a directory. NOTE: ssa.gov
+    // intermittently 403s automated fetchers (seen in CI); registry-declared
+    // candidates survive a failed fetch with their honest kind as
+    // link_unverified (≠ dead) while the run records fetch_error.
     source_id: 'ssa_disability',
     name: 'Social Security disability benefits (SSDI / SSI)',
     source_type: 'directory',
@@ -373,7 +375,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Social Security Administration',
     resource_title: 'Social Security disability benefits (SSDI/SSI)',
     resource_summary: 'Official Social Security disability-benefits information and application entry point: SSDI for workers with a qualifying disability and SSI for people with limited income and resources. This is a benefits lane, not a grant.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran', 'disabled'],
     need_categories: ['disability', 'medical'],
     geography: { national: true, states: [] },
@@ -809,7 +811,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Social Security Administration',
     resource_title: 'Social Security survivors benefits',
     resource_summary: 'Official Social Security survivor-benefits information for eligible surviving spouses, children, and families. This is a benefits lane, not a grant.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['survivor_benefits', 'housing', 'food', 'medical'],
     geography: { national: true, states: [] },
@@ -825,7 +827,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'U.S. Department of Labor',
     resource_title: 'Black Lung Program benefits',
     resource_summary: 'Official Department of Labor Black Lung Program information for eligible coal miners and surviving family members. GrantFlow treats this as benefit guidance, not an open grant.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['black_lung_benefits'],
     geography: { national: true, states: [] },
@@ -861,7 +863,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'survivor_benefits'],
     geography: { national: false, states: ['KY'] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
   },
   {
@@ -1113,7 +1115,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'U.S. Department of Defense',
     resource_title: 'MyCAA Scholarship',
     resource_summary: 'Official Military Spouse Career Advancement Account Scholarship portal for eligible military spouses pursuing licenses, certificates, certifications, or associate degrees.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['military_spouse'],
     need_categories: ['military_spouse_support', 'education', 'employment'],
     geography: { national: true, states: [] },
@@ -1565,7 +1567,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
     geography: { national: false, states: ['OH'] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
   },
   {
@@ -1597,7 +1599,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
     geography: { national: false, states: ['WA'] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
   },
   {

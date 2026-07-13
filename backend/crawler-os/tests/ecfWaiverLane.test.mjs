@@ -61,7 +61,8 @@ test('the three waiver-lane sources are registered with honest shapes', () => {
   assert.equal(hcbs.geography.national, true);
 
   const ssa = getSource('ssa_disability');
-  assert.equal(ssa.directory, true, 'SSA disability is a locator (survives the known ssa.gov 403 honestly)');
+  assert.equal(ssa.directory, false, 'SSA disability is a real benefit PROGRAM, honestly classified (fetch-failure survival now comes from the registry-candidate mechanism in pipeline.js, not a directory label)');
+  assert.ok(ssa.default_kinds.includes(OPPORTUNITY_KIND.BENEFIT), 'SSDI/SSI rows are BENEFIT kind');
   assert.equal(ssa.geography.national, true);
 });
 
@@ -165,15 +166,28 @@ test('curated program candidate is honest: kind BENEFIT, rolling enrollment, off
   assert.deepEqual(c.geography, { national: false, states: ['TN'] });
 });
 
-test('honest degrade: a tn.gov fetch failure surfaces as FETCH_ERROR with nothing stored for the source', async () => {
+test('honest degrade: a tn.gov fetch failure keeps the config-driven ECF program row (link_unverified) and records the failure; live discovery stores nothing', async () => {
+  // The branch-1 candidate is built entirely from curated registry config —
+  // a tn.gov hiccup must not erase the ECF lane for a TN disability profile
+  // (same survival rule as every registry-declared candidate; pipeline.js).
+  // Truth is preserved: no fetched page → the row can never claim VERIFIED,
+  // and the failed fetch is recorded as a fetch_failed rejection.
   const store = createMemoryStore();
   const fetcher = makeOfflineFetcher({ fail: new Set(['tn.gov']) });
   const res = await runDiscovery({ store, fetcher, env: {} }, { profile: TN_WAIVER_PROFILE });
   const summary = res.sources.find((s) => s.source_id === 'tn_ecf_choices');
   assert.ok(summary, 'the ECF source ran (it was planned)');
-  assert.equal(summary.outcome, CRAWLER_OUTCOME.FETCH_ERROR, 'failure is an honest fetch_error');
-  assert.equal(summary.stored, 0, 'nothing fabricated on fetch failure');
-  assert.equal(summary.parsed, 0);
+  assert.equal(summary.stored, 1, 'exactly the config-driven program row survives; the live-discovery branch stores nothing');
+  const ecfRows = store.all('funding_opportunities').filter((o) => o.source_id === 'tn_ecf_choices');
+  assert.equal(ecfRows.length, 1);
+  // ECF is a rolling-enrollment program (a registry fact), so the gate's
+  // existing status ladder yields ROLLING with a "rolling, evidence not yet
+  // captured" note. The truth bar here: without a fetched page the row must
+  // NEVER be stamped `verified`.
+  assert.notEqual(ecfRows[0].reality_status, 'verified', 'no fetched page → never verified');
+  assert.equal(ecfRows[0].reality_status, 'rolling', 'rolling enrollment is a registry fact; evidence gap stays noted');
+  const rejections = store.all('crawler_rejections').filter((x) => x.source_id === 'tn_ecf_choices');
+  assert.ok(rejections.some((x) => x.reason === 'fetch_failed'), 'the fetch failure stays observable as a recorded rejection');
 });
 
 test('happy path: with the page reachable, the ECF program row is stored for a TN waiver profile', async () => {
