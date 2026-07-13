@@ -125,11 +125,11 @@ export default function PrivacyPolicy() {
           </p>
         </Section>
 
-        <Section title="Cookies">
+        <Section title="Sign-In and Local Storage">
           <p>
-            On the website we use essential, secure cookies to keep you signed in and to protect
-            against cross-site request forgery. We do not use advertising or third-party tracking
-            cookies.
+            To keep you signed in, we store a secure access token in your browser or app&rsquo;s local
+            storage and send it with your requests. This is essential to operating the Service. We do
+            not use advertising or third-party tracking cookies.
           </p>
         </Section>
 
