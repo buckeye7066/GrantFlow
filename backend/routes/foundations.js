@@ -195,7 +195,9 @@ router.get('/calendar/deadlines', async (req, res) => {
       }
     }
 
-    // Get from saved grants (user's pipeline)
+    // Get from saved grants (user's pipeline). grants has NO user_id column —
+    // the user's pipeline is reached through their owned profile(s), which also
+    // satisfies the profile-scope guard when a token-claimed profile is active.
     const savedSql = `
       SELECT fo.id, fo.title, fo.sponsor, fo.deadline, fo.deadline_type,
              fo.amount_min, fo.amount_max, fo.state, fo.source,
@@ -203,7 +205,7 @@ router.get('/calendar/deadlines', async (req, res) => {
              g.status as pipeline_status, g.notes as pipeline_notes
       FROM grants g
       JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-      WHERE g.user_id = ?${profileId ? ' AND g.profile_id = ?' : ''}
+      WHERE g.profile_id IN (SELECT id FROM profiles WHERE user_id = ?)${profileId ? ' AND g.profile_id = ?' : ''}
         AND fo.deadline IS NOT NULL${dateFilter}
       ORDER BY fo.deadline ASC
       LIMIT 200

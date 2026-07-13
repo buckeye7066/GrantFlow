@@ -1306,39 +1306,112 @@ router.post('/', createProfileLimiter, async (req, res) => {
   // behind a reverse proxy. Admins may explicitly set user_id to create an owned profile for a user.
   const profileUserId = isAdmin ? (user_id || null) : userId
 
-  const profileId = crypto.randomUUID()
-  // Ensure every newly created profile starts with all canonical sections + canonical keys.
-  // This prevents downstream crawlers/scoring from encountering missing sections.
-  await req.db.withTransaction(async (tx) => {
-    const insert = tx.prepare(`
-      INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-
-    await insert.run(
-      profileId,
-      display_name,
-      primary_type ?? null,
-      organization_id ?? null,
-      profileUserId ?? null,
-      created_by ?? req.ctx?.userId ?? req.ctx?.email ?? null,
-      status,
-      JSON.stringify(tags),
-    )
-
-    const upsertSection = tx.prepare(
-      `
-        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(profile_id, section_key) DO NOTHING
-      `,
-    )
-
+  // ux_profiles_user_id: one owned profile per user (prod Postgres enforces
+  // it; the fresh-DB SQLite schema does not, so this pre-check IS the behavior
+  // of record). Signup already auto-creates a fallback shell profile (auth
+  // email verify), so an explicit "create profile" from a user who owns one is
+  // the NORMAL first-run flow — not an error. Adopt the existing profile:
+  // apply the submitted identity fields to it and return it as the created
+  // profile. Before this, prod answered the second INSERT with a raw
+  // duplicate-key 500 (2026-07-13). status is never changed on adopt (owner
+  // suspend/ban tooling must not be undone by a re-submitted create) and tags
+  // are only overwritten when explicitly provided.
+  const adoptOwnedProfile = async (existingId) => {
+    await req.db
+      .prepare(
+        `UPDATE profiles
+            SET display_name = ?,
+                primary_type = COALESCE(?, primary_type),
+                organization_id = COALESCE(?, organization_id),
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`,
+      )
+      .run(display_name, primary_type ?? null, organization_id ?? null, existingId)
+    if (Array.isArray(tags) && tags.length > 0) {
+      await req.db.prepare('UPDATE profiles SET tags = ? WHERE id = ?').run(JSON.stringify(tags), existingId)
+    }
+    // Fallback shells are created without canonical sections — backfill any
+    // missing ones so downstream crawlers/scoring never see gaps. Existing
+    // section data is never overwritten (DO NOTHING).
     for (const sectionKey of supportedSectionKeys) {
       const defaults = getDefaultSectionData(sectionKey)
-      await upsertSection.run(profileId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
+      await req.db
+        .prepare(
+          `
+            INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(profile_id, section_key) DO NOTHING
+          `,
+        )
+        .run(existingId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
     }
-  })
+  }
+
+  let adoptedExisting = false
+  let profileId = null
+  if (profileUserId) {
+    const existing = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').get(profileUserId)
+    if (existing?.id) {
+      profileId = existing.id
+      adoptedExisting = true
+      await adoptOwnedProfile(profileId)
+    }
+  }
+
+  if (!adoptedExisting) {
+    profileId = crypto.randomUUID()
+    // Ensure every newly created profile starts with all canonical sections + canonical keys.
+    // This prevents downstream crawlers/scoring from encountering missing sections.
+    try {
+      await req.db.withTransaction(async (tx) => {
+        const insert = tx.prepare(`
+          INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+
+        await insert.run(
+          profileId,
+          display_name,
+          primary_type ?? null,
+          organization_id ?? null,
+          profileUserId ?? null,
+          created_by ?? req.ctx?.userId ?? req.ctx?.email ?? null,
+          status,
+          JSON.stringify(tags),
+        )
+
+        const upsertSection = tx.prepare(
+          `
+            INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(profile_id, section_key) DO NOTHING
+          `,
+        )
+
+        for (const sectionKey of supportedSectionKeys) {
+          const defaults = getDefaultSectionData(sectionKey)
+          await upsertSection.run(profileId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
+        }
+      })
+    } catch (err) {
+      // Concurrent-create race: two requests passed the pre-check above and
+      // this one lost the unique index (Postgres 23505 / SQLite UNIQUE).
+      // Adopt the winner's row instead of surfacing a 500.
+      const msg = String(err?.message || '')
+      const isUniqueViolation =
+        err?.code === '23505' ||
+        msg.includes('duplicate key value') ||
+        msg.includes('UNIQUE constraint failed')
+      const winner =
+        isUniqueViolation && profileUserId
+          ? await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').get(profileUserId)
+          : null
+      if (!winner?.id) throw err
+      profileId = winner.id
+      adoptedExisting = true
+      await adoptOwnedProfile(profileId)
+    }
+  }
 
   await linkProfileToAdmin(req.db, profileId)
 
@@ -1349,10 +1422,22 @@ router.post('/', createProfileLimiter, async (req, res) => {
   // longer of the two ONCE — grantFreePeriod extends from any existing window,
   // so two calls would stack. Best-effort — never fail profile creation.
   try {
+    // Adopted profiles keep their one-and-only signup grant: grantFreePeriod
+    // EXTENDS from any existing window, so re-granting on every re-submitted
+    // create would stack free time. Only grant when no period was ever granted.
+    let alreadyGranted = false
+    if (adoptedExisting) {
+      try {
+        const acct = await req.db
+          .prepare('SELECT free_granted_at, free_until FROM billing_accounts WHERE profile_id = ?')
+          .get(profileId)
+        alreadyGranted = Boolean(acct?.free_granted_at || acct?.free_until)
+      } catch { /* no billing schema yet → nothing granted */ }
+    }
     const { freeWeekSignupGrant, signupTrialGrant } = await import('../../shared/freeWeek.js')
     const trial = signupTrialGrant(process.env)
     const promo = freeWeekSignupGrant(process.env)
-    const candidates = [
+    const candidates = alreadyGranted ? [] : [
       trial && { period: trial.period, days: trial.days, reason: 'signup_trial', grantedBy: 'signup_trial' },
       promo && { period: promo.period, days: promo.days, reason: 'free_week_signup', grantedBy: 'free_week_promo' },
     ].filter(Boolean)
@@ -1382,7 +1467,14 @@ router.post('/', createProfileLimiter, async (req, res) => {
   try {
     const createdBy = String(created_by ?? req.ctx?.email ?? '').toLowerCase()
     const isSynthetic = createdBy.startsWith('agent:') || isDesignatedProfileId(profileId)
-    if (!isSynthetic) {
+    // Idempotent: an adopted profile (or a client retry) must not add a second
+    // 'signup' row to the owner's Applications tab.
+    const priorSignup = isSynthetic
+      ? null
+      : await req.db
+          .prepare(`SELECT id FROM service_applications WHERE profile_id = ? AND type = 'signup' LIMIT 1`)
+          .get(profileId)
+    if (!isSynthetic && !priorSignup) {
       let applicantEmail = req.ctx?.email ?? null
       if (!applicantEmail && profileUserId) {
         try {
@@ -1451,7 +1543,9 @@ router.post('/', createProfileLimiter, async (req, res) => {
     console.warn('[profiles] consent enqueue unavailable for new profile:', consentError?.message || String(consentError))
   }
 
-  res.status(201).json(mapProfile(refreshed))
+  const payload = mapProfile(refreshed)
+  if (adoptedExisting) payload.adopted_existing = true
+  res.status(201).json(payload)
 })
 
 // Back-compat for older deployed clients:
