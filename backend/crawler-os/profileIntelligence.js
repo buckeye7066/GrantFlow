@@ -786,14 +786,27 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   //   1. canonicalize the EXPLICIT identity strings via synonyms (trusted), and
   //   2. ONLY when the profile declares no identity at all, fall back to a blob
   //      scan so a bare profile still searches something (never zero).
+  const exactMapped = new Set();
   for (const e of explicit) {
     const mapped = PRIMARY_TYPE_TO_APPLICANT[e] ?? PRIMARY_TYPE_TO_APPLICANT[key(e)];
-    if (mapped) for (const bucket of mapped) found.add(bucket);
+    if (mapped) {
+      for (const bucket of mapped) found.add(bucket);
+      exactMapped.add(e);
+    }
   }
   for (const e of explicit) {
     if (APPLICANT_TYPE_SYNONYMS[e]) found.add(e); // already a canonical bucket
+    // An exact canonical mapping is AUTHORITATIVE for its string — the fuzzy
+    // synonym pass must not widen it ('homeschool_family' ⊃ "school" was
+    // promoting a homeschool FAMILY into the org school bucket, surfacing
+    // classroom-teacher funding like DonorsChoose it can never use).
+    if (exactMapped.has(e)) continue;
+    // Word-boundary matching on the underscore-normalized string — substring
+    // includes() is the documented 13-bucket-explosion driver ('ets' inside
+    // "targets", 'ems' inside "systems"); the same class applied here.
+    const normalized = e.replace(/_/g, ' ');
     for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
-      if (syns.some((s) => e.includes(s))) found.add(canon);
+      if (syns.some((s) => wordBoundaryMatch(normalized, s))) found.add(canon);
     }
   }
   // 1b. A FREE-TEXT declared org type ("Biotechnology / research organization")

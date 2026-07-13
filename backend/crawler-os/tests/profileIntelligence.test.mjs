@@ -190,3 +190,18 @@ test('kinship/grandfamily language derives the caregiving need (the grandfamilie
   });
   assert.ok(th.needs.includes('caregiving'), `kinship text derives caregiving (got ${th.needs.join(',')})`);
 });
+
+test('exact-mapped declared types are authoritative — the synonym pass never widens them by substring', () => {
+  // 'homeschool_family' ⊃ "school" was promoting a homeschool FAMILY into the
+  // org school bucket (classroom-teacher funding like DonorsChoose surfaced
+  // for a family that can never use it).
+  const th = buildThesis({
+    id: 'p_homeschool_types',
+    primary_type: 'homeschool_family',
+    needs: ['curriculum'],
+    location: { state: 'CA', city: 'Eureka' },
+  });
+  assert.ok(th.applicant_types.includes('family'), 'family bucket present');
+  assert.ok(th.applicant_types.includes('individual'), 'individual bucket present');
+  assert.ok(!th.applicant_types.includes('school'), `no org school bucket from a substring (got ${th.applicant_types.join(',')})`);
+});
