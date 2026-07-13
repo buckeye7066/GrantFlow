@@ -6,6 +6,7 @@ import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
 import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { isNativeApp } from '@/lib/platform'
 
 const AUTH_TABS = new Set(['email'])
 
@@ -24,6 +25,11 @@ export default function Login() {
 
   const showDevAdminShortcut = useMemo(() => {
         if (typeof window === 'undefined') return false
+        // The Capacitor app's origin IS https://localhost, so a bare
+        // hostname check showed this dev-only button to every mobile-app
+        // user (harmless without VITE_DEV_ADMIN_TOKEN, but it reads like a
+        // debug backdoor to a store reviewer).
+        if (isNativeApp()) return false
         const host = window.location.hostname
         return host === 'localhost' || host === '127.0.0.1'
   }, [])
