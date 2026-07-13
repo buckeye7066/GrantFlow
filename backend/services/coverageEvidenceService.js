@@ -22,7 +22,7 @@
 // profileFieldPrompts, matchSurfacing) and never re-scores or mutates data.
 
 import { explainCrawlerPlan, rawReasonCode, HUMAN_REASON } from '../crawler-os/crawlerPlanExplainer.js';
-import { allSources } from '../crawler-os/sourceRegistry.js';
+import { allSources, STATE_BENEFITS_SOURCE_IDS } from '../crawler-os/sourceRegistry.js';
 import { loadProfileContext } from './profileHelpers.js';
 import { profileContextToThesisInput } from './crawlerOsPersistence.js';
 import { computeDetailedReadiness } from './profileReadinessService.js';
@@ -133,6 +133,10 @@ export const LANE_OF_SOURCE = Object.freeze({
   oh_college_opportunity_grant: 'state_programs',
   wa_connection_benefits: 'state_programs',
   wa_college_grant: 'state_programs',
+  // State benefits portals (2026-07-12): every remaining state + DC + PR gets
+  // its official benefits portal, generated in lockstep with the registry's
+  // STATE_BENEFITS_PORTALS table — closes the fleet-wide per-state gap.
+  ...Object.fromEntries(STATE_BENEFITS_SOURCE_IDS.map((id) => [id, 'state_programs'])),
   // ── County & city programs — geo-aware locators (2026-07-08; formerly the
   //    fleet's #1 structural gap: 22/22 profiles had no county_city source).
   //    countyCityDirectoryAdapter titles each candidate with the profile's own
