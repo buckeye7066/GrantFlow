@@ -161,6 +161,11 @@ function thesisToCanonicalProfile(thesis = {}, opts = {}) {
     type: profileType,
     applicant_types: applicantTypes,
     applicantTypes: new Set(uniqueStrings([profileType, ...applicantTypes, ...canonicalApplicantTypes])),
+    // Structured eligibility facts carried on the thesis (the OS path passes
+    // no sections): the engine's age-contradiction and foster-youth gates
+    // read profileNorm.age / hasFosterIndicator.
+    age: Number.isFinite(Number(thesis.age)) ? Number(thesis.age) : null,
+    foster_youth: thesis.has_foster_indicator === true,
     needs: uniqueStrings(thesis.needs),
     need_categories: uniqueStrings(thesis.needs),
     state: location.state ?? thesis.state ?? null,

@@ -285,6 +285,14 @@ export function profileContextToThesisInput(ctx = {}) {
   return {
     id: profile.id ?? ctx.profileId ?? null,
     profile_type: profile.primary_type ?? profile.applicant_type ?? null,
+    // Structured age for the engine's hard eligibility gates (age-restricted
+    // and age-contradicted programs) — the thesis is the OS match path's only
+    // profile representation, so the fact must ride on it.
+    age: (() => {
+      const raw = sections?.basic_information?.age ?? profile.age ?? null
+      const n = Number(raw)
+      return Number.isFinite(n) && n > 0 && n < 120 ? n : null
+    })(),
     schools,
     field_of_study,
     employer,

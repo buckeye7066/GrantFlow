@@ -801,7 +801,10 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
 
   // -- Caregiver / family: family_life section, dependents, foster indicators --
   let isCaregiverFromSections = false
-  let hasFosterIndicator = false
+  // Profile-level fallback first: section-less callers (the crawler-os thesis
+  // path) carry the structured flag directly on the profile object.
+  let hasFosterIndicator =
+    Boolean(profile.foster_youth) || Boolean(profile.has_foster_indicator)
   const familySection =
     profileSections?.family_life ??
     profileSections?.family ??
@@ -818,7 +821,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
         Boolean(fa.cares_for_family_member) ||
         Number(fa.number_of_dependents ?? 0) > 0 ||
         Number(fa.num_dependents ?? 0) > 0
-      hasFosterIndicator =
+      hasFosterIndicator = hasFosterIndicator ||
         Boolean(fa.is_foster_parent) ||
         Boolean(fa.foster_care) ||
         Boolean(fa.has_foster_children) ||

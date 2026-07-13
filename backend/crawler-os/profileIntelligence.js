@@ -275,6 +275,25 @@ function hasStructuredFarmerFlag(profile) {
   return false;
 }
 
+// Structured foster indicator (current/former foster youth OR foster parent),
+// scoped to the FAMILY-shaped sections. Mirrors profileNormalizer's
+// hasFosterIndicator: sectionSignalText renders true flags as their key words
+// ("foster youth homeless"), so a word-bounded "foster" inside the family
+// section's own text is the declared flag — never the general blob.
+function hasStructuredFosterFlag(profile) {
+  if (profile?.foster_youth === true || profile?.has_foster_indicator === true) return true;
+  for (const section of profile?.sections ?? []) {
+    const sectionKey = lc(section?.section_key ?? section?.key ?? section?.title);
+    if (!/^family(_life)?$|^caregiving$/.test(sectionKey)) continue;
+    const data = section?.data ?? {};
+    if (data.foster_youth === true || data.former_foster_youth === true ||
+        data.is_foster_parent === true || data.foster_care === true || data.has_foster_children === true) return true;
+    const text = lc(valueText(data) + ' ' + (section?.body ?? ''));
+    if (/(^|[^a-z])foster([^a-z]|$)/.test(text)) return true;
+  }
+  return false;
+}
+
 // System/bookkeeping tags that must never be treated as topical interests —
 // they mark HOW a profile is managed, not WHAT it seeks funding for.
 const RESERVED_PROFILE_TAGS = new Set([
@@ -1076,6 +1095,12 @@ export function buildThesis(profile = {}) {
     is_org: isOrg,
     is_research_org,
     research_topic,
+    // Structured eligibility facts the canonical engine's hard gates need but
+    // the thesis previously dropped (the OS match path passes no sections, so
+    // a 73-year-old's age-contradicted foster-youth program could never
+    // hard-gate — it REVIEW-capped as "status unknown" instead).
+    age: Number.isFinite(Number(profile?.age)) ? Number(profile.age) : null,
+    has_foster_indicator: hasStructuredFosterFlag(profile),
     school: profile?.school ?? null,
     // Concrete institution / field-of-study / employer seeds — the highest-signal
     // way to reach institution-specific endowments/departmental scholarships and
