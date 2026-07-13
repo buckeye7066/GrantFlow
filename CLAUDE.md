@@ -27,18 +27,27 @@ npm run build        # Production build
 npm run lint         # ESLint (zero warnings enforced)
 npm run typecheck    # TypeScript check
 npm run unit         # Vitest unit tests
-npm run test         # lint + typecheck + unit + build
+npm run test         # profile-metadata check + lint:ci + typecheck + build + unit
 npm run test:all     # + smoke + e2e (Playwright)
+npm run check:prepush  # Pre-push guardrail chain (auth-middleware/profile-guards/profile-metadata/runtime-imports/env-examples checks + lint + typecheck + build)
 
 npm run migrate      # Run DB migrations
 npm run db:setup     # migrate + seed
 npm run doctor       # Project health check
+
+npm run crawler-os:crawl              # Run crawler-os discovery
+npm run crawler-os:test               # crawler-os node:test suite
+npm run crawler:doctor                # Crawler-os health diagnostics
+npm run crawler:verify                # End-to-end crawler system verify
+npm run opps:ensure-national-minimum  # Ensure national opportunity floor
 ```
 
 ## Architecture
 
 - **Frontend** (`src/`): React 18 + Vite + TypeScript + Tailwind + Radix UI. State via Zustand (`stores/`). Feature-based components under `components/`. API calls go through `api/`.
-- **Backend** (`backend/`): Express, 30+ route files under `backend/routes/`, business logic in `backend/services/`, DB access via `backend/db/`. Entry: `backend/server.js`. Boot tasks in `backend/startup/`.
+- **Backend** (`backend/`): Express, ~100 route files under `backend/routes/`, business logic in `backend/services/`, DB access via `backend/db/`. Entry: `backend/server.js`. Boot tasks in `backend/startup/`.
+- **Shared + vnext**: `shared/` holds ~16 cross-cutting modules (`pipelineStages.js`, `dedupePipelineGrants.js`, `opportunityFundability.js`, etc.); `backend/vnext/` holds the newer scoring/state-machine subsystem (`scoringService.js`, `stateMachine.js`).
+- **Crawler-os agents**: anya, hamilton, john, robert, sam, yana under `backend/crawler-os/agents/`; Amy lives in `backend/services/amy/`.
 - **AI**: Claude (`@anthropic-ai/sdk`) + OpenAI for drafting, discovery, and the "Anya" assistant. Prompts in `backend/prompts/`.
 - **Recall/grounding/critic lanes (flag-gated, default OFF)**: `SEMANTIC_RECALL` (embedding recall booster — ADDITIVE candidates only; `backend/services/embeddings/embeddingService.js`; matchEngine stays the sole decision authority), `COMPARABLE_AWARDS` (real NIH RePORTER awards as labeled reference-only drafting context), `PROPOSAL_CRITIC` (multi-pass draft critic). Contracts + off-state behavior: `docs/canonical_rules.md` ("Feature flags" section).
 - **DB**: SQLite for local/test (`backend/db/schema.sql`), Postgres in prod via a shim. Tests use vitest with `.js` (`backend/tests/`); a few runners use `node:test` with `.mjs` — match the convention of the file you're editing.
