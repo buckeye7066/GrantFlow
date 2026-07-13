@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo } from "react"
 import { useForm, useFieldArray, Controller } from "react-hook-form"
+import { generateId } from "@/utils/generateId"
 import {
   Dialog,
   DialogContent,
@@ -65,13 +66,6 @@ const CONTACT_GENDER_TARGETS = ["any", "women", "men", "coed", "unknown"]
 // sentinel internally is not feasible for a single text field, so we validate
 // and split on commas but trim entries; interests containing commas are not
 // supported via this text input by design.
-function generateId(prefix = "item") {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
-}
-
 // Lightweight URL validator suitable for react-hook-form `validate`.
 // Returns true (valid) for empty values (fields are optional) and for
 // well-formed http(s) URLs; otherwise returns an error message string.
@@ -661,7 +655,10 @@ export default function UniversityApplicationForm({
             </div>
             <div className="space-y-2">
               <Label htmlFor="tuition">Tuition (Annual USD)</Label>
-              <Input id="tuition" type="number" step="100" min="0" {...register("tuition")} />
+              <Input id="tuition" type="number" step="100" min="0" {...register("tuition", { validate: (value) => value === "" || value === null || value === undefined || Number(value) >= 0 || "Enter a valid positive number." })} />
+              {errors.tuition && (
+                <p className="text-xs text-red-600">{errors.tuition.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="student_teacher_ratio">Student/Teacher Ratio</Label>

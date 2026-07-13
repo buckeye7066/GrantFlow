@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { generateId } from "@/utils/generateId"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -128,13 +129,6 @@ const DEFAULT_ACTIVITY_CATALOG = [
   { id: "faith_campus_ministry", label: "Campus Ministry / Faith Groups", category: "Community" },
   { id: "community_cultural", label: "Cultural/Identity Organizations", category: "Community" },
 ]
-
-function generateId(prefix = "item") {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
-}
 
 // Validate that a color string is a safe, recognizable CSS color value so it
 // can be interpolated into inline styles without silently breaking the layout
