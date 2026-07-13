@@ -105,13 +105,43 @@ function crawlFetchTimeoutMs() {
   return Math.max(50, Number(process.env.CRAWLER_FETCH_TIMEOUT_MS) || 30000);
 }
 
+/**
+ * Browser-equivalent request headers for the production crawl fetcher.
+ *
+ * Native fetch/undici identifies itself as a non-browser client, and some
+ * official sources' WAFs answer that with a fake 404 (2026-07-12:
+ * highered.ohio.gov served 404 to the crawler while the same OCOG page is 200
+ * under a browser UA — Amy reported it as source_fetch_failed). These are
+ * public program pages fetched for legitimate discovery; presenting standard
+ * browser headers is owner-approved (2026-07-12) for exactly this class.
+ * Caller-provided headers always win (API adapters keep their keys/accepts).
+ * Kill switch: CRAWLER_BROWSER_HEADERS=0.
+ */
+export const BROWSER_FETCH_HEADERS = Object.freeze({
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+});
+
+function browserHeadersEnabled() {
+  return String(process.env.CRAWLER_BROWSER_HEADERS ?? '1').toLowerCase() !== '0';
+}
+
 /** Exported for tests. */
 export function fetchWithTimeout(url, init = {}) {
   const timeoutSignal = AbortSignal.timeout(crawlFetchTimeoutMs());
   const signal = init.signal
     ? AbortSignal.any([init.signal, timeoutSignal])
     : timeoutSignal;
-  return fetch(url, { ...init, signal });
+  let headers = init.headers;
+  if (browserHeadersEnabled()) {
+    // Headers() merge is case-insensitive, so a caller's 'user-agent' cleanly
+    // overrides the default 'User-Agent' instead of duplicating it.
+    const merged = new Headers(BROWSER_FETCH_HEADERS);
+    for (const [k, v] of new Headers(init.headers ?? {})) merged.set(k, v);
+    headers = merged;
+  }
+  return fetch(url, { ...init, headers, signal });
 }
 
 /**
