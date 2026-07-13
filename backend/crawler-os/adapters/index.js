@@ -142,6 +142,13 @@ const FACTORIES = Object.freeze({
   samhsa_findtreatment: officialDirectory('samhsa_findtreatment'),
   american_kidney_fund: officialDirectory('american_kidney_fund'),
   needymeds_diagnosis_assistance: officialDirectory('needymeds_diagnosis_assistance'),
+  // --- Benchmark-gap lanes (2026-07-13): kinship/grandfamily caregivers,
+  //     heirs'-property / beginning farmers, homeschool families.
+  acl_family_caregiver_support: officialDirectory('acl_family_caregiver_support'),
+  gks_network: officialDirectory('gks_network'),
+  farmers_gov_heirs_property: officialDirectory('farmers_gov_heirs_property'),
+  farmers_gov_beginning_farmers: officialDirectory('farmers_gov_beginning_farmers'),
+  hslda_compassion_grants: officialDirectory('hslda_compassion_grants'),
   // --- State benefits portals (2026-07-12): one official portal per remaining
   //     state/DC/PR, generated in lockstep with the registry table.
   ...Object.fromEntries(STATE_BENEFITS_SOURCE_IDS.map((id) => [id, officialDirectory(id)])),

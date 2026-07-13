@@ -95,6 +95,9 @@ export const LANE_OF_SOURCE = Object.freeze({
   nea_neh_arts: 'federal_grants',
   usda_conservation: 'federal_grants',
   hrsa_health_workforce: 'federal_grants',
+  // Benchmark-gap lanes (2026-07-13): heirs'-property + beginning farmers.
+  farmers_gov_heirs_property: 'federal_grants',
+  farmers_gov_beginning_farmers: 'federal_grants',
   // ── Federal benefits / federal support programs for people ──
   benefits_gov: 'federal_benefits',
   liheap: 'federal_benefits',
@@ -119,6 +122,9 @@ export const LANE_OF_SOURCE = Object.freeze({
   acf_chafee_foster: 'federal_benefits',
   ccdf_childcare: 'federal_benefits',
   va_housing_grants: 'federal_benefits',
+  // Benchmark-gap lanes (2026-07-13): kinship/grandfamily caregiver support.
+  acl_family_caregiver_support: 'federal_benefits',
+  gks_network: 'federal_benefits',
   // ── State programs (state-specific portals & resources) ──
   // TennCare ECF CHOICES — TN Medicaid HCBS waiver (ported legacy ECF lane).
   tn_ecf_choices: 'state_programs',
@@ -160,6 +166,8 @@ export const LANE_OF_SOURCE = Object.freeze({
   petco_love_grants: 'private_charities',
   aspca_grants: 'private_charities',
   feeding_america: 'private_charities',
+  // Benchmark-gap lane (2026-07-13): the homeschool-family direct-grant anchor.
+  hslda_compassion_grants: 'private_charities',
   // IRS 990 grantmakers (ProPublica) — the private-foundation funder universe.
   propublica_990: 'private_charities',
   // ── Disease-specific support ──

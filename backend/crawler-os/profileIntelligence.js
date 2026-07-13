@@ -104,7 +104,7 @@ const NEED_KEYWORDS = {
   // essays) are common theme words that falsely flagged students/individuals as
   // political candidates. Keep unambiguous, multi-word political-finance phrases.
   campaign: ['campaign finance', 'candidate filing', 'political committee', 'political campaign', 'running for office', 'run for office', 'campaign committee', 'ballot measure'],
-  caregiving: ['caregiver', 'caregiving', 'respite', 'memory care', 'long term care', 'home care', 'dementia care', 'elder care', 'aging services'],
+  caregiving: ['caregiver', 'caregiving', 'respite', 'memory care', 'long term care', 'home care', 'dementia care', 'elder care', 'aging services', 'kinship', 'kinship care', 'grandfamily', 'grandfamilies', 'raising grandchildren', 'grandparent raising', 'grandparents raising'],
   survivor_benefits: ['survivor benefits', 'surviving spouse', 'widow benefits', 'widower benefits', 'death benefit'],
   cancer_support: ['cancer', 'oncology', 'chemotherapy', 'breast cancer', 'stage 4', 'metastatic'],
   dementia_support: ['dementia', 'alzheimers', 'alzheimer', 'memory care'],
@@ -253,6 +253,26 @@ function gatherStructuredApplicantHints(profile) {
     if (data?.is_military_spouse === true || data?.military_spouse === true) push('military spouse');
   }
   return hints;
+}
+
+// A deliberate occupation.farmer checkbox declares the profile an agricultural
+// producer. Structured only — never the general text blob (a mission mentioning
+// "farmers market" is not a farm). The check is scoped to the OCCUPATION
+// section: either the raw boolean flag, or its canonicalized text form —
+// sectionSignalText (crawlerOsPersistence) renders a section as the keys of its
+// TRUE flags ("farmer small business owner"), so a word-bounded "farmer" inside
+// the occupation section's own text is the same declared flag.
+function hasStructuredFarmerFlag(profile) {
+  if (profile?.farmer === true || profile?.is_farmer === true) return true;
+  if (profile?.occupation?.farmer === true) return true;
+  for (const section of profile?.sections ?? []) {
+    const sectionKey = lc(section?.section_key ?? section?.key ?? section?.title);
+    if (sectionKey !== 'occupation') continue;
+    if (section?.data?.farmer === true) return true;
+    const text = lc(valueText(section?.data) + ' ' + (section?.body ?? ''));
+    if (/(^|[^a-z])farmer([^a-z]|$)/.test(text)) return true;
+  }
+  return false;
 }
 
 // System/bookkeeping tags that must never be treated as topical interests —
@@ -766,14 +786,27 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
   //   1. canonicalize the EXPLICIT identity strings via synonyms (trusted), and
   //   2. ONLY when the profile declares no identity at all, fall back to a blob
   //      scan so a bare profile still searches something (never zero).
+  const exactMapped = new Set();
   for (const e of explicit) {
     const mapped = PRIMARY_TYPE_TO_APPLICANT[e] ?? PRIMARY_TYPE_TO_APPLICANT[key(e)];
-    if (mapped) for (const bucket of mapped) found.add(bucket);
+    if (mapped) {
+      for (const bucket of mapped) found.add(bucket);
+      exactMapped.add(e);
+    }
   }
   for (const e of explicit) {
     if (APPLICANT_TYPE_SYNONYMS[e]) found.add(e); // already a canonical bucket
+    // An exact canonical mapping is AUTHORITATIVE for its string — the fuzzy
+    // synonym pass must not widen it ('homeschool_family' ⊃ "school" was
+    // promoting a homeschool FAMILY into the org school bucket, surfacing
+    // classroom-teacher funding like DonorsChoose it can never use).
+    if (exactMapped.has(e)) continue;
+    // Word-boundary matching on the underscore-normalized string — substring
+    // includes() is the documented 13-bucket-explosion driver ('ets' inside
+    // "targets", 'ems' inside "systems"); the same class applied here.
+    const normalized = e.replace(/_/g, ' ');
     for (const [canon, syns] of Object.entries(APPLICANT_TYPE_SYNONYMS)) {
-      if (syns.some((s) => e.includes(s))) found.add(canon);
+      if (syns.some((s) => wordBoundaryMatch(normalized, s))) found.add(canon);
     }
   }
   // 1b. A FREE-TEXT declared org type ("Biotechnology / research organization")
@@ -813,6 +846,13 @@ function deriveApplicantTypes(profile, blob, triggerCollector = null) {
     // opportunities still match even when the only declared subtype is e.g.
     // "student". This is a correct structural implication, not free-text noise.
     found.add('individual');
+    // A structurally-declared FARMER (the occupation.farmer schema checkbox) is
+    // an agricultural PRODUCER: USDA farm lanes (NRCS EQIP/CSP cost-share, FSA
+    // beginning-farmer, conservation) serve individual producers, and stripping
+    // the farm bucket planner-excluded them from their primary funding universe
+    // (the Lowndes-County beginning-farmer class). A deliberate schema flag is
+    // declared identity — not the free-text noise the guard exists to stop.
+    if (hasStructuredFarmerFlag(profile)) found.add('farm');
   }
 
   // HIGH-PRECISION keyword safety net (ORG-class profiles only): pull in the

@@ -17,6 +17,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { assembleFundingResults, TIERS } from '../../backend/services/zeroResultLadder.js'
+import { RELAX_THRESHOLDS, DEFAULT_MIN_SCORE } from '../../backend/config/matchThresholds.js'
 
 function direct(score, extras = {}) {
   return {
@@ -71,6 +72,29 @@ test('ladder: drops to RELAXED_DIRECT and marks rows when minScore unmet but low
     assert.equal(opp.threshold_relaxed, true)
     assert.ok(opp.relaxed_reason)
   }
+})
+
+test('ladder: relaxation is GRADUATED on the canonical data-point ladder — the best non-empty band wins, not one jump to zero', () => {
+  // Data-point bar (8) unmet; a review-worthy 7 and a floor-level 3 exist.
+  // The canonical RELAX_THRESHOLDS ([7, 4, 0]) must surface ONLY the 7 —
+  // the retired hardcoded [40, 30, 20, 10, 0] tiers were all >= 8-bar
+  // minScores and degenerated into a single jump to 0 (returning the 3 too).
+  const result = assembleFundingResults([direct(7), direct(3)], { minScore: DEFAULT_MIN_SCORE })
+  assert.equal(result.tier, TIERS.RELAXED_DIRECT)
+  assert.equal(result.opportunities.length, 1, 'only the best relax band surfaces')
+  assert.equal(result.opportunities[0].match_score, 7)
+  // and the graduated steps ARE the canonical ladder (no second relaxation authority)
+  assert.ok(RELAX_THRESHOLDS.includes(7) && RELAX_THRESHOLDS.includes(0))
+})
+
+test('ladder: the default minScore is the canonical discovery bar (data-point scale), not a retired-scale constant', () => {
+  // A direct opportunity exactly at the canonical bar must be STRONG_DIRECT
+  // with NO relaxation when the caller omits minScore. Under the old
+  // hardcoded default (25, need-anchored scale) this honest at-bar match was
+  // mislabeled threshold_relaxed.
+  const result = assembleFundingResults([direct(DEFAULT_MIN_SCORE)], {})
+  assert.equal(result.tier, TIERS.STRONG_DIRECT)
+  assert.equal(result.threshold_relaxed, false)
 })
 
 test('ladder: falls to DIRECTORY when no direct opp exists; marks directory_only=true (mission rule: never blank)', () => {

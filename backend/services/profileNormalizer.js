@@ -822,6 +822,11 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
         Boolean(fa.is_foster_parent) ||
         Boolean(fa.foster_care) ||
         Boolean(fa.has_foster_children) ||
+        // The schema's own family_life flag for current/FORMER foster youth —
+        // without it, a real foster youth's Chafee/ETV lane was REVIEW-capped
+        // by the foster-youth restriction gate as "status unknown".
+        Boolean(fa.foster_youth) ||
+        Boolean(fa.former_foster_youth) ||
         String(fa.foster_status ?? '').toLowerCase().includes('foster')
     }
   }

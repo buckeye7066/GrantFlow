@@ -31,21 +31,40 @@ function typeWord(types = []) {
   return TYPE_WORD[String(t || '').toLowerCase()] || 'organization';
 }
 
+// US-territory codes are poison as bare tokens in search text ("PR" reads as
+// public relations, "GU"/"VI"/"AS"/"MP" are noise), and "<code> state ..."
+// phrasing is wrong for a territory. Expand them to the full territory name in
+// every query phrase — the fifty-state assumption must never silently exclude
+// a territorial profile (Puerto Rico is the canonical case).
+const TERRITORY_NAME = Object.freeze({
+  PR: 'Puerto Rico',
+  GU: 'Guam',
+  VI: 'U.S. Virgin Islands',
+  AS: 'American Samoa',
+  MP: 'Northern Mariana Islands',
+});
+function regionName(stateCode) {
+  const code = String(stateCode || '').trim();
+  return TERRITORY_NAME[code.toUpperCase()] || code;
+}
+
 function geoPhrase(location = {}) {
   const city = location?.city ? String(location.city).trim() : '';
-  const state = location?.state ? String(location.state).trim() : '';
+  const state = regionName(location?.state);
   if (city && state) return `${city}, ${state}`;
   return state || city || '';
 }
 
 // County-level phrase ("Bradley County, TN"). Hyperlocal awards (community
 // foundations, county scholarships, local civic clubs) are keyed to the COUNTY,
-// not the city — and the city phrase never reaches them.
+// not the city — and the city phrase never reaches them. Territory and Alaska
+// county-equivalents (municipio, municipality, census area) keep their own
+// suffix — never "Ponce Municipio County".
 function countyPhrase(location = {}) {
   let county = location?.county ? String(location.county).trim() : '';
   if (!county) return '';
-  if (!/county|parish|borough/i.test(county)) county = `${county} County`;
-  const state = location?.state ? String(location.state).trim() : '';
+  if (!/county|parish|borough|municipio|municipality|census area/i.test(county)) county = `${county} County`;
+  const state = regionName(location?.state);
   return state ? `${county}, ${state}` : county;
 }
 
@@ -108,12 +127,16 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     (types.length > 0 && !types.some((t) => ['individual', 'family', 'student', 'veteran', 'senior', 'caregiver'].includes(t)));
   const geo = geoPhrase(thesis.location);
   const county = countyPhrase(thesis.location);
-  const state = thesis.location?.state ? String(thesis.location.state).trim() : '';
+  const stateCode = thesis.location?.state ? String(thesis.location.state).trim().toUpperCase() : '';
+  // `state` is SEARCH LANGUAGE (territory codes expanded to full names) — use
+  // stateCode for any code comparison.
+  const state = regionName(stateCode);
+  const isTerritory = Boolean(TERRITORY_NAME[stateCode]);
   // Towns within the ~25-mile local radius of the profile ZIP (nearest first,
   // computed by geoRadius in the thesis). These reach the next-town-over and
   // across-county/state-line funders that the exact city/county tokens miss.
   const nearby = (Array.isArray(thesis.location?.nearby_cities) ? thesis.location.nearby_cities : [])
-    .map((n) => (n?.city && n?.state ? `${String(n.city).trim()}, ${String(n.state).trim()}` : ''))
+    .map((n) => (n?.city && n?.state ? `${String(n.city).trim()}, ${regionName(n.state)}` : ''))
     .filter(Boolean)
     .slice(0, 4);
   const schools = (Array.isArray(thesis.schools) ? thesis.schools : [])
@@ -197,12 +220,19 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   if (geo && !isStudent) add(core, `${word} grants ${geo} ${year}`);
   // Community/place-based philanthropy (where most local money lives).
   if (geo) add(core, `community foundation grants ${geo}`);
+  // Puerto Rico: much of the territorial/municipal assistance surface is
+  // published in Spanish only — an English-only query set structurally
+  // misses it. One core + one broadening Spanish query.
+  if (stateCode === 'PR') {
+    add(core, `programas de ayuda ${geo || 'Puerto Rico'}`);
+    add(extra, `subvenciones y ayudas ${geo || 'Puerto Rico'}`);
+  }
   // Students: the single best scholarship query is core (federal APIs skip them).
   if (isStudent) add(core, `scholarships for students ${geo} ${year}`);
   // State aid programs (HOPE, TSAA, Promise, Cal Grant...) have no API and are a
   // student's largest single non-federal source — CORE, never rotated out (was
   // in the rotated EXTRA pool, so runs under the query cap could drop it).
-  if (isStudent && state) add(core, `${state} state scholarship programs`);
+  if (isStudent && state) add(core, isTerritory ? `${state} scholarship programs` : `${state} state scholarship programs`);
   // Hyperlocal scholarship ENTITIES (2026-07-06, hyperlocal_recall_miss fix):
   // county education foundations, civic clubs (Rotary/Lions/Elks), Dollars for
   // Scholars chapters, and local churches run most small-town scholarships, and

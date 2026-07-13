@@ -138,15 +138,20 @@ export async function runDiscovery(deps, opts = {}) {
         }
         sawFetchError = true;
         recordRejection(store, runId, { source_id: sourceId, reason: 'fetch_failed', detail: resp.reason ?? resp.error ?? `status:${resp.status}`, url: req.url });
-        // A true DIRECTORY/locator candidate is constructed ENTIRELY from
-        // registry config — parseDirectory never reads the body. A transient
-        // fetch failure (site hiccup, CI-runner egress blocked) must not erase
-        // the honest locator row a sparse profile depends on. Emit it anyway
-        // with fetch-less evidence (content_hash stays null → the link is
-        // honestly unverified; link_unverified ≠ dead). Everything else still
-        // skips: API/list candidates come from the body, and a PROGRAM-kind
-        // registry page that stops resolving may genuinely be gone.
-        if (req.parseCfg?.directoryCandidate?.kind !== OPPORTUNITY_KIND.DIRECTORY) continue;
+        // A registry-declared candidate (parseCfg.directoryCandidate) is
+        // constructed ENTIRELY from curated registry config — parseDirectory
+        // never reads the body; the fetch only captures evidence. A transient
+        // fetch failure (site hiccup, WAF 403 on automated clients, CI-runner
+        // egress blocked) must not erase the honest row a sparse profile
+        // depends on — and that holds for its HONEST kind, not only DIRECTORY.
+        // Coupling survival to the DIRECTORY kind forced real programs (SSDI,
+        // Black Lung, MyCAA) to be registered as fake "directories" just to
+        // stay resilient. Emit the candidate anyway with fetch-less evidence
+        // (content_hash stays null → the reality gate marks a non-directory
+        // kind LINK_UNVERIFIED; link_unverified ≠ dead, and it can never claim
+        // VERIFIED without a captured page). API/list candidates still skip:
+        // they come from the body.
+        if (!req.parseCfg?.directoryCandidate) continue;
       }
 
       const parsed = parse(req.family, resp.ok ? resp.body : '', req.parseCfg ?? {});
@@ -158,7 +163,14 @@ export async function runDiscovery(deps, opts = {}) {
         recordRejection(store, runId, { source_id: sourceId, reason: 'parser_note', detail: parsed.note, url: req.url });
       }
 
-      const evidence = { url: resp.finalUrl ?? req.url, content_hash: resp.contentHash ?? null, fetched_at: resp.fetchedAt ?? null };
+      // A failed response's body (an error page, a WAF block) is NOT evidence
+      // of the opportunity — without an ok fetch the evidence hash stays null
+      // so the reality gate can never stamp the row VERIFIED off a 500 body.
+      const evidence = {
+        url: resp.finalUrl ?? req.url,
+        content_hash: resp.ok ? (resp.contentHash ?? null) : null,
+        fetched_at: resp.fetchedAt ?? null,
+      };
 
       for (const raw of candidates) {
         const cand = adapter.mapCandidate(raw, { thesis, source });

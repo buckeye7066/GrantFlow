@@ -104,7 +104,9 @@ function stateBenefitsPortalRow([state, name, url, sponsor, summary]) {
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
     geography: { national: false, states: [state] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    // A state portal is an honest LOCATOR (directory:true forces the emitted
+    // kind anyway); default_kinds must agree — registryKindTotality.test.mjs.
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 76,
   };
 }
@@ -295,7 +297,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'student', 'veteran'],
     need_categories: ['food'],
     geography: { national: true, states: [] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 67,
   },
   {
@@ -362,9 +364,11 @@ export const SOURCES = Object.freeze([
   },
   {
     // SSA disability benefits (SSDI/SSI) — the federal branch of the legacy ECF
-    // crawler's individual sources. NOTE: ssa.gov intermittently 403s automated
-    // fetchers (seen in CI); as a directory-kind locator the honest row survives
-    // a failed fetch (link_unverified ≠ dead) while the run records fetch_error.
+    // crawler's individual sources. A real benefit PROGRAM (apply at ssa.gov),
+    // honestly classified BENEFIT — not a directory. NOTE: ssa.gov
+    // intermittently 403s automated fetchers (seen in CI); registry-declared
+    // candidates survive a failed fetch with their honest kind as
+    // link_unverified (≠ dead) while the run records fetch_error.
     source_id: 'ssa_disability',
     name: 'Social Security disability benefits (SSDI / SSI)',
     source_type: 'directory',
@@ -373,7 +377,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Social Security Administration',
     resource_title: 'Social Security disability benefits (SSDI/SSI)',
     resource_summary: 'Official Social Security disability-benefits information and application entry point: SSDI for workers with a qualifying disability and SSI for people with limited income and resources. This is a benefits lane, not a grant.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran', 'disabled'],
     need_categories: ['disability', 'medical'],
     geography: { national: true, states: [] },
@@ -809,7 +813,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Social Security Administration',
     resource_title: 'Social Security survivors benefits',
     resource_summary: 'Official Social Security survivor-benefits information for eligible surviving spouses, children, and families. This is a benefits lane, not a grant.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['survivor_benefits', 'housing', 'food', 'medical'],
     geography: { national: true, states: [] },
@@ -825,7 +829,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'U.S. Department of Labor',
     resource_title: 'Black Lung Program benefits',
     resource_summary: 'Official Department of Labor Black Lung Program information for eligible coal miners and surviving family members. GrantFlow treats this as benefit guidance, not an open grant.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['black_lung_benefits'],
     geography: { national: true, states: [] },
@@ -861,7 +865,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'survivor_benefits'],
     geography: { national: false, states: ['KY'] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
   },
   {
@@ -1113,7 +1117,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'U.S. Department of Defense',
     resource_title: 'MyCAA Scholarship',
     resource_summary: 'Official Military Spouse Career Advancement Account Scholarship portal for eligible military spouses pursuing licenses, certificates, certifications, or associate degrees.',
-    directory: true, loan_allowed: false, cost_share_allowed: false,
+    directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['military_spouse'],
     need_categories: ['military_spouse_support', 'education', 'employment'],
     geography: { national: true, states: [] },
@@ -1565,7 +1569,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
     geography: { national: false, states: ['OH'] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
   },
   {
@@ -1597,7 +1601,7 @@ export const SOURCES = Object.freeze([
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
     geography: { national: false, states: ['WA'] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 78,
   },
   {
@@ -1723,6 +1727,105 @@ export const SOURCES = Object.freeze([
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  // ── Benchmark-gap lanes (2026-07-13). Structural gaps surfaced by the
+  //    12-persona stress cohort: kinship/grandfamily caregivers, heirs'-property
+  //    / beginning farmers, and homeschool families had NO dedicated lane. All
+  //    URLs verified live 2026-07-13 (curl -L → 200 with a browser UA).
+  {
+    // NFCSP funds caregiver services through local AAAs — including OLDER
+    // RELATIVE CAREGIVERS (grandparents 55+ raising grandchildren), the
+    // grandfamily class no grant feed reaches. A real benefit PROGRAM: the
+    // next step (contact your AAA) is on the official page.
+    source_id: 'acl_family_caregiver_support',
+    name: 'National Family Caregiver Support Program (ACL)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://acl.gov/programs/support-caregivers/national-family-caregiver-support-program',
+    sponsor_name: 'Administration for Community Living',
+    resource_title: 'National Family Caregiver Support Program (NFCSP)',
+    resource_summary: 'Official ACL program funding counseling, respite care, training, and supplemental services for family caregivers — including grandparents and other older relatives (55+) raising children. Services are delivered through local Area Agencies on Aging.',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'senior', 'caregiver'],
+    need_categories: ['caregiving', 'aging', 'family_support'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
+  },
+  {
+    // ACL-funded national TA center for kinship/grandfamily caregivers — an
+    // honest locator for state kinship navigator programs and support groups.
+    source_id: 'gks_network',
+    name: 'Grandfamilies & Kinship Support Network',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://www.gksnetwork.org',
+    sponsor_name: 'Generations United (ACL-funded)',
+    resource_title: 'Grandfamilies & Kinship Support Network',
+    resource_summary: 'National technical-assistance network for kinship and grandfamily caregivers: state-by-state kinship navigator programs, support services, and resources for grandparents and relatives raising children.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'senior', 'caregiver'],
+    need_categories: ['caregiving', 'family_support'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  {
+    // Heirs'-property pathway: establishing a farm number on undivided
+    // inherited land is the gate to EVERY USDA program. A standing PROGRAM
+    // (eligibility/intake guidance on the official page) — legal-assistance
+    // adjacent, never presented as a grant.
+    source_id: 'farmers_gov_heirs_property',
+    name: 'USDA heirs’ property eligibility (farmers.gov)',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.farmers.gov/working-with-us/heirs-property-eligibility',
+    sponsor_name: 'U.S. Department of Agriculture',
+    resource_title: 'Heirs’ property landowner eligibility (USDA)',
+    resource_summary: 'Official USDA guidance for heirs’ property landowners: documentation paths to establish a farm number on undivided inherited land, unlocking FSA, NRCS conservation, and other USDA program eligibility. Includes the Heirs’ Property Relending Program (a LOAN, classified as such).',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['farm', 'individual', 'family'],
+    need_categories: ['legal', 'agriculture'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.PROGRAM],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    // Beginning-farmer hub: the coordination point for FSA/NRCS/RD programs a
+    // new producer qualifies for — an honest locator.
+    source_id: 'farmers_gov_beginning_farmers',
+    name: 'USDA beginning farmers and ranchers (farmers.gov)',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: 'https://www.farmers.gov/your-business/beginning-farmers',
+    sponsor_name: 'U.S. Department of Agriculture',
+    resource_title: 'USDA beginning farmer and rancher resources',
+    resource_summary: 'Official USDA hub for beginning farmers and ranchers: coordinators in every state, farm loan programs, conservation cost-share, crop insurance options, and technical assistance for new and historically underserved producers.',
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['farm', 'individual', 'family'],
+    need_categories: ['agriculture', 'startup', 'equipment'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    // The one national direct-grant program specifically for homeschooling
+    // families in financial need (curriculum/materials). A real grant with a
+    // real application path — the homeschool lane's anchor.
+    source_id: 'hslda_compassion_grants',
+    name: 'HSLDA Compassion Grants',
+    source_type: 'html',
+    trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
+    base_url: 'https://hslda.org/compassion-grants',
+    sponsor_name: 'Home School Legal Defense Association',
+    resource_title: 'HSLDA Compassion Grants (homeschool families)',
+    resource_summary: 'Direct grants for homeschooling families facing financial hardship: curriculum and educational materials support so families can keep homeschooling through crisis.',
+    directory: false, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family'],
+    need_categories: ['education', 'curriculum'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECT_GRANT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
   },
   // State benefits portals — generated from the verified table above.
   ...STATE_BENEFITS_PORTALS.map(stateBenefitsPortalRow),

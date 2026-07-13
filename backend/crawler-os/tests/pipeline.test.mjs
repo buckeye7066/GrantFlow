@@ -59,13 +59,16 @@ test('a placeholder candidate is rejected by the reality gate and never enters t
   assert.ok(r.rejected >= 1 || r.stored === 0);
 });
 
-test('failed directory fetches still surface honest DIRECTORY locator rows (fetch failure ≠ zero results)', async () => {
-  // grants.gov empty AND every fetch fails. True DIRECTORY candidates are
-  // built entirely from registry config (parseDirectory ignores the body), so
-  // a transient fetch failure — a site hiccup or a CI runner whose egress to
-  // those sites is blocked — must not erase the honest locator rows a sparse
-  // profile depends on. This was zeroing the discover-local-funding release
-  // gate in CI (2026-07-01).
+test('failed directory fetches still surface honest registry-built rows (fetch failure ≠ zero results)', async () => {
+  // grants.gov empty AND every fetch fails. Registry-declared candidates
+  // (parseCfg.directoryCandidate) are built entirely from curated registry
+  // config (parseDirectory ignores the body), so a transient fetch failure —
+  // a site hiccup, a WAF 403, or a CI runner whose egress to those sites is
+  // blocked — must not erase the honest rows a sparse profile depends on.
+  // This was zeroing the discover-local-funding release gate in CI
+  // (2026-07-01). Survival is kind-agnostic (a real BENEFIT program is not
+  // relabeled "directory" to stay resilient), but TRUTH is preserved: a row
+  // stored without a fetched body must never claim VERIFIED/ROLLING reality.
   const d = deps({ grantsGov: [], fail: new Set([
     'cof.org',
     'benefits.gov',
@@ -79,11 +82,14 @@ test('failed directory fetches still surface honest DIRECTORY locator rows (fetc
   ]) });
   const thesis = buildThesis(SAMPLE_VFD_PROFILE);
   const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run0' });
-  assert.ok(r.stored >= 1, `directory locators must survive fetch failures (stored=${r.stored})`);
+  assert.ok(r.stored >= 1, `registry-built rows must survive fetch failures (stored=${r.stored})`);
   for (const o of storage.listCatalog(d.store)) {
-    assert.equal(o.kind, OPPORTUNITY_KIND.DIRECTORY, `only DIRECTORY rows may store without a fetched body, got kind=${o.kind} for "${o.title}"`);
+    assert.ok(
+      [REALITY_STATUS.DIRECTORY, REALITY_STATUS.LINK_UNVERIFIED].includes(o.reality_status),
+      `a row stored without a fetched body must be honestly unverified (directory or link_unverified), got reality_status=${o.reality_status} kind=${o.kind} for "${o.title}"`,
+    );
   }
-  assert.ok(!r.zero_result, 'no zero-result ladder when honest locators stored');
+  assert.ok(!r.zero_result, 'no zero-result ladder when honest rows stored');
 });
 
 test('when a run truly stores nothing, the zero-result ladder explains why and what next', async () => {

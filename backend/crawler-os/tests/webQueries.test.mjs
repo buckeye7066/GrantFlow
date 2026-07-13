@@ -220,3 +220,64 @@ test('SBIR topic prefers thesis.research_topic and never uses a bookkeeping tag'
   assert.ok(qs.includes('SBIR STTR genomics solicitation 2026'), 'topic from research_topic');
   assert.ok(!qs.some((q) => /designated|source-safe/i.test(q)), 'no bookkeeping-tag queries');
 });
+
+// ── Territory query language (2026-07-13, fifty-state-assumption fix) ────────
+// A Puerto Rico profile's queries must speak search language: "PR" as a bare
+// token reads as "public relations", "Ponce Municipio County" is not a place,
+// and Spanish-only territorial programs are unreachable by English-only queries.
+const PR_ORG_THESIS = {
+  applicant_types: ['business'],
+  is_org: true,
+  needs: ['disaster_recovery', 'childcare'],
+  location: { state: 'PR', city: 'Ponce', county: 'Ponce Municipio' },
+};
+
+test('a Puerto Rico profile gets full-territory-name query language, never a bare PR token', () => {
+  const qs = buildWebQueries(PR_ORG_THESIS, { year: 2026, max: 40, seed: 0 });
+  assert.ok(qs.length > 0, 'queries emitted for a PR profile');
+  assert.ok(
+    qs.some((q) => q.includes('Ponce, Puerto Rico')),
+    `geo phrase expands the territory name (got: ${qs.join(' | ')})`,
+  );
+  assert.ok(
+    !qs.some((q) => /(^|\s)PR(\s|$)/.test(q)),
+    'no query carries the ambiguous bare "PR" token',
+  );
+});
+
+test('municipio county-equivalents never get a "County" suffix bolted on', () => {
+  const qs = buildWebQueries(PR_ORG_THESIS, { year: 2026, max: 40, seed: 0 });
+  assert.ok(!qs.some((q) => /Municipio County/i.test(q)), 'no "Ponce Municipio County" phrases');
+  assert.ok(
+    qs.some((q) => q.includes('Ponce Municipio, Puerto Rico')),
+    'the municipio phrase is used for hyperlocal queries',
+  );
+});
+
+test('a Puerto Rico profile gets a Spanish-language assistance query (CORE, seed-stable)', () => {
+  for (const seed of [0, 5]) {
+    const qs = buildWebQueries(PR_ORG_THESIS, { year: 2026, max: 12, seed });
+    assert.ok(
+      qs.some((q) => q.startsWith('programas de ayuda')),
+      `Spanish core query present at seed ${seed}`,
+    );
+  }
+});
+
+test('a territory student reaches territory scholarship programs without the "state" misnomer', () => {
+  const qs = buildWebQueries(
+    { applicant_types: ['student', 'individual'], is_student: true, needs: ['education'], location: { state: 'PR', city: 'San Juan' } },
+    { year: 2026, max: 20, seed: 0 },
+  );
+  assert.ok(qs.includes('Puerto Rico scholarship programs'), 'territory scholarship query present');
+  assert.ok(!qs.includes('PR state scholarship programs'), 'no code-plus-state phrasing');
+});
+
+test('fifty-state profiles keep their existing query language (no churn)', () => {
+  const qs = buildWebQueries(
+    { applicant_types: ['student', 'individual'], is_student: true, needs: ['education'], location: { state: 'TN', city: 'Cleveland' } },
+    { year: 2026, max: 20, seed: 0 },
+  );
+  assert.ok(qs.includes('TN state scholarship programs'), 'state phrasing unchanged for TN');
+  assert.ok(!qs.some((q) => /programas de ayuda/.test(q)), 'no Spanish lane outside PR');
+});
