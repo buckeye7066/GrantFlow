@@ -32,6 +32,7 @@ import {
   isWebParityBenchmarkEnabled,
   normalizeUrlKey,
   isRealFundingHit,
+  isOutOfStateGovHit,
   parityScore,
   classifyWebResults,
   readWebParityBenchmark,
@@ -145,6 +146,37 @@ describe('pure helpers', () => {
     expect(web_only[0].url).toBe('https://neighborfund.org/apply')
     expect(web_only[0].need).toBe('medical bills') // honest need attribution
     expect(grantflow_only).toBe(1) // o2 was never surfaced by the web session
+  })
+
+  it('isRealFundingHit excludes consumer-health info sites and SEO lead-gen (2026-07-12 noise class)', () => {
+    expect(isRealFundingHit({ url: 'https://www.webmd.com/', title: 'WebMD - Better information. Better health.', snippet: 'health benefits information' })).toBe(false)
+    expect(isRealFundingHit({ url: 'https://sslg.com/social-security-disability-benefits-pay-chart/', title: 'SSDI Pay Chart 2026: Monthly Disability Benefit Amounts', snippet: '' })).toBe(false)
+  })
+
+  it('isOutOfStateGovHit: filters other states\' portals, keeps own state, federal, and unknown domains', () => {
+    // California portals against a TN profile — the 2026-07-12 parity crater.
+    expect(isOutOfStateGovHit('https://www.dhcs.ca.gov/medi-cal/', 'TN')).toBe(true)
+    expect(isOutOfStateGovHit('https://benefitscal.com/Help/program/medical/HCPDE?lang=en', 'TN')).toBe(true)
+    expect(isOutOfStateGovHit('https://compass.state.pa.us/', 'TN')).toBe(true)
+    // The profile's OWN state is never filtered.
+    expect(isOutOfStateGovHit('https://www.tn.gov/humanservices.html', 'TN')).toBe(false)
+    // Federal domains are never filtered — va.gov is Veterans Affairs, not Virginia.
+    expect(isOutOfStateGovHit('https://www.va.gov/disability/', 'TN')).toBe(false)
+    expect(isOutOfStateGovHit('https://www.grants.gov/', 'TN')).toBe(false)
+    // Unknown/unattributable domains and unknown profile state: never filtered.
+    expect(isOutOfStateGovHit('https://neighborfund.org/apply', 'TN')).toBe(false)
+    expect(isOutOfStateGovHit('https://www.dhcs.ca.gov/medi-cal/', null)).toBe(false)
+  })
+
+  it('classifyWebResults drops out-of-state government hits when a state is provided', () => {
+    const hits = [
+      { url: 'https://www.dhcs.ca.gov/medi-cal/', title: 'Medi-Cal - DHCS', snippet: 'health coverage assistance' },
+      { url: 'https://neighborfund.org/apply', title: 'Neighbor Grant', snippet: 'grant for medical bills' },
+    ]
+    const { web_only, web_real } = classifyWebResults(hits, [], { needs: [], state: 'TN' })
+    expect(web_only).toHaveLength(1)
+    expect(web_only[0].url).toBe('https://neighborfund.org/apply')
+    expect(web_real).toBe(1)
   })
 
   it('classifyWebResults: title identity and domain fallback both count as overlap', () => {
@@ -395,14 +427,14 @@ describe('sam check coverage.webParityBenchmark', () => {
     } finally { db.close() }
   })
 
-  it('goes RED on a fleet-parity regression >10 points vs the previous run (the ratchet)', async () => {
+  it('goes RED on a fleet-parity regression >10 points vs the trailing median (the ratchet)', async () => {
     const db = kvDb()
     try {
       put(db, freshStore(60, 80))
       const res = await check.run({ db })
       expect(res.ok).toBe(false)
       expect(res.summary).toMatch(/regression/i)
-      expect(res.evidence.previous_fleet_parity).toBe(80)
+      expect(res.evidence.trailing_median_fleet_parity).toBe(80)
       expect(res.evidence.top_web_only[0].url).toBe('https://neighborfund.org/apply')
       expect(res.recommended_fix).toMatch(/web_parity_gap_queue/)
     } finally { db.close() }
@@ -417,6 +449,47 @@ describe('sam check coverage.webParityBenchmark', () => {
       expect(res.summary).toMatch(/fleet parity 80/)
       put(db, freshStore(72, 80)) // -8: within the ratchet tolerance
       expect((await check.run({ db })).ok).toBe(true)
+    } finally { db.close() }
+  })
+
+  it('does NOT red-flag a return to the historical band after a single-night spike (median ratchet)', async () => {
+    const db = kvDb()
+    try {
+      // 2026-07-12 prod shape: 18.8, 34.8, 26.3 baseline; 64.6 one-night spike; latest 15.
+      // Old prior-run delta read this as -49.6; the trailing median (26.3) is
+      // within tolerance of 15? 26.3-15=11.3 > 10 — pick baseline so the return
+      // is honestly inside tolerance: median of [18.8, 34.8, 26.3, 64.6] = 30.55…
+      // Use a band where the spike alone would have red-flagged but the median
+      // does not: priors [20, 25, 26, 64.6], latest 22 → median 25.5, delta 3.5.
+      const store = freshStore(22, 64.6)
+      store.runs = [
+        { generated_at: hoursAgo(97), fleet_parity: 20, per_profile: [] },
+        { generated_at: hoursAgo(73), fleet_parity: 25, per_profile: [] },
+        { generated_at: hoursAgo(49), fleet_parity: 26, per_profile: [] },
+        { generated_at: hoursAgo(25), fleet_parity: 64.6, per_profile: [] },
+        store.runs[store.runs.length - 1],
+      ]
+      put(db, store)
+      const res = await check.run({ db })
+      expect(res.ok).toBe(true)
+    } finally { db.close() }
+  })
+
+  it('still reds when the latest run is materially below the whole recent norm', async () => {
+    const db = kvDb()
+    try {
+      const store = freshStore(15, 60)
+      store.runs = [
+        { generated_at: hoursAgo(97), fleet_parity: 55, per_profile: [] },
+        { generated_at: hoursAgo(73), fleet_parity: 62, per_profile: [] },
+        { generated_at: hoursAgo(49), fleet_parity: 58, per_profile: [] },
+        { generated_at: hoursAgo(25), fleet_parity: 60, per_profile: [] },
+        store.runs[store.runs.length - 1],
+      ]
+      put(db, store)
+      const res = await check.run({ db })
+      expect(res.ok).toBe(false)
+      expect(res.summary).toMatch(/regression/i)
     } finally { db.close() }
   })
 })

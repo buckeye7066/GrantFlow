@@ -872,15 +872,30 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           confidence: 0.85,
         }
       }
+      // The web side of the benchmark churns nightly (search engines rotate
+      // results), so fleet parity swings ±25 points run-over-run — a single-
+      // prior-run delta red-flagged routine noise (2026-07-12: 64.6 → 15 read
+      // as a -49.6 "regression" when 15 was inside the historical band).
+      // Ratchet against the TRAILING MEDIAN of the previous runs instead: a
+      // red means the latest run is materially below the recent NORM.
       const runs = Array.isArray(store.runs) ? store.runs : []
-      const prev = runs.length >= 2 ? runs[runs.length - 2] : null
+      const priorParities = runs
+        .slice(0, -1)
+        .slice(-5)
+        .map((r) => Number(r?.fleet_parity))
+        .filter((n) => Number.isFinite(n))
+        .sort((a, b) => a - b)
+      const median = priorParities.length
+        ? (priorParities.length % 2
+          ? priorParities[(priorParities.length - 1) / 2]
+          : (priorParities[priorParities.length / 2 - 1] + priorParities[priorParities.length / 2]) / 2)
+        : null
       const latestParity = Number(latest.fleet_parity)
-      const prevParity = Number(prev?.fleet_parity)
-      if (Number.isFinite(latestParity) && Number.isFinite(prevParity) && prevParity - latestParity > mod.REGRESSION_POINTS) {
+      if (Number.isFinite(latestParity) && Number.isFinite(median) && median - latestParity > mod.REGRESSION_POINTS) {
         return {
           ok: false,
-          summary: `Google-bar REGRESSION: fleet web-parity dropped ${Math.round((prevParity - latestParity) * 10) / 10} points (${prevParity} → ${latestParity}) — the system got WORSE vs a plain web search.`,
-          evidence: { ...evidence, previous_fleet_parity: prevParity },
+          summary: `Google-bar REGRESSION: fleet web-parity ${latestParity} is ${Math.round((median - latestParity) * 10) / 10} points below the trailing median of the last ${priorParities.length} run(s) (${median}) — the system got WORSE vs a plain web search.`,
+          evidence: { ...evidence, trailing_median_fleet_parity: median, trailing_runs: priorParities.length },
           recommended_fix: recommendedFix,
           confidence: 0.85,
         }
@@ -888,7 +903,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       return {
         ok: true,
         summary: `Web-parity benchmark fresh (${Math.round(ageMs / 3600000)}h old): fleet parity ${latest.fleet_parity ?? 'n/a'} across ${perProfile.length} golden profile(s)` +
-          `${Number.isFinite(prevParity) ? ` (prev ${prevParity})` : ''}; ${topWebOnly.length} web-only find(s) queued for review.`,
+          `${Number.isFinite(median) ? ` (trailing median ${median})` : ''}; ${topWebOnly.length} web-only find(s) queued for review.`,
         evidence,
       }
     },
