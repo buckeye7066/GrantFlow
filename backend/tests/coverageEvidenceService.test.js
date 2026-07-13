@@ -270,7 +270,7 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     const result = await buildCoverageEvidence(db, profileId)
     expect(result.lanes).toHaveLength(9)
     for (const lane of result.lanes) {
-      expect(['searched', 'no_results', 'missing']).toContain(lane.status)
+      expect(['searched', 'no_results', 'missing', 'not_applicable']).toContain(lane.status)
     }
   })
 
@@ -435,5 +435,59 @@ describe('matches and answer_next aggregation', () => {
     // the readiness category (amount) fire; they must collapse to ONE item.
     const amountItems = result.answer_next.filter((i) => i.field === 'funding_amount')
     expect(amountItems).toHaveLength(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// By-design exclusions are not fleet gaps — REGARDLESS of reason form
+// (the 2026-07-12 "school portals = 81% fleet gap" class: plan reasons arrive
+// humanized on the live path, and the not_applicable branch compared raw
+// codes, so applicant-type skips re-entered the gap scoreboard).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('by-design lane exclusions stay out of gaps (reason-form independent)', () => {
+  let db
+  beforeEach(() => {
+    db = makeDb()
+  })
+
+  it('rawReasonCode maps humanized text back to its code and passes codes through', async () => {
+    const { rawReasonCode, HUMAN_REASON } = await import('../crawler-os/crawlerPlanExplainer.js')
+    for (const [code, text] of Object.entries(HUMAN_REASON)) {
+      expect(rawReasonCode(text)).toBe(code)
+      expect(rawReasonCode(code)).toBe(code)
+    }
+    expect(rawReasonCode('some future reason')).toBe('some future reason')
+  })
+
+  it('an org profile gets school_portals as not_applicable, never an applicant-type gap', async () => {
+    const id = 'sb-org-1'
+    insertProfile(db, { id, displayName: 'Begay Weaving Studio', primaryType: 'small_business', state: 'AZ' })
+    insertSection(db, id, 'organization_details', { organization_type: 'small business' })
+    insertSection(db, id, 'basic_information', { city: 'Window Rock', state: 'AZ', zip: '86515' })
+    const result = await buildCoverageEvidence(db, id)
+
+    const school = result.lanes.find((l) => l.lane === 'school_portals')
+    expect(school).toBeTruthy()
+    expect(school.status).toBe('not_applicable')
+
+    // No gap in ANY lane may cite the by-design applicant-type skip.
+    for (const g of result.gaps) {
+      expect(String(g.statement)).not.toMatch(/does not fund this applicant type/i)
+    }
+  })
+
+  it('geography-shaped exclusions remain REAL gaps', async () => {
+    const id = 'geo-gap-1'
+    insertProfile(db, { id, displayName: 'AZ Person', primaryType: 'individual', state: 'AZ' })
+    insertSection(db, id, 'basic_information', { city: 'Window Rock', state: 'AZ', zip: '86515' })
+    insertSection(db, id, 'financial_information', { low_income: true, financial_need_level: 'high' })
+    const result = await buildCoverageEvidence(db, id)
+
+    // No AZ state-programs source exists in the registry, so the state lane
+    // must surface as a gap (either the lane-level geography exclusion or the
+    // scoped no-state-source detector) — geography is never "by design".
+    const stateGaps = result.gaps.filter((g) => g.lane === 'state_programs')
+    expect(stateGaps.length).toBeGreaterThan(0)
   })
 })

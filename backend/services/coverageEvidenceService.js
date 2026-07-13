@@ -21,7 +21,7 @@
 // (crawlerPlanService plan explainer, sourceRegistry, profileReadinessService,
 // profileFieldPrompts, matchSurfacing) and never re-scores or mutates data.
 
-import { explainCrawlerPlan } from '../crawler-os/crawlerPlanExplainer.js';
+import { explainCrawlerPlan, rawReasonCode, HUMAN_REASON } from '../crawler-os/crawlerPlanExplainer.js';
 import { allSources } from '../crawler-os/sourceRegistry.js';
 import { loadProfileContext } from './profileHelpers.js';
 import { profileContextToThesisInput } from './crawlerOsPersistence.js';
@@ -479,10 +479,17 @@ export async function buildCoverageEvidence(db, profileId) {
         suggested_action: `Add a ${bucket.label.toLowerCase()} source adapter (e.g. for ${placeHint}) to backend/crawler-os/sourceRegistry.js.`,
       });
     } else {
-      // Dominant humanized exclusion reason for the lane's candidates.
+      // Dominant exclusion reason for the lane's candidates. Reasons arrive in
+      // BOTH forms (planner codes and explainCrawlerPlan's humanized text), so
+      // normalize to the raw code before counting/branching — comparing the
+      // display text is how the 2026-07-12 "school portals = 81% fleet gap"
+      // regression slipped past the not_applicable fix below.
       const reasonCounts = new Map();
       for (const s of bucket.excluded_sources) {
-        for (const r of s.reasons || []) reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
+        for (const r of s.reasons || []) {
+          const code = rawReasonCode(r);
+          reasonCounts.set(code, (reasonCounts.get(code) || 0) + 1);
+        }
       }
       const topReason = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'not applicable to this profile';
       // A lane whose sources are excluded because they DON'T SERVE this
@@ -496,7 +503,7 @@ export async function buildCoverageEvidence(db, profileId) {
         bucket.status = 'not_applicable';
         bucket.gap = `None of the ${bucket.registry_source_count} known ${bucket.label.toLowerCase()} sources fund this applicant type/need — correctly skipped, not a coverage gap.`;
       } else {
-        bucket.gap = `None of the ${bucket.registry_source_count} known ${bucket.label.toLowerCase()} sources apply to this profile — ${topReason}`;
+        bucket.gap = `None of the ${bucket.registry_source_count} known ${bucket.label.toLowerCase()} sources apply to this profile — ${HUMAN_REASON[topReason] || topReason}`;
         gaps.push({
           lane: bucket.lane,
           statement: bucket.gap,
