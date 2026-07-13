@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchWithTimeout } from '../services/crawlerOsService.js'
+import { BROWSER_FETCH_HEADERS, fetchWithTimeout } from '../services/crawlerOsService.js'
 
 /**
  * makeProductionFetcher is "the ONE network entry for live discovery". Native
@@ -43,5 +43,40 @@ describe('crawler fetchWithTimeout', () => {
     const pending = fetchWithTimeout('https://example.org/hung', { signal: controller.signal })
     controller.abort(new Error('caller aborted'))
     await expect(pending).rejects.toThrow('caller aborted')
+  })
+
+  // Browser-equivalent headers (owner-approved 2026-07-12): some official
+  // sources' WAFs serve a fake 404 to non-browser clients (the
+  // highered.ohio.gov / OCOG source_fetch_failed class).
+  it('sends browser-equivalent headers by default', async () => {
+    let seen
+    globalThis.fetch = async (_url, init) => { seen = init; return { ok: true, status: 200 } }
+    await fetchWithTimeout('https://example.org/page')
+    const h = new Headers(seen.headers)
+    expect(h.get('user-agent')).toBe(BROWSER_FETCH_HEADERS['User-Agent'])
+    expect(h.get('accept')).toContain('text/html')
+    expect(h.get('accept-language')).toContain('en-US')
+  })
+
+  it('caller-provided headers override the browser defaults (case-insensitive)', async () => {
+    let seen
+    globalThis.fetch = async (_url, init) => { seen = init; return { ok: true, status: 200 } }
+    await fetchWithTimeout('https://example.org/api', {
+      headers: { 'user-agent': 'GrantFlowApiClient/1.0', 'X-Api-Key': 'k123' },
+    })
+    const h = new Headers(seen.headers)
+    expect(h.get('user-agent')).toBe('GrantFlowApiClient/1.0')
+    expect(h.get('x-api-key')).toBe('k123')
+    expect(h.get('accept-language')).toContain('en-US') // defaults still present
+  })
+
+  it('CRAWLER_BROWSER_HEADERS=0 disables the defaults (kill switch)', async () => {
+    vi.stubEnv('CRAWLER_BROWSER_HEADERS', '0')
+    let seen
+    globalThis.fetch = async (_url, init) => { seen = init; return { ok: true, status: 200 } }
+    await fetchWithTimeout('https://example.org/page', { headers: { 'X-Only': 'yes' } })
+    const h = new Headers(seen.headers ?? {})
+    expect(h.get('user-agent')).toBeNull()
+    expect(h.get('x-only')).toBe('yes')
   })
 })
