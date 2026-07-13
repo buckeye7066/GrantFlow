@@ -154,3 +154,39 @@ test('bookkeeping tags in explicit needs/need_categories never seed the need sca
   assert.ok(!th.needs.includes('designated'), 'reserved tag is not a need');
   assert.ok(!th.needs.includes('synthetic'), 'reserved tag is not a need');
 });
+
+test('a structurally-declared farmer (occupation.farmer flag) keeps the farm bucket through the person-identity guard', () => {
+  // The Lowndes-County beginning-farmer class: an INDIVIDUAL whose occupation
+  // section deliberately declares farmer=true is an agricultural producer —
+  // stripping 'farm' planner-excluded USDA conservation/RD lanes entirely.
+  const th = buildThesis({
+    id: 'p_farmer_flag',
+    primary_type: 'individual',
+    sections: [{ section_key: 'occupation', data: { farmer: true, small_business_owner: true } }],
+    needs: ['agriculture', 'legal'],
+    location: { state: 'AL', city: 'Hayneville', county: 'Lowndes County' },
+  });
+  assert.ok(th.applicant_types.includes('individual'), 'still an individual');
+  assert.ok(th.applicant_types.includes('farm'), `farm bucket preserved (got ${th.applicant_types.join(',')})`);
+});
+
+test('the farm bucket comes ONLY from the structured flag — free-text farm words never promote an individual', () => {
+  const th = buildThesis({
+    id: 'p_farm_text_only',
+    primary_type: 'individual',
+    mission: 'I volunteer at the farmers market and love agriculture.',
+    needs: ['food'],
+    location: { state: 'AL' },
+  });
+  assert.ok(!th.applicant_types.includes('farm'), 'no farm bucket from prose');
+});
+
+test('kinship/grandfamily language derives the caregiving need (the grandfamilies class)', () => {
+  const th = buildThesis({
+    id: 'p_kinship',
+    primary_type: 'senior',
+    description: 'Widowed grandmother raising two grandchildren; seeking kinship care support.',
+    location: { state: 'NM', city: 'Las Cruces' },
+  });
+  assert.ok(th.needs.includes('caregiving'), `kinship text derives caregiving (got ${th.needs.join(',')})`);
+});
