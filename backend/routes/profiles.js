@@ -1306,39 +1306,76 @@ router.post('/', createProfileLimiter, async (req, res) => {
   // behind a reverse proxy. Admins may explicitly set user_id to create an owned profile for a user.
   const profileUserId = isAdmin ? (user_id || null) : userId
 
+  // ux_profiles_user_id: one owned profile per user. A second create for the
+  // same user is a client retry/duplicate submit, not a server fault — answer
+  // 409 with the existing profile id instead of letting the INSERT 500.
+  if (profileUserId) {
+    const existing = await req.db
+      .prepare('SELECT id FROM profiles WHERE user_id = ?')
+      .get(profileUserId)
+    if (existing) {
+      return res.status(409).json({
+        error: 'A profile already exists for this user',
+        code: 'PROFILE_EXISTS',
+        existing_profile_id: existing.id,
+      })
+    }
+  }
+
   const profileId = crypto.randomUUID()
   // Ensure every newly created profile starts with all canonical sections + canonical keys.
   // This prevents downstream crawlers/scoring from encountering missing sections.
-  await req.db.withTransaction(async (tx) => {
-    const insert = tx.prepare(`
-      INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
+  try {
+    await req.db.withTransaction(async (tx) => {
+      const insert = tx.prepare(`
+        INSERT INTO profiles (id, display_name, primary_type, organization_id, user_id, created_by, status, tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
 
-    await insert.run(
-      profileId,
-      display_name,
-      primary_type ?? null,
-      organization_id ?? null,
-      profileUserId ?? null,
-      created_by ?? req.ctx?.userId ?? req.ctx?.email ?? null,
-      status,
-      JSON.stringify(tags),
-    )
+      await insert.run(
+        profileId,
+        display_name,
+        primary_type ?? null,
+        organization_id ?? null,
+        profileUserId ?? null,
+        created_by ?? req.ctx?.userId ?? req.ctx?.email ?? null,
+        status,
+        JSON.stringify(tags),
+      )
 
-    const upsertSection = tx.prepare(
-      `
-        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(profile_id, section_key) DO NOTHING
-      `,
-    )
+      const upsertSection = tx.prepare(
+        `
+          INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(profile_id, section_key) DO NOTHING
+        `,
+      )
 
-    for (const sectionKey of supportedSectionKeys) {
-      const defaults = getDefaultSectionData(sectionKey)
-      await upsertSection.run(profileId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
+      for (const sectionKey of supportedSectionKeys) {
+        const defaults = getDefaultSectionData(sectionKey)
+        await upsertSection.run(profileId, sectionKey, JSON.stringify(defaults ?? {}), 'system-create')
+      }
+    })
+  } catch (err) {
+    // Race net for the pre-check above: two concurrent creates can both pass it
+    // and one loses the unique index (Postgres 23505 / SQLite UNIQUE constraint).
+    const msg = String(err?.message || '')
+    const isUniqueViolation =
+      err?.code === '23505' ||
+      msg.includes('duplicate key value') ||
+      msg.includes('UNIQUE constraint failed')
+    if (isUniqueViolation && profileUserId) {
+      const existing = await req.db
+        .prepare('SELECT id FROM profiles WHERE user_id = ?')
+        .get(profileUserId)
+      return res.status(409).json({
+        error: 'A profile already exists for this user',
+        code: 'PROFILE_EXISTS',
+        existing_profile_id: existing?.id ?? null,
+      })
     }
-  })
+    throw err
+  }
 
   await linkProfileToAdmin(req.db, profileId)
 

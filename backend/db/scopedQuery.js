@@ -76,6 +76,18 @@ export const DUAL_SCOPE_TABLES = new Set(['funding_opportunities'])
  */
 export const ORG_SCOPED_TABLES = new Set(['organizations'])
 
+/**
+ * Profile-scoped tables that ALSO carry a first-class organization_id tenant
+ * key. Org pipelines are shared across the org's profiles by design (the
+ * matching/grants org branch, org grant lists, org pipeline-$ cards), and the
+ * enforceNoCrossProfileBleed() boot invariant keeps grants.organization_id
+ * consistent with the owning profile's org — so a param-bound organization_id
+ * predicate is equivalent tenant isolation for these tables. Without this,
+ * every org-branch read under a claimed profile throws ProfileScopeError
+ * (prod: GET /api/matching/profile/:id/grants, 2026-07-13).
+ */
+export const ORG_KEYED_PROFILE_TABLES = new Set(['grants', 'documents'])
+
 /** Admins can read/write across tenants; readers of this role bypass the guard. */
 const ADMIN_ROLES = new Set(['admin', 'admin_global', 'service', 'service_role', 'health_check'])
 
@@ -117,6 +129,7 @@ export function analyzeProfileScope(sql) {
     isScoped: false,
     tables: [],
     hasProfilePredicate: false,
+    hasOrgKeyPredicate: false,
     op: null,
     dualScopeTables: [],
     orgScopedTables: [],
@@ -193,6 +206,19 @@ export function analyzeProfileScope(sql) {
   const profileIdIsNull = /\bPROFILE_ID\s+IS\s+NULL\b/.test(upper)
   const orgLinkage = /\bORGANIZATION_ID\b/.test(upper)
 
+  // Org-keyed profile tables: a PARAM-BOUND organization_id equality/IN is an
+  // equivalent tenant key (stricter than the organizations-tier presence check
+  // above — a literal or bare mention does not qualify). Only satisfied when
+  // EVERY profile-scoped table in the query carries the org key, so a join
+  // that smuggles in e.g. anya_sessions still requires a profile_id predicate.
+  const orgKeyPredicate =
+    new RegExp(`\\bORGANIZATION_ID\\s*=\\s*${PARAM}`).test(upper) ||
+    /\bORGANIZATION_ID\s+IN\s*\(/.test(upper)
+  const hasOrgKeyPredicate =
+    orgKeyPredicate &&
+    tables.length > 0 &&
+    tables.every((t) => ORG_KEYED_PROFILE_TABLES.has(t))
+
   const isWrite = op === 'UPDATE' || op === 'DELETE'
   const fundingRowScoped =
     hasEqPredicate || hasInPredicate || profileIdIsNull || idTargeted || rowKeyTargeted || emptySet
@@ -207,6 +233,7 @@ export function analyzeProfileScope(sql) {
     isScoped: tables.length > 0,
     tables,
     hasProfilePredicate,
+    hasOrgKeyPredicate,
     op,
     dualScopeTables,
     orgScopedTables,
@@ -243,7 +270,8 @@ export function assertProfileScopedSql(sql, opts = {}) {
   // Collect violations across the three tiers.
   //   blocking  — throws in strict mode (default when a profile is claimed)
   //   warn-only — observability tier (never throws unless explicitly opted in)
-  const coreViolation = analysis.isScoped && !analysis.hasProfilePredicate
+  const coreViolation =
+    analysis.isScoped && !analysis.hasProfilePredicate && !analysis.hasOrgKeyPredicate
   const fundingReadsStrict =
     String(process.env.PROFILE_SCOPE_FUNDING_READS || '').trim().toLowerCase() === 'strict'
   const blockingViolations = []
@@ -318,6 +346,7 @@ export default {
   PROFILE_SCOPED_TABLES,
   DUAL_SCOPE_TABLES,
   ORG_SCOPED_TABLES,
+  ORG_KEYED_PROFILE_TABLES,
   ProfileScopeError,
   runProfileContext,
   getProfileContext,
