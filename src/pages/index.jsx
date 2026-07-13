@@ -77,6 +77,7 @@ const ServiceAgreement = lazy(() => import("./ServiceAgreement"), 'ServiceAgreem
 const CheckoutRequired = lazy(() => import("./CheckoutRequired"), 'CheckoutRequired');
 const HamiltonLiveLogin = lazy(() => import("./HamiltonLiveLogin"), 'HamiltonLiveLogin');
 const Landing = lazy(() => import("./Landing"), 'Landing');
+const PrivacyPolicy = lazy(() => import("./PrivacyPolicy"), 'PrivacyPolicy');
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -428,6 +429,14 @@ export default function Pages() {
                 Mounted ABOVE the gated Layout so it renders without auth and
                 never changes where authenticated users land (they still go to
                 the Dashboard at "/"). */}
+            {/* /privacy is the PUBLIC privacy policy required by app stores.
+                Mounted ABOVE the gated Layout so app-store reviewers and
+                logged-out visitors can read it without an account or the app
+                shell. Google Play's Data safety form must stay consistent with
+                its content (src/pages/PrivacyPolicy.jsx). Both cases are
+                registered because Play accepts the exact URL you enter. */}
+            <Route path="/privacy" element={withBoundary(<PrivacyPolicy />, "PrivacyPolicy")} />
+            <Route path="/Privacy" element={withBoundary(<PrivacyPolicy />, "PrivacyPolicy")} />
             <Route path="/welcome" element={withBoundary(<Landing />, "Landing")} />
             <Route path="/start" element={withBoundary(<Start />, "Start")} />
             <Route path="/login" element={withBoundary(<Login />, "Login")} />

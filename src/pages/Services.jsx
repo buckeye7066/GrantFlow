@@ -18,6 +18,7 @@ import {
   createHourlyCheckout,
 } from '@/api/services'
 import { useToast } from '@/components/ui/use-toast'
+import { isNativeApp } from '@/lib/platform'
 
 function formatUsdFromCents(cents) {
   const n = Number(cents)
@@ -144,6 +145,29 @@ export default function Services() {
     }
 
     checkoutMutation.mutate({ purchase_id: purchaseId })
+  }
+
+  // Store policy: this page lists service prices and starts Stripe checkout,
+  // so it must not render inside the installed app. Show a neutral notice
+  // instead — no prices, no purchase flow, no steering to the web. (Placed
+  // after all hooks to respect the rules of hooks.)
+  if (isNativeApp()) {
+    return (
+      <div className="p-6 md:p-8">
+        <div className="max-w-5xl mx-auto">
+          <Card>
+            <CardHeader>
+              <CardTitle>Services</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-600">
+              Service purchases aren&apos;t available in this app. If your account
+              already has active service, simply log in — your full GrantFlow
+              workspace is available here.
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
   }
 
   return (
