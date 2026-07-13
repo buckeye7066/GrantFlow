@@ -6,6 +6,7 @@ import { CreditCard, AlertTriangle } from 'lucide-react'
 
 import { createServicePurchase, createServiceCheckout } from '@/api/services'
 import { formatMoney, categoryLabel } from './pricingFormatters'
+import { isNativeApp } from '@/lib/platform'
 
 const KICKOFF_PHASE = 'kickoff'
 
@@ -99,6 +100,27 @@ export function PricingCheckoutPanel({
     } finally {
       setLoading(false)
     }
+  }
+
+  // Store policy: the installed app must not offer a purchase flow or point
+  // at an external one. This panel is the single checkout choke point
+  // (ProfilePricingGate + CheckoutRequired both mount it), so gating here
+  // covers every path to Stripe.
+  if (isNativeApp()) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Checkout</CardTitle>
+          <CardDescription>
+            Payments aren&apos;t available in this app.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          If your account already has active service, simply log in — your full
+          workspace is available here.
+        </CardContent>
+      </Card>
+    )
   }
 
   return (
