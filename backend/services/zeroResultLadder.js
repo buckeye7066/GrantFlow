@@ -30,6 +30,8 @@
  * which tier produced the visible results, plus structured diagnostics.
  */
 
+import { RELAX_THRESHOLDS, DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
+
 export const TIERS = Object.freeze({
   STRONG_DIRECT: 'STRONG_DIRECT',
   RELAXED_DIRECT: 'RELAXED_DIRECT',
@@ -66,7 +68,8 @@ function rejected(opp) {
  *
  * @param {Array<object>} scored - all scored candidates (already ranked)
  * @param {object} opts
- * @param {number} [opts.minScore=50]   - requested minimum score
+ * @param {number} [opts.minScore=DEFAULT_MIN_SCORE] - requested minimum score
+ *        (data-point scale; the canonical discovery bar when omitted)
  * @param {number} [opts.maxResults=50] - maximum to return at any tier
  * @param {Array<object>} [opts.geoExpansionPool] - candidates that were
  *        excluded by the geographic filter; ladder may pull from these
@@ -86,8 +89,9 @@ function rejected(opp) {
  * }}
  */
 export function assembleFundingResults(scored = [], opts = {}) {
-  // Fallback default aligned to the need-anchored discovery bar (25).
-  const minScore = Number.isFinite(opts.minScore) ? Math.max(0, Math.min(100, opts.minScore)) : 25
+  // Fallback default is the canonical discovery bar (DATA-POINT scale, 8) —
+  // never a hardcoded number from the retired need-anchored scale.
+  const minScore = Number.isFinite(opts.minScore) ? Math.max(0, Math.min(100, opts.minScore)) : DEFAULT_MIN_SCORE
   const maxResults = Math.max(1, Math.min(200, Number(opts.maxResults) || 50))
   const geoExpansionPool = Array.isArray(opts.geoExpansionPool) ? opts.geoExpansionPool : []
   const profileGaps = Array.isArray(opts.profileGaps) ? opts.profileGaps : []
@@ -142,11 +146,15 @@ export function assembleFundingResults(scored = [], opts = {}) {
     })
   }
 
-  // Tier 2: RELAXED_DIRECT
-  const RELAX_TIERS = [40, 30, 20, 10, 0]
+  // Tier 2: RELAXED_DIRECT — graduated steps from the CANONICAL relaxation
+  // ladder (matchThresholds.RELAX_THRESHOLDS, data-point scale), the same
+  // authority the match engine relaxes with. The former hardcoded
+  // [40, 30, 20, 10, 0] spoke the retired need-anchored scale: with the
+  // data-point bar (8) every graduated step was >= minScore and skipped, so
+  // "relaxation" degenerated into one jump straight to 0.
   let relaxed = []
   let relaxedTo = null
-  for (const t of RELAX_TIERS) {
+  for (const t of RELAX_THRESHOLDS) {
     if (t >= minScore) continue
     const subset = all.filter((o) => isDirect(o) && score(o) >= t)
     if (subset.length > 0) {
