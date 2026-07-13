@@ -545,6 +545,23 @@ export function evaluateEligibility(profileNorm, oppNorm) {
       missingFields.push('dv_survivor_status')
     }
   }
+  // Foster-youth-restricted programs (Chafee/ETV class — 2026-07-13 benchmark
+  // cohort: Chafee ranked top-10 for a 73-year-old widow and a homeschool
+  // family). Two-tier per the DV precedent: an ORG can never be a foster youth
+  // (hard ineligibility); a PERSON without the foster indicator gets a MISSING
+  // field (undisclosed history is neutral per G4) — EXCEPT when the profile's
+  // own age makes the restriction a clear contradiction (Chafee-class programs
+  // statutorily end at 23–26; 30 is the conservative outer bound).
+  if (oppNorm.requiresFosterYouth && !profileNorm.hasFosterIndicator) {
+    const fosterAge = Number(profileNorm.age)
+    if (orgLikeProfile) {
+      ineligibilityReasons.push('Program is restricted to current/former foster youth (individuals); profile is an organization')
+    } else if (Number.isFinite(fosterAge) && fosterAge >= 30) {
+      ineligibilityReasons.push('Program is restricted to current/former foster youth aging out of care; profile age makes this a clear mismatch')
+    } else {
+      missingFields.push('foster_youth_status')
+    }
+  }
   if (oppNorm.requiresFarmer && !profileNorm.isFarmer) {
     const clearlyNotAgricultural =
       String(profileNorm.entityType) !== 'farm' &&

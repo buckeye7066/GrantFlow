@@ -203,3 +203,66 @@ describe('computeMatchDecision — population-program caps demote mismatches', (
     expect(rSurvivor.decision).not.toBe('REJECT')
   })
 })
+
+// ── Foster-youth restriction (Chafee/ETV class, 2026-07-13) ─────────────────
+
+describe('foster-youth-restricted programs (Chafee/ETV)', () => {
+  const chafeeOpp = normalizeOpportunity({
+    id: 'chafee-1',
+    title: 'John H. Chafee Foster Care Program for Successful Transition to Adulthood',
+    description: 'Education and training vouchers, housing, and employment support for current and former foster youth aging out of foster care. Administered by states.',
+    is_national: true,
+    application_url: 'https://example.org/chafee',
+  })
+
+  it('normalizer flags the explicit foster-youth restriction; a program merely serving foster families does not trip it', () => {
+    expect(chafeeOpp.requiresFosterYouth).toBe(true)
+    const servesMany = normalizeOpportunity({
+      id: 'family-1',
+      title: 'Family Resource Center Grants',
+      description: 'Supports community centers serving families, including foster families, kinship caregivers, and new parents.',
+    })
+    expect(servesMany.requiresFosterYouth).toBe(false)
+  })
+
+  it('a former foster youth (family_life.foster_youth) carries the indicator and is never gated', () => {
+    const fosterYouth = normalizeProfile(
+      { id: 'p-fy', primary_type: 'individual', state: 'MI', city: 'Detroit', age: 19 },
+      { family_life: { answers: { foster_youth: true } } },
+    )
+    expect(fosterYouth.hasFosterIndicator).toBe(true)
+    const r = evaluateEligibility(fosterYouth, chafeeOpp)
+    expect(r.ineligibilityReasons.join(' ')).not.toMatch(/foster/i)
+    expect(r.missingFields).not.toContain('foster_youth_status')
+  })
+
+  it('a 73-year-old is a clear age contradiction — explicit ineligibility, not a top-10 candidate', () => {
+    const senior = normalizeProfile(
+      { id: 'p-senior', primary_type: 'individual', state: 'NM', city: 'Las Cruces', age: 73 },
+      { family_life: { answers: { widow_widower: true, grandparent_raising_grandchildren: true } } },
+    )
+    const r = evaluateEligibility(senior, chafeeOpp)
+    expect(r.eligible).toBe(false)
+    expect(r.ineligibilityReasons.join(' ')).toMatch(/foster youth/i)
+  })
+
+  it('a 25-year-old non-foster person is a MISSING field (REVIEW) — undisclosed history stays neutral per G4', () => {
+    const adult = normalizeProfile(
+      { id: 'p-25', primary_type: 'individual', state: 'CA', city: 'Eureka', age: 25 },
+      {},
+    )
+    const r = evaluateEligibility(adult, chafeeOpp)
+    expect(r.missingFields).toContain('foster_youth_status')
+    expect(r.ineligibilityReasons.join(' ')).not.toMatch(/foster/i)
+  })
+
+  it('an organization can never be a foster youth — explicit ineligibility', () => {
+    const org = normalizeProfile(
+      { id: 'p-org', primary_type: 'nonprofit', state: 'TN' },
+      {},
+    )
+    const r = evaluateEligibility(org, chafeeOpp)
+    expect(r.eligible).toBe(false)
+    expect(r.ineligibilityReasons.join(' ')).toMatch(/organization/i)
+  })
+})

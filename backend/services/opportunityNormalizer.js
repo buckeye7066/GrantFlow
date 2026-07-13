@@ -523,6 +523,21 @@ const CDC_RESTRICTION_PATTERNS = [
   /\b(?:limited|exclusively|only)\s+(?:to|for)\s+(?:certified\s+)?(?:community\s+development\s+corporations?|chdos?)\b/i,
 ]
 
+// Foster-youth restriction — programs statutorily limited to current/former
+// foster youth (Chafee, ETV, "aging out of foster care"). These are among the
+// most audience-exclusive programs in the catalog, yet their restriction lived
+// only in prose: Chafee ranked top-10 for a 73-year-old widow and a homeschool
+// family (2026-07-13 benchmark cohort). Phrases are anchored so a program that
+// merely SERVES foster families alongside others does not trip the flag.
+const FOSTER_YOUTH_RESTRICTION_PATTERNS = [
+  /\b(?:current(?:ly)?\s+(?:and|or)\s+former(?:ly)?|former(?:ly)?\s+(?:and|or)\s+current(?:ly)?)\s+(?:in\s+)?foster\s+(?:care|youth)\b/i,
+  /\bfor\s+(?:current|former|eligible)\s+foster\s+(?:youth|care\s+youth)\b/i,
+  /\byouth\s+(?:aging|who\s+age[d]?)\s+out\s+of\s+(?:the\s+)?foster\s+care\b/i,
+  /\bmust\s+(?:be|have\s+been)\s+in\s+foster\s+care\b/i,
+  /\bchafee\b/i,
+  /\beducation\s+and\s+training\s+vouchers?\b/i,
+]
+
 // Income restriction — explicit means-tests only ("income at or below 200% of
 // FPL", "low-income households only"). A passing mention of serving low-income
 // communities is NOT a restriction.
@@ -839,6 +854,8 @@ export function normalizeOpportunity(rawOpp) {
     matchesAnyRegex(text, CDC_RESTRICTION_PATTERNS)
   const requiresLowIncome = Boolean(rawOpp.requires_low_income) ||
     matchesAnyRegex(text, INCOME_RESTRICTION_PATTERNS)
+  const requiresFosterYouth = Boolean(rawOpp.requires_foster_youth) ||
+    matchesAnyRegex(text, FOSTER_YOUTH_RESTRICTION_PATTERNS)
   const ageRestriction = detectAgeRestriction(text)
 
   // -- Veteran/student/nonprofit requirements --
@@ -950,6 +967,7 @@ export function normalizeOpportunity(rawOpp) {
     requiresFaithBased,
     requiresCdc,
     requiresLowIncome,
+    requiresFosterYouth,
     ageRestriction,
     requiresVeteran,
     requiresStudent,
