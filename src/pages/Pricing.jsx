@@ -6,6 +6,7 @@ import { Check, DollarSign, Users, GraduationCap, Heart, Building, Church } from
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import TierMatrix from '@/components/billing/TierMatrix.jsx';
+import { isNativeApp } from '@/lib/platform';
 
 const pricingTiers = [
   {
@@ -146,6 +147,28 @@ const colorClasses = {
 };
 
 export default function Pricing() {
+  // Store policy: no plans, prices, or purchase steering in native builds.
+  if (isNativeApp()) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 md:p-8">
+        <div className="max-w-xl mx-auto pt-16">
+          <Card>
+            <CardHeader>
+              <CardTitle>Plans &amp; Pricing</CardTitle>
+              <CardDescription>
+                Plan purchases aren&apos;t available in this app.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-600">
+              If your account already has active service, simply log in — your
+              full workspace is available here.
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
