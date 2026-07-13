@@ -1,12 +1,13 @@
 /**
  * crawler-stress-cohort.mjs — owner-directed crawler stress-test cohort.
  *
- * Creates 10 PERSISTENT synthetic personas engineered to stress under-covered
+ * Creates 12 PERSISTENT synthetic personas engineered to stress under-covered
  * crawler lanes (tribal business, foster-youth ETV, Puerto Rico geo, dislocated
  * worker + dementia caregiver, reentry entrepreneur, disability self-employment,
  * kinship grandfamilies, Appalachian recovery workforce, refugee student minor,
- * Black beginning farmer / heirs' property), runs live Crawler OS discovery on
- * them, and rebuilds the fleet gap scoreboard so Amy / Sam / Anya see the gaps.
+ * Black beginning farmer / heirs' property, homeschool family, senior veteran
+ * cancer patient), runs live Crawler OS discovery on them, and rebuilds the
+ * fleet gap scoreboard so Amy / Sam / Anya see the gaps.
  *
  * DELIBERATE PROVENANCE CHOICE: rows carry created_by 'crawler-stress-test',
  * NOT 'agent:amy' —
@@ -45,7 +46,7 @@ const SYNTHETIC_NOTE =
   'SYNTHETIC crawler stress-test persona (owner-directed cohort 2026-07-12). Not a real person or organization. Persistent test cohort — purge only via crawler-stress-cohort.mjs --purge.'
 
 /**
- * The 10 personas. Sections use ONLY schema-accurate structured fields
+ * The 12 personas. Sections use ONLY schema-accurate structured fields
  * (backend/config/profileSchema.js) — narrative/prose is drafting-only and
  * unscored, so eligibility is expressed through flags, enums, and the
  * controlled focus-tag vocabulary (backend/constants/needCategories.js ids).
@@ -325,6 +326,64 @@ const COHORT = [
       narrative: {
         mission: 'Beginning Black farmer developing 15 inherited acres of heirs’ property.',
         primary_goal: 'Legal assistance to clear title, irrigation, and startup equipment for a regenerative vegetable farm.',
+      },
+    },
+  },
+  // Benchmark-corpus completion (2026-07-13): the two owner-directed benchmark
+  // shapes the original 10-persona cohort did not cover — a homeschool family
+  // and a senior veteran cancer patient. Same provenance/purge contract.
+  {
+    slug: 'samantha-green',
+    display_name: 'Samantha Green (Stress Cohort)',
+    primary_type: 'homeschool_family',
+    expected: 'homeschool curriculum/materials support, computer + internet access, tutoring and enrichment, family assistance; CA / Humboldt County / local-community and national homeschool lanes; tax deductions, public-school allocations, and contests classified honestly, never as cash grants',
+    sections: {
+      basic_information: {
+        age: 25, gender: 'female', city: 'Eureka', state: 'CA', zip: '95501',
+        location: { city: 'Eureka', state: 'CA', county: 'Humboldt County', zip_code: '95501' },
+      },
+      family: { household_size: 4, responsibilities: 'Homeschools her two children full-time.' },
+      financial_information: { low_income: true, financial_need_level: 'moderate', household_size: 4 },
+      programs_services: {
+        focus_areas: ['education', 'family_life', 'technology_equipment'],
+        interests: ['children_youth'],
+        keywords: ['homeschool curriculum', 'educational materials', 'tutoring assistance', 'internet access', 'field trip enrichment', 'microschool'],
+      },
+      narrative: {
+        mission: 'Homeschooling mother of two in Eureka, California.',
+        primary_goal: 'Curriculum and educational materials, a computer with internet access, tutoring, and enrichment activities for her homeschooled children.',
+      },
+    },
+  },
+  {
+    slug: 'max-smith',
+    display_name: 'Max Smith (Stress Cohort)',
+    primary_type: 'veteran',
+    expected: 'veteran health + financial support (VA lanes), prostate-cancer patient assistance (disease-specific lane), medication/copay help, transportation + lodging for treatment, nutrition, utility/housing stability, senior and low-income assistance; racial eligibility never inferred unless the source explicitly supports it',
+    sections: {
+      basic_information: {
+        age: 85, gender: 'male', city: 'Jackson', state: 'MS', zip: '39203',
+        location: { city: 'Jackson', state: 'MS', county: 'Hinds County', zip_code: '39203' },
+      },
+      military_service: { veteran: true },
+      demographics: { african_american: true },
+      health_medical: {
+        conditions: [{ name: 'prostate cancer', diagnosed_year: 2026 }],
+        chronic_illness: true, chronic_illness_type: 'prostate cancer',
+        support_needs: ['transportation', 'copay_assistance', 'lodging', 'medication'],
+        support_needs_level: 'high',
+      },
+      government_assistance: { medicare_recipient_self: true },
+      financial_information: { low_income: true, financial_need_level: 'high', household_income: 19000, household_size: 1 },
+      housing: { status: 'at_risk', type: 'own' },
+      programs_services: {
+        focus_areas: ['health_medical', 'veteran', 'senior', 'utilities'],
+        interests: ['food', 'transportation', 'housing'],
+        keywords: ['prostate cancer patient assistance', 'veteran benefits', 'copay assistance', 'medication assistance', 'transportation to treatment', 'utility bill help'],
+      },
+      narrative: {
+        mission: 'African American Army veteran and senior in Jackson, Mississippi, recently diagnosed with prostate cancer.',
+        primary_goal: 'Treatment-related costs, medication and copay help, transportation and lodging for treatment, nutrition support, and utility stability.',
       },
     },
   },
