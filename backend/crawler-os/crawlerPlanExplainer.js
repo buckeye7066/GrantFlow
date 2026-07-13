@@ -21,13 +21,31 @@ import { buildThesis } from './profileIntelligence.js';
 import { plan } from './planner.js';
 import { allSources } from './sourceRegistry.js';
 
-const HUMAN_REASON = {
+export const HUMAN_REASON = Object.freeze({
   selected: 'Selected — this source serves the profile.',
   applicant_type_not_served: 'Skipped — this source does not fund this applicant type.',
   need_category_not_covered: 'Skipped — none of the profile\'s needs match this source.',
   geography_out_of_scope: 'Skipped — the source is geographically out of scope for this profile.',
   loan_capable_source_kept_loans_gated_downstream: 'Kept — loan-capable program; loans gated downstream.',
-};
+});
+
+const REASON_CODE_OF_HUMAN = Object.freeze(
+  Object.fromEntries(Object.entries(HUMAN_REASON).map(([code, text]) => [text, code])),
+);
+
+/**
+ * rawReasonCode — normalize an exclusion reason back to its raw code.
+ * Plan reasons reach downstream consumers in BOTH forms depending on the
+ * path (planner emits codes; explainCrawlerPlan humanizes them). Any consumer
+ * that branches on a reason (e.g. coverageEvidenceService's by-design gap
+ * suppression) MUST compare codes via this helper, never the display text —
+ * comparing text is how the 2026-07-12 "school portals = 81% fleet gap"
+ * regression slipped past the #921 not_applicable fix.
+ */
+export function rawReasonCode(reason) {
+  const r = String(reason ?? '').trim();
+  return REASON_CODE_OF_HUMAN[r] || r;
+}
 
 function humanize(reasons = []) {
   return reasons.map((r) => HUMAN_REASON[r] || r);
