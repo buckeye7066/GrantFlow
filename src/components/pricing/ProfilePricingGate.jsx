@@ -7,6 +7,7 @@ import { accessGateApi } from '@/api/accessGate'
 import ServiceAgreementGate from './ServiceAgreementGate'
 import PricingCheckoutPanel from './PricingCheckoutPanel'
 import { formatMoney, categoryLabel } from './pricingFormatters'
+import { isNativeApp } from '@/lib/platform'
 
 /**
  * Top-level gate state machine for the unpaid-user experience. Decides
@@ -87,6 +88,28 @@ export function ProfilePricingGate({ profileId, children, onUnlocked }) {
           GrantFlow is finishing your pricing recommendation. Refresh in a moment.
         </AlertDescription>
       </Alert>
+    )
+  }
+
+  // Store policy: the installed app must not show plans/prices or offer a
+  // purchase flow. Paid + admin users already returned children above; only an
+  // unpaid non-admin reaches here, where the next block would render the price
+  // summary, service agreement, and Stripe checkout. In native builds, replace
+  // all of that with a neutral notice — no amounts, no steering to the web.
+  if (isNativeApp()) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Activate your workspace</CardTitle>
+          <CardDescription>
+            Plan setup and payment aren&apos;t available in this app.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          If your account already has active service, simply log in — your full
+          GrantFlow workspace is available here.
+        </CardContent>
+      </Card>
     )
   }
 
