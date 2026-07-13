@@ -104,7 +104,9 @@ function stateBenefitsPortalRow([state, name, url, sponsor, summary]) {
     applicant_types: ['individual', 'family', 'veteran', 'student'],
     need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
     geography: { national: false, states: [state] },
-    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    // A state portal is an honest LOCATOR (directory:true forces the emitted
+    // kind anyway); default_kinds must agree — registryKindTotality.test.mjs.
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 76,
   };
 }
