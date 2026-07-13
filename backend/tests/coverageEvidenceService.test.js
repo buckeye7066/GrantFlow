@@ -217,8 +217,8 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     )
     expect(ohGap, 'OH is covered by oh_benefits — no state gap should fire').toBeUndefined()
 
-    // The gap detector itself still works: a state with no registry source
-    // (MT has none) must still emit the state-programs gap.
+    // MT is covered as of 2026-07-12 (apply.mt.gov via STATE_BENEFITS_PORTALS —
+    // every US state + DC + PR now has a portal row) — no MT gap fires.
     const mtId = 'p-mt-senior'
     insertProfile(db, { id: mtId, displayName: 'Missoula Senior', state: 'MT' })
     insertSection(db, mtId, 'basic_information', {
@@ -229,9 +229,24 @@ describe('gap detection (TN profile + dementia health signal)', () => {
     const mtGap = mtResult.gaps.find(
       (g) => g.lane === 'state_programs' && /\bMT\b/.test(g.statement),
     )
-    expect(mtGap, 'expected an MT state-programs gap').toBeTruthy()
-    expect(mtGap.profile_fact).toBe('state=MT')
-    expect(mtGap.suggested_action).toMatch(/MT/)
+    expect(mtGap, 'MT is covered by mt_benefits — no state gap should fire').toBeUndefined()
+
+    // The gap detector itself still works: a jurisdiction with no registry
+    // source (Guam — a valid state code with no portal row) must still emit
+    // the state-programs gap.
+    const guId = 'p-gu-senior'
+    insertProfile(db, { id: guId, displayName: 'Hagatna Senior', state: 'GU' })
+    insertSection(db, guId, 'basic_information', {
+      state: 'GU', city: 'Hagatna', profile_category: 'individual',
+    })
+    insertSection(db, guId, 'narrative', { primary_goal: 'help paying for housing and caregiving' })
+    const guResult = await buildCoverageEvidence(db, guId)
+    const guGap = guResult.gaps.find(
+      (g) => g.lane === 'state_programs' && /\bGU\b/.test(g.statement),
+    )
+    expect(guGap, 'expected a GU state-programs gap').toBeTruthy()
+    expect(guGap.profile_fact).toBe('state=GU')
+    expect(guGap.suggested_action).toMatch(/GU/)
   })
 
   it('covers dementia via alzheimers_gov_services (no false-positive gap) but gaps on parkinsons', async () => {
@@ -478,16 +493,67 @@ describe('by-design lane exclusions stay out of gaps (reason-form independent)',
   })
 
   it('geography-shaped exclusions remain REAL gaps', async () => {
+    // AZ gained a portal (az_benefits) on 2026-07-12, so it no longer gaps;
+    // Guam — a valid state code with no registry source — exercises the same
+    // geography-is-never-by-design path.
     const id = 'geo-gap-1'
-    insertProfile(db, { id, displayName: 'AZ Person', primaryType: 'individual', state: 'AZ' })
-    insertSection(db, id, 'basic_information', { city: 'Window Rock', state: 'AZ', zip: '86515' })
+    insertProfile(db, { id, displayName: 'GU Person', primaryType: 'individual', state: 'GU' })
+    insertSection(db, id, 'basic_information', { city: 'Hagatna', state: 'GU', zip: '96910' })
     insertSection(db, id, 'financial_information', { low_income: true, financial_need_level: 'high' })
     const result = await buildCoverageEvidence(db, id)
 
-    // No AZ state-programs source exists in the registry, so the state lane
+    // No GU state-programs source exists in the registry, so the state lane
     // must surface as a gap (either the lane-level geography exclusion or the
     // scoped no-state-source detector) — geography is never "by design".
     const stateGaps = result.gaps.filter((g) => g.lane === 'state_programs')
     expect(stateGaps.length).toBeGreaterThan(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State-programs lane totality (REGISTRY + TOTALITY rule, CLAUDE.md)
+// ─────────────────────────────────────────────────────────────────────────────
+// The stress-cohort gap report (2026-07-12) showed EVERY persona hitting
+// "No {ST}-specific state-programs source exists in the source registry".
+// This guard asserts the invariant that closed it: every US state, DC, and
+// Puerto Rico has at least one state_programs-lane source whose geography
+// covers it (the same predicate the (c1) gap check in buildCoverageEvidence
+// uses), so a future registry edit cannot silently reopen a state's gap.
+
+const US_STATES_DC_PR = [
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+  'DC', 'PR',
+]
+
+describe('state_programs lane totality', () => {
+  it('covers every US state, DC, and PR with at least one state_programs source', () => {
+    const registry = allSources()
+    for (const state of US_STATES_DC_PR) {
+      const covered = registry.some((s) => {
+        if (laneForSource(s.source_id, s) !== 'state_programs') return false
+        const states = s.geography?.states
+        return Array.isArray(states) && states.map((x) => String(x).toUpperCase()).includes(state)
+      })
+      expect(covered, `no state_programs source covers ${state} — add its official portal to STATE_BENEFITS_PORTALS in sourceRegistry.js`).toBe(true)
+    }
+  })
+
+  it('every state benefits portal row is well-formed and has an adapter', async () => {
+    const { STATE_BENEFITS_SOURCE_IDS } = await import('../crawler-os/sourceRegistry.js')
+    const { getAdapter } = await import('../crawler-os/adapters/index.js')
+    const byId = new Map(allSources().map((s) => [s.source_id, s]))
+    for (const id of STATE_BENEFITS_SOURCE_IDS) {
+      const row = byId.get(id)
+      expect(row, `${id} missing from registry`).toBeTruthy()
+      expect(row.base_url, `${id} base_url`).toMatch(/^https:\/\//)
+      expect(row.directory, `${id} must be a directory row`).toBe(true)
+      expect(row.geography?.states?.length, `${id} must be single-state`).toBe(1)
+      expect(getAdapter(id), `${id} has no adapter factory`).toBeTruthy()
+      expect(LANE_OF_SOURCE[id], `${id} missing from LANE_OF_SOURCE`).toBe('state_programs')
+    }
   })
 })

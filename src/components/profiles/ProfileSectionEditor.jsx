@@ -158,9 +158,15 @@ const basicInfoSchema = z.object({
   notes: z.string().optional().or(z.literal("")),
   contacts: z.array(z.object({
     name: z.string().min(1, "Contact name is required"),
-    email: z.string().email("Enter a valid email address"),
+    // Email is optional for directory-only contacts, but login access is granted
+    // solely by the contacts→profile_emails sync, which skips blank emails — so
+    // a login-implying role without an email would silently never get access.
+    email: z.string().email("Enter a valid email address").optional().or(z.literal("")),
     role: z.enum(["admin", "full_access", "read_only"]).default("full_access"),
     addedDate: z.string().optional().default(() => new Date().toISOString()),
+  }).refine((c) => c.role === "read_only" || (typeof c.email === "string" && c.email.length > 0), {
+    message: "Email is required for contacts with login access (admin / full access)",
+    path: ["email"],
   })).optional().default([]),
 })
 const toBoolean = (value) => {

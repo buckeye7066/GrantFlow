@@ -3,6 +3,7 @@
  * Normalizes education.target_colleges (string or array) and syncs missing colleges
  * into university_applications.applications without duplicates.
  */
+import { generateId } from "./generateId.js"
 
 /**
  * Normalize target_colleges to a deduplicated array of trimmed strings.
@@ -43,13 +44,6 @@ export function normalizeTargetColleges(value) {
   })
 }
 
-function generateId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `app_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
-}
-
 /**
  * Build minimal application object for a college name.
  * @param {string} name - College/university name
@@ -57,7 +51,7 @@ function generateId() {
  */
 export function buildApplicationFromCollegeName(name) {
   return {
-    id: generateId(),
+    id: generateId("app"),
     name: String(name || "").trim(),
     status: "planning",
     portals: {},

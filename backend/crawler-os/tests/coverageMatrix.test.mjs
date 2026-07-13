@@ -158,9 +158,9 @@ test('CRITICAL_NEEDS and DOCUMENTED_GAPS use only real registry slugs and real U
     assert.ok(stateSet.has(gap.state), `DOCUMENTED_GAPS entry uses unknown state '${gap.state}'`);
     assert.ok(gap.reason && String(gap.reason).trim().length > 0, `DOCUMENTED_GAPS ${gap.need}×${gap.state} needs a reason`);
   }
-  // Axis sanity: 50 states + DC, no dupes.
-  assert.equal(US_STATES.length, 51);
-  assert.equal(new Set(US_STATES).size, 51);
+  // Axis sanity: 50 states + DC + PR, no dupes.
+  assert.equal(US_STATES.length, 52);
+  assert.equal(new Set(US_STATES).size, 52);
   // Every state-scoped registry source's states are on the axis (a source
   // scoped to an off-axis region would silently drop out of the matrix).
   for (const s of allSources()) {

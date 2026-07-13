@@ -32,6 +32,88 @@ import { mergeSourceCoverage } from './coverageOverrides.js';
  *  - refresh_frequency_days  scheduler cadence hint
  *  - priority_score   planner tie-breaker
  */
+// ── State benefits portals (state_programs lane) ────────────────────────────
+// One official state-government benefits/assistance portal per state that has
+// no bespoke state-programs source elsewhere in this registry (TN/KY/WV/OR/PA/
+// OH/WA have dedicated rows). Every URL was verified live on 2026-07-12
+// (curl -L → 200 on the state's own domain; NH EASY answers 403 to non-browser
+// clients — the DIRECTORY kind honestly survives fetch failures as
+// link_unverified). Closes the fleet-wide "No {ST}-specific state-programs
+// source exists in the source registry" coverage gap for every US state, DC,
+// and Puerto Rico.
+// Row shape: [state, portal name, verified URL, sponsor, summary]
+const STATE_BENEFITS_PORTALS = Object.freeze([
+  ['AL', 'MyDHR — Alabama benefits portal', 'https://mydhr.alabama.gov', 'Alabama Department of Human Resources', 'Official Alabama portal to apply for and manage SNAP food assistance, TANF cash assistance, and child care assistance.'],
+  ['AK', 'Alaska Division of Public Assistance', 'https://health.alaska.gov/dpa', 'Alaska Department of Health', 'Official Alaska public-assistance hub: SNAP, Temporary Assistance, Medicaid, heating assistance, and senior benefits programs.'],
+  ['AZ', 'Health-e-Arizona Plus', 'https://www.healthearizonaplus.gov', 'Arizona Department of Economic Security', 'Official Arizona portal to apply for AHCCCS health coverage, SNAP nutrition assistance, and cash assistance.'],
+  ['AR', 'Access Arkansas', 'https://access.arkansas.gov', 'Arkansas Department of Human Services', 'Official Arkansas portal to apply for SNAP, TEA cash assistance, health care coverage, and child care assistance.'],
+  ['CA', 'BenefitsCal', 'https://benefitscal.com', 'State of California (county consortia)', 'Official California portal to apply for CalFresh food benefits, CalWORKs cash aid, Medi-Cal health coverage, and General Assistance.'],
+  ['CO', 'Colorado PEAK', 'https://co.gov/PEAK', 'Colorado Department of Human Services', 'Official Colorado PEAK portal to apply for SNAP, Health First Colorado (Medicaid), cash assistance, and child care assistance.'],
+  ['CT', 'ConneCT — Connecticut DSS benefits', 'https://connect.ct.gov', 'Connecticut Department of Social Services', 'Official Connecticut portal for SNAP, cash assistance, and HUSKY Health coverage applications and case management.'],
+  ['DE', 'Delaware ASSIST', 'https://assist.dhss.delaware.gov/assisthome', 'Delaware Health and Social Services', 'Official Delaware ASSIST portal to screen and apply for food benefits, cash assistance, medical coverage, and child care.'],
+  ['DC', 'District Direct', 'https://districtdirect.dc.gov', 'DC Department of Human Services', 'Official District of Columbia portal for SNAP, TANF, Medicaid, and other public benefits applications and renewals.'],
+  ['FL', 'MyACCESS Florida', 'https://myaccess.myflfamilies.com', 'Florida Department of Children and Families', 'Official Florida portal to apply for SNAP food assistance, temporary cash assistance, and Medicaid.'],
+  ['GA', 'Georgia Gateway', 'https://gateway.ga.gov', 'Georgia Department of Human Services', 'Official Georgia portal for SNAP, TANF, Medicaid/PeachCare, child care assistance (CAPS), and WIC eligibility.'],
+  ['HI', 'My Benefits Hawaiʻi', 'https://mybenefits.hawaii.gov', 'Hawaiʻi Department of Human Services', 'Official Hawaiʻi portal for medical assistance (Med-QUEST), SNAP, and financial assistance program applications.'],
+  ['ID', 'idalink Idaho', 'https://idalink.idaho.gov', 'Idaho Department of Health and Welfare', 'Official Idaho portal to apply for food assistance, cash assistance, child care assistance, and Medicaid.'],
+  ['IL', 'Illinois ABE (Application for Benefits Eligibility)', 'https://abe.illinois.gov', 'Illinois Department of Human Services', 'Official Illinois portal to apply for SNAP, cash assistance, and medical benefits and manage existing cases.'],
+  ['IN', 'Indiana FSSA Benefits Portal', 'https://fssabenefits.in.gov', 'Indiana Family and Social Services Administration', 'Official Indiana portal to apply for SNAP, TANF, and Health Coverage (Medicaid/HIP) benefits.'],
+  ['IA', 'Iowa HHS programs', 'https://hhs.iowa.gov/programs', 'Iowa Department of Health and Human Services', 'Official Iowa HHS programs hub covering food assistance, health coverage, child care assistance, and family support programs.'],
+  ['KS', 'KEES Self-Service Portal (Kansas)', 'https://cssp.kees.ks.gov', 'Kansas Department for Children and Families', 'Official Kansas self-service portal to apply for food, cash, and child care assistance and medical coverage.'],
+  ['LA', 'Louisiana CAFÉ', 'https://www.dcfs.louisiana.gov/cafe', 'Louisiana Department of Children and Family Services', 'Official Louisiana CAFÉ portal for SNAP, FITAP cash assistance, child care assistance, and other DCFS services.'],
+  ['ME', 'My Maine Connection', 'https://www.maine.gov/mymaineconnection', 'Maine Department of Health and Human Services', 'Official Maine portal to apply for food supplement (SNAP), TANF, MaineCare health coverage, and other assistance.'],
+  ['MD', 'Maryland benefits (myMDTHINK)', 'https://mymdthink.maryland.gov', 'Maryland Department of Human Services', 'Official Maryland myMDTHINK portal for SNAP, cash assistance, Medicaid, and social services applications.'],
+  ['MA', 'DTA Connect (Massachusetts)', 'https://dtaconnect.eohhs.mass.gov', 'Massachusetts Department of Transitional Assistance', 'Official Massachusetts portal for SNAP and cash assistance (TAFDC/EAEDC) applications and case management.'],
+  ['MI', 'MI Bridges', 'https://newmibridges.michigan.gov', 'Michigan Department of Health and Human Services', 'Official Michigan portal to apply for food, cash, child care, emergency relief, and health care assistance.'],
+  ['MN', 'MNbenefits', 'https://mnbenefits.mn.gov', 'Minnesota Department of Human Services', 'Official Minnesota portal to apply for SNAP, cash programs, emergency assistance, child care assistance, and housing supports in one application.'],
+  ['MS', 'Mississippi Department of Human Services programs', 'https://www.mdhs.ms.gov', 'Mississippi Department of Human Services', 'Official Mississippi DHS hub for SNAP, TANF, child care payment assistance, and workforce development programs.'],
+  ['MO', 'myDSS Missouri', 'https://mydss.mo.gov', 'Missouri Department of Social Services', 'Official Missouri portal for food stamps (SNAP), temporary assistance, child care subsidy, and MO HealthNet coverage.'],
+  ['MT', 'apply.mt.gov — Montana public assistance', 'https://apply.mt.gov', 'Montana Department of Public Health and Human Services', 'Official Montana portal to apply for SNAP, TANF, Medicaid, and healthy Montana kids coverage.'],
+  ['NE', 'ACCESSNebraska', 'https://accessnebraska.ne.gov', 'Nebraska Department of Health and Human Services', 'Official Nebraska portal for SNAP, child care subsidy, energy assistance, and economic assistance applications.'],
+  ['NV', 'Access Nevada', 'https://accessnevada.dwss.nv.gov', 'Nevada Division of Welfare and Supportive Services', 'Official Nevada portal to apply for SNAP, TANF, Medicaid, and energy assistance and manage existing cases.'],
+  ['NH', 'NH EASY Gateway to Services', 'https://nheasy.nh.gov', 'New Hampshire Department of Health and Human Services', 'Official New Hampshire portal to apply for food stamps, cash assistance, Medicaid, and child care scholarship.'],
+  ['NJ', 'MyNJHelps', 'https://www.mynjhelps.gov', 'New Jersey Department of Human Services', 'Official New Jersey portal to screen and apply for NJ SNAP, WorkFirst NJ cash assistance, and NJ FamilyCare.'],
+  ['NM', 'YES New Mexico', 'https://www.yes.state.nm.us', 'New Mexico Health Care Authority', 'Official New Mexico YESNM portal for SNAP, cash assistance, Medicaid, and energy assistance (LIHEAP).'],
+  ['NY', 'myBenefits New York', 'https://mybenefits.ny.gov', 'New York State Office of Temporary and Disability Assistance', 'Official New York portal to screen and apply for SNAP, HEAP energy assistance, and other state benefits.'],
+  ['NC', 'ePASS North Carolina', 'https://epass.nc.gov', 'North Carolina Department of Health and Human Services', 'Official North Carolina portal to apply for Food and Nutrition Services, Medicaid, energy, and child care assistance.'],
+  ['ND', 'North Dakota Apply for Help', 'https://applyforhelp.nd.gov', 'North Dakota Health and Human Services', 'Official North Dakota hub to apply for SNAP, TANF, child care assistance, energy assistance, and health coverage.'],
+  ['OK', 'OKDHS Live!', 'https://www.okdhslive.org', 'Oklahoma Human Services', 'Official Oklahoma portal to apply for SNAP food benefits, child care subsidy, and TANF and manage existing benefits.'],
+  ['RI', 'HealthyRhode', 'https://healthyrhode.ri.gov', 'Rhode Island Executive Office of Health and Human Services', 'Official Rhode Island portal for health coverage, SNAP, cash assistance, and child care assistance applications.'],
+  ['SC', 'SC DSS Benefits Portal', 'https://benefitsportal.dss.sc.gov', 'South Carolina Department of Social Services', 'Official South Carolina portal to apply for SNAP and TANF benefits and manage existing DSS cases.'],
+  ['SD', 'South Dakota Department of Social Services', 'https://dss.sd.gov', 'South Dakota Department of Social Services', 'Official South Dakota DSS hub for SNAP, TANF, child care assistance, energy assistance, and Medicaid programs.'],
+  ['TX', 'Your Texas Benefits', 'https://www.yourtexasbenefits.com', 'Texas Health and Human Services Commission', 'Official Texas portal to apply for SNAP food benefits, TANF cash help, Medicaid/CHIP, and other support programs.'],
+  ['UT', 'Utah DWS public assistance', 'https://jobs.utah.gov/assistance/', 'Utah Department of Workforce Services', 'Official Utah hub for SNAP, financial assistance, child care assistance, and unemployment services (myCase).'],
+  ['VT', 'Vermont DCF Economic Services benefits', 'https://dcf.vermont.gov/benefits', 'Vermont Department for Children and Families', 'Official Vermont hub for 3SquaresVT (SNAP), Reach Up cash assistance, fuel assistance, and child care financial assistance.'],
+  ['VA', 'CommonHelp Virginia', 'https://commonhelp.virginia.gov', 'Virginia Department of Social Services', 'Official Virginia portal to apply for SNAP, TANF, Medicaid/FAMIS, child care, and energy assistance.'],
+  ['WI', 'ACCESS Wisconsin', 'https://access.wisconsin.gov', 'Wisconsin Department of Health Services', 'Official Wisconsin portal to apply for FoodShare, BadgerCare Plus health coverage, child care, and other benefits.'],
+  ['WY', 'Wyoming Department of Family Services', 'https://dfs.wyo.gov', 'Wyoming Department of Family Services', 'Official Wyoming DFS hub for SNAP, POWER cash assistance, child care subsidy, and energy assistance (LIEAP).'],
+  ['PR', 'Departamento de la Familia de Puerto Rico', 'https://www.familia.pr.gov', 'Departamento de la Familia (ADSEF)', 'Official Puerto Rico family-services hub covering the Nutrition Assistance Program (PAN), TANF, and social services.'],
+]);
+
+function stateBenefitsPortalRow([state, name, url, sponsor, summary]) {
+  return {
+    source_id: `${state.toLowerCase()}_benefits`,
+    name,
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.OFFICIAL_HTML,
+    base_url: url,
+    sponsor_name: sponsor,
+    resource_title: name,
+    resource_summary: summary,
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran', 'student'],
+    need_categories: ['housing', 'food', 'medical', 'energy', 'caregiving', 'childcare', 'survivor_benefits'],
+    geography: { national: false, states: [state] },
+    default_kinds: [OPPORTUNITY_KIND.BENEFIT],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 76,
+  };
+}
+
+/** source_ids of the generated per-state benefits portal rows (adapter + lane wiring). */
+export const STATE_BENEFITS_SOURCE_IDS = Object.freeze(
+  STATE_BENEFITS_PORTALS.map(([state]) => `${state.toLowerCase()}_benefits`),
+);
+
 export const SOURCES = Object.freeze([
   {
     source_id: 'grants_gov',
@@ -1642,6 +1724,8 @@ export const SOURCES = Object.freeze([
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
   },
+  // State benefits portals — generated from the verified table above.
+  ...STATE_BENEFITS_PORTALS.map(stateBenefitsPortalRow),
 ]);
 
 const BY_ID = Object.freeze(Object.fromEntries(SOURCES.map((s) => [s.source_id, s])));

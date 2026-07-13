@@ -18,6 +18,7 @@ import { createOfficialDirectoryAdapter } from "./officialDirectoryAdapter.js";
 import { createEcfChoicesAdapter } from "./ecfChoicesAdapter.js";
 import { createPropublica990Adapter } from "./propublica990Adapter.js";
 import { createCountyCityDirectoryAdapter } from "./countyCityDirectoryAdapter.js";
+import { STATE_BENEFITS_SOURCE_IDS } from "../sourceRegistry.js";
 
 const officialDirectory = (sourceId) => () => createOfficialDirectoryAdapter(sourceId);
 const countyCityDirectory = (sourceId) => () => createCountyCityDirectoryAdapter(sourceId);
@@ -141,6 +142,9 @@ const FACTORIES = Object.freeze({
   samhsa_findtreatment: officialDirectory('samhsa_findtreatment'),
   american_kidney_fund: officialDirectory('american_kidney_fund'),
   needymeds_diagnosis_assistance: officialDirectory('needymeds_diagnosis_assistance'),
+  // --- State benefits portals (2026-07-12): one official portal per remaining
+  //     state/DC/PR, generated in lockstep with the registry table.
+  ...Object.fromEntries(STATE_BENEFITS_SOURCE_IDS.map((id) => [id, officialDirectory(id)])),
 });
 /** @returns {object|null} an adapter instance, or null if none is implemented. */
 export function getAdapter(sourceId) {

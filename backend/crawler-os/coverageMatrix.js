@@ -25,11 +25,13 @@
 import { allSources } from './sourceRegistry.js';
 
 /**
- * The 50 US states + DC — the geography axis of the matrix. Territories
- * (PR/GU/VI/AS/MP) and Canadian provinces are deliberately NOT on the guard
- * axis: national sources serve them too, but the registry has no
- * territory-scoped lanes yet and putting them on the axis would only pad the
- * documented-gaps list without a serviceable adapter backlog behind it.
+ * The 50 US states + DC + PR — the geography axis of the matrix. PR joined the
+ * axis 2026-07-12 when it gained a scoped state-programs lane (pr_benefits via
+ * STATE_BENEFITS_PORTALS). The remaining territories (GU/VI/AS/MP) and
+ * Canadian provinces are deliberately NOT on the guard axis: national sources
+ * serve them too, but the registry has no lanes scoped to them yet and putting
+ * them on the axis would only pad the documented-gaps list without a
+ * serviceable adapter backlog behind it.
  */
 export const US_STATES = Object.freeze([
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
@@ -37,7 +39,7 @@ export const US_STATES = Object.freeze([
   'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
   'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
   'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
-  'DC',
+  'DC', 'PR',
 ]);
 
 /**
