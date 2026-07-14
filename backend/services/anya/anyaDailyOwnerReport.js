@@ -22,6 +22,7 @@
 import { sendEmail as defaultSendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { maskSecrets, latestRun as defaultLatestRun, getRun as defaultGetRun } from '../sam/samAuditStore.js'
+import { summarizeCrawlerResearch } from '../amy/crawlerCompetitiveResearch.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('anyaDailyOwnerReport')
@@ -94,6 +95,22 @@ async function defaultLoadWebParity(db) {
   try {
     const { readWebParityBenchmark } = await import('../webParityBenchmark.js')
     const store = await readWebParityBenchmark(db).catch(() => null)
+    return store?.latest ? store : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Load Amy's competitive crawler research for the digest (system_kv
+ * `amy_crawler_research`, refreshed by the throttled nightly research pass —
+ * owner directive 2026-07-14). Best-effort — the section is omitted until the
+ * research goal has run at least once.
+ */
+async function defaultLoadCrawlerResearch(db) {
+  try {
+    const { readCrawlerResearch } = await import('../amy/crawlerCompetitiveResearch.js')
+    const store = await readCrawlerResearch(db).catch(() => null)
     return store?.latest ? store : null
   } catch {
     return null
@@ -281,8 +298,11 @@ export function summarizeWebParity(parity) {
  * (see summarizeCoverageGaps).
  * `parity` (optional) adds the "Google-bar benchmark" section
  * (see summarizeWebParity).
+ * `research` (optional) adds the "Competitive crawler research" section — Amy's
+ * scan of how other crawler codebases work + implementation suggestions
+ * (see summarizeCrawlerResearch).
  */
-export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null, research = null } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -397,6 +417,19 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       paritySummary.webOnlyTop.forEach((w) => t.push(`  • ${w}`))
     } else {
       t.push('No real web-only finds — GrantFlow covered everything the web session produced.')
+    }
+  }
+  const researchSummary = summarizeCrawlerResearch(research)
+  if (researchSummary) {
+    t.push('')
+    t.push('COMPETITIVE CRAWLER RESEARCH (how other codebases do it)')
+    t.push('========================================================')
+    t.push(researchSummary.headline)
+    if (researchSummary.findings.length) {
+      t.push('Techniques worth stealing (candidates — nothing changed automatically):')
+      researchSummary.findings.forEach((f) => t.push(`  • ${f}`))
+    } else if (researchSummary.allClear) {
+      t.push('Nothing beat our current crawler approach this run.')
     }
   }
   t.push('')
@@ -525,6 +558,22 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         ${webOnlyHtml}
       </div>`
       })()}
+      ${(() => {
+        const rs = summarizeCrawlerResearch(research)
+        if (!rs) return ''
+        const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+        const findingsHtml = rs.findings.length
+          ? `<div style="margin-top:8px;"><strong style="color:#1d4ed8;">Techniques worth stealing (candidates — nothing changed automatically):</strong>${list(rs.findings, '#1e3a8a')}</div>`
+          : rs.allClear
+            ? '<div style="margin-top:8px;color:#166534;">Nothing beat our current crawler approach this run.</div>'
+            : ''
+        return `
+      <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Competitive crawler research</h3>
+      <div style="font-size:13px;">
+        <div style="font-weight:600;color:#334155;">${esc(rs.headline)}</div>
+        ${findingsHtml}
+      </div>`
+      })()}
 
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
@@ -551,6 +600,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
  *        the gap scoreboard + 24h amy/sam/anya activity loader)
  * @param {Function} [opts.loadParity] injectable db->web_parity_benchmark store
  *        (defaults to the system_kv reader; section omitted when never run)
+ * @param {Function} [opts.loadResearch] injectable db->amy_crawler_research store
+ *        (defaults to the system_kv reader; section omitted until the research
+ *        goal has run once)
  * @param {Date} [opts.now]
  * @returns {Promise<{ran:boolean, sent:boolean, reason?:string, run_id?:string|null, to?:string, stats?:object}>}
  */
@@ -562,6 +614,7 @@ export async function runAnyaDailyOwnerReport(db, {
   loadAmy = defaultLoadAmy,
   loadGaps = defaultLoadCoverageGaps,
   loadParity = defaultLoadWebParity,
+  loadResearch = defaultLoadCrawlerResearch,
   now = null,
 } = {}) {
   try {
@@ -576,7 +629,8 @@ export async function runAnyaDailyOwnerReport(db, {
     const amy = await loadAmy(db).catch(() => null)
     const gaps = await loadGaps(db, { now }).catch(() => null)
     const parity = await loadParity(db).catch(() => null)
-    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps, parity })
+    const research = await loadResearch(db).catch(() => null)
+    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps, parity, research })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {

@@ -130,6 +130,32 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
     webParity = { ran: false, error: err?.message }
   }
 
+  // Amy competitive crawler research (owner directive 2026-07-14): a THROTTLED,
+  // bounded web scan of how OTHER grant/funding crawler codebases work, LLM-
+  // compared against GrantFlow's own approach. Persists implementation
+  // suggestions to system_kv `amy_crawler_research` for Anya's morning email —
+  // ADVISORY only, never changes code. The run self-skips unless the last run is
+  // older than its internal MIN_INTERVAL (competitor tech is slow-moving and the
+  // LLM pass costs), so wiring it into the nightly sweep refreshes it a couple
+  // times a week without burning a call every night. Env-gated
+  // (AMY_CRAWLER_RESEARCH, on by default). Best-effort — never blocks the sweep.
+  let crawlerResearch = null
+  try {
+    const { runCrawlerCompetitiveResearch, isCrawlerResearchEnabled } = await import('../amy/crawlerCompetitiveResearch.js')
+    if (isCrawlerResearchEnabled()) {
+      crawlerResearch = await runCrawlerCompetitiveResearch(db, { now })
+      log.info('nightly Amy crawler research complete', {
+        ran: crawlerResearch?.ran ?? false,
+        reason: crawlerResearch?.reason ?? null,
+        candidates: crawlerResearch?.candidates_scanned ?? 0,
+        optimal: crawlerResearch?.optimal_count ?? 0,
+      })
+    }
+  } catch (err) {
+    log.warn('nightly Amy crawler research failed (non-fatal)', { error: err?.message })
+    crawlerResearch = { ran: false, error: err?.message }
+  }
+
   // Award-amount enrichment, at NIGHT-sized bounds. The boot invariant
   // (enforceAmountEnrichment) reads the funder's own page for active-pipeline
   // rows with no dollar figure, but its boot budget (10 fetches / 20s) exists
@@ -317,6 +343,14 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
           fleet_parity: webParity.fleet_parity ?? null,
           profiles: webParity.per_profile?.length ?? 0,
           gap_candidates_appended: webParity.gap_queue?.appended ?? 0,
+        }
+      : null,
+    crawler_research: crawlerResearch
+      ? {
+          ran: crawlerResearch.ran === true,
+          reason: crawlerResearch.reason ?? crawlerResearch.error ?? null,
+          candidates_scanned: crawlerResearch.candidates_scanned ?? 0,
+          optimal_count: crawlerResearch.optimal_count ?? 0,
         }
       : null,
     amount_enrichment: amountEnrichment
