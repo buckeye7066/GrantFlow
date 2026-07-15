@@ -27,6 +27,7 @@ import { searchOrganizations as realSearchOrganizations } from '../../src/integr
 import { NTEE_DESCRIPTIONS, NEED_TO_NTEE_MAP } from '../../constants/nteeMapping.js'
 import { createLogger } from '../../utils/logger.js'
 import { searchPlaces as realOsmSearchPlaces } from './osmProvider.js'
+import { searchResearchOrganizations as realSearchResearchOrgs } from '../../src/integrations/nihReporter.js'
 
 const log = createLogger('yanaProspectSources')
 
@@ -271,9 +272,187 @@ export function makeOpenStreetMapSource(deps = {}) {
   }
 }
 
+// ── NIH RePORTER: the biomedical research audience ───────────────────────────
+// The audience axiombiolabs.org actually speaks to — its site leads with a
+// patent-pending CAR-Treg transplant-tolerance platform, then genomics/CRISPR,
+// molecular diagnostics and environmental DNA — is academic and hospital
+// research institutions working those same problems. NIH RePORTER is where they
+// are publicly enumerable, and an active NIH award proves BOTH halves of a Yana
+// lead at once: the org does this science, and it demonstrably pursues grant
+// funding. That second half is what keeps John's GrantFlow pitch honest here —
+// the same "past federal recipients actively seek grants" rationale the
+// usaspending source rests on.
+//
+// Each topic mirrors one of the site's five platforms so the discovered
+// universe tracks what Axiom actually publishes. `focus_areas` are canonical
+// GrantFlow cause tags (NEED_TO_NTEE_MAP keys) so these leads speak the same
+// vocabulary as every other source.
+export const RESEARCH_TOPICS = Object.freeze([
+  Object.freeze({
+    id: 'transplant_tolerance',
+    text: 'transplant immune tolerance regulatory T cell',
+    label: 'transplant immunology and immune tolerance',
+    focus_areas: ['health_medical'],
+  }),
+  Object.freeze({
+    id: 'cell_therapy',
+    text: 'CAR T cell therapy immunotherapy',
+    label: 'engineered cell therapy and immuno-oncology',
+    focus_areas: ['health_medical'],
+  }),
+  Object.freeze({
+    id: 'gene_editing',
+    text: 'CRISPR gene editing',
+    label: 'CRISPR and gene-editing research',
+    focus_areas: ['health_medical', 'technology_equipment'],
+  }),
+  Object.freeze({
+    id: 'genomic_diagnostics',
+    text: 'genomic sequencing variant interpretation diagnostics',
+    label: 'genomics and molecular diagnostics',
+    focus_areas: ['health_medical', 'technology_equipment'],
+  }),
+  Object.freeze({
+    id: 'environmental_dna',
+    text: 'environmental DNA metagenomics pathogen surveillance',
+    label: 'environmental DNA and molecular surveillance',
+    focus_areas: ['environment', 'technology_equipment'],
+  }),
+])
+
+/**
+ * Map an NIH RePORTER institution into a Yana prospect candidate.
+ *
+ * Every field is derived from what NIH actually published — never inferred.
+ * RePORTER carries no email/website (enrichment closes that gap downstream, so
+ * these land `needs_enrichment` exactly like a 990 prospect), and the
+ * institution's real project titles become `program_areas` while the contact PI
+ * becomes the named contact, giving John concrete, checkable specifics to
+ * personalize against instead of a generic pitch.
+ */
+export function mapResearchOrgToProspect(org, { source = 'nih_reporter', topic = null } = {}) {
+  if (!org || !org.org_id || !org.name) return null
+
+  const topics = Array.isArray(org.topics) ? org.topics : []
+  const investigators = Array.isArray(org.investigators) ? org.investigators : []
+  const projectTitles = topics.map((t) => t?.title).filter(Boolean)
+
+  // Factual, countable mission line — no adjectives NIH didn't earn.
+  const area = topic?.label || 'biomedical research'
+  const projectCount = Number(org.project_count) || projectTitles.length
+  const missionBits = [
+    `Research institution with ${projectCount} active NIH-funded ${projectCount === 1 ? 'project' : 'projects'} in ${area}`,
+  ]
+  if (org.latest_fiscal_year) missionBits.push(`most recent award FY${org.latest_fiscal_year}`)
+  if (org.departments?.length) missionBits.push(`departments include ${org.departments.slice(0, 3).join(', ').toLowerCase()}`)
+  const mission = `${missionBits.join('; ')}.`
+
+  const contactPi = investigators[0] || null
+
+  const evidence = [
+    { type: 'nih_awards', project_count: projectCount, award_total: org.award_total ?? null, latest_fiscal_year: org.latest_fiscal_year ?? null, source_url: org.detail_url || null },
+  ]
+  if (investigators.length) {
+    evidence.push({ type: 'principal_investigators', value: investigators.map((i) => [i.name, i.title].filter(Boolean).join(' — ')).slice(0, 3) })
+  }
+
+  const location = [org.city, org.state].filter(Boolean).join(', ') || null
+
+  return {
+    source,
+    external_id: String(org.org_id),
+    organization_name: org.name,
+    organization_type: 'research_institution',
+    entity_type: 'research_institution',
+    city: org.city || null,
+    state: org.state || null,
+    location,
+    mission,
+    focus_areas: topic?.focus_areas ? [...topic.focus_areas] : ['health_medical'],
+    // Real NIH project titles — the specifics John's "their work" paragraph needs.
+    program_areas: projectTitles.slice(0, 5),
+    contact_name: contactPi?.name || null,
+    contact_title: contactPi?.title || null,
+    website: null,
+    website_url: null,
+    email: null,
+    profile_url: org.detail_url || null,
+    source_urls: org.detail_url ? [org.detail_url] : [],
+    public_evidence: evidence,
+  }
+}
+
+/**
+ * NIH RePORTER prospect source — free, keyless, national by default.
+ *
+ * Geography is deliberately NOT defaulted to YANA_TARGET_AREAS. Those counties
+ * are the right frame for local community nonprofits; research institutions are
+ * a national universe and Axiom's collaboration framing is national, so the
+ * caller must opt in to a state filter (`states`) rather than silently losing
+ * ~48 states of the audience to a setting meant for a different source.
+ *
+ * @param {object} [deps]
+ * @param {Function} [deps.searchResearchOrganizations] injectable for tests.
+ */
+export function makeNihReporterSource(deps = {}) {
+  const search = typeof deps.searchResearchOrganizations === 'function'
+    ? deps.searchResearchOrganizations
+    : realSearchResearchOrgs
+  return {
+    name: 'nih_reporter',
+    /**
+     * @param {object} [args]
+     * @param {number} [args.limit] max prospects across all topics
+     * @param {Array}  [args.topics] override RESEARCH_TOPICS
+     * @param {string[]} [args.states] optional 2-letter state filter
+     * @param {number[]} [args.fiscalYears] restrict to these FYs (default: recent two)
+     */
+    async discover({ limit = 50, topics = null, states = null, fiscalYears = null, offset = 0 } = {}) {
+      const plans = Array.isArray(topics) && topics.length ? topics : RESEARCH_TOPICS
+      // Recent fiscal years only: an org with a CURRENT award is actively
+      // running the work and actively seeking funding. A 2005 award proves
+      // neither, and would make John's outreach reference stale science.
+      const fy = Array.isArray(fiscalYears) && fiscalYears.length
+        ? fiscalYears
+        : (() => { const y = new Date().getFullYear(); return [y - 1, y] })()
+
+      const perTopic = Math.max(1, Math.floor(limit / plans.length))
+      const out = []
+      const seen = new Set()
+
+      for (const plan of plans) {
+        if (out.length >= limit) break
+        let orgs = []
+        try {
+          orgs = await search({ text: plan.text, limit: perTopic, states, fiscalYears: fy, offset })
+        } catch (err) {
+          log.warn(`nih_reporter search failed for "${plan.id}": ${err?.message || err}`)
+          continue
+        }
+        for (const org of orgs || []) {
+          if (out.length >= limit) break
+          const prospect = mapResearchOrgToProspect(org, { topic: plan })
+          if (!prospect) continue
+          // One institution can fund work across several topics — keep the
+          // first (its best-matching topic) rather than emitting duplicates.
+          if (seen.has(prospect.external_id)) continue
+          seen.add(prospect.external_id)
+          out.push(prospect)
+        }
+      }
+      return out
+    },
+  }
+}
+
 function registerDefaults() {
   if (!providers.has('propublica_990')) {
     registerProspectSource('propublica_990', makePropublica990Source())
+  }
+  // NIH RePORTER: free + keyless, so the biomedical research audience is
+  // reachable out of the box like the other no-key sources.
+  if (!providers.has('nih_reporter')) {
+    registerProspectSource('nih_reporter', makeNihReporterSource())
   }
   // OpenStreetMap: the free, keyless geo-local source — active by default (no
   // key needed), so geo-local prospecting works out of the box.

@@ -124,6 +124,158 @@ export async function fetchComparableAwards(query = {}) {
   return out
 }
 
+/**
+ * NIH RePORTER, read as an ORGANIZATION directory rather than an award feed.
+ *
+ * `fetchOpportunities`/`fetchComparableAwards` above read RePORTER rows for the
+ * AWARD they describe. This reads the same rows for the INSTITUTION behind them:
+ * a US research organization actively running funded work on `text`.
+ *
+ * Yana uses it as a prospect source. An active NIH award is two facts at once —
+ * the org does this science, AND it demonstrably pursues grant funding — which
+ * is the same "past federal recipients actively seek grants" rationale the
+ * usaspending source already rests on.
+ *
+ * RePORTER returns one row per PROJECT, and a big institution has hundreds, so
+ * this aggregates rows into one entry per org (keyed on the stable
+ * `org_ipf_code`), keeping each org's distinct project titles, departments and
+ * named investigators as evidence.
+ *
+ * No API key. Foreign orgs are dropped (GrantFlow serves US applicants).
+ *
+ * @param {Object=} query
+ * @param {string=} query.text free-text research topic (RePORTER `advanced_text_search`)
+ * @param {number=} query.limit max ORGANIZATIONS to return (default 25)
+ * @param {number=} query.offset project-page offset for pagination (default 0)
+ * @param {string[]=} query.states 2-letter codes; omit for national coverage
+ * @param {number[]=} query.fiscalYears restrict to these FYs (recency = still active)
+ * @param {number=} query.projectLimit projects to scan per call (default 200, API max 500)
+ * @returns {Promise<Array<{org_id:string, name:string, city:string|null, state:string|null,
+ *   zipcode:string|null, departments:string[], topics:Array<{title:string,fiscal_year:number|null}>,
+ *   investigators:Array<{name:string,title:string|null}>, project_count:number,
+ *   award_total:number|null, latest_fiscal_year:number|null, detail_url:string|null}>>}
+ */
+export async function searchResearchOrganizations(query = {}) {
+  const {
+    text = '',
+    limit = 25,
+    offset = 0,
+    states = null,
+    fiscalYears = null,
+    projectLimit = 200,
+  } = query
+
+  const stateList = Array.isArray(states) ? states.filter(Boolean).map((s) => String(s).toUpperCase()) : []
+  const fyList = Array.isArray(fiscalYears) ? fiscalYears.filter((y) => Number.isInteger(y)) : []
+
+  // Same `include_fields` caveat as fetchOpportunities — omit it and take the
+  // full projection, or the server returns empty rows.
+  const body = {
+    criteria: {
+      ...(text ? { advanced_text_search: { operator: 'and', search_field: 'all', search_text: text } } : {}),
+      ...(stateList.length ? { org_states: stateList } : {}),
+      ...(fyList.length ? { fiscal_years: fyList } : {}),
+    },
+    offset,
+    limit: Math.min(500, Math.max(1, Number(projectLimit) || 200)),
+  }
+
+  /** @type {any} */
+  const data = await requestJson({
+    provider: 'nih.reporter',
+    url: NIH_REPORTER_PROJECTS_SEARCH_URL,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: body,
+    timeoutMs: 25_000,
+    maxRetries: 2,
+  })
+
+  const rows = Array.isArray(data?.results) ? data.results : []
+  /** @type {Map<string, any>} */
+  const byOrg = new Map()
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    const org = row.organization && typeof row.organization === 'object' ? row.organization : null
+    const name = firstString(org?.org_name)
+    if (!name) continue
+
+    // US only — a foreign institution can never be a GrantFlow client.
+    const country = firstString(org?.org_country)
+    if (country && !/united states/i.test(country)) continue
+
+    // org_ipf_code is NIH's stable institution id; fall back to the normalized
+    // name so an org missing the code still dedupes instead of duplicating.
+    const orgId = firstString(org?.org_ipf_code, org?.primary_uei)
+      || `name:${name.trim().toLowerCase()}`
+
+    let entry = byOrg.get(orgId)
+    if (!entry) {
+      entry = {
+        org_id: String(orgId),
+        name,
+        city: firstString(org?.org_city),
+        state: firstString(org?.org_state),
+        zipcode: firstString(org?.org_zipcode),
+        departments: [],
+        topics: [],
+        investigators: [],
+        project_count: 0,
+        award_total: null,
+        latest_fiscal_year: null,
+        detail_url: null,
+      }
+      byOrg.set(orgId, entry)
+    }
+
+    entry.project_count += 1
+
+    // NIH uses the literal string 'NONE' as a dept_type for unaffiliated
+    // projects. Carrying it through renders as "departments include ... none".
+    const dept = firstString(org?.dept_type)
+    if (dept && !/^none$/i.test(dept) && !entry.departments.includes(dept)) entry.departments.push(dept)
+
+    const fy = Number.isInteger(row?.fiscal_year) ? row.fiscal_year : null
+    if (fy !== null && (entry.latest_fiscal_year === null || fy > entry.latest_fiscal_year)) {
+      entry.latest_fiscal_year = fy
+    }
+
+    const title = firstString(row?.project_title)
+    if (title && entry.topics.length < 5 && !entry.topics.some((t) => t.title === title)) {
+      entry.topics.push({ title, fiscal_year: fy })
+    }
+
+    // The contact PI is the person actually running the work — the name John's
+    // draft can honestly reference. Never invent one; only take what NIH lists.
+    for (const pi of Array.isArray(row?.principal_investigators) ? row.principal_investigators : []) {
+      if (!pi?.is_contact_pi) continue
+      const piName = firstString(pi?.full_name)
+      if (!piName || entry.investigators.some((i) => i.name === piName)) continue
+      if (entry.investigators.length >= 3) break
+      entry.investigators.push({ name: piName, title: firstString(pi?.title) })
+    }
+
+    if (typeof row?.award_amount === 'number' && Number.isFinite(row.award_amount)) {
+      entry.award_total = (entry.award_total || 0) + row.award_amount
+    }
+
+    if (!entry.detail_url) {
+      const applId = firstString(row?.appl_id)
+      entry.detail_url = firstString(
+        row?.project_detail_url,
+        applId ? `https://reporter.nih.gov/project-details/${encodeURIComponent(applId)}` : null,
+      )
+    }
+  }
+
+  // Best-funded, most-active institutions first — they have the most real
+  // signal for John to personalize against.
+  return Array.from(byOrg.values())
+    .sort((a, b) => (b.project_count - a.project_count) || ((b.award_total || 0) - (a.award_total || 0)))
+    .slice(0, Math.max(0, Number(limit) || 25))
+}
+
 function firstString(...candidates) {
   for (const c of candidates) {
     const v = toTrimmedStringOrNull(c)
