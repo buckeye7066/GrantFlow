@@ -65,6 +65,59 @@ describe('isPlausibleHomepage — the real prod failures', () => {
   })
 })
 
+/**
+ * SECOND PROD DEFECT (the live Drafts folder, 2026-07-14/15).
+ *
+ * The one-distinctive-token bar above shipped, and John still drafted real
+ * outreach to ten wrong organizations — 8 of these 10 recipients PASSED that
+ * gate. A floor of one word is no floor for the names Yana actually discovers,
+ * because the one word they share is a surname ("willie") or a place
+ * ("decatur", "johnson", "robertson") that a completely unrelated business is
+ * equally entitled to. Identity has to be argued from the WHOLE name, and the
+ * hostname has to be anchored to it.
+ *
+ * Every pair below is a REAL draft that was sitting in the owner's mailbox,
+ * addressed by name to the org on the left and mailed to the domain on the
+ * right. All ten must be rejected.
+ */
+describe('isPlausibleHomepage — the live wrong-recipient drafts (2026-07-15)', () => {
+  const wrongDrafts = [
+    // A geography site's "Ohio" page is not the Ohio Education Foundation.
+    ['Ohio Education Foundation', 'worldatlas.com'],
+    // A watch festival that merely shares the county's name.
+    ['Decatur County Education Foundation Inc', 'decaturwatchfest26.com'],
+    // A streaming service. The draft body even NARRATES the bad research:
+    // "pointed me mostly toward a streaming service and some astronomy pages".
+    ['Star News Education Foundation', 'help.starz.com'],
+    // Johnson University — shares only the city's name.
+    ['Johnson City Area Arts Council Inc', 'johnson.edu'],
+    ['Upper Cumberland Regional Arts Council Inc', 'upperinc.com'],
+    ['Smith County Education Foundation Inc', 'redvanworkshop.com'],
+    // The musician, not the foundation.
+    ['Willie Julie Educational Foundation', 'willienelson.com'],
+    // Winton Group, a UK investment firm.
+    ['Winton Woods Educational Foundation Inc', 'winton.com'],
+    // A funeral home. Exactly the #937 class, still shipping.
+    ['Robertson Community Health Foundation Inc', 'robertsoncountyfuneralhome.com'],
+  ]
+
+  it.each(wrongDrafts)('refuses to address %s at %s', (org, domain) => {
+    expect(isPlausibleHomepage({ url: `https://${domain}`, title: '' }, org)).toBe(false)
+  })
+
+  it('a title mentioning the org can NOT rescue an unrelated hostname', () => {
+    // worldatlas.com genuinely has a page titled "Ohio" — the title is the
+    // SEARCH ENGINE's text about a page, never proof of whose page it is.
+    expect(isPlausibleHomepage({ url: 'https://worldatlas.com', title: 'Ohio - WorldAtlas' }, 'Ohio Education Foundation')).toBe(false)
+  })
+
+  it('one shared distinctive word is a coincidence, not an identity', () => {
+    // The whole bug in one line: 'willie' is in both, and they are unrelated.
+    expect(distinctiveNameTokens('Willie Julie Educational Foundation')).toContain('willie')
+    expect(isPlausibleHomepage({ url: 'https://willienelson.com', title: '' }, 'Willie Julie Educational Foundation')).toBe(false)
+  })
+})
+
 describe('makeContactEnricher — refuses a stranger\'s email', () => {
   const env = { YANA_ALLOW_LIVE_WEB: 'true' }
 

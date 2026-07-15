@@ -119,6 +119,19 @@ const GENERIC_ORG_TOKENS = new Set([
   'national', 'american', 'america', 'usa', 'state', 'city', 'county',
   'church', 'ministries', 'ministry', 'department', 'district', 'board',
   'public', 'international', 'global', 'united', 'first', 'new',
+  'education', 'educational',
+  // Org SUFFIXES / legal forms. These matter twice over, because the COVERAGE
+  // rule now requires every distinctive token to be explained: leaving a suffix
+  // in the distinctive set demands the org's domain spell it out, and no real
+  // org does — `rivertownyouth.org` IS the Rivertown Youth Coalition, and
+  // `leaderscu.com` IS Leaders Education Foundation Inc. Treating a category
+  // word as REQUIRED is the mirror of the original bug (treating it as
+  // sufficient); both come from this list being incomplete.
+  'foundation', 'foundations', 'coalition', 'council', 'councils',
+  'association', 'associations', 'alliance', 'society', 'trust',
+  'fund', 'funds', 'inc', 'incorporated', 'llc', 'ltd', 'corporation',
+  'organization', 'organizations', 'center', 'centers', 'centre',
+  'network', 'services', 'initiative',
 ])
 
 /** Org-name tokens that actually identify THIS org (drops category words). */
@@ -128,6 +141,52 @@ export function distinctiveNameTokens(name) {
   // An org named entirely from category words (e.g. "Community Health Center")
   // has nothing distinctive; fall back rather than rejecting everything.
   return distinctive.length ? distinctive : toks
+}
+
+/** Every >=3-char word of an org name, INCLUDING category words and stopwords. */
+function allNameTokens(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 3)
+}
+
+/** Shortest abbreviation of an org token we will credit inside a hostname. */
+const MIN_ABBREV_LEN = 4
+/** Leftover hostname text this long names a DIFFERENT entity, not an abbreviation. */
+const MAX_UNEXPLAINED_HOST_LEN = 4
+
+/**
+ * Hostname text left over once every word of the org's name is accounted for.
+ *
+ * Each org token is removed whole where present, else by its longest >=4-char
+ * PREFIX ("penn" for "pennsylvania" inside `upenn`) — that is what a legitimate
+ * abbreviated domain looks like. What survives is text the org's own name cannot
+ * explain: `decaturwatchfest26` minus "decatur" leaves "watchfest26", which is a
+ * watch festival, not the Decatur County Education Foundation.
+ *
+ * Only LETTERS count as leftover identity — hyphens, digits and separators
+ * (`riverbend-org.test`, `decaturwatchfest26`) name nobody.
+ */
+function unexplainedHostText(bare, orgName) {
+  let rest = bare
+  // Longest first so "pennsylvania" is consumed before its own prefix "penn".
+  const toks = allNameTokens(orgName).sort((a, b) => b.length - a.length)
+  for (const tok of toks) {
+    if (rest.includes(tok)) {
+      rest = rest.split(tok).join('')
+      continue
+    }
+    for (let len = tok.length - 1; len >= MIN_ABBREV_LEN; len--) {
+      const prefix = tok.slice(0, len)
+      if (rest.includes(prefix)) {
+        rest = rest.split(prefix).join('')
+        break
+      }
+    }
+  }
+  return rest.replace(/[^a-z]/g, '')
 }
 
 /**
@@ -141,15 +200,33 @@ export function distinctiveNameTokens(name) {
  * nonprofits. Getting NO email is recoverable (the lead waits at
  * needs_enrichment); emailing the WRONG organization is not.
  *
- * Requires at least one DISTINCTIVE org token to appear in the hostname or in
- * the search result's title. The title is what rescues legitimate abbreviated
- * domains (upenn.edu titled "University of Pennsylvania"), which a hostname-only
- * check would wrongly reject.
+ * The first fix required ONE distinctive token in the hostname or title. That
+ * replaced "no floor" with a floor of one word, which is no floor at all for the
+ * org names Yana actually discovers: a single shared surname or place name let
+ * `willienelson.com` answer for the "Willie Julie Educational Foundation",
+ * `johnson.edu` for the "Johnson City Area Arts Council", and
+ * `robertsoncountyfuneralhome.com` for the "Robertson Community Health
+ * Foundation" — 8 of 10 live drafts on 2026-07-15 passed that gate. One shared
+ * word is a coincidence; identity has to be argued from the WHOLE name.
+ *
+ * Two conditions must now BOTH hold:
+ *  1. COVERAGE — every distinctive org token appears in the hostname or the
+ *     search-result title. The title is what rescues legitimate abbreviated
+ *     domains (upenn.edu titled "University of Pennsylvania").
+ *  2. HOST ANCHOR — the hostname carries no substantial text the org's name
+ *     cannot explain. This is what stops the title alone from authorizing an
+ *     unrelated host: worldatlas.com has a page titled "Ohio", but "worldatlas"
+ *     is not anything the "Ohio Education Foundation" is named after.
  */
 export function isPlausibleHomepage({ url, title = '' } = {}, orgName) {
   const host = domainOf(url)
   if (!host || !orgName) return false
   const bare = host.split('.').slice(0, -1).join('')
   const haystack = `${bare} ${String(title || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ')}`
-  return distinctiveNameTokens(orgName).some((tok) => haystack.includes(tok))
+
+  const distinctive = distinctiveNameTokens(orgName)
+  if (!distinctive.length) return false
+  if (!distinctive.every((tok) => haystack.includes(tok))) return false
+
+  return unexplainedHostText(bare, orgName).length < MAX_UNEXPLAINED_HOST_LEN
 }

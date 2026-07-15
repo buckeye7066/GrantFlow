@@ -3685,6 +3685,89 @@ export async function enforceAmySyntheticExpiry(db, deps = {}) {
  *
  * Count-only via ENFORCE_LEAD_CONTACT_PLAUSIBILITY=0. Bounded per boot.
  */
+/**
+ * INVARIANT: no LIVE draft in the mailbox is addressed to the wrong organization.
+ *
+ * enforceLeadContactPlausibility() repairs the LEAD, but a draft John already
+ * wrote from a bad lead keeps sitting in Drafts with the wrong recipient — and
+ * a draft is one click (or one stray automation) from being sent to a stranger.
+ * On 2026-07-15, 9 of 10 live drafts were addressed to an unrelated business
+ * (`willienelson.com` for the "Willie Julie Educational Foundation",
+ * `robertsoncountyfuneralhome.com` for the "Robertson Community Health
+ * Foundation"). `purgeImplausibleDrafts()` already existed and could have caught
+ * them, but NOTHING ever called it — it was reachable only via a manual
+ * `POST /api/john/purge-implausible`. Per the choke-point rule, the mailbox
+ * residue needs the same boot net the lead data has.
+ *
+ * Archives the row + removes the draft from the mailbox (Graph DELETE → Deleted
+ * Items, recoverable; the provider REFUSES anything that is not still a draft,
+ * so a sent message is never touched). The lead returns to enrichment and John
+ * can re-draft it correctly — nothing is lost, and a wrong-org draft cannot sit
+ * there waiting to be sent.
+ *
+ * NEVER sends. NEVER judges on a guess: a draft with no org name or no
+ * recipient is skipped, not purged.
+ *
+ * OVERRIDE: ON by default; ENFORCE_JOHN_DRAFT_PLAUSIBILITY=0 for count-only
+ * (dry-run — reports what WOULD be purged and touches nothing).
+ * Bound: JOHN_DRAFT_PLAUSIBILITY_LIMIT (default 200).
+ */
+export async function enforceJohnDraftPlausibility(db, deps = {}) {
+  return runInvariant('john_draft_plausibility', async () => {
+    try {
+      // Table is john_email_drafts (NOT john_drafts — the indexes are named
+      // idx_john_drafts_*, which is a trap: probing the wrong name returns
+      // skipped:'schema' and the whole invariant no-ops while reading green).
+      await db.prepare('SELECT recipient_email FROM john_email_drafts LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const dryRun = _parseBoolEnv(process.env.ENFORCE_JOHN_DRAFT_PLAUSIBILITY) === false
+    const limit = Math.max(1, Number(process.env.JOHN_DRAFT_PLAUSIBILITY_LIMIT || 200))
+
+    // Lazy imports — keep the boot module from statically pulling the john/Graph
+    // graph (same precedent as enforceLeadContactPlausibility).
+    const { purgeImplausibleDrafts } =
+      deps.purgeImpl ? { purgeImplausibleDrafts: deps.purgeImpl } : await import('../services/john/johnDraftPlausibilityPurge.js')
+
+    // No provider (Graph not configured) → still archive the ROWS? No: the store
+    // must keep telling the truth about what is in the mailbox, so without a
+    // provider we report only. The purge itself enforces that rule per-draft.
+    let provider = deps.provider ?? null
+    if (!provider && !dryRun) {
+      try {
+        const [{ getJohnConfig }, { createOutlookProvider }] = await Promise.all([
+          import('../services/john/johnOutreachSafety.js'),
+          import('../services/john/johnOutlookProvider.js'),
+        ])
+        const p = createOutlookProvider({ config: getJohnConfig(), logger: log })
+        provider = p?.ready ? p : null
+      } catch { provider = null }
+    }
+
+    const result = await purgeImplausibleDrafts(db, { provider, dryRun: dryRun || !provider, limit })
+
+    if ((result?.implausible ?? 0) > 0) {
+      const mode = dryRun ? 'DISABLED via ENFORCE_JOHN_DRAFT_PLAUSIBILITY=0' : (provider ? 'purged' : 'no Outlook provider — report only')
+      log.warn('drafts addressed to the WRONG organization present', {
+        implausible: result.implausible,
+        purged: result.purged ?? 0,
+        mode,
+        orgs: (result.items || []).slice(0, 6).map((i) => `${i.organization_name} → ${i.recipient_email}`),
+      })
+    }
+    return {
+      scanned: result?.scanned ?? 0,
+      repaired: result?.purged ?? 0,
+      implausible: result?.implausible ?? 0,
+      mailboxDeleted: result?.mailbox_deleted ?? 0,
+      failed: result?.failed ?? 0,
+      enforced: !dryRun && Boolean(provider),
+    }
+  })
+}
+
 export async function enforceLeadContactPlausibility(db) {
   return runInvariant('lead_contact_plausibility', async () => {
     try {
@@ -3870,6 +3953,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // synthetics accumulate forever (the 13-live/0-reaped prod class).
   steps.push(await enforceAmySyntheticExpiry(db))
   steps.push(await enforceLeadContactPlausibility(db))
+  // AFTER the lead repair: the lead is the cause, the draft is the residue.
+  // Repairing the lead first means a draft purged here can be re-drafted from a
+  // corrected lead on the next John pass.
+  steps.push(await enforceJohnDraftPlausibility(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -3954,4 +4041,5 @@ export const __testables = {
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,
   enforceLeadContactPlausibility,
+  enforceJohnDraftPlausibility,
 }
