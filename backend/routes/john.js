@@ -16,6 +16,8 @@
  *   GET    /api/john/drafts/:draftId    — single draft
  *   POST   /api/john/drafts/:id/revise  — manual revision
  *   POST   /api/john/drafts/:id/archive — archive (no send)
+ *   POST   /api/john/purge-implausible-drafts — remove drafts addressed to the
+ *                                        WRONG org (enrichment-bug residue)
  *   GET    /api/john/audit              — audit feed
  *   GET    /api/john/suppression        — suppression list
  *   POST   /api/john/suppression        — add to suppression list
@@ -39,6 +41,7 @@ import {
   reviseDraftBody,
 } from '../services/john/johnDraftService.js'
 import { refreshDraftBodies } from '../services/john/johnDraftRefreshService.js'
+import { purgeImplausibleDrafts } from '../services/john/johnDraftPlausibilityPurge.js'
 import {
   getRun,
   listRuns,
@@ -318,6 +321,28 @@ router.post('/drafts/:id/revise', adminAuth, async (req, res) => {
     if (!result.ok) {
       return res.status(400).json({ ok: false, ...result })
     }
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message })
+  }
+})
+
+/**
+ * Purge drafts addressed to the WRONG organization — the residue of the
+ * enrichment bug that attached strangers' emails to leads (see
+ * johnDraftPlausibilityPurge). Scoped to drafts whose recipient fails the same
+ * plausibility gate the enricher now enforces; rows are ARCHIVED (re-draft
+ * eligible), never marked deleted_by_user. Pass { dryRun: true } to preview.
+ */
+router.post('/purge-implausible-drafts', adminAuth, async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true
+    const provider = dryRun ? null : createOutlookProvider({ config: getJohnConfig(), logger: log })
+    const result = await purgeImplausibleDrafts(db, {
+      provider,
+      dryRun,
+      limit: Number(req.body?.limit) || 200,
+    })
     res.json({ ok: true, ...result })
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message })
