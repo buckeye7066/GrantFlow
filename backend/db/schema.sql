@@ -156,11 +156,17 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   amount_text TEXT,
   amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
   amount_confidence REAL,
-  -- Set once enforceAmountEnrichment() has READ this row's funder page, so the
-  -- sweep excludes tried rows in SQL instead of after the LIMIT (a JS filter
-  -- after LIMIT wedged enrichment at a fixed 200-row window). Stays NULL when
-  -- the fetch itself failed, so an outage never burns a row's one attempt.
+  -- Set once enforceAmountEnrichment() is DONE with this row, so the sweep
+  -- excludes tried rows in SQL instead of after the LIMIT (a JS filter after
+  -- LIMIT wedged enrichment at a fixed 200-row window). Stays NULL while a
+  -- TRANSIENT fetch failure is still worth retrying, so an outage never burns a
+  -- row's chance -- the mark means "we learned this row's answer", not "we
+  -- pointed a fetcher at it".
   amount_enrich_attempted_at TEXT,
+  -- Tries so far. Bounds the retry above (AMOUNT_ENRICH_MAX_ATTEMPTS) so a
+  -- permanently-down host cannot be re-fetched nightly forever, and orders
+  -- candidates fewest-attempts-first so retries never starve fresh rows.
+  amount_enrich_attempts INTEGER DEFAULT 0,
 
   deadline DATE,
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),

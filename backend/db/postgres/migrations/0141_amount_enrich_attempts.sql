@@ -1,0 +1,21 @@
+-- Award-amount enrichment: how many times we have TRIED, not just whether.
+-- Twin of sqlite migration 137_amount_enrich_attempts.sql.
+--
+-- 136/0140 gave the sweep a per-row attempt mark so the exclusion could be a
+-- SQL predicate. But the sweep set that mark on EVERY outcome, because it keyed
+-- the retry rule off an exception while the service's documented contract is
+-- "Best-effort: never throws" — it catches everything and RETURNS
+-- {attempted:true, reason:'fetch_failed:503'}. The catch was dead code and a
+-- provider outage permanently burned every row it touched. Measured in prod
+-- 2026-07-15: 30 rows attempted, 0 amounts found, 0 retried.
+--
+-- A boolean cannot distinguish "this page states no award figure"
+-- (deterministic — burn it, we learned the answer) from "the host 503'd
+-- tonight" (transient — retry). Un-bounded retry would re-wedge the sweep from
+-- the other side, so we count attempts, give transient failures a bounded
+-- number of chances (AMOUNT_ENRICH_MAX_ATTEMPTS), and order candidates by
+-- fewest-attempts-first so a retry never starves a never-tried row.
+--
+-- Re-asserted at boot by ensureAmountVisibilityColumns() so prod heals without
+-- a manual migrate.
+ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS amount_enrich_attempts INTEGER DEFAULT 0;
