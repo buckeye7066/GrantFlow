@@ -2463,7 +2463,7 @@ describe('enforceAmountEnrichment', () => {
     const foId = seedLinkedPair(db)
     const res = await enforceAmountEnrichment(db, {
       enrichImpl: async () => ({
-        attempted: true, found: true,
+        attempted: true, page_read: true, transient: false, found: true,
         amounts: { amount_min: 1000, amount_max: 5000, amount_text: 'grants of $1,000 to $5,000', amount_status: 'range', amount_confidence: 0.9 },
       }),
     })
@@ -2478,7 +2478,7 @@ describe('enforceAmountEnrichment', () => {
     const db = makeRealDb()
     const foId = seedLinkedPair(db)
     const res = await enforceAmountEnrichment(db, {
-      enrichImpl: async () => ({ attempted: true, found: false, reason: 'no_per_award_amount_on_page', amount_text: 'Amounts vary', amount_status: 'varies' }),
+      enrichImpl: async () => ({ attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page', amount_text: 'Amounts vary', amount_status: 'varies' }),
     })
     expect(res.repaired).toBe(0)
     expect(res.textOnly).toBe(1)
@@ -2491,10 +2491,100 @@ describe('enforceAmountEnrichment', () => {
     const db = makeRealDb()
     seedLinkedPair(db)
     let calls = 0
-    const deps = { enrichImpl: async () => { calls++; return { attempted: true, found: false, reason: 'thin_page' } } }
+    const deps = {
+      enrichImpl: async () => { calls++; return { attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' } },
+    }
     await enforceAmountEnrichment(db, deps)
     await enforceAmountEnrichment(db, deps)
     expect(calls).toBe(1)
+  })
+
+  // The burn bug. The service is documented "never throws" and RETURNS its
+  // failures, but the sweep called markAttempted() unconditionally and put the
+  // retry rule in a catch block that could therefore never run. A 503 burned
+  // the row's one and only chance, forever. Prod 2026-07-15: 30 rows marked
+  // attempted, 0 amounts extracted, 0 retried.
+  it('does NOT burn a row when the fetch failed transiently — it retries it', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    let calls = 0
+    const deps = {
+      enrichImpl: async () => {
+        calls++
+        return { attempted: true, page_read: false, transient: true, found: false, reason: 'fetch_failed:503' }
+      },
+    }
+    const first = await enforceAmountEnrichment(db, deps)
+    expect(first.retryable).toBe(1)
+    // Unmarked, so it is still a candidate...
+    expect(foRow(db, foId).amount_enrich_attempted_at).toBeNull()
+    expect(foRow(db, foId).amount_enrich_attempts).toBe(1)
+    // ...and the next pass actually tries it again. On the old code the row was
+    // marked on the first pass and calls stuck at 1 forever.
+    await enforceAmountEnrichment(db, deps)
+    expect(calls).toBe(2)
+  })
+
+  it('gives up on a permanently-down host after MAX_ATTEMPTS so it cannot be re-fetched forever', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    let calls = 0
+    const deps = {
+      maxAttempts: 2,
+      enrichImpl: async () => { calls++; return { attempted: true, page_read: false, transient: true, found: false, reason: 'fetch_failed:503' } },
+    }
+    await enforceAmountEnrichment(db, deps)
+    expect(foRow(db, foId).amount_enrich_attempted_at).toBeNull()
+    await enforceAmountEnrichment(db, deps)
+    // Second strike hits maxAttempts: burned, so the budget moves on.
+    expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
+    await enforceAmountEnrichment(db, deps)
+    expect(calls).toBe(2)
+  })
+
+  it('burns a row whose page was READ but stated no per-award amount', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    const deps = {
+      enrichImpl: async () => ({ attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page' }),
+    }
+    await enforceAmountEnrichment(db, deps)
+    // We learned this row's answer, so we stop asking — the one-shot mark is
+    // correct HERE, and only here.
+    expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
+  })
+
+  it('retries never starve never-tried rows out of the budget', async () => {
+    const db = makeRealDb()
+    // Ids are PINNED, and pinned adversarially: the stale row sorts FIRST by id.
+    // The old sweep ordered by fo.id alone, so with random UUIDs this test
+    // passed ~half the time by luck — vacuously green, asserting nothing. The
+    // retried row must lose to the fresh one on ATTEMPTS despite winning on id.
+    const stale = seedLinkedPair(db, { foId: '00000000-0000-4000-8000-000000000001', sourceUrl: 'https://down.example/grants' })
+    db.prepare('UPDATE funding_opportunities SET amount_enrich_attempts = 2 WHERE id = ?').run(stale)
+    // ...must not crowd out a fresh one when the budget is a single fetch.
+    const fresh = seedLinkedPair(db, { foId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', sourceUrl: 'https://fresh.example/grants' })
+    const seen = []
+    await enforceAmountEnrichment(db, {
+      limit: 1,
+      enrichImpl: async (cand) => {
+        seen.push(cand.id)
+        return { attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page' }
+      },
+    })
+    expect(seen).toEqual([fresh])
+  })
+
+  it('reports `exhausted` so remaining=0 cannot pass for success when nothing was learned', async () => {
+    const db = makeRealDb()
+    seedLinkedPair(db)
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page' }),
+    })
+    // Backlog drained, but the coverage gap is INTACT — the report must be able
+    // to tell that apart from every row having gotten an amount.
+    expect(res.remaining).toBe(0)
+    expect(res.exhausted).toBe(1)
   })
 
   it('only targets amount-less rows linked to ACTIVE pipeline grants', async () => {

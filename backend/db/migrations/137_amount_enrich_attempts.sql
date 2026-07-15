@@ -1,0 +1,26 @@
+-- Award-amount enrichment: how many times we have TRIED, not just whether.
+--
+-- 136 gave the sweep a per-row attempt mark so the exclusion could be a SQL
+-- predicate. But the sweep set that mark on EVERY outcome, because it keyed the
+-- retry rule off an exception:
+--
+--     const res = await enrichOpportunityAmountFromSource(cand, deps)
+--     await markAttempted(cand.id)          // <- unconditional
+--   } catch (err) { fetchFailed++ }         // <- "a fetch that throws is retried"
+--
+-- ...while the service's documented contract is "Best-effort: never throws" —
+-- it catches everything and RETURNS {attempted:true, reason:'fetch_failed:503'}.
+-- So the catch was dead code, fetchFailed was always 0, and a provider outage
+-- permanently burned every row it touched. The invariant table claimed "a row
+-- is marked attempted only once its page was actually READ"; the code marked it
+-- regardless. Measured in prod 2026-07-15: 30 rows attempted, 0 amounts found.
+--
+-- A boolean cannot express the difference between "this page has no award
+-- figure on it" (deterministic — burn the row, we learned the answer) and "the
+-- host 503'd tonight" (transient — retry). But un-bounded retry re-wedges the
+-- sweep from the other side: a permanently-down host would be re-fetched every
+-- night forever and, ordered by id, would starve fresh candidates out of the
+-- budget. So we count attempts and give transient failures a bounded number of
+-- chances (AMOUNT_ENRICH_MAX_ATTEMPTS) before giving up, and order candidates
+-- by fewest-attempts-first so a retry never crowds out a never-tried row.
+ALTER TABLE funding_opportunities ADD COLUMN amount_enrich_attempts INTEGER DEFAULT 0;

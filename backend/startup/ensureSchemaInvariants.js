@@ -583,12 +583,19 @@ export async function ensureProfilePreferredLanguageColumn(db, { logger = consol
  * manual migrate.
  *
  * `amount_enrich_attempted_at` (funding_opportunities only) records that
- * enforceAmountEnrichment() has READ this row's funder page, so the sweep can
- * exclude already-tried rows IN SQL rather than after the LIMIT. It replaces
- * the `system_kv amount_enrich_attempted_ids` ring, which capped at 2000 ids
+ * enforceAmountEnrichment() is DONE with this row, so the sweep can exclude
+ * already-tried rows IN SQL rather than after the LIMIT. It replaces the
+ * `system_kv amount_enrich_attempted_ids` ring, which capped at 2000 ids
  * and — because the candidate query LIMITed before the JS filter — wedged the
  * whole sweep at a fixed 200-row window once those rows were attempted.
  * Attempt-state belongs on the row it describes, not in a side blob.
+ *
+ * `amount_enrich_attempts` counts the TRIES. The mark above is one-shot and
+ * permanent, so it can only be set once we have actually learned something
+ * about the row; a host that 503'd tonight has taught us nothing. The counter
+ * is what lets a transient failure be retried a bounded number of times
+ * (AMOUNT_ENRICH_MAX_ATTEMPTS) without a permanently-down host being re-fetched
+ * forever and starving never-tried rows out of the nightly budget.
  */
 export async function ensureAmountVisibilityColumns(db, { logger = console } = {}) {
   return runStep(
@@ -602,6 +609,7 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
           ['amount_status', 'TEXT'],
           ['amount_confidence', 'REAL'],
           ['amount_enrich_attempted_at', 'TEXT'],
+          ['amount_enrich_attempts', 'INTEGER'],
         ],
         grants: [
           ['amount_text', 'TEXT'],

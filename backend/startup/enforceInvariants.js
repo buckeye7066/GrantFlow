@@ -2848,6 +2848,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
     const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.AMOUNT_ENRICH_BOOT_LIMIT ?? '10', 10) || 10)
     const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.AMOUNT_ENRICH_TIME_BUDGET_MS ?? '20000', 10) || 20000)
+    const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
 
     // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
     // numeric amount, no text yet (or explicitly not_listed), has a page, and
@@ -2867,7 +2868,8 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
       candidates = await db
         .prepare(
-          `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url
+          `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url,
+                  COALESCE(fo.amount_enrich_attempts, 0) AS attempts
              FROM funding_opportunities fo
              JOIN grants g ON g.funding_opportunity_id = fo.id
             WHERE g.status IN (${statuses})
@@ -2877,7 +2879,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
               AND fo.amount_text IS NULL
               AND fo.amount_enrich_attempted_at IS NULL
               AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
-            ORDER BY fo.id
+            ORDER BY COALESCE(fo.amount_enrich_attempts, 0) ASC, fo.id ASC
             LIMIT ?`,
         )
         .all(Math.max(LIMIT, 1))
@@ -2905,15 +2907,33 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     const { enrichOpportunityAmountFromSource } =
       deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
 
-    // Mark a row as attempted only once its page was actually READ. A fetch
-    // that threw (timeout, 5xx, transient DNS) leaves the row unmarked so the
-    // next pass retries it — the same rule enforceApplicationUrlRescue() uses:
-    // a provider outage must never burn a candidate's one chance.
-    const markAttempted = async (id) => {
+    // Record one try. `attempts` always increments; `amount_enrich_attempted_at`
+    // is the PERMANENT one-shot mark and is set only when we have actually
+    // learned this row's answer:
+    //
+    //   - page_read      → the extractor scanned real copy. Done either way: an
+    //                      amount found, or an honest "this page states none".
+    //   - !transient     → a stable fact about the URL (404/410, or a JS shell
+    //                      that will be thin every night). Another fetch cannot
+    //                      teach us more, so stop asking.
+    //   - out of retries → transient, but it has had MAX_ATTEMPTS bad nights.
+    //                      Give up rather than re-fetch it forever.
+    //
+    // Everything else stays NULL and is retried — which is what the invariant
+    // table has always CLAIMED ("a provider outage never burns a candidate's
+    // one chance") but the code did not do: it marked unconditionally and put
+    // the retry rule in a catch block that the service — documented "never
+    // throws" — could not reach. Prod 2026-07-15: 30 rows burned, 0 amounts.
+    const recordAttempt = async (id, { burn, attempts }) => {
       try {
         await db
-          .prepare('UPDATE funding_opportunities SET amount_enrich_attempted_at = ? WHERE id = ?')
-          .run(new Date().toISOString(), id)
+          .prepare(
+            `UPDATE funding_opportunities
+                SET amount_enrich_attempts = ?,
+                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
+              WHERE id = ?`,
+          )
+          .run(attempts, burn ? new Date().toISOString() : null, id)
       } catch { /* best-effort; a missed mark only costs one re-fetch */ }
     }
 
@@ -2922,13 +2942,23 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     let enriched = 0
     let textOnly = 0
     let fetchFailed = 0
+    let retryable = 0
     for (const cand of fresh) {
       if (attemptedNow >= LIMIT) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
       try {
         const res = await enrichOpportunityAmountFromSource(cand, deps)
-        await markAttempted(cand.id)
+        const attempts = Number(cand.attempts ?? 0) + 1
+        // The service never throws, so this — not a catch block — is the only
+        // place the outage-must-not-burn rule can actually be enforced.
+        const outOfRetries = attempts >= MAX_ATTEMPTS
+        const burn = res?.page_read === true || res?.transient !== true || outOfRetries
+        await recordAttempt(cand.id, { burn, attempts })
+        if (res?.page_read !== true) {
+          fetchFailed++
+          if (!burn) retryable++
+        }
         if (res?.found && res.amounts) {
           await db
             .prepare(
@@ -2958,8 +2988,14 @@ export async function enforceAmountEnrichment(db, deps = {}) {
           textOnly++
         }
       } catch (err) {
-        // NOT marked attempted — a transient failure must not burn the row.
+        // Defence in depth only. enrichOpportunityAmountFromSource is documented
+        // "never throws" and returns its failures, so reaching here means a DB
+        // write above failed, not a fetch. Leaving the row unmarked is still the
+        // safe default. Do NOT move the retry rule back into this block: that is
+        // exactly the bug — the guard sat in an unreachable path while the mark
+        // ran unconditionally.
         fetchFailed++
+        retryable++
         log.warn('amount_enrichment: enrich failed (non-fatal, will retry)', {
           opportunity: cand.id, error: String(err?.message || err),
         })
@@ -2968,9 +3004,25 @@ export async function enforceAmountEnrichment(db, deps = {}) {
 
     // Remaining backlog, so Anya's report can show this converging (or not)
     // instead of only ever seeing this pass's bounded slice.
+    //
+    // `remaining` ALONE cannot tell success from exhaustion: it counts only
+    // never-marked rows, so it falls to 0 both when every row got an amount and
+    // when every row was tried and yielded nothing. Those look identical in the
+    // report, and the second is the failure this fix exists for. So also count
+    // `exhausted` — rows we are permanently done with that still carry no
+    // dollar figure. remaining→0 with a large `exhausted` is the sweep finishing
+    // with the coverage gap INTACT, which means the pages do not state amounts
+    // and the answer is an adapter (grants.gov and sam.gov both have APIs), not
+    // more fetching.
     let remaining = null
+    let exhausted = null
     try {
       const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      const amountless = `COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
+              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
+              AND fo.amount_text IS NULL
+              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
       const row = await db
         .prepare(
@@ -2978,25 +3030,33 @@ export async function enforceAmountEnrichment(db, deps = {}) {
              FROM funding_opportunities fo
              JOIN grants g ON g.funding_opportunity_id = fo.id
             WHERE g.status IN (${statuses})
-              AND COALESCE(fo.amount_min, 0) <= 0
-              AND COALESCE(fo.amount_max, 0) <= 0
-              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
-              AND fo.amount_text IS NULL
-              AND fo.amount_enrich_attempted_at IS NULL
-              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`,
+              AND ${amountless}
+              AND fo.amount_enrich_attempted_at IS NULL`,
         )
         .get()
       remaining = Number(row?.n ?? 0)
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const done = await db
+        .prepare(
+          `SELECT COUNT(DISTINCT fo.id) AS n
+             FROM funding_opportunities fo
+             JOIN grants g ON g.funding_opportunity_id = fo.id
+            WHERE g.status IN (${statuses})
+              AND ${amountless}
+              AND fo.amount_enrich_attempted_at IS NOT NULL`,
+        )
+        .get()
+      exhausted = Number(done?.n ?? 0)
     } catch { /* best-effort telemetry */ }
 
     if (enriched > 0 || textOnly > 0) {
       log.info('enriched catalog award amounts from funder pages', {
-        attempted: attemptedNow, enriched, textOnly, fetchFailed, remaining,
+        attempted: attemptedNow, enriched, textOnly, fetchFailed, retryable, remaining, exhausted,
       })
     }
     return {
       scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
-      textOnly, fetchFailed, remaining, enforced: true,
+      textOnly, fetchFailed, retryable, remaining, exhausted, enforced: true,
     }
   })
 }
