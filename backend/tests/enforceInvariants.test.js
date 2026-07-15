@@ -2519,6 +2519,60 @@ describe('enforceAmountEnrichment', () => {
       delete process.env.ENFORCE_AMOUNT_ENRICHMENT
     }
   })
+
+  // REGRESSION (the "pinned at 12% coverage" class): the sweep must reach rows
+  // beyond its first batch. The original implementation SELECTed a hardcoded
+  // `LIMIT 200` and then dropped already-attempted rows in JS, so once those
+  // 200 rows were attempted every later run filtered them all away, reported
+  // zero candidates, and never reached row 201 — enrichment looked green while
+  // permanently stalled. Seeding >200 rows is what makes this observable; a
+  // 1-2 row fixture passes against the broken code.
+  it('reaches rows beyond the first batch instead of wedging on one window', async () => {
+    const db = makeRealDb()
+    const TOTAL = 210
+    for (let i = 0; i < TOTAL; i++) seedLinkedPair(db, { sourceUrl: `https://funder.org/g/${i}` })
+
+    const seen = new Set()
+    const deps = {
+      enrichImpl: async (cand) => { seen.add(String(cand.id)); return { attempted: true, found: false, reason: 'thin_page' } },
+    }
+    // First pass takes a full 200-row batch — the exact window the old code
+    // could never escape. The second must pick up the remaining 10.
+    const first = await enforceAmountEnrichment(db, { ...deps, limit: 200 })
+    expect(first.attempted).toBe(200)
+
+    const second = await enforceAmountEnrichment(db, { ...deps, limit: 200 })
+    expect(second.attempted).toBe(TOTAL - 200) // old code: 0 — stalled forever
+    expect(seen.size).toBe(TOTAL)
+
+    // Exhausted, and stays exhausted: no page is re-fetched.
+    const third = await enforceAmountEnrichment(db, { ...deps, limit: 200 })
+    expect(third.attempted ?? 0).toBe(0)
+    expect(seen.size).toBe(TOTAL)
+  })
+
+  it('does not burn a row when the fetch itself fails (a transient outage is retried)', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    let calls = 0
+    // First pass: the fetcher throws (timeout/5xx). The row must stay eligible.
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => { calls++; throw new Error('ETIMEDOUT') },
+    })
+    expect(calls).toBe(1)
+    expect(foRow(db, foId).amount_enrich_attempted_at).toBeNull()
+
+    // Second pass: the page is reachable and the amount lands.
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, found: true,
+        amounts: { amount_min: 500, amount_max: 2500, amount_text: '$500 to $2,500', amount_status: 'range', amount_confidence: 0.9 },
+      }),
+    })
+    expect(res.repaired).toBe(1)
+    expect(foRow(db, foId).amount_max).toBe(2500)
+    expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
+  })
 })
 
 describe('enforceGrantAmountBackfill wide-range default (program-envelope guard)', () => {

@@ -2848,22 +2848,20 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
     const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.AMOUNT_ENRICH_BOOT_LIMIT ?? '10', 10) || 10)
     const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.AMOUNT_ENRICH_TIME_BUDGET_MS ?? '20000', 10) || 20000)
-    const ATTEMPTED_KV_KEY = 'amount_enrich_attempted_ids'
-    const ATTEMPTED_MAX_REMEMBERED = 2000
-
-    // Previously-attempted ids (bounded ring in system_kv; tolerate absence).
-    let attempted = []
-    try {
-      await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
-      const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(ATTEMPTED_KV_KEY)
-      const parsed = row?.value ? JSON.parse(row.value) : null
-      if (Array.isArray(parsed)) attempted = parsed.filter((v) => typeof v === 'string')
-    } catch { /* missing table → best-effort, may refetch */ }
-    const attemptedSet = new Set(attempted)
 
     // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
-    // numeric amount, no text yet (or explicitly not_listed), has a page.
+    // numeric amount, no text yet (or explicitly not_listed), has a page, and
+    // NOT already attempted.
+    //
+    // The attempted-exclusion MUST be part of this query, not a JS filter after
+    // it. The previous implementation SELECTed `LIMIT 200` and then dropped
+    // already-attempted rows in JS: once those 200 arbitrary rows had all been
+    // tried (~2 nights at the nightly budget), every subsequent run filtered
+    // them all away, reported "0 candidates", and never reached row 201. The
+    // sweep read as green while doing nothing — which is why raising the
+    // nightly budget to 120 on 2026-07-08 left coverage pinned at ~12%.
     let candidates = []
+    let attemptedColumnMissing = false
     try {
       const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
@@ -2877,16 +2875,25 @@ export async function enforceAmountEnrichment(db, deps = {}) {
               AND COALESCE(fo.amount_max, 0) <= 0
               AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
               AND fo.amount_text IS NULL
+              AND fo.amount_enrich_attempted_at IS NULL
               AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
-            LIMIT 200`,
+            ORDER BY fo.id
+            LIMIT ?`,
         )
-        .all()
+        .all(Math.max(LIMIT, 1))
     } catch (err) {
-      log.warn('amount_enrichment: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
-      return { scanned: 0, repaired: 0, skipped: 'query' }
+      // A DB that predates ensureAmountVisibilityColumns() has no attempted
+      // column. Count-only rather than silently falling back to the wedged
+      // ring — boot re-asserts the column, so this self-heals next start.
+      attemptedColumnMissing = /amount_enrich_attempted_at/i.test(String(err?.message || err))
+      log.warn('amount_enrichment: candidate scan failed (non-fatal)', {
+        error: String(err?.message || err),
+        attemptedColumnMissing,
+      })
+      return { scanned: 0, repaired: 0, skipped: attemptedColumnMissing ? 'schema' : 'query' }
     }
 
-    const fresh = (candidates || []).filter((c) => c?.id && !attemptedSet.has(String(c.id)))
+    const fresh = candidates || []
     if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
     if (disabled) {
       log.warn('amount-less active pipeline sources present (enrichment DISABLED via ENFORCE_AMOUNT_ENRICHMENT=0)', {
@@ -2898,17 +2905,30 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     const { enrichOpportunityAmountFromSource } =
       deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
 
+    // Mark a row as attempted only once its page was actually READ. A fetch
+    // that threw (timeout, 5xx, transient DNS) leaves the row unmarked so the
+    // next pass retries it — the same rule enforceApplicationUrlRescue() uses:
+    // a provider outage must never burn a candidate's one chance.
+    const markAttempted = async (id) => {
+      try {
+        await db
+          .prepare('UPDATE funding_opportunities SET amount_enrich_attempted_at = ? WHERE id = ?')
+          .run(new Date().toISOString(), id)
+      } catch { /* best-effort; a missed mark only costs one re-fetch */ }
+    }
+
     const startedAt = Date.now()
     let attemptedNow = 0
     let enriched = 0
     let textOnly = 0
+    let fetchFailed = 0
     for (const cand of fresh) {
       if (attemptedNow >= LIMIT) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
-      attemptedSet.add(String(cand.id))
       try {
         const res = await enrichOpportunityAmountFromSource(cand, deps)
+        await markAttempted(cand.id)
         if (res?.found && res.amounts) {
           await db
             .prepare(
@@ -2938,28 +2958,46 @@ export async function enforceAmountEnrichment(db, deps = {}) {
           textOnly++
         }
       } catch (err) {
-        log.warn('amount_enrichment: enrich failed (non-fatal)', {
+        // NOT marked attempted — a transient failure must not burn the row.
+        fetchFailed++
+        log.warn('amount_enrichment: enrich failed (non-fatal, will retry)', {
           opportunity: cand.id, error: String(err?.message || err),
         })
       }
     }
 
-    // Persist the attempted ring (most recent last, bounded). UPDATE-then-
-    // INSERT matches the braveBudget/system_kv convention (shim-safe).
+    // Remaining backlog, so Anya's report can show this converging (or not)
+    // instead of only ever seeing this pass's bounded slice.
+    let remaining = null
     try {
-      const ring = [...attemptedSet].slice(-ATTEMPTED_MAX_REMEMBERED)
-      const value = JSON.stringify(ring)
-      const iso = new Date().toISOString()
-      const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, iso, ATTEMPTED_KV_KEY)
-      if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
-        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(ATTEMPTED_KV_KEY, value, iso)
-      }
-    } catch { /* best-effort */ }
+      const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const row = await db
+        .prepare(
+          `SELECT COUNT(DISTINCT fo.id) AS n
+             FROM funding_opportunities fo
+             JOIN grants g ON g.funding_opportunity_id = fo.id
+            WHERE g.status IN (${statuses})
+              AND COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
+              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
+              AND fo.amount_text IS NULL
+              AND fo.amount_enrich_attempted_at IS NULL
+              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`,
+        )
+        .get()
+      remaining = Number(row?.n ?? 0)
+    } catch { /* best-effort telemetry */ }
 
     if (enriched > 0 || textOnly > 0) {
-      log.info('enriched catalog award amounts from funder pages', { attempted: attemptedNow, enriched, textOnly })
+      log.info('enriched catalog award amounts from funder pages', {
+        attempted: attemptedNow, enriched, textOnly, fetchFailed, remaining,
+      })
     }
-    return { scanned: fresh.length, attempted: attemptedNow, repaired: enriched, textOnly, enforced: true }
+    return {
+      scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
+      textOnly, fetchFailed, remaining, enforced: true,
+    }
   })
 }
 

@@ -581,6 +581,14 @@ export async function ensureProfilePreferredLanguageColumn(db, { logger = consol
  * awardAmountExtractor.resolveOpportunityAmounts and mirrored onto grants by
  * enforceGrantAmountBackfill(). Re-asserted at boot so prod heals without a
  * manual migrate.
+ *
+ * `amount_enrich_attempted_at` (funding_opportunities only) records that
+ * enforceAmountEnrichment() has READ this row's funder page, so the sweep can
+ * exclude already-tried rows IN SQL rather than after the LIMIT. It replaces
+ * the `system_kv amount_enrich_attempted_ids` ring, which capped at 2000 ids
+ * and — because the candidate query LIMITed before the JS filter — wedged the
+ * whole sweep at a fixed 200-row window once those rows were attempted.
+ * Attempt-state belongs on the row it describes, not in a side blob.
  */
 export async function ensureAmountVisibilityColumns(db, { logger = console } = {}) {
   return runStep(
@@ -588,12 +596,20 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
     '[database]',
     logger,
     async () => {
-      const columns = [
-        ['amount_text', 'TEXT'],
-        ['amount_status', 'TEXT'],
-        ['amount_confidence', 'REAL'],
-      ]
-      for (const table of ['funding_opportunities', 'grants']) {
+      const columnsByTable = {
+        funding_opportunities: [
+          ['amount_text', 'TEXT'],
+          ['amount_status', 'TEXT'],
+          ['amount_confidence', 'REAL'],
+          ['amount_enrich_attempted_at', 'TEXT'],
+        ],
+        grants: [
+          ['amount_text', 'TEXT'],
+          ['amount_status', 'TEXT'],
+          ['amount_confidence', 'REAL'],
+        ],
+      }
+      for (const [table, columns] of Object.entries(columnsByTable)) {
         if (db?.dialect === 'postgres') {
           for (const [col, type] of columns) {
             // audit:allow dynamic-sql — table/col/type come from hardcoded module-local constants

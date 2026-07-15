@@ -183,6 +183,13 @@ export const LANE_OF_SOURCE = Object.freeze({
   samhsa_findtreatment: 'disease_specific',
   american_kidney_fund: 'disease_specific',
   needymeds_diagnosis_assistance: 'disease_specific',
+  // Transportation / deaf / assistive-tech / sleep-apnea lanes (adapter
+  // wishlist 2026-07-15); registry `keywords` feed conditionCoveredBySource.
+  mercy_medical_angels: 'disease_specific',
+  pan_foundation_nemt_directory: 'disease_specific',
+  hlaa_financial_assistance: 'disease_specific',
+  at3_state_at_programs: 'disease_specific',
+  asaa_cpap_assistance: 'disease_specific',
   // ── 211 / local safety net ──
   community_211: 'local_211',
   united_way_211: 'local_211',
