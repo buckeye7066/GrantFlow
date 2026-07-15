@@ -70,15 +70,35 @@ describe('draftRecipientIsImplausible', () => {
     expect(draftRecipientIsImplausible(RIGHT)).toBe(false)
   })
 
-  it('is CONSERVATIVE: a coincidental token match is left alone, by design', () => {
-    // Prod: "Robertson Community Health Foundation" was drafted to a FUNERAL
-    // HOME (rcfh@robertsoncountyfuneralhome.com) — plainly wrong to a human, but
-    // the domain genuinely contains the org's distinctive token (the county
-    // name), so the gate cannot prove it wrong and must not guess. Purging on a
-    // hunch would delete real drafts; this stays a false negative on purpose.
+  it('flags a coincidental token match the org name cannot explain', () => {
+    // This case was previously pinned as an intentional FALSE NEGATIVE: the
+    // domain contains the org's distinctive token (the county name), so the
+    // one-token gate "could not prove it wrong and must not guess".
+    //
+    // It could. The draft went out to a FUNERAL HOME, and the proof was sitting
+    // in the hostname: once "robertson" (and every other word of the org's name)
+    // is accounted for, "countyfuneralhome" is left over — text the org's name
+    // cannot explain. That is evidence, not a hunch. Sharing a county name is a
+    // coincidence; naming yourself a funeral home is an identity.
+    //
+    // The conservatism this replaces was aimed the wrong way. Archiving is
+    // reversible (ARCHIVED is re-draft-eligible in hasDraftForLead, so the lead
+    // gets a correct draft once it earns a real address); mailing a bereaved
+    // family's funeral home a pitch for a health foundation is not.
     expect(draftRecipientIsImplausible({
       organization_name: 'Robertson Community Health Foundation',
       recipient_email: 'rcfh@robertsoncountyfuneralhome.com',
+    })).toBe(true)
+  })
+
+  it('STILL never purges on a mere token coincidence when the host adds nothing', () => {
+    // The real conservatism bar: "leaderscu.com" for the "Leaders Education
+    // Foundation" leaves only "cu" once the name is accounted for — a plausible
+    // abbreviation (Leaders Credit Union runs that foundation in Jackson, TN).
+    // Nothing contradicts the org, so the gate must not touch it.
+    expect(draftRecipientIsImplausible({
+      organization_name: 'Leaders Education Foundation Inc',
+      recipient_email: 'support@leaderscu.com',
     })).toBe(false)
   })
 

@@ -23,6 +23,35 @@ import { getJohnConfig } from './johnOutreachSafety.js'
 import { aiComposerEnabled, composeEmailWithAI } from './johnEmailComposerAI.js'
 import { extractOrgSignals } from './johnEvidenceSufficiency.js'
 import { matchFundingLane, DEFAULT_FUNDING_FRAME } from './johnFundingLanes.js'
+import { CANONICAL_NEED_CATEGORIES } from '../../constants/needCategories.js'
+
+/** Canonical need-category id → human label ('research_arts' → 'Research & Arts'). */
+const NEED_CATEGORY_LABELS = new Map(
+  CANONICAL_NEED_CATEGORIES.map((c) => [c.id, c.label]),
+)
+/** A machine identifier: snake_case, no spaces. Never customer-facing prose. */
+const MACHINE_ID_RE = /^[a-z0-9]+(_[a-z0-9]+)+$/
+
+/**
+ * Turn one focus/program tag into something a human can read, or null.
+ *
+ * Yana's tags are usually free text ("after-school programs"), but they can also
+ * arrive as canonical need-category IDs, and those used to be printed verbatim:
+ * a real 2026-07-15 draft told an arts council "Between research_arts, Johnson
+ * City Area Arts Council Inc is carrying real weight". A raw enum in outreach
+ * prose reads as a bug to the recipient and tells them nobody looked.
+ *
+ * Known ids resolve to their canonical label; an UNKNOWN machine-looking token
+ * is DROPPED, never printed and never prettified into a guess (de-slugging
+ * would invent a label the registry never agreed to).
+ */
+function humanizeTag(raw) {
+  const t = String(raw || '').trim()
+  if (!t) return null
+  const label = NEED_CATEGORY_LABELS.get(t.toLowerCase())
+  if (label) return label
+  return MACHINE_ID_RE.test(t) ? null : t
+}
 
 /**
  * Build a clean, list-style noun phrase from Yana's focus/program areas (e.g.
@@ -33,7 +62,7 @@ import { matchFundingLane, DEFAULT_FUNDING_FRAME } from './johnFundingLanes.js'
  */
 function deriveHookPhrase(signals) {
   const tags = [...(signals.focusAreas || []), ...(signals.programAreas || [])]
-    .map((t) => String(t).trim())
+    .map(humanizeTag)
     .filter(Boolean)
     .slice(0, 3)
   if (!tags.length) return null

@@ -987,7 +987,8 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(26)
+    // 27th: enforceJohnDraftPlausibility (wrong-org drafts in the mailbox).
+    expect(summary.ran).toBe(27)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1016,6 +1017,9 @@ describe('enforceInvariants — runner', () => {
       'admin_reinterview_suppression',
       'amy_synthetic_expiry',
       'lead_contact_plausibility',
+      // The mailbox residue of a bad lead: a draft already addressed to the
+      // wrong org. Runs after the lead repair so it can be re-drafted correctly.
+      'john_draft_plausibility',
     ])
   })
 
