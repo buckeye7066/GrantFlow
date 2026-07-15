@@ -120,6 +120,18 @@ const GENERIC_ORG_TOKENS = new Set([
   'church', 'ministries', 'ministry', 'department', 'district', 'board',
   'public', 'international', 'global', 'united', 'first', 'new',
   'education', 'educational',
+  // Org SUFFIXES / legal forms. These matter twice over, because the COVERAGE
+  // rule now requires every distinctive token to be explained: leaving a suffix
+  // in the distinctive set demands the org's domain spell it out, and no real
+  // org does — `rivertownyouth.org` IS the Rivertown Youth Coalition, and
+  // `leaderscu.com` IS Leaders Education Foundation Inc. Treating a category
+  // word as REQUIRED is the mirror of the original bug (treating it as
+  // sufficient); both come from this list being incomplete.
+  'foundation', 'foundations', 'coalition', 'council', 'councils',
+  'association', 'associations', 'alliance', 'society', 'trust',
+  'fund', 'funds', 'inc', 'incorporated', 'llc', 'ltd', 'corporation',
+  'organization', 'organizations', 'center', 'centers', 'centre',
+  'network', 'services', 'initiative',
 ])
 
 /** Org-name tokens that actually identify THIS org (drops category words). */
