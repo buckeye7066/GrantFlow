@@ -18,7 +18,7 @@
 
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision } from './matchEngine.js';
+import { computeMatchDecision, isRecommendable } from './matchEngine.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
 import { buildWebQueries } from './webQueries.js';
@@ -198,7 +198,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         // Provenance for the crawler doctor: the exact query that surfaced the
         // page this opportunity was extracted from.
         upsertMatch(store, { ...decision, source_query: page.query, discovered_via: 'web_search' });
-        if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id) {
+        if (isRecommendable(matchOpp, decision.decision) && mp.profile_id === thesis.profile_id) {
           // topical_evidence: legacy weighted-evidence subscale for Amy's
           // weight-tuning validation (weights no longer move the final score).
           // kind + amounts travel with the recommendation so Amy's evaluator

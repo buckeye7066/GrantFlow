@@ -140,7 +140,7 @@ export const CODE_TARGETS = Object.freeze({
     hint: 'A generic/directory-style result was ACCEPTED for a specific profile — scoring is over-crediting weak signals (false positive).',
   },
   [FINDING_TYPES.BAD_MATCH]: {
-    file: 'backend/services/matching/relevanceFilter.js',
+    file: 'backend/services/relevanceFilter.js',
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'An accepted result is a borderline/likely-irrelevant match for this profile category — relevance/eligibility rules under-filter it.',
@@ -158,7 +158,7 @@ export const CODE_TARGETS = Object.freeze({
     hint: 'A profile signal Amy set did not flow into the thesis (needs/geo/type empty) — check the facet field mapping.',
   },
   [FINDING_TYPES.POLICY_REJECTION]: {
-    file: 'backend/services/matching/relevanceFilter.js',
+    file: 'backend/services/relevanceFilter.js',
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'Results were dropped by a relevance/eligibility policy — verify the rule is not over-rejecting this category.',

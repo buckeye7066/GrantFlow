@@ -14,7 +14,7 @@ import { OPPORTUNITY_KIND } from '../contract.js';
 import { createCountyCityDirectoryAdapter } from '../adapters/countyCityDirectoryAdapter.js';
 import { enforceReality } from '../realityGate.js';
 import { normalize } from '../normalizer.js';
-import { computeMatchDecision } from '../matchEngine.js';
+import { computeMatchDecision, isRecommendable } from '../matchEngine.js';
 import { MATCH_DECISION } from '../contract.js';
 
 const COUNTY_CITY = ['usa_gov_local_governments', 'hud_resource_locator', 'findhelp_local_programs'];
@@ -95,24 +95,43 @@ function decisionForCountySource(sourceId, thesis) {
   return { opp, decision: computeMatchDecision(opp, thesis, { floor: 8 }) };
 }
 
-test('a county DIRECTORY locator with no apply_url can reach ACCEPT (recommendation-eligible)', () => {
+// The #886 guard, restated against the rule that now carries it. A locator's
+// reachability is owned by isRecommendable(), NOT by it claiming ACCEPT: a
+// pointer is admitted to the recommendation list at REVIEW. Asserting ACCEPT
+// here is what previously forced locators to over-claim to stay visible
+// (Amy false_positive x56) — the guard is that the locator stays RECOMMENDABLE.
+test('a county DIRECTORY locator with no apply_url stays recommendation-eligible', () => {
   const { opp, decision } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
   assert.equal(opp.apply_url, null, 'locator honesty: apply_url stays null');
-  assert.equal(decision.decision, MATCH_DECISION.ACCEPT,
-    'locator must not be demoted to REVIEW for its by-design missing apply URL');
+  assert.ok(isRecommendable(opp, decision.decision),
+    'locator must remain recommendation-eligible (hyperlocal fleet reachability)');
+  assert.ok(
+    !decision.match_explain.warnings.some((w) => /no direct application URL/i.test(w)),
+    'a locator is never demoted for its by-design missing apply URL',
+  );
   assert.match(opp.title, /Davidson County, TN/, 'title carries the county (hyperlocal recall)');
 });
 
-test('a PROGRAM row with no apply_url is still held at REVIEW (the #886 guard stands)', () => {
+test('a DIRECTORY locator is never labelled a strong match (ACCEPT)', () => {
   const { opp, decision } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
+  assert.equal(opp.kind, OPPORTUNITY_KIND.DIRECTORY);
+  assert.notEqual(decision.decision, MATCH_DECISION.ACCEPT,
+    'a pointer must not claim "eligibility and location check out" — it states neither');
+  assert.ok(decision.match_explain.warnings.some((w) => /pointer to look through/i.test(w)));
+});
+
+test('a PROGRAM row with no apply_url is still held at REVIEW (the #886 guard stands)', () => {
+  const { opp } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
   // Same strong-fit opportunity re-shaped as a PROGRAM without an apply URL.
+  // Unconditional: gating this on the locator's own decision made the assertion
+  // vacuous the moment locators stopped reaching ACCEPT.
   const program = { ...opp, kind: 'PROGRAM', apply_url: null };
   const d = computeMatchDecision(program, RICH_THESIS, { floor: 8 });
-  if (decision.decision === MATCH_DECISION.ACCEPT) {
-    assert.equal(d.decision, MATCH_DECISION.REVIEW,
-      'non-locator rows without an apply target must still demote to REVIEW');
-    assert.ok(d.match_explain.warnings.some((w) => /no direct application URL/i.test(w)));
-  }
+  assert.equal(d.decision, MATCH_DECISION.REVIEW,
+    'non-locator rows without an apply target must still demote to REVIEW');
+  assert.ok(d.match_explain.warnings.some((w) => /no direct application URL/i.test(w)));
+  assert.ok(!isRecommendable(program, d.decision),
+    'a PROGRAM held at REVIEW is NOT recommendable — only locators are admitted at REVIEW');
 });
 
 test('countyCityDirectoryAdapter personalizes the candidate to the profile place', () => {

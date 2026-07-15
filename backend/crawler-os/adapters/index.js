@@ -142,6 +142,13 @@ const FACTORIES = Object.freeze({
   samhsa_findtreatment: officialDirectory('samhsa_findtreatment'),
   american_kidney_fund: officialDirectory('american_kidney_fund'),
   needymeds_diagnosis_assistance: officialDirectory('needymeds_diagnosis_assistance'),
+  // --- Adapter-wishlist lanes (2026-07-15): transportation, deaf/hard of
+  //     hearing, assistive technology, sleep apnea.
+  mercy_medical_angels: officialDirectory('mercy_medical_angels'),
+  pan_foundation_nemt_directory: officialDirectory('pan_foundation_nemt_directory'),
+  hlaa_financial_assistance: officialDirectory('hlaa_financial_assistance'),
+  at3_state_at_programs: officialDirectory('at3_state_at_programs'),
+  asaa_cpap_assistance: officialDirectory('asaa_cpap_assistance'),
   // --- Benchmark-gap lanes (2026-07-13): kinship/grandfamily caregivers,
   //     heirs'-property / beginning farmers, homeschool families.
   acl_family_caregiver_support: officialDirectory('acl_family_caregiver_support'),

@@ -82,6 +82,31 @@ const OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED = Object.freeze({
 });
 
 /**
+ * Does this (opportunity, decision) pair belong in a run's recommendation list?
+ *
+ * THE single admission rule — both producers (pipeline.js registry lane and
+ * webLane.js) must consult it, so "recommended" cannot drift apart from what a
+ * decision means.
+ *
+ * "Recommended" and "strong match" are deliberately NOT the same bit. A grant
+ * row earns its place by scoring ACCEPT. A DIRECTORY locator is admitted at
+ * REVIEW: it is worth showing (it is often the only route to hyperlocal help)
+ * but is a pointer, not an award, so computeMatchDecision never lets it claim
+ * ACCEPT. Conflating the two forced a choice between Amy's false_positive
+ * (locators ACCEPTing as strong matches) and hyperlocal_recall_miss (locators
+ * dropped from the list entirely) — they were the same defect from both ends.
+ *
+ * @param {object} opportunity Crawler OS canonical Opportunity
+ * @param {string} decision    crawler decision ('accept' | 'review' | 'reject')
+ * @returns {boolean}
+ */
+export function isRecommendable(opportunity, decision) {
+  if (decision === MATCH_DECISION.ACCEPT) return true;
+  const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
+  return isDirectoryLocator && decision === MATCH_DECISION.REVIEW;
+}
+
+/**
  * Score an OS-normalized opportunity against one OS thesis using the canonical
  * GrantFlow matcher.
  *
@@ -120,6 +145,21 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   if (!hasApplyUrl && !isDirectoryLocator && decision === 'accept') {
     decision = 'review';
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
+  }
+
+  // A DIRECTORY locator is a POINTER, never a strong match: it promises a place
+  // to look, not an award, and carries no per-award amount by design. Labelling
+  // one ACCEPT asserts "eligibility and location check out" about a row that
+  // states neither — the generic/directory false-positive class (Amy ×56).
+  //
+  // This does NOT hide locators. `isRecommendable()` admits a locator to the
+  // recommendation list at REVIEW, so the county/211/state-portal/disease-support
+  // fleet stays reachable (the #886 hyperlocal regression came from demoting
+  // locators while recommendations still required ACCEPT — the two must move
+  // together, which is why the demotion lives beside the admission rule).
+  if (isDirectoryLocator && decision === 'accept') {
+    decision = 'review';
+    warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
   }
 
   return {

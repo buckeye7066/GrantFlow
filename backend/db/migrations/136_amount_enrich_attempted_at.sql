@@ -1,0 +1,14 @@
+-- Award-amount enrichment attempt-state, on the row it describes.
+--
+-- enforceAmountEnrichment() previously remembered attempted ids in a
+-- `system_kv amount_enrich_attempted_ids` ring and filtered them in JS AFTER a
+-- hardcoded `LIMIT 200`. Once those 200 rows had each been tried, every later
+-- run filtered them all away, reported "0 candidates", and never reached row
+-- 201 — the sweep read green while permanently stalled (pipeline-$ coverage
+-- pinned at 12%). The ring also capped at 2000 ids, so a larger catalog would
+-- truncate it and re-fetch dead pages forever.
+--
+-- With the attempt recorded here, the exclusion becomes a SQL predicate and
+-- LIMIT selects FRESH rows. NULL means "never read": rows whose fetch threw are
+-- left NULL on purpose so a transient outage never burns a row's one chance.
+ALTER TABLE funding_opportunities ADD COLUMN amount_enrich_attempted_at TEXT;

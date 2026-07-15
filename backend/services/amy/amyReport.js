@@ -70,6 +70,17 @@ function isGenericTitle(title) {
   return GENERIC_TITLE_RX.test(String(title ?? ''))
 }
 
+// A DIRECTORY locator is a declared pointer, not a claimed award. It is titled
+// generically BY DESIGN ("… Resource Directory") and reaches the recommendation
+// list through isRecommendable()'s locator rule at REVIEW — computeMatchDecision
+// no longer lets one claim ACCEPT. So a locator is not evidence of a relevance
+// defect, and counting one as a false positive measured the naming convention
+// rather than the matcher. A generic-titled NON-locator that clears ACCEPT is
+// still a real false positive and still counts below.
+function isLocatorKind(kind) {
+  return String(kind ?? '').toUpperCase() === 'DIRECTORY'
+}
+
 function normLower(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
@@ -174,18 +185,21 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     topical: topicalEvidenceOf(r),
     decision: decisionUpper(r.decision),
     title: r.title ?? null,
+    locator: isLocatorKind(r.kind),
     generic: isGenericTitle(r.title),
   }))
 
-  // False positives / bad matches: a generic/directory-style result that the
-  // engine ACCEPTED (or scored at/above ACCEPT) for a SPECIFIC profile.
+  // False positives / bad matches: a generic-titled result the engine ACCEPTED
+  // (or scored at/above ACCEPT) for a SPECIFIC profile. Declared DIRECTORY
+  // locators are excluded — they are pointers admitted at REVIEW by design, so
+  // a high score on one is topical fit, not an over-claim.
   const falsePositives = candidates.filter(
-    (c) => c.generic && (c.decision === 'ACCEPT' || c.score >= ACCEPT_SCORE),
+    (c) => c.generic && !c.locator && (c.decision === 'ACCEPT' || c.score >= ACCEPT_SCORE),
   )
   if (falsePositives.length > 0) {
     findings.push(
       makeFinding(FINDING_TYPES.FALSE_POSITIVE, {
-        message: `${scenario.label}: ${falsePositives.length} generic/directory result(s) were ACCEPTED as strong matches (likely false positive).`,
+        message: `${scenario.label}: ${falsePositives.length} generic non-directory result(s) were ACCEPTED as strong matches (likely false positive).`,
         excerpt: falsePositives.map((c) => `${c.score}:${c.title}`).slice(0, 4).join('; '),
         evidence: { ...baseEvidence, false_positive_titles: falsePositives.map((c) => c.title).slice(0, 6) },
       }),

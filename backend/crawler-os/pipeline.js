@@ -23,7 +23,7 @@ import { getAdapter } from './adapters/index.js';
 import { parse } from './parsers.js';
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision } from './matchEngine.js';
+import { computeMatchDecision, isRecommendable } from './matchEngine.js';
 import { buildEvolutionSignals } from './profileEvolution.js';
 import { CRAWLER_OUTCOME, MATCH_DECISION, OPPORTUNITY_KIND, REASON, canonicalOpportunityKey } from './contract.js';
 import {
@@ -74,7 +74,7 @@ export async function runDiscovery(deps, opts = {}) {
       // source_query and discovered_via; here only the source id applies).
       upsertMatch(store, { ...decision, discovered_via: canonicalOpp.source_id ?? null });
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
-      if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
+      if (isRecommendable(canonicalOpp, decision.decision) && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
         // topical_evidence: legacy weighted-evidence subscale, retained so Amy's
         // weight-tuning validation can measure where the W_* weights still act
