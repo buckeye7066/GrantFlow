@@ -1,6 +1,7 @@
 import { applyRelevanceFilter, extractProfileData } from '../relevanceFilter.js'
 import { NO_FIT_RELEVANCE_RULE_IDS } from '../relevanceFilterRules.js'
 import { REVIEW_SCORE } from '../../config/matchThresholds.js'
+import { isGenericOnly } from '../../config/genericTitleVocabulary.js'
 
 /**
  * The NO-FIT rule family: rules that reject on CONTENT SHAPE ("directory /
@@ -387,7 +388,12 @@ const CATEGORY_RULES = [
   },
 ]
 
-const GENERIC_ONLY_RE = /\b(general funding support|funding finder|benefit finder|resource directory|service directory|grant search|funding opportunities|find funding|search portal)\b/
+// The generic vocabulary lives in ONE registry (backend/config/
+// genericTitleVocabulary.js) that the canonical engine's ACCEPT cap and Amy's
+// false-positive detector also read. This gate used to carry its own list which
+// had drifted from Amy's (4 of ~12 terms shared), so the two disagreed about
+// what "generic" even meant. Keep the local carve-out semantics — `matched`
+// rules and stored authority still rescue a row below.
 
 export function evaluateProfileSpecificGate(profileContext, opportunity, opts = {}) {
   if (!opportunity || typeof opportunity !== 'object') {
@@ -432,10 +438,10 @@ export function evaluateProfileSpecificGate(profileContext, opportunity, opts = 
     return { pass: false, ruleId: rule.id, reason: rule.reason }
   }
 
-  const genericOnly =
-    GENERIC_ONLY_RE.test(text) &&
-    matched.length === 0 &&
-    !/\b(fafsa|pell|scholarship|tuition|rent|housing|utility|food|medical|business|veteran|disability|farm|classroom|student aid)\b/.test(text)
+  // isGenericOnly = generic vocabulary hit AND no concrete anchor (the same
+  // predicate the engine's ACCEPT cap uses). This gate adds its own extra
+  // condition: a row that matched a CATEGORY_RULE has proven profile fit.
+  const genericOnly = isGenericOnly(text) && matched.length === 0
 
   // NO-FIT suppression: a stored above-floor row keeps surfacing even when its
   // short text hit no keyword rule — the scorer already found the fit.

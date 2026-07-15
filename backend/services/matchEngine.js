@@ -34,6 +34,7 @@ import { normalizeOpportunity, inferHousingClassification } from './opportunityN
 import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
+import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('matchEngine')
 
@@ -3576,6 +3577,32 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       reasons,
     }
   }
+
+  // Generic-only rule: a row that names a WAY TO LOOK for funding ("funding
+  // finder", "list of grants") rather than a concrete program is not a strong
+  // match for a specific profile, however well its topic scores.
+  //
+  // This guard existed only inside evaluateProfileSpecificGate(), which is
+  // called from opportunityMatcher (the pipeline path) and from NOWHERE in
+  // backend/crawler-os — so discovery, the path Amy measures, never had it and
+  // generic rows cleared ACCEPT freely (Amy false_positive ×56). Per the repo's
+  // choke-point rule it belongs HERE, in the sole decision authority, so every
+  // caller inherits it instead of each path re-remembering to gate.
+  //
+  // Demotes to REVIEW, never REJECT — a generic row stays reachable for a human
+  // look; it just stops claiming "eligibility and location check out". A
+  // concrete anchor in the text (isGenericOnly's carve-out) rescues rows like
+  // "Cancer Resource Directory", and declared DIRECTORY locators are already
+  // held at REVIEW upstream by the locator rule.
+  if (score >= ACCEPT_SCORE && isGenericOnly(oppText)) {
+    reasons.push('Generic funding/search listing with no concrete profile-specific anchor — held at REVIEW')
+    return {
+      decision: 'REVIEW',
+      explanation: `Covers about ${score}% of this profile's main needs on topic, but this is a general funding/search listing rather than a specific program — worth a look, not a strong fit.`,
+      reasons,
+    }
+  }
+
   if (score >= ACCEPT_SCORE) {
     reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
     return { decision: 'ACCEPT', explanation: `Covers about ${score}% of this profile's main needs (eligibility and location check out).`, reasons }

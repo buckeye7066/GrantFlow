@@ -217,7 +217,7 @@ export function buildApprovalQueue(evaluations = []) {
       target_file: CODE_TARGETS[FINDING_TYPES.FALSE_POSITIVE].file,
       category,
       severity: SEVERITY.HIGH,
-      rationale: `${count} "${category}" profile(s) had generic/directory results ACCEPTED as strong matches. Tighten relevance/scoring so generic results cannot clear ACCEPT for specific profiles.`,
+      rationale: `${count} "${category}" profile(s) had generic results ACCEPTED as strong matches. Approve the relevance_precision lever (Amy console → "relevance") to add the recurring generic phrasing to the shared vocabulary so those titles are held at REVIEW instead of clearing ACCEPT.`,
       evidence: { false_positive_profiles: count },
       requires_approval: true,
     })
@@ -277,4 +277,9 @@ export function buildApprovalQueue(evaluations = []) {
   return items
 }
 
-export default { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildApprovalQueue }
+export default {
+  decideFloorChange,
+  decideWeightChange,
+  proposeCoverageOverrides,
+  buildApprovalQueue,
+}
