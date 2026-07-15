@@ -280,6 +280,24 @@ export function scoreOrganizationLead(org = {}) {
   }
   const sourceUrls = website ? [website] : []
 
+  // Merge the evidence + audit URLs a PROSPECT SOURCE already gathered. The
+  // scorer builds evidence from an org's raw columns, but an external source
+  // (ProPublica 990, NIH RePORTER) also carries identity signal and a public
+  // profile URL that no column expresses — and rebuilding from scratch DROPPED
+  // it, so a prospect was stored with none of the provenance its mapper
+  // collected, contradicting this module's own auditability contract.
+  // Additive only: it never manufactures a contact channel, so `hasEmail`
+  // stays the binding constraint and nothing qualifies that wouldn't before.
+  for (const extra of parseJsonArray(org.public_evidence)) {
+    if (extra && typeof extra === 'object' && !publicEvidence.some((e) => e.type === extra.type)) {
+      publicEvidence.push(extra)
+    }
+  }
+  for (const url of [...parseJsonArray(org.source_urls), org.profile_url]) {
+    const u = String(url || '').trim()
+    if (u && !sourceUrls.includes(u)) sourceUrls.push(u)
+  }
+
   const needBits = [...focus, ...programs].filter(Boolean).slice(0, 4)
   const fundingNeedSummary = needBits.length
     ? `Active in: ${needBits.join(', ')}.`
@@ -600,6 +618,20 @@ export async function discoverProspects(db, {
     if (areaStates.length && sourceNames.includes('propublica_990') &&
         sharedArgs.states === undefined && !bySource.propublica_990?.states) {
       bySource.propublica_990 = { ...(bySource.propublica_990 || {}), states: areaStates }
+    }
+  }
+
+  // NIH RePORTER stays NATIONAL by default. YANA_TARGET_AREAS is deliberately
+  // not applied to it: those counties frame the geo-LOCAL sources (community
+  // nonprofits), whereas research institutions are a national universe, so
+  // inheriting that setting would silently drop ~48 states of the audience.
+  // YANA_RESEARCH_STATES narrows it independently when an operator wants that.
+  if (sourceNames.includes('nih_reporter') && !bySource.nih_reporter?.states) {
+    const researchStates = String(process.env.YANA_RESEARCH_STATES || '')
+      .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+    if (researchStates.length) {
+      bySource.nih_reporter = { ...(bySource.nih_reporter || {}), states: researchStates }
+      result.research_states = researchStates
     }
   }
 
@@ -1143,7 +1175,20 @@ function candidateToLeadPacket(row) {
   const publicEvidence = parseJsonArray(row.public_evidence_json)
   const contactEvidence = publicEvidence.find((e) => e?.type === 'contact') || null
   const contactPoints = []
-  if (row.contact_email) contactPoints.push({ type: 'email', value: row.contact_email })
+  // Carry the known person ON the contact point. John's selectContactPoint
+  // reads `name`/`role` from here (its documented shape) to build a real
+  // salutation — and John's makeYanaLeadPacket allowlist drops the separate
+  // `contact_person` field below, so a name passed ONLY there never reaches
+  // him and every draft falls back to "Hello <Org> team," even when Yana knows
+  // exactly who to address. This is the one place Yana packets are built.
+  if (row.contact_email) {
+    contactPoints.push({
+      type: 'email',
+      value: row.contact_email,
+      name: contactEvidence?.name || null,
+      role: contactEvidence?.title || null,
+    })
+  }
   if (contactEvidence?.phone) contactPoints.push({ type: 'phone', value: contactEvidence.phone })
   return {
     lead_id: row.id,
