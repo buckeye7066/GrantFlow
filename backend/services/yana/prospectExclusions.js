@@ -103,3 +103,53 @@ export function homepageNameScore(url, orgName) {
   }
   return score
 }
+
+/**
+ * Tokens that identify a CATEGORY of organization rather than a specific one.
+ * They are kept in `nameTokens` (they carry real ranking signal) but must never
+ * be sufficient ON THEIR OWN to conclude a site belongs to an org: "University
+ * of Minnesota" and "Franklin University" share `university` while being
+ * completely different institutions.
+ */
+const GENERIC_ORG_TOKENS = new Set([
+  'university', 'universities', 'college', 'school', 'academy', 'institute',
+  'hospital', 'medical', 'medicine', 'health', 'healthcare', 'clinic',
+  'research', 'laboratory', 'laboratories', 'science', 'sciences',
+  'children', 'childrens', 'community', 'regional', 'memorial', 'general',
+  'national', 'american', 'america', 'usa', 'state', 'city', 'county',
+  'church', 'ministries', 'ministry', 'department', 'district', 'board',
+  'public', 'international', 'global', 'united', 'first', 'new',
+])
+
+/** Org-name tokens that actually identify THIS org (drops category words). */
+export function distinctiveNameTokens(name) {
+  const toks = nameTokens(name)
+  const distinctive = toks.filter((t) => !GENERIC_ORG_TOKENS.has(t))
+  // An org named entirely from category words (e.g. "Community Health Center")
+  // has nothing distinctive; fall back rather than rejecting everything.
+  return distinctive.length ? distinctive : toks
+}
+
+/**
+ * Is `url` plausibly the official site OF `orgName`?
+ *
+ * The enricher used to SORT candidate homepages by homepageNameScore and then
+ * take the top one unconditionally — a preference with no floor, so when NO
+ * result matched the org it still accepted the best of a bad lot and scraped a
+ * stranger's contact email. That is how ten different universities ended up
+ * sharing `helpdesk@franklin.edu`, and a newspaper's address landed on fourteen
+ * nonprofits. Getting NO email is recoverable (the lead waits at
+ * needs_enrichment); emailing the WRONG organization is not.
+ *
+ * Requires at least one DISTINCTIVE org token to appear in the hostname or in
+ * the search result's title. The title is what rescues legitimate abbreviated
+ * domains (upenn.edu titled "University of Pennsylvania"), which a hostname-only
+ * check would wrongly reject.
+ */
+export function isPlausibleHomepage({ url, title = '' } = {}, orgName) {
+  const host = domainOf(url)
+  if (!host || !orgName) return false
+  const bare = host.split('.').slice(0, -1).join('')
+  const haystack = `${bare} ${String(title || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ')}`
+  return distinctiveNameTokens(orgName).some((tok) => haystack.includes(tok))
+}

@@ -3621,6 +3621,107 @@ export async function enforceAmySyntheticExpiry(db, deps = {}) {
   })
 }
 
+/**
+ * A Yana lead's contact email actually belongs to THAT organization.
+ *
+ * Prod damage (2026-07-15): contact enrichment sorted candidate homepages by
+ * name score but took the top one unconditionally, so when nothing matched the
+ * org it scraped an unrelated site's address — helpdesk@franklin.edu on 10
+ * distinct orgs, a newspaper's admin@conwaydailysun.com on 14, worldatlas /
+ * mathway / roblox addresses on dozens more; 147 of 490 enriched candidates
+ * shared an address with a DIFFERENT org. Each one makes John draft outreach to
+ * the wrong organization. The per-call gate is `isPlausibleHomepage` in the
+ * enricher; this is the net for rows already persisted (and for any future path
+ * that writes a contact email).
+ *
+ * Repair = strip the address and send the lead back to `needs_enrichment` with
+ * a fresh retry budget, so the now-gated enricher can find the RIGHT address.
+ * It never invents a contact and never deletes a lead — the org keeps its
+ * identity and simply waits until it is honestly reachable.
+ *
+ * Deliberately conservative about what it strips: only when the email's domain
+ * carries NO distinctive token of the org name. A legitimate abbreviated domain
+ * (upenn.edu for University of Pennsylvania) is stripped here but re-accepted on
+ * the next enrichment pass, which sees the page TITLE this row no longer has —
+ * self-healing, and it never leaves a WRONG address in place.
+ *
+ * Count-only via ENFORCE_LEAD_CONTACT_PLAUSIBILITY=0. Bounded per boot.
+ */
+export async function enforceLeadContactPlausibility(db) {
+  return runInvariant('lead_contact_plausibility', async () => {
+    try {
+      await db.prepare('SELECT contact_email FROM yana_lead_candidates LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const enforce = _parseBoolEnv(process.env.ENFORCE_LEAD_CONTACT_PLAUSIBILITY) !== false
+    const limit = Math.max(1, Number(process.env.LEAD_CONTACT_PLAUSIBILITY_LIMIT || 500))
+    // Lazy import — keeps the boot module from statically pulling the yana graph
+    // (same precedent as enforceAmySyntheticExpiry).
+    const { isPlausibleHomepage } = await import('../services/yana/prospectExclusions.js')
+
+    const rows = await db
+      .prepare(
+        `SELECT id, organization_name, contact_email
+           FROM yana_lead_candidates
+          WHERE contact_email IS NOT NULL AND TRIM(contact_email) <> ''
+          ORDER BY updated_at DESC
+          LIMIT ?`,
+      )
+      .all(limit)
+
+    const bad = []
+    for (const row of rows || []) {
+      const domain = String(row.contact_email).split('@')[1]
+      if (!domain || !row.organization_name) continue
+      // Title-less check: the stored row has no page title to vouch for an
+      // abbreviation, so this is the hostname-only bar. Stripping is safe (the
+      // gated re-enrichment restores a real match); keeping a wrong one is not.
+      if (!isPlausibleHomepage({ url: `https://${domain}`, title: '' }, row.organization_name)) {
+        bad.push(row)
+      }
+    }
+
+    if (!enforce) {
+      if (bad.length > 0) {
+        log.warn('Yana leads carry an implausible contact email (repair DISABLED via ENFORCE_LEAD_CONTACT_PLAUSIBILITY=0)', {
+          wouldRepair: bad.length,
+          scanned: rows?.length || 0,
+          examples: bad.slice(0, 3).map((b) => `${b.organization_name} → ${b.contact_email}`),
+        })
+      }
+      return { scanned: rows?.length || 0, repaired: 0, wouldRepair: bad.length, enforced: false }
+    }
+
+    const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+    let repaired = 0
+    for (const row of bad) {
+      await db
+        .prepare(
+          `UPDATE yana_lead_candidates
+              SET contact_email = NULL,
+                  qualification_status = 'needs_enrichment',
+                  pushed_to_john = 0,
+                  enrich_attempts = 0,
+                  contact_confidence = 0,
+                  updated_at = ${nowFn}
+            WHERE id = ?`,
+        )
+        .run(String(row.id))
+      repaired += 1
+    }
+    if (repaired > 0) {
+      log.info('stripped implausible contact emails from Yana leads (returned to needs_enrichment)', {
+        repaired,
+        scanned: rows?.length || 0,
+        examples: bad.slice(0, 3).map((b) => `${b.organization_name} → ${b.contact_email}`),
+      })
+    }
+    return { scanned: rows?.length || 0, repaired, enforced: true }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -3730,6 +3831,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // discovery skips/errors (empty crawled-id list), so without this net
   // synthetics accumulate forever (the 13-live/0-reaped prod class).
   steps.push(await enforceAmySyntheticExpiry(db))
+  steps.push(await enforceLeadContactPlausibility(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -3813,4 +3915,5 @@ export const __testables = {
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,
+  enforceLeadContactPlausibility,
 }

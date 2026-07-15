@@ -987,7 +987,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    expect(summary.ran).toBe(25)
+    expect(summary.ran).toBe(26)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1015,6 +1015,7 @@ describe('enforceInvariants — runner', () => {
       'converted_applications_have_profiles',
       'admin_reinterview_suppression',
       'amy_synthetic_expiry',
+      'lead_contact_plausibility',
     ])
   })
 
