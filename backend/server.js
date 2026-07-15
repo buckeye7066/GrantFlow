@@ -3001,14 +3001,18 @@ if (process.env.NODE_ENV !== 'test') {
     // Runs regardless of whether the Amy scheduler is enabled.
     ;(async () => {
       try {
-        const [{ hydrateScoringTuning }, { hydrateCoverageOverrides }] = await Promise.all([
+        const [{ hydrateScoringTuning }, { hydrateCoverageOverrides }, { hydrateGenericTitleAdditions }] = await Promise.all([
           import('./config/scoringTuning.js'),
           import('./services/amy/crawlerCoverageEditor.js'),
+          import('./services/amy/relevanceVocabularyEditor.js'),
         ])
         const scoring = await hydrateScoringTuning(db)
         const coverage = await hydrateCoverageOverrides(db)
-        if (scoring || coverage) {
-          console.log('[Server] Amy tuning hydrated:', JSON.stringify({ scoring: scoring || null, coverage_sources: coverage ? Object.keys(coverage).length : 0 }))
+        // Owner-approved generic-title phrases (Amy's relevance_precision
+        // lever). kv is the durable record — a container filesystem is not.
+        const relevance = await hydrateGenericTitleAdditions(db)
+        if (scoring || coverage || relevance) {
+          console.log('[Server] Amy tuning hydrated:', JSON.stringify({ scoring: scoring || null, coverage_sources: coverage ? Object.keys(coverage).length : 0, generic_title_phrases: relevance ? relevance.length : 0 }))
         }
       } catch (hydErr) {
         console.warn('[Server] Amy tuning hydrate skipped:', hydErr?.message || hydErr)

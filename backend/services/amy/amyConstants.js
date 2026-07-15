@@ -134,10 +134,15 @@ export const CODE_TARGETS = Object.freeze({
     hint: 'Candidates stored but none reached ACCEPT — decision thresholds or need/eligibility credit miss this category.',
   },
   [FINDING_TYPES.FALSE_POSITIVE]: {
-    file: 'backend/services/matchEngine.js',
+    // The generic vocabulary, not the engine: the engine's generic-only ACCEPT
+    // cap is structural and reads this registry, so the actionable remedy is a
+    // vocabulary phrase (Amy's `relevance_precision` lever writes here).
+    // Declared DIRECTORY locators are NOT false positives — they are pointers
+    // admitted at REVIEW by the locator rule.
+    file: 'backend/config/genericTitleVocabulary.js',
     line: 1,
     severity: SEVERITY.HIGH,
-    hint: 'A generic/directory-style result was ACCEPTED for a specific profile — scoring is over-crediting weak signals (false positive).',
+    hint: 'A generic-titled (non-locator) result was ACCEPTED for a specific profile — the generic vocabulary does not yet catch this phrasing, so the engine\'s generic-only ACCEPT cap could not hold it at REVIEW.',
   },
   [FINDING_TYPES.BAD_MATCH]: {
     file: 'backend/services/relevanceFilter.js',

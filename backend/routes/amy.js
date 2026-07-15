@@ -101,6 +101,63 @@ router.get('/approvals', async (req, res) => {
 })
 
 /**
+ * THE APPLY PATH for the `relevance_precision` approval item.
+ *
+ * That item is HIGH severity and `requires_approval: true`, but nothing could
+ * ever action it: no route, no UI control, and it is not one of amyAgent's
+ * auto-apply levers — so it re-rendered identically after every run, forever.
+ *
+ * Applying adds owner-approved GENERIC phrases to the shared vocabulary
+ * (backend/config/genericTitleVocabulary.js) that the canonical engine's
+ * generic-only ACCEPT cap reads, so rows titled that way are held at REVIEW
+ * instead of clearing ACCEPT for a specific profile.
+ *
+ * Why owner-supplied rather than auto-mined: Amy's detector can only flag a
+ * title as generic if the vocabulary ALREADY matches it, so mining "new"
+ * phrases from flagged titles is circular — it can only ever re-propose what is
+ * already there. A human reads the item's `false_positive_titles` evidence and
+ * names the phrase. This lever can suppress real programs if a phrase
+ * over-blocks, which is exactly why the item demands approval.
+ *
+ *   GET  /api/amy/relevance-vocabulary  → { additions, baseline_size }
+ *   POST /api/amy/relevance-vocabulary  body { phrases: string[] }  (the FULL
+ *        desired additions list, not a delta; [] reverts to baseline only)
+ *
+ * Additive-only over a frozen baseline — a guard that already holds can never
+ * be removed here. Phrases are sanitized to literal text before compilation.
+ */
+router.get('/relevance-vocabulary', async (req, res) => {
+  try {
+    const { readGenericTitleAdditions } = await import('../services/amy/relevanceVocabularyEditor.js')
+    const { GENERIC_TITLE_PHRASES } = await import('../config/genericTitleVocabulary.js')
+    return res.json({ ok: true, additions: readGenericTitleAdditions(), baseline_size: GENERIC_TITLE_PHRASES.length })
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: 'relevance_vocabulary_read_failed' })
+  }
+})
+
+router.post('/relevance-vocabulary', async (req, res) => {
+  try {
+    const phrases = req.body?.phrases
+    if (!Array.isArray(phrases)) {
+      return res.status(400).json({ ok: false, error: 'phrases_must_be_array' })
+    }
+    const { applyGenericTitleAdditions } = await import('../services/amy/relevanceVocabularyEditor.js')
+    const result = await applyGenericTitleAdditions(phrases, { db: req.db })
+    if (!result.applied && result.reason === 'no_valid_phrases') {
+      // Every phrase was rejected by the sanitizer — tell the owner, do not
+      // silently report success on a no-op.
+      return res.status(400).json({ ok: false, error: 'no_valid_phrases', ...result })
+    }
+    log.info('relevance vocabulary updated by owner', { from: result.from, to: result.to })
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    log.warn('relevance vocabulary apply failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'relevance_vocabulary_apply_failed' })
+  }
+})
+
+/**
  * Trigger an on-demand run. FIRE-AND-FORGET: a real run crawls many profiles and
  * runs the Anya→Sam pipeline (minutes), which would 504 at the edge proxy if we
  * awaited it. So we start it in the background and return 202 immediately; the

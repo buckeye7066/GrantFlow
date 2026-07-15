@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
-import { getAmyStatus, getAmyLatestReport, runAmy } from '@/api/amy'
+import { getAmyStatus, getAmyLatestReport, runAmy, getAmyRelevanceVocabulary, applyAmyRelevanceVocabulary } from '@/api/amy'
 
 /**
  * AdminAmyConsole — Agent Amy. Amy generates synthetic profiles, runs a real
@@ -43,6 +43,79 @@ function Metric({ label, value, tone }) {
     <div className="rounded-lg border p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={`text-lg font-semibold ${tone || ''}`}>{value}</div>
+    </div>
+  )
+}
+
+/**
+ * The apply control for a `relevance_precision` item — the lever that had no
+ * way to be actioned at all (no route, no button), so the same item re-rendered
+ * after every run forever.
+ *
+ * The owner reads the offending titles and names the GENERIC phrase they share.
+ * It is added to the shared vocabulary the engine's generic-only ACCEPT cap
+ * reads, so rows titled that way are held at REVIEW instead of clearing ACCEPT.
+ * Owner-driven on purpose: Amy's detector only sees titles the vocabulary
+ * already matches, so it cannot learn a NEW phrase on its own — and a phrase
+ * that over-blocks would suppress real programs.
+ */
+function RelevancePrecisionApply({ item, onApplied }) {
+  const { toast } = useToast()
+  const [phrase, setPhrase] = useState('')
+  const [saving, setSaving] = useState(false)
+  const titles = Array.isArray(item?.evidence?.false_positive_titles) ? item.evidence.false_positive_titles : []
+
+  const apply = async () => {
+    const p = phrase.trim()
+    if (!p) return
+    setSaving(true)
+    try {
+      const current = await getAmyRelevanceVocabulary().catch(() => null)
+      const next = [...(current?.additions ?? []), p]
+      const res = await applyAmyRelevanceVocabulary(next)
+      toast({
+        title: 'Generic phrase added',
+        description: `"${p}" — titles containing it are now held at REVIEW instead of clearing ACCEPT. ${(res?.to ?? []).length} owner phrase(s) active.`,
+      })
+      setPhrase('')
+      onApplied?.()
+    } catch (err) {
+      toast({
+        title: 'Could not add phrase',
+        description: err?.message || 'The phrase may have been rejected (too short, or already covered).',
+        variant: 'destructive',
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md bg-muted/40 p-2 space-y-2">
+      {titles.length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          Accepted as strong matches:{' '}
+          {titles.slice(0, 4).map((t) => <code key={t} className="mr-1">{t}</code>)}
+        </div>
+      )}
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          type="text"
+          value={phrase}
+          onChange={(e) => setPhrase(e.target.value)}
+          placeholder="generic phrase these titles share (e.g. benefits lookup)"
+          className="flex-1 min-w-[16rem] rounded border px-2 py-1 text-xs bg-background"
+          aria-label="Generic title phrase to hold at REVIEW"
+        />
+        <Button size="sm" variant="outline" onClick={apply} disabled={saving || !phrase.trim()}>
+          {saving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+          Hold at REVIEW
+        </Button>
+      </div>
+      <div className="text-[11px] text-muted-foreground">
+        Additive and reversible. Use a phrase that is generic in EVERY context — never a need word
+        (&quot;cancer&quot;, &quot;housing&quot;), which would suppress real programs.
+      </div>
     </div>
   )
 }
@@ -287,6 +360,9 @@ export default function AdminAmyConsole() {
                   <code className="text-xs text-muted-foreground">{item.target_file}</code>
                 </div>
                 <div className="text-sm mt-1">{item.rationale}</div>
+                {item.lever === 'relevance_precision' && (
+                  <RelevancePrecisionApply item={item} onApplied={refresh} />
+                )}
               </div>
             ))}
           </CardContent>

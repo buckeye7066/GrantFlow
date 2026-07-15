@@ -62,6 +62,16 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // way matchEngine is the sole matching authority. Pure module; only reaches
   // shared/profileSectionApplicability.js (itself dependency-free).
   'backend/services/profileKnownFacts.js',
+  // The ONE award-amount authority (structured-wins → conservative text
+  // extraction → honest status, plus the $100–$10M plausibility window that
+  // keeps an untrusted aggregator's PROGRAM APPROPRIATION from posing as a
+  // per-award ceiling — the HUD Section 4 $42M class). The OS normalizer must
+  // resolve amounts through it rather than carry structured numerics only:
+  // otherwise the canonical Opportunity and the persisted row disagree within
+  // one run (persistence resolved amounts a stage later), which is what made
+  // Amy's amount_recall_miss measure pre-extraction values. Zero imports, zero
+  // I/O — verified dependency-free.
+  'backend/services/awardAmountExtractor.js',
 ]);
 
 function listFiles(dir) {

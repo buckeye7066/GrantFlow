@@ -256,6 +256,16 @@ export function makeOpportunity(input = {}) {
     funding: Object.freeze({
       amount_min: input.funding?.amount_min ?? null,
       amount_max: input.funding?.amount_max ?? null,
+      // Amount VISIBILITY travels with the canonical row (normalizer resolves it
+      // via awardAmountExtractor). "$0" and "no amount stated" are different
+      // facts: when no per-award number is knowable the row still carries the
+      // honest label + status ('varies' | 'contact_required' | 'not_listed' | …)
+      // instead of a silent blank. This block is a WHITELIST — a key absent here
+      // is dropped from the canonical row without warning, so any new amount
+      // field must be added in both places.
+      amount_text: input.funding?.amount_text ?? null,
+      amount_status: input.funding?.amount_status ?? null,
+      amount_confidence: input.funding?.amount_confidence ?? null,
       is_loan: input.funding?.is_loan ?? false,
       requires_cost_share: input.funding?.requires_cost_share ?? false,
       currency: input.funding?.currency ?? 'USD',
