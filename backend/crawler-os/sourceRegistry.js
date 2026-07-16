@@ -1701,7 +1701,11 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Substance Abuse and Mental Health Services Administration',
     resource_title: 'FindTreatment.gov — confidential mental-health & substance-use treatment locator',
     resource_summary: 'Official SAMHSA locator for state-licensed mental-health and substance-use treatment, including PTSD and trauma care; filters for sliding-scale fees, payment assistance, and free/low-cost programs.',
-    keywords: ['ptsd', 'trauma', 'mental health treatment', 'depression', 'anxiety', 'substance use', 'counseling'],
+    // Real profiles spell diagnoses out ("post-traumatic stress disorder", "major
+    // depressive disorder"); token matching does not stem or expand acronyms, so
+    // the curated vocabulary must carry BOTH forms or SAMHSA — which plainly does
+    // cover them — reads as no lane at all. Same class as 'diabetic' vs 'diabetes'.
+    keywords: ['ptsd', 'post-traumatic stress disorder', 'post traumatic stress disorder', 'trauma', 'mental health treatment', 'depression', 'depressive disorder', 'major depressive disorder', 'anxiety', 'substance use', 'counseling'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical'],
@@ -1794,7 +1798,10 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Hearing Loss Association of America',
     resource_title: 'HLAA financial assistance for hearing aids & hearing care',
     resource_summary: 'Guide to financial help for people who are deaf or hard of hearing: hearing-aid assistance programs, state and national funds, and low-cost hearing-care routes. Eligibility and available funds vary by program, so this is surfaced for review rather than promised as an award.',
-    keywords: ['deaf', 'hard of hearing', 'hearing loss', 'hearing aid', 'hearing aids', 'cochlear implant', 'hearing care', 'assistive listening'],
+    // 'hearing impairment' / 'hearing' are the CANONICAL FLAG forms profileHelpers
+    // mints (`hearing_impairment`); without them the flag reads as an uncovered
+    // condition even though this is exactly its lane.
+    keywords: ['deaf', 'hard of hearing', 'hearing loss', 'hearing impairment', 'hearing', 'hearing aid', 'hearing aids', 'cochlear implant', 'hearing care', 'assistive listening'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical', 'disability', 'equipment'],

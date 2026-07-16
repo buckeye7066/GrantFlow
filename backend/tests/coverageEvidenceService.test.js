@@ -650,6 +650,33 @@ describe('conditionCoveredBySource — the coverage floor', () => {
     expect(conditionCoveredBySource('physical therapy', reeve)).toBe(false)
   })
 
+  it('covers CANONICAL FLAG tokens, which arrive underscored', () => {
+    // REGRESSION (prod 2026-07-16). Health signals come in two shapes: free text
+    // ("breast cancer") and canonical flags minted with underscores
+    // ("hearing_impairment") by profileHelpers. The old rule split on `_` before
+    // matching, so it saw "hearing"; the new rule matched the raw string and
+    // silently stopped covering EVERY underscore flag — `hearing_impairment` became
+    // a false "no source lane exists" the moment it shipped, with
+    // hlaa_financial_assistance sitting right there. Caught only by rebuilding the
+    // scoreboard against real prod profiles.
+    expect(coveredBy('hearing_impairment').map((s) => s.source_id)).toContain('hlaa_financial_assistance')
+    expect(coveredBy('hearing impairment').map((s) => s.source_id)).toContain('hlaa_financial_assistance')
+  })
+
+  it('covers diagnoses spelled out the way real profiles type them', () => {
+    // SAMHSA plainly covers these; only its vocabulary was missing the long forms.
+    // Token matching neither stems nor expands acronyms.
+    expect(coveredBy('post-traumatic stress disorder').map((s) => s.source_id)).toContain('samhsa_findtreatment')
+    expect(coveredBy('major depressive disorder').map((s) => s.source_id)).toContain('samhsa_findtreatment')
+    expect(coveredBy('ptsd').map((s) => s.source_id)).toContain('samhsa_findtreatment')
+  })
+
+  it('still reports an honestly uncovered flag as a gap (no vision lane exists)', () => {
+    // The underscore fix must not paper over a REAL gap: nothing in the registry
+    // serves vision, so visual_impairment stays a true structural finding.
+    expect(coveredBy('visual_impairment')).toHaveLength(0)
+  })
+
   it('matches on whole tokens only — `renal` must not hit inside `adrenal`', () => {
     const fake = { source_id: 'x', name: 'x', keywords: ['adrenal insufficiency'], need_categories: [] }
     expect(conditionCoveredBySource('renal failure', fake)).toBe(false)

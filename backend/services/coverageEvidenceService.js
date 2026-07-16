@@ -435,7 +435,15 @@ function containsTerm(haystack, term) {
  * @param {Set<string>} [overlay] condition keys already covered by an ADOPTED source
  */
 export function conditionCoveredBySource(condition, source, overlay = null) {
-  const raw = String(condition || '').trim().toLowerCase();
+  // `_` → ' ' is NOT cosmetic. Health signals arrive in two shapes: free text from
+  // the profile ("breast cancer") and CANONICAL FLAG tokens minted with underscores
+  // ("hearing_impairment", "visual_impairment", "rare_disease" — profileHelpers).
+  // The old rule split the condition on `_` before matching, so it saw "hearing";
+  // matching the raw string instead silently stopped covering every underscore flag
+  // — `hearing_impairment` became a false "no source lane exists" the moment this
+  // rule shipped, even though hlaa_financial_assistance is right there. Normalise
+  // both sides to the same word-separated shape before comparing.
+  const raw = String(condition || '').trim().toLowerCase().replace(/_/g, ' ');
   if (!raw) return false;
   // An adopted, fully-gated source retires the gap — see conditionCoverageKey.
   if (overlay && overlay.has(conditionCoverageKey(raw))) return true;
