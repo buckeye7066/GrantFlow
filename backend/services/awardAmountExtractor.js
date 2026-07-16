@@ -270,6 +270,20 @@ export function isOfficialAmountSource(opportunity) {
 export const AMOUNT_MIN_PLAUSIBLE = MIN_PLAUSIBLE
 export const AMOUNT_MAX_PLAUSIBLE = MAX_PLAUSIBLE
 
+/**
+ * Confidence for a figure taken from a source's OWN structured fields — the
+ * value this module already assigns such amounts in resolveOpportunityAmounts.
+ *
+ * Exported so the API adapters (services/sources/*) persist the SAME numeric
+ * scale rather than inventing one. `amount_confidence` is a REAL column: an
+ * adapter that returned the string 'high' typechecked fine, passed every
+ * (SQLite, typeless) unit test, and then threw `invalid input syntax for type
+ * real: "high"` against Postgres in prod — where the sweep had ALREADY marked
+ * the row attempted, so the row was burned and the write it was burned for
+ * never happened.
+ */
+export const AMOUNT_CONFIDENCE_STRUCTURED = CONFIDENCE.structured
+
 function formatUsd(n) {
   return `$${Number(n).toLocaleString('en-US')}`
 }

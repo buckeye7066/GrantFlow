@@ -22,6 +22,7 @@ import {
   enrichAmountViaGrantsGovApi,
 } from '../services/sources/grantsGovAmountAdapter.js'
 import { findAmountAdapter, AMOUNT_ADAPTERS } from '../services/sources/amountAdapters.js'
+import { AMOUNT_CONFIDENCE_STRUCTURED } from '../services/awardAmountExtractor.js'
 
 /** Build a fake fetch returning one JSON body (optionally per-URL). */
 function fakeFetch(handler) {
@@ -183,6 +184,23 @@ describe('enrichAmountViaGrantsGovApi — the sweep contract', () => {
     const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
     expect(res).toMatchObject({ attempted: true, page_read: true, transient: false, found: true })
     expect(res.amounts).toMatchObject({ amount_min: 200_000, amount_max: 22_000_000, amount_status: 'range' })
+  })
+
+  it('reports amount_confidence as the NUMERIC structured scale, not a label', async () => {
+    // REGRESSION (prod 2026-07-16). This shipped as the string 'high'.
+    // `amount_confidence` is a REAL column: Postgres threw `invalid input
+    // syntax for type real: "high"`, and because the sweep marked the row
+    // attempted BEFORE the write, 10 rows whose amounts the API had already
+    // returned were burned holding nothing. Every unit test passed, because the
+    // test DB is SQLite and SQLite is typeless — so asserting the TYPE here is
+    // the only thing that can catch it.
+    const f = fakeFetch(() => synopsisBody('22000000', '200000'))
+    const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+    expect(typeof res.amounts.amount_confidence).toBe('number')
+    expect(res.amounts.amount_confidence).toBe(AMOUNT_CONFIDENCE_STRUCTURED)
+    // Same scale the page-extraction lane persists for structured figures.
+    expect(res.amounts.amount_confidence).toBeGreaterThan(0)
+    expect(res.amounts.amount_confidence).toBeLessThanOrEqual(1)
   })
 
   it('marks an equal floor/ceiling as a known amount, not a range', async () => {
