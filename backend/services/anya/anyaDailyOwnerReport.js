@@ -413,7 +413,13 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     t.push(paritySummary.headline)
     paritySummary.perProfile.forEach((p) => t.push(`  • ${p}`))
     if (paritySummary.webOnlyTop.length) {
-      t.push('Top web-only finds awaiting your judgment (candidate queue — nothing auto-added):')
+      // These are QUEUED FOR ADOPTION, not homework for the owner. Each is
+      // seeded into the profile's next discovery run and added if — and only if
+      // — the full gate stack (fetch → extract → reality gate → match engine)
+      // accepts it; the run then marks it adopted or gated_out. Saying
+      // "awaiting your judgment / nothing auto-added" here was true until the
+      // seeding lane existed and would now be a lie in the owner's inbox.
+      t.push('Top web-only finds (queued — seeded into each profile\'s next crawl, added if the gates accept):')
       paritySummary.webOnlyTop.forEach((w) => t.push(`  • ${w}`))
     } else {
       t.push('No real web-only finds — GrantFlow covered everything the web session produced.')
@@ -548,7 +554,7 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         if (!ps) return ''
         const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
         const webOnlyHtml = ps.webOnlyTop.length
-          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds awaiting your judgment (candidate queue — nothing auto-added):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
+          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds (queued — seeded into each profile&rsquo;s next crawl, added if the gates accept):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
           : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
         return `
       <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Google-bar benchmark</h3>

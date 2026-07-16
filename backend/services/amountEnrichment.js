@@ -8,12 +8,24 @@
  * usually states the award ("grants of up to $5,000"). Nothing ever went
  * back to read it.
  *
- * This service fetches ONE opportunity's source page through the crawler-os
- * production fetcher (safe-URL validation, DNS-rebinding guard, redirect
- * validation, timeout) and runs the conservative awardAmountExtractor over
- * the page text. Precision doctrine unchanged: only explicit per-award
- * phrasings yield numbers; program totals stay text-only. Extraction from
- * the funder's own page is EVIDENCE, not invention (G0).
+ * This service resolves ONE opportunity's award figures by two strategies, in
+ * order:
+ *
+ *   1. AN API ADAPTER (services/sources/amountAdapters.js), when the row's
+ *      source publishes its award figures over its own API. This exists because
+ *      strategy 2 is structurally impossible for the largest sources:
+ *      grants.gov/sam.gov render detail pages client-side, so the fetcher gets a
+ *      JS shell and this service returns `thin_page` every night forever
+ *      regardless of budget (grants.gov = 45 of 149 backlog rows, prod
+ *      2026-07-15). A source's own API is more authoritative than its HTML.
+ *   2. THE PAGE FETCH — the generic strategy: fetch source_url through the
+ *      crawler-os production fetcher (safe-URL validation, DNS-rebinding guard,
+ *      redirect validation, timeout) and run the conservative
+ *      awardAmountExtractor over the page text.
+ *
+ * Precision doctrine unchanged across both: only explicit per-award phrasings
+ * (or a source's own structured award fields) yield numbers; program totals stay
+ * text-only. Reading the funder's own page or API is EVIDENCE, not invention (G0).
  *
  * Consumed by the enforceAmountEnrichment boot sweep (bounded per boot) and
  * usable ad-hoc by admin tooling. Best-effort: never throws.
@@ -21,6 +33,7 @@
 
 import { extractAwardAmountsFromText } from './awardAmountExtractor.js'
 import { htmlToText } from './webGrantExtractor.js'
+import { findAmountAdapter as defaultFindAmountAdapter } from './sources/amountAdapters.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('service:amountEnrichment')
@@ -68,6 +81,24 @@ export function isTransientFetchFailure({ status = null } = {}) {
 export async function enrichOpportunityAmountFromSource(opportunity, deps = {}) {
   let fetcher = deps.fetcher
   try {
+    // ADAPTER FIRST. Some sources cannot be read by fetching at all: grants.gov
+    // and sam.gov render their detail pages client-side, so the fetcher receives
+    // a JS shell, the extractor never sees award copy, and this function returns
+    // `thin_page` every single night no matter how large the budget. Those rows
+    // are not a long tail — grants.gov alone was 45 of the 149 remaining backlog
+    // rows in the 2026-07-15 prod audit. When a source publishes the figure over
+    // its own API, that API is both cheaper and MORE authoritative than parsing
+    // its HTML, so it is consulted before any page fetch.
+    //
+    // An adapter that does not recognize the row returns `attempted:false` and we
+    // fall through to the page fetcher unchanged — the adapter lane can never
+    // cost a row its chance at the generic strategy.
+    const adapter = (deps.findAdapter ?? defaultFindAmountAdapter)(opportunity)
+    if (adapter) {
+      const viaApi = await adapter.enrich(opportunity, deps)
+      if (viaApi?.attempted) return viaApi
+    }
+
     if (!fetcher) {
       const { makeProductionFetcher } = await import('./crawlerOsService.js')
       fetcher = makeProductionFetcher()

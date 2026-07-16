@@ -2868,7 +2868,14 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
       candidates = await db
         .prepare(
+          // fo.source / fo.source_id / fo.record_origin are what the amount
+          // ADAPTER registry routes on (services/sources/amountAdapters.js): the
+          // source identifies whose API can answer this row, and source_id (the
+          // opportunity NUMBER) is how a row whose URL carries no numeric id is
+          // resolved. Selecting only URLs would silently degrade every adapter
+          // to URL-pattern matching and drop the rows that need it most.
           `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url,
+                  fo.source, fo.source_id, fo.record_origin,
                   COALESCE(fo.amount_enrich_attempts, 0) AS attempts
              FROM funding_opportunities fo
              JOIN grants g ON g.funding_opportunity_id = fo.id

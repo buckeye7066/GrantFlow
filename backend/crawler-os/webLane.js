@@ -10,6 +10,13 @@
 //   -> LLM extract real opportunities -> enforceReality (same gate) -> normalize
 //   -> upsertOpportunity (same catalog + dedup) -> computeMatchDecision + upsertMatch
 //
+// SEED PAGES (opts.seedPages) enter the SAME flow at the page stage, skipping
+// only the search that would have had to find them. They implement the owner's
+// standing rule ("a funding source found to meet a profile's needs gets added")
+// for pages the Google-bar benchmark already found and this lane's search missed.
+// A seed bypasses NO gate: it is fetched, extracted, reality-gated, deduped and
+// scored exactly like a search hit, and is added only if all of that passes.
+//
 // Every guardrail the adapter pipeline uses applies here unchanged: the reality
 // gate rejects stubs/placeholders/expired/loan-disallowed/unsafe-URL, the catalog
 // dedup collapses repeats, and the canonical match engine (not this lane) decides
@@ -106,12 +113,14 @@ function toCandidate(ex, evidence, thesis, page) {
  * into `store` (so the caller's persistRun flushes them).
  *
  * @param {{ store, fetcher:{fetch:Function}, searchWeb:Function, extractOpportunities:Function }} deps
- * @param {{ thesis, matchProfiles?, floor?, runId?, maxQueries?, resultsPerQuery?, maxPages? }} opts
+ * @param {{ thesis, matchProfiles?, floor?, runId?, maxQueries?, resultsPerQuery?, maxPages?, seedPages? }} opts
+ * @param {Array<{url,title?,snippet?}>} [opts.seedPages] Known funding pages to
+ *   fetch IN ADDITION to this run's search hits — see SEED PAGES below.
  * @returns {Promise<object>} lane telemetry
  */
 export async function runWebDiscoveryLane(deps, opts = {}) {
   const { store, fetcher, searchWeb, extractOpportunities } = deps;
-  const result = { ok: false, queries: [], pages: 0, fetched: 0, extracted: 0, stored: 0, deduped: 0, rejected: 0, recommendations: [] };
+  const result = { ok: false, queries: [], pages: 0, seeded: 0, fetched: 0, extracted: 0, stored: 0, deduped: 0, rejected: 0, recommendations: [] };
   if (!store || !fetcher?.fetch || typeof searchWeb !== 'function' || typeof extractOpportunities !== 'function') {
     result.reason = 'web_lane_deps_missing';
     return result;
@@ -136,12 +145,37 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   upsertSource(store, WEB_SOURCE);
 
   // 1) Search → collect unique candidate pages (bounded).
-  const queries = buildWebQueries(thesis, { max: maxQueries, seed });
-  result.queries = queries;
+  //
+  // SEED PAGES — the owner's standing rule: "if a funding source is found that
+  // meets the needs of a profile, ADD that funding source." The Google-bar
+  // benchmark already FINDS real funding pages this lane's own search misses
+  // (fleet parity 41.2 on 2026-07-15 = most of what a plain web session surfaces
+  // was absent), and it filed every one into a candidate queue that had no
+  // consumer — so a source we had already found, and already judged real, was
+  // re-found and re-filed nightly and never added. Seeding those URLs here is
+  // what closes that loop.
+  //
+  // A seed is a URL, NOT a verdict. It enters at exactly the same place a search
+  // hit does and is then fetched, LLM-extracted, reality-gated, deduped, and
+  // scored by the canonical match engine like anything else — "found by a
+  // benchmark" earns a page a LOOK, never a row and never a match. Seeds are
+  // placed FIRST and are exempt from `maxPages` (which exists to bound how much
+  // of an unbounded SERP we chase, a question already settled for a known URL);
+  // the caller bounds the seed list itself.
   const seen = new Set();
   const pages = [];
+  for (const s of Array.isArray(opts.seedPages) ? opts.seedPages : []) {
+    const url = String(s?.url || '').trim();
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    pages.push({ url, query: s.query ?? 'seed:web_parity_gap', title: s.title, snippet: s.snippet, seeded: true });
+  }
+  result.seeded = pages.length;
+
+  const queries = buildWebQueries(thesis, { max: maxQueries, seed });
+  result.queries = queries;
   for (const q of queries) {
-    if (pages.length >= maxPages) break;
+    if (pages.length - result.seeded >= maxPages) break;
     let hits = [];
     try { hits = await searchWeb(q, { count: resultsPerQuery }); } catch { hits = []; }
     for (const h of Array.isArray(hits) ? hits : []) {
@@ -149,13 +183,20 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       if (!url || seen.has(url)) continue;
       seen.add(url);
       pages.push({ url, query: q, title: h.title, snippet: h.snippet });
-      if (pages.length >= maxPages) break;
+      if (pages.length - result.seeded >= maxPages) break;
     }
   }
   result.pages = pages.length;
 
   // 2) Fetch each page → LLM-extract → gate → normalize → store → match.
   const storedKeys = new Set();
+  // Which SEEDED pages actually produced a catalog row. This is the evidence the
+  // owner rule worked: it lets the caller mark a candidate 'adopted' vs
+  // 'gated_out' from what the gates DID, rather than from the fact we tried.
+  // Without it, "we seeded 8 pages" would be reported as if it were "we added 8
+  // sources" — the same read-green-while-doing-nothing class as the sweep that
+  // marked rows attempted and found zero amounts.
+  const seededAdopted = new Set();
   for (const page of pages) {
     let resp;
     try { resp = await fetcher.fetch(page.url, { method: 'GET' }); }
@@ -190,6 +231,10 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       if (!res.stored && !res.deduped) { result.rejected += 1; continue; }
       if (res.deduped) result.deduped += 1; else result.stored += 1;
       storedKeys.add(key);
+      // `deduped` counts as adopted: the source IS in the catalog and reachable
+      // for this profile, which is what the rule promises. Re-offering it next
+      // run would just re-dedupe it forever.
+      if (page.seeded) seededAdopted.add(page.url);
 
       // Per-profile matching — decision comes ONLY from the canonical engine.
       const matchOpp = canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
@@ -211,6 +256,8 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   }
 
   result.ok = true;
+  result.seeded_adopted_urls = [...seededAdopted];
+  result.seeded_adopted = seededAdopted.size;
   result.recommendations.sort((a, b) => b.match_score - a.match_score);
   return result;
 }
