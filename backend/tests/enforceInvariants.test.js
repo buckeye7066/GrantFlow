@@ -2458,6 +2458,49 @@ describe('enforceAmountEnrichment', () => {
   }
   const foRow = (db, id) => db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id)
 
+  it('does NOT burn a row when the amount WRITE fails (the "will retry" must be true)', async () => {
+    // REGRESSION (prod 2026-07-16). recordAttempt used to run BEFORE the write.
+    // The grants.gov adapter shipped `amount_confidence: 'high'` into a REAL
+    // column; Postgres threw, the catch logged "non-fatal, will retry" — and the
+    // row was ALREADY marked, so the candidate query (which excludes marked
+    // rows) could never hand it back. 10 rows whose amounts the API had already
+    // returned were burned holding nothing, and the log said it was fine.
+    //
+    // A row may only be burned for an answer we actually STORED.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    // Force the write to fail the way Postgres did, without needing Postgres.
+    const realPrepare = db.prepare.bind(db)
+    db.prepare = (sql) => {
+      if (/UPDATE funding_opportunities\s+SET amount_min/i.test(sql)) {
+        return { run: () => { throw new Error('invalid input syntax for type real: "high"') } }
+      }
+      return realPrepare(sql)
+    }
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: true,
+        amounts: { amount_min: 4500000, amount_max: 9000000, amount_text: null, amount_status: 'range', amount_confidence: 'high' },
+      }),
+      limit: 1,
+    })
+    db.prepare = realPrepare
+
+    const row = foRow(db, foId)
+    expect(row.amount_enrich_attempted_at, 'a failed write must NOT burn the row').toBeNull()
+    expect(res.repaired).toBe(0)
+    // And it is still a candidate next run — the whole point.
+    const again = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: true,
+        amounts: { amount_min: 4500000, amount_max: 9000000, amount_text: null, amount_status: 'range', amount_confidence: 0.95 },
+      }),
+      limit: 1,
+    })
+    expect(again.repaired).toBe(1)
+    expect(foRow(db, foId).amount_max).toBe(9000000)
+  })
+
   it('persists per-award amounts learned from the funder page', async () => {
     const db = makeRealDb()
     const foId = seedLinkedPair(db)

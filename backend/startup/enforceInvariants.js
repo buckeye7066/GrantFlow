@@ -2961,11 +2961,21 @@ export async function enforceAmountEnrichment(db, deps = {}) {
         // place the outage-must-not-burn rule can actually be enforced.
         const outOfRetries = attempts >= MAX_ATTEMPTS
         const burn = res?.page_read === true || res?.transient !== true || outOfRetries
-        await recordAttempt(cand.id, { burn, attempts })
         if (res?.page_read !== true) {
           fetchFailed++
           if (!burn) retryable++
         }
+        // The mark is recorded AFTER the writes below, never before. It used to
+        // run here — so when a write threw, the row was already burned and the
+        // catch block's "non-fatal, will retry" was a LIE: the candidate query
+        // excludes marked rows, so it could never be retried. That is not
+        // hypothetical: the grants.gov adapter shipped returning the STRING
+        // 'high' for `amount_confidence` (a REAL column). Postgres threw
+        // `invalid input syntax for type real: "high"`, and 10 rows whose
+        // amounts the API had ALREADY returned were burned holding nothing.
+        // Every unit test passed — SQLite is typeless.
+        //
+        // Burn on what we LEARNED and successfully STORED, not on what we tried.
         if (res?.found && res.amounts) {
           await db
             .prepare(
@@ -2994,16 +3004,19 @@ export async function enforceAmountEnrichment(db, deps = {}) {
             .run(res.amount_text ?? null, res.amount_status ?? null, cand.id)
           textOnly++
         }
+        // Reached only when every write above SUCCEEDED.
+        await recordAttempt(cand.id, { burn, attempts })
       } catch (err) {
-        // Defence in depth only. enrichOpportunityAmountFromSource is documented
-        // "never throws" and returns its failures, so reaching here means a DB
-        // write above failed, not a fetch. Leaving the row unmarked is still the
-        // safe default. Do NOT move the retry rule back into this block: that is
-        // exactly the bug — the guard sat in an unreachable path while the mark
-        // ran unconditionally.
+        // enrichOpportunityAmountFromSource is documented "never throws" and
+        // returns its failures, so reaching here means a DB WRITE above failed.
+        // The row is deliberately left UNMARKED, which is what makes the
+        // "will retry" below true rather than a comforting lie — the mark now
+        // runs only after the writes succeed. Do NOT move the retry rule into
+        // this block: that was the original #944 bug (the guard sat in an
+        // unreachable path while the mark ran unconditionally).
         fetchFailed++
         retryable++
-        log.warn('amount_enrichment: enrich failed (non-fatal, will retry)', {
+        log.warn('amount_enrichment: write failed — row left unmarked so it WILL be retried', {
           opportunity: cand.id, error: String(err?.message || err),
         })
       }

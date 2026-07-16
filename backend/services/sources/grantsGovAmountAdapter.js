@@ -50,6 +50,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
+import { AMOUNT_CONFIDENCE_STRUCTURED } from '../awardAmountExtractor.js'
 import {
   GRANTS_GOV_SEARCH2_URL,
   GRANTS_GOV_API_KEY_ENV,
@@ -315,9 +316,14 @@ export async function enrichAmountViaGrantsGovApi(row, deps = {}) {
         amount_max,
         amount_text: null,
         amount_status: status,
-        // Structured figures straight from the official API — the same
-        // confidence the inserter assigns a source's own structured fields.
-        amount_confidence: 'high',
+        // Structured figures straight from the official API — the SAME numeric
+        // confidence resolveOpportunityAmounts assigns a source's own
+        // structured fields. `amount_confidence` is a REAL column, so this must
+        // be a number: shipping the string 'high' here typechecked, passed every
+        // unit test (SQLite is typeless), and threw `invalid input syntax for
+        // type real: "high"` on Postgres in prod — after the sweep had already
+        // marked the row attempted. Never hand-write this value.
+        amount_confidence: AMOUNT_CONFIDENCE_STRUCTURED,
       },
     }
   } catch (err) {
