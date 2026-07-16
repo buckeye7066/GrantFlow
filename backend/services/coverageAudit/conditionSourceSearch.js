@@ -45,7 +45,7 @@
  * EFFECT by the coverage overlay: an adopted source retires the wishlist entry.
  */
 
-import { appendGapCandidates, isRealFundingHit } from '../webParityBenchmark.js'
+import { appendGapCandidates, isRealFundingHit, isOutOfStateGovHit } from '../webParityBenchmark.js'
 import { conditionCoverageKey } from '../coverageEvidenceService.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -119,6 +119,21 @@ export async function readConditionSearchEvidence(db) {
 }
 
 /**
+ * The profile's state, for the out-of-state geo filter. Injectable so tests stay
+ * offline. Best-effort: an unknown state means NO geo filtering (never invent a
+ * location, and never drop a candidate on a guess).
+ */
+async function defaultLoadProfileState(db, profileId) {
+  try {
+    const { buildThesisForProfile } = await import('../crawlerOsService.js')
+    const thesis = await buildThesisForProfile(db, profileId)
+    return thesis?.location?.state ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Is this condition due for a search?
  *
  * Never (re)searched → yes. Exhausted → no (we have our answer; the entry stays
@@ -147,6 +162,7 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
     now = new Date(),
     maxConditions = MAX_CONDITIONS_PER_RUN,
     appendCandidates = appendGapCandidates,
+    loadProfileState = defaultLoadProfileState,
   } = opts
 
   if (!db?.prepare) return { ran: false, reason: 'no_db', searched: 0, queued: 0, exhausted: 0, conditions: [] }
@@ -172,6 +188,15 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
   const report = []
   let queuedTotal = 0
   let exhaustedTotal = 0
+  let skippedOutOfState = 0
+  // One state lookup per profile per run, not per hit.
+  const stateCache = new Map()
+  const stateFor = async (profileId) => {
+    if (stateCache.has(profileId)) return stateCache.get(profileId)
+    const st = await loadProfileState(db, profileId).catch(() => null)
+    stateCache.set(profileId, st)
+    return st
+  }
 
   for (const gap of batch) {
     const condition = String(gap.detail).trim()
@@ -215,9 +240,30 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
 
     // Queue per affected profile — the seeding lane is profile-scoped, and the full
     // gate stack decides whether any of this becomes a real source for that profile.
+    //
+    // GEO FILTER, per profile. A "<condition> patient assistance" search reliably
+    // surfaces the biggest state's portals: searching "medical debt" for a profile
+    // in Cleveland, TENNESSEE queued California's Medi-Cal and BenefitsCal (prod,
+    // 2026-07-16). The benchmark already learned this exact lesson — those two
+    // domains are named in `isOutOfStateGovHit` because they cratered the parity
+    // score against a TN profile on 2026-07-12 — and this consumer reused
+    // `isRealFundingHit` from the same module while walking past the filter next
+    // to it. GrantFlow is RIGHT not to surface Medi-Cal in Tennessee.
+    //
+    // The downstream geo gate would reject these anyway, so this is not a
+    // correctness hole — but every one costs a fetch + an LLM extract and occupies
+    // a slot in a bounded queue, which is how a real candidate gets crowded out.
+    // Filter per PROFILE (not per condition): the same hit can be in-scope for one
+    // affected profile and out-of-scope for another.
     const candidates = []
     for (const profileId of gap.affected_profiles) {
+      const state = await stateFor(profileId)
       for (const h of deduped) {
+        // Unknown state ⇒ no filtering: never drop a candidate on a guess.
+        if (state && isOutOfStateGovHit(h.url, state)) {
+          skippedOutOfState += 1
+          continue
+        }
         candidates.push({
           url: h.url,
           title: h.title ?? null,
@@ -238,10 +284,13 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
     }
     queuedTotal += appended
 
-    // Exhausted = we have SEARCHED our budget and found nothing real. The wishlist
-    // entry stays; it just stops being re-searched and starts telling the truth
-    // about why it is still open.
-    const exhausted = deduped.length === 0 && attempts >= MAX_ATTEMPTS
+    // Exhausted = we have SEARCHED our budget and found nothing real FOR THESE
+    // PROFILES. `appended === 0` (not `deduped.length === 0`) is the honest test:
+    // hits that all got geo-filtered mean this condition yielded nothing usable
+    // here, which is the same answer as finding nothing. The wishlist entry stays;
+    // it just stops being re-searched and starts telling the truth about why it is
+    // still open.
+    const exhausted = appended === 0 && attempts >= MAX_ATTEMPTS
     if (exhausted) exhaustedTotal += 1
 
     evidence[key] = {
@@ -254,6 +303,12 @@ export async function searchForMissingConditionSources(db, wishlist, opts = {}) 
       exhausted,
     }
     report.push({ condition, searched: true, real_hits: deduped.length, candidates_queued: appended, attempts, exhausted })
+  }
+
+  if (skippedOutOfState > 0) {
+    // Visible, not silent: a filter that drops candidates without saying so is
+    // indistinguishable from a search that found nothing.
+    log.info('condition search: skipped out-of-state government portals', { skipped: skippedOutOfState })
   }
 
   if (report.length) await writeEvidence(db, evidence, at)
