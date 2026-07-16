@@ -124,6 +124,36 @@ How it is enforced, and why automating it lowers no bar:
 **Generalize:** any queue this system writes must name its consumer. A finding
 that only accumulates is an unpaid debt that reads like diligence.
 
+#### The adapter wishlist asks an answerable question, and something answers it
+
+The same rule, applied to the second write-only queue (2026-07-16). The fleet
+gap scoreboard's **adapter wishlist** is legitimate — "a lane the registry lacks
+is a structural gap, never a silent miss" — but it was neither honest nor
+actioned:
+
+- **It asked unanswerable questions.** `signals.health` conflates diagnoses with
+  support needs, disability descriptors and canonical flags, so the disease-lane
+  loop demanded a *disease source lane* for `lodging`, `unsteady gait`,
+  `clawing effect in hands` and `mobility_needs`. Provenance is now recorded at
+  the write site (`health_conditions` vs `health_support`); only diagnoses reach
+  that loop, and support needs become a NEED question whose fix is a one-line
+  alias, not a new lane. **A denylist cannot fix a free-text field** — that is
+  why `NON_DISEASE_HEALTH_SIGNALS` never converged.
+- **It answered coverage on a coincidence.** A condition counted as covered when
+  any ≥4-char word of it appeared in a haystack that included the source's free-text
+  `source_id`/`name`. Coverage is now decided only by a source's CURATED
+  vocabulary (`keywords[]` + `need_categories[]`), which every `disease_specific`
+  source must therefore carry.
+- **Nothing acted on it.** A `no_disease_source` gap is now a bounded search whose
+  real hits are queued for GATED adoption via the same seeding lane; an adopted
+  source **retires** the entry through the `condition_source_coverage` overlay
+  (the scoreboard reads the static registry, so without that overlay a closed gap
+  re-emits forever — convergence with a footnote is not convergence).
+- **When nothing exists, say so.** After `MAX_ATTEMPTS` honest searches the entry
+  is marked `exhausted` and **stays visible** carrying what was tried. "Nobody has
+  looked" and "we looked and there is nothing" are different facts (G0); a wishlist
+  that reads the same on night 1 and night 30 is wallpaper, not a finding.
+
 ### The self-improvement loop (first-class rule: the system may only get better)
 
 > **Every owner-verified outcome becomes a golden expectation; every benchmark

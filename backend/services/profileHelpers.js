@@ -865,6 +865,29 @@ function normalizeString(value) {
   return value.trim().toLowerCase()
 }
 
+/**
+ * Canonical health FLAG tokens that name a medical condition — a disease-specific
+ * source lane could plausibly be built for each, so "no lane exists for X" is a
+ * fair finding.
+ */
+const HEALTH_DIAGNOSIS_FLAGS = new Set([
+  'dialysis', 'transplant', 'hiv', 'tbi', 'amputee', 'neurodivergent',
+  'mental_health', 'rare_disease', 'visual_impairment', 'hearing_impairment',
+  'cancer', 'recovery', 'terminal',
+])
+
+/**
+ * Canonical health FLAG tokens that describe a support LEVEL, an equipment need or
+ * a functional status — NOT a diagnosis. No disease lane can ever name these, so
+ * asking for one is noise; they belong to the need-coverage question instead.
+ * `mobility_needs` is here because it leaked past the old exact-match denylist into
+ * prod as an "add a disease lane for mobility_needs" wishlist entry.
+ */
+const HEALTH_SUPPORT_FLAGS = new Set([
+  'wheelchair', 'chronic_illness', 'high_support_needs', 'disability',
+  'mobility_needs', 'dme',
+])
+
 function addKeyword(set, value) {
   const normalized = normalizeString(value)
   if (!normalized) return
@@ -1180,6 +1203,20 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   const interestSet = new Set()
   const applicantTypeSet = new Set()
   const healthSet = new Set()
+  // PROVENANCE. `healthSet` is the historical UNION and stays exactly as it was —
+  // ~14 downstream consumers test canonical tokens against it. But a union cannot
+  // answer "is this a DIAGNOSIS?", and the coverage gap detector needs to: it asks
+  // "does a disease-specific source lane exist for X?" for every member, which is a
+  // sensible question for `epilepsy` and a nonsensical one for `lodging` (a support
+  // need), `unsteady gait` (a symptom) or `mobility_needs` (a support flag). Prod
+  // 2026-07-16 asked the owner to add a disease lane for all three.
+  //
+  // The fix cannot be a denylist: these are FREE TEXT (only trim+lowercase is
+  // applied), so an exact-match Set can never catch them. Provenance is the only
+  // thing that distinguishes them, and it is known at the write site — so record it
+  // here rather than trying to re-derive intent downstream from a bare string.
+  const healthConditionSet = new Set()  // diagnoses: conditions[], medical_history, disease flags
+  const healthSupportSet = new Set()    // support needs / disability descriptors / support flags
   const familySet = new Set()
   const occupationSet = new Set()
   const needs = new Set()
@@ -1721,7 +1758,14 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   const health = sections?.health_medical ?? {}
   const disabilityTypes = Array.isArray(health.disability_type) ? health.disability_type : []
   registerKeywords(disabilityTypes)
-  disabilityTypes.forEach(dt => healthSet.add(normalizeString(dt)))
+  // A disability TYPE describes function ("physical", "unsteady gait"), not a
+  // diagnosis — no disease lane can ever name it.
+  disabilityTypes.forEach((dt) => {
+    const n = normalizeString(dt)
+    if (!n) return
+    healthSet.add(n)
+    healthSupportSet.add(n)
+  })
 
   // Structured conditions (array of objects). Accept legacy/string formats too.
   const rawConditions = Array.isArray(health.conditions) ? health.conditions : []
@@ -1735,6 +1779,9 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     const normalized = normalizeString(name)
     if (!normalized) continue
     healthSet.add(normalized)
+    // The conditions[] field is where a DIAGNOSIS lives — the one health signal
+    // for which "is there a disease-specific source lane?" is a fair question.
+    healthConditionSet.add(normalized)
     registerKeyword(normalized)
   }
 
@@ -1752,6 +1799,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     assistanceSet.add(normalized.replace(/\s+/g, '_'))
     // Also include in health for condition-aware matching.
     healthSet.add(normalized)
+    // ...but a support NEED ("lodging", "transportation", "copay_assistance") is
+    // logistics, not a diagnosis. This is the provenance that stops the coverage
+    // scoreboard demanding a "lodging disease lane" (prod 2026-07-16).
+    healthSupportSet.add(normalized)
   }
 
   if (health.mobility_or_transport_notes) {
@@ -2589,6 +2640,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     const condition = normalizeString(medicalHistory.primary_condition)
     if (condition) {
       healthSet.add(condition)
+      healthConditionSet.add(condition) // a diagnosis field — see the provenance note
       registerKeyword(condition)
     }
   }
@@ -2597,6 +2649,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       const normalized = normalizeString(cond)
       if (normalized) {
         healthSet.add(normalized)
+        healthConditionSet.add(normalized) // a diagnosis field
         registerKeyword(normalized)
       }
     }
@@ -3354,6 +3407,16 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     }
   }
 
+  // Classify the CANONICAL flag tokens (the boolean-flag branch above). Unlike the
+  // free-text fields — which are classified at their write site because only the
+  // write site knows their provenance — these are a finite, known vocabulary, so a
+  // table is honest here and a new flag cannot silently fall out (totality-tested:
+  // health_conditions ∪ health_support ⊇ every canonical flag).
+  for (const token of healthSet) {
+    if (HEALTH_DIAGNOSIS_FLAGS.has(token)) healthConditionSet.add(token)
+    else if (HEALTH_SUPPORT_FLAGS.has(token)) healthSupportSet.add(token)
+  }
+
   return {
     keywords: Array.from(keywordSet),
     keywordSet,
@@ -3366,6 +3429,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     interests: interestSet,
     applicantTypes: applicantTypeSet,
     health: healthSet,
+    // Provenance-split views of `health` (which stays the union, unchanged).
+    // Only `health_conditions` is a fair input to "does a disease lane exist?".
+    health_conditions: healthConditionSet,
+    health_support: healthSupportSet,
     family: familySet,
     occupation: occupationSet,
     credentials: credentialsSet,

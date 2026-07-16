@@ -66,6 +66,14 @@ export const GAP_QUEUE_KV_KEY = 'web_parity_gap_queue'
 /** system_kv key holding the golden-profile expectations (shared with Sam's coverage.goldenOutcomes). */
 export const GOLDEN_KV_KEY = 'golden_outcome_expectations'
 
+/**
+ * system_kv key: conditions an ADOPTED source now covers. Read by
+ * coverageEvidenceService's overlay so a closed wishlist gap stops re-emitting.
+ * Mirrors `CONDITION_COVERAGE_KV_KEY` there — kept as a literal to avoid an import
+ * cycle (coverageEvidenceService already imports nothing from this module).
+ */
+export const CONDITION_COVERAGE_KV_KEY = 'condition_source_coverage'
+
 /** Mandatory search budget per profile — an owner-quality web session, bounded. */
 export const MAX_QUERIES_PER_PROFILE = 6
 export const MAX_RESULTS_PER_QUERY = 10
@@ -367,7 +375,11 @@ export async function appendGapCandidates(db, entries = [], { now = new Date() }
       profile_id: e.profile_id,
       need: e.need ?? null,
       domain: e.domain ?? extractHostname(e.url) ?? null,
-      source: 'web_parity_benchmark',
+      // The queue has more than one producer now (the Google-bar benchmark and the
+      // adapter-wishlist condition search). Hardcoding the benchmark here would make
+      // the queue misreport its own origin — and provenance is the thing that lets
+      // anyone tell which loop is working.
+      source: e.source ?? 'web_parity_benchmark',
       status: 'candidate',
       found_at: at,
     })
@@ -433,19 +445,56 @@ export async function markGapCandidateOutcomes(db, { offeredUrls = [], adoptedUr
   const queue = await readWebParityGapQueue(db)
   let adoptedCount = 0
   let gatedCount = 0
+  // Conditions whose gap an ADOPTED source just closed — see creditConditionCoverage.
+  const coveredConditions = new Set()
   const next = queue.map((c) => {
     if (profileId !== null && String(c?.profile_id) !== String(profileId)) return c
     const key = normalizeUrlKey(c?.url)
     if (!key || !offered.has(key)) return c
     if (adopted.has(key)) {
       adoptedCount += 1
+      if (c?.source === 'condition_source_search' && c?.need) coveredConditions.add(String(c.need))
       return { ...c, status: 'adopted', resolved_at: at }
     }
     gatedCount += 1
     return { ...c, status: 'gated_out', resolved_at: at }
   })
   await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates: next }, at)
-  return { adopted: adoptedCount, gated_out: gatedCount }
+  if (coveredConditions.size) await creditConditionCoverage(db, [...coveredConditions], { now })
+  return { adopted: adoptedCount, gated_out: gatedCount, conditions_covered: coveredConditions.size }
+}
+
+/**
+ * Credit a condition as COVERED because a real source for it was adopted.
+ *
+ * THIS IS WHAT MAKES THE ADAPTER WISHLIST CONVERGE. `conditionCoveredBySource`
+ * matches against the STATIC sourceRegistry, but an adopted source lands in
+ * `funding_opportunities`, which that registry never sees. Without this credit, the
+ * wishlist consumer could find and adopt a real epilepsy source and the scoreboard
+ * would STILL report "No disease-specific source lane exists for epilepsy" every
+ * night forever — permanently holding one of the 10 wishlist slots and starving new
+ * gaps. That is not convergence; it is the same finding with a footnote, and it
+ * fails the rule that discovered sources RETIRE wishlist items.
+ *
+ * Only conditions whose candidate survived the FULL gate stack (fetch → LLM extract
+ * → reality gate → dedupe → canonical match engine → a real catalog row) reach here,
+ * so this can never manufacture coverage the system does not have (G0).
+ */
+export async function creditConditionCoverage(db, conditions = [], { now = new Date() } = {}) {
+  if (!db?.prepare || !conditions.length) return { credited: 0 }
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
+  const key = (c) => String(c || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const existing = await kvGetJson(db, CONDITION_COVERAGE_KV_KEY)
+  const set = new Set(Array.isArray(existing?.conditions) ? existing.conditions : [])
+  let credited = 0
+  for (const c of conditions) {
+    const k = key(c)
+    if (!k || set.has(k)) continue
+    set.add(k)
+    credited += 1
+  }
+  if (credited) await kvSet(db, CONDITION_COVERAGE_KV_KEY, { updated_at: at, conditions: [...set] }, at)
+  return { credited, total: set.size }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

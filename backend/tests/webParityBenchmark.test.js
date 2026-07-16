@@ -622,7 +622,9 @@ describe('markGapCandidateOutcomes', () => {
       adoptedUrls: ['https://good.org/x'],
       profileId: 'gilbert',
     })
-    expect(res).toEqual({ adopted: 1, gated_out: 1 })
+    // toMatchObject, not toEqual: the return grew `conditions_covered` when the
+    // adapter-wishlist consumer began crediting adopted condition sources.
+    expect(res).toMatchObject({ adopted: 1, gated_out: 1 })
     const q = await readWebParityGapQueue(db)
     expect(q.find((c) => c.url === 'https://good.org/x').status).toBe('adopted')
     expect(q.find((c) => c.url === 'https://refused.org/x').status).toBe('gated_out')
@@ -643,7 +645,7 @@ describe('markGapCandidateOutcomes', () => {
     const db = makeDb()
     seedQueue(db, [{ url: 'https://untouched.org/x', profile_id: 'gilbert', status: 'candidate' }])
     const res = await markGapCandidateOutcomes(db, { offeredUrls: ['https://other.org/y'], adoptedUrls: [], profileId: 'gilbert' })
-    expect(res).toEqual({ adopted: 0, gated_out: 0 })
+    expect(res).toMatchObject({ adopted: 0, gated_out: 0 })
     expect((await readWebParityGapQueue(db))[0].status).toBe('candidate')
   })
 

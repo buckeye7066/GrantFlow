@@ -79,8 +79,14 @@ async function defaultLoadCoverageGaps(db, { now = null } = {}) {
     const endMs = now instanceof Date ? now.getTime() : Date.now()
     const startIso = new Date(endMs - 24 * 60 * 60 * 1000).toISOString()
     const events = await readActivityEvents(db, { agents: ['amy', 'sam', 'anya'], startIso, limit: 60 }).catch(() => [])
+    // What the wishlist consumer has actually tried per condition — this is what
+    // turns "add a cipn source" (an ask the owner cannot action) into "we searched
+    // 3× and found nothing; likely none exists" (a fact).
+    const conditionSearch = await import('../coverageAudit/conditionSourceSearch.js')
+      .then((m) => m.readConditionSearchEvidence(db))
+      .catch(() => null)
     if (!scoreboard && (!Array.isArray(events) || events.length === 0)) return null
-    return { scoreboard, events: Array.isArray(events) ? events : [] }
+    return { scoreboard, events: Array.isArray(events) ? events : [], conditionSearch }
   } catch {
     return null
   }
@@ -215,10 +221,34 @@ export function summarizeAmyFlywheel(amy) {
  * @param {{scoreboard?:object|null, events?:Array|null}} gaps
  * @returns {{headline:string, topGaps:string[], wishlist:string[], changed:string[], needsOwner:string[]}|null}
  */
+/**
+ * What the wishlist consumer has actually TRIED for a condition.
+ *
+ * "Nobody has looked yet" and "we looked and there is nothing" are different facts,
+ * and a wishlist that cannot tell them apart is asking the owner to adjudicate
+ * blind. Mirrors the remaining-vs-exhausted distinction the amount sweep needed:
+ * an entry that reads the same on night 1 and night 30 is not a finding, it is
+ * wallpaper. Never suppresses the entry — a structural gap stays visible.
+ */
+function conditionSearchNote(detail, searchEvidence) {
+  const key = String(detail || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const rec = searchEvidence?.[key]
+  if (!rec) return ' [not yet searched]'
+  const when = String(rec.searched_at || '').slice(0, 10)
+  if (rec.candidates_queued > 0) {
+    return ` [searched ${rec.queries_run} queries ${when} → ${rec.candidates_queued} candidate source(s) queued; pending the gates on the next crawl]`
+  }
+  if (rec.exhausted) {
+    return ` [searched ${rec.attempts}× through ${when} → 0 real sources found; likely none exists]`
+  }
+  return ` [searched ${rec.queries_run} queries ${when} → 0 found; will retry]`
+}
+
 export function summarizeCoverageGaps(gaps) {
   if (!gaps || (!gaps.scoreboard && !(Array.isArray(gaps.events) && gaps.events.length > 0))) return null
   const board = gaps.scoreboard || null
   const events = Array.isArray(gaps.events) ? gaps.events : []
+  const searchEvidence = gaps.conditionSearch || null
 
   const boardGaps = Array.isArray(board?.gaps) ? board.gaps : []
   const headline = board
@@ -228,7 +258,10 @@ export function summarizeCoverageGaps(gaps) {
   const topGaps = boardGaps.slice(0, 5).map((g) => `${g.count} profile(s): ${g.statement}`)
   const wishlist = (Array.isArray(board?.adapter_wishlist) ? board.adapter_wishlist : [])
     .slice(0, 5)
-    .map((w) => `${w.detail || w.lane || 'lane'} — ${w.statement} (${w.affected_profiles_count} profile(s); ${w.suggested_action || 'add a source adapter'})`)
+    .map((w) => {
+      const note = w.gap_class === 'no_disease_source' ? conditionSearchNote(w.detail, searchEvidence) : ''
+      return `${w.detail || w.lane || 'lane'} — ${w.statement} (${w.affected_profiles_count} profile(s); ${w.suggested_action || 'add a source adapter'})${note}`
+    })
 
   // Autonomous vs needs-owner, straight from telemetry: succeeded events are
   // the changes the agents made themselves; blocked/failed events (plus the

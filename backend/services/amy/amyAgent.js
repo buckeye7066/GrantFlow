@@ -230,19 +230,48 @@ export async function runAmyTraining(options = {}) {
       },
     })).catch(() => {})
     if (gapActions.structural.length > 0) {
+      // ACT on the wishlist, don't just log it. A `no_disease_source` gap is a
+      // search waiting to happen: find a real patient-assistance source for the
+      // condition and queue it for GATED adoption on the affected profiles' next
+      // crawl (the seeding lane decides — this never inserts a source itself).
+      //
+      // Until now this block only emitted the 'blocked' telemetry below, so a
+      // finding that was correct every night had no actor and the owner was asked
+      // to hand-add adapters — "a queue with no consumer is a record of the gap,
+      // not a fix for it". Best-effort: a search outage must never fail Amy's run.
+      let searchOutcome = null
+      try {
+        const [{ searchForMissingConditionSources }, { searchWeb }] = await Promise.all([
+          import('../coverageAudit/conditionSourceSearch.js'),
+          import('../shared/webSearchEngine.js'),
+        ])
+        searchOutcome = await searchForMissingConditionSources(db, gapActions.structural, { searchWeb })
+      } catch (err) {
+        searchOutcome = { ran: false, reason: String(err?.message ?? err) }
+      }
+
+      const queued = Number(searchOutcome?.queued ?? 0)
       await Promise.resolve(recordActivity(db, {
         agent_name: 'amy',
         event_type: 'amy.adapter_wishlist',
-        status: 'blocked',
-        severity: 'medium',
-        title: `Adapter wishlist: ${gapActions.structural.length} structural coverage gap(s) Amy cannot fix (source adapter needed)`,
+        // Only still 'blocked' when nothing could be queued for ANY of them. If a
+        // candidate is queued the gap is being worked, not blocked — and reporting
+        // "blocked" then would understate the loop exactly as reporting "added"
+        // would overstate it.
+        status: queued > 0 ? 'succeeded' : 'blocked',
+        severity: queued > 0 ? 'info' : 'medium',
+        title: queued > 0
+          ? `Adapter wishlist: queued ${queued} candidate source(s) for ${searchOutcome.searched} condition(s) — pending the gates on each profile's next crawl`
+          : `Adapter wishlist: ${gapActions.structural.length} structural coverage gap(s) Amy cannot fix (source adapter needed)`,
         description: gapActions.structural
           .slice(0, 3)
           .map((w) => `${w.detail || w.lane}: ${w.statement} (${w.affected_profiles_count} profile(s))`)
           .join(' | '),
         metric_key: 'adapter_wishlist',
         metric_value: gapActions.structural.length,
-        details_json: { run_id: runId, wishlist: gapActions.structural },
+        // `condition_search` records what the SEARCH did (queued ≠ added — the gates
+        // have not run yet). Anya's report reads the evidence store for the rest.
+        details_json: { run_id: runId, wishlist: gapActions.structural, condition_search: searchOutcome },
       })).catch(() => {})
     }
   }
