@@ -85,6 +85,13 @@ export const MAX_STORED_MATCHES = 50
 /** Cap on the candidate gap queue (oldest entries beyond the cap are dropped). */
 export const GAP_QUEUE_CAP = 200
 
+/**
+ * Seeds handed to ONE discovery run. Each seed costs a fetch + an LLM
+ * extraction, so this is bounded like every other lane budget; leftovers stay
+ * 'candidate' and are offered to the next run rather than dropped.
+ */
+export const GAP_SEED_LIMIT_PER_RUN = 8
+
 /** Web-only finds carried per profile in `latest` (evidence + owner report). */
 const WEB_ONLY_TOP_CAP = 5
 
@@ -369,6 +376,76 @@ export async function appendGapCandidates(db, entries = [], { now = new Date() }
   const candidates = [...byKey.values()].slice(-GAP_QUEUE_CAP)
   await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates }, at)
   return { appended, total: candidates.length }
+}
+
+/**
+ * Seed pages for ONE profile's next discovery run — the consumer side of the
+ * owner's standing rule: "if a funding source is found that meets the needs of a
+ * profile, ADD that funding source."
+ *
+ * Until this existed the gap queue was write-only. The benchmark found real
+ * funding pages GrantFlow lacked, filed them honestly as candidates, and nothing
+ * ever read the file — so the same pages were re-found and re-filed every night
+ * and the owner was asked to adjudicate them by hand ("candidate queue — nothing
+ * auto-added", 2026-07-15). The queue was a record of the gap, not a fix for it.
+ *
+ * These URLs are handed to the web lane as seed pages, where they are fetched,
+ * LLM-extracted, reality-gated, deduped and scored by the canonical match engine
+ * exactly like a search hit. So "auto-add" never means "trust the benchmark": it
+ * means the gates get to SEE a page they were previously never handed. A seed
+ * that is a directory, a stub, out of scope, or simply not a match is rejected
+ * by the same rules as everything else — which is why this can be automatic
+ * without lowering any bar.
+ *
+ * `pending_only` (default) skips candidates already resolved, so a page the
+ * gates have judged is not re-fetched on every crawl.
+ *
+ * @returns {Promise<Array<{url,title,snippet}>>} bounded, oldest-first
+ */
+export async function loadGapSeedPagesForProfile(db, profileId, { limit = GAP_SEED_LIMIT_PER_RUN, pendingOnly = true } = {}) {
+  if (!db?.prepare || !profileId) return []
+  const queue = await readWebParityGapQueue(db)
+  return queue
+    .filter((c) => String(c?.profile_id) === String(profileId))
+    .filter((c) => (pendingOnly ? (c?.status ?? 'candidate') === 'candidate' : true))
+    .filter((c) => /^https?:\/\//i.test(String(c?.url || '')))
+    .slice(0, Math.max(0, limit))
+    .map((c) => ({ url: c.url, title: c.title ?? null, snippet: c.need ? `need: ${c.need}` : null }))
+}
+
+/**
+ * Record what the gates decided about seeded candidates, so the queue stops
+ * re-offering a page that has already had its chance and the owner report can
+ * show the rule WORKING (adopted) or honestly not (gated_out) instead of an
+ * ever-growing pile of unjudged links.
+ *
+ * `adoptedUrls` are the seeds that became catalog rows this run; every other
+ * seed offered this run was seen by the gates and refused. Both are terminal:
+ * re-fetching a page the reality gate rejected cannot produce a different
+ * answer, and leaving it 'candidate' would rebuild the write-only queue.
+ */
+export async function markGapCandidateOutcomes(db, { offeredUrls = [], adoptedUrls = [], profileId = null, now = new Date() } = {}) {
+  if (!db?.prepare || offeredUrls.length === 0) return { adopted: 0, gated_out: 0 }
+  const adopted = new Set(adoptedUrls.map(normalizeUrlKey).filter(Boolean))
+  const offered = new Set(offeredUrls.map(normalizeUrlKey).filter(Boolean))
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
+
+  const queue = await readWebParityGapQueue(db)
+  let adoptedCount = 0
+  let gatedCount = 0
+  const next = queue.map((c) => {
+    if (profileId !== null && String(c?.profile_id) !== String(profileId)) return c
+    const key = normalizeUrlKey(c?.url)
+    if (!key || !offered.has(key)) return c
+    if (adopted.has(key)) {
+      adoptedCount += 1
+      return { ...c, status: 'adopted', resolved_at: at }
+    }
+    gatedCount += 1
+    return { ...c, status: 'gated_out', resolved_at: at }
+  })
+  await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates: next }, at)
+  return { adopted: adoptedCount, gated_out: gatedCount }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

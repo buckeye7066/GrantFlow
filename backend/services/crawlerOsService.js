@@ -256,19 +256,53 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // Best-effort and bounded; never blocks or fails the run.
   if (isWebDiscoveryEnabled()) {
     try {
-      const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }] = await Promise.all([
+      const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }, parity] = await Promise.all([
         import('../crawler-os/webLane.js'),
         import('./shared/webSearchEngine.js'),
         import('./webGrantExtractor.js'),
+        import('./webParityBenchmark.js'),
       ]);
+
+      // OWNER RULE — "if a funding source is found that meets the needs of a
+      // profile, ADD that funding source." The Google-bar benchmark finds real
+      // funding pages this lane's own search misses and files them as
+      // candidates; before this, that queue had NO consumer, so the same real
+      // sources were re-found nightly and never added (2026-07-15: "candidate
+      // queue — nothing auto-added", fleet parity 41.2). Seeding them here is
+      // what makes the benchmark a feedback loop instead of a report.
+      //
+      // Seeds bypass no gate — the lane fetches, extracts, reality-gates and
+      // scores them exactly like search hits. Best-effort: a queue read must
+      // never fail a crawl.
+      let seedPages = [];
+      try {
+        seedPages = await parity.loadGapSeedPagesForProfile(db, profileId);
+      } catch { seedPages = []; }
+
       const web = await runWebDiscoveryLane(
         { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage },
-        { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id },
+        { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages },
       );
       const { recommendations: webRecs, ...webTelemetry } = web;
       run.web_lane = webTelemetry;
       if (Array.isArray(webRecs) && webRecs.length) {
         run.recommendations = [...(run.recommendations ?? []), ...webRecs].sort((a, b) => b.match_score - a.match_score);
+      }
+
+      // Record the gates' verdict on each seed. A seed that produced a catalog
+      // row is 'adopted'; one that did not was SEEN and refused, which is a real
+      // answer — leaving it 'candidate' would rebuild the write-only queue this
+      // rule exists to drain. Skipped on a dry run (nothing was persisted, so
+      // nothing has been judged).
+      if (!dryRun && seedPages.length) {
+        try {
+          const adoptedUrls = Array.isArray(web.seeded_adopted_urls) ? web.seeded_adopted_urls : [];
+          run.gap_adoption = await parity.markGapCandidateOutcomes(db, {
+            offeredUrls: seedPages.map((s) => s.url),
+            adoptedUrls,
+            profileId,
+          });
+        } catch { /* bookkeeping must never fail a crawl */ }
       }
     } catch (err) {
       run.web_lane = { ok: false, error: String(err?.message ?? err) };

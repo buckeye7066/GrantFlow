@@ -91,4 +91,130 @@ describe('runWebDiscoveryLane', () => {
     expect(res.ok).toBe(false)
     expect(res.reason).toBe('web_lane_deps_missing')
   })
+
+  describe('seed pages (owner rule: a source found for a profile gets added)', () => {
+    const realOpp = {
+      title: 'Tennessee Disability Small Grants',
+      funder: 'Tennessee Disability Coalition',
+      summary: 'Small grants to Tennessee nonprofits serving youth and after school programs',
+      deadline: '2026-12-01',
+      apply_url: 'https://tndisability.org/grants/apply',
+      state: 'TN',
+      relevant: true,
+    }
+
+    it('adds a real source the lane search never surfaced', async () => {
+      // The exact 2026-07-15 case: the Google-bar benchmark found
+      // tndisability.org for a TN profile, filed it as a candidate, and nothing
+      // ever added it because the lane's own search does not surface it.
+      const store = createMemoryStore()
+      const searchWeb = vi.fn().mockResolvedValue([])
+      const extractOpportunities = vi.fn(async () => [realOpp])
+
+      const res = await runWebDiscoveryLane(
+        {
+          store,
+          fetcher: fakeFetcher({ 'https://tndisability.org/grants': '<body>small grants</body>' }),
+          searchWeb,
+          extractOpportunities,
+        },
+        { thesis, runId: 'seed-run', seedPages: [{ url: 'https://tndisability.org/grants', title: 'Small Grants' }] },
+      )
+
+      expect(res.seeded).toBe(1)
+      expect(res.stored).toBe(1)
+      expect(res.seeded_adopted_urls).toEqual(['https://tndisability.org/grants'])
+      expect(storage.listCatalog(store).map((o) => o.title)).toContain('Tennessee Disability Small Grants')
+    })
+
+    it('a seed does NOT bypass the reality gate', async () => {
+      // The whole safety argument for automating this rule: a seed buys a page a
+      // LOOK, never a row. If being seeded could skip a gate, "auto-add" would
+      // mean "auto-trust" and the benchmark would become an ingestion backdoor.
+      const store = createMemoryStore()
+      const searchWeb = vi.fn().mockResolvedValue([])
+      const extractOpportunities = vi.fn(async () => [
+        { title: 'Mystery Money', funder: '', summary: 'no funder at all', apply_url: 'https://junk.org/x', relevant: true },
+      ])
+
+      const res = await runWebDiscoveryLane(
+        { store, fetcher: fakeFetcher({ 'https://junk.org/x': '<body>x</body>' }), searchWeb, extractOpportunities },
+        { thesis, runId: 'seed-gate', seedPages: [{ url: 'https://junk.org/x' }] },
+      )
+
+      expect(res.seeded).toBe(1)
+      expect(res.stored).toBe(0)
+      expect(res.seeded_adopted_urls).toEqual([])
+      expect(storage.listCatalog(store)).toHaveLength(0)
+    })
+
+    it('reports a seed whose page cannot be fetched as NOT adopted', async () => {
+      // Honesty: offering a seed is not adopting it. A dead page must never be
+      // reported as an added source.
+      const store = createMemoryStore()
+      const res = await runWebDiscoveryLane(
+        { store, fetcher: fakeFetcher({}), searchWeb: vi.fn().mockResolvedValue([]), extractOpportunities: vi.fn(async () => [realOpp]) },
+        { thesis, runId: 'seed-dead', seedPages: [{ url: 'https://dead.org/x' }] },
+      )
+      expect(res.seeded).toBe(1)
+      expect(res.seeded_adopted).toBe(0)
+      expect(res.seeded_adopted_urls).toEqual([])
+    })
+
+    it('seeds run ALONGSIDE search hits and are not crowded out by maxPages', async () => {
+      // maxPages bounds how much of an unbounded SERP we chase — a question
+      // already settled for a known URL. If seeds shared that budget, a busy
+      // search would silently starve the rule.
+      const store = createMemoryStore()
+      const searchWeb = vi.fn().mockResolvedValue([{ url: 'https://serp.org/a', title: 'A', snippet: '' }])
+      const extractOpportunities = vi.fn(async ({ pageUrl }) =>
+        pageUrl.includes('tndisability') ? [realOpp] : [{ ...realOpp, title: 'Serp Grant', apply_url: 'https://serp.org/a/apply' }],
+      )
+
+      const res = await runWebDiscoveryLane(
+        {
+          store,
+          fetcher: fakeFetcher({ 'https://tndisability.org/grants': '<body>a</body>', 'https://serp.org/a': '<body>b</body>' }),
+          searchWeb,
+          extractOpportunities,
+        },
+        { thesis, runId: 'seed-cap', maxPages: 1, seedPages: [{ url: 'https://tndisability.org/grants' }] },
+      )
+
+      expect(res.seeded).toBe(1)
+      expect(res.fetched).toBe(2) // seed + the one allowed search page
+      expect(res.seeded_adopted_urls).toEqual(['https://tndisability.org/grants'])
+    })
+
+    it('ignores malformed/duplicate seeds without touching the run', async () => {
+      const store = createMemoryStore()
+      const res = await runWebDiscoveryLane(
+        { store, fetcher: fakeFetcher({ 'https://tndisability.org/grants': '<body>a</body>' }), searchWeb: vi.fn().mockResolvedValue([]), extractOpportunities: vi.fn(async () => [realOpp]) },
+        {
+          thesis,
+          runId: 'seed-junk',
+          seedPages: [
+            { url: 'not-a-url' },
+            { url: '' },
+            null,
+            { url: 'https://tndisability.org/grants' },
+            { url: 'https://tndisability.org/grants' }, // duplicate
+          ],
+        },
+      )
+      expect(res.seeded).toBe(1)
+      expect(res.stored).toBe(1)
+    })
+
+    it('runs unchanged when no seeds are supplied (default path)', async () => {
+      const store = createMemoryStore()
+      const res = await runWebDiscoveryLane(
+        { store, fetcher: fakeFetcher({ 'https://serp.org/a': '<body>b</body>' }), searchWeb: vi.fn().mockResolvedValue([{ url: 'https://serp.org/a', title: 'A', snippet: '' }]), extractOpportunities: vi.fn(async () => [realOpp]) },
+        { thesis, runId: 'no-seed' },
+      )
+      expect(res.seeded).toBe(0)
+      expect(res.seeded_adopted_urls).toEqual([])
+      expect(res.stored).toBe(1)
+    })
+  })
 })

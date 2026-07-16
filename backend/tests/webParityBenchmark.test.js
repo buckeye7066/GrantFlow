@@ -39,6 +39,9 @@ import {
   readWebParityGapQueue,
   appendGapCandidates,
   runWebParityBenchmark,
+  loadGapSeedPagesForProfile,
+  markGapCandidateOutcomes,
+  GAP_SEED_LIMIT_PER_RUN,
 } from '../services/webParityBenchmark.js'
 import { getCheckById } from '../services/sam/samRegistry.js'
 import { buildOwnerReport, summarizeWebParity } from '../services/anya/anyaDailyOwnerReport.js'
@@ -531,11 +534,128 @@ describe('Anya "Google-bar benchmark" report section', () => {
     const withParity = buildOwnerReport(run, { parity: parityStore })
     expect(withParity.text).toMatch(/GOOGLE-BAR BENCHMARK/)
     expect(withParity.text).toMatch(/Gilbert: parity 75\/100/)
-    expect(withParity.text).toMatch(/awaiting your judgment/i)
+    // The queue is now a work item the crawler drains, not homework for the owner.
+    expect(withParity.text).toMatch(/queued — seeded into each profile/i)
     expect(withParity.html).toMatch(/Google-bar benchmark/)
     expect(withParity.html).toMatch(/Neighbor Grant/)
 
     const without = buildOwnerReport(run, {})
     expect(without.text).not.toMatch(/GOOGLE-BAR BENCHMARK/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The owner rule: a funding source found to meet a profile's needs gets ADDED.
+//
+// Before this, the gap queue was WRITE-ONLY: the benchmark found real funding
+// pages GrantFlow lacked, filed them honestly as candidates, and nothing ever
+// read the file — so the same pages were re-found and re-filed every night and
+// the owner was asked to adjudicate them by hand ("candidate queue — nothing
+// auto-added", 2026-07-15). These two functions are the consumer that drains it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function seedQueue(db, candidates) {
+  db.prepare('INSERT OR REPLACE INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(GAP_QUEUE_KV_KEY, JSON.stringify({ updated_at: 'x', candidates }), 'x')
+}
+
+describe('loadGapSeedPagesForProfile', () => {
+  it("hands the profile's pending candidates to its next discovery run", async () => {
+    const db = makeDb()
+    seedQueue(db, [
+      { url: 'https://tndisability.org/small-grants', title: 'Small Grants', profile_id: 'gilbert', need: 'disability', status: 'candidate' },
+      { url: 'https://other.org/x', title: 'Other', profile_id: 'kimberly', status: 'candidate' },
+    ])
+    const seeds = await loadGapSeedPagesForProfile(db, 'gilbert')
+    expect(seeds).toHaveLength(1)
+    expect(seeds[0]).toMatchObject({ url: 'https://tndisability.org/small-grants', title: 'Small Grants' })
+    // The need travels as page context for the extractor.
+    expect(seeds[0].snippet).toContain('disability')
+  })
+
+  it('does not re-offer a candidate the gates have already judged', async () => {
+    // Otherwise every crawl re-fetches and re-extracts pages already refused —
+    // paying an LLM call per page to be told the same thing forever.
+    const db = makeDb()
+    seedQueue(db, [
+      { url: 'https://a.org/x', profile_id: 'gilbert', status: 'adopted' },
+      { url: 'https://b.org/x', profile_id: 'gilbert', status: 'gated_out' },
+      { url: 'https://c.org/x', profile_id: 'gilbert', status: 'candidate' },
+    ])
+    const seeds = await loadGapSeedPagesForProfile(db, 'gilbert')
+    expect(seeds.map((s) => s.url)).toEqual(['https://c.org/x'])
+  })
+
+  it('treats a legacy entry with no status as pending', async () => {
+    const db = makeDb()
+    seedQueue(db, [{ url: 'https://legacy.org/x', profile_id: 'gilbert' }])
+    expect(await loadGapSeedPagesForProfile(db, 'gilbert')).toHaveLength(1)
+  })
+
+  it('bounds the seeds handed to one run (each costs a fetch + an LLM call)', async () => {
+    const db = makeDb()
+    seedQueue(db, Array.from({ length: 25 }, (_, i) => ({ url: `https://f${i}.org/x`, profile_id: 'gilbert', status: 'candidate' })))
+    const seeds = await loadGapSeedPagesForProfile(db, 'gilbert')
+    expect(seeds).toHaveLength(GAP_SEED_LIMIT_PER_RUN)
+  })
+
+  it('drops junk urls and returns [] for an empty queue / missing profile', async () => {
+    const db = makeDb()
+    seedQueue(db, [{ url: 'javascript:alert(1)', profile_id: 'gilbert', status: 'candidate' }, { url: '', profile_id: 'gilbert' }])
+    expect(await loadGapSeedPagesForProfile(db, 'gilbert')).toEqual([])
+    expect(await loadGapSeedPagesForProfile(makeDb(), 'nobody')).toEqual([])
+    expect(await loadGapSeedPagesForProfile(null, 'gilbert')).toEqual([])
+  })
+})
+
+describe('markGapCandidateOutcomes', () => {
+  it('records what the GATES decided, not what we attempted', async () => {
+    // The honesty bar: "we seeded 2 pages" must never be reported as "we added
+    // 2 sources" — the read-green-while-doing-nothing class.
+    const db = makeDb()
+    seedQueue(db, [
+      { url: 'https://good.org/x', profile_id: 'gilbert', status: 'candidate' },
+      { url: 'https://refused.org/x', profile_id: 'gilbert', status: 'candidate' },
+    ])
+    const res = await markGapCandidateOutcomes(db, {
+      offeredUrls: ['https://good.org/x', 'https://refused.org/x'],
+      adoptedUrls: ['https://good.org/x'],
+      profileId: 'gilbert',
+    })
+    expect(res).toEqual({ adopted: 1, gated_out: 1 })
+    const q = await readWebParityGapQueue(db)
+    expect(q.find((c) => c.url === 'https://good.org/x').status).toBe('adopted')
+    expect(q.find((c) => c.url === 'https://refused.org/x').status).toBe('gated_out')
+  })
+
+  it('never touches another profile’s candidates', async () => {
+    const db = makeDb()
+    seedQueue(db, [
+      { url: 'https://shared.org/x', profile_id: 'gilbert', status: 'candidate' },
+      { url: 'https://shared.org/x', profile_id: 'kimberly', status: 'candidate' },
+    ])
+    await markGapCandidateOutcomes(db, { offeredUrls: ['https://shared.org/x'], adoptedUrls: ['https://shared.org/x'], profileId: 'gilbert' })
+    const q = await readWebParityGapQueue(db)
+    expect(q.find((c) => c.profile_id === 'kimberly').status).toBe('candidate')
+  })
+
+  it('leaves candidates that were never offered alone', async () => {
+    const db = makeDb()
+    seedQueue(db, [{ url: 'https://untouched.org/x', profile_id: 'gilbert', status: 'candidate' }])
+    const res = await markGapCandidateOutcomes(db, { offeredUrls: ['https://other.org/y'], adoptedUrls: [], profileId: 'gilbert' })
+    expect(res).toEqual({ adopted: 0, gated_out: 0 })
+    expect((await readWebParityGapQueue(db))[0].status).toBe('candidate')
+  })
+
+  it('matches urls by normalized identity (trailing slash / www / scheme)', async () => {
+    const db = makeDb()
+    seedQueue(db, [{ url: 'https://www.good.org/x/', profile_id: 'gilbert', status: 'candidate' }])
+    const res = await markGapCandidateOutcomes(db, { offeredUrls: ['https://www.good.org/x/'], adoptedUrls: ['http://good.org/x'], profileId: 'gilbert' })
+    expect(res.adopted).toBe(1)
+  })
+
+  it('is a no-op when nothing was offered', async () => {
+    const db = makeDb()
+    expect(await markGapCandidateOutcomes(db, { offeredUrls: [] })).toEqual({ adopted: 0, gated_out: 0 })
   })
 })

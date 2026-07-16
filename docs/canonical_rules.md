@@ -87,6 +87,43 @@ persisted in `system_kv` `web_parity_benchmark`, asserted nightly by Sam's
 benchmark failure feeds Amy's work queue (`system_kv` `web_parity_gap_queue`)
 and the adapter wishlist — a failure is queued work, never a shrug.
 
+#### A funding source found for a profile gets ADDED (owner rule, 2026-07-16)
+
+> **If a funding source is found that meets a profile's needs, add that funding
+> source.** Finding it and filing it is not finding it. A queue with no consumer
+> is a record of the gap, not a fix for it.
+
+This is the rule the gap queue existed to serve and did not. The benchmark found
+real funding pages GrantFlow lacked, wrote them to `web_parity_gap_queue`, and
+**nothing ever read that key** — so the same real sources were re-found and
+re-filed every night while the owner's report asked him to adjudicate them by
+hand ("candidate queue — nothing auto-added", 2026-07-15, fleet parity 41.2 and
+falling). The finding was correct every night; only the loop was open.
+
+How it is enforced, and why automating it lowers no bar:
+
+- `loadGapSeedPagesForProfile()` (`services/webParityBenchmark.js`) hands a
+  profile's pending candidates to its next discovery run as **seed pages**
+  (`opts.seedPages`, `crawler-os/webLane.js`), bounded by
+  `GAP_SEED_LIMIT_PER_RUN`.
+- **A seed is a URL, not a verdict.** It enters the web lane at exactly the
+  place a search hit does and is then fetched (SSRF-safe), LLM-extracted,
+  reality-gated, deduped and scored by the canonical match engine like anything
+  else. Being found by the benchmark buys a page a LOOK — never a catalog row,
+  never a match, never a score. Seeding is therefore *strictly* the removal of a
+  search's failure to find; every substantive gate still decides.
+- **The gates' verdict is recorded, not the attempt.** The lane reports which
+  seeds actually produced a catalog row (`seeded_adopted_urls`), and
+  `markGapCandidateOutcomes()` marks each offered candidate `adopted` or
+  `gated_out`. Both are terminal: a page the reality gate refused cannot answer
+  differently next time, and leaving it `candidate` would rebuild the write-only
+  queue. "We seeded 8 pages" must never be reported as "we added 8 sources" —
+  that is the read-green-while-doing-nothing class this repo has now shipped
+  three times (#941, #944, and this queue).
+
+**Generalize:** any queue this system writes must name its consumer. A finding
+that only accumulates is an unpaid debt that reads like diligence.
+
 ### The self-improvement loop (first-class rule: the system may only get better)
 
 > **Every owner-verified outcome becomes a golden expectation; every benchmark
