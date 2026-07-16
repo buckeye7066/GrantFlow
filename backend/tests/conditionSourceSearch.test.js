@@ -93,6 +93,66 @@ describe('searchForMissingConditionSources', () => {
     expect(queue[0].status).toBe('candidate')
   })
 
+  it("does NOT queue ANOTHER state's government portal", async () => {
+    // REGRESSION (prod 2026-07-16). Searching "medical debt" for a profile in
+    // Cleveland, TENNESSEE queued California's Medi-Cal (dhcs.ca.gov) and
+    // BenefitsCal. The benchmark already learned this exact lesson — both domains
+    // are named in isOutOfStateGovHit because they cratered the parity score
+    // against a TN profile on 2026-07-12 — and this consumer reused
+    // isRealFundingHit from that same module while walking straight past the
+    // filter next to it. GrantFlow is RIGHT not to surface Medi-Cal in Tennessee.
+    const db = makeDb()
+    const searchWeb = vi.fn(async () => [
+      { url: 'https://www.dhcs.ca.gov/medi-cal/', title: 'Medi-Cal financial assistance', snippet: 'health coverage grants' },
+      { url: 'https://benefitscal.com/Help/program/medical/HCPDE', title: 'BenefitsCal medical assistance', snippet: 'apply for benefits' },
+      { url: 'https://undueMedicalDebt.org/apply', title: 'Undue Medical Debt relief grants', snippet: 'medical debt assistance' },
+    ])
+    const res = await searchForMissingConditionSources(db, [wishlistEntry('medical debt', ['tn-profile'])], {
+      searchWeb,
+      loadProfileState: async () => 'TN',
+    })
+    const queue = await readWebParityGapQueue(db)
+    expect(queue.map((c) => c.url)).toEqual(['https://undueMedicalDebt.org/apply'])
+    expect(res.queued).toBe(1)
+  })
+
+  it('keeps an IN-state government portal', async () => {
+    // The filter must not become "no .gov ever" — a TN profile SHOULD get TN's portal.
+    const db = makeDb()
+    const searchWeb = vi.fn(async () => [
+      { url: 'https://www.tn.gov/humanservices/for-families/grant-assistance.html', title: 'TN grant assistance', snippet: 'financial assistance' },
+    ])
+    const res = await searchForMissingConditionSources(db, [wishlistEntry('medical debt', ['tn-profile'])], {
+      searchWeb, loadProfileState: async () => 'TN',
+    })
+    expect(res.queued).toBe(1)
+  })
+
+  it('never drops a candidate when the profile state is UNKNOWN (no guessing)', async () => {
+    const db = makeDb()
+    const searchWeb = vi.fn(async () => [
+      { url: 'https://www.dhcs.ca.gov/medi-cal/', title: 'Medi-Cal financial assistance', snippet: 'health coverage grants' },
+    ])
+    const res = await searchForMissingConditionSources(db, [wishlistEntry('x-cond', ['p1'])], {
+      searchWeb, loadProfileState: async () => null,
+    })
+    expect(res.queued).toBe(1)
+  })
+
+  it('filters per PROFILE — the same hit can be in-scope for one and not another', async () => {
+    const db = makeDb()
+    const searchWeb = vi.fn(async () => [
+      { url: 'https://www.dhcs.ca.gov/medi-cal/', title: 'Medi-Cal financial assistance', snippet: 'health coverage grants' },
+    ])
+    const states = { 'ca-profile': 'CA', 'tn-profile': 'TN' }
+    const res = await searchForMissingConditionSources(db, [wishlistEntry('x-cond', ['ca-profile', 'tn-profile'])], {
+      searchWeb, loadProfileState: async (_db, pid) => states[pid],
+    })
+    const queue = await readWebParityGapQueue(db)
+    expect(queue.map((c) => c.profile_id)).toEqual(['ca-profile'])
+    expect(res.queued).toBe(1)
+  })
+
   it('drops non-funding noise (WebMD is never a funder)', async () => {
     const db = makeDb()
     const searchWeb = vi.fn(async () => [NOISE_HIT])
