@@ -797,6 +797,11 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'CancerCare',
     resource_title: 'CancerCare financial assistance',
     resource_summary: 'Financial and practical-support assistance information for people affected by cancer. Eligibility and available funds vary, so this is surfaced for review rather than promised as an award.',
+    // `keywords` are the CURATED vocabulary conditionCoveredBySource matches on.
+    // They are not decoration: the coverage haystack is keywords + need_categories
+    // ONLY, so a disease source without them is invisible to condition matching
+    // and mints a false "no source lane exists" wishlist entry every night.
+    keywords: ['cancer', 'oncology', 'chemotherapy', 'radiation therapy', 'tumor', 'leukemia', 'lymphoma', 'melanoma', 'carcinoma', 'metastatic'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['cancer_support'],
@@ -845,6 +850,10 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Alzheimers.gov',
     resource_title: 'Dementia local services finder',
     resource_summary: 'Official federal dementia resource for finding local services, support, and care resources for people living with dementia and their caregivers.',
+    // Curated match vocabulary (see cancer_care). 'alzheimers' must be spelled
+    // BOTH ways: the possessive form is what people actually type, and token
+    // matching does not fold an apostrophe.
+    keywords: ['dementia', 'alzheimers', "alzheimer's", 'alzheimer', 'memory loss', 'memory care', 'cognitive decline', 'vascular dementia', 'lewy body'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['dementia_support'],
@@ -1471,6 +1480,12 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'NeedyMeds',
     resource_title: 'NeedyMeds medication and healthcare cost assistance finder',
     resource_summary: 'Directory of patient-assistance programs, copay assistance foundations, drug discount programs, and diagnosis-based medical financial aid. A directory/referral lane, not a direct cash grant.',
+    // Curated match vocabulary (see cancer_care). NeedyMeds is DIAGNOSIS-agnostic
+    // — it indexes patient-assistance programs by condition — so these name the
+    // cost/medication axis it genuinely covers rather than claiming any specific
+    // disease. Do NOT add broad disease names here to make gaps disappear: that
+    // would manufacture coverage the source does not have (G0).
+    keywords: ['copay', 'copayment', 'prescription', 'medication', 'patient assistance', 'drug costs', 'diabetes', 'insulin', 'hypercholesterolemia', 'high cholesterol'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['medical', 'medication', 'medical_bills', 'cancer_support'],
@@ -1720,7 +1735,11 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'NeedyMeds',
     resource_title: 'NeedyMeds diagnosis-based assistance directory (hypertension, heart disease & chronic conditions)',
     resource_summary: 'Directory of assistance programs organized by diagnosis — medication cost help, copay cards, and condition-specific funds for hypertension, high blood pressure, heart disease, diabetes, and other chronic conditions.',
-    keywords: ['hypertension', 'high blood pressure', 'heart disease', 'diabetes', 'medication assistance', 'copay assistance', 'chronic condition'],
+    // 'diabetic' is the ADJECTIVE form real profiles actually type (prod
+    // 2026-07-16 carried the condition "diabetic", not "diabetes"). Token
+    // matching does not stem, so the curated vocabulary must carry both forms
+    // or a genuinely covered condition mints a false wishlist entry.
+    keywords: ['hypertension', 'high blood pressure', 'heart disease', 'diabetes', 'diabetic', 'medication assistance', 'copay assistance', 'chronic condition'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical'],

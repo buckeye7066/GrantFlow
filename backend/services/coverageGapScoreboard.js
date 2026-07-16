@@ -204,6 +204,13 @@ export function aggregateGapResults(results = []) {
       detail: g.detail,
       statement: g.statement,
       affected_profiles_count: g.count,
+      // The wishlist's CONSUMER (conditionSourceSearch) needs the ids, not just the
+      // count: a candidate source it finds is queued per-profile, and
+      // appendGapCandidates hard-drops any entry without a profile_id. Projecting
+      // only the count is why a consumer written against this shape would queue
+      // ZERO candidates while reporting success — the read-green-while-doing-nothing
+      // class. Already capped at AFFECTED_PROFILE_ID_CAP upstream.
+      affected_profiles: Array.isArray(g.affected_profiles) ? g.affected_profiles : [],
       suggested_action: g.suggested_action,
     }))
 

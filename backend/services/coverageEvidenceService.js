@@ -29,6 +29,9 @@ import { computeDetailedReadiness } from './profileReadinessService.js';
 import { getProfileFieldPrompts } from './profileFieldPrompts.js';
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js';
 import { normalizeState } from '../utils/stateNormalization.js';
+// The SAME need gate `signals.needs` goes through in profileHelpers — so a support
+// need this cannot resolve is genuinely one no source can match on.
+import { normalizeNeedCategory } from './profileNormalizer.js';
 import { shouldAskProfileQuestion } from './profileKnownFacts.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -375,25 +378,137 @@ function needCoveredBySources(need, sources) {
   });
 }
 
-function conditionCoveredBySource(condition, source) {
-  const token = String(condition || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  if (!token) return false;
-  const cats = Array.isArray(source.need_categories) ? source.need_categories : [];
-  const hay = [
-    ...cats,
-    source.source_id,
-    source.name,
-    ...(Array.isArray(source.keywords) ? source.keywords : []),
-  ].join(' ').toLowerCase();
-  // token containment both ways ("dementia" ⊂ "dementia_support";
-  // "alzheimers" source id covers an "alzheimers disease" condition).
-  return hay.includes(token) || token.split('_').some((t) => t.length >= 4 && hay.includes(t));
+/**
+ * Words that describe the SHAPE of a diagnosis rather than which disease it is.
+ * Two sources sharing one of these share nothing — "chronic kidney disease" and
+ * "alzheimer's disease" have `disease` in common and are not the same lane.
+ * Laterality/severity are the same story: "left" is not an identity.
+ */
+const GENERIC_CONDITION_WORDS = new Set([
+  'disease', 'diseases', 'disorder', 'disorders', 'syndrome', 'condition', 'conditions',
+  'illness', 'chronic', 'acute', 'severe', 'mild', 'moderate', 'stage', 'type',
+  'left', 'right', 'bilateral', 'primary', 'secondary', 'early', 'late', 'onset',
+  'support', 'care', 'health', 'medical', 'patient', 'assistance', 'general',
+]);
+
+/** Whole-word (token-boundary) containment: `renal` must NOT match inside `adrenal`. */
+function containsTerm(haystack, term) {
+  if (!term) return false;
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, 'i').test(haystack);
 }
 
-// health-signal buckets that are support LEVELS / generic flags, not diseases
-// a disease-specific lane could ever name — skipped in gap detection.
+/**
+ * Does this source's CURATED vocabulary name the profile's condition?
+ *
+ * THE HAYSTACK IS THE DEFECT, NOT JUST THE RULE. This used to read
+ * `need_categories + source_id + name + keywords` and return true when ANY ≥4-char
+ * word of the condition appeared anywhere in it. `source_id`/`name` are free text,
+ * so that was a floor of ONE SHARED WORD — the #937/#943 class ("a shared word is a
+ * coincidence, not an identity"), and it fired in prod: the Reeve Foundation
+ * "covers" the condition `physical` purely because its name carries
+ * "physical disability", and any source whose name contains "disease" "covered"
+ * chronic kidney disease.
+ *
+ * The fix is to match ONLY against the curated vocabulary a human wrote for exactly
+ * this purpose — `keywords[]` + `need_categories[]` — which is why every
+ * `disease_specific` source must carry `keywords` (totality-tested). Free-text
+ * `source_id`/`name` are deliberately NOT consulted.
+ *
+ * The load-bearing direction is `keyword ⊂ condition`: the keyword is the specific
+ * term, the condition is the user's free text, so `cancer` ⊂ "breast cancer",
+ * `dementia` ⊂ "vascular dementia", `diabetes` ⊂ "type 2 diabetes". The reverse
+ * (`condition ⊂ keyword`) is also honoured so a bare "cancer" still reaches a
+ * source keyed to "breast cancer".
+ *
+ * REJECTED ALTERNATIVE (recorded so it is not re-attempted): "every distinctive
+ * token of the condition must appear". Measured against the real registry it flips
+ * ten true covers to false — `breast cancer`, `vascular dementia`, `wheelchair user`,
+ * `type 2 diabetes`, `complex ptsd`, `obstructive sleep apnea`… — because the
+ * haystack never contained the qualifier. It is also VACUOUSLY TRUE for an
+ * all-generic condition like "chronic condition" (empty distinctive set matches every
+ * source), and `chronic_illness` is a real health signal. Strictness in the rule
+ * cannot repair a haystack made of the wrong words.
+ *
+ * @param {string} condition free-text condition from the profile
+ * @param {object} source registry source
+ * @param {Set<string>} [overlay] condition keys already covered by an ADOPTED source
+ */
+export function conditionCoveredBySource(condition, source, overlay = null) {
+  const raw = String(condition || '').trim().toLowerCase();
+  if (!raw) return false;
+  // An adopted, fully-gated source retires the gap — see conditionCoverageKey.
+  if (overlay && overlay.has(conditionCoverageKey(raw))) return true;
+
+  const terms = [
+    ...(Array.isArray(source.keywords) ? source.keywords : []),
+    ...(Array.isArray(source.need_categories) ? source.need_categories : []),
+  ]
+    .map((t) => String(t || '').toLowerCase().replace(/_/g, ' ').trim())
+    .filter((t) => t.length >= 4 && !GENERIC_CONDITION_WORDS.has(t));
+
+  return terms.some((term) => containsTerm(raw, term) || containsTerm(term, raw));
+}
+
+/** Stable key for a condition across the gap scoreboard and the adoption overlay. */
+export function conditionCoverageKey(condition) {
+  return String(condition || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/** system_kv key: conditions a fully-gated, ADOPTED source now covers (see the overlay note). */
+export const CONDITION_COVERAGE_KV_KEY = 'condition_source_coverage';
+
+/** Diagnoses checked per profile. A truncation is REPORTED, never silent. */
+const MAX_CONDITIONS_SCANNED = 8;
+
+/** Support needs checked per profile. */
+const MAX_SUPPORT_NEEDS_SCANNED = 8;
+
+/**
+ * Conditions an ADOPTED source already covers.
+ *
+ * THIS IS WHAT MAKES THE WISHLIST CONVERGE. `conditionCoveredBySource` matches
+ * against the STATIC sourceRegistry, but a source found by the wishlist consumer and
+ * accepted by the full gate stack lands in `funding_opportunities` — which the
+ * registry never sees. Without this overlay, Amy could find and adopt a real
+ * epilepsy source and the scoreboard would STILL report "No disease-specific source
+ * lane exists for epilepsy" every night forever, permanently occupying one of the 10
+ * wishlist slots and starving genuinely new gaps. That is "never converges, but with
+ * a footnote" — and it fails the canonical rule that discovered sources RETIRE
+ * wishlist items.
+ *
+ * Only URLs that survived fetch → extract → reality gate → match engine are written
+ * here (see markGapCandidateOutcomes), so this can never manufacture coverage (G0).
+ */
+export async function loadConditionCoverageOverlay(db) {
+  if (!db?.prepare) return new Set();
+  try {
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(CONDITION_COVERAGE_KV_KEY);
+    if (!row?.value) return new Set();
+    const parsed = JSON.parse(row.value);
+    const keys = Array.isArray(parsed?.conditions) ? parsed.conditions : Array.isArray(parsed) ? parsed : [];
+    return new Set(keys.map((k) => conditionCoverageKey(k)).filter(Boolean));
+  } catch {
+    // A missing/corrupt overlay must never fail the coverage report — it only means
+    // an adopted source is not yet credited, which self-heals on the next adoption.
+    return new Set();
+  }
+}
+
+/**
+ * Support LEVELS / generic flags that are not diseases.
+ *
+ * NOT LOAD-BEARING — do not grow this expecting the wishlist to converge. It is an
+ * exact-match Set, so it can only ever suppress the canonical-token branch of
+ * `profileHelpers`' health signals; the noisy wishlist entries ("lodging",
+ * "unsteady gait", "clawing effect in hands") are FREE TEXT and can never match it.
+ * It could not even cover its own branch — `mobility_needs` leaked past it into prod.
+ * The real fix is provenance: only `signals.health_conditions` reaches the
+ * disease-lane loop now. This stays as a cheap belt-and-braces for legacy callers.
+ */
 const NON_DISEASE_HEALTH_SIGNALS = new Set([
   'high_support_needs', 'disability', 'chronic_illness', 'mental_health', 'recovery',
+  'mobility_needs', 'dme', 'physical',
 ]);
 
 /**
@@ -423,6 +538,9 @@ export async function buildCoverageEvidence(db, profileId) {
   const plan = explainCrawlerPlan(profileContextToThesisInput(ctx));
   const registry = allSources();
   const registryById = Object.fromEntries(registry.map((s) => [s.source_id, s]));
+  // Loaded ONCE per profile: conditions an adopted (fully-gated) source now covers,
+  // so a wishlist entry the consumer actually closed stops re-emitting forever.
+  const conditionOverlay = await loadConditionCoverageOverlay(db);
 
   // ── Which selected sources currently HAVE stored matches ──
   let contributing = new Set();
@@ -553,16 +671,39 @@ export async function buildCoverageEvidence(db, profileId) {
     }
   }
 
-  // (c2) Health conditions with no disease-specific coverage (or coverage that
-  // exists in the registry but was not selected for this profile).
-  const healthSignals = ctx.signals?.health instanceof Set
-    ? [...ctx.signals.health]
-    : Array.isArray(ctx.signals?.health) ? ctx.signals.health : [];
+  // (c2) DIAGNOSES with no disease-specific coverage (or coverage that exists in
+  // the registry but was not selected for this profile).
+  //
+  // Reads `health_conditions`, NOT the `health` union. The union mixes diagnoses
+  // with support needs, disability descriptors and support flags, so iterating it
+  // asked "does a disease-specific source lane exist for X?" about `lodging` (a
+  // support need), `unsteady gait` (a symptom) and `mobility_needs` (a flag) — 4 of
+  // the 10 wishlist items the owner was asked to action on 2026-07-16. Those are
+  // unanswerable by construction, and no denylist can fix it because the values are
+  // free text. Provenance can, and is recorded at the write site
+  // (profileHelpers.js). Falls back to the union for a caller with older signals.
+  const conditionSignals = ctx.signals?.health_conditions instanceof Set
+    ? [...ctx.signals.health_conditions]
+    : Array.isArray(ctx.signals?.health_conditions)
+      ? ctx.signals.health_conditions
+      : ctx.signals?.health instanceof Set
+        ? [...ctx.signals.health]
+        : Array.isArray(ctx.signals?.health) ? ctx.signals.health : [];
   const diseaseSources = registry.filter((s) => laneForSource(s.source_id, s) === 'disease_specific');
   const selectedIds = new Set((plan.selected_sources || []).map((s) => s.source_id));
-  for (const condition of healthSignals.slice(0, 8)) {
+  // A silent cap is a silent miss (the one thing the lane pillar forbids): report
+  // the truncation instead of dropping a 9th diagnosis on the floor.
+  if (conditionSignals.length > MAX_CONDITIONS_SCANNED) {
+    gaps.push({
+      lane: 'disease_specific',
+      statement: `Only the first ${MAX_CONDITIONS_SCANNED} of ${conditionSignals.length} conditions were checked for a disease-specific lane.`,
+      profile_fact: `health_conditions_count=${conditionSignals.length}`,
+      suggested_action: `Raise MAX_CONDITIONS_SCANNED or split this profile — ${conditionSignals.length - MAX_CONDITIONS_SCANNED} condition(s) are currently unchecked.`,
+    });
+  }
+  for (const condition of conditionSignals.slice(0, MAX_CONDITIONS_SCANNED)) {
     if (NON_DISEASE_HEALTH_SIGNALS.has(String(condition))) continue;
-    const covering = diseaseSources.filter((s) => conditionCoveredBySource(condition, s));
+    const covering = diseaseSources.filter((s) => conditionCoveredBySource(condition, s, conditionOverlay));
     if (covering.length === 0) {
       gaps.push({
         lane: 'disease_specific',
@@ -581,12 +722,51 @@ export async function buildCoverageEvidence(db, profileId) {
     }
   }
 
-  // (c3) Declared needs that NO searched source selects on.
-  const selectedRegistrySources = (plan.selected_sources || [])
+  // (c2b) SUPPORT NEEDS ("lodging", "copay_assistance") and disability descriptors.
+  // These are not diagnoses, so they are a NEED-coverage question, not a disease-lane
+  // one. Routing them here is what turns an unfillable ask ("add a lodging disease
+  // lane") into a finite, convergent one ("teach the matcher that lodging is
+  // housing"). `normalizeNeedCategory` is the SAME gate `signals.needs` already goes
+  // through (profileHelpers), so a value it cannot resolve is genuinely a value no
+  // source can match on — which canonical_rules calls out directly: "a field a
+  // source cannot match on shouldn't be collected".
+  const supportSignals = ctx.signals?.health_support instanceof Set
+    ? [...ctx.signals.health_support]
+    : Array.isArray(ctx.signals?.health_support) ? ctx.signals.health_support : [];
+  const declaredNeeds = new Set((plan.needs || []).map((n) => String(n).toLowerCase()));
+  // The sources this run actually searched — the same set (c3) judges need coverage
+  // against, resolved once and shared so the two loops cannot disagree.
+  const searchedSources = (plan.selected_sources || [])
     .map((s) => registryById[s.source_id])
     .filter(Boolean);
+  for (const support of supportSignals.slice(0, MAX_SUPPORT_NEEDS_SCANNED)) {
+    const canonical = normalizeNeedCategory(String(support));
+    if (!canonical) {
+      gaps.push({
+        lane: null,
+        statement: `Profile support need "${support}" is not in the matcher's need vocabulary, so no source can match on it.`,
+        profile_fact: `support_need=${support}`,
+        suggested_action: `Add "${support}" to NEED_ALIAS_MAP (backend/services/profileNormalizer.js) pointing at the canonical need it means — a one-line, finite fix. Do NOT add a disease lane: this is not a diagnosis.`,
+      });
+      continue;
+    }
+    // Already declared as a canonical need → (c3) below is the authority on whether
+    // a source covers it; emitting here too would double-count the same gap.
+    if (declaredNeeds.has(canonical)) continue;
+    if (!needCoveredBySources(canonical, searchedSources)) {
+      gaps.push({
+        lane: null,
+        statement: `No searched source covers the support need "${support}" (canonical need "${canonical}").`,
+        profile_fact: `support_need=${support}`,
+        suggested_action: `Add or broaden a source covering the "${canonical}" need category.`,
+      });
+    }
+  }
+
+  // (c3) Declared needs that NO searched source selects on. Shares
+  // `searchedSources` with (c2b) so the two need-coverage answers cannot diverge.
   for (const need of (plan.needs || []).slice(0, 12)) {
-    if (!needCoveredBySources(need, selectedRegistrySources)) {
+    if (!needCoveredBySources(need, searchedSources)) {
       gaps.push({
         lane: null,
         statement: `No searched source covers the profile need "${need}".`,
