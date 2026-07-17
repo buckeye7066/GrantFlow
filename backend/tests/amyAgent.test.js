@@ -146,6 +146,53 @@ describe('Amy synthetic profile catalog', () => {
   })
 })
 
+describe('amount_recall_miss counts only amounts that were KNOWABLE', () => {
+  const scenario = { scenario_id: 'senior-v1', category: 'senior', label: 'Senior', expected: { state: 'TN' } }
+  const run = (recommendations) =>
+    evaluateDiscovery(scenario, 'p-amt', {
+      run: { run_id: 'r', stored: recommendations.length, sources: [], recommendations },
+      persisted: { opportunities: recommendations.length },
+      thesis: { applicant_types: ['individual'], needs: ['food'], location: { state: 'TN' } },
+    })
+  const fired = (ev) => ev.findings.some((f) => f.type === 'amount_recall_miss')
+  const rec = (i, extra) => ({
+    title: `Program ${i}`, sponsor: 'Agency', match_score: 40, decision: 'REVIEW', kind: 'PROGRAM', ...extra,
+  })
+
+  it('does NOT fire when every funder was READ and publishes no per-award figure', () => {
+    // THE 28-OF-50 CASE (prod 2026-07-16). Amy's cohort reported
+    // amount_recall_miss ×28 against profiles matched to benefit programs, food
+    // banks and SSI — funders that genuinely publish no per-award amount. Amy
+    // could not know that: the sweep READ those pages, learned the answer, and
+    // threw it away (only a status that was NOT 'not_listed' was ever persisted,
+    // and 'not_listed' is exactly what a read-with-no-figure returns).
+    //
+    // So the finding was unfalsifiable: the cohort could never come back clean,
+    // and the owner's standing "50/50 clean → notify me once" goal was
+    // unreachable BY CONSTRUCTION, not by crawler quality.
+    const ev = run(Array.from({ length: 8 }, (_, i) => rec(i, { amount_status: 'none_published' })))
+    expect(fired(ev), 'a funder that publishes nothing is not a recall miss').toBe(false)
+  })
+
+  it('STILL fires when the amount was knowable and we missed it', () => {
+    // The finding must keep its teeth. 'not_listed' is SILENCE — nobody looked,
+    // or the answer was never written down — and that is exactly where a real
+    // extraction gap hides. Do not let it into the unknowable set.
+    const ev = run(Array.from({ length: 8 }, (_, i) => rec(i, { amount_status: 'not_listed' })))
+    expect(fired(ev), 'silence is not a denial — a real miss must still fire').toBe(true)
+  })
+
+  it('fires on a MIXED cohort where the readable rows all missed', () => {
+    // 5 knowable misses + 3 honest denials: the denials are excluded, the 5
+    // remain measurable, and the finding fires on them.
+    const ev = run([
+      ...Array.from({ length: 5 }, (_, i) => rec(i, { amount_status: 'not_listed' })),
+      ...Array.from({ length: 3 }, (_, i) => rec(i + 5, { amount_status: 'none_published' })),
+    ])
+    expect(fired(ev)).toBe(true)
+  })
+})
+
 describe('Amy evaluation + Anya handoff', () => {
   it('flags zero-result and builds an Anya-compatible report', () => {
     const scenario = { scenario_id: 'veteran-v1', category: 'veteran', label: 'Veteran', expected: { state: 'TN', needs: ['veteran housing'] } }

@@ -415,16 +415,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // amount anywhere (an ingest/extraction gap Amy's amount_recall_miss
     // findings and the awardAmountExtractor patterns are meant to close).
     id: 'pipeline.amountCoverage',
-    label: 'Pipeline dollar-value coverage (active grants with a knowable amount)',
+    label: 'Pipeline dollar-value answers (every active grant has an honest amount answer)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Measures what share of active pipeline grants carry a usable dollar value (amount_requested/max/min) and what share of the active catalog has amounts. Flags when coverage is low enough that profile Pipeline Potential figures materially understate reality.',
+    description: 'Asserts every active pipeline grant has an ANSWER about its award amount — a dollar value, an evidenced "this funder publishes none", or no-per-award-figure-by-design — and flags the rows that have no answer, grouped by why. Also reports raw coverage and ratchets it against the previous run so a writer silently REMOVING amounts still fails.',
     async run({ db } = {}) {
       if (!db) return { ok: true, skipped: true, summary: 'no db handle; amount coverage read skipped' }
       const statusesSql = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
       let grants
       let catalog
+      let answers
       try {
         grants = await db
           .prepare(
@@ -443,10 +444,86 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       } catch (err) {
         return { ok: true, skipped: true, summary: `amount coverage query failed: ${err?.message || err}` }
       }
+
+      // THE ANSWER CENSUS runs in its OWN try/catch, and deliberately cannot take
+      // the ratchet down with it. The ratchet is the WIPE detector — the one
+      // thing here that caught a live bug (#950/#951) — and it needs nothing but
+      // the two counts above. Folding the census into the same try meant one
+      // typo, one column a DB has not migrated yet, and the whole check returns
+      // `skipped: true` → reads GREEN while a writer quietly destroys amounts.
+      // That is this subsystem's signature failure and it is not being rebuilt
+      // here: a census that cannot run degrades to "census unavailable", never to
+      // "everything is fine".
+      let censusError = null
+      try {
+        // Every active row falls in exactly one bucket, in priority order — the
+        // CASE is ordered deliberately: a carried value outranks any label, and
+        // evidence outranks silence.
+        answers = await db
+          .prepare(
+            `SELECT
+               SUM(CASE WHEN ${pipelineValueSql('g')} > 0 THEN 1 ELSE 0 END) AS carried,
+               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
+                         AND LOWER(COALESCE(fo.opportunity_kind, '')) = 'directory'
+                        THEN 1 ELSE 0 END) AS by_design,
+               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
+                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
+                         AND (fo.amount_status = 'none_published' OR g.amount_status = 'none_published')
+                        THEN 1 ELSE 0 END) AS answered_none_published,
+               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
+                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
+                         AND (fo.amount_status IS NULL OR fo.amount_status <> 'none_published')
+                         AND (g.amount_status IS NULL OR g.amount_status <> 'none_published')
+                         AND (COALESCE(fo.amount_status, '') IN ('varies', 'contact_required', 'estimated')
+                              OR COALESCE(fo.amount_text, '') <> '')
+                        THEN 1 ELSE 0 END) AS answered_text,
+               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
+                         AND g.funding_opportunity_id IS NULL
+                        THEN 1 ELSE 0 END) AS unanswered_no_catalog_row,
+               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
+                         AND g.funding_opportunity_id IS NOT NULL
+                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
+                         AND (fo.amount_status IS NULL OR fo.amount_status IN ('not_listed'))
+                         AND COALESCE(fo.amount_text, '') = ''
+                         AND fo.amount_enrich_attempted_at IS NULL
+                        THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
+                         AND g.funding_opportunity_id IS NOT NULL
+                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
+                         AND (fo.amount_status IS NULL OR fo.amount_status IN ('not_listed'))
+                         AND COALESCE(fo.amount_text, '') = ''
+                         AND fo.amount_enrich_attempted_at IS NOT NULL
+                        THEN 1 ELSE 0 END) AS unanswered_unreadable
+             FROM grants g
+             LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+            WHERE g.status IN (${statusesSql})`,
+          )
+          .get()
+      } catch (err) {
+        censusError = String(err?.message || err)
+      }
       const total = Number(grants?.total) || 0
       const withValue = Number(grants?.with_value) || 0
       const catTotal = Number(catalog?.total) || 0
       const catWith = Number(catalog?.with_amount) || 0
+      const carried = Number(answers?.carried) || 0
+      const byDesign = Number(answers?.by_design) || 0
+      const nonePublished = Number(answers?.answered_none_published) || 0
+      const answeredText = Number(answers?.answered_text) || 0
+      const noCatalogRow = Number(answers?.unanswered_no_catalog_row) || 0
+      const neverRead = Number(answers?.unanswered_never_read) || 0
+      const unreadable = Number(answers?.unanswered_unreadable) || 0
+      const census = answers
+        ? {
+            carried,
+            answered_none_published: nonePublished,
+            answered_text: answeredText,
+            no_amount_by_design: byDesign,
+            unanswered_no_catalog_row: noCatalogRow,
+            unanswered_never_read: neverRead,
+            unanswered_unreadable: unreadable,
+          }
+        : {}
       if (total < 20) return { ok: true, summary: `Only ${total} active pipeline grants — coverage check not meaningful yet.` }
       const pct = Math.round((withValue / total) * 100)
       const catPct = catTotal > 0 ? Math.round((catWith / catTotal) * 100) : 0
@@ -471,22 +548,74 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         return {
           ok: false,
           summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${pct}%): ${summary}`,
-          evidence: { ...regression, active_grants: total, with_value: withValue, catalog_pct: catPct },
+          // The census rides along: on a wipe it shows exactly where the rows
+          // went (they stay MISSES — a wiped row keeps its honest status and is
+          // never `none_published`, because no read ever denied it).
+          evidence: { ...regression, active_grants: total, with_value: withValue, catalog_pct: catPct, ...census },
           recommended_fix: 'Coverage falling means something is REMOVING amounts, not just failing to find them — treat it as an active bug, not a backlog. Group the metric BY WRITER first (`SELECT record_origin, COUNT(*), COUNT(*) FILTER (WHERE amount_max > 0) FROM funding_opportunities GROUP BY record_origin`): a single origin collapsing is the fingerprint. That query exposed the 2026-07-16 defect in one shot (live_crawl 2.4% vs funding_api 17%), where a re-crawl treated an ingest carrying no amount as the source asserting it had none, and `amount_enrich_attempted_at` survived the wipe so each row was burned blank forever. Also check the enforce-invariants summary (pipeline.invariantSweepOutcomes) for a net stripping values.',
           confidence: 0.8,
         }
       }
 
-      if (pct < 60) {
+      // THE BAR IS "DOES EVERY ROW HAVE AN ANSWER?", NOT "IS COVERAGE HIGH?"
+      //
+      // This check used to fail whenever raw coverage sat under 60%. It printed
+      // the same LOW line every night for a year while five PRs (#941-#951)
+      // fixed real defects underneath it, because the bar measured THE WORLD,
+      // not US: coverage is capped by what share of funders publish a per-award
+      // figure at all, and the honest measured ceiling is ~21% (prod, 2026-07-16:
+      // remaining=2, exhausted=131 — the backlog is DRAINED; those rows publish
+      // no figure anywhere). A bar nothing can reach is not a standard, it is a
+      // nightly false alarm — and an owner who learns to scroll past this finding
+      // is exactly how the real one (a re-crawl WIPING amounts) goes unread.
+      //
+      // What IS ours to hold: every active row must have an honest ANSWER —
+      // a dollar value, an evidenced "read it, this funder publishes none"
+      // (`none_published`, written only after a real read), an honest label
+      // ("varies"/"contact funder"), or no-per-award-figure-BY-DESIGN (a
+      // DIRECTORY locator is a pointer, never an award — the same doctrine
+      // `unvaluedCountSql` states and Amy's false_positive detector already
+      // applies). That set DRAINS and stays drained, and every residual names
+      // its own fix instead of shrugging at a percentage.
+      //
+      // "$0" and "no amount stated" are DIFFERENT facts (config/pipelineValue.js).
+      // This check was the one surface that conflated them.
+      // The ratchet above has already run and already returned on a regression.
+      // Only now may a broken census matter — and it degrades to "unknown", not
+      // to "ok". Reporting raw coverage keeps the reading honest and visible.
+      if (censusError || !answers) {
+        return {
+          ok: true,
+          skipped: true,
+          summary: `amount answer census unavailable (${censusError || 'no rows'}) — raw reading only: ${summary}`,
+          evidence: { active_grants: total, with_value: withValue, coverage_pct: pct, catalog_pct: catPct },
+        }
+      }
+
+      const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct }
+
+      // `never_read` is BACKLOG, not a defect: the sweep is bounded per night and
+      // drains it. It fails only if it STALLS — which the sweep's own
+      // remaining/exhausted telemetry (pipeline.invariantSweepOutcomes) owns.
+      // Failing on it here would re-create the nightly-noise problem one rung down.
+      const unanswered = noCatalogRow + unreadable
+      if (unanswered > 0) {
+        const parts = []
+        if (unreadable > 0) parts.push(`${unreadable} unreadable (source read failed/JS-shell — needs an API adapter)`)
+        if (noCatalogRow > 0) parts.push(`${noCatalogRow} with no catalog row (structurally out of the sweep's reach — it joins grants→funding_opportunities)`)
         return {
           ok: false,
-          summary: `Pipeline-$ coverage LOW: ${summary}`,
-          evidence: { active_grants: total, with_value: withValue, coverage_pct: pct, catalog_total: catTotal, catalog_with_amount: catWith, catalog_pct: catPct },
-          recommended_fix: 'The boot nets now ACQUIRE amounts, not just copy them: enforceAmountEnrichment fetches the funder\'s own page for active-pipeline sources with no dollar figure (bounded per boot; see pipeline.invariantSweepOutcomes for what it learned), and enforceGrantAmountBackfill mirrors catalog amounts onto pipeline rows. A persistently low residual after those means INGEST never captured amounts: extend awardAmountExtractor patterns for the text phrasings on failing sources, and make structured adapters map their award-size fields into amount_min/amount_max. Amy\'s amount_recall_miss findings name the profile shapes/sources where the gap concentrates.',
+          summary: `${unanswered} active pipeline grant(s) have NO amount answer: ${parts.join('; ')}. ${summary}`,
+          evidence: fullCensus,
+          recommended_fix: 'These rows are not "low coverage" — they are rows the system has no ANSWER for, and each names its own fix. UNREADABLE: the source rendered a JS shell or refused the fetch, so no amount of page-fetching will ever help — it needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one; check which hosts they are (`SELECT fo.source, COUNT(*) FROM funding_opportunities fo JOIN grants g ON g.funding_opportunity_id=fo.id WHERE fo.amount_enrich_attempted_at IS NOT NULL AND COALESCE(fo.amount_max,0)=0 AND fo.amount_text IS NULL GROUP BY 1`). NO CATALOG ROW: the grant carries a URL but no funding_opportunity_id, so enforceAmountEnrichment (which JOINs through that link) can never see it and enforceGrantAmountBackfill has nothing to inherit from — some of these have a catalog row that exists and simply is not linked. Do NOT "fix" this by widening the answer buckets: an answer is a dollar value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.',
           confidence: 0.85,
         }
       }
-      return { ok: true, summary }
+      return {
+        ok: true,
+        summary: `All ${total} active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting tonight's read` : ''}). ${summary}`,
+        evidence: fullCensus,
+      }
     },
   },
   {

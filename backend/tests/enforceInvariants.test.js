@@ -2501,6 +2501,88 @@ describe('enforceAmountEnrichment', () => {
     expect(foRow(db, foId).amount_max).toBe(9000000)
   })
 
+  it('RECORDS the denial when the page was read and states no per-award figure', async () => {
+    // REGRESSION (prod 2026-07-17). The sweep fetched the funder's page, the
+    // extractor scanned real copy, and the answer — "this funder publishes no
+    // per-award figure" — was thrown away: the write branch only persisted a
+    // status when it was NOT 'not_listed', which is exactly what the extractor
+    // returns for that case. So the row stayed blank and indistinguishable from
+    // one nothing had ever looked at, and every consumer downstream
+    // (pipeline.amountCoverage, Amy's amount_recall_miss) had to treat a funder
+    // that pays no stated award as a CRAWLER MISS. 28 of 50 synthetic profiles
+    // failed on that conflation.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: false,
+        reason: 'no_per_award_amount_on_page', amount_text: null, amount_status: 'not_listed',
+      }),
+      limit: 1,
+    })
+    const row = foRow(db, foId)
+    expect(row.amount_status, 'a READ page that states no figure must record the denial').toBe('none_published')
+    expect(res.nonePublished).toBe(1)
+    // It is an ANSWER, so the row is burned — and stays out of future candidacy.
+    expect(row.amount_enrich_attempted_at).not.toBeNull()
+  })
+
+  it('does NOT record a denial when the page could not be READ (thin page / JS shell)', async () => {
+    // The guard that keeps `none_published` honest. A JS shell means the
+    // extractor never saw award copy, so we have learned NOTHING about whether
+    // this funder publishes a figure. Recording a denial here would fabricate
+    // evidence and silently retire the row from the coverage metric — the very
+    // rows that need an API ADAPTER would be the ones that vanish from the
+    // report. Reaching them is grants.gov's lesson, not a status write.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page',
+      }),
+      limit: 1,
+    })
+    const row = foRow(db, foId)
+    expect(row.amount_status, 'an UNREAD page must never manufacture a denial').not.toBe('none_published')
+    expect(res.nonePublished ?? 0).toBe(0)
+  })
+
+  it('prefers an honest label the page stated over the bare denial', async () => {
+    // "amounts vary" is strictly more informative than "no figure published",
+    // so a real label wins; none_published is the floor, not an override.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: false,
+        reason: 'no_per_award_amount_on_page', amount_text: 'amounts vary by need', amount_status: 'varies',
+      }),
+      limit: 1,
+    })
+    const row = foRow(db, foId)
+    expect(row.amount_status).toBe('varies')
+    expect(row.amount_text).toBe('amounts vary by need')
+  })
+
+  it('never downgrades a row that already carries a real amount', async () => {
+    // A denial must not overwrite a figure that landed between scan and write
+    // (the #950 class: the least-informed writer must never win).
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    db.prepare('UPDATE funding_opportunities SET amount_max = 9000, amount_status = ? WHERE id = ?')
+      .run('known', foId)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: false,
+        reason: 'no_per_award_amount_on_page', amount_text: null, amount_status: 'not_listed',
+      }),
+      limit: 1,
+    })
+    const row = foRow(db, foId)
+    expect(row.amount_max).toBe(9000)
+    expect(row.amount_status).toBe('known')
+  })
+
   it('persists per-award amounts learned from the funder page', async () => {
     const db = makeRealDb()
     const foId = seedLinkedPair(db)
