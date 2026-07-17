@@ -69,11 +69,25 @@ export function createRobert(deps = {}) {
           }
         }
 
-        // Per-profile recommendation rollup (ACCEPT-band only) over the catalog.
+        // Per-profile recommendation rollup: ACCEPT-band matches over the catalog.
+        //
+        // The authoritative gate is the canonical engine's own verdict,
+        // `decision === 'accept'` — the crawler-os matchEngine maps the canonical
+        // ACCEPT/REVIEW/REJECT decision through, and the canonical engine only
+        // returns ACCEPT at/above its ACCEPT band. We deliberately do NOT re-apply
+        // a numeric `min_match_score` floor here: that thesis field defaults to
+        // 55/60, a value on the RETIRED 0-100 slider scale that predates the
+        // 2026-07-06 DATA-POINT rescale (real matches now run p50=8 / p90=15 /
+        // max~47; ACCEPT fires around 11). Filtering ACCEPTs at 55/60 discarded
+        // effectively EVERY genuine recommendation for a real 50-150-data-point
+        // profile, silently emptying this rollup — goal drift masked only by thin
+        // test fixtures whose tiny denominator scores 100% coverage. Crawler-os is
+        // import-isolated from config/matchThresholds by design, so the OS reads
+        // the canonical bar through the decision, never by re-deriving a number.
         const recommendationsByProfile = {};
         for (const th of theses) {
           if (!th.profile_id) continue;
-          recommendationsByProfile[th.profile_id] = getMatchesForProfile(store, th.profile_id, { minScore: th.min_match_score })
+          recommendationsByProfile[th.profile_id] = getMatchesForProfile(store, th.profile_id, { minScore: 0 })
             .filter((m) => m.decision === 'accept');
         }
 
