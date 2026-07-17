@@ -28,6 +28,30 @@
 
 import { SAM_CATEGORIES, SEVERITY } from './samTypes.js'
 import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../../config/pipelineValue.js'
+import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY } from '../amy/amyConstants.js'
+
+/**
+ * Exclude Amy's SYNTHETIC-profile grants from a pipeline-health metric.
+ *
+ * Amy dumps up to 50 synthetic training profiles a night (each with many grant
+ * rows) to stress the crawlers, and the reaper deletes them after each run
+ * (`enforceAmySyntheticExpiry`). They are NOT real client pipeline: including
+ * them makes a coverage metric measure Amy's rotation schedule, not crawler
+ * quality. Measured 2026-07-17: a nightly cohort added 188 unvalued grants and
+ * ZERO valued ones, dragging pipeline-$ coverage 18% → 11% and tripping the
+ * regression RATCHET — a false "amounts are being destroyed" alarm on a night
+ * nothing was destroyed. That is the same "measure the world, not us" failure
+ * the #954 census set out to kill, one level down in the ratchet. The synthetic
+ * side has its OWN telemetry (Amy's cohort scoreboard + `amount_recall_miss`);
+ * this metric is the owner-facing REAL-pipeline number.
+ *
+ * `created_by = 'agent:amy'` is the canonical synthetic marker (amyConstants —
+ * the same scope `listAmyProfiles`/`cleanupExpiredAmyProfiles` use). A profile
+ * row is required to exclude, so a grant with a NULL/absent profile is KEPT
+ * (real by default — a synthetic is only ever excluded on positive evidence).
+ */
+const NON_SYNTHETIC_PIPELINE = (alias) =>
+  `NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = ${alias}.profile_id AND p.created_by = '${AMY_ORIGIN_CREATED_BY}')`
 
 // ---------------------------------------------------------------------------
 // Shape constants
@@ -431,7 +455,9 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           .prepare(
             `SELECT COUNT(*) AS total,
                     SUM(CASE WHEN ${pipelineValueSql('grants')} > 0 THEN 1 ELSE 0 END) AS with_value
-               FROM grants WHERE status IN (${statusesSql})`,
+               FROM grants
+              WHERE status IN (${statusesSql})
+                AND ${NON_SYNTHETIC_PIPELINE('grants')}`,
           )
           .get()
         catalog = await db
@@ -496,7 +522,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
                         THEN 1 ELSE 0 END) AS unanswered_unreadable
              FROM grants g
              LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-            WHERE g.status IN (${statusesSql})`,
+            WHERE g.status IN (${statusesSql})
+              AND ${NON_SYNTHETIC_PIPELINE('g')}`,
           )
           .get()
       } catch (err) {
@@ -539,7 +566,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       await appendAmountCoverageHistory(db, { at: new Date().toISOString(), pct, with_value: withValue, total })
 
       const trend = previous ? ` (was ${previous.pct}% on ${String(previous.at).slice(0, 10)})` : ''
-      const summary = `${withValue}/${total} (${pct}%) active pipeline grants carry a dollar value${trend}; catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
 
       // A DROP is reported even when the level is above the bar, and takes
       // precedence when below it: "we went backwards" is a different, more urgent
