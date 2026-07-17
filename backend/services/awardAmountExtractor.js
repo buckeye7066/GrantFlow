@@ -131,11 +131,46 @@ const RE_CONTACT =
 
 // A dollar figure in these contexts is a PROGRAM total / org financial, never a
 // per-award amount. Checked in a window around the match.
-const RE_EXCLUDE_BEFORE = /(?:total(?:ing|s)?|in\s+total|aggregate|annually\s+(?:awards?|distributes?)|has\s+(?:awarded|distributed|given)|over|more\s+than|assets|revenue|incomes?|sales|budgets?|endowment|raised|available)\s*(?:of|:|is)?\s*$/i
+// `annual(ly) SCHOLARSHIPS/AWARDS/GRANTS of $X` (note: PLURAL award noun) is a
+// program's yearly disbursement total, not a per-award figure — Coca-Cola's page
+// leads with "annual scholarships of $3.55 million awarded through the program".
+// PLURAL is the discriminator: "an annual scholarship of $5,000" (SINGULAR) is a
+// real per-award phrasing and is deliberately NOT matched here.
+const RE_EXCLUDE_BEFORE = /(?:total(?:ing|s)?|in\s+total|aggregate|annual(?:ly)?\s+(?:scholarships|awards|grants|stipends|fellowships)|annually\s+(?:awards?|distributes?)|has\s+(?:awarded|distributed|given)|over|more\s+than|assets|revenue|incomes?|sales|budgets?|endowment|raised|available)\s*(?:of|:|is)?\s*$/i
 const RE_EXCLUDE_AFTER = /^\s+in\s+(?:total\s+)?(?:funding|grants?|scholarships?|awards?)/i
 // Subset of the exclusion contexts that identify a PROGRAM TOTAL specifically
 // (worth preserving as amount_text) vs. org financials (assets/revenue — noise).
 const RE_PROGRAM_TOTAL_BEFORE = /(?:total(?:ing|s)?|in\s+total|aggregate|annually\s+(?:awards?|distributes?)|total\s+funding\s+available|available)\s*(?:of|:|is)?\s*$/i
+
+// AGGREGATE phrasings: a figure that is "N awards up to $X" or "$X across N
+// tiers/recipients annually" is a PROGRAM TOTAL, not a per-award amount, even
+// though "up to $X" reads as per-award in isolation.
+//
+// THE BUG THIS CLOSES (2026-07-17, Coca-Cola Scholars): the page says both
+// "receive this $20,000 scholarship" (the real award) and, for a DIFFERENT
+// program, "awards 200 stipends (up to $237,500) annually across four tiers"
+// (an annual total across 200 recipients). RE_UP_TO matched "$237,500" first
+// and returned it, so the pipeline showed a WRONG figure 12× the real award —
+// worse than a blank (precision-over-recall doctrine). Excluding the aggregate
+// lets the extractor fall through to "$20,000 scholarship" (RE_SINGLE) and
+// return the correct per-award figure.
+//   - BEFORE: a COUNT of awards precedes the figure ("200 stipends (up to $").
+//   - AFTER: the figure is spread across N recipients/tiers or is an annual
+//     program sum ("$X annually across four tiers", "$X to 150 recipients").
+// Precision guard: both require a NUMBER, so genuine per-award phrasings
+// ("up to $10,000 in scholarship support", "$2,500 to each recipient") are
+// untouched — they carry no count.
+const RE_AGGREGATE_BEFORE =
+  /\b\d{1,4}\s+(?:stipends?|awards?|scholarships?|grants?|fellowships?|prizes?|recipients?|winners?|awardees?|scholars?)\b[^$]{0,40}$/i
+const RE_AGGREGATE_AFTER =
+  /^[^.$]{0,48}?\b(?:annually\s+across|across\s+\d+\s+(?:tiers?|categor|recipients?|programs?|awards?)|to\s+\d+\s+(?:recipients?|students?|winners?|awardees?|scholars?|families|households))/i
+// "annual SCHOLARSHIPS of $X" (PLURAL award noun) spans the before/match
+// boundary — for a "$X scholarships of" match the award noun is INSIDE the
+// matched text, so a before-only window never sees the plural. Checked against
+// `before + match`. PLURAL only: "an annual scholarship of $5,000" (singular,
+// per-award) is deliberately preserved.
+const RE_ANNUAL_PLURAL_TOTAL =
+  /\bannual(?:ly)?\s+(?:scholarships|awards|grants|stipends|fellowships)\s+(?:of|worth|valued\s+at)\s*\$/i
 
 function parseMoney(numStr, unit) {
   const base = Number(String(numStr).replace(/,/g, ''))
@@ -148,6 +183,17 @@ function parseMoney(numStr, unit) {
 function excluded(text, matchIndex, matchLength, { checkAfter = false } = {}) {
   const before = text.slice(Math.max(0, matchIndex - 56), matchIndex)
   if (RE_EXCLUDE_BEFORE.test(before)) return true
+  // AGGREGATE guard runs for EVERY pattern (not gated on checkAfter): "N awards
+  // up to $X" and "$X across N tiers" are program totals no matter which pattern
+  // matched the figure — and the costliest miss is exactly RE_UP_TO/RE_RANGE,
+  // which do NOT set checkAfter. Both windows require a count, so a bare
+  // per-award "up to $10,000 in support" is never caught.
+  if (RE_AGGREGATE_BEFORE.test(before)) return true
+  const aggAfter = text.slice(matchIndex + matchLength, matchIndex + matchLength + 56)
+  if (RE_AGGREGATE_AFTER.test(aggAfter)) return true
+  // "annual scholarships of $X" — the plural award noun lives inside the match,
+  // so test across the before/match boundary.
+  if (RE_ANNUAL_PLURAL_TOTAL.test(before + text.slice(matchIndex, matchIndex + matchLength))) return true
   // The after-window ("$2 million in grants") only disambiguates BARE-verb
   // phrasings ("awarded $X", "receive $X"). Range/"up to" matches are already
   // explicitly per-award — "up to $10,000 in scholarship support" must pass.
