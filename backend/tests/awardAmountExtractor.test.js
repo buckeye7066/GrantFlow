@@ -109,6 +109,45 @@ describe('extractAwardAmountsFromText — per-award dollar extraction', () => {
     expect(extractAwardAmountsFromText(null).matched).toBeNull()
     expect(extractAwardAmountsFromText('').amount_status).toBe('not_listed')
   })
+
+  describe('AGGREGATE / program-total precision (the Coca-Cola Scholars class, 2026-07-17)', () => {
+    // A rich funder page carries a real per-award figure AND several program
+    // aggregates. The extractor used to grab the biggest matching aggregate — a
+    // WRONG amount, worse than a blank (precision-over-recall). It must skip the
+    // aggregates and return the real per-award figure.
+    it('skips "N stipends (up to $X) annually across N tiers" and finds the real award', () => {
+      const text = '150 Coca-Cola Scholars are selected each year to receive this $20,000 scholarship. ' +
+        'The Program awards 200 stipends (up to $237,500) annually across four tiers of recognition.'
+      const r = extractAwardAmountsFromText(text)
+      expect(r.amount_max).toBe(20000)
+    })
+
+    it('skips "annual scholarships of $X million" (plural = program total)', () => {
+      const text = 'We support exceptional students each year, with annual scholarships of $3.55 million ' +
+        'awarded through the program. Each scholar receives a $20,000 scholarship.'
+      const r = extractAwardAmountsFromText(text)
+      expect(r.amount_max).toBe(20000)
+    })
+
+    it('excludes a pure program total ("$X in scholarships annually") with no per-award figure', () => {
+      const r = extractAwardAmountsFromText('The foundation awards $15 million in scholarships annually to students nationwide.')
+      expect(r.amount_min).toBeNull()
+      expect(r.amount_max).toBeNull()
+    })
+
+    it('PRESERVES a singular "annual scholarship of $X" (a real per-award figure)', () => {
+      // The plural discriminator must not swallow legitimate singular per-award phrasing.
+      expect(extractAwardAmountsFromText('Recipients receive an annual scholarship of $5,000.').amount_max).toBe(5000)
+    })
+
+    it('PRESERVES a genuine per-award "up to $X" with no count', () => {
+      expect(extractAwardAmountsFromText('Apply for up to $10,000 in scholarship support.').amount_max).toBe(10000)
+    })
+
+    it('PRESERVES "$X to each recipient" (per-award, no count before the figure)', () => {
+      expect(extractAwardAmountsFromText('Grants of $5,000 to each recipient are available.').amount_max).toBe(5000)
+    })
+  })
 })
 
 describe('resolveOpportunityAmounts — structured wins, extraction fills', () => {
