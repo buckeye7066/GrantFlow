@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Best-available amount TEXT + explicit status when no per-award number is
   -- knowable (awardAmountExtractor.js): a row is never silently blank.
   amount_text TEXT,
-  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
+  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required','none_published')),
   amount_confidence REAL,
   -- Set once enforceAmountEnrichment() is DONE with this row, so the sweep
   -- excludes tried rows in SQL instead of after the LIMIT (a JS filter after
@@ -500,7 +500,7 @@ CREATE TABLE IF NOT EXISTS grants (
   -- pipeline cards can show honest "varies / contact funder / not listed"
   -- states instead of a blank when no dollar figure is knowable.
   amount_text TEXT,
-  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
+  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required','none_published')),
   amount_confidence REAL,
 
   status TEXT DEFAULT 'discovered' CHECK(status IN (

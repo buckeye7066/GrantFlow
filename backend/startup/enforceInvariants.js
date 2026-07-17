@@ -62,7 +62,7 @@ import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
-import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE } from '../services/awardAmountExtractor.js'
+import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE, AMOUNT_STATUS_NONE_PUBLISHED } from '../services/awardAmountExtractor.js'
 import { AUTO_ADD_SCORE, DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
@@ -2948,6 +2948,10 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     let attemptedNow = 0
     let enriched = 0
     let textOnly = 0
+    // Rows whose source was read and honestly states no per-award figure. NOT a
+    // failure: it is the sweep learning the answer, and the only thing that lets
+    // a coverage metric stop counting the row as a miss forever.
+    let nonePublished = 0
     let fetchFailed = 0
     let retryable = 0
     for (const cand of fresh) {
@@ -2991,18 +2995,42 @@ export async function enforceAmountEnrichment(db, deps = {}) {
               res.amounts.amount_status, res.amounts.amount_confidence, cand.id,
             )
           enriched++
-        } else if (res?.amount_text || (res?.amount_status && res.amount_status !== 'not_listed')) {
-          // No per-award number, but the page yielded an honest label
-          // ("varies", "contact funder", program-total excerpt) — better than blank.
+        } else if (res?.page_read === true) {
+          // The source's own page/API was READ and states no per-award figure.
+          // That is an ANSWER about this row, and until now it was thrown away:
+          // the branch only wrote a status when it was NOT 'not_listed', which
+          // is precisely the value the extractor returns for "read it, no figure
+          // here". So the one fact worth recording — a DENIAL, gathered nightly
+          // at real fetch cost — was the one fact never written down, and the
+          // row became indistinguishable from one nothing had ever looked at.
+          //
+          // Downstream (pipeline.amountCoverage, Amy's amount_recall_miss) that
+          // conflation is the difference between "the crawler missed an amount"
+          // and "this funder publishes none" — an unreachable bar vs a real one.
+          //
+          // A better label the page DID state ('varies', 'contact_required', a
+          // program-total excerpt) is more informative than the bare denial, so
+          // it wins; `none_published` is the floor, not an override.
+          const readStatus =
+            res.amount_status && res.amount_status !== 'not_listed'
+              ? res.amount_status
+              : AMOUNT_STATUS_NONE_PUBLISHED
           await db
             .prepare(
+              // Guarded to silence-or-nothing: a row that already carries an
+              // honest status (or a real amount that landed between the scan and
+              // now) is never downgraded by a later read.
               `UPDATE funding_opportunities
                   SET amount_text = COALESCE(?, amount_text),
-                      amount_status = COALESCE(?, amount_status)
-                WHERE id = ? AND amount_text IS NULL`,
+                      amount_status = ?
+                WHERE id = ?
+                  AND (amount_status IS NULL OR amount_status = 'not_listed')
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0`,
             )
-            .run(res.amount_text ?? null, res.amount_status ?? null, cand.id)
-          textOnly++
+            .run(res.amount_text ?? null, readStatus, cand.id)
+          if (readStatus === AMOUNT_STATUS_NONE_PUBLISHED) nonePublished++
+          else textOnly++
         }
         // Reached only when every write above SUCCEEDED.
         await recordAttempt(cand.id, { burn, attempts })
@@ -3038,10 +3066,25 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     let exhausted = null
     try {
       const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
-      const amountless = `COALESCE(fo.amount_min, 0) <= 0
+      // TWO DIFFERENT QUESTIONS — do not re-merge these predicates.
+      //
+      // `remaining` = "how many rows are still WAITING for a read?", so it must
+      // mirror the CANDIDATE query exactly (silence-only status, no amount text)
+      // or it reports a backlog the sweep would never actually pick up.
+      //
+      // `exhausted` = "done with, still no dollar figure" — a fact about the
+      // OUTCOME, which the invariant table defines without reference to status or
+      // text. It must therefore NOT filter on them: once a read records its
+      // answer (`none_published`, or a 'varies' label), the row is precisely what
+      // `exhausted` exists to count, and a shared predicate silently dropped it
+      // from BOTH buckets — making a fully-answered fleet look like an empty one.
+      const stillUnread = `COALESCE(fo.amount_min, 0) <= 0
               AND COALESCE(fo.amount_max, 0) <= 0
               AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
               AND fo.amount_text IS NULL
+              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`
+      const noFigure = `COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
               AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
       const row = await db
@@ -3050,7 +3093,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
              FROM funding_opportunities fo
              JOIN grants g ON g.funding_opportunity_id = fo.id
             WHERE g.status IN (${statuses})
-              AND ${amountless}
+              AND ${stillUnread}
               AND fo.amount_enrich_attempted_at IS NULL`,
         )
         .get()
@@ -3062,21 +3105,21 @@ export async function enforceAmountEnrichment(db, deps = {}) {
              FROM funding_opportunities fo
              JOIN grants g ON g.funding_opportunity_id = fo.id
             WHERE g.status IN (${statuses})
-              AND ${amountless}
+              AND ${noFigure}
               AND fo.amount_enrich_attempted_at IS NOT NULL`,
         )
         .get()
       exhausted = Number(done?.n ?? 0)
     } catch { /* best-effort telemetry */ }
 
-    if (enriched > 0 || textOnly > 0) {
+    if (enriched > 0 || textOnly > 0 || nonePublished > 0) {
       log.info('enriched catalog award amounts from funder pages', {
-        attempted: attemptedNow, enriched, textOnly, fetchFailed, retryable, remaining, exhausted,
+        attempted: attemptedNow, enriched, textOnly, nonePublished, fetchFailed, retryable, remaining, exhausted,
       })
     }
     return {
       scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
-      textOnly, fetchFailed, retryable, remaining, exhausted, enforced: true,
+      textOnly, nonePublished, fetchFailed, retryable, remaining, exhausted, enforced: true,
     }
   })
 }

@@ -52,6 +52,32 @@ const CONFIDENCE = Object.freeze({
   average: 0.6,
 })
 
+/**
+ * "We have no figure" and "the funder publishes no figure" are DIFFERENT facts,
+ * and only a READ can tell them apart.
+ *
+ * `not_listed` is this extractor's DEFAULT — the value a row carries when
+ * nothing has looked yet. It is SILENCE, and silence is not a denial (the same
+ * reasoning that stops a re-crawl carrying no amount from clearing one:
+ * `opportunityInserter.upsertFundingOpportunity`). So `not_listed` can never
+ * license a claim about the source, only about us.
+ *
+ * `none_published` is the DENIAL: the funder's own page or API was actually
+ * read (`page_read`) and states no per-award figure. It is EVIDENCE about the
+ * world (G0 — read, never invented), and it is what lets a coverage metric
+ * honestly stop counting a row as a miss. Nothing this module produces may
+ * ever return it: it is written ONLY by `enforceAmountEnrichment` (the one
+ * caller that performs the read), never by an extractor default and never by
+ * an ingest. See `pipeline.amountCoverage` in `services/sam/samRegistry.js`.
+ *
+ * KEEP THESE DISTINCT. Collapsing `none_published` back into `not_listed` (or
+ * letting ingest write it) re-opens the defect this exists to close: a row that
+ * was never read becomes indistinguishable from one whose funder pays nothing,
+ * and a coverage metric built on that conflation measures the world's
+ * publishing habits while claiming to measure the crawler.
+ */
+export const AMOUNT_STATUS_NONE_PUBLISHED = 'none_published'
+
 export const AMOUNT_STATUSES = Object.freeze([
   'known',
   'estimated',
@@ -59,6 +85,7 @@ export const AMOUNT_STATUSES = Object.freeze([
   'varies',
   'not_listed',
   'contact_required',
+  AMOUNT_STATUS_NONE_PUBLISHED,
 ])
 
 // "$1,234", "$1,234.56", "$1.5 million", "$10k"

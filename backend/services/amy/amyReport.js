@@ -17,6 +17,7 @@ import { isStudentAidOpportunity } from '../matchEngine.js'
 import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
 import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabulary.js'
+import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -83,9 +84,27 @@ function isLocatorKind(kind) {
 }
 
 // amount_status values that mean "the funder itself states no per-award figure"
-// — an honest answer, not a recall failure. 'not_listed' is deliberately NOT
-// here: it means extraction found nothing, which may well be a real miss.
-const AMOUNT_UNKNOWABLE_STATUSES = new Set(['varies', 'contact_required'])
+// — an honest answer, not a recall failure.
+//
+// 'not_listed' is deliberately NOT here, and that has always been right: it is
+// the extractor's DEFAULT, so it means "nobody found a figure" and cannot tell
+// a real extraction miss from a funder that publishes none. Silence is not a
+// denial. Keeping it in the denominator is what makes this finding able to fire.
+//
+// 'none_published' IS here: it is written ONLY by enforceAmountEnrichment after
+// the funder's own page or API was actually READ and stated no per-award figure
+// (awardAmountExtractor.AMOUNT_STATUS_NONE_PUBLISHED). That is evidence about
+// the world, not an absence in our DB — the one thing that can honestly retire
+// a row from this finding.
+//
+// Why it matters here: on 2026-07-16 this finding fired for 28 of 50 synthetic
+// profiles, every one of them on rows whose funders publish nothing (benefit
+// programs, food-bank locators, SSI). Amy could not know that, because the read
+// that proved it threw its own answer away. So the cohort could never come back
+// clean, and the owner's standing "50/50 clean → notify me once" goal was
+// unreachable BY CONSTRUCTION. Do not add 'not_listed' here to make the number
+// look better — that would delete the finding rather than answer it.
+const AMOUNT_UNKNOWABLE_STATUSES = new Set(['varies', 'contact_required', AMOUNT_STATUS_NONE_PUBLISHED])
 
 function normLower(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -312,11 +331,13 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   const withAmount = grantShaped.filter(
     (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0,
   )
-  // A funder that states "amounts vary" / "contact us" has told us the truth:
-  // there IS no per-award number to extract. Counting those rows as an
+  // A funder that states "amounts vary" / "contact us" — or whose page we READ
+  // and which states no figure at all ('none_published') — has told us the
+  // truth: there IS no per-award number to extract. Counting those rows as an
   // extraction gap measures the funder's disclosure, not our recall. Rows with
-  // no status at all, or 'not_listed' (we looked and found nothing), stay in
-  // the denominator — those are where a real extraction miss hides.
+  // no status at all, or 'not_listed' (nobody has looked yet, or looked and the
+  // answer was never written down), stay in the denominator — those are where a
+  // real extraction miss hides.
   const amountUnknowable = grantShaped.filter((r) =>
     AMOUNT_UNKNOWABLE_STATUSES.has(String(r.amount_status ?? '').toLowerCase()),
   )

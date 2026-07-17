@@ -29,16 +29,43 @@ beforeEach(() => {
   db = new Database(':memory:')
   db.exec(`
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
-    CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL);
-    CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL);
+    CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
+                         amount_status TEXT, funding_opportunity_id INTEGER);
+    CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
+                                        amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
+                                        amount_enrich_attempted_at TEXT);
   `)
 })
 
-/** Seed N active grants, `withValue` of which carry a dollar value. */
-function seedGrants(total, withValue) {
-  const ins = db.prepare('INSERT INTO grants (status, amount_requested) VALUES (?, ?)')
-  for (let i = 0; i < total; i++) ins.run('discovered', i < withValue ? 5000 : null)
-  db.prepare('INSERT INTO funding_opportunities (is_active, amount_max) VALUES (1, 5000)').run()
+/**
+ * Seed N active grants, `withValue` of which carry a dollar value.
+ *
+ * Every unvalued grant gets a LINKED catalog row that has been READ and honestly
+ * denied (`none_published`) unless the caller says otherwise. That is the
+ * realistic default — prod 2026-07-17: of 257 unvalued active rows, 186 were
+ * already read-and-exhausted and only ONE had never been tried — and it keeps
+ * these ratchet tests testing the RATCHET rather than tripping the answer census.
+ */
+function seedGrants(total, withValue, { unansweredFo = 0 } = {}) {
+  const insFo = db.prepare(
+    'INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempted_at) VALUES (1, ?, ?)',
+  )
+  const ins = db.prepare(
+    'INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, ?, ?)',
+  )
+  let unanswered = unansweredFo
+  for (let i = 0; i < total; i++) {
+    const valued = i < withValue
+    let foId = null
+    if (!valued) {
+      // An unanswered row = burned with no recorded answer (the "unreadable" bucket).
+      const answered = unanswered-- <= 0
+      foId = insFo.run(answered ? 'none_published' : 'not_listed', '2026-07-16T00:00:00Z').lastInsertRowid
+    } else {
+      foId = insFo.run('known', '2026-07-16T00:00:00Z').lastInsertRowid
+    }
+    ins.run('discovered', valued ? 5000 : null, foId)
+  }
 }
 
 const seedHistory = (runs) =>
@@ -93,12 +120,90 @@ describe('pipeline.amountCoverage ratchet', () => {
     expect(res.summary).not.toMatch(/^Pipeline-\$ coverage LOW/)
   })
 
-  it('still reports LOW (not a drop) when coverage is merely low and steady', async () => {
+  it('is GREEN when coverage is low and steady but every row has an ANSWER', async () => {
+    // THE FALSE ALARM THIS REPLACES. The old check failed whenever raw coverage
+    // sat under 60%, so it fired every single night — 21%, 15%, 18%, forever.
+    // That bar measured THE WORLD (what share of funders publish a per-award
+    // figure at all), not us: the honest measured ceiling is ~21%, and prod on
+    // 2026-07-17 had remaining=2 / exhausted=132 — the backlog was DRAINED and
+    // the sweep had done its job. A finding that cannot ever go green is not a
+    // standard, it is noise, and an owner trained to scroll past it is exactly
+    // how the REAL defect next door (a re-crawl wiping amounts) goes unread.
+    //
+    // 15% coverage where every unvalued row was read and honestly denied is not
+    // a crawler defect. It is the answer.
     seedHistory([{ at: '2026-07-16T14:00:00Z', pct: 15, with_value: 15, total: 100 }])
     seedGrants(100, 15)
     const res = await check().run({ db })
+    expect(res.ok).toBe(true)
+    expect(res.summary).toMatch(/All 100 active pipeline grants have an amount answer/)
+    expect(res.summary).toMatch(/85 read → funder publishes none/)
+  })
+
+  it('FAILS when rows have no answer, and names why', async () => {
+    // The bar that replaces it, and the one the system can actually hold: an
+    // unvalued row must carry a reason. 10 rows burned with no recorded answer
+    // are rows we cannot explain — that IS actionable (they need an adapter).
+    seedHistory([{ at: '2026-07-16T14:00:00Z', pct: 15, with_value: 15, total: 100 }])
+    seedGrants(100, 15, { unansweredFo: 10 })
+    const res = await check().run({ db })
     expect(res.ok).toBe(false)
-    expect(res.summary).toMatch(/^Pipeline-\$ coverage LOW/)
+    expect(res.summary).toMatch(/10 active pipeline grant\(s\) have NO amount answer/)
+    expect(res.summary).toMatch(/needs an API adapter/)
+    expect(res.evidence).toMatchObject({ unanswered_unreadable: 10, answered_none_published: 75 })
+  })
+
+  it('counts a grant with NO catalog row as unanswered — the sweep cannot reach it', async () => {
+    // enforceAmountEnrichment JOINs grants→funding_opportunities, so a grant with
+    // no link is structurally invisible to it (82 of 312 active rows in prod).
+    // Those must not read as "answered" just because nothing can look at them.
+    seedGrants(30, 30)
+    db.prepare('INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, NULL, NULL)')
+      .run('discovered')
+    const res = await check().run({ db })
+    expect(res.ok).toBe(false)
+    expect(res.summary).toMatch(/no catalog row/)
+    expect(res.evidence).toMatchObject({ unanswered_no_catalog_row: 1 })
+  })
+
+  it('does NOT count a DIRECTORY locator as a miss — it carries no award BY DESIGN', async () => {
+    // A locator is a pointer to more sources, never an award (crawler-os
+    // contract.js). Amy's false_positive detector already excludes them for the
+    // same reason; this check was the surface that still counted them.
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, opportunity_kind, amount_status) VALUES (1, 'DIRECTORY', 'not_listed')",
+    ).run().lastInsertRowid
+    db.prepare('INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, NULL, ?)')
+      .run('discovered', foId)
+    const res = await check().run({ db })
+    expect(res.ok).toBe(true)
+    expect(res.evidence).toMatchObject({ no_amount_by_design: 1 })
+  })
+
+  it('A WIPED row still counts as a MISS — the wipe must never hide in an exclusion', async () => {
+    // THE TRAP THIS DESIGN EXISTS TO AVOID, and the reason the denial must be a
+    // POSITIVE recorded fact rather than "we tried and have nothing now".
+    //
+    // #950: a re-crawl nulled amounts the grants.gov adapter had just acquired,
+    // and `amount_enrich_attempted_at` SURVIVED the wipe. Had this check excluded
+    // rows on "attempted but still blank", every wiped row would have quietly
+    // LEFT the denominator, coverage would have read ~100%, and the metric would
+    // have gone blind to the exact defect it was built to catch.
+    //
+    // A wiped row keeps its honest status ('known') — it is NOT `none_published`,
+    // because no read ever denied it — so it stays a miss and the ratchet fires.
+    seedHistory([{ at: '2026-07-16T14:00:00Z', pct: 90, with_value: 90, total: 100 }])
+    seedGrants(100, 90)
+    // The wipe: 50 valued rows lose their amounts, keeping the burn mark + status.
+    db.prepare(
+      `UPDATE grants SET amount_requested = NULL WHERE id IN (SELECT id FROM grants WHERE amount_requested > 0 LIMIT 50)`,
+    ).run()
+    const res = await check().run({ db })
+    expect(res.ok, 'a wipe must FAIL the check').toBe(false)
+    expect(res.summary).toMatch(/DROPPED/)
+    // And they are NOT laundered into an "answered" bucket.
+    expect(res.evidence.answered_none_published ?? 0).toBe(10)
   })
 
   it('goes GREEN while RECOVERING, so a climb is never mistaken for a fault', async () => {
@@ -120,7 +225,6 @@ describe('pipeline.amountCoverage ratchet', () => {
   it('a first run cannot regress (no history) but still seeds the ratchet', async () => {
     seedGrants(100, 15)
     const res = await check().run({ db })
-    expect(res.summary).toMatch(/^Pipeline-\$ coverage LOW/) // low, but not a "DROP"
     expect(res.summary).not.toMatch(/DROPPED/)
     const runs = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_COVERAGE_KV_KEY).value).runs
     expect(runs).toHaveLength(1)
