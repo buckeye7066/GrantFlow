@@ -31,7 +31,8 @@ beforeEach(() => {
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
     CREATE TABLE profiles (id TEXT PRIMARY KEY, created_by TEXT);
     CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
-                         amount_status TEXT, funding_opportunity_id INTEGER, profile_id TEXT);
+                         amount_status TEXT, amount_text TEXT, funding_opportunity_id INTEGER, profile_id TEXT,
+                         amount_enrich_attempted_at TEXT);
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
                                         amount_enrich_attempted_at TEXT);
@@ -176,34 +177,56 @@ describe('pipeline.amountCoverage ratchet', () => {
     seedGrants(100, 15)
     const res = await check().run({ db })
     expect(res.ok).toBe(true)
-    expect(res.summary).toMatch(/All 100 active pipeline grants have an amount answer/)
+    expect(res.summary).toMatch(/All 100 real active pipeline grants have an amount answer/)
     expect(res.summary).toMatch(/85 read → funder publishes none/)
   })
 
-  it('FAILS when rows have no answer, and names why', async () => {
-    // The bar that replaces it, and the one the system can actually hold: an
-    // unvalued row must carry a reason. 10 rows burned with no recorded answer
-    // are rows we cannot explain — that IS actionable (they need an adapter).
+  it('FAILS ONLY on genuinely-unreadable rows (read → JS shell), naming adapter work', async () => {
+    // The one class the system cannot answer by reading: a row whose source WAS
+    // read and came back a JS shell / dead page. 10 such rows need an API
+    // adapter — that is real, named work, not backlog and not a false alarm.
     seedHistory([{ at: '2026-07-16T14:00:00Z', pct: 15, with_value: 15, total: 100 }])
     seedGrants(100, 15, { unansweredFo: 10 })
     const res = await check().run({ db })
     expect(res.ok).toBe(false)
-    expect(res.summary).toMatch(/10 active pipeline grant\(s\) have NO amount answer/)
-    expect(res.summary).toMatch(/needs an API adapter/)
+    expect(res.summary).toMatch(/10 active pipeline grant\(s\) were READ but their source could not be parsed/)
+    expect(res.summary).toMatch(/need an API adapter/)
     expect(res.evidence).toMatchObject({ unanswered_unreadable: 10, answered_none_published: 75 })
   })
 
-  it('counts a grant with NO catalog row as unanswered — the sweep cannot reach it', async () => {
-    // enforceAmountEnrichment JOINs grants→funding_opportunities, so a grant with
-    // no link is structurally invisible to it (82 of 312 active rows in prod).
-    // Those must not read as "answered" just because nothing can look at them.
+  it('an unread ORPHAN grant is BACKLOG (never_read), not a failure — it is now read directly', async () => {
+    // Before enforceGrantDirectAmountEnrichment, a grant with no catalog row was
+    // structurally unreadable and failed the check forever. Now it is read
+    // directly, so an unread orphan is simply backlog (the sweep will read it),
+    // exactly like an unread catalog row — never a standing failure.
     seedGrants(30, 30)
-    db.prepare('INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, NULL, NULL)')
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id, amount_status) VALUES (?, NULL, NULL, 'real-1', 'not_listed')")
+      .run('discovered')
+    const res = await check().run({ db })
+    expect(res.ok, 'an unread orphan is backlog, not a failure').toBe(true)
+    expect(res.evidence).toMatchObject({ unanswered_never_read: 1, unanswered_no_catalog_row: 1 })
+  })
+
+  it('a READ orphan that returned no figure is ANSWERED (none_published on the grant)', async () => {
+    // The direct sweep records the denial ON THE GRANT. That is an answer — the
+    // orphan must leave the unanswered set entirely.
+    seedGrants(30, 30)
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id, amount_status, amount_enrich_attempted_at) VALUES (?, NULL, NULL, 'real-1', 'none_published', '2026-07-17T00:00:00Z')")
+      .run('discovered')
+    const res = await check().run({ db })
+    expect(res.ok).toBe(true)
+    expect(res.evidence).toMatchObject({ answered_none_published: 1, unanswered_never_read: 0, unanswered_unreadable: 0 })
+  })
+
+  it('a READ orphan that came back a JS shell is UNREADABLE (fails, names adapter work)', async () => {
+    // Read directly, still no figure, and marked attempted → genuinely
+    // unreadable → the one class that legitimately fails and names adapter work.
+    seedGrants(30, 30)
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id, amount_status, amount_enrich_attempted_at) VALUES (?, NULL, NULL, 'real-1', 'not_listed', '2026-07-17T00:00:00Z')")
       .run('discovered')
     const res = await check().run({ db })
     expect(res.ok).toBe(false)
-    expect(res.summary).toMatch(/no catalog row/)
-    expect(res.evidence).toMatchObject({ unanswered_no_catalog_row: 1 })
+    expect(res.evidence).toMatchObject({ unanswered_unreadable: 1 })
   })
 
   it('does NOT count a DIRECTORY locator as a miss — it carries no award BY DESIGN', async () => {
