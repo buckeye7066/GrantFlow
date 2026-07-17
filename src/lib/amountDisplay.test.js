@@ -20,3 +20,18 @@ describe('amountTextFallback — honest amount display when no number renders', 
     expect(amountTextFallback({ amount_status: 'known' })).toBeNull() // numeric statuses render numbers, not labels
   })
 })
+
+describe('none_published — the READ denial', () => {
+  it('tells the user the funder states no amount, rather than "not listed"', () => {
+    // "We did not find a figure" and "this funder publishes no figure" are
+    // different facts (CLAUDE.md invariant). A benefit program or a food bank is
+    // a real, valuable match that simply has no award size — rendering it as an
+    // absence is how a full pipeline reads as "qualifies for nothing".
+    expect(amountTextFallback({ amount_status: 'none_published' })).toBe('Funder states no set amount')
+  })
+
+  it('still prefers a real excerpt the page stated', () => {
+    expect(amountTextFallback({ amount_status: 'none_published', amount_text: 'up to $500/mo' }))
+      .toBe('up to $500/mo')
+  })
+})
