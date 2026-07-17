@@ -45,6 +45,70 @@ export const CHECK_KIND = Object.freeze({
 // cutoff with its 'T' separator sorts AFTER every same-date SQLite timestamp,
 // so same-day comparisons silently misclassify. Both formats are returned in
 // the shape the engine actually stores.
+/** system_kv key: rolling pipeline-$ coverage history (the no-regression ratchet). */
+export const AMOUNT_COVERAGE_KV_KEY = 'pipeline_amount_coverage_history'
+
+/** Coverage POINTS of drop vs the previous run that count as a regression. */
+export const AMOUNT_COVERAGE_REGRESSION_POINTS = 5
+
+/** History ring size (Sam runs ~daily ⇒ about a month of trend). */
+const AMOUNT_COVERAGE_HISTORY = 30
+
+/**
+ * Read/append the coverage history ring.
+ *
+ * WHY THIS EXISTS. This check only ever compared coverage to an ABSOLUTE bar
+ * (`pct < 60`), so it printed the identical "LOW" line at 21%, at 15% and at 18%.
+ * On 2026-07-16 a re-crawl bug wiped award amounts for hours and drove coverage
+ * 21% → 15%; Sam said exactly what it says every other day, and the owner had no
+ * way to tell "recovering" from "actively being destroyed". A level tells you
+ * where you are; only a TREND tells you which way you are going, and this
+ * subsystem's whole failure mode is work being silently undone.
+ *
+ * The web-parity benchmark next door already ratchets on regression
+ * (`REGRESSION_POINTS`, "the system may only get better"). Coverage never did.
+ * Best-effort: a ratchet must never fail the check it decorates.
+ */
+async function readAmountCoverageHistory(db) {
+  try {
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_COVERAGE_KV_KEY)
+    const parsed = row?.value ? JSON.parse(row.value) : null
+    return Array.isArray(parsed?.runs) ? parsed.runs : []
+  } catch {
+    return []
+  }
+}
+
+async function appendAmountCoverageHistory(db, entry) {
+  try {
+    const runs = [...(await readAmountCoverageHistory(db)), entry].slice(-AMOUNT_COVERAGE_HISTORY)
+    const value = JSON.stringify({ updated_at: entry.at, runs })
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, entry.at, AMOUNT_COVERAGE_KV_KEY)
+    if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(AMOUNT_COVERAGE_KV_KEY, value, entry.at)
+    }
+    return runs
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Did coverage REGRESS vs the previous run?
+ *
+ * Compares against the PREVIOUS run rather than the all-time peak, matching the
+ * web-parity ratchet: a peak comparison would red forever after one legitimate
+ * dip, and a finding that can never go green is one the owner learns to ignore.
+ * Pure; exported for tests.
+ */
+export function detectCoverageRegression(previousPct, currentPct, points = AMOUNT_COVERAGE_REGRESSION_POINTS) {
+  if (!Number.isFinite(previousPct) || !Number.isFinite(currentPct)) return null
+  const delta = currentPct - previousPct
+  if (delta > -points) return null
+  return { previous_pct: previousPct, current_pct: currentPct, delta }
+}
+
 function timeCutoff(db, msAgo) {
   const iso = new Date(Date.now() - msAgo).toISOString()
   if (db?.dialect === 'postgres') return iso
@@ -386,7 +450,33 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (total < 20) return { ok: true, summary: `Only ${total} active pipeline grants — coverage check not meaningful yet.` }
       const pct = Math.round((withValue / total) * 100)
       const catPct = catTotal > 0 ? Math.round((catWith / catTotal) * 100) : 0
-      const summary = `${withValue}/${total} (${pct}%) active pipeline grants carry a dollar value; catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+
+      // Ratchet: record this reading and compare it to the previous one. A LEVEL
+      // cannot distinguish "climbing back" from "being destroyed" — both look like
+      // "LOW" — and this subsystem's characteristic failure is work being silently
+      // undone (a re-crawl wiped amounts 21% → 15% on 2026-07-16 while this check
+      // printed its usual line).
+      const history = await readAmountCoverageHistory(db)
+      const previous = history.length ? history[history.length - 1] : null
+      const regression = detectCoverageRegression(Number(previous?.pct), pct)
+      await appendAmountCoverageHistory(db, { at: new Date().toISOString(), pct, with_value: withValue, total })
+
+      const trend = previous ? ` (was ${previous.pct}% on ${String(previous.at).slice(0, 10)})` : ''
+      const summary = `${withValue}/${total} (${pct}%) active pipeline grants carry a dollar value${trend}; catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+
+      // A DROP is reported even when the level is above the bar, and takes
+      // precedence when below it: "we went backwards" is a different, more urgent
+      // fact than "we are low", and it is the one that names an active bug.
+      if (regression) {
+        return {
+          ok: false,
+          summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${pct}%): ${summary}`,
+          evidence: { ...regression, active_grants: total, with_value: withValue, catalog_pct: catPct },
+          recommended_fix: 'Coverage falling means something is REMOVING amounts, not just failing to find them — treat it as an active bug, not a backlog. Group the metric BY WRITER first (`SELECT record_origin, COUNT(*), COUNT(*) FILTER (WHERE amount_max > 0) FROM funding_opportunities GROUP BY record_origin`): a single origin collapsing is the fingerprint. That query exposed the 2026-07-16 defect in one shot (live_crawl 2.4% vs funding_api 17%), where a re-crawl treated an ingest carrying no amount as the source asserting it had none, and `amount_enrich_attempted_at` survived the wipe so each row was burned blank forever. Also check the enforce-invariants summary (pipeline.invariantSweepOutcomes) for a net stripping values.',
+          confidence: 0.8,
+        }
+      }
+
       if (pct < 60) {
         return {
           ok: false,
