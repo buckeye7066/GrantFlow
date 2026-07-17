@@ -125,6 +125,7 @@ import { runLinkVerification, getLinkHealthSummary } from './services/linkVerifi
 import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
+import { runGracefulShutdown } from './startup/gracefulShutdown.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -2839,33 +2840,21 @@ app.use((req, res) => {
 // Graceful shutdown handling
 let server = null
 
+let shuttingDown = false
 function gracefulShutdown(signal) {
   if (!server) return
+  if (shuttingDown) return
+  shuttingDown = true
   console.log(`\nReceived ${signal}, closing server gracefully...`);
-  
-  server.close(async () => {
-    console.log('HTTP server closed');
-    
-    try {
-      const maybe = db?.close?.()
-      if (maybe && typeof maybe.then === 'function') {
-        await maybe
-      }
-      console.log('Database connection closed');
-    } catch (error) {
-      console.error('Error closing database:', error);
-    }
-    await flushObservability();
-    
-    console.log('Graceful shutdown complete');
-    process.exit(0);
+  // The full rationale (the "Deploy Crashed"-on-every-deploy bug) lives in
+  // backend/startup/gracefulShutdown.js. Behavior is unit-tested there.
+  runGracefulShutdown({
+    server,
+    closeDb: () => db?.close?.(),
+    flush: flushObservability,
+    exit: (code) => process.exit(code),
+    graceMs: Number(process.env.SHUTDOWN_GRACE_MS || 15000),
   });
-  
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
 }
 
 if (process.env.NODE_ENV !== 'test') {
