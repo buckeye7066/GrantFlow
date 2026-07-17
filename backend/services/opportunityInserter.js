@@ -749,6 +749,46 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
 
     // For live_crawl: allow clearing nullable fields when source no longer has them (avoids stale data).
     const fromLiveCrawl = recordOrigin === 'live_crawl'
+
+    // ...but SILENCE IS NOT A DENIAL, and for amounts that distinction is the
+    // whole ballgame. The clearing rule assumes an ingest that carries no amount
+    // means "the source no longer has one". For a LISTING endpoint that is simply
+    // false: grants.gov `search2` — which every grants.gov crawl uses — returns NO
+    // award fields at all, ever. So each re-crawl asserted "no amount" about rows
+    // whose amounts the API had just given us, and wiped them.
+    //
+    // Measured in prod 2026-07-16: rows re-crawled AFTER the amount sweep were
+    // null (FY26 Pathways enriched to $5M–$10M at 14:51, re-crawled 23:28, wiped);
+    // the one row NOT re-crawled since kept its $9M. Fleet-wide the fingerprint is
+    // unmistakable — `live_crawl` rows carried an amount 13/538 (2.4%) versus
+    // `funding_api` 147/866 (17%). Worse, `amount_enrich_attempted_at` survives the
+    // wipe, so the row is BURNED: never re-enriched, permanently blank. The
+    // adapter's coverage decayed 21% → 15% in seven hours.
+    //
+    // So: clear amounts only when this pass actually SAYS something about them.
+    // An ingest carrying no amount signal at all is silent, not authoritative —
+    // exactly the reasoning `amount_status` already uses six lines up ("persist
+    // NULL when this pass learned nothing, so the COALESCE paths never downgrade
+    // an honest stored status"). An ingest that DOES assert an amount still
+    // overwrites, so a funder genuinely dropping its figure is still honoured.
+    const assertsAmounts =
+      record.amount_min !== null || record.amount_max !== null || Boolean(record.amount_text)
+    const amountSet = assertsAmounts
+      ? `
+        amount_min = ?,
+        amount_max = ?,
+        amount_description = ?,
+        amount_text = ?,
+        amount_status = ?,
+        amount_confidence = ?,`
+      : `
+        amount_min = COALESCE(?, amount_min),
+        amount_max = COALESCE(?, amount_max),
+        amount_description = COALESCE(?, amount_description),
+        amount_text = COALESCE(?, amount_text),
+        amount_status = COALESCE(?, amount_status),
+        amount_confidence = COALESCE(?, amount_confidence),`
+
     const update = db.prepare(
       fromLiveCrawl
         ? `
@@ -761,13 +801,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         evidence_url = COALESCE(?, evidence_url),
         contact_info = COALESCE(?, contact_info),
         record_origin = COALESCE(?, record_origin),
-        eligibility_bullets = COALESCE(?, eligibility_bullets),
-        amount_min = ?,
-        amount_max = ?,
-        amount_description = ?,
-        amount_text = ?,
-        amount_status = ?,
-        amount_confidence = ?,
+        eligibility_bullets = COALESCE(?, eligibility_bullets),${amountSet}
         deadline = ?,
         deadline_type = ?,
         application_url = ?,
