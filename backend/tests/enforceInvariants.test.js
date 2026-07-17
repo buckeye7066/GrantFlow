@@ -48,6 +48,7 @@ import {
   enforceApplicationUrlRescue,
   enforceImportedStatusHonesty,
   enforceAmountEnrichment,
+  enforceGrantCatalogLink,
   enforceGrantAmountBackfill,
   enforceAmySyntheticExpiry,
   getRelevanceFloor,
@@ -988,7 +989,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // 27th: enforceJohnDraftPlausibility (wrong-org drafts in the mailbox).
-    expect(summary.ran).toBe(27)
+    expect(summary.ran).toBe(28)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -998,6 +999,7 @@ describe('enforceInvariants — runner', () => {
       'no_duplicate_grants',
       'imported_status_honesty',
       'relevance_floor',
+      'grant_catalog_link',
       'amount_enrichment',
       'grant_amount_backfill',
       'individual_amount_ceiling',
@@ -2791,6 +2793,158 @@ describe('enforceAmountEnrichment', () => {
     expect(res.repaired).toBe(1)
     expect(foRow(db, foId).amount_max).toBe(2500)
     expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
+  })
+})
+
+describe('enforceGrantCatalogLink', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+  const insFo = (db, o = {}) => {
+    const id = o.id || crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, source_url, is_active, profile_id, amount_max, amount_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, o.title || 'Prog', o.source_url ?? null, o.is_active ?? 1, o.profile_id ?? null, o.amount_max ?? null, o.amount_status ?? null)
+    return id
+  }
+  const insGrant = (db, o = {}) => {
+    const id = o.id || crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id, url, application_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, o.title || 'Prog', o.status || 'interested', o.profile_id ?? null, o.funding_opportunity_id ?? null, o.url ?? null, o.application_url ?? null)
+    return id
+  }
+  const insProfile = (db, id) =>
+    db.prepare('INSERT INTO profiles (id, display_name, primary_type) VALUES (?, ?, ?)').run(id, id, 'individual')
+  const link = (db, id) => db.prepare('SELECT funding_opportunity_id FROM grants WHERE id = ?').get(id).funding_opportunity_id
+
+  it('links an unlinked active grant to the single catalog row at the same URL', async () => {
+    // THE GAP #954 SURFACED. An unlinked grant is invisible to every amount net
+    // (they only reach a grant through funding_opportunity_id). 27 such grants in
+    // prod had an exact catalog twin at the same URL and were never linked.
+    const db = makeRealDb()
+    const foId = insFo(db, { source_url: 'https://swe.org/scholarships', amount_max: 15000, amount_status: 'range' })
+    const gId = insGrant(db, { url: 'https://swe.org/scholarships' })
+    const res = await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBe(foId)
+    expect(res.repaired).toBe(1)
+  })
+
+  it('normalizes a trailing slash and case before matching', async () => {
+    const db = makeRealDb()
+    const foId = insFo(db, { source_url: 'https://Good360.org/' })
+    const gId = insGrant(db, { url: 'https://good360.org' })
+    await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBe(foId)
+  })
+
+  it('matches the grant application_url against any catalog URL column', async () => {
+    const db = makeRealDb()
+    const foId = insFo(db, { source_url: null })
+    db.prepare('UPDATE funding_opportunities SET application_url = ? WHERE id = ?').run('https://elks.org/mvs', foId)
+    const gId = insGrant(db, { url: null, application_url: 'https://elks.org/mvs' })
+    await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBe(foId)
+  })
+
+  it('NEVER guesses when two catalog rows share the URL (ambiguous)', async () => {
+    // A shared directory URL. Linking to either would be a coin flip — leave it.
+    const db = makeRealDb()
+    insFo(db, { source_url: 'https://grantwatch.com/' })
+    insFo(db, { source_url: 'https://grantwatch.com/' })
+    const gId = insGrant(db, { url: 'https://grantwatch.com/' })
+    const res = await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBeNull()
+    expect(res.ambiguous).toBe(1)
+    expect(res.repaired).toBe(0)
+  })
+
+  it('NEVER links across a profile boundary (URL coincidence is not identity)', async () => {
+    // The catalog row belongs to profile B; the grant to profile A. Same URL,
+    // different pipelines — linking would be cross-profile bleed (G4/G8).
+    const db = makeRealDb()
+    insProfile(db, 'prof-A'); insProfile(db, 'prof-B')
+    insFo(db, { source_url: 'https://shared.org/prog', profile_id: 'prof-B' })
+    const gId = insGrant(db, { url: 'https://shared.org/prog', profile_id: 'prof-A' })
+    const res = await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBeNull()
+    expect(res.unlinkable).toBe(1)
+  })
+
+  it('links when the catalog row is profile-agnostic (NULL profile) even if the grant has one', async () => {
+    const db = makeRealDb()
+    insProfile(db, 'prof-A')
+    const foId = insFo(db, { source_url: 'https://nfb.org/resources', profile_id: null })
+    const gId = insGrant(db, { url: 'https://nfb.org/resources', profile_id: 'prof-A' })
+    await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBe(foId)
+  })
+
+  it('does not link to an INACTIVE catalog row', async () => {
+    const db = makeRealDb()
+    insFo(db, { source_url: 'https://dead.org/x', is_active: 0 })
+    const gId = insGrant(db, { url: 'https://dead.org/x' })
+    const res = await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBeNull()
+    expect(res.unlinkable).toBe(1)
+  })
+
+  it('never overwrites an existing link', async () => {
+    const db = makeRealDb()
+    const already = insFo(db, { source_url: 'https://a.org/x' })
+    insFo(db, { source_url: 'https://a.org/x' }) // a second row at the same URL exists
+    const gId = insGrant(db, { url: 'https://a.org/x', funding_opportunity_id: already })
+    await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBe(already) // untouched — an existing link is never re-evaluated
+  })
+
+  it('leaves an unlinkable grant (no catalog twin) alone', async () => {
+    const db = makeRealDb()
+    const gId = insGrant(db, { url: 'https://orphan.org/x' })
+    const res = await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBeNull()
+    expect(res.unlinkable).toBe(1)
+    expect(res.repaired).toBe(0)
+  })
+
+  it('is idempotent — a second run links nothing new', async () => {
+    const db = makeRealDb()
+    insFo(db, { source_url: 'https://swe.org/s' })
+    insGrant(db, { url: 'https://swe.org/s' })
+    const first = await enforceGrantCatalogLink(db)
+    const second = await enforceGrantCatalogLink(db)
+    expect(first.repaired).toBe(1)
+    expect(second.repaired).toBe(0)
+  })
+
+  it('count-only mode reports what WOULD link without writing (ENFORCE_GRANT_CATALOG_LINK=0)', async () => {
+    const db = makeRealDb()
+    insFo(db, { source_url: 'https://swe.org/s' })
+    const gId = insGrant(db, { url: 'https://swe.org/s' })
+    const prev = process.env.ENFORCE_GRANT_CATALOG_LINK
+    process.env.ENFORCE_GRANT_CATALOG_LINK = '0'
+    try {
+      const res = await enforceGrantCatalogLink(db)
+      expect(res.repaired).toBe(1) // would-link count
+      expect(res.enforced).toBe(false)
+      expect(link(db, gId)).toBeNull() // but nothing written
+    } finally {
+      if (prev === undefined) delete process.env.ENFORCE_GRANT_CATALOG_LINK
+      else process.env.ENFORCE_GRANT_CATALOG_LINK = prev
+    }
+  })
+
+  it('only touches ACTIVE-pipeline grants', async () => {
+    const db = makeRealDb()
+    insFo(db, { source_url: 'https://swe.org/s' })
+    const gId = insGrant(db, { url: 'https://swe.org/s', status: 'declined' })
+    await enforceGrantCatalogLink(db)
+    expect(link(db, gId)).toBeNull()
   })
 })
 

@@ -2843,6 +2843,163 @@ export async function enforceImportedStatusHonesty(db) {
  * (the nightly sweep's dedicated enrichment pass) may override both via
  * deps.limit / deps.timeBudgetMs — the boot path stays cheap by default.
  */
+/**
+ * INVARIANT: A PIPELINE GRANT IS LINKED TO ITS CATALOG ROW WHEN ONE EXISTS
+ * (the amount-answer census blind spot, 2026-07-17).
+ *
+ * THE GAP THIS CLOSES
+ * -------------------
+ * `enforceAmountEnrichment` and `enforceGrantAmountBackfill` both reach a grant
+ * ONLY through `grants.funding_opportunity_id` — they JOIN or subquery on it. A
+ * grant with that column NULL is therefore STRUCTURALLY invisible to every
+ * amount net: it can never be enriched, can never inherit a catalog amount, and
+ * shows up in `pipeline.amountCoverage` as `unanswered_no_catalog_row`. Prod
+ * 2026-07-17: 82 of 313 active pipeline grants were unlinked, and the coverage
+ * check (correctly) failed on the 70 of them with no amount — a real gap the
+ * #954 census SURFACED but did not close.
+ *
+ * Many of those grants DO have a catalog twin — the crawler upserts a
+ * `funding_opportunities` row AND a `grants` row from the same result
+ * (`crawlerManager.js`), but the grant was written without the link. The two
+ * rows share a URL, which is one of the tiers of the canonical dedup identity
+ * (`canonicalOpportunityKey`: external_id → title+sponsor → URL), so a grant and
+ * an active catalog row at the SAME url are the same real-world opportunity.
+ *
+ * THE RULE (high-precision; a wrong link is cross-profile bleed — never guess)
+ * ---------------------------------------------------------------------------
+ * Link an unlinked active-pipeline grant to a catalog row ONLY when ALL hold:
+ *   1. URL IDENTITY — the grant's own URL (`url`/`application_url`), normalized
+ *      (lowercase, trailing '/' stripped), equals a normalized URL on the
+ *      catalog row (`source_url`/`url`/`application_url`).
+ *   2. EXACTLY ONE active catalog row matches. Two or more is AMBIGUOUS (a
+ *      shared directory URL) and is left alone — counted, never guessed. This is
+ *      the same posture as `reconcileConvertedApplications` ("ambiguous matches
+ *      flagged, never guessed").
+ *   3. NO PROFILE CONFLICT — if BOTH rows carry a `profile_id` and they differ,
+ *      skip. A profile-scoped catalog row belongs to a different pipeline; the
+ *      URL coincidence must not cross that boundary (G4/G8). A NULL on either
+ *      side is profile-agnostic and compatible.
+ * Only NULL → value: an existing link is never touched. Idempotent (a linked
+ * grant leaves the candidate set) and bounded (`GRANT_CATALOG_LINK_LIMIT`).
+ *
+ * It runs immediately BEFORE `enforceAmountEnrichment` so a grant linked this
+ * boot gets its amount read/inherited in the SAME sweep — the whole point.
+ *
+ * OVERRIDE: ON by default; `ENFORCE_GRANT_CATALOG_LINK=0` for count-only.
+ */
+export async function enforceGrantCatalogLink(db) {
+  return runInvariant('grant_catalog_link', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('funding_opportunity_id') || !grantCols.has('url')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_CATALOG_LINK) === false
+    const LIMIT = Math.max(1, Number(process.env.GRANT_CATALOG_LINK_LIMIT) || 500)
+
+    // RTRIM(x, '/') strips trailing slashes on BOTH sqlite and postgres (both
+    // read the 2nd arg as a character set). LOWER folds case. Kept as one
+    // expression so the candidate scan and the per-row match use IDENTICAL
+    // normalization — a mismatch there would link on a near-miss.
+    const norm = (col) => `RTRIM(LOWER(COALESCE(${col}, '')), '/')`
+    const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+
+    let candidates = []
+    try {
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.profile_id,
+                  ${norm('g.url')} AS u1, ${norm('g.application_url')} AS u2
+             FROM grants g
+            WHERE g.status IN (${statuses})
+              AND g.funding_opportunity_id IS NULL
+              AND COALESCE(g.url, g.application_url, '') <> ''
+            ORDER BY g.id ASC
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+    } catch (err) {
+      log.warn('grant_catalog_link: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    const fresh = Array.isArray(candidates) ? candidates : []
+    if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+
+    let linked = 0
+    let ambiguous = 0
+    let unlinkable = 0
+    for (const g of fresh) {
+      // The grant carries at least one non-empty normalized URL (WHERE guard).
+      const urls = [g.u1, g.u2].filter((u) => u && u.length)
+      let matches = []
+      try {
+        // Match ANY of the grant's URLs against ANY catalog URL column, on an
+        // ACTIVE row, that is profile-compatible. DISTINCT id so a row matching
+        // on two columns counts once. The profile guard: skip a catalog row
+        // owned by a DIFFERENT profile than the grant (a URL coincidence must
+        // not cross a pipeline boundary); NULL on either side is compatible.
+        // Catalog URL columns that exist in BOTH dialects. Prod Postgres also
+        // has a bare `url` column, but the SQLite schema does not, and a live
+        // probe confirmed `url` adds ZERO matches the other three columns miss —
+        // so referencing it would break CI (SQLite) for no coverage. Schema
+        // drift is the hazard, not the missing column (the #946/#954 lesson).
+        const placeholders = urls.map(() => '?').join(', ')
+        matches = await db
+          .prepare(
+            `SELECT DISTINCT fo.id, fo.profile_id
+               FROM funding_opportunities fo
+              WHERE fo.is_active
+                AND (
+                     ${norm('fo.source_url')} IN (${placeholders})
+                  OR ${norm('fo.application_url')} IN (${placeholders})
+                  OR ${norm('fo.evidence_url')} IN (${placeholders})
+                )`,
+          )
+          .all(...urls, ...urls, ...urls)
+      } catch (err) {
+        log.warn('grant_catalog_link: match query failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+        continue
+      }
+
+      const compatible = (Array.isArray(matches) ? matches : []).filter((m) => {
+        const gp = g.profile_id === null || g.profile_id === undefined ? '' : String(g.profile_id)
+        const fp = m.profile_id === null || m.profile_id === undefined ? '' : String(m.profile_id)
+        // Compatible unless BOTH sides name a profile and they disagree.
+        return !(gp && fp && gp !== fp)
+      })
+
+      if (compatible.length === 0) { unlinkable++; continue }
+      if (compatible.length > 1) { ambiguous++; continue } // never guess
+
+      if (disabled) { linked++; continue } // count-only: what WOULD link
+      try {
+        // Guarded to NULL → value: the WHERE re-asserts the row is still
+        // unlinked, so a concurrent writer that linked it first is never
+        // overwritten. is_active is re-checked so a row deactivated between
+        // scan and write is not linked.
+        const res = await db
+          .prepare(
+            `UPDATE grants
+                SET funding_opportunity_id = ?
+              WHERE id = ?
+                AND funding_opportunity_id IS NULL
+                AND EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = ? AND fo.is_active)`,
+          )
+          .run(compatible[0].id, g.id, compatible[0].id)
+        if (changesOf(res) > 0) linked++
+      } catch (err) {
+        log.warn('grant_catalog_link: link write failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+      }
+    }
+
+    if (linked > 0) {
+      log.info('linked unlinked pipeline grants to their catalog rows', { linked, ambiguous, unlinkable, enforced: !disabled })
+    }
+    return { scanned: fresh.length, repaired: linked, ambiguous, unlinkable, enforced: !disabled }
+  })
+}
+
 export async function enforceAmountEnrichment(db, deps = {}) {
   return runInvariant('amount_enrichment', async () => {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
@@ -3994,6 +4151,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // every Pipeline Potential surface can see the money that is actually there.
   // MUST run before the individual amount ceiling so the ceiling operates on
   // honest (backfilled) values.
+  // Catalog LINK first: an unlinked grant is invisible to BOTH amount nets
+  // below (they only reach a grant through funding_opportunity_id). Linking it
+  // to its catalog twin here — URL-identity, exactly-one, profile-safe — puts it
+  // in reach of the enrichment + backfill in the SAME boot.
+  steps.push(await enforceGrantCatalogLink(db))
   // Amount ACQUISITION first: read the funder's own page for active-pipeline
   // sources that carry no dollar figure (bounded per boot), so the backfill
   // right after can mirror freshly-learned amounts onto the grants same-boot.
@@ -4154,6 +4316,7 @@ export const __testables = {
   enforceGrantAmountBackfill,
   enforceNoDanglingMatches,
   enforceImportedStatusHonesty,
+  enforceGrantCatalogLink,
   enforceAmountEnrichment,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
