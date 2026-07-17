@@ -1029,6 +1029,98 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // Golden AMOUNT sentinel (2026-07-17). The golden-outcome check above guards
+    // SOURCE coverage per profile; this one guards the AWARD FIGURE. After
+    // live-verifying that a known funder's page yields its real per-award amount
+    // (Coca-Cola Scholars = $20,000, not the $237,500 program total the extractor
+    // used to grab), append an expectation so a future extractor/enrichment
+    // regression that re-introduces a wrong figure reds Anya's morning report
+    // instead of quietly inflating a client's Pipeline Potential.
+    //
+    // system_kv 'golden_amount_expectations' as
+    //   [{ label, url_contains, expect_max, [over_factor=3], [under_factor=5] }]
+    // A live grant whose url matches AND whose value sits outside
+    // [expect_max/under_factor, expect_max*over_factor] is a regression. A row
+    // with NO amount yet is BACKLOG, never a failure — the sweep will read it.
+    // Expectations are DATA, not code: verify a fix live, then append.
+    id: 'coverage.goldenAmounts',
+    label: 'Golden-amount sentinel (per-award figures stay correct)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Asserts owner-verified per-award amounts (system_kv golden_amount_expectations) have not regressed to a program total or a wrong figure. Fails open when no expectations are recorded or system_kv is unavailable. A row with no amount yet is backlog, not a failure.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'golden amounts: db unavailable' }
+      let row
+      try {
+        row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('golden_amount_expectations')
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!row?.value) {
+        return { ok: true, skipped: true, summary: 'No golden amount expectations recorded yet (system_kv golden_amount_expectations absent).' }
+      }
+      let expectations = null
+      try { expectations = JSON.parse(row.value) } catch { expectations = null }
+      if (!Array.isArray(expectations) || expectations.length === 0) {
+        return { ok: false, summary: 'golden_amount_expectations exists but is not a non-empty JSON array.', evidence: { raw: String(row.value).slice(0, 200) } }
+      }
+      const statusesSql = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      const failures = []
+      let assertions = 0
+      for (const exp of expectations) {
+        const urlContains = String(exp?.url_contains || '').toLowerCase()
+        const expectMax = Number(exp?.expect_max)
+        if (!urlContains || !Number.isFinite(expectMax) || expectMax <= 0) continue
+        const over = Number(exp?.over_factor) > 1 ? Number(exp.over_factor) : 3
+        const under = Number(exp?.under_factor) > 1 ? Number(exp.under_factor) : 5
+        const hi = expectMax * over
+        const lo = expectMax / under
+        assertions += 1
+        let rows = []
+        try {
+          // Match the funder's own url on the grant OR its linked catalog row;
+          // only rows that ACTUALLY carry a value are judged (no amount = backlog).
+          // audit:allow dynamic-sql — statusesSql is the frozen PIPELINE_ACTIVE_STATUSES constant
+          rows = await db.prepare(
+            `SELECT g.id, COALESCE(NULLIF(g.amount_requested,0), NULLIF(g.amount_max,0), NULLIF(g.amount_min,0),
+                                   NULLIF(fo.amount_max,0), NULLIF(fo.amount_min,0), 0) AS value
+               FROM grants g
+               LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+              WHERE g.status IN (${statusesSql})
+                AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+                AND (LOWER(COALESCE(g.url,'')) LIKE '%' || ? || '%'
+                     OR LOWER(COALESCE(g.application_url,'')) LIKE '%' || ? || '%'
+                     OR LOWER(COALESCE(fo.source_url,'')) LIKE '%' || ? || '%')`,
+          ).all(urlContains, urlContains, urlContains)
+        } catch { rows = [] }
+        const offenders = (rows || []).filter((r) => Number(r.value) > 0 && (Number(r.value) > hi || Number(r.value) < lo))
+        if (offenders.length > 0) {
+          failures.push({
+            label: exp.label || urlContains,
+            expect_max: expectMax,
+            acceptable_band: [Math.round(lo), Math.round(hi)],
+            found: offenders.slice(0, 5).map((r) => Number(r.value)),
+          })
+        }
+      }
+      if (failures.length > 0) {
+        return {
+          ok: false,
+          summary: `GOLDEN AMOUNT REGRESSION: ${failures.map((f) => `${f.label} expected ~$${f.expect_max.toLocaleString()} but pipeline shows $${f.found.map((v) => v.toLocaleString()).join('/$')}`).join('; ')}.`,
+          evidence: { failures, expectations: expectations.length },
+          recommended_fix: 'A funder\'s per-award figure regressed — almost always the extractor grabbing a PROGRAM TOTAL again (awardAmountExtractor aggregate exclusion: "N awards up to $X", "annual scholarships of $X"). Re-read the offending grant\'s page with enrichOpportunityAmountFromSource and confirm the aggregate guards still fire; if a re-crawl re-wrote the wrong value, check opportunityInserter. Never edit the amount by hand — fix the reader so it stays correct.',
+          confidence: 0.9,
+        }
+      }
+      return {
+        ok: true,
+        summary: `All golden amounts hold: ${assertions} funder amount assertion(s) within band.`,
+        evidence: { assertions },
+      }
+    },
+  },
+  {
     id: 'http.readyz',
     label: 'GET /readyz',
     category: SAM_CATEGORIES.ENVIRONMENT_READINESS,

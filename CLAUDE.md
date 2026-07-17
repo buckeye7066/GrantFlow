@@ -79,7 +79,14 @@ Owner-verified outcomes on real profiles are protected by the
 `backend/services/sam/samRegistry.js`, expectations in `system_kv
 golden_outcome_expectations`): after live-verifying a coverage fix, append the
 expectation so a future regression reds Anya's morning report instead of
-waiting for the owner to notice.
+waiting for the owner to notice. The companion **golden-AMOUNT sentinel**
+(`coverage.goldenAmounts`, `system_kv golden_amount_expectations` =
+`[{label, url_contains, expect_max, [over_factor=3], [under_factor=5]}]`) does
+the same for per-award FIGURES: a live grant whose url matches but whose value
+falls outside `[expect_max/under, expect_max*over]` is a regression (the
+Coca-Cola $237,500-for-a-$20,000-award class — the extractor grabbing a program
+total). A row with no amount yet is backlog, not a failure; Amy synthetics are
+excluded. Verify the real figure live, then append the expectation.
 
 ## INVARIANTS — enforce at a choke point, never trust per-call discipline
 
