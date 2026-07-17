@@ -29,12 +29,17 @@ beforeEach(() => {
   db = new Database(':memory:')
   db.exec(`
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, created_by TEXT);
     CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
-                         amount_status TEXT, funding_opportunity_id INTEGER);
+                         amount_status TEXT, funding_opportunity_id INTEGER, profile_id TEXT);
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
                                         amount_enrich_attempted_at TEXT);
   `)
+  // One real client profile and one Amy synthetic-training profile, so seeded
+  // grants can attach to either.
+  db.prepare("INSERT INTO profiles (id, created_by) VALUES ('real-1', 'user')").run()
+  db.prepare("INSERT INTO profiles (id, created_by) VALUES ('amy-synthetic', 'agent:amy')").run()
 })
 
 /**
@@ -46,12 +51,12 @@ beforeEach(() => {
  * already read-and-exhausted and only ONE had never been tried — and it keeps
  * these ratchet tests testing the RATCHET rather than tripping the answer census.
  */
-function seedGrants(total, withValue, { unansweredFo = 0 } = {}) {
+function seedGrants(total, withValue, { unansweredFo = 0, profileId = 'real-1' } = {}) {
   const insFo = db.prepare(
     'INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempted_at) VALUES (1, ?, ?)',
   )
   const ins = db.prepare(
-    'INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, ?, ?)',
+    'INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES (?, ?, ?, ?)',
   )
   let unanswered = unansweredFo
   for (let i = 0; i < total; i++) {
@@ -64,7 +69,7 @@ function seedGrants(total, withValue, { unansweredFo = 0 } = {}) {
     } else {
       foId = insFo.run('known', '2026-07-16T00:00:00Z').lastInsertRowid
     }
-    ins.run('discovered', valued ? 5000 : null, foId)
+    ins.run('discovered', valued ? 5000 : null, foId, profileId)
   }
 }
 
@@ -85,6 +90,41 @@ describe('detectCoverageRegression', () => {
   it('cannot flag on a first run (no previous reading to compare)', () => {
     expect(detectCoverageRegression(NaN, 15)).toBeNull()
     expect(detectCoverageRegression(undefined, 15)).toBeNull()
+  })
+})
+
+describe('pipeline.amountCoverage excludes Amy synthetic-training grants', () => {
+  it('a synthetic-cohort influx does NOT drop coverage or trip the ratchet', async () => {
+    // THE FALSE ALARM (prod 2026-07-17). Amy dumped 188 synthetic-profile grants
+    // overnight, all unvalued. Raw coverage fell 18% → 11% and the ratchet fired
+    // "amounts are being destroyed" — on a night NOTHING was destroyed. A metric
+    // about REAL pipeline health must not move when Amy's training cohort rotates.
+    seedHistory([{ at: '2026-07-16T14:00:00Z', pct: 18, with_value: 18, total: 100 }])
+    seedGrants(100, 18) // real pipeline: 18/100 = 18%, unchanged from yesterday
+    seedGrants(188, 0, { profileId: 'amy-synthetic' }) // the overnight synthetic flood
+    const res = await check().run({ db })
+    // Coverage is measured on REAL grants only → still 18%, no drop, no alarm.
+    expect(res.summary).not.toMatch(/DROPPED/)
+    expect(res.evidence.active_grants).toBe(100) // synthetics are not counted
+    expect(res.evidence.coverage_pct).toBe(18)
+  })
+
+  it('the answer census counts only real grants', async () => {
+    seedGrants(30, 30) // real, all valued
+    seedGrants(50, 0, { profileId: 'amy-synthetic' }) // synthetic, all unvalued
+    const res = await check().run({ db })
+    expect(res.ok).toBe(true) // the 50 synthetic unanswered rows do not fail the check
+    expect(res.evidence.active_grants).toBe(30)
+    expect(res.evidence.carried).toBe(30)
+  })
+
+  it('a grant with NO profile is treated as REAL (excluded only on positive evidence)', async () => {
+    // The predicate excludes only on a proven synthetic profile; a NULL profile
+    // is kept, so a real grant is never silently dropped from the metric.
+    seedGrants(25, 25)
+    db.prepare('INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES (?, ?, NULL, NULL)').run('discovered', 5000)
+    const res = await check().run({ db })
+    expect(res.evidence.active_grants).toBe(26)
   })
 })
 
