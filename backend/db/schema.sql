@@ -502,6 +502,12 @@ CREATE TABLE IF NOT EXISTS grants (
   amount_text TEXT,
   amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required','none_published')),
   amount_confidence REAL,
+  -- Direct grant amount-enrichment attempt state (migration 142/0146): a grant
+  -- with a URL but no catalog twin is read directly by
+  -- enforceGrantDirectAmountEnrichment; these mirror the catalog columns so the
+  -- burn/retry logic is identical.
+  amount_enrich_attempted_at TEXT,
+  amount_enrich_attempts INTEGER DEFAULT 0,
 
   status TEXT DEFAULT 'discovered' CHECK(status IN (
         -- Canonical pipeline (RC-13, shared/pipelineStages.js):

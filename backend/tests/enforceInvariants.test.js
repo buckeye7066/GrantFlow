@@ -48,6 +48,7 @@ import {
   enforceApplicationUrlRescue,
   enforceImportedStatusHonesty,
   enforceAmountEnrichment,
+  enforceGrantDirectAmountEnrichment,
   enforceGrantCatalogLink,
   enforceGrantAmountBackfill,
   enforceAmySyntheticExpiry,
@@ -989,7 +990,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // 27th: enforceJohnDraftPlausibility (wrong-org drafts in the mailbox).
-    expect(summary.ran).toBe(28)
+    expect(summary.ran).toBe(29)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1002,6 +1003,7 @@ describe('enforceInvariants — runner', () => {
       'grant_catalog_link',
       'amount_enrichment',
       'grant_amount_backfill',
+      'grant_direct_amount',
       'individual_amount_ceiling',
       'student_aid_eligibility',
       'no_dangling_matches',
@@ -2793,6 +2795,138 @@ describe('enforceAmountEnrichment', () => {
     expect(res.repaired).toBe(1)
     expect(foRow(db, foId).amount_max).toBe(2500)
     expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
+  })
+})
+
+describe('enforceGrantDirectAmountEnrichment', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+  // An ORPHAN grant: active pipeline, a URL, no catalog link, no amount, silent.
+  const insOrphan = (db, { url = 'https://swe.org/scholarship', status = 'interested' } = {}) => {
+    const id = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id, url) VALUES (?, ?, ?, NULL, NULL, ?)`,
+    ).run(id, 'Scholarship', status, url)
+    return id
+  }
+  const grantRow = (db, id) => db.prepare('SELECT * FROM grants WHERE id = ?').get(id)
+
+  it('reads an orphan grant\'s own page and writes the amount ONTO THE GRANT', async () => {
+    // THE LAST-MILE GAP. A grant with no catalog twin is invisible to the catalog
+    // sweep (which JOINs through funding_opportunity_id). Reading its own url is
+    // the only way it ever gets an amount. Coca-Cola Scholars / HSF / Elks are
+    // real scholarships that publish a figure — this is how it lands.
+    const db = makeRealDb()
+    const gId = insOrphan(db)
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: true,
+        amounts: { amount_min: 5000, amount_max: 20000, amount_text: '$5,000–$20,000', amount_status: 'range', amount_confidence: 0.9 },
+      }),
+    })
+    const g = grantRow(db, gId)
+    expect(g.amount_max).toBe(20000)
+    expect(g.amount_status).toBe('range')
+    expect(res.repaired).toBe(1)
+    expect(g.amount_enrich_attempted_at).not.toBeNull()
+  })
+
+  it('records none_published ON THE GRANT when the page states no figure (a locator)', async () => {
+    // Eldercare Locator / FAFSA / AAAD: read, no per-award figure → an honest
+    // denial on the grant, which is an ANSWER (the coverage census stops
+    // counting it as unanswered).
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://eldercare.acl.gov/' })
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: false,
+        reason: 'no_per_award_amount_on_page', amount_text: null, amount_status: 'not_listed',
+      }),
+    })
+    expect(grantRow(db, gId).amount_status).toBe('none_published')
+    expect(res.nonePublished).toBe(1)
+  })
+
+  it('does NOT record a denial when the page could not be READ (JS shell → needs adapter)', async () => {
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://sam.gov/fal/abc/view' })
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+    })
+    expect(grantRow(db, gId).amount_status, 'an unread page must never fabricate a denial').not.toBe('none_published')
+    expect(res.nonePublished ?? 0).toBe(0)
+  })
+
+  it('never touches a LINKED grant (that is the catalog sweep\'s job)', async () => {
+    const db = makeRealDb()
+    const foId = crypto.randomUUID()
+    db.prepare(`INSERT INTO funding_opportunities (id, title, source_url) VALUES (?, ?, ?)`).run(foId, 'X', 'https://x.org')
+    const gId = crypto.randomUUID()
+    db.prepare(`INSERT INTO grants (id, title, status, funding_opportunity_id, url) VALUES (?, ?, 'interested', ?, ?)`)
+      .run(gId, 'X', foId, 'https://x.org')
+    let called = false
+    const res = await enforceGrantDirectAmountEnrichment(db, { enrichImpl: async () => { called = true; return { attempted: true, page_read: true, found: false } } })
+    expect(called, 'a linked grant must not be read directly').toBe(false)
+    expect(res.scanned).toBe(0)
+  })
+
+  it('excludes Amy synthetic-profile grants', async () => {
+    const db = makeRealDb()
+    db.prepare("INSERT INTO profiles (id, display_name, primary_type, created_by) VALUES ('amy-1', 'amy', 'individual', 'agent:amy')").run()
+    const gId = crypto.randomUUID()
+    db.prepare(`INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id, url) VALUES (?, ?, 'interested', 'amy-1', NULL, ?)`)
+      .run(gId, 'Synthetic', 'https://swe.org/s')
+    const res = await enforceGrantDirectAmountEnrichment(db, { enrichImpl: async () => ({ attempted: true, page_read: true, found: false }) })
+    expect(res.scanned).toBe(0)
+  })
+
+  it('does NOT burn the grant when the amount WRITE fails (the "will retry" must be true)', async () => {
+    // The #946 rule, on the grant path: mark AFTER the write, never before.
+    const db = makeRealDb()
+    const gId = insOrphan(db)
+    const realPrepare = db.prepare.bind(db)
+    db.prepare = (sql) => {
+      if (/UPDATE grants\s+SET amount_min/i.test(sql)) {
+        return { run: () => { throw new Error('invalid input syntax for type real: "high"') } }
+      }
+      return realPrepare(sql)
+    }
+    await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: true, transient: false, found: true, amounts: { amount_min: 5000, amount_max: 9000, amount_text: null, amount_status: 'range', amount_confidence: 0.9 } }),
+    })
+    db.prepare = realPrepare
+    expect(grantRow(db, gId).amount_enrich_attempted_at, 'a failed write must NOT burn the grant').toBeNull()
+  })
+
+  it('is idempotent — a read grant is not re-read next run', async () => {
+    const db = makeRealDb()
+    insOrphan(db)
+    const impl = async () => ({ attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page', amount_status: 'not_listed' })
+    const first = await enforceGrantDirectAmountEnrichment(db, { enrichImpl: impl })
+    const second = await enforceGrantDirectAmountEnrichment(db, { enrichImpl: impl })
+    expect(first.attempted).toBe(1)
+    expect(second.scanned).toBe(0)
+  })
+
+  it('count-only mode reads nothing (ENFORCE_GRANT_DIRECT_AMOUNT=0)', async () => {
+    const db = makeRealDb()
+    const gId = insOrphan(db)
+    const prev = process.env.ENFORCE_GRANT_DIRECT_AMOUNT
+    process.env.ENFORCE_GRANT_DIRECT_AMOUNT = '0'
+    try {
+      let called = false
+      const res = await enforceGrantDirectAmountEnrichment(db, { enrichImpl: async () => { called = true; return { attempted: true, page_read: true, found: false } } })
+      expect(called).toBe(false)
+      expect(res.enforced).toBe(false)
+      expect(grantRow(db, gId).amount_enrich_attempted_at).toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.ENFORCE_GRANT_DIRECT_AMOUNT
+      else process.env.ENFORCE_GRANT_DIRECT_AMOUNT = prev
+    }
   })
 })
 

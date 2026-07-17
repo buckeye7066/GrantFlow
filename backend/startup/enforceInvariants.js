@@ -57,7 +57,7 @@ import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
-import { PIPELINE_ACTIVE_STATUSES, WIDE_AWARD_RANGE_RATIO } from '../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, WIDE_AWARD_RANGE_RATIO, pipelineValueSql } from '../config/pipelineValue.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
@@ -3281,6 +3281,211 @@ export async function enforceAmountEnrichment(db, deps = {}) {
   })
 }
 
+/**
+ * INVARIANT: A GRANT WITH NO CATALOG TWIN IS READ DIRECTLY (the last mile of the
+ * amount-answer census, 2026-07-17).
+ *
+ * `enforceAmountEnrichment` reads CATALOG rows; it reaches a grant only through
+ * `funding_opportunity_id`. `enforceGrantCatalogLink` links the grants that have
+ * a catalog twin — but ~38 active-pipeline grants in prod have NO twin at all
+ * (Eldercare Locator, Coca-Cola Scholars, FAFSA — curated resources inserted
+ * directly as grants). Nothing reads them, so they sit in
+ * `pipeline.amountCoverage` as `unanswered_no_catalog_row` forever, and the
+ * finding can never go green while a real, answerable row has simply never been
+ * looked at.
+ *
+ * This sweep reads such a grant's OWN url via the SAME service the catalog sweep
+ * uses (`enrichOpportunityAmountFromSource`, adapter-then-fetch, SSRF-safe) and
+ * records the answer ON THE GRANT: a scholarship page yields a real amount; a
+ * locator/benefit page yields an evidenced `none_published` (an honest denial,
+ * not a blank). A JS shell / dead page stays `page_read:false` → NOT burned as a
+ * denial (we learned we cannot read it, not that it pays nothing) → it remains
+ * an honest `unanswered_unreadable` that names real adapter work.
+ *
+ * Burn/retry semantics are IDENTICAL to the catalog sweep (the whole reason the
+ * grant carries its own `amount_enrich_attempted_at`/`amount_enrich_attempts`,
+ * migration 142/0146): burn on `page_read` or a stable non-transient failure or
+ * after MAX_ATTEMPTS; a provider outage never burns a row; the mark is written
+ * only AFTER the amount write succeeds. Amy synthetic-profile grants are excluded
+ * (they are training artifacts, not real pipeline). Runs AFTER
+ * `enforceGrantCatalogLink` so a grant that COULD link is linked first and read
+ * through the catalog path; only genuine orphans reach here.
+ *
+ * OVERRIDE: ON by default; `ENFORCE_GRANT_DIRECT_AMOUNT=0` for count-only.
+ */
+export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
+  return runInvariant('grant_direct_amount', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('amount_enrich_attempted_at') || !grantCols.has('url')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_DIRECT_AMOUNT) === false
+    const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.GRANT_DIRECT_AMOUNT_BOOT_LIMIT ?? '10', 10) || 10)
+    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.GRANT_DIRECT_AMOUNT_TIME_BUDGET_MS ?? '20000', 10) || 20000)
+    const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
+    const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+    const VAL = pipelineValueSql('g')
+
+    let candidates = []
+    try {
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.url, g.application_url, COALESCE(g.amount_enrich_attempts, 0) AS attempts
+             FROM grants g
+            WHERE g.status IN (${statuses})
+              AND g.funding_opportunity_id IS NULL
+              AND ${VAL} = 0
+              AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
+              AND (g.amount_text IS NULL OR g.amount_text = '')
+              AND g.amount_enrich_attempted_at IS NULL
+              AND COALESCE(g.url, g.application_url, '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+            ORDER BY COALESCE(g.amount_enrich_attempts, 0) ASC, g.id ASC
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+    } catch (err) {
+      log.warn('grant_direct_amount: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    const fresh = Array.isArray(candidates) ? candidates : []
+    if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) return { scanned: fresh.length, repaired: 0, enforced: false }
+
+    const { enrichOpportunityAmountFromSource } =
+      deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
+
+    const recordAttempt = async (id, { burn, attempts }) => {
+      try {
+        await db
+          .prepare(
+            `UPDATE grants
+                SET amount_enrich_attempts = ?,
+                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
+              WHERE id = ?`,
+          )
+          .run(attempts, burn ? new Date().toISOString() : null, id)
+      } catch { /* best-effort; a missed mark only costs one re-fetch */ }
+    }
+
+    const startedAt = Date.now()
+    let attemptedNow = 0
+    let enriched = 0
+    let nonePublished = 0
+    let textOnly = 0
+    let fetchFailed = 0
+    let retryable = 0
+    for (const g of fresh) {
+      if (attemptedNow >= LIMIT) break
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break
+      attemptedNow++
+      try {
+        // The service reads source_url ?? application_url ?? evidence_url. A grant
+        // carries no source/source_id, so the API-adapter lane is a no-op here and
+        // the page fetch runs — correct: an orphan grant at a grants.gov/sam.gov
+        // URL will read as a thin_page and stay honestly unreadable, exactly like
+        // the catalog path.
+        const res = await enrichOpportunityAmountFromSource(
+          { source_url: g.url ?? g.application_url ?? null },
+          deps,
+        )
+        const attempts = Number(g.attempts ?? 0) + 1
+        const outOfRetries = attempts >= MAX_ATTEMPTS
+        const burn = res?.page_read === true || res?.transient !== true || outOfRetries
+        if (res?.page_read !== true) {
+          fetchFailed++
+          if (!burn) retryable++
+        }
+        if (res?.found && res.amounts) {
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_min = ?, amount_max = ?, amount_text = ?,
+                      amount_status = ?, amount_confidence = ?
+                WHERE id = ?
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND COALESCE(amount_requested, 0) <= 0`,
+            )
+            .run(
+              res.amounts.amount_min, res.amounts.amount_max, res.amounts.amount_text,
+              res.amounts.amount_status, res.amounts.amount_confidence, g.id,
+            )
+          enriched++
+        } else if (res?.page_read === true) {
+          // Read, no per-award figure → record the evidenced denial (or a better
+          // honest label the page stated). Same rule as the catalog sweep:
+          // `none_published` is the floor; a real 'varies'/'contact_required' wins.
+          const readStatus =
+            res.amount_status && res.amount_status !== 'not_listed'
+              ? res.amount_status
+              : AMOUNT_STATUS_NONE_PUBLISHED
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_text = COALESCE(?, amount_text),
+                      amount_status = ?
+                WHERE id = ?
+                  AND (amount_status IS NULL OR amount_status = 'not_listed')
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND COALESCE(amount_requested, 0) <= 0`,
+            )
+            .run(res.amount_text ?? null, readStatus, g.id)
+          if (readStatus === AMOUNT_STATUS_NONE_PUBLISHED) nonePublished++
+          else textOnly++
+        }
+        // Mark only AFTER the write succeeds (the #946 rule): a failed write
+        // leaves the row unmarked so "will retry" is true, not a comforting lie.
+        await recordAttempt(g.id, { burn, attempts })
+      } catch (err) {
+        fetchFailed++
+        retryable++
+        log.warn('grant_direct_amount: write failed — grant left unmarked so it WILL be retried', {
+          grant: g.id, error: String(err?.message || err),
+        })
+      }
+    }
+
+    let remaining = null
+    let exhausted = null
+    try {
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const stillUnread = `${VAL} = 0
+              AND g.funding_opportunity_id IS NULL
+              AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
+              AND (g.amount_text IS NULL OR g.amount_text = '')
+              AND COALESCE(g.url, g.application_url, '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')`
+      const r = await db.prepare(
+        `SELECT COUNT(*) AS n FROM grants g
+          WHERE g.status IN (${statuses}) AND ${stillUnread} AND g.amount_enrich_attempted_at IS NULL`,
+      ).get()
+      remaining = Number(r?.n ?? 0)
+      const done = await db.prepare(
+        `SELECT COUNT(*) AS n FROM grants g
+          WHERE g.status IN (${statuses}) AND ${VAL} = 0 AND g.funding_opportunity_id IS NULL
+            AND COALESCE(g.url, g.application_url, '') <> ''
+            AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+            AND g.amount_enrich_attempted_at IS NOT NULL`,
+      ).get()
+      exhausted = Number(done?.n ?? 0)
+    } catch { /* best-effort telemetry */ }
+
+    if (enriched > 0 || nonePublished > 0 || textOnly > 0) {
+      log.info('read orphan pipeline grants directly for award amounts', {
+        attempted: attemptedNow, enriched, nonePublished, textOnly, fetchFailed, retryable, remaining, exhausted,
+      })
+    }
+    return {
+      scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
+      nonePublished, textOnly, fetchFailed, retryable, remaining, exhausted, enforced: true,
+    }
+  })
+}
+
 export async function enforceFunderBackfill(db) {
   return runInvariant('funder_backfill', async () => {
     const grantCols = await listGrantColumns(db)
@@ -4161,6 +4366,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // right after can mirror freshly-learned amounts onto the grants same-boot.
   steps.push(await enforceAmountEnrichment(db))
   steps.push(await enforceGrantAmountBackfill(db))
+  // Last mile: a grant with NO catalog twin is invisible to both nets above.
+  // Read its own url directly (scholarship → amount; locator → honest
+  // none_published), so an answerable orphan never sits in the coverage census
+  // as unanswered just because nothing looked at it.
+  steps.push(await enforceGrantDirectAmountEnrichment(db))
   // Amount-sanity net: purge institutional-scale ($ > ceiling) grants that were
   // mis-matched into an INDIVIDUAL/student pipeline (the ">$3M potential" bug).
   // Runs after the relevance floor because those below-floor rows are cheaper to
@@ -4318,6 +4528,7 @@ export const __testables = {
   enforceImportedStatusHonesty,
   enforceGrantCatalogLink,
   enforceAmountEnrichment,
+  enforceGrantDirectAmountEnrichment,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,

@@ -482,44 +482,42 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // "everything is fine".
       let censusError = null
       try {
-        // Every active row falls in exactly one bucket, in priority order — the
-        // CASE is ordered deliberately: a carried value outranks any label, and
-        // evidence outranks silence.
+        // Every active row gets an ANSWER classification. The predicates read an
+        // answer off EITHER the grant itself OR its linked catalog row, because
+        // an amount can now be recorded in two places: on the catalog row (the
+        // enrichment sweep) or directly on an orphan grant with no catalog twin
+        // (enforceGrantDirectAmountEnrichment). `attempted` follows the same
+        // rule — the catalog row's mark when linked, the grant's own mark when an
+        // orphan — so a read-but-silent row is `unreadable` regardless of which
+        // path read it, and a never-looked-at row is `never_read` backlog.
+        const V = pipelineValueSql('g')
+        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) = 'directory'`
+        // NULL-safe (COALESCE): amount_status is NULL on many rows, and a raw
+        // `col = 'x'` yields NULL there, which poisons every `NOT (...)` below via
+        // three-valued logic (NULL AND anything = NULL → the CASE never fires and
+        // the row silently vanishes from the count). Every status comparison here
+        // must fold NULL to '' first.
+        const nonePub = `(COALESCE(g.amount_status, '') = 'none_published' OR COALESCE(fo.amount_status, '') = 'none_published')`
+        const honestLabel =
+          `(COALESCE(g.amount_status, '') IN ('varies', 'contact_required', 'estimated')` +
+          ` OR COALESCE(g.amount_text, '') <> ''` +
+          ` OR COALESCE(fo.amount_status, '') IN ('varies', 'contact_required', 'estimated')` +
+          ` OR COALESCE(fo.amount_text, '') <> '')`
+        // Read-mark that applies to THIS row: the catalog row's when linked, the
+        // grant's own when an orphan (COALESCE picks whichever is present).
+        const attempted = `COALESCE(fo.amount_enrich_attempted_at, g.amount_enrich_attempted_at)`
+        // A row with no value, not a directory, no denial and no honest label.
+        const unanswered = `${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND NOT ${honestLabel}`
         answers = await db
           .prepare(
             `SELECT
-               SUM(CASE WHEN ${pipelineValueSql('g')} > 0 THEN 1 ELSE 0 END) AS carried,
-               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
-                         AND LOWER(COALESCE(fo.opportunity_kind, '')) = 'directory'
-                        THEN 1 ELSE 0 END) AS by_design,
-               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
-                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
-                         AND (fo.amount_status = 'none_published' OR g.amount_status = 'none_published')
-                        THEN 1 ELSE 0 END) AS answered_none_published,
-               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
-                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
-                         AND (fo.amount_status IS NULL OR fo.amount_status <> 'none_published')
-                         AND (g.amount_status IS NULL OR g.amount_status <> 'none_published')
-                         AND (COALESCE(fo.amount_status, '') IN ('varies', 'contact_required', 'estimated')
-                              OR COALESCE(fo.amount_text, '') <> '')
-                        THEN 1 ELSE 0 END) AS answered_text,
-               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
-                         AND g.funding_opportunity_id IS NULL
-                        THEN 1 ELSE 0 END) AS unanswered_no_catalog_row,
-               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
-                         AND g.funding_opportunity_id IS NOT NULL
-                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
-                         AND (fo.amount_status IS NULL OR fo.amount_status IN ('not_listed'))
-                         AND COALESCE(fo.amount_text, '') = ''
-                         AND fo.amount_enrich_attempted_at IS NULL
-                        THEN 1 ELSE 0 END) AS unanswered_never_read,
-               SUM(CASE WHEN ${pipelineValueSql('g')} = 0
-                         AND g.funding_opportunity_id IS NOT NULL
-                         AND LOWER(COALESCE(fo.opportunity_kind, '')) <> 'directory'
-                         AND (fo.amount_status IS NULL OR fo.amount_status IN ('not_listed'))
-                         AND COALESCE(fo.amount_text, '') = ''
-                         AND fo.amount_enrich_attempted_at IS NOT NULL
-                        THEN 1 ELSE 0 END) AS unanswered_unreadable
+               SUM(CASE WHEN ${V} > 0 THEN 1 ELSE 0 END) AS carried,
+               SUM(CASE WHEN ${V} = 0 AND ${isDir} THEN 1 ELSE 0 END) AS by_design,
+               SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND ${nonePub} THEN 1 ELSE 0 END) AS answered_none_published,
+               SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND ${honestLabel} THEN 1 ELSE 0 END) AS answered_text,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL THEN 1 ELSE 0 END) AS unanswered_unreadable,
+               SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL THEN 1 ELSE 0 END) AS unanswered_no_catalog_row
              FROM grants g
              LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
             WHERE g.status IN (${statusesSql})
@@ -621,26 +619,30 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
 
       const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct }
 
-      // `never_read` is BACKLOG, not a defect: the sweep is bounded per night and
-      // drains it. It fails only if it STALLS — which the sweep's own
-      // remaining/exhausted telemetry (pipeline.invariantSweepOutcomes) owns.
-      // Failing on it here would re-create the nightly-noise problem one rung down.
-      const unanswered = noCatalogRow + unreadable
-      if (unanswered > 0) {
-        const parts = []
-        if (unreadable > 0) parts.push(`${unreadable} unreadable (source read failed/JS-shell — needs an API adapter)`)
-        if (noCatalogRow > 0) parts.push(`${noCatalogRow} with no catalog row (structurally out of the sweep's reach — it joins grants→funding_opportunities)`)
+      // `never_read` is BACKLOG, not a defect: the enrichment sweeps are bounded
+      // per night and drain it (catalog rows via enforceAmountEnrichment, orphan
+      // grants via enforceGrantDirectAmountEnrichment). It fails only if it
+      // STALLS — the sweeps' own remaining/exhausted telemetry owns that. Failing
+      // on it here would re-create the nightly-noise problem one rung down.
+      //
+      // The ONLY genuinely-unanswered class is `unreadable`: a row whose source
+      // WAS read and came back a JS shell / dead page, so no amount of fetching
+      // can ever help — it names real ADAPTER work (the report itself says
+      // "persistent classes need a code change"). Orphan grants used to fail here
+      // as `no_catalog_row`; now they are read directly, so they either get an
+      // answer, sit in `never_read` backlog, or land here as honestly unreadable.
+      if (unreadable > 0) {
         return {
           ok: false,
-          summary: `${unanswered} active pipeline grant(s) have NO amount answer: ${parts.join('; ')}. ${summary}`,
+          summary: `${unreadable} active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter. ${summary}`,
           evidence: fullCensus,
-          recommended_fix: 'These rows are not "low coverage" — they are rows the system has no ANSWER for, and each names its own fix. UNREADABLE: the source rendered a JS shell or refused the fetch, so no amount of page-fetching will ever help — it needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one; check which hosts they are (`SELECT fo.source, COUNT(*) FROM funding_opportunities fo JOIN grants g ON g.funding_opportunity_id=fo.id WHERE fo.amount_enrich_attempted_at IS NOT NULL AND COALESCE(fo.amount_max,0)=0 AND fo.amount_text IS NULL GROUP BY 1`). NO CATALOG ROW: the grant carries a URL but no funding_opportunity_id, so enforceAmountEnrichment (which JOINs through that link) can never see it and enforceGrantAmountBackfill has nothing to inherit from — some of these have a catalog row that exists and simply is not linked. Do NOT "fix" this by widening the answer buckets: an answer is a dollar value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.',
+          recommended_fix: 'These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. Identify the hosts: group the unreadable rows by source_url host. sam.gov is deliberately NOT adapted (its award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.',
           confidence: 0.85,
         }
       }
       return {
         ok: true,
-        summary: `All ${total} active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting tonight's read` : ''}). ${summary}`,
+        summary: `All ${total} real active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting a read` : ''}). ${summary}`,
         evidence: fullCensus,
       }
     },
