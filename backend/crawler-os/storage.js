@@ -94,10 +94,10 @@ export function upsertOpportunity(store, opp) {
     applicant_types_json: JSON.stringify(opp.applicant_types),
     need_categories_json: JSON.stringify(opp.need_categories),
     geography_json: JSON.stringify(opp.geography),
-    eligibility_text: pageFacts.eligibility_text,
-    eligibility_bullets_json: pageFacts.eligibility_bullets_json,
-    page_fact_schema_version: pageFacts.page_fact_schema_version,
-    field_provenance_json: pageFacts.field_provenance_json,
+    // Page-fact columns spread straight from the registry-driven builder (keyed
+    // by PAGE_FACT_OS_STORE_COLUMNS) so a future registry addition can't be
+    // silently dropped by a hand-copied property list.
+    ...pageFacts,
     trust_tier: opp.trust_tier, reality_status: opp.reality_status,
     content_hash: opp.evidence?.content_hash ?? null, evidence_url: opp.evidence?.url ?? null,
     fetched_at: opp.evidence?.fetched_at ?? null,

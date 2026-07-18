@@ -110,11 +110,13 @@ export function cleanSchemaVersion(v) {
 
 /**
  * A nonempty, VALIDATED provenance object, else null. Accepts an object or a
- * JSON string. Each kept ENTRY must be a serializable plain object that carries
- * at least an own `value` property (the stated fact); entries without `value`
- * (`{}`, `{ source }`), non-objects, arrays, or unserializable values are
- * DROPPED — so `{}` / `[]` / bad JSON / `{ is_loan: {} }` never overwrite a
- * stored fact during a merge. Returns null when nothing valid remains.
+ * JSON string. Each kept ENTRY must be a PLAIN object (a `{...}` literal /
+ * JSON.parse output — NOT a class instance) that carries an own `value` which is
+ * not undefined (the stated fact), and must be serializable. Entries that are
+ * class instances, arrays, non-objects, missing `value`, `{ value: undefined }`,
+ * or unserializable are DROPPED — so `{}` / `[]` / bad JSON / `{ is_loan: {} }` /
+ * `{ value: undefined }` / a class instance never overwrite a stored fact during
+ * a merge. Returns null when nothing valid remains.
  */
 export function cleanFieldProvenance(v) {
   let obj = v;
@@ -123,17 +125,26 @@ export function cleanFieldProvenance(v) {
     if (!s) return null;
     try { obj = JSON.parse(s); } catch { return null; }
   }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  if (!isPlainObject(obj)) return null;
   const out = {};
   for (const [key, entry] of Object.entries(obj)) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-    if (!Object.prototype.hasOwnProperty.call(entry, 'value')) continue; // must carry a stated value
+    if (!isPlainObject(entry)) continue; // plain objects only — never a class instance
+    // `value` must be an OWN, defined property. `{ value: undefined }` serializes
+    // to `{}` and would clobber good evidence during a merge, so it is not a fact.
+    if (!Object.prototype.hasOwnProperty.call(entry, 'value') || entry.value === undefined) continue;
     let serialized;
     try { serialized = JSON.stringify(entry); } catch { continue; } // reject circular / unserializable
     if (typeof serialized !== 'string') continue;
     out[key] = entry;
   }
   return Object.keys(out).length ? out : null;
+}
+
+/** True only for a plain object literal / JSON.parse output — never a class instance or array. */
+function isPlainObject(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
 }
 
 /**

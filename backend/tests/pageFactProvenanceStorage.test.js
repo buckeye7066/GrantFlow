@@ -163,6 +163,26 @@ describe('page-fact provenance — LIVE-DB per-key provenance merge (finding #1)
     expect(prov).toEqual({ is_loan: { value: false } })
   })
 
+  it('CONCURRENT persists to the same live row both survive (atomic in-SQL merge, many iterations)', async () => {
+    const db = makeMigratedDb()
+    for (let i = 0; i < 25; i += 1) {
+      const id = `race-${i}`
+      const ck = `ck-race-${i}`
+      const a = makeMemStore([osRow({ id, canonical_opportunity_key: ck,
+        field_provenance_json: JSON.stringify({ is_loan: { value: false, source: 'https://a' } }) })])
+      const b = makeMemStore([osRow({ id, canonical_opportunity_key: ck,
+        field_provenance_json: JSON.stringify({ national: { value: true, source: 'https://b' } }) })])
+      // Interleave two persists of the SAME live row. A non-atomic read-then-write
+      // would let one overwrite the other; the in-SQL json_patch/jsonb merge can't.
+      await Promise.all([persistRun(db, a, {}), persistRun(db, b, {})])
+      const prov = JSON.parse(
+        db.prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ?').get(id).field_provenance,
+      )
+      expect(prov.is_loan?.value, `iter ${i} is_loan`).toBe(false)
+      expect(prov.national?.value, `iter ${i} national`).toBe(true)
+    }
+  })
+
   it('a partial dedup write onto an existing live canonical row keeps prior keys', async () => {
     const db = makeMigratedDb()
     // Seed a live row (id os-1) with is_loan provenance already stored.

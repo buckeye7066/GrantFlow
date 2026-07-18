@@ -234,6 +234,38 @@ test('cleanFieldProvenance drops entries with no own `value`, and they never ove
   assert.deepEqual(mergeFieldProvenance(good, { is_loan: {} }), good);
 });
 
+test('cleanFieldProvenance drops class instances and {value: undefined} (never clobbers good evidence)', () => {
+  class Evidence { constructor() { this.value = true; } } // NOT a plain object
+  assert.equal(cleanFieldProvenance({ national: new Evidence() }), null);
+  assert.equal(cleanFieldProvenance({ is_loan: { value: undefined, source: 'x' } }), null);
+  // Only the valid plain-object-with-defined-value survives a mixed input.
+  assert.deepEqual(cleanFieldProvenance({ a: new Evidence(), b: { value: 1 } }), { b: { value: 1 } });
+  // During a merge, neither a class instance nor {value:undefined} can clobber a stored fact.
+  const good = { national: { value: true, source: 'https://x/1' } };
+  assert.deepEqual(mergeFieldProvenance(good, { national: new Evidence() }), good);
+  assert.deepEqual(mergeFieldProvenance(good, { national: { value: undefined } }), good);
+});
+
+test('upsertOpportunity passes EXACTLY the registry OS-store page-fact columns to store.upsert', () => {
+  const store = createMemoryStore();
+  let capturedKeys = null;
+  const origUpsert = store.upsert.bind(store);
+  store.upsert = (table, keys, row) => {
+    if (table === 'funding_opportunities') capturedKeys = Object.keys(row);
+    return origUpsert(table, keys, row);
+  };
+  storage.upsertOpportunity(store, makeOpportunity(baseInput({
+    eligibility_text: 't', eligibility_bullets: ['b'], page_fact_schema_version: 1,
+    field_provenance: { is_loan: { value: false } },
+  })));
+  // Every registry OS-store column is actually written...
+  for (const c of PAGE_FACT_OS_STORE_COLUMNS) assert.ok(capturedKeys.includes(c), `upsert row includes ${c}`);
+  // ...and the page-fact columns in the ACTUAL upsert row equal the registry set exactly
+  // (so a future registry addition can't be silently omitted by the write site).
+  const pageFactKeysInRow = capturedKeys.filter((k) => PAGE_FACT_OS_STORE_COLUMNS.includes(k));
+  assert.deepEqual(pageFactKeysInRow.sort(), [...PAGE_FACT_OS_STORE_COLUMNS].sort());
+});
+
 // ---- finding #3: the registry actually DRIVES the real consumers ------------
 
 test('registry drives the OS-store schema surface (SCHEMA_DDL + applySchema)', () => {

@@ -20,7 +20,7 @@ import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
 import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
 import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
-import { buildLivePageFactColumns, mergeFieldProvenance } from '../crawler-os/pageFacts.js';
+import { buildLivePageFactColumns } from '../crawler-os/pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -398,14 +398,39 @@ function osOppToLiveRow(o) {
   return row;
 }
 
-async function upsertRow(db, table, keyCols, row) {
+/**
+ * upsertRow — INSERT ... ON CONFLICT DO UPDATE. `conflictExpr` optionally maps a
+ * column to the SQL expression used on the UPDATE side (default `excluded.<col>`)
+ * so a column can be MERGED with its current value ATOMICALLY inside the single
+ * statement (no read-then-write race). The expression may reference `excluded.`
+ * (the would-be-inserted value) and `<table>.<col>` (the current stored value).
+ */
+async function upsertRow(db, table, keyCols, row, { conflictExpr = {} } = {}) {
   const cols = Object.keys(row);
   const placeholders = cols.map(() => '?').join(', ');
-  const updates = cols.filter((c) => !keyCols.includes(c)).map((c) => `${c} = excluded.${c}`).join(', ');
+  const updates = cols
+    .filter((c) => !keyCols.includes(c))
+    .map((c) => `${c} = ${conflictExpr[c] ?? `excluded.${c}`}`)
+    .join(', ');
   const sql =
     `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders}) ` +
     `ON CONFLICT (${keyCols.join(', ')}) DO UPDATE SET ${updates}`;
   await db.prepare(sql).run(...cols.map((c) => row[c]));
+}
+
+/**
+ * fundingOpportunityConflictExpr — the per-column UPDATE-side overrides for a
+ * funding_opportunities upsert. `field_provenance` is MERGED per canonical key
+ * with the currently-stored value INSIDE the statement, so two concurrent
+ * persists can't read-then-clobber each other (the round-3 race): incoming wins
+ * per key, existing keys survive. SQLite uses json_patch (RFC 7396 shallow
+ * merge); Postgres uses jsonb `||` on the cast TEXT column, written back as text.
+ */
+function fundingOpportunityConflictExpr(db) {
+  const provExpr = db?.dialect === 'postgres'
+    ? "(COALESCE(funding_opportunities.field_provenance, '{}')::jsonb || excluded.field_provenance::jsonb)::text"
+    : "json_patch(COALESCE(funding_opportunities.field_provenance, '{}'), excluded.field_provenance)";
+  return { field_provenance: provExpr };
 }
 
 /**
@@ -494,25 +519,18 @@ export async function persistRun(db, memStore, run, opts = {}) {
       if (existing && existing.id) targetId = existing.id;
     }
     idRemap.set(o.id, targetId);
-    // LIVE-DB per-key provenance merge: the generic upsert REPLACES the whole
-    // field_provenance JSON, so a partial re-crawl (or a dedup write onto an
-    // existing canonical row) would drop keys another extraction already stored.
-    // Merge the incoming provenance with the target row's current value per
-    // canonical field before writing, so both keys survive. Only when this write
-    // actually carries provenance; a write that lacks it never touches the column
-    // (osOppToLiveRow omits it), so stored provenance is preserved untouched.
-    if (row.field_provenance !== undefined) {
-      let existingProvenance = null;
-      try {
-        const cur = await db
-          .prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ? LIMIT 1')
-          .get(targetId);
-        existingProvenance = cur ? cur.field_provenance : null;
-      } catch { /* column absent on a minimal fixture — upsert handles/ fails as before */ }
-      const merged = mergeFieldProvenance(existingProvenance, row.field_provenance);
-      if (merged) row.field_provenance = JSON.stringify(merged);
-    }
-    await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId });
+    // LIVE-DB per-key provenance merge, done ATOMICALLY inside the single UPSERT
+    // (fundingOpportunityConflictExpr) so two concurrent persists can't
+    // read-then-clobber each other. The generic upsert would REPLACE the whole
+    // field_provenance JSON — dropping keys another extraction stored — so the
+    // conflict expression json_patch/jsonb-merges incoming over the current value
+    // (incoming wins per key, existing keys survive). A write that carries no
+    // provenance never names the column (osOppToLiveRow omits it), so stored
+    // provenance is untouched; there is no read-then-write gap and no fetch that
+    // could error into a null-clobber.
+    await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId }, {
+      conflictExpr: fundingOpportunityConflictExpr(db),
+    });
     opportunities += 1;
   }
 
