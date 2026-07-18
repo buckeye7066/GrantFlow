@@ -67,7 +67,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
   })
 
   it('returns 400 (not 401) when no passphrase is supplied', async () => {
-    const app = createApp(db, { role: 'admin', is_admin: true, userId: 'system_admin_token' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({})
@@ -76,7 +76,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
   })
 
   it('returns 403 (NOT 401) when no passphrase has been set for the profile', async () => {
-    const app = createApp(db, { role: 'admin', is_admin: true, userId: 'system_admin_token' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({ passphrase: 'whatever' })
@@ -89,7 +89,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
 
   it('returns 403 (NOT 401) on a WRONG passphrase', async () => {
     await setMasterPassphrase(db, { profileId: PROFILE_ID, passphrase: 'the-right-one' })
-    const app = createApp(db, { role: 'admin', is_admin: true, userId: 'system_admin_token' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({ passphrase: 'the-wrong-one' })
@@ -101,7 +101,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
   it('returns 200 with vault status on the CORRECT passphrase', async () => {
     await setMasterPassphrase(db, { profileId: PROFILE_ID, passphrase: 'the-right-one' })
     _resetUnlockCache() // ensure unlock derives fresh, not a cached key from setMasterPassphrase
-    const app = createApp(db, { role: 'admin', is_admin: true, userId: 'system_admin_token' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({ passphrase: 'the-right-one' })

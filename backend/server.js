@@ -1510,6 +1510,11 @@ app.use(async (req, res, next) => {
       // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
       // but requestContext will resolve the final answer from users.is_admin.
       is_admin: true,
+      // serviceToken PROVENANCE: set ONLY inside a safeTokenEqual service-token
+      // branch. isSyntheticServiceAdmin REQUIRES it, so a JWT whose `sub` collides
+      // with a synthetic id (system_admin_token) can never be treated as a service
+      // admin (a JWT payload cannot set this flag).
+      serviceToken: true,
       // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
       userId: 'system_admin_token',
       profileId: null,
@@ -1524,6 +1529,7 @@ app.use(async (req, res, next) => {
     user = {
       role: 'admin',
       is_admin: true,
+      serviceToken: true,
       userId: 'system_anya_token',
       full_name: 'Anya Assistant',
       email: 'anya@grantflow.app',
@@ -1544,6 +1550,7 @@ app.use(async (req, res, next) => {
         user = {
           role: 'admin',
           is_admin: true,
+          serviceToken: true,
           userId: 'system_admin_token',
           profileId: null,
           full_name: ADMIN_NAME,
@@ -1557,6 +1564,7 @@ app.use(async (req, res, next) => {
         user = {
           role: 'admin',
           is_admin: true,
+          serviceToken: true,
           userId: 'system_anya_token',
           full_name: 'Anya Assistant',
           email: 'anya@grantflow.app',
@@ -1916,10 +1924,12 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       }
 
       try {
-        // DB-backed admin only (req.ctx.isAdmin fails closed on DB error and never
-        // trusts a JWT role/is_admin claim; dbUser.is_admin is the persisted row).
-        // A demoted admin's stale token must NOT unlock the cross-org profile list.
-        const isAdminUser = req.ctx?.isAdmin === true || Boolean(dbUser?.is_admin)
+        // DB-backed admin ONLY (req.ctx.isAdmin is authoritative: fail-closed, and
+        // denies a synthetic id arriving without service-token provenance). We do
+        // NOT OR-in dbUser.is_admin — the persisted synthetic row (keyed by
+        // system_admin_token) would otherwise let a JWT with a colliding `sub`
+        // unlock the cross-org profile list.
+        const isAdminUser = req.ctx?.isAdmin === true
 
         if (isAdminUser) {
           // Admin UX expects cross-org profile selection.

@@ -104,6 +104,26 @@ describe('mergeSectionData allowlist (untrusted-AI hardening)', () => {
     expect({}.z).toBeUndefined()
   })
 
+  it('a nested array-of-arrays payload cannot smuggle keys/prototype past the sanitizer', () => {
+    // applications is array<object>; the AI returns applications:[[{...}]] (an
+    // array whose element is itself an ARRAY of objects). Previously this took the
+    // primitive-array path and stored the nested objects (incl. __proto__)
+    // unfiltered. Now the array is flattened + shaped: extra keys dropped, no pollution.
+    const existing = { applications: [{ name: 'Baseline U', status: 'draft' }] }
+    const incoming = JSON.parse(
+      '{"applications":[[{"name":"Injected U","status":"accepted","secret_admin_flag":true,"__proto__":{"polluted":true}}]]}',
+    )
+    const { data } = mergeSectionData(existing, incoming, ['applications'])
+    const injected = data.applications.find((a) => a && a.name === 'Injected U')
+    expect(injected).toBeTruthy()
+    expect(injected.status).toBe('accepted')
+    expect(injected).not.toHaveProperty('secret_admin_flag')
+    expect(Object.prototype.hasOwnProperty.call(injected, '__proto__')).toBe(false)
+    expect({}.polluted).toBeUndefined()
+    // No raw nested array leaked into the stored value.
+    expect(data.applications.every((a) => !Array.isArray(a))).toBe(true)
+  })
+
   it('drops reserved prototype-pollution keys at top level AND nested depth', () => {
     const payload = JSON.parse(
       '{"household_income": 100, "__proto__": {"polluted": true}, "academic_status": {"__proto__": {"x": 1}}}',

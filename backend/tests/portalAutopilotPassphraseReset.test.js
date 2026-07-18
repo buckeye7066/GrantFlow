@@ -41,7 +41,7 @@ function createApp(db) {
     req.db = db
     // Validated synthetic ADMIN_TOKEN identity → req.ctx.isAdmin=true (DB-backed
     // context now fails closed for any other unresolved role:'admin' token).
-    req.user = { role: 'admin', is_admin: true, userId: 'system_admin_token' }
+    req.user = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }
     next()
   })
   // Mirror prod: admin authority is DB-backed via attachRequestContext.

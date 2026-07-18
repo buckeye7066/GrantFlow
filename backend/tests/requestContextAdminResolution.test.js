@@ -60,9 +60,9 @@ describe('buildRequestContext DB-backed admin resolution', () => {
     expect(ctx.isAdmin).toBe(false)
   })
 
-  it('a validated synthetic service token stays admin even when the DB lookup fails', async () => {
-    // ADMIN_TOKEN flow: userId is a known synthetic id + is_admin from the token.
-    const user = { role: 'admin', is_admin: true, userId: 'system_admin_token' }
+  it('a validated synthetic service token (serviceToken provenance) stays admin even when the DB lookup fails', async () => {
+    // ADMIN_TOKEN flow: safeTokenEqual branch set serviceToken:true + synthetic id.
+    const user = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }
     const ctx = await buildRequestContext(makeDb({ isAdmin: false, failUsersLookup: true }), user)
     expect(ctx.isAdmin).toBe(true)
   })
@@ -76,5 +76,53 @@ describe('buildRequestContext DB-backed admin resolution', () => {
     const user = { role: 'admin', is_admin: true, roles: ['admin'], userId: 'attacker-novel-id' }
     const ctx = await buildRequestContext(db, user)
     expect(ctx.isAdmin).toBe(false)
+  })
+
+  it('a JWT whose sub COLLIDES with a synthetic id but lacks service-token provenance is NOT a service admin', async () => {
+    // Attack: sign a JWT { sub:'system_admin_token', roles:['admin'] }. The JWT
+    // branch builds userId:'system_admin_token', is_admin:true — but NO
+    // serviceToken flag (a JWT payload can't set it). It must fall through to the
+    // DB lookup (no is_admin row here => null) and resolve NON-admin.
+    const db = {
+      dialect: 'sqlite',
+      prepare(sql) {
+        const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm.includes('from users where id')) return { get: () => null }
+        return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
+      },
+    }
+    const jwtUser = { role: 'admin', is_admin: true, roles: ['admin'], userId: 'system_admin_token' }
+    const ctx = await buildRequestContext(db, jwtUser)
+    expect(ctx.isAdmin).toBe(false)
+  })
+
+  it('FAIL-CLOSED never carries the null all-access sentinel (accessible sets coerced to empty)', async () => {
+    // Repro of the coordinator scenario: the context admin lookup (SELECT
+    // is_admin, primary_email ...) TIMES OUT -> isAdmin=false (fail closed), but
+    // getAccessibleProfileIds' own admin check (SELECT is_admin ...) SUCCEEDS and
+    // says admin -> returns null. A non-admin context must NOT carry null.
+    const db = {
+      dialect: 'sqlite',
+      prepare(sql) {
+        const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm.includes('from users where id')) {
+          if (norm.includes('primary_email')) {
+            // requestContext's admin lookup -> fail (fail closed).
+            return { get: () => { throw new Error('statement timeout') } }
+          }
+          // isAdminUserWithDb's lookup (inside the helpers) -> succeeds as admin,
+          // making getAccessibleProfileIds/OrgIds return the null sentinel.
+          return { get: () => ({ is_admin: 1 }) }
+        }
+        return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
+      },
+    }
+    const user = { role: 'admin', is_admin: true, roles: ['admin'], userId: 'demoted' }
+    const ctx = await buildRequestContext(db, user)
+    expect(ctx.isAdmin).toBe(false)
+    expect(ctx.accessibleProfileIds instanceof Set).toBe(true)
+    expect(ctx.accessibleProfileIds.size).toBe(0)
+    expect(ctx.accessibleOrgIds instanceof Set).toBe(true)
+    expect(ctx.accessibleOrgIds.size).toBe(0)
   })
 })

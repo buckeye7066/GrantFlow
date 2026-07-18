@@ -163,6 +163,23 @@ function buildElementShape(existingElements) {
   return { keys, children }
 }
 
+// Recursively collect the OBJECT elements of an untrusted array, flattening any
+// nested arrays (array<object> fields must never store raw nested arrays that
+// bypass shape sanitization). Primitives are dropped in this object-array
+// context. Returns [] when the array contains no objects at any depth (a genuine
+// primitive array), so the caller falls through to the primitive-dedup path.
+function collectObjectElements(arr) {
+  const out = []
+  for (const e of arr) {
+    if (Array.isArray(e)) {
+      out.push(...collectObjectElements(e))
+    } else if (e && typeof e === 'object') {
+      out.push(e)
+    }
+  }
+  return out
+}
+
 // Sanitize an untrusted ARRAY against a shape. Object items are allowlisted
 // against `shape`; nested arrays recurse; primitives pass through. Reserved keys
 // are always dropped (via sanitizeAgainstShape). `shape` null => reserved-only.
@@ -260,7 +277,13 @@ export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = nul
       // to those already present across the existing elements so untrusted AI
       // can't inject NEW element fields. If no existing element defines a shape,
       // fall back to reserved-key stripping only (don't nuke first-time data).
-      const objectElements = value.filter((e) => e && typeof e === 'object' && !Array.isArray(e))
+      // Collect object elements, RECURSIVELY flattening nested arrays. An AI
+      // response of the form applications:[[{...}]] (array whose elements are all
+      // nested arrays) previously produced objectElements=[] and fell through to
+      // the primitive-array path, storing the nested objects (and __proto__)
+      // unfiltered. Flattening here routes every structured element through the
+      // shape sanitizer, so nested array-of-arrays can't smuggle keys/prototype.
+      const objectElements = collectObjectElements(value)
       if (objectElements.length > 0) {
         // Under an active allowlist, derive a RECURSIVE key shape from the
         // existing elements and enforce it at every depth so untrusted AI cannot

@@ -57,6 +57,14 @@ Compat: behavior-preserving for real admins and synthetic admin/anya tokens (res
 
 Compat: behavior-preserving for real DB admins, the configured owner email, and validated synthetic tokens; only stale/forged `role:'admin'` tokens and DB-error cases change (now denied). Four isolated route-test harnesses were updated to use the validated synthetic ADMIN_TOKEN identity (their previous fake `role:'admin'` user relied on the now-removed fail-open fallback).
 
+## Round 6 — provenance-bound service admin + two more scope defects (see PORTFOLIO_AUDIT.md §5f)
+
+- **Synthetic (service-token) admin is now bound to provenance, not an id value.** A `serviceToken` flag is set only inside the validated `safeTokenEqual` service-token branches; a signed JWT whose `sub` collides with `system_admin_token`/`system_anya_token`/`system_health_token` can no longer impersonate the service token (and can't resolve the persisted synthetic `users` row). `/api/admin/*` correctly forbids it.
+- **Nested array-of-arrays in document-AI output** are now flattened and shape-sanitized (previously they slipped through the primitive-array path, storing arbitrary keys / `__proto__`).
+- **A fail-closed (`isAdmin=false`) context can never carry the null all-access sentinel** — the accessible-profile/org sets are coerced to empty (deny) for any non-admin context.
+
+Compat: behavior-preserving for real DB admins, the configured owner email, and the validated ADMIN_TOKEN/Anya/health service tokens; only forged/colliding tokens and DB-error cases change (now denied). Four route-test harnesses and the auth-identity matrix were updated to the provenance model.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

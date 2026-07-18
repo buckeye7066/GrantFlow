@@ -34,7 +34,7 @@ const PROFILE_ID = 'profile-summary-test-1'
 // Default admin = the validated synthetic ADMIN_TOKEN identity, which
 // buildRequestContext resolves to isAdmin=true without a users row (mirrors prod;
 // req.ctx.isAdmin now fails closed for any other unresolved role:'admin' token).
-function createApp(db, user = { role: 'admin', is_admin: true, userId: 'system_admin_token' }) {
+function createApp(db, user = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }) {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {

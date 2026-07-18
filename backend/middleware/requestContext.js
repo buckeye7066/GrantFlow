@@ -28,7 +28,7 @@ let lastAdminSelfHealAtMs = 0
 const ADMIN_SELF_HEAL_INTERVAL_MS = 10 * 60 * 1000
 
 // Synthetic SERVICE tokens (ADMIN_TOKEN / bulk key, Anya API key, health token)
-// are validated by safeTokenEqual against configured secrets in authIdentity and
+// are validated by safeTokenEqual against configured secrets in the auth layer and
 // have NO real users row. They are the ONLY legitimate token-derived admins — a
 // real user (any other userId) must always resolve from users.is_admin, and a DB
 // error/missing row must FAIL CLOSED, never trust the JWT role/is_admin claim.
@@ -39,9 +39,18 @@ const SYNTHETIC_SERVICE_ADMIN_USER_IDS = new Set([
 ])
 
 export function isSyntheticServiceAdmin(user) {
+  // Bind synthetic-admin authority to service-token PROVENANCE, not to the id
+  // VALUE. `serviceToken` is set ONLY inside a safeTokenEqual service-token branch
+  // and can never come from a JWT payload — so a signed JWT with sub:'system_admin_token'
+  // (or any colliding synthetic id) does NOT pass this check and falls through to
+  // the normal DB lookup (where it has no is_admin row => non-admin). The id
+  // allowlist is kept as a secondary defense-in-depth constraint.
   const id = user?.userId
   return Boolean(
-    id && SYNTHETIC_SERVICE_ADMIN_USER_IDS.has(String(id)) && user.is_admin === true,
+    user?.serviceToken === true &&
+      user.is_admin === true &&
+      id &&
+      SYNTHETIC_SERVICE_ADMIN_USER_IDS.has(String(id)),
   )
 }
 
@@ -206,6 +215,12 @@ export async function buildRequestContext(db, user) {
     if (syntheticServiceAdmin) {
       // Validated service token with no real user row — legitimate token admin.
       ctx.isAdmin = true
+    } else if (ctx.userId && SYNTHETIC_SERVICE_ADMIN_USER_IDS.has(String(ctx.userId))) {
+      // A synthetic service id arriving WITHOUT service-token provenance (e.g. a
+      // JWT whose `sub` collides with system_admin_token) is an impersonation
+      // attempt. Never admin — and do NOT honor the synthetic DB row that the real
+      // service token's self-heal may have persisted (it's keyed by this id).
+      ctx.isAdmin = false
     } else if (ctx.userId) {
       const row = await db
         .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
@@ -256,10 +271,19 @@ export async function buildRequestContext(db, user) {
       // ignore (best-effort)
     }
   } else {
-    // Regular user - compute accessible resources
+    // Regular user - compute accessible resources.
     try {
-      ctx.accessibleProfileIds = await getAccessibleProfileIds(db, user)
-      ctx.accessibleOrgIds = await getAccessibleOrganizationIds(db, user)
+      const profileIds = await getAccessibleProfileIds(db, user)
+      const orgIds = await getAccessibleOrganizationIds(db, user)
+      // SECURITY: ctx.isAdmin is FALSE here (a genuine non-admin, OR a fail-closed
+      // admin resolution after a DB error). These helpers run their OWN admin
+      // check and can independently return `null` (the ALL-ACCESS sentinel) — e.g.
+      // if the earlier users lookup timed out but theirs succeeds. A non-admin
+      // context must NEVER carry the null all-access sentinel, or consumers treat
+      // it as admin and leak cross-tenant. Coerce any non-Set (null) result to an
+      // empty Set = deny.
+      ctx.accessibleProfileIds = profileIds instanceof Set ? profileIds : new Set()
+      ctx.accessibleOrgIds = orgIds instanceof Set ? orgIds : new Set()
     } catch (error) {
       console.warn('[requestContext] Failed to compute accessible resources:', error?.message)
       ctx.accessibleProfileIds = new Set()
