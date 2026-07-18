@@ -135,6 +135,10 @@ const ACCESS_TOKEN_TTL = parseSeconds(process.env.AUTH_ACCESS_TOKEN_TTL, 10800) 
 const REFRESH_TOKEN_TTL = parseSeconds(process.env.AUTH_REFRESH_TOKEN_TTL, 30 * 24 * 60 * 60) // seconds
 const EMAIL_CODE_TTL = parseSeconds(process.env.AUTH_EMAIL_CODE_TTL, 600) // seconds
 const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS, 45) // seconds
+// Max wrong /email/verify guesses against a single active code before it is
+// invalidated (lockout). Bounds an ONLINE brute-force of the 6-digit space; the
+// verifier is never exposed to the client, so there is no offline attack.
+const EMAIL_MAX_VERIFY_ATTEMPTS = Math.max(3, parseInt(process.env.AUTH_EMAIL_MAX_VERIFY_ATTEMPTS, 10) || 6)
 const PHONE_CODE_TTL = parseSeconds(process.env.AUTH_PHONE_CODE_TTL, 600) // seconds
 const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS, 60) // seconds
 const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
@@ -327,32 +331,26 @@ function otpLoginRetired(res) {
   })
 }
 
-function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
+// SECURITY: a JWT is SIGNED, not ENCRYPTED — anyone holding this token can base64-
+// decode its payload. It therefore MUST NOT carry the OTP verifier (a hash of the
+// 6-digit code): sha256 is instant, so an exposed `sha256(email:code)` lets the
+// holder brute-force all 1,000,000 codes offline and recover the real code. This
+// token is now only an opaque, non-secret challenge REFERENCE (identifier + nonce)
+// returned for client convenience; it is NEVER accepted as proof of possession.
+// The authoritative verifier is the server-side one-time DB code row (hashed,
+// expiring, attempt-limited) checked in /email/verify.
+function signOtpToken({ kind, identifier, ttlSeconds }) {
   const jti = crypto.randomUUID()
   return jwt.sign(
     {
       typ: 'otp',
       kind,
       identifier,
-      code_hash: codeHash,
       jti,
     },
     JWT_SECRET,
     { expiresIn: Math.max(30, Number(ttlSeconds) || 600) },
   )
-}
-
-function verifyOtpToken(token) {
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
-    if (!decoded || typeof decoded !== 'object') return null
-    if (decoded.typ !== 'otp') return null
-    if (decoded.kind !== 'email' && decoded.kind !== 'phone') return null
-    if (typeof decoded.identifier !== 'string' || typeof decoded.code_hash !== 'string') return null
-    return decoded
-  } catch {
-    return null
-  }
 }
 
 async function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
@@ -1981,10 +1979,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     const code = generateSixDigitCode()
     const codeHash = hashValue(`${email}:${code}`)
     const expiresAt = new Date(now.getTime() + EMAIL_CODE_TTL * 1000).toISOString()
+    // The token carries NO verifier (see signOtpToken) — the code hash lives ONLY
+    // in the server-side DB row below and is delivered to the user via email.
     const verificationToken = signOtpToken({
       kind: 'email',
       identifier: email,
-      codeHash,
       ttlSeconds: EMAIL_CODE_TTL,
     })
     
@@ -2093,7 +2092,6 @@ router.post('/email/verify', async (req, res) => {
   if (isOtpLoginRetired()) return otpLoginRetired(res)
   const emailRaw = req.body?.email
   const codeRaw = req.body?.code
-  const verificationTokenRaw = req.body?.verification_token ?? req.body?.verificationToken ?? null
   const requestedProfileId = req.body?.profile_id ?? null
 
   if (typeof emailRaw !== 'string' || (typeof codeRaw !== 'string' && typeof codeRaw !== 'number')) {
@@ -2120,13 +2118,6 @@ router.post('/email/verify', async (req, res) => {
   // Always compute the incoming hash.
   const incomingHash = hashValue(`${email}:${code}`)
 
-  // Prefer stateless verification token (survives multi-instance / non-shared sqlite deployments).
-  const tokenDecoded = typeof verificationTokenRaw === 'string' ? verifyOtpToken(verificationTokenRaw) : null
-  const tokenOk =
-    tokenDecoded &&
-    normalizeEmail(tokenDecoded.identifier) === email &&
-    tokenDecoded.code_hash === incomingHash
-
   // Ensure a credential exists (create if needed). This avoids "code not requested" across instances.
   let user = null
   let credential = null
@@ -2138,7 +2129,45 @@ router.post('/email/verify', async (req, res) => {
     return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  const codeRow = tokenOk ? { id: null } : await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
+  // AUTHORITATIVE server-side verification: the OTP is proven ONLY by the
+  // server-stored, one-time, expiring DB code row — never by any client-supplied
+  // token (the token carries no verifier; see signOtpToken). This is what makes
+  // /email/verify genuinely prove inbox possession (and thus makes the r17
+  // credential-bound profile adoption sound).
+  //
+  // Lockout FIRST: cap wrong guesses against the active code so an online
+  // brute-force of the 1,000,000-code space is bounded. On exhaustion the code
+  // is invalidated and a fresh /email/start is required.
+  const activeCode = await req.db
+    .prepare(
+      `
+        SELECT id, attempt_count
+        FROM user_verification_codes
+        WHERE credential_id = ?
+          AND consumed_at IS NULL
+          AND (expires_at IS NULL OR expires_at >= ?)
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    )
+    .get(credential.id, nowISOString())
+
+  if (activeCode && Number(activeCode.attempt_count || 0) >= EMAIL_MAX_VERIFY_ATTEMPTS) {
+    // Invalidate every active code for this credential so the space cannot be
+    // exhausted by requesting the same code repeatedly.
+    await req.db
+      .prepare(
+        `UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`,
+      )
+      .run(nowISOString(), credential.id)
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'too_many_attempts' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(429).json({
+      error: 'Too many attempts. Request a new code.',
+      error_type: 'too_many_attempts',
+    })
+  }
+
+  const codeRow = await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
   if (!codeRow) {
     // Provide a more accurate error (expired vs already used vs invalid) without exposing the code.
@@ -2222,7 +2251,8 @@ router.post('/email/verify', async (req, res) => {
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
-  // Best-effort consume in DB (may be absent in stateless flow on a different instance).
+  // One-time consumption: mark the matched server-side code row used so it can
+  // never be replayed (codeRow is always a real DB row now).
   if (codeRow.id) {
     await req.db
       .prepare(

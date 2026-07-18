@@ -199,10 +199,15 @@ describe('login recording across auth paths', () => {
     ).run()
 
     const code = '654321'
+    // Server-side one-time verification is now authoritative: seed the real DB
+    // code row the way /email/start would (the client token is no longer a
+    // verifier). See emailOtpTokenNoVerifier.test.js for the security rationale.
+    await db.prepare(
+      `INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES ('cred-1', ?, ?)`,
+    ).run(hashValue(`${email}:${code}`), new Date(Date.now() + 600_000).toISOString())
     const verificationToken = signOtpToken({
       kind: 'email',
       identifier: email,
-      codeHash: hashValue(`${email}:${code}`),
       ttlSeconds: 600,
     })
     const res = await request(app)

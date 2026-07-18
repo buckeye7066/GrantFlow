@@ -149,6 +149,14 @@ Compat: behavior-preserving for real resolved users (they update their own onboa
 
 Compat: behavior-preserving for real users (adopt/re-select their own or their-email-bound profiles; read their own `/me`), validated admins, legacy profile tokens, and the OAuth/password flows (adoption there already uses DB-derived emails); only cross-credential adoption of an unowned profile and unresolved/synthetic `/me` reads change (now denied). New tests: `otpProfileAdoptionBinding.test.js` (10) and `authMeIdentityGate.test.js` (3, full-app), both verified red without their fix. Two auth helpers (`attachProfileToUser`, `profileIsBoundToEmail`) added to the existing test-export block.
 
+## Round 18 — email OTP genuinely proves inbox possession (see PORTFOLIO_AUDIT.md §5r)
+
+- **[HIGH] The email OTP no longer leaks a brute-forceable verifier.** `/email/start` signed a JWT containing `code_hash = sha256(email:code)` and returned it to the requester; a JWT is signed, not encrypted, so the client could decode the hash and brute-force all 1,000,000 six-digit codes offline, then `/email/verify` accepted the matching token (`tokenOk`) and skipped the DB row. Now: `signOtpToken` embeds no verifier (opaque challenge reference only) and `/email/start` signs it without the code hash; `/email/verify` trusts only the server-side one-time, expiring DB code row (client token removed); and a max-attempts lockout (`EMAIL_MAX_VERIFY_ATTEMPTS`, default 6) bounds an online brute-force with `429 too_many_attempts` + invalidation of the active code. Removed the now-unused `verifyOtpToken`.
+- **Phone path audited — already safe:** `/phone/start` signs no token and `/phone/verify` verifies only against the DB code row. No change.
+- This makes `/email/verify` genuinely identity-establishing, which is what the r17 credential-bound profile adoption depends on.
+
+Compat: behavior-preserving for the real login flow (a user who receives the emailed code still verifies); only the offline-recoverable token verifier and the tokenOk DB-skip change (both removed). New test: `emailOtpTokenNoVerifier.test.js` (3, full-app), verified red under the pre-fix behavior. Two tests that relied on the token bypass (`refreshLoginRecording`, `adminReinterviewGate`) were made prod-faithful (seed the real server-side DB code row).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

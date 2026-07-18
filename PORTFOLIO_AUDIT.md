@@ -379,6 +379,24 @@ The r16 audit closed the auth **mutation** residual but missed two other `/api/a
 
 **Confirmation:** no `/api/auth` route (read, write, or adopt) lets an unresolved/synthetic principal reach user-scoped data, and no credential holder can claim an unbound resource — OTP adoption is credential-bound (no unowned-profile takeover) and `/api/auth/me` is `identityResolved`-gated.
 
+## 5r. Round 18 — the email OTP genuinely proves inbox possession (Codex review of commit `8df6edd`)
+
+The r17 credential-bound adoption is only sound if `/email/verify` actually proves the caller controls the email. It did not: the OTP verifier was handed to the client.
+
+### R18-1 [HIGH] `/email/start` leaked a brute-forceable verifier; `/email/verify` accepted it as proof
+`POST /api/auth/email/start` signed an OTP **JWT** containing `code_hash = sha256(email:code)` and **returned it to the requester** (`verification_token`). A JWT is signed, **not encrypted**, so the client base64-decodes the payload, reads the hash, and brute-forces all 1,000,000 six-digit codes offline (sha256 → instant) to recover the real code. `/email/verify` then treated a matching token (`tokenOk`) as sufficient and **skipped the DB code row** entirely. An attacker could: start login for an authorized victim email, recover the code from the returned token, verify as the victim, and (via r17) adopt any profile bound to that email — so `/email/verify`'s "identity-establishing" status was **false** whenever OTP login was enabled (inbox possession was never actually proven).
+
+**Fix (`backend/routes/auth.js`):**
+- **The token carries NO verifier.** `signOtpToken` no longer embeds `code_hash` (it is now an opaque, non-secret challenge reference: `typ/kind/identifier/jti`), and `/email/start` signs it without the code hash. The code hash lives **only** in the server-side DB row and is delivered to the user through the email channel. Removed the now-unused `verifyOtpToken`.
+- **Server-side one-time verification is authoritative.** `/email/verify` no longer decodes or trusts any client token (`tokenOk` deleted). It **requires** the server-stored, one-time, expiring DB code row (`findMatchingActiveVerificationCode`) — hashed comparison, `consumed_at` one-time consumption, `expires_at`.
+- **Max-attempts lockout.** Before checking the guess, wrong attempts against the active code are capped at `EMAIL_MAX_VERIFY_ATTEMPTS` (default 6, env `AUTH_EMAIL_MAX_VERIFY_ATTEMPTS`); on exhaustion every active code for the credential is invalidated and a fresh `/email/start` is required (`429 too_many_attempts`). This bounds an **online** brute-force (there is no rate limiter on `/email/verify`), and there is no longer any **offline** attack because the verifier is never exposed.
+
+**Phone path:** audited — `/phone/start` signs **no** token and `/phone/verify` already verifies only against the server-side DB code row (`findMatchingActiveVerificationCode`, no `tokenOk`). No leak; no change needed.
+
+**Tests:** `emailOtpTokenNoVerifier.test.js` (full-app) — (1) decodes the returned `verification_token` and asserts it contains no `code_hash` and the real verifier hash appears nowhere in the payload (the code cannot be recovered offline), and the token is not accepted as a bypass; (2) an online brute-force of `/email/verify` hits the lockout (`429`) and the real code is then rejected until a fresh start; (3) the legitimate flow (the delivered code) verifies (`200`). Verified **red** under the pre-fix behavior (token re-carrying `code_hash` + no lockout → 2 of 3 red). Two existing tests that relied on the token bypass (`refreshLoginRecording`, `adminReinterviewGate`) were made prod-faithful — they now seed the real server-side DB code row instead of a client token.
+
+**Confirmation:** the email OTP verifier is not client-readable or brute-forceable — verification is server-side, one-time, expiring, and attempt-limited — so `/email/verify` genuinely proves inbox possession and the r17 credential-bound adoption holds.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

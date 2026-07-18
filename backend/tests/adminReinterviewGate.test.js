@@ -30,7 +30,7 @@ const {
 const { enforceAdminReinterviewSuppression } = await import('../startup/enforceInvariants.js')
 const authModule = await import('../routes/auth.js')
 const authRouter = authModule.default
-const { hashValue, signOtpToken } = authModule
+const { hashValue } = authModule
 
 // ---------------------------------------------------------------------------
 // SQLite shim mirroring the prod wrapper's prepare/.run/.get/.all signature
@@ -160,19 +160,23 @@ async function seedLoginReadyUser(db, {
   ).run(`profile-${id}`, `Profile ${id}`, id)
 }
 
-/** Drive the real stateless-OTP login (the magic-code path) for an email. */
-async function loginViaEmailVerify(app, email) {
+/**
+ * Drive the real OTP login (the magic-code path) for an email. Server-side
+ * one-time verification is now authoritative, so we seed the real DB code row
+ * (as /email/start would) rather than relying on a client token — the token no
+ * longer carries a verifier. See emailOtpTokenNoVerifier.test.js.
+ */
+async function loginViaEmailVerify(app, db, email) {
   const code = '123456'
-  const codeHash = hashValue(`${email}:${code}`)
-  const verificationToken = signOtpToken({
-    kind: 'email',
-    identifier: email,
-    codeHash,
-    ttlSeconds: 600,
-  })
-  return request(app)
-    .post('/api/auth/email/verify')
-    .send({ email, code, verification_token: verificationToken })
+  const cred = await db
+    .prepare(`SELECT id FROM user_credentials WHERE identifier = ? AND type = 'email_otp' LIMIT 1`)
+    .get(email)
+  if (cred?.id) {
+    await db
+      .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`)
+      .run(cred.id, hashValue(`${email}:${code}`), new Date(Date.now() + 600_000).toISOString())
+  }
+  return request(app).post('/api/auth/email/verify').send({ email, code })
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +260,7 @@ describe('secondary login never re-triggers the interview for admins (live /emai
       hasCompletedOnboarding: 1,
     })
 
-    const res = await loginViaEmailVerify(app, 'admin@example.test')
+    const res = await loginViaEmailVerify(app, db, 'admin@example.test')
     expect(res.status).toBe(200)
     expect(res.body.user?.is_admin).toBe(true)
     // The interview trigger the frontend keys on must NOT be served.
@@ -273,7 +277,7 @@ describe('secondary login never re-triggers the interview for admins (live /emai
       lastLoginAt: '2026-06-15T09:00:00.000Z',
     })
 
-    const res = await loginViaEmailVerify(app, 'admin2@example.test')
+    const res = await loginViaEmailVerify(app, db, 'admin2@example.test')
     expect(res.status).toBe(200)
     expect(res.body.user?.guided_cycle_tour_status).toBe('completed')
   })
@@ -287,7 +291,7 @@ describe('secondary login never re-triggers the interview for admins (live /emai
       hasCompletedOnboarding: 1,
     })
 
-    const res = await loginViaEmailVerify(app, 'client@example.test')
+    const res = await loginViaEmailVerify(app, db, 'client@example.test')
     expect(res.status).toBe(200)
     expect(res.body.user?.is_admin).toBe(false)
     // Deliberate product behavior: existing non-admin users reset by the
