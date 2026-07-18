@@ -437,6 +437,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // + LLM extraction, then writes finds into the SAME store through the same
   // reality gate + matcher, so persistRun flushes them alongside the API finds.
   // Best-effort and bounded; never blocks or fails the run.
+  //
+  // Phase 1d target verification (shadow, flag ON) is a bounded telemetry-only
+  // step the lane runs WITHOUT blocking its live return — it hands back a promise
+  // (`web.targetVerification`) that we await AFTER persistRun so the live result
+  // and persistence never wait on it (it also runs concurrently with persistRun).
+  let webTargetVerification = null;
   if (isWebDiscoveryEnabled()) {
     try {
       const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }, parity] = await Promise.all([
@@ -474,7 +480,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
         { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage, blindShadow },
         { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages },
       );
-      const { recommendations: webRecs, ...webTelemetry } = web;
+      const { recommendations: webRecs, targetVerification, ...webTelemetry } = web;
+      // The bounded target-verification promise is awaited AFTER persistRun (it
+      // mutates web_lane_blind_shadow.promotion_evidence in place — a shared ref —
+      // so recordWebLaneRun below sees the final counter) and is kept OUT of the
+      // persisted telemetry object.
+      webTargetVerification = targetVerification ?? null;
       run.web_lane = webTelemetry;
       if (Array.isArray(webRecs) && webRecs.length) {
         run.recommendations = [...(run.recommendations ?? []), ...webRecs].sort((a, b) => b.match_score - a.match_score);
@@ -520,6 +531,15 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     };
   }
   const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
+
+  // Now that the live result is persisted, settle the bounded Phase-1d target
+  // verification (started before the lane returned, so it ran CONCURRENTLY with
+  // persistRun and never delayed it) so its promotion_evidence counter is present
+  // on run.web_lane before we record web-lane health telemetry below. Best-effort:
+  // it never throws, and a failure here can never affect the persisted result.
+  if (webTargetVerification) {
+    try { await webTargetVerification; } catch { /* telemetry-only; never fails a crawl */ }
+  }
 
   // Return the full-fidelity stored opportunities (OS shape, with
   // applicant_types/need_categories/geography/kind) so the caller can cross-match

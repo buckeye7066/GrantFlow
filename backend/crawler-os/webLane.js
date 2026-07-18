@@ -29,6 +29,9 @@ import { computeMatchDecision, isRecommendable } from './matchEngine.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
 import { buildWebQueries } from './webQueries.js';
+// Pure URL canonicalizer (tracking-param strip) — from the SHARED urlCanonical
+// module, NOT the blind link inventory, so the live lane stays blind-import-free.
+import { canonicalizeUrl } from './urlCanonical.js';
 
 // The synthetic source row for open-web finds. UNVERIFIED trust tier is honest:
 // these are corroborated by a real fetched page + reality gate, but not by an
@@ -121,30 +124,57 @@ function pickTargetUrl(cand) {
 }
 
 /**
+ * targetDedupKey — normalize a target URL to its FETCH identity for per-run dedup.
+ * Reuses the shared URL canonicalizer (`canonicalizeUrl` — strips known tracking
+ * params, so `?utm_source=…` aliases collapse) AND additionally drops the fragment:
+ * a `#hash` is never sent in an HTTP request, so two targets that differ only by
+ * fragment are the SAME server fetch and must dedup to one. Falls back to the
+ * trimmed raw string if canonicalization fails (defensive — pickTargetUrl already
+ * guarantees an absolute http(s) URL, so canonicalization normally succeeds).
+ */
+function targetDedupKey(url) {
+  const canon = canonicalizeUrl(url);
+  if (!canon) return String(url || '').trim();
+  try {
+    const u = new URL(canon);
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return canon;
+  }
+}
+
+/**
  * verifyBlindTargets — bounded, best-effort INDEPENDENT target verification for a
  * run's collected blind candidates. Mutates `shadow`'s target-* accumulators ONLY;
  * it never touches the live lane's `result`, `store`, or matches. See the call
  * site for the full contract (single wall-clock budget + max-fetches cap, per-fetch
  * timeout + abort, dedup, SSRF-safe fetcher only, error isolation).
  */
-async function verifyBlindTargets(shadow, fetcher, fetchedSourceUrls, minSliceMs) {
-  const cache = new Map(); // target URL -> boolean verified (dedup across candidates)
+async function verifyBlindTargets(shadow, fetcher, fetchedSourceKeys, minSliceMs) {
+  // Dedup by NORMALIZED key (tracking-param + fragment stripped), and cache the
+  // RESULT of EVERY attempted target — success AND failure/timeout — so a given
+  // target is fetched at most ONCE per run (a repeatedly-failing url is never
+  // re-fetched up to the caps).
+  const cache = new Map(); // dedup key -> boolean verified
   for (const { cand, evidenced } of shadow.targets) {
     const targetUrl = pickTargetUrl(cand);
+    const key = targetUrl ? targetDedupKey(targetUrl) : null;
 
     // No INDEPENDENT target (missing, or it IS a source page we already fetched):
     // the candidate rests on source evidence alone. Counted, but no fetch spent.
-    if (!targetUrl || (fetchedSourceUrls && fetchedSourceUrls.has(targetUrl))) {
+    if (!targetUrl || (fetchedSourceKeys && key && fetchedSourceKeys.has(key))) {
       shadow.target_checked += 1;
       shadow.source_only += 1;
       continue;
     }
 
-    // Deduped: a target URL another candidate already verified this run reuses the
-    // cached verdict — no second network fetch (the dedup guarantee).
-    if (cache.has(targetUrl)) {
+    // Deduped: a target another candidate already ATTEMPTED this run (verified OR
+    // failed) reuses the cached verdict — no second network fetch (the dedup
+    // guarantee, now covering failures too so a bad url costs exactly one fetch).
+    if (cache.has(key)) {
       shadow.target_checked += 1;
-      if (cache.get(targetUrl)) {
+      if (cache.get(key)) {
         shadow.target_verified += 1;
         if (evidenced) shadow.real_and_matched += 1;
       } else {
@@ -192,7 +222,7 @@ async function verifyBlindTargets(shadow, fetcher, fetchedSourceUrls, minSliceMs
         return true; // no classifier => reachability alone stands in
       })();
       const verified = await Promise.race([work, deadline]);
-      cache.set(targetUrl, verified);
+      cache.set(key, verified);
       shadow.target_checked += 1;
       if (verified) {
         shadow.target_verified += 1;
@@ -202,9 +232,11 @@ async function verifyBlindTargets(shadow, fetcher, fetchedSourceUrls, minSliceMs
       }
     } catch {
       // Best-effort isolation: any fetch/classify error or timeout is counted and
-      // never affects the live lane. Not cached — a transient failure may differ
-      // for a later candidate sharing the URL, and we spent the fetch either way.
+      // never affects the live lane. The FAILURE is cached (as not-verified) so a
+      // later candidate sharing this target reuses the verdict instead of spending
+      // another fetch — a repeatedly-failing url costs exactly one fetch per run.
       void timedOut;
+      cache.set(key, false);
       shadow.target_checked += 1;
       shadow.target_check_errors += 1;
     } finally {
@@ -320,11 +352,13 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // The smallest target-verify slice worth a fetch: below this a real remote round
   // trip cannot complete, so we stop rather than burn the budget tail on sure aborts.
   const TARGET_VERIFY_MIN_SLICE_MS = 200;
-  // The source pages we ALREADY fetched this run. Target verification must NEVER
-  // re-fetch the source/listing page (we have its bytes) — only the candidate's
-  // OWN independent apply/info target. A candidate whose only target IS the source
-  // page has no independent target and rests on source evidence alone (source_only).
-  const fetchedSourceUrls = shadow ? new Set() : null;
+  // The source pages we ALREADY fetched this run, held as NORMALIZED dedup keys.
+  // Target verification must NEVER re-fetch the source/listing page (we have its
+  // bytes) — only the candidate's OWN independent apply/info target. A candidate
+  // whose only target IS the source page (matched on the normalized key, so an
+  // alias/fragment variant still counts) has no independent target and rests on
+  // source evidence alone (source_only).
+  const fetchedSourceKeys = shadow ? new Set() : null;
   const thesis = opts.thesis ?? {};
   const matchProfiles = (opts.matchProfiles && opts.matchProfiles.length) ? opts.matchProfiles : [thesis];
   const runId = opts.runId ?? null;
@@ -406,8 +440,9 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
 
     const evidence = { url: resp.finalUrl ?? page.url, content_hash: resp.contentHash ?? null, fetched_at: resp.fetchedAt ?? null };
     // Remember this source page's own URL so target verification never re-fetches
-    // it (both the requested and any redirect-final URL are ours already).
-    if (fetchedSourceUrls) { fetchedSourceUrls.add(page.url); fetchedSourceUrls.add(evidence.url); }
+    // it (both the requested and any redirect-final URL are ours already), keyed
+    // the SAME normalized way targets are so an alias/fragment variant still hits.
+    if (fetchedSourceKeys) { fetchedSourceKeys.add(targetDedupKey(page.url)); fetchedSourceKeys.add(targetDedupKey(evidence.url)); }
 
     let extracted = [];
     try { extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body, thesis, query: page.query }); }
@@ -536,27 +571,11 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     }
   }
 
-  // ── Phase 1d: INDEPENDENT TARGET VERIFICATION (promotion evidence) ─────────
-  // Runs ONLY when the shadow is active (WEB_LANE_PROFILE_BLIND ON) and STRICTLY
-  // AFTER all live work (fetch/extract/gate/store/match) is already computed, so
-  // it can never delay a live result. For a BOUNDED sample of blind candidates it
-  // fetches the candidate's OWN apply/info target via the SAME SSRF-safe fetcher
-  // live discovery uses (never a raw fetch, never the source page — deduped), and
-  // records whether that target is INDEPENDENTLY reachable + a real single program
-  // (not an aggregator/error/login page). This is stronger promotion evidence than
-  // the source LISTING page's hash: it proves the candidate's target is real.
-  //
-  // HARD BOUNDS: one wall-clock budget (`targetBudgetMs`) AND a max-fetches cap
-  // (`targetMax`) for the WHOLE run, both checked BEFORE every fetch; once either
-  // is hit the pass stops and marks `target_capped`. Each fetch has its own short
-  // slice timeout + AbortSignal and is raced against that deadline, so a hung host
-  // is aborted and counted (`target_check_errors`), never awaited past the budget.
-  // Best-effort: any fetch/classify error is caught and counted; the live lane's
-  // result/writes are NEVER touched. Deduped by target URL (cached per run).
-  if (shadow && shadow.targets.length) {
-    await verifyBlindTargets(shadow, fetcher, fetchedSourceUrls, TARGET_VERIFY_MIN_SLICE_MS);
-  }
-
+  // ── Finalize the LIVE result — WITHOUT awaiting target verification ────────
+  // The live outputs (result.ok, recommendations, seeded_adopted) and everything
+  // the caller persists are produced and returned here. Independent target
+  // verification (below) is a bounded, best-effort telemetry-only step that must
+  // NEVER gate this — see the `targetVerification` handle after this block.
   result.ok = true;
   // Additive shadow delta (mirrors the SEMANTIC_RECALL additive-counter
   // precedent). Present ONLY when the flag is ON; absent otherwise so a flag-off
@@ -576,8 +595,51 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       blind_evidenced: shadow.blind_evidenced,
       delta: shadow.blind_candidates - shadow.current_candidates,
       by_kind: shadow.by_kind,
-      // Phase 1d promotion-evidence delta. SOURCE evidence (blind_evidenced above)
-      // and TARGET verification (here) are DIFFERENT facts and are reported apart:
+      // Phase 1d promotion_evidence is attached ASYNCHRONOUSLY by the target
+      // verification step (result.targetVerification) so the live return never
+      // waits on it. It is NOT present on the returned object until that handle
+      // settles — the caller awaits it AFTER persistRun (telemetry-only).
+    };
+  }
+  result.seeded_adopted_urls = [...seededAdopted];
+  result.seeded_adopted = seededAdopted.size;
+  result.recommendations.sort((a, b) => b.match_score - a.match_score);
+
+  // ── Phase 1d: INDEPENDENT TARGET VERIFICATION (promotion evidence) ─────────
+  // Runs ONLY when the shadow is active (WEB_LANE_PROFILE_BLIND ON), and its ONLY
+  // effect is the shadow telemetry counter — it does NOT gate result.ok,
+  // recommendations, or anything the caller persists. It is STARTED here but
+  // deliberately NOT awaited on the live path: the function returns immediately
+  // with the live result, and `result.targetVerification` is a promise the caller
+  // awaits AFTER persistRun (so the live result + persist never wait on it — a
+  // target that hangs for the whole budget cannot delay the live return). Because
+  // it is fired before the return, it also runs CONCURRENTLY with persistRun.
+  //
+  // For a BOUNDED sample of blind candidates it fetches the candidate's OWN
+  // apply/info target via the SAME SSRF-safe fetcher live discovery uses (never a
+  // raw fetch, never the source page — deduped by normalized key), and records
+  // whether that target is INDEPENDENTLY reachable + a real single program (not an
+  // aggregator/error/login page) — stronger promotion evidence than the source
+  // LISTING page's hash.
+  //
+  // HARD BOUNDS: one wall-clock budget (`targetBudgetMs`) AND a max-fetches cap
+  // (`targetMax`) for the WHOLE run, both checked BEFORE every fetch; once either
+  // is hit the pass stops and marks `target_capped`. Each fetch has its own short
+  // slice timeout + AbortSignal and is raced against that deadline, so a hung host
+  // is aborted and counted (`target_check_errors`), never awaited past the budget.
+  // Best-effort: any fetch/classify error is caught and counted; the live lane's
+  // result/writes are NEVER touched.
+  if (shadow) {
+    result.targetVerification = (async () => {
+      try {
+        if (shadow.targets.length) {
+          await verifyBlindTargets(shadow, fetcher, fetchedSourceKeys, TARGET_VERIFY_MIN_SLICE_MS);
+        }
+      } catch {
+        // Best-effort isolation: target verification can never fail the lane.
+      }
+      // SOURCE evidence (blind_evidenced) and TARGET verification are DIFFERENT
+      // facts, reported apart:
       //   target_checked      candidates whose target we produced a verdict for
       //                       (= target_verified + source_only + target_check_errors)
       //   target_verified     target independently reachable + a real single program
@@ -588,7 +650,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       //   target_check_errors best-effort fetch/classify failures (never affect live)
       //   target_fetches      real network fetches spent (≤ targetMax)
       //   target_capped       stopped early because a bound was hit
-      promotion_evidence: {
+      const promotion_evidence = {
         target_checked: shadow.target_checked,
         target_verified: shadow.target_verified,
         source_only: shadow.source_only,
@@ -597,12 +659,12 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         target_fetches: shadow.target_fetches,
         target_capped: shadow.target_capped,
         target_elapsed_ms: shadow.target_elapsed_ms,
-      },
-    };
+      };
+      if (result.web_lane_blind_shadow) result.web_lane_blind_shadow.promotion_evidence = promotion_evidence;
+      return promotion_evidence;
+    })();
   }
-  result.seeded_adopted_urls = [...seededAdopted];
-  result.seeded_adopted = seededAdopted.size;
-  result.recommendations.sort((a, b) => b.match_score - a.match_score);
+
   return result;
 }
 
