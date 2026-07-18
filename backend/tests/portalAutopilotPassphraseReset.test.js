@@ -18,6 +18,7 @@ import Database from 'better-sqlite3'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
 
 const profilePortalsRouter = (await import('../routes/profilePortals.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   setMasterPassphrase,
   getUnlockedKey,
@@ -41,6 +42,8 @@ function createApp(db) {
     req.user = { role: 'admin', id: 'admin-1' }
     next()
   })
+  // Mirror prod: admin authority is DB-backed via attachRequestContext.
+  app.use(attachRequestContext())
   app.use('/api', profilePortalsRouter)
   return app
 }

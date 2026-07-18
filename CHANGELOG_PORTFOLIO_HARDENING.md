@@ -42,6 +42,13 @@ Compat: `sendResendEmail` is additive (exported). `mergeSectionData` allowlist s
 
 Compat: `sendTwilioMessage` is additive (exported from `sms.js`). `/phone/start` returns a new `502 { error_type: 'sms_send_failed' }` on genuine delivery failure (previously a misleading 202). The `isAdminUser` migration is behavior-preserving for real admins and synthetic tokens; only stale-JWT demoted admins change (now correctly denied).
 
+## Round 4 — exhaustive admin-claim migration + recursive array allowlist (see PORTFOLIO_AUDIT.md §5d)
+
+- **Every direct JWT-claim admin check is now DB-backed.** Round 3 migrated `isAdminUser(user)`; round 4 swept `backend/` for the OTHER shapes — `user.role === 'admin'`, `roles.includes('admin')`, `user.is_admin` / `req.user.is_admin` — and migrated ~24 authorization sites (Hamilton profile fence + admin gates, application-tasks, funding-sources, committed-college, portal fences, billing/comms profile fences, john/robert/emailGrants/yana admin middleware, maintenance bypass, `opportunityScope.resolveIsAdmin`, and the Anya admin-tool gate which now fails closed on a DB error instead of trusting the token). A demoted admin holding an unexpired `role:'admin'` JWT can no longer reach any admin surface or another profile's Hamilton data.
+- **Document-AI array elements are recursively allowlisted.** Nested object keys inside an allowed `array<object>` element (e.g. `applications[].meta.secret_admin_flag`) are now dropped at every depth, not just the element's top level.
+
+Compat: behavior-preserving for real admins and synthetic admin/anya tokens (resolved via `req.ctx.isAdmin`); only stale-JWT demoted admins change (now denied). Login-time side-effects (geo-crawl / Anya scheduler) and the ADMIN_TOKEN self-heal path are unchanged. Two isolated route tests were made faithful to prod by mounting the real `attachRequestContext` middleware.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

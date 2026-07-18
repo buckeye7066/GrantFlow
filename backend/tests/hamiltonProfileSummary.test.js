@@ -20,6 +20,7 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const hamiltonRouter = (await import('../routes/hamiltonAutomation.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   ensureApplicationTask,
   updateApplicationTask,
@@ -38,6 +39,8 @@ function createApp(db, user = { role: 'admin', id: 'admin-1' }) {
     req.user = user
     next()
   })
+  // Mirror prod: admin authority is DB-backed via attachRequestContext.
+  app.use(attachRequestContext())
   app.use('/api/hamilton/automation', hamiltonRouter)
   return app
 }

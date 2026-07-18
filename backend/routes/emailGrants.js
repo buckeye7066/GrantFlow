@@ -43,7 +43,6 @@ function timingSafeEq(a, b) {
 
 function adminAuth(req, res, next) {
   if (req.ctx?.isAdmin === true) return next()
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) return next()
   const configured = resolveAdminToken()
   if (!configured) return res.status(401).json({ error: 'Admin token not configured' })
   const headerToken =

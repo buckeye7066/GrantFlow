@@ -148,15 +148,47 @@ function deepStripReservedKeys(value) {
   return value
 }
 
-// Sanitize a single object element of an untrusted-AI array: drop reserved keys
-// at every depth, and when `allowedKeys` (a Set) is supplied restrict the
-// element's top-level keys to it so AI can't inject new element fields.
-function sanitizeObjectElement(obj, allowedKeys) {
+// Build a RECURSIVE allowed-key shape from the union of existing array elements:
+// { keys: Set<string>, children: { [key]: shape } }. Used to allowlist untrusted
+// AI array-element objects at EVERY depth (not just their top level).
+function buildElementShape(existingElements) {
+  const keys = new Set()
+  const childGroups = {}
+  for (const el of existingElements) {
+    if (!el || typeof el !== 'object' || Array.isArray(el)) continue
+    for (const [k, v] of Object.entries(el)) {
+      if (RESERVED_SECTION_KEYS.has(k)) continue
+      keys.add(k)
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        ;(childGroups[k] ||= []).push(v)
+      }
+    }
+  }
+  const children = {}
+  for (const [k, group] of Object.entries(childGroups)) {
+    children[k] = buildElementShape(group)
+  }
+  return { keys, children }
+}
+
+// Sanitize an untrusted object against a recursive shape allowlist. Reserved
+// keys are ALWAYS dropped at every depth. When `shape` is non-null, keys not in
+// `shape.keys` are dropped and nested objects recurse into their child shape
+// (unknown nested keys => dropped). When `shape` is null, only reserved-key
+// stripping applies (structure preserved) — the first-time-population fallback.
+function sanitizeAgainstShape(obj, shape) {
   const out = {}
   for (const [k, v] of Object.entries(obj)) {
     if (RESERVED_SECTION_KEYS.has(k)) continue
-    if (allowedKeys && !allowedKeys.has(k)) continue
-    out[k] = deepStripReservedKeys(v)
+    if (shape && !shape.keys.has(k)) continue
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const childShape = shape ? shape.children[k] ?? { keys: new Set(), children: {} } : null
+      out[k] = sanitizeAgainstShape(v, childShape)
+    } else if (Array.isArray(v)) {
+      out[k] = deepStripReservedKeys(v)
+    } else {
+      out[k] = v
+    }
   }
   return out
 }
@@ -226,15 +258,14 @@ export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = nul
       // fall back to reserved-key stripping only (don't nuke first-time data).
       const objectElements = value.filter((e) => e && typeof e === 'object' && !Array.isArray(e))
       if (objectElements.length > 0) {
-        let elementAllow = null
-        if (allow) {
-          const known = new Set()
-          for (const e of existingArr) {
-            if (e && typeof e === 'object' && !Array.isArray(e)) Object.keys(e).forEach((k) => known.add(k))
-          }
-          elementAllow = known.size > 0 ? known : null
-        }
-        const sanitized = objectElements.map((e) => sanitizeObjectElement(e, elementAllow))
+        // Under an active allowlist, derive a RECURSIVE key shape from the
+        // existing elements and enforce it at every depth so untrusted AI cannot
+        // introduce new element fields OR new nested fields (e.g.
+        // applications[].meta.secret_admin_flag). With no existing shape we fall
+        // back to reserved-key stripping only (first-time population is preserved).
+        const shape = allow ? buildElementShape(existingArr) : null
+        const activeShape = shape && shape.keys.size > 0 ? shape : null
+        const sanitized = objectElements.map((e) => sanitizeAgainstShape(e, activeShape))
         merged[key] = [...existingArr, ...sanitized]
         updatedFields.add(key)
         return

@@ -135,11 +135,13 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         // configured-admin-email users). Fall back to dbUser/token flags only if
         // requestContext middleware didn't run or couldn't resolve.
         // Hoisted out of the try block so the response can mirror the same answer.
+        // DB-backed admin only: req.ctx.isAdmin (canonical; also true for the
+        // admin/anya token flows) or the persisted users.is_admin row. A raw JWT
+        // role/is_admin claim must NOT flip this true, or a demoted admin's
+        // unexpired token would keep seeing the admin surface.
         const isAdminUser =
           req.ctx?.isAdmin === true ||
-          Boolean(dbUser?.is_admin) ||
-          user.role === 'admin' ||
-          user.is_admin === true
+          Boolean(dbUser?.is_admin)
 
         try {
           if (isAdminUser) {

@@ -33,6 +33,8 @@ const USERS = {
   'u-A': { id: 'u-A', role: 'user', email: 'a@test.com' },
   'u-B': { id: 'u-B', role: 'user', email: 'b@test.com' },
   'u-admin': { id: 'u-admin', role: 'user', email: 'buckeye7066@gmail.com' },
+  // Demoted admin: the JWT still claims role:'admin' but users.is_admin=0.
+  'u-demoted': { id: 'u-demoted', role: 'admin', is_admin: true, roles: ['admin'], email: 'demoted@test.com' },
 }
 
 function makeDb() {
@@ -46,6 +48,8 @@ function makeDb() {
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-B', 'b@test.com', 0, 'user');
     -- The canonical admin is DB-backed (users.is_admin), NOT a token/email claim.
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-admin', 'buckeye7066@gmail.com', 1, 'admin');
+    -- Demoted admin: DB says NOT admin even though the JWT still claims role:'admin'.
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-demoted', 'demoted@test.com', 0, 'user');
   `)
   return db
 }
@@ -135,6 +139,23 @@ describe('Hamilton route auth + profile scoping', () => {
       .get('/api/hamilton/automation/resolved-fields?profileId=p-A')
       .set('x-test-user', 'u-B')
     assert.equal(res.status, 403)
+  })
+
+  it('a demoted admin (role:admin JWT, users.is_admin=0) cannot read another profile\'s sessions (403)', async () => {
+    const res = await request(app)
+      .get('/api/hamilton/automation/sessions?profileId=p-A')
+      .set('x-test-user', 'u-demoted')
+    assert.equal(res.status, 403)
+  })
+
+  it('a demoted admin cannot cross-profile revoke a session (403, row intact)', async () => {
+    const res = await request(app)
+      .post(`/api/hamilton/automation/sessions/${sessionA.id}/revoke`)
+      .set('x-test-user', 'u-demoted')
+      .send({ reason: 'stale token' })
+    assert.equal(res.status, 403)
+    const row = db.prepare('SELECT status FROM hamilton_saved_sessions WHERE id = ?').get(sessionA.id)
+    assert.notEqual(row.status, 'revoked')
   })
 
   it('restricts portal-policy writes to the canonical admin', async () => {

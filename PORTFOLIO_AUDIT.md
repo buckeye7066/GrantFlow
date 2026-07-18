@@ -151,6 +151,45 @@ The migration is fail-closed (`req.ctx?.isAdmin !== true`) and preserves synthet
 ### F6b (class) — Twilio no-throw failures reported as sent
 Twilio RESOLVES (doesn't throw) on failed/undelivered with an `errorCode`. **Fix:** one checked helper `sendTwilioMessage(client, payload)` (in `sms.js`) inspects `errorCode`/`status`; **every Twilio caller routes through it:** `sms.sendSms` (used by `commsService`, `smsConsentService`), `auth.js` `sendPhoneVerificationCode`, and `deadlineEmailSmsService.sendDeadlineSms`. The **phone-OTP `/phone/start` was the worst sibling**: it stamped the resend cooldown (`last_sent_at`) and returned 202 "sent" before an un-awaited, unchecked send. It now **awaits** the checked send and only persists the code + stamps cooldown + returns 202 on success; a real delivery failure returns 502 with no cooldown (the user can retry immediately). Tests: `smsSendHonesty.test.js` (`sendTwilioMessage` + `sendSms`: errorCode/status failure → `ok:false`).
 
+## 5d. Round 4 — exhaustive admin-claim migration + recursive array allowlist (Codex review of commit `4ef9ead`)
+
+Round-3 migrated `isAdminUser(user)` but a DIFFERENT admin-claim shape (direct JWT `role`/`is_admin`/`roles` reads) was still trusted in many gates. Round 4 does the exhaustive sweep and closes the array-allowlist recursion.
+
+### F1c — the Hamilton profile fence + EVERY direct JWT-claim admin gate migrated to DB-backed `req.ctx.isAdmin`
+The named bug: `hamiltonAutomation.js:167` `userMayAccessProfile` short-circuited on `user.role === 'admin'` (raw JWT claim), granting a demoted real user cross-profile access to Hamilton start + payment/session/attestation/resolved-field reads + revoke/expire. Fixed, then swept `backend/` for every admin-claim shape (`role === 'admin'`, `roles.includes('admin')`, `user.is_admin`, `req.user.is_admin`). **Full list migrated to `req.ctx.isAdmin` (DB-backed) / fail-closed:**
+
+| File:line | Site | Change |
+|-----------|------|--------|
+| `routes/hamiltonAutomation.js:167` | `userMayAccessProfile` | dropped `user.role==='admin'` shortcut |
+| `routes/hamiltonAutomation.js:266,275` | `requireAdmin`, `actorManagedBy` | dropped `\|\| req.user.is_admin/role` |
+| `routes/hamiltonAutomation.js:343,345` | admin task-list branch | `req.ctx.isAdmin` |
+| `routes/hamiltonAutomation.js` (×6 audit) | `actorRole: ctx.user.role==='admin'` | `req.ctx.isAdmin` |
+| `routes/applicationTasks.js:61,74,76` | task access + list branches | `req.ctx.isAdmin` |
+| `routes/committedCollege.js:86` | profile fence | `req.ctx.isAdmin` |
+| `routes/fundingSources.js:27` | profile fence | `req.ctx.isAdmin` |
+| `routes/hamiltonPortalSync.js:47` | profile fence | `req.ctx.isAdmin` |
+| `routes/profilePortals.js:80` | profile fence | `req.ctx.isAdmin` |
+| `routes/schoolPortal.js:97` | `isAdminRequest` | `req.ctx.isAdmin` |
+| `routes/studentPortals.js:41,56` | fence + scopedQuery `bypass` | `req.ctx.isAdmin` |
+| `routes/emailGrants.js:46`, `john.js:77`, `robert.js:67` | admin middleware | dropped token-claim `return next()` |
+| `routes/billing.js:117,160` | `canAccessProfile` + view gate | dropped `\|\| req.user.role` |
+| `routes/comms.js:27` | `canAccessProfile` | dropped `\|\| req.user.role` |
+| `routes/yanaLeads.js:17` | `requireAdmin` | dropped token OR |
+| `routes/authMe.js:141` | reported `isAdmin` in /auth/me | `req.ctx.isAdmin \|\| dbUser.is_admin` |
+| `services/opportunityScope.js:125` | `resolveIsAdmin(req)` | DB-backed only (dropped `role`/`roles`/`isAdmin` claim reads) |
+| `services/maintenance/maintenanceMode.js:187` | maintenance bypass | `req.ctx.isAdmin` |
+| `services/anyaToolRegistry.js:804-806` | admin-tool gate token fallback | **removed** (fail closed on DB error) |
+| `services/anyaAdminTools.js:225` | `isAdmin()` helper | dropped `role==='admin'` claim (keeps DB `is_admin`) |
+| `services/anyaAutonomousFunctionTesting.js:229` | internal-admin-token mint | `context.ctx.isAdmin` only |
+| `services/anyaTestRepair.js:23` | `isAdminContext` | `context.ctx.isAdmin` only |
+
+**Reviewed, intentionally NOT changed** (not cross-tenant authz decisions): `auth.js` login-trigger side-effects (geo-crawl / Anya scheduler / startup audit — read the FRESH login-time DB user, not a stale session token); `authMe.js:94` and `:241` (ADMIN_TOKEN synthetic-admin self-heal, only reached when there's no `dbUser`, i.e. never for a real demoted user who has a users row); `adminGeoCrawlOnLogin.js:19` / `anyaLoginTrigger.js:14` (login behavior, not access control); `hamilton/hamiltonAdminAccount.js:145` (the `isAdminUser` definition itself, used by non-authz digest-recipient code). `anyaAdminTools.isAdmin` still accepts the DB `is_admin` row shape (DB-backed, not a JWT claim); all its authz callers pass `req.ctx`.
+
+Tests: `hamilton-route-auth.test.mjs` gains two demoted-admin (role:'admin' JWT, `users.is_admin=0`) cross-profile cases (read + revoke → 403). `opportunityScope.test.js` `resolveIsAdmin` rewritten to the DB-backed contract (JWT claims no longer broaden scope). Two isolated route tests (`profilePortalsUnlockRoute`) made faithful (mount `attachRequestContext`).
+
+### F4c — array-element allowlist is now recursive at every depth
+`sanitizeObjectElement` allowlisted only the element's TOP-LEVEL keys; nested values got reserved-key stripping but no allowlist, so `applications[].meta.secret_admin_flag` persisted whenever `meta` was an allowed element key. **Fix:** `buildElementShape()` derives a recursive key-shape from the union of existing array elements; `sanitizeAgainstShape()` enforces it at every depth (reserved keys always dropped; unknown nested keys dropped under an active shape; reserved-only fallback when no existing shape, to preserve first-time population). Test: `documentIngestionSectionAllowlist.test.js` — an unlisted nested key inside an allowed array element (`applications[].meta.secret_admin_flag`) + `__proto__` are both dropped.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

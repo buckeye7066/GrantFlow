@@ -21,14 +21,8 @@ function allowAutoRouteGeneration() {
 }
 
 function isAdminContext(context) {
-  const user = context?.user
-  const ctx = context?.ctx
-  return Boolean(
-    ctx?.isAdmin === true ||
-      user?.role === 'admin' ||
-      user?.is_admin === true ||
-      user?.is_admin === 1,
-  )
+  // DB-backed admin only (req.ctx.isAdmin); never a raw JWT role/is_admin claim.
+  return context?.ctx?.isAdmin === true
 }
 
 function audit(db, { action, severity = SEVERITY.INFO, userId = null, details = null } = {}) {

@@ -791,18 +791,20 @@ export async function invokeTool(name, params, context) {
       throw error
     }
 
+    // DB-backed admin only. ctx.isAdmin is the canonical (requestContext) answer;
+    // isAdminUserWithDb is the self-contained DB fallback. We must NEVER fall back
+    // to a raw token claim (user.role/is_admin) — a demoted admin holding an
+    // unexpired role:'admin' JWT would otherwise pass this admin-tool gate. On a
+    // DB error we fail CLOSED (deny) rather than trust the token.
     let isAdmin = ctx?.isAdmin === true
     if (!isAdmin && db && user) {
       const { isAdminUserWithDb } = await import('../utils/accessControl.js')
       try {
         isAdmin = await isAdminUserWithDb(db, user)
       } catch (error) {
-        console.warn('[anyaToolRegistry] DB admin check failed, falling back to token:', error?.message)
-        isAdmin = user.role === 'admin' || user.is_admin === true
+        console.warn('[anyaToolRegistry] DB admin check failed; failing closed:', error?.message)
+        isAdmin = false
       }
-    }
-    if (!isAdmin && user) {
-      isAdmin = user.role === 'admin' || user.is_admin === true
     }
 
     if (!isAdmin) {

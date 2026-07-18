@@ -73,14 +73,19 @@ describe('mergeSectionData allowlist (untrusted-AI hardening)', () => {
     expect({}.polluted).toBeUndefined()
   })
 
-  it('strips reserved keys nested INSIDE an array element object at any depth', () => {
-    const existing = { applications: [{ school: '', meta: {} }] }
-    const incoming = JSON.parse('{"applications":[{"school":"X","meta":{"__proto__":{"z":1},"note":"ok"}}]}')
+  it('recursively allowlists nested array-element keys (drops unlisted nested key + __proto__)', () => {
+    // meta is a known element key AND its existing shape declares `note`; an
+    // injected nested key (secret_admin_flag) is NOT in the shape -> dropped.
+    const existing = { applications: [{ school: '', meta: { note: '' } }] }
+    const incoming = JSON.parse(
+      '{"applications":[{"school":"X","meta":{"__proto__":{"z":1},"note":"ok","secret_admin_flag":true}}]}',
+    )
     const { data } = mergeSectionData(existing, incoming, ['applications'])
     const el = data.applications.find((a) => a.school === 'X')
     expect(el.meta).toBeTruthy()
     expect(Object.prototype.hasOwnProperty.call(el.meta, '__proto__')).toBe(false)
-    expect(el.meta.note).toBe('ok')
+    expect(el.meta.note).toBe('ok') // in the existing nested shape -> kept
+    expect(el.meta).not.toHaveProperty('secret_admin_flag') // unlisted nested key -> dropped
   })
 
   it('drops reserved prototype-pollution keys at top level AND nested depth', () => {

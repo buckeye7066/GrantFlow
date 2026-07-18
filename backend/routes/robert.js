@@ -64,7 +64,6 @@ const resolveAdminToken = () =>
 
 function adminOnly(req, res, next) {
   if (req.ctx && req.ctx.isAdmin === true) return next()
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) return next()
   const configured = resolveAdminToken()
   if (configured) {
     const header =
