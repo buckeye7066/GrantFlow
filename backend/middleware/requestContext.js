@@ -208,6 +208,11 @@ export async function buildRequestContext(db, user) {
   // missing row FAILS CLOSED — we NEVER fall back to the token's role/is_admin
   // claim, or a demoted admin whose context DB read errors would still be admin.
   const syntheticServiceAdmin = isSyntheticServiceAdmin(user)
+  // Whether a TRUSTED DB identity backs this request: a real users row was
+  // resolved, or a validated synthetic service token. A stale JWT for a
+  // deleted/missing user must NOT retain token-userId ownership of its old
+  // profiles — access computation below fails closed unless this is true.
+  let identityResolved = syntheticServiceAdmin
   try {
     // If we only have a profileId, resolve its owning user first.
     if (!ctx.userId && ctx.activeProfileId) {
@@ -231,6 +236,7 @@ export async function buildRequestContext(db, user) {
         .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
         .get(String(ctx.userId))
       if (row) {
+        identityResolved = true
         ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
         // The configured-admin-email elevation is honored ONLY from the TRUSTED
         // stored email (row.primary_email), NEVER from the token-supplied
@@ -286,17 +292,26 @@ export async function buildRequestContext(db, user) {
   } else {
     // Regular user - compute accessible resources.
     try {
-      const profileIds = await getAccessibleProfileIds(db, user)
-      const orgIds = await getAccessibleOrganizationIds(db, user)
-      // SECURITY: ctx.isAdmin is FALSE here (a genuine non-admin, OR a fail-closed
-      // admin resolution after a DB error). These helpers run their OWN admin
-      // check and can independently return `null` (the ALL-ACCESS sentinel) — e.g.
-      // if the earlier users lookup timed out but theirs succeeds. A non-admin
-      // context must NEVER carry the null all-access sentinel, or consumers treat
-      // it as admin and leak cross-tenant. Coerce any non-Set (null) result to an
-      // empty Set = deny.
-      ctx.accessibleProfileIds = profileIds instanceof Set ? profileIds : new Set()
-      ctx.accessibleOrgIds = orgIds instanceof Set ? orgIds : new Set()
+      if (!identityResolved) {
+        // No TRUSTED DB identity: a real userId but NO users row (deleted/missing
+        // user), or a synthetic-id impersonation. A stale JWT must NOT retain
+        // token-userId ownership of its old profiles/orgs — FAIL CLOSED (deny all),
+        // and do not call the access helpers with the unresolved token identity.
+        ctx.accessibleProfileIds = new Set()
+        ctx.accessibleOrgIds = new Set()
+      } else {
+        const profileIds = await getAccessibleProfileIds(db, user)
+        const orgIds = await getAccessibleOrganizationIds(db, user)
+        // SECURITY: ctx.isAdmin is FALSE here (a genuine non-admin, OR a fail-closed
+        // admin resolution after a DB error). These helpers run their OWN admin
+        // check and can independently return `null` (the ALL-ACCESS sentinel) — e.g.
+        // if the earlier users lookup timed out but theirs succeeds. A non-admin
+        // context must NEVER carry the null all-access sentinel, or consumers treat
+        // it as admin and leak cross-tenant. Coerce any non-Set (null) result to an
+        // empty Set = deny.
+        ctx.accessibleProfileIds = profileIds instanceof Set ? profileIds : new Set()
+        ctx.accessibleOrgIds = orgIds instanceof Set ? orgIds : new Set()
+      }
     } catch (error) {
       console.warn('[requestContext] Failed to compute accessible resources:', error?.message)
       ctx.accessibleProfileIds = new Set()

@@ -560,12 +560,14 @@ async function ensureDocumentDeleteAccess(req, res, context, document) {
   }
 
   const actorUserId = context.ctx?.userId ?? null
-  const actorActiveProfileId = context.ctx?.activeProfileId ? String(context.ctx.activeProfileId) : null
 
-  // Legacy sessions can be profile-scoped without a durable profiles.user_id mapping.
-  // Treat "active profile" as ownership for destructive actions on that same profile.
-  // (ctx.activeProfileId is DB-validated against the accessible set in requestContext.)
-  if (actorActiveProfileId && actorActiveProfileId === profileId) return true
+  // NOTE: a matching ctx.activeProfileId is NOT ownership. activeProfileId is only
+  // validated against the ACCESSIBLE set, which includes profiles merely SHARED to
+  // the caller via profile_emails — so treating "active profile === document
+  // profile" as ownership let a shared-profile user delete the OWNER's documents
+  // (IDOR). Delete now requires owner-equivalent proof only: profiles.user_id ===
+  // actorUserId, or a NULL-owner legacy profile whose saved email matches one of
+  // the caller's DB-VERIFIED emails (both checked below).
 
   // Ownership via profiles.user_id (no email needed).
   if (await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail: null })) return true
