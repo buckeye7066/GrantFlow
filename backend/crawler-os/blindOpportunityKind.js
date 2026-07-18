@@ -61,8 +61,9 @@ export const BLIND_TRUST = Object.freeze({
 // are deliberately high so a nav-heavy program page never trips the structural
 // path on its own — the primary AGGREGATOR path ALSO requires directory LANGUAGE
 // and the ABSENCE of a concrete apply target.
-export const AGGREGATOR_MIN_LINKS = 12;    // "many programs" floor (paired with language + no-apply)
-export const AGGREGATOR_STRONG_LINKS = 30; // a pure link-farm floor (no language cue required)
+export const AGGREGATOR_MIN_LINKS = 12;    // "many programs" floor (paired with directory language)
+export const AGGREGATOR_STRONG_LINKS = 30; // a link-farm floor (still requires ≥1 directory cue)
+export const AGGREGATOR_STRONG_CUES = 2;   // multiple distinct directory phrases = a STRONG list signal
 // Below this the page copy is too thin to assert anything → UNKNOWN.
 export const MIN_PAGE_TEXT_CHARS = 120;
 
@@ -81,9 +82,33 @@ const DIRECTORY_CUES = [
   'matching grants', 'matching scholarships', 'showing results', 'results found',
 ];
 
-/** Normalize text for substring cue matching: lowercase, collapse whitespace. */
+/** Read a property without ever throwing (defends against throwing getters on a
+ *  hostile input object). Returns undefined on any access failure. */
+function safeGet(obj, key) {
+  try {
+    return obj == null ? undefined : obj[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Coerce any value to a string without throwing. `String(Object.create(null))`
+ *  throws (no default toString / Symbol.toPrimitive); a throwing toString does
+ *  too — both become '' here. */
+function safeString(v) {
+  if (typeof v === 'string') return v;
+  if (v == null) return '';
+  try {
+    return String(v);
+  } catch {
+    return '';
+  }
+}
+
+/** Normalize text for substring cue matching: lowercase, collapse whitespace.
+ *  Never throws (coerces via safeString first). */
 function norm(s) {
-  return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+  return safeString(s).replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 /** Count DISTINCT directory-language cues present in the (normalized) page text. */
@@ -103,7 +128,8 @@ function countInventoryLinks(inv) {
   if (!Array.isArray(inv)) return 0;
   const urls = new Set();
   for (const l of inv) {
-    if (l && typeof l.url === 'string' && /^https?:\/\//i.test(l.url)) urls.add(l.url);
+    const u = safeGet(l, 'url'); // never throws, even on a hostile getter
+    if (typeof u === 'string' && /^https?:\/\//i.test(u)) urls.add(u);
   }
   return urls.size;
 }
@@ -111,9 +137,11 @@ function countInventoryLinks(inv) {
 /** Is `url` present as a real link ON the page (a member of the inventory)? A
  *  target that is only the page's own URL fallback is NOT a verified info target. */
 function isInventoryMember(url, inv) {
-  if (!url || !Array.isArray(inv)) return false;
-  const u = String(url);
-  return inv.some((l) => l && typeof l.url === 'string' && l.url === u);
+  if (typeof url !== 'string' || !url || !Array.isArray(inv)) return false;
+  for (const l of inv) {
+    if (safeGet(l, 'url') === url) return true; // never throws
+  }
+  return false;
 }
 
 /** Extract a lowercased hostname from an absolute http(s) URL, or '' if unparsable. */
@@ -137,8 +165,10 @@ const DURABLE_DIRECTORY_HOSTS = Object.freeze([
   'grants.gov', 'candid.org', 'foundationcenter.org',
 ]);
 
-/** A page-derived TRUSTED signal: the verified info-target host is an official /
- *  institutional / known-durable-directory host. Purely code-checkable. */
+/** A page-derived TRUSTED signal: the given host (the SOURCE PAGE / operator's
+ *  own host) is an official / institutional / known-durable-directory host.
+ *  Purely code-checkable. Applied to the operator page URL, never to a host the
+ *  page merely links to. */
 function hasTrustedHost(url) {
   const host = hostOf(url);
   if (!host) return false;
@@ -161,86 +191,139 @@ function hasTrustedHost(url) {
  *   + the page-derived signals it was decided on (for shadow observability).
  */
 export function classifyBlindOpportunityKind(input) {
-  const { candidate, linkInventory, pageText } = (input && typeof input === 'object') ? input : {};
-  const cand = (candidate && typeof candidate === 'object') ? candidate : {};
-  const inv = Array.isArray(linkInventory) ? linkInventory : [];
-  const hay = norm(pageText);
+  // Absolute backstop: no input, however hostile/malformed, may throw. Any
+  // unexpected failure below degrades to the conservative UNKNOWN/UNVERIFIED.
+  try {
+    const src = (input && typeof input === 'object') ? input : {};
+    const candidate = safeGet(src, 'candidate');
+    const linkInventory = safeGet(src, 'linkInventory');
+    const cand = (candidate && typeof candidate === 'object') ? candidate : {};
+    const inv = Array.isArray(linkInventory) ? linkInventory : [];
+    const hay = norm(safeGet(src, 'pageText')); // safeString/norm never throw
 
-  // Page-derived candidate signals. sponsor/title are page-derived by the blind
-  // extractor (it drops any not found on the page); we still treat them literally.
-  const sponsor = typeof cand.sponsor === 'string' ? cand.sponsor.trim() : '';
-  const hasNamedOperator = sponsor.length >= 2;
-  const applyUrl = typeof cand.apply_url === 'string' && /^https?:\/\//i.test(cand.apply_url) ? cand.apply_url : null;
-  const infoUrl = typeof cand.info_url === 'string' && /^https?:\/\//i.test(cand.info_url) ? cand.info_url : null;
-  // A CONCRETE apply target: a distinct apply link the extractor resolved inside
-  // the page inventory (never the page-URL fallback — the extractor puts that in
-  // info_url only). Its presence is the strongest "single applicable program" cue.
-  const hasConcreteApply = !!applyUrl;
-  // A VERIFIED info target: an apply/info URL that is a REAL link on the page
-  // (a member of the inventory), not merely the page's own URL fallback.
-  const verifiedInfoTarget = isInventoryMember(applyUrl, inv) ? applyUrl
-    : (isInventoryMember(infoUrl, inv) ? infoUrl : null);
-  const hasVerifiedInfoTarget = !!verifiedInfoTarget;
+    // Page-derived candidate signals, all read defensively (a hostile candidate
+    // may carry throwing getters). sponsor/title are page-derived by the blind
+    // extractor; we treat them literally and read via safeGet.
+    const sponsorRaw = safeGet(cand, 'sponsor');
+    const sponsor = typeof sponsorRaw === 'string' ? sponsorRaw.trim() : '';
+    const hasNamedOperator = sponsor.length >= 2;
 
-  const directoryCues = countDirectoryCues(hay);
-  const linkCount = countInventoryLinks(inv);
-  const manyLinks = linkCount >= AGGREGATOR_MIN_LINKS;
-  const linkFarm = linkCount >= AGGREGATOR_STRONG_LINKS;
-  const sparse = hay.length < MIN_PAGE_TEXT_CHARS
-    || (linkCount === 0 && !hasConcreteApply && !hasVerifiedInfoTarget);
+    const applyRaw = safeGet(cand, 'apply_url');
+    const infoRaw = safeGet(cand, 'info_url');
+    const applyUrl = typeof applyRaw === 'string' && /^https?:\/\//i.test(applyRaw) ? applyRaw : null;
+    const infoUrl = typeof infoRaw === 'string' && /^https?:\/\//i.test(infoRaw) ? infoRaw : null;
 
-  const signals = {
-    has_named_operator: hasNamedOperator,
-    has_concrete_apply: hasConcreteApply,
-    has_verified_info_target: hasVerifiedInfoTarget,
-    directory_cue_count: directoryCues,
-    link_count: linkCount,
-    many_links: manyLinks,
-    link_farm: linkFarm,
-    sparse,
-    trusted_host: false,
-  };
+    // The SOURCE PAGE (operator) URL — the directory's OWN host, not a host it
+    // links to. This is what the trust axis validates: a blog that links to
+    // benefits.gov is not itself a trusted operator. Read from the page-fact
+    // (`page_url`) or the mapped candidate's provenance (`raw.page_url`).
+    const rawMeta = safeGet(cand, 'raw');
+    const pageUrl = (() => {
+      const direct = safeGet(cand, 'page_url');
+      if (typeof direct === 'string' && direct) return direct;
+      const viaRaw = safeGet(rawMeta, 'page_url');
+      return typeof viaRaw === 'string' && viaRaw ? viaRaw : null;
+    })();
 
-  // --- KIND ------------------------------------------------------------------
-  // Order matters and every branch is conservative.
-  let kind;
-  if (sparse) {
-    // Too little page signal to assert either way.
-    kind = BLIND_OPPORTUNITY_KIND.UNKNOWN;
-  } else if (
-    // AGGREGATOR: a list of MANY programs with NO single applicable target.
-    // Primary path needs directory LANGUAGE + many links + no concrete apply;
-    // the structural fallback needs a genuine link-farm (very high link count).
-    !hasConcreteApply && ((directoryCues >= 1 && manyLinks) || linkFarm)
-  ) {
-    kind = BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX;
-  } else if (
-    // DIRECT_PROGRAM: a named sponsor + a concrete apply/info target. A concrete
-    // apply link settles it even if the page mentions other grants; an info-only
-    // page qualifies only when it does NOT read like a directory.
-    hasNamedOperator && (hasConcreteApply || (hasVerifiedInfoTarget && directoryCues === 0))
-  ) {
-    kind = BLIND_OPPORTUNITY_KIND.DIRECT_PROGRAM;
-  } else {
-    kind = BLIND_OPPORTUNITY_KIND.UNKNOWN;
-  }
+    // A CONCRETE apply target: a distinct apply link the extractor resolved inside
+    // the page inventory (never the page-URL fallback — the extractor puts that in
+    // info_url only). Its presence is a strong "single applicable program" cue.
+    const hasConcreteApply = !!applyUrl;
+    // A VERIFIED info target: an apply/info URL that is a REAL link on the page
+    // (a member of the inventory), not merely the page's own URL fallback.
+    const verifiedInfoTarget = isInventoryMember(applyUrl, inv) ? applyUrl
+      : (isInventoryMember(infoUrl, inv) ? infoUrl : null);
+    const hasVerifiedInfoTarget = !!verifiedInfoTarget;
 
-  // --- TRUST -----------------------------------------------------------------
-  // PROTECTED is reserved for a DURABLE LOCATOR (an AGGREGATOR_INDEX) that clears
-  // ALL THREE bars: a named operator, a verified info target that is a real link
-  // on the page, AND a page-derived trusted signal (an official / institutional /
-  // known-durable-directory host on that target). Anything short of that — and
-  // every non-directory kind — is UNVERIFIED and inherits NO directory protection.
-  let trust = BLIND_TRUST.UNVERIFIED;
-  if (kind === BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX) {
-    const trustedHost = hasTrustedHost(verifiedInfoTarget);
-    signals.trusted_host = trustedHost;
-    if (hasNamedOperator && hasVerifiedInfoTarget && trustedHost) {
-      trust = BLIND_TRUST.PROTECTED;
+    const directoryCues = countDirectoryCues(hay);
+    const linkCount = countInventoryLinks(inv);
+    const manyLinks = linkCount >= AGGREGATOR_MIN_LINKS;
+
+    // A SINGLE-PROGRAM signal: a named sponsor + a concrete program title, with
+    // NO directory language. Such a page is a program even when it carries dozens
+    // of ordinary NAVIGATION links (the .edu-with-nav-links class) — raw anchor
+    // count is NOT aggregator evidence on its own.
+    const titleRaw = safeGet(cand, 'title');
+    const hasProgramTitle = typeof titleRaw === 'string' && titleRaw.trim().length >= 3;
+    const singleProgramSignal = hasNamedOperator && hasProgramTitle && directoryCues === 0;
+
+    // A STRONG aggregator signal: unambiguous "this is a list/directory". Requires
+    // directory LANGUAGE in every case (so navigation-heavy program pages, which
+    // carry no directory cues, never qualify no matter how many anchors they have),
+    // and is strong enough to WIN even when the page also exposes one apply link
+    // (a directory can contain apply links — finding 3a).
+    const strongAggregator = manyLinks
+      && (directoryCues >= AGGREGATOR_STRONG_CUES || (directoryCues >= 1 && linkCount >= AGGREGATOR_STRONG_LINKS));
+    // A WEAK aggregator signal: directory language + many links + no single apply
+    // target. An apply link is enough to pull a WEAK signal back to DIRECT.
+    const weakAggregator = directoryCues >= 1 && manyLinks && !hasConcreteApply;
+
+    const sparse = hay.length < MIN_PAGE_TEXT_CHARS
+      || (linkCount === 0 && !hasConcreteApply && !hasVerifiedInfoTarget);
+
+    const signals = {
+      has_named_operator: hasNamedOperator,
+      has_program_title: hasProgramTitle,
+      has_concrete_apply: hasConcreteApply,
+      has_verified_info_target: hasVerifiedInfoTarget,
+      directory_cue_count: directoryCues,
+      link_count: linkCount,
+      many_links: manyLinks,
+      strong_aggregator: strongAggregator,
+      weak_aggregator: weakAggregator,
+      single_program_signal: singleProgramSignal,
+      sparse,
+      operator_host_trusted: false,
+    };
+
+    // --- KIND ----------------------------------------------------------------
+    // Conservative, order-sensitive. Directory LANGUAGE is REQUIRED for any
+    // aggregator verdict; a STRONG list beats a lone apply link; otherwise a
+    // concrete apply target (or a single-program signal) means DIRECT_PROGRAM.
+    let kind;
+    if (sparse) {
+      kind = BLIND_OPPORTUNITY_KIND.UNKNOWN;
+    } else if (strongAggregator) {
+      // A clear multi-program list wins even when it also contains an apply link.
+      kind = BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX;
+    } else if (hasNamedOperator && hasConcreteApply) {
+      // One resolved apply link + a named sponsor, without a STRONG list signal.
+      kind = BLIND_OPPORTUNITY_KIND.DIRECT_PROGRAM;
+    } else if (weakAggregator) {
+      // Directory language + many links + no apply target.
+      kind = BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX;
+    } else if (singleProgramSignal || (hasNamedOperator && hasVerifiedInfoTarget && directoryCues === 0)) {
+      // A named single program with a real info target and no directory language —
+      // regardless of how many navigation links surround it.
+      kind = BLIND_OPPORTUNITY_KIND.DIRECT_PROGRAM;
+    } else {
+      kind = BLIND_OPPORTUNITY_KIND.UNKNOWN;
     }
-  }
 
-  return { kind, trust, signals };
+    // --- TRUST ---------------------------------------------------------------
+    // PROTECTED is reserved for a DURABLE LOCATOR (an AGGREGATOR_INDEX) whose
+    // OPERATOR is trustworthy. All THREE bars must hold: a named operator, the
+    // SOURCE PAGE's OWN host on the trusted allowlist (.gov/.edu/durable
+    // directories — NOT merely a host it links to), AND a verified info target
+    // that is a real inventory link. A blog that links to benefits.gov is not a
+    // trusted operator → UNVERIFIED. Every non-directory kind is UNVERIFIED.
+    let trust = BLIND_TRUST.UNVERIFIED;
+    if (kind === BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX) {
+      const operatorTrusted = hasTrustedHost(pageUrl);
+      signals.operator_host_trusted = operatorTrusted;
+      if (hasNamedOperator && operatorTrusted && hasVerifiedInfoTarget) {
+        trust = BLIND_TRUST.PROTECTED;
+      }
+    }
+
+    return { kind, trust, signals };
+  } catch {
+    return {
+      kind: BLIND_OPPORTUNITY_KIND.UNKNOWN,
+      trust: BLIND_TRUST.UNVERIFIED,
+      signals: { error: true },
+    };
+  }
 }
 
 /**

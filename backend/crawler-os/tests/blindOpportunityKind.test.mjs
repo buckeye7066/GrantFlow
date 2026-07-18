@@ -2,9 +2,11 @@
 //
 // Phase 1c — the PURE, trust-aware AGGREGATOR/DIRECTORY classifier. These pin:
 // a multi-program list => AGGREGATOR_INDEX, a single real program => DIRECT_PROGRAM,
-// a sparse page => UNKNOWN; the PROTECTED bar (named operator + verified info
-// target + trusted signal) vs an open-web list => UNVERIFIED; determinism; and
-// profile-blindness (the signature reads ONLY page-derived inputs).
+// a sparse page => UNKNOWN; the PROTECTED bar (named operator + TRUSTED OPERATOR
+// PAGE HOST + verified info target) vs an open-web list => UNVERIFIED; the
+// aggregator-vs-direct edge cases (a directory containing one apply link; a
+// nav-heavy single-program page); determinism; profile-blindness; and total
+// no-throw robustness on hostile input.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -16,8 +18,8 @@ import {
   AGGREGATOR_MIN_LINKS,
 } from '../blindOpportunityKind.js';
 
-// Build an inventory of N distinct http(s) links on a host, each optionally
-// resolvable. Mirrors buildLinkInventory's { id, url, text } shape.
+// Build an inventory of N distinct http(s) links on a host. Mirrors
+// buildLinkInventory's { id, url, text } shape.
 function inv(n, host = 'https://directory.example.org') {
   return Array.from({ length: n }, (_, i) => ({
     id: `L${i + 1}`,
@@ -64,7 +66,7 @@ test('a sparse page => UNKNOWN', () => {
   assert.equal(out.trust, BLIND_TRUST.UNVERIFIED);
 });
 
-test('a concrete apply target settles DIRECT_PROGRAM even when the page mentions other grants', () => {
+test('a DIRECT program page with an apply link and a WEAK (not strong) directory signal stays DIRECT_PROGRAM', () => {
   const candidate = {
     title: 'STEM Scholarship',
     sponsor: 'Acme Foundation',
@@ -73,49 +75,126 @@ test('a concrete apply target settles DIRECT_PROGRAM even when the page mentions
   };
   const linkInventory = [
     { id: 'L1', url: 'https://acme.org/stem/apply', text: 'Apply' },
-    ...inv(15, 'https://acme.org'), // many links AND directory language present...
+    { id: 'L2', url: 'https://acme.org/', text: 'Home' },
+    { id: 'L3', url: 'https://acme.org/about', text: 'About' },
   ];
-  const pageText = `Browse grants and find scholarships. Search our database. ${LONG}`;
+  // Mentions "find scholarships" (one cue) but few links → not a strong list.
+  const pageText = `The Acme Foundation STEM Scholarship. You can also find scholarships elsewhere. ${LONG}`;
   const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
-  // ...but a resolved concrete apply link blocks the aggregator path.
   assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.DIRECT_PROGRAM);
 });
 
-test('a pure link-farm with NO directory language but a very high link count => AGGREGATOR_INDEX', () => {
-  const candidate = { title: 'Resources', sponsor: 'Portal', apply_url: null, info_url: null };
-  const out = classifyBlindOpportunityKind({ candidate, linkInventory: inv(35), pageText: LONG });
+test('finding 3a: a STRONG directory (many links + strong cues) that contains ONE apply link stays AGGREGATOR_INDEX', () => {
+  const candidate = {
+    title: 'Grants & Scholarships',
+    sponsor: 'Resource Center',
+    apply_url: 'https://directory.example.org/program/1/apply', // one apply link on a directory
+    info_url: null,
+  };
+  const linkInventory = [
+    { id: 'A', url: 'https://directory.example.org/program/1/apply', text: 'Apply', apply_intent: true },
+    ...inv(20), // 20 more distinct program links
+  ];
+  const pageText = `Browse grants and search our database. List of grants and directory of funding below. ${LONG}`;
+  const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
+  // A directory can contain apply links — the strong list signal must win.
   assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX);
-  assert.ok(out.signals.link_farm);
+  assert.equal(out.signals.strong_aggregator, true);
 });
 
-test('PROTECTED requires named operator + verified info target + trusted signal', () => {
-  // A durable directory: named operator, an info target that is a REAL inventory
-  // link, on a trusted (.gov) host.
-  const infoUrl = 'https://benefits.gov/browse';
+test('finding 3b: a single-program .edu page with ~35 NAVIGATION links (no apply, no directory cues) stays DIRECT_PROGRAM', () => {
+  const infoUrl = 'https://university.edu/scholarships/marshall/details';
+  const candidate = {
+    title: 'Marshall Scholarship',
+    sponsor: 'State University',
+    page_url: 'https://university.edu/scholarships/marshall',
+    apply_url: null,
+    info_url: infoUrl,
+  };
+  // 35 ordinary navigation anchors + the one real info link. NO directory cues.
+  const linkInventory = [{ id: 'INFO', url: infoUrl, text: 'Program details' }, ...inv(35, 'https://university.edu')];
+  const pageText = `State University offers the Marshall Scholarship to graduating seniors. Eligibility and program details follow. ${LONG}`;
+  const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
+  // Raw anchor count is NOT aggregator evidence without directory language.
+  assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.DIRECT_PROGRAM);
+  assert.equal(out.signals.single_program_signal, true);
+});
+
+test('finding 3b (corollary): many nav links + NO directory cues + no program signal => UNKNOWN, never AGGREGATOR', () => {
+  const candidate = { title: '', sponsor: 'X', apply_url: null, info_url: null };
+  const out = classifyBlindOpportunityKind({ candidate, linkInventory: inv(40), pageText: LONG });
+  assert.notEqual(out.kind, BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX);
+  assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.UNKNOWN);
+});
+
+test('PROTECTED requires named operator + TRUSTED OPERATOR PAGE HOST + verified info target', () => {
+  // A durable directory: named operator, its OWN page host is .gov, and the info
+  // target is a REAL inventory link.
+  const infoUrl = 'https://benefits.gov/browse/list';
   const linkInventory = [{ id: 'L1', url: infoUrl, text: 'Browse benefits' }, ...inv(15)];
-  const candidate = { title: 'Benefits Finder', sponsor: 'US Government', apply_url: null, info_url: infoUrl };
+  const candidate = {
+    title: 'Benefits Finder',
+    sponsor: 'US Government',
+    page_url: 'https://benefits.gov/browse',
+    apply_url: null,
+    info_url: infoUrl,
+  };
   const pageText = `Browse grants and search our database of benefits. Directory of programs. ${LONG}`;
   const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
   assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX);
   assert.equal(out.trust, BLIND_TRUST.PROTECTED);
-  assert.equal(out.signals.trusted_host, true);
+  assert.equal(out.signals.operator_host_trusted, true);
 });
 
-test('an open-web list (no trusted host) => AGGREGATOR_INDEX but UNVERIFIED (no protection)', () => {
-  const infoUrl = 'https://someblog.example.com/grants';
+test('finding 2: a blog that merely LINKS to benefits.gov is NOT a trusted operator => UNVERIFIED', () => {
+  // The operator page host is a blog; it selects an inventory-member benefits.gov
+  // link as its info target. Trust must reflect the OPERATOR, not the linked host.
+  const infoUrl = 'https://benefits.gov/list';
+  const linkInventory = [
+    { id: 'L1', url: infoUrl, text: 'See the official list' },
+    ...inv(15, 'https://someblog.example.com'),
+  ];
+  const candidate = {
+    title: 'Best Grants 2026',
+    sponsor: 'Some Blog',
+    page_url: 'https://someblog.example.com/grants',
+    apply_url: null,
+    info_url: infoUrl,
+  };
+  const pageText = `Browse grants and search for grants. List of grants and directory of funding. ${LONG}`;
+  const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
+  assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX);
+  assert.equal(out.trust, BLIND_TRUST.UNVERIFIED); // operator host untrusted, despite the .gov link
+  assert.equal(out.signals.operator_host_trusted, false);
+});
+
+test('an open-web list with an untrusted operator host => AGGREGATOR_INDEX but UNVERIFIED', () => {
+  const infoUrl = 'https://someblog.example.com/grants/list';
   const linkInventory = [{ id: 'L1', url: infoUrl, text: 'See the list' }, ...inv(15, 'https://someblog.example.com')];
-  const candidate = { title: 'Grant List', sponsor: 'Some Blog', apply_url: null, info_url: infoUrl };
+  const candidate = {
+    title: 'Grant List',
+    sponsor: 'Some Blog',
+    page_url: 'https://someblog.example.com/grants',
+    apply_url: null,
+    info_url: infoUrl,
+  };
   const pageText = `Browse grants and search for grants. List of grants. ${LONG}`;
   const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
   assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX);
-  assert.equal(out.trust, BLIND_TRUST.UNVERIFIED); // trusted-host bar not met
+  assert.equal(out.trust, BLIND_TRUST.UNVERIFIED);
 });
 
-test('a directory whose info target is only the page-URL fallback (NOT an inventory member) is never PROTECTED', () => {
-  // info_url points at a gov host, but that url is NOT one of the page's real
-  // links (not in the inventory) — so there is no VERIFIED info target.
-  const linkInventory = inv(15, 'https://random.example.com'); // gov url absent here
-  const candidate = { title: 'Finder', sponsor: 'Agency', apply_url: null, info_url: 'https://benefits.gov/x' };
+test('a durable-host directory whose info target is NOT an inventory member is never PROTECTED', () => {
+  // Operator host is .gov, but the info_url is not one of the page's real links
+  // (not in the inventory) — so there is no VERIFIED info target.
+  const linkInventory = inv(15, 'https://benefits.gov'); // the info url below is absent here
+  const candidate = {
+    title: 'Finder',
+    sponsor: 'Agency',
+    page_url: 'https://benefits.gov/finder',
+    apply_url: null,
+    info_url: 'https://benefits.gov/somewhere-else',
+  };
   const pageText = `Browse grants and search our database. Directory of funding. ${LONG}`;
   const out = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
   assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.AGGREGATOR_INDEX);
@@ -124,8 +203,8 @@ test('a directory whose info target is only the page-URL fallback (NOT an invent
 });
 
 test('deterministic: identical inputs => identical output', () => {
-  const candidate = { title: 'Grants Directory', sponsor: 'Hub', apply_url: null, info_url: null };
-  const args = { candidate, linkInventory: inv(20), pageText: `Browse grants. List of grants. ${LONG}` };
+  const candidate = { title: 'Grants Directory', sponsor: 'Hub', page_url: 'https://x.org', apply_url: null, info_url: null };
+  const args = { candidate, linkInventory: inv(20), pageText: `Browse grants. List of grants. Directory of funding. ${LONG}` };
   const a = classifyBlindOpportunityKind(args);
   const b = classifyBlindOpportunityKind(args);
   assert.deepEqual(a, b);
@@ -151,9 +230,26 @@ test('profile-blind: extra profile-shaped fields on the input are IGNORED (no be
   assert.deepEqual(withProfile, base);
 });
 
-test('robust to garbage input: never throws, defaults to UNKNOWN/UNVERIFIED', () => {
-  for (const bad of [undefined, null, {}, { candidate: null, linkInventory: 'x', pageText: 42 }]) {
-    const out = classifyBlindOpportunityKind(bad);
+test('finding 1: NEVER throws on hostile input — null-prototype pageText, throwing getters, non-array inventory, null candidate', () => {
+  const nullProtoText = Object.create(null); // String(this) throws
+  const throwingUrlInv = [{ id: 'L1', get url() { throw new Error('hostile getter'); } }];
+  const throwingCandidate = {
+    get sponsor() { throw new Error('hostile'); },
+    get apply_url() { throw new Error('hostile'); },
+  };
+  const cases = [
+    undefined,
+    null,
+    {},
+    { candidate: null, linkInventory: 'not-an-array', pageText: 42 },
+    { candidate: { sponsor: 'X' }, linkInventory: [], pageText: nullProtoText },
+    { candidate: { sponsor: 'X', apply_url: null }, linkInventory: throwingUrlInv, pageText: 'Browse grants list of grants directory of funding' },
+    { candidate: throwingCandidate, linkInventory: [], pageText: 'x' },
+    { get candidate() { throw new Error('hostile input getter'); } },
+  ];
+  for (const bad of cases) {
+    let out;
+    assert.doesNotThrow(() => { out = classifyBlindOpportunityKind(bad); });
     assert.equal(out.kind, BLIND_OPPORTUNITY_KIND.UNKNOWN);
     assert.equal(out.trust, BLIND_TRUST.UNVERIFIED);
   }
