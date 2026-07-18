@@ -424,42 +424,49 @@ async function atomicVerifyOtpCode(db, credentialId, incomingHash, maxAttempts) 
 
     const latest = Array.isArray(active) && active.length > 0 ? active[0] : null
 
-    // Cap enforced UNDER the lock (re-read). Locked codes stay locked.
-    if (latest && Number(latest.attempt_count || 0) >= maxAttempts) {
-      return 'locked_out'
-    }
-
     const match = Array.isArray(active)
       ? active.find((row) => timingSafeEqualHex(row.code_hash, incomingHash))
       : null
 
-    if (!match) {
-      // Wrong code: raceless conditional increment of the active-code counter and
-      // the credential counter. Serialized by the lock, so the cap is exact.
-      if (latest?.id) {
-        await tx
-          .prepare(`UPDATE user_verification_codes SET attempt_count = attempt_count + 1 WHERE id = ? AND consumed_at IS NULL`)
-          .run(latest.id)
+    if (match) {
+      // Cap enforced on the MATCHED row (not merely the latest): a matched-but-
+      // capped code is LOCKED, never consumed — even if it is an older row that a
+      // fresh /start left behind. Combined with the single-active-code invariant
+      // in insertFreshVerificationCode, this makes the per-code cap strict.
+      if (Number(match.attempt_count || 0) >= maxAttempts) {
+        return 'locked_out'
       }
-      await tx.prepare(`UPDATE user_credentials SET attempt_count = attempt_count + 1 WHERE id = ?`).run(credentialId)
-      return 'invalid'
+      // One-time consume — a single conditional UPDATE that MUST affect exactly
+      // one row. A parallel winner already flipped consumed_at → 0 rows →
+      // 'already_consumed' (no second session).
+      const consume = await tx
+        .prepare(
+          `UPDATE user_verification_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`,
+        )
+        .run(now, match.id, now)
+      if (Number(consume?.changes ?? 0) !== 1) {
+        return 'already_consumed'
+      }
+      await tx
+        .prepare(`UPDATE user_credentials SET verified_at = COALESCE(verified_at, ?), attempt_count = 0 WHERE id = ?`)
+        .run(now, credentialId)
+      return 'ok'
     }
 
-    // Correct code: one-time consume — a single conditional UPDATE that MUST
-    // affect exactly one row. A parallel winner already flipped consumed_at →
-    // 0 rows → 'already_consumed' (no second session).
-    const consume = await tx
-      .prepare(
-        `UPDATE user_verification_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`,
-      )
-      .run(now, match.id, now)
-    if (Number(consume?.changes ?? 0) !== 1) {
-      return 'already_consumed'
+    // No match (wrong guess). If the latest active code is already capped, the
+    // credential is locked out. Otherwise charge the miss to the latest active
+    // code (raceless conditional increment) and the credential counter. Serialized
+    // by the lock, so the cap is exact.
+    if (latest && Number(latest.attempt_count || 0) >= maxAttempts) {
+      return 'locked_out'
     }
-    await tx
-      .prepare(`UPDATE user_credentials SET verified_at = COALESCE(verified_at, ?), attempt_count = 0 WHERE id = ?`)
-      .run(now, credentialId)
-    return 'ok'
+    if (latest?.id) {
+      await tx
+        .prepare(`UPDATE user_verification_codes SET attempt_count = attempt_count + 1 WHERE id = ? AND consumed_at IS NULL`)
+        .run(latest.id)
+    }
+    await tx.prepare(`UPDATE user_credentials SET attempt_count = attempt_count + 1 WHERE id = ?`).run(credentialId)
+    return 'invalid'
   })
 }
 
@@ -1789,6 +1796,32 @@ async function insertVerificationCode(db, credentialId, codeHash, expiresAtIso) 
   ).run(credentialId, codeHash, expiresAtIso)
 }
 
+/**
+ * Mint a fresh OTP code AND invalidate every prior active code for this
+ * credential in ONE transaction, so a credential has at most ONE consumable
+ * active code at a time.
+ *
+ * Without this, /email/start and /phone/start APPENDED rows and left older
+ * active rows unconsumed. A row that had already hit maxAttempts stayed active,
+ * so an attacker could mint a fresh code and then verify the OLDER, locked-out
+ * code (its cap was never re-checked against the newest row) — a lockout bypass,
+ * and by alternating /start + guess, unlimited attempts against a target code.
+ * The invalidate+insert are atomic (transaction isolation: no observer ever sees
+ * two active codes, nor zero mid-swap).
+ */
+async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAtIso) {
+  return db.withTransaction(async (tx) => {
+    await tx
+      .prepare(
+        `UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`,
+      )
+      .run(nowISOString(), credentialId)
+    await tx
+      .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`)
+      .run(credentialId, codeHash, expiresAtIso)
+  })
+}
+
 function signAccessToken(user, sessionId, profileId) {
   const roles = []
   if (user.is_admin) {
@@ -2078,7 +2111,9 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     })
     
     try {
-      await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
+      // Invalidate prior active codes + insert the fresh one atomically, so only
+      // the newest code is ever verifiable (no locked-out older row survives).
+      await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt)
       await req.db
         .prepare(
           `
@@ -2433,7 +2468,9 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     })
   }
 
-  await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
+  // Invalidate prior active codes + insert the fresh one atomically (single
+  // consumable active code per credential — no locked-out older row survives).
+  await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt)
   await req.db
     .prepare(
       `
@@ -3598,8 +3635,9 @@ export {
   attachProfileToUser,
   profileIsBoundToEmail,
   // Exported for the OTP-atomicity regression suite: one-time consume + raceless
-  // attempt cap (see atomicVerifyOtpCode).
+  // attempt cap (see atomicVerifyOtpCode); single-active-code minting.
   atomicVerifyOtpCode,
+  insertFreshVerificationCode,
   EMAIL_MAX_VERIFY_ATTEMPTS,
 }
 

@@ -165,6 +165,13 @@ Compat: behavior-preserving for the real login flow (a user who receives the ema
 
 Compat: behavior-preserving for the normal single-request login (correct code → session; wrong → invalid; too many → 429); only concurrent double-submit and parallel brute-force change (now strictly bounded / single-session). New test `otpVerifyAtomicity.test.js` (4: 2 concurrent full-app + 2 deterministic helper units), verified red by removing the cap + one-time-consume logic. Two SQLite test shims (`refreshLoginRecording`, `adminReinterviewGate`) gained `withTransaction`/`dialect` to mirror the real `SqliteDb`. `findMatchingActiveVerificationCode` (superseded) removed.
 
+## Round 20 — one consumable OTP per credential + per-code cap on the matched row (see PORTFOLIO_AUDIT.md §5t)
+
+- **[HIGH] Closed the multi-row OTP lockout bypass.** r19 enforced the cap only on the LATEST active code, and `/email/start` + `/phone/start` appended new codes without invalidating older active rows — so a locked-out older code stayed active and, after a fresh `/start` minted a newer (attempt_count=0) row, could still be verified (lockout bypass; alternating start+guess gave unlimited attempts on a target). Two belt-and-suspenders fixes: (1) new `insertFreshVerificationCode` invalidates all prior active codes in the SAME transaction as the insert → exactly one consumable active code per credential (both start paths use it); (2) `atomicVerifyOtpCode` enforces the cap on the MATCHED row (not just latest) → a matched-but-capped older row is `locked_out`, never consumed.
+- All r19 properties preserved (row-locked tx, conditional one-time consume requiring one affected row, constant-time compare, phone parity, email+IP rate limiter); the parallel-correct→one-session and parallel-wrong→cap-bounded guarantees still hold.
+
+Compat: behavior-preserving for the normal login (start → verify newest code → session); only stale/locked older codes change (now always invalidated at the next start and never consumable). New test `otpLockoutBypass.test.js` (4: dialect-agnostic unit for both shared helpers + full-app email + full-app phone), verified red by reverting both fixes (reproduces the bypass). `insertFreshVerificationCode` exported for the suite.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

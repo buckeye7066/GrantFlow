@@ -419,6 +419,23 @@ Under pooled Postgres these are independent statements on independent connection
 
 **Confirmation:** `/email/verify` (and `/phone/verify`) verify inside a row-locked transaction with a conditional one-time consume that requires exactly one affected row and a raceless attempt cap — so an online brute-force is strictly cap-bounded and a one-time code cannot mint multiple sessions under race, keeping the r17 profile adoption genuinely inbox-possession-backed.
 
+## 5t. Round 20 — one consumable OTP per credential + per-code cap on the matched row (Codex review of commit `3ae1e16`)
+
+The r19 transactional verifier was correct, but the attempt cap could be **bypassed across multiple rows**.
+
+### R20-1 [HIGH] Locked-out older OTP rows survived a fresh `/start`
+`atomicVerifyOtpCode` enforced `maxAttempts` only against **`latest.attempt_count`**, and `/email/start` + `/phone/start` **APPENDED** a new `user_verification_codes` row without invalidating older active rows. A row that had already hit the cap therefore stayed **active + unconsumed**. After a fresh `/start` minted a newer row (`attempt_count=0`), submitting the **older, locked-out** code passed the latest-row cap check and was consumed → **lockout bypass**; and because a wrong guess was charged to the *newest* row (not the matched/target row), alternating `/start` + guess gave effectively **unlimited attempts against a target code**.
+
+**Fix (`backend/routes/auth.js`) — both halves, so the invariant holds regardless of future code paths:**
+1. **Single consumable active code per credential.** New `insertFreshVerificationCode(db, credentialId, codeHash, expiresAt)` invalidates every prior active code and inserts the fresh one **in one transaction** (transaction isolation → no observer ever sees two active codes, nor zero mid-swap). Both `/email/start` and `/phone/start` now mint via it (replacing the bare `insertVerificationCode`).
+2. **Cap enforced on the MATCHED row, not the latest.** `atomicVerifyOtpCode` now finds the hash match first and, under the lock, checks **`match.attempt_count >= maxAttempts` → `locked_out` (never consumed)** before the conditional one-time consume; a no-match wrong guess still charges the latest active row and re-checks its cap. So even if multiple active rows ever coexisted, a matched-but-capped row can never be consumed.
+
+Everything r19 established is preserved: one transaction, row lock (`FOR UPDATE` / `BEGIN IMMEDIATE`, dialect-selected), conditional one-time consume requiring exactly one affected row (`changes !== 1` → `already_consumed`), constant-time compare, phone parity, and the email+IP `/email/verify` rate limiter. The r19 guarantees (parallel-correct → one session; parallel-wrong → strictly cap-bounded) still hold.
+
+**Tests (`otpLockoutBypass.test.js`):** dialect-agnostic unit — `insertFreshVerificationCode` leaves exactly one active code; a matched-but-capped older row with a newer under-cap row present → `locked_out` and never consumed. Full-app **email** — lock out code A, fresh `/start` mints code B, then A is rejected (no session), exactly one active code remains, and the happy path (verify newest code B) still mints a session. Full-app **phone** — a seeded, known, locked-out code A is invalidated by a fresh `/phone/start` and can no longer verify; one active code remains. **Verified red:** reverting both halves (drop the invalidate + neutralize the matched-row cap) makes all four tests fail — reproducing the actual bypass (the old locked code A verifies to a session). The r17 credential-bound adoption is unchanged (covered by `otpProfileAdoptionBinding`, still green).
+
+**Confirmation:** there is exactly one consumable active OTP per credential (older codes invalidated atomically at mint), and the per-code cap is enforced on the matched row — so an attacker cannot bypass lockout by minting a fresh code, and cannot accumulate unlimited attempts against a target code.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.
