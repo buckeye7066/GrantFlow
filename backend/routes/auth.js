@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
 import { sendTwilioMessage } from '../services/sms.js'
+import { requireResolvedIdentity } from '../utils/accessControl.js'
 import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlocklistService.js'
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
@@ -3320,7 +3321,14 @@ router.get('/:provider/callback', async (req, res) => {
  */
 router.patch('/onboarding-state', async (req, res) => {
   try {
-    const userId = req.ctx?.userId ?? req.user?.userId ?? req.user?.id ?? null
+    // /api/auth* is exempt from the global enforceResolvedIdentity gate (identity-
+    // ESTABLISHING endpoints must run pre-identity). But this is a user-scoped
+    // STATE MUTATION — a deleted-user JWT or synthetic-id collision keeps
+    // ctx.userId through the exemption and would write auth state / mutate the
+    // reserved system_admin_token row. Gate on the DB-backed identity here, and
+    // use req.ctx.userId ONLY (never a raw req.user.userId/id fallback).
+    if (!requireResolvedIdentity(req, res)) return
+    const userId = req.ctx?.userId ?? null
     if (!userId) {
       return res.status(401).json({ error: 'Not authenticated' })
     }
@@ -3373,7 +3381,12 @@ router.patch('/onboarding-state', async (req, res) => {
     // (e.g. 'has_completed_onboarding = ?'). All values go through ? placeholders.
     // No user input enters the SQL template itself.
     values.push(userId)
-    await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+    const result = await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+    // A zero-row update means no such users row (e.g. a stale token for a deleted
+    // user that slipped the gate). Never report a no-op write as success.
+    if ((result?.changes ?? 0) === 0) {
+      return res.status(404).json({ error: 'User not found' })
+    }
 
     // Return updated state (is_admin + last_login_at feed the admin
     // reinterview gate so this echo matches what login//me will serve).

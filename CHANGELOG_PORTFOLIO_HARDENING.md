@@ -133,6 +133,14 @@ Compat: behavior-preserving for real users, validated tokens, admins, and the si
 
 Compat: behavior-preserving for real users, admins, validated tokens, and the auth flow (`/api/auth/*` exempt); only deleted-user and synthetic-collision JWTs change (now fully denied — no admin, no profile access via any token field).
 
+## Round 16 — close the `/api/auth*` residual: user-scoped auth mutations are identity-gated (see PORTFOLIO_AUDIT.md §5p)
+
+- **`PATCH /api/auth/onboarding-state` now fails closed.** The route is exempt from the structural `enforceResolvedIdentity` gate (identity-establishing endpoints must run pre-identity), so its un-nulled `ctx.userId`/`req.user.userId` let a deleted-user or synthetic-collision JWT write onboarding/tour state (the collision case mutating the reserved `system_admin_token` row). It now calls `requireResolvedIdentity(req, res)` before reading any id, derives the id from `req.ctx.userId` **only** (removed the `req.user?.userId/id` fallback, which isn't guest-nulled on this exempt path), and returns `404` on a zero-row UPDATE instead of a silent success.
+- **Audited all `/api/auth*` handlers:** every other route is identity-**establishing** and self-validates against a presented credential (email/phone/OTP/password/OAuth, refresh-token hash, session revocation), not a claimed caller id — `onboarding-state` was the only user-scoped state mutation.
+- **Fixed a false-positive regression test:** the r15 collision test used a nonexistent `profileId:'p-svc'`, so it never drove the `profileId→profiles.user_id→system_admin_token` rehydration guard. It now uses the seeded `'svc-owned'` (asserting the precondition mapping) so it genuinely exercises the guard.
+
+Compat: behavior-preserving for real resolved users (they update their own onboarding state) and admins; only deleted-user and synthetic-collision JWTs change (now 403, reserved row untouched). New tests: 3 in `ownershipIdentityGates.test.js` (deny deleted/synthetic, allow real), verified red without the gate.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

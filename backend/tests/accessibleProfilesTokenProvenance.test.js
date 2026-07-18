@@ -123,7 +123,13 @@ describe('a synthetic-id JWT WITHOUT service-token provenance is rejected everyw
 
   it('cannot REHYDRATE admin via a token profileId that maps to the synthetic-admin row', async () => {
     // r14 hole: userId nulled but profileId survives -> profiles.user_id -> synthetic row.
-    const viaProfile = { role: 'user', userId: null, profileId: 'p-svc' } // no serviceToken
+    // PRECONDITION: 'svc-owned' MUST actually map to system_admin_token, so this
+    // test genuinely exercises the reserved-synthetic-id guard in the
+    // profileId->userId rehydration path (would FAIL if the guard regressed).
+    const mapping = db.prepare('SELECT user_id FROM profiles WHERE id = ?').get('svc-owned')
+    expect(mapping?.user_id).toBe('system_admin_token')
+
+    const viaProfile = { role: 'user', userId: null, profileId: 'svc-owned' } // no serviceToken
     expect(await isAdminUserWithDb(db, viaProfile)).toBe(false)
     const ids = await getAccessibleProfileIds(db, viaProfile)
     expect(ids).not.toBeNull() // never the all-access sentinel

@@ -22,6 +22,7 @@ const foundationsRouter = (await import('../routes/foundations.js')).default
 const anyaMatchRouter = (await import('../routes/anyaMatchSuggestions.js')).default
 const savedGrantsRouter = (await import('../routes/savedGrants.js')).default
 const pricingRouter = (await import('../routes/pricing.js')).default
+const authRouter = (await import('../routes/auth.js')).default
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -193,6 +194,51 @@ describe('GET /api/pricing/my-estimate/:profileId requires identity + profile ac
       .get('/api/pricing/my-estimate/p-real')
     expect(res.status).not.toBe(403)
     expect(res.status).not.toBe(401)
+  })
+})
+
+describe('PATCH /api/auth/onboarding-state (user-scoped auth MUTATION) is identityResolved-gated', () => {
+  function makeAuthDb() {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY, is_admin INTEGER DEFAULT 0, primary_email TEXT,
+        has_completed_onboarding INTEGER DEFAULT 0, onboarding_completed_at TEXT,
+        last_seen_manual_version INTEGER DEFAULT 0, last_completed_tour_version INTEGER DEFAULT 0,
+        tour_dismissed_at TEXT, guided_cycle_tour_status TEXT, last_login_at TEXT
+      );
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, status TEXT DEFAULT 'active');
+      INSERT INTO users (id, is_admin, primary_email) VALUES ('u-real', 0, 'real@x.example');
+      -- self-healed reserved synthetic row (must NOT be mutable via a colliding JWT)
+      INSERT INTO users (id, is_admin, primary_email) VALUES ('system_admin_token', 1, 'svc@grantflow.app');
+    `)
+    return db
+  }
+
+  it('DENIES a deleted-user JWT (403, no auth-state write)', async () => {
+    const db = makeAuthDb()
+    const res = await request(appWith(db, DELETED, authRouter, '/api/auth'))
+      .patch('/api/auth/onboarding-state').send({ has_completed_onboarding: true })
+    expect(res.status).toBe(403)
+  })
+
+  it('DENIES a synthetic-collision JWT (403, no reserved-row mutation)', async () => {
+    const db = makeAuthDb()
+    const res = await request(appWith(db, SYNTH_COLLISION, authRouter, '/api/auth'))
+      .patch('/api/auth/onboarding-state').send({ has_completed_onboarding: true })
+    expect(res.status).toBe(403)
+    // The reserved synthetic row must be untouched.
+    const row = db.prepare('SELECT has_completed_onboarding FROM users WHERE id = ?').get('system_admin_token')
+    expect(row.has_completed_onboarding).toBe(0)
+  })
+
+  it('ALLOWS a real user to update their own onboarding state (200)', async () => {
+    const db = makeAuthDb()
+    const res = await request(appWith(db, REAL, authRouter, '/api/auth'))
+      .patch('/api/auth/onboarding-state').send({ has_completed_onboarding: true })
+    expect(res.status).toBe(200)
+    const row = db.prepare('SELECT has_completed_onboarding FROM users WHERE id = ?').get('u-real')
+    expect(row.has_completed_onboarding).toBe(1)
   })
 })
 
