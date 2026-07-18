@@ -53,9 +53,19 @@ const SESSION_TTL_MS = 15 * 60_000
 //   browser, server, context, page, meta, createdAt,
 //   screencastCdp,   // CDP session driving Page.startScreencast (1 active stream)
 //   inputCdp,        // CDP session for Input.* dispatch
+//   keyframeTimer,   // idle-keyframe interval (see attachScreencast)
 //   lastFrameMeta,   // { deviceWidth, deviceHeight, ... } from the latest frame
 // }
 const sessions = new Map()
+
+// JPEG quality for keyframe screenshots (matches the screencast stream quality).
+const KEYFRAME_QUALITY = 60
+// When the compositor is idle (no screencast frame for this long) we push a
+// fresh screenshot keyframe so the mirror never silently goes blank/stale. A
+// fully-loaded static login page emits NO Page.screencastFrame until something
+// repaints, so without this the canvas stays a blank white box forever even
+// though the stream is "connected" — the reported bug. ~1 fps idle is cheap.
+const KEYFRAME_IDLE_MS = Math.max(250, Number(process.env.CLOUD_LOGIN_KEYFRAME_MS) || 1000)
 
 const DEFAULT_PROVIDER = 'self_hosted'
 
@@ -102,6 +112,8 @@ function sweepExpired() {
 }
 
 async function closeQuietly(s) {
+  try { if (s?.keyframeTimer) clearInterval(s.keyframeTimer) } catch { /* ignore */ }
+  if (s) s.keyframeTimer = null
   try { await s?.screencastCdp?.detach() } catch { /* ignore */ }
   try { await s?.inputCdp?.detach() } catch { /* ignore */ }
   try { await s?.browser?.close() } catch { /* ignore */ }
@@ -215,6 +227,7 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
     browser, server, context, page,
     screencastCdp: null,
     inputCdp: null,
+    keyframeTimer: null,
     lastFrameMeta: null,
     meta: { userId, profileId: String(profileId), portalHost, loginUrl: target, label, captureRequestId },
     createdAt: Date.now(),
@@ -238,35 +251,93 @@ export function getCloudLoginSession(liveSessionId) {
 }
 
 /**
- * Open (once) a CDP screencast on the live page and invoke onFrame for every
- * frame. The caller (SSE route) acks each frame and forwards it to the client;
+ * Capture ONE JPEG keyframe of the live page via CDP and shape it exactly like a
+ * Page.screencastFrame ({ data, metadata }) so the same draw path handles both.
+ *
+ * This is the fix for the "connected but blank white canvas" bug: CDP
+ * Page.startScreencast only emits a frame when the compositor REPAINTS, and a
+ * static, already-loaded login page produces no repaint — so the viewer would
+ * wait forever for a first frame it can never receive (and, seeing nothing, the
+ * user never interacts to trigger one: a deadlock). An explicit screenshot gives
+ * the canvas real pixels immediately, independent of any repaint.
+ *
+ * Best-effort: returns null (never throws) if the page is gone / the screenshot
+ * fails, so it can never break the live stream.
+ */
+export async function captureKeyframe(cdp, page, quality = KEYFRAME_QUALITY) {
+  try {
+    if (!cdp || !page) return null
+    const vp = (typeof page.viewportSize === 'function' && page.viewportSize()) || { width: 1280, height: 900 }
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality })
+    if (!shot || !shot.data) return null
+    return {
+      data: shot.data,
+      metadata: {
+        deviceWidth: vp.width,
+        deviceHeight: vp.height,
+        pageScaleFactor: 1,
+        offsetTop: 0,
+        scrollOffsetX: 0,
+        scrollOffsetY: 0,
+        timestamp: Date.now() / 1000,
+        keyframe: true,
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Attach the frame source to a live session and invoke onFrame for every frame.
+ * The frame source is CDP Page.startScreencast (live repaints) PLUS an immediate
+ * keyframe screenshot and an idle-keyframe net so the viewer paints even when the
+ * compositor is quiet. The caller (SSE route) forwards each frame to the client;
  * we record the latest frame metadata so the input route can scale normalized
- * coordinates. Returns a stop() that detaches and stops the screencast.
+ * coordinates. Returns a stop() that tears down the screencast + keyframe timer.
+ *
+ * Exported (taking the session record directly) so it is unit-testable without a
+ * real browser: pass a fake session whose page.context().newCDPSession() yields a
+ * fake CDP that never emits Page.screencastFrame, and assert onFrame still fires.
  *
  * Only ONE screencast viewer is supported per live session (the capture flow is
  * single-viewer by design). Re-attaching stops any prior screencast first.
  */
-export async function startScreencast(liveSessionId, onFrame, { quality = 60, maxWidth = 1280, maxHeight = 1280 } = {}) {
-  const s = sessions.get(liveSessionId)
+export async function attachScreencast(s, onFrame, { quality = KEYFRAME_QUALITY, maxWidth = 1280, maxHeight = 1280 } = {}) {
   if (!s || !s.page) return null
-  // Tear down a previous viewer's screencast if one was left attached.
+  const liveSessionId = s.__id
+  // Tear down a previous viewer's screencast / keyframe loop if one was left on.
   if (s.screencastCdp) {
     try { await s.screencastCdp.send('Page.stopScreencast') } catch { /* ignore */ }
     try { await s.screencastCdp.detach() } catch { /* ignore */ }
     s.screencastCdp = null
   }
+  if (s.keyframeTimer) { clearInterval(s.keyframeTimer); s.keyframeTimer = null }
+
   const cdp = await s.page.context().newCDPSession(s.page)
   s.screencastCdp = cdp
   let frameCount = 0
+  let lastFrameAt = 0
+
+  // Single emit path for both live screencast frames and keyframe screenshots:
+  // record metadata (for input coordinate scaling), mark the time (idle net),
+  // and forward. A consumer error never kills the stream.
+  const emit = (frame) => {
+    if (!frame || !frame.data) return
+    s.lastFrameMeta = frame.metadata || s.lastFrameMeta
+    lastFrameAt = Date.now()
+    try { onFrame(frame) } catch { /* consumer error — ignore, keep stream alive */ }
+  }
+
   cdp.on('Page.screencastFrame', async (frame) => {
     try {
       if (frameCount === 0) log.info('cloud login first frame delivered', { liveSessionId })
       frameCount += 1
-      s.lastFrameMeta = frame?.metadata || s.lastFrameMeta
-      onFrame({ data: frame.data, metadata: frame.metadata })
-    } catch { /* consumer error — ignore, keep stream alive */ }
+      emit({ data: frame.data, metadata: frame.metadata })
+    } catch { /* ignore */ }
     try { await cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }) } catch { /* ignore */ }
   })
+
   // Enable the Page domain BEFORE starting the screencast. A raw CDP session
   // (Playwright's newCDPSession) does not auto-enable Page; without it some
   // Chromium builds accept Page.startScreencast but never emit Page.screencastFrame
@@ -279,12 +350,43 @@ export async function startScreencast(liveSessionId, onFrame, { quality = 60, ma
     maxHeight,
     everyNthFrame: 1,
   })
+
+  // Immediate keyframe — the canvas gets real pixels NOW, without waiting for a
+  // repaint a static page will never produce.
+  const initial = await captureKeyframe(cdp, s.page, quality)
+  if (initial) emit(initial)
+
+  // Idle keyframe net: while the compositor is quiet (no frame within
+  // KEYFRAME_IDLE_MS) push a fresh screenshot, so the mirror stays live even for
+  // changes that happen WITHOUT local input (a 2FA redirect, a server push) and
+  // so a missed initial screencast frame self-heals within ~1s.
+  s.keyframeTimer = setInterval(async () => {
+    if (Date.now() - lastFrameAt < KEYFRAME_IDLE_MS) return
+    const kf = await captureKeyframe(cdp, s.page, quality)
+    if (kf) emit(kf)
+  }, KEYFRAME_IDLE_MS)
+  if (typeof s.keyframeTimer.unref === 'function') s.keyframeTimer.unref()
+
   log.info('cloud login screencast started', { liveSessionId, quality, maxWidth, maxHeight })
   return async function stop() {
+    if (s.keyframeTimer) { clearInterval(s.keyframeTimer); s.keyframeTimer = null }
     try { await cdp.send('Page.stopScreencast') } catch { /* ignore */ }
     try { await cdp.detach() } catch { /* ignore */ }
     if (s.screencastCdp === cdp) s.screencastCdp = null
   }
+}
+
+/**
+ * Open (once) a CDP screencast on the live page identified by liveSessionId and
+ * invoke onFrame for every frame. Thin lookup wrapper over attachScreencast.
+ * Returns a stop() that detaches and stops the screencast, or null if the
+ * session is gone.
+ */
+export async function startScreencast(liveSessionId, onFrame, opts = {}) {
+  const s = sessions.get(liveSessionId)
+  if (!s || !s.page) return null
+  s.__id = liveSessionId
+  return attachScreencast(s, onFrame, opts)
 }
 
 /** Lazily create (and cache) the Input.* CDP session for a live session. */
