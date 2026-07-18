@@ -18,8 +18,11 @@ import { buildThesis } from '../profileIntelligence.js';
 import { SAMPLE_VFD_PROFILE } from './fixtures/fakeFetch.mjs';
 import {
   PAGE_FACT_COLUMNS, PAGE_FACT_MIGRATION_COLUMNS, PAGE_FACT_TRISTATE_FIELDS,
-  cleanFieldProvenance, cleanSchemaVersion, mergeFieldProvenance,
+  PAGE_FACT_OS_STORE_COLUMNS,
+  cleanEligibilityBullets, cleanFieldProvenance, cleanSchemaVersion, mergeFieldProvenance,
+  buildLivePageFactColumns, buildOsStorePageFactColumns,
 } from '../pageFacts.js';
+import { SCHEMA_DDL } from '../storage.js';
 
 function baseInput(over = {}) {
   return {
@@ -204,6 +207,63 @@ test('validators reject blanks, non-positive/non-integer versions, and malformed
   assert.equal(cleanFieldProvenance('not json'), null);
   assert.equal(cleanFieldProvenance({ k: 'scalar-not-evidence' }), null);
   assert.deepEqual(mergeFieldProvenance('{}', { a: { value: 1 } }), { a: { value: 1 } });
+});
+
+// ---- finding #2: validators must not COERCE malformed structured values -----
+
+test('cleanEligibilityBullets drops non-string items (never "[object Object]")', () => {
+  assert.deepEqual(cleanEligibilityBullets([{}]), []);
+  assert.deepEqual(cleanEligibilityBullets(['ok', {}, 42, null, ' trim ']), ['ok', 'trim']);
+  assert.deepEqual(cleanEligibilityBullets('[{}]'), []);
+});
+
+test('cleanSchemaVersion rejects booleans and objects (no Number(true)===1 coercion)', () => {
+  assert.equal(cleanSchemaVersion(true), null);
+  assert.equal(cleanSchemaVersion(false), null);
+  assert.equal(cleanSchemaVersion({}), null);
+  assert.equal(cleanSchemaVersion([]), null);
+  assert.equal(cleanSchemaVersion(3), 3);
+});
+
+test('cleanFieldProvenance drops entries with no own `value`, and they never overwrite good evidence', () => {
+  // An entry that is a bare {} (no `value`) is not evidence — dropped.
+  assert.equal(cleanFieldProvenance({ is_loan: {} }), null);
+  assert.deepEqual(cleanFieldProvenance({ is_loan: {}, national: { value: true } }), { national: { value: true } });
+  // During a merge, a value-less incoming entry cannot clobber a stored one.
+  const good = { is_loan: { value: false, source: 'https://x/1' } };
+  assert.deepEqual(mergeFieldProvenance(good, { is_loan: {} }), good);
+});
+
+// ---- finding #3: the registry actually DRIVES the real consumers ------------
+
+test('registry drives the OS-store schema surface (SCHEMA_DDL + applySchema)', () => {
+  for (const c of PAGE_FACT_COLUMNS) assert.ok(SCHEMA_DDL.includes(c.osStoreColumn), `SCHEMA_DDL declares ${c.osStoreColumn}`);
+  const raw = new Database(':memory:');
+  applySchema(raw);
+  const cols = new Set(raw.prepare('PRAGMA table_info(funding_opportunities)').all().map((r) => r.name));
+  for (const name of PAGE_FACT_OS_STORE_COLUMNS) assert.ok(cols.has(name), `applySchema created ${name}`);
+  raw.close();
+});
+
+test('buildOsStorePageFactColumns emits EXACTLY the registry OS-store columns', () => {
+  const emitted = Object.keys(buildOsStorePageFactColumns(null, makeOpportunity(baseInput({
+    eligibility_text: 't', eligibility_bullets: ['b'], page_fact_schema_version: 1,
+    field_provenance: { is_loan: { value: false } },
+  }))));
+  assert.deepEqual(emitted.sort(), [...PAGE_FACT_OS_STORE_COLUMNS].sort());
+});
+
+test('buildLivePageFactColumns maps EXACTLY the registry live columns when all facts present', () => {
+  const osRow = {
+    eligibility_text: 'Nonprofits only.',
+    eligibility_bullets_json: JSON.stringify(['A bullet']),
+    page_fact_schema_version: 2,
+    field_provenance_json: JSON.stringify({ national: { value: true } }),
+  };
+  const emitted = Object.keys(buildLivePageFactColumns(osRow));
+  assert.deepEqual(emitted.sort(), PAGE_FACT_COLUMNS.map((c) => c.liveColumn).sort());
+  // ...and NOTHING is emitted for an all-empty row.
+  assert.deepEqual(buildLivePageFactColumns({}), {});
 });
 
 // ---- finding #2: applySchema heals the OS-store columns on a pre-change DB ----

@@ -134,6 +134,55 @@ describe('page-fact provenance — zero behavior change when unset', () => {
   })
 })
 
+describe('page-fact provenance — LIVE-DB per-key provenance merge (finding #1)', () => {
+  it('two persists of the same live row MERGE provenance per key (both survive)', async () => {
+    const db = makeMigratedDb()
+    // First run learns is_loan; second run (same id) learns national.
+    await persistRun(db, makeMemStore([osRow({
+      field_provenance_json: JSON.stringify({ is_loan: { value: false, source: 'https://a' } }),
+    })]), {})
+    await persistRun(db, makeMemStore([osRow({
+      field_provenance_json: JSON.stringify({ national: { value: true, source: 'https://b' } }),
+    })]), {})
+    const prov = JSON.parse(
+      db.prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ?').get('os-1').field_provenance,
+    )
+    expect(prov.is_loan.value).toBe(false) // preserved from the first write
+    expect(prov.national.value).toBe(true) // added by the second write
+  })
+
+  it('a re-crawl that lacks provenance leaves the stored live provenance untouched', async () => {
+    const db = makeMigratedDb()
+    await persistRun(db, makeMemStore([osRow({
+      field_provenance_json: JSON.stringify({ is_loan: { value: false } }),
+    })]), {})
+    await persistRun(db, makeMemStore([osRow()]), {}) // no provenance this run
+    const prov = JSON.parse(
+      db.prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ?').get('os-1').field_provenance,
+    )
+    expect(prov).toEqual({ is_loan: { value: false } })
+  })
+
+  it('a partial dedup write onto an existing live canonical row keeps prior keys', async () => {
+    const db = makeMigratedDb()
+    // Seed a live row (id os-1) with is_loan provenance already stored.
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, canonical_opportunity_key, fingerprint, field_provenance)
+       VALUES ('os-1', 'Rural Facilities Grant', 'ck-1', 'ck-1', '{"is_loan":{"value":false}}')`,
+    ).run()
+    // A new OS id that dedups to os-1 via the SAME canonical key, carrying national.
+    await persistRun(db, makeMemStore([osRow({
+      id: 'os-2',
+      field_provenance_json: JSON.stringify({ national: { value: true } }),
+    })]), {})
+    const prov = JSON.parse(
+      db.prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ?').get('os-1').field_provenance,
+    )
+    expect(prov.is_loan.value).toBe(false)
+    expect(prov.national.value).toBe(true)
+  })
+})
+
 describe('page-fact provenance — round-trips when provided', () => {
   it('(b) osOppToLiveRow carries the fields into the live catalog columns', async () => {
     const db = makeMigratedDb()

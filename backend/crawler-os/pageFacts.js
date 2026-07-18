@@ -2,30 +2,31 @@
 //
 // THE single registry for Phase 0.1 page-fact provenance — the additive,
 // NULL-default storage a later profile-blind extractor will populate. Every
-// producer/consumer of these fields reads THIS module so the OS shape, the OS
-// store, the live catalog columns, the boot schema invariant, and the drift
-// check can never silently drift apart (the repo's registry + totality rule).
+// producer/consumer of these fields is DRIVEN by this module (column lists,
+// OS->live mapping, validators) so the OS shape, the OS store, the live catalog
+// columns, the boot schema invariant, and the drift check can never silently
+// drift apart (the repo's registry + totality rule).
 //
 // TWO vocabularies exist BY DESIGN and this registry is the ONLY bridge:
 //   - OS shape (contract.makeOpportunity): `funding.is_loan` /
 //     `funding.requires_cost_share` / `geography.national`.
 //   - LIVE catalog (funding_opportunities): `is_loan` / `requires_match` /
 //     `is_national`.
-// `osOppToLiveRow` is the only place allowed to hand-map these names.
+// `buildLivePageFactColumns` is the one place that maps OS-store -> live names.
 
 // Pure data + tiny pure validators. No I/O, no DB, no network.
 
 /**
- * The additive page-fact COLUMNS, each mapping the OS memory/SQL-store column
- * name to the live `funding_opportunities` column name.
- *   kind drives validation + (de)serialization at the write sites.
+ * The additive page-fact COLUMNS, each mapping the OS memory/SQL-store column to
+ * the live `funding_opportunities` column, with the SQL type at each side and a
+ * `kind` that drives validation + (de)serialization at every write site.
  */
 export const PAGE_FACT_COLUMNS = Object.freeze([
-  Object.freeze({ field: 'eligibility_text', osStoreColumn: 'eligibility_text', liveColumn: 'eligibility_text', kind: 'text' }),
-  Object.freeze({ field: 'eligibility_bullets', osStoreColumn: 'eligibility_bullets_json', liveColumn: 'eligibility_bullets', kind: 'json_array' }),
-  Object.freeze({ field: 'page_fact_schema_version', osStoreColumn: 'page_fact_schema_version', liveColumn: 'page_fact_schema_version', kind: 'positive_int' }),
-  Object.freeze({ field: 'field_provenance', osStoreColumn: 'field_provenance_json', liveColumn: 'field_provenance', kind: 'json_object' }),
-]);
+  { field: 'eligibility_text', osStoreColumn: 'eligibility_text', osStoreType: 'TEXT', liveColumn: 'eligibility_text', liveType: 'TEXT', kind: 'text' },
+  { field: 'eligibility_bullets', osStoreColumn: 'eligibility_bullets_json', osStoreType: 'TEXT', liveColumn: 'eligibility_bullets', liveType: 'TEXT', kind: 'json_array' },
+  { field: 'page_fact_schema_version', osStoreColumn: 'page_fact_schema_version', osStoreType: 'INTEGER', liveColumn: 'page_fact_schema_version', liveType: 'INTEGER', kind: 'positive_int' },
+  { field: 'field_provenance', osStoreColumn: 'field_provenance_json', osStoreType: 'TEXT', liveColumn: 'field_provenance', liveType: 'TEXT', kind: 'json_object' },
+].map(Object.freeze));
 
 /**
  * Live catalog columns ADDED by migration 144 / pg 0148. `eligibility_bullets`
@@ -38,9 +39,15 @@ export const PAGE_FACT_MIGRATION_COLUMNS = Object.freeze([
   Object.freeze({ column: 'field_provenance', type: 'TEXT' }),
 ]);
 
-/** Every OS-store column these facts occupy — the applySchema/SCHEMA_DDL surface. */
-export const PAGE_FACT_OS_STORE_COLUMNS = Object.freeze(
-  PAGE_FACT_COLUMNS.map((c) => c.osStoreColumn),
+/** Live column NAMES the drift check / migration must verify. */
+export const PAGE_FACT_MIGRATION_COLUMN_NAMES = Object.freeze(PAGE_FACT_MIGRATION_COLUMNS.map((c) => c.column));
+
+/** OS-store column names these facts occupy (the merge/upsert surface). */
+export const PAGE_FACT_OS_STORE_COLUMNS = Object.freeze(PAGE_FACT_COLUMNS.map((c) => c.osStoreColumn));
+
+/** `col type` defs for the OS-store columns — DRIVES applySchema + SCHEMA_DDL. */
+export const PAGE_FACT_OS_STORE_COLUMN_DEFS = Object.freeze(
+  PAGE_FACT_COLUMNS.map((c) => `${c.osStoreColumn} ${c.osStoreType}`),
 );
 
 /**
@@ -65,7 +72,11 @@ export function cleanEligibilityText(v) {
   return s ? s : null;
 }
 
-/** Array (or JSON-string array) of nonblank bullets; [] when none. */
+/**
+ * Array of nonblank STRING bullets; [] when none. Non-string items (objects,
+ * numbers, null) are DROPPED — never coerced (`[{}]` must not become "[object
+ * Object]"). Accepts an array or a JSON-string array.
+ */
 export function cleanEligibilityBullets(v) {
   let arr = v;
   if (typeof v === 'string') {
@@ -76,28 +87,34 @@ export function cleanEligibilityBullets(v) {
   if (!Array.isArray(arr)) return [];
   const out = [];
   for (const item of arr) {
-    const s = String(item ?? '').trim();
+    if (typeof item !== 'string') continue; // ONLY string items — never coerce
+    const s = item.trim();
     if (s) out.push(s);
   }
   return out;
 }
 
 /**
- * A valid POSITIVE INTEGER schema version, else null. Guards the live INTEGER
- * column: Postgres rejects '' / 'abc', and 0 / negatives are not real versions.
+ * A valid POSITIVE INTEGER schema version, else null. Accepts a real number or
+ * an ALL-DIGITS string only — booleans (`Number(true) === 1`), objects, NaN, and
+ * fractional / signed values are rejected. Guards the live INTEGER column
+ * (Postgres rejects '' / 'abc') and the meaning of "version".
  */
 export function cleanSchemaVersion(v) {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(v);
+  let n;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && /^\d+$/.test(v.trim())) n = Number(v.trim());
+  else return null; // booleans, objects, null, NaN-y strings
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /**
  * A nonempty, VALIDATED provenance object, else null. Accepts an object or a
- * JSON string; drops malformed / non-object entries; returns null when nothing
- * valid remains (so '' / '{}' / '[]' / bad JSON never overwrite a stored fact).
- * Each kept entry is a plain object (the `{ value, evidence_snippet, source }`
- * shape); a bare scalar value is not evidence and is dropped.
+ * JSON string. Each kept ENTRY must be a serializable plain object that carries
+ * at least an own `value` property (the stated fact); entries without `value`
+ * (`{}`, `{ source }`), non-objects, arrays, or unserializable values are
+ * DROPPED — so `{}` / `[]` / bad JSON / `{ is_loan: {} }` never overwrite a
+ * stored fact during a merge. Returns null when nothing valid remains.
  */
 export function cleanFieldProvenance(v) {
   let obj = v;
@@ -109,7 +126,12 @@ export function cleanFieldProvenance(v) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
   const out = {};
   for (const [key, entry] of Object.entries(obj)) {
-    if (entry && typeof entry === 'object' && !Array.isArray(entry)) out[key] = entry;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    if (!Object.prototype.hasOwnProperty.call(entry, 'value')) continue; // must carry a stated value
+    let serialized;
+    try { serialized = JSON.stringify(entry); } catch { continue; } // reject circular / unserializable
+    if (typeof serialized !== 'string') continue;
+    out[key] = entry;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -118,7 +140,8 @@ export function cleanFieldProvenance(v) {
  * Merge two provenance objects per canonical field: incoming wins for a key it
  * supplies, existing keys are PRESERVED (a re-crawl that lacks a fact never
  * drops one already learned — mirrors the amount_status "never downgrade" rule).
- * Returns null only when neither side has a valid fact.
+ * Both sides are validated first, so a malformed incoming entry can never wipe a
+ * good stored one. Returns null only when neither side has a valid fact.
  */
 export function mergeFieldProvenance(existing, incoming) {
   const a = cleanFieldProvenance(existing);
@@ -129,14 +152,85 @@ export function mergeFieldProvenance(existing, incoming) {
   return { ...a, ...b };
 }
 
+/** Validate a raw value by its registry `kind`; null when not a real fact. */
+function cleanByKind(kind, v) {
+  switch (kind) {
+    case 'text': return cleanEligibilityText(v);
+    case 'json_array': { const a = cleanEligibilityBullets(v); return a.length ? a : null; }
+    case 'positive_int': return cleanSchemaVersion(v);
+    case 'json_object': return cleanFieldProvenance(v);
+    default: return null;
+  }
+}
+
+/**
+ * buildLivePageFactColumns — map an OS-store row to the LIVE catalog columns for
+ * the populated page facts ONLY (the single OS->live name mapping). Validated
+ * per `kind`; JSON kinds are serialized. An unset/blank/malformed fact is
+ * omitted, so it never overwrites a stored value and the live INTEGER column
+ * never receives ''. `field_provenance` still needs a per-key merge against the
+ * live row — the caller (persistRun) does that with mergeFieldProvenance().
+ */
+export function buildLivePageFactColumns(osRow) {
+  const out = {};
+  for (const col of PAGE_FACT_COLUMNS) {
+    const cleaned = cleanByKind(col.kind, osRow?.[col.osStoreColumn]);
+    if (cleaned === null) continue;
+    out[col.liveColumn] = (col.kind === 'json_array' || col.kind === 'json_object')
+      ? JSON.stringify(cleaned)
+      : cleaned;
+  }
+  return out;
+}
+
+/**
+ * buildOsStorePageFactColumns — the OS-store column shape to persist for a
+ * write, validated and MERGED with any fact already on the row (`existing`) so a
+ * blank/empty/malformed incoming fact never overwrites a stored one; provenance
+ * is merged per canonical field. `opp` is a canonical OS Opportunity (contract
+ * field names); `existing` is a prior OS-store row (osStoreColumn names) or null.
+ * Returns exactly the PAGE_FACT_OS_STORE_COLUMNS keys.
+ */
+export function buildOsStorePageFactColumns(existing, opp) {
+  const incomingText = cleanEligibilityText(opp?.eligibility_text);
+  const incomingBullets = cleanEligibilityBullets(opp?.eligibility_bullets);
+  const incomingVersion = cleanSchemaVersion(opp?.page_fact_schema_version);
+  const existingText = existing ? cleanEligibilityText(existing.eligibility_text) : null;
+  const existingBullets = existing ? cleanEligibilityBullets(existing.eligibility_bullets_json) : [];
+  const existingVersion = existing ? cleanSchemaVersion(existing.page_fact_schema_version) : null;
+  const mergedProvenance = mergeFieldProvenance(existing ? existing.field_provenance_json : null, opp?.field_provenance);
+  const bullets = incomingBullets.length ? incomingBullets : existingBullets;
+  return {
+    eligibility_text: incomingText ?? existingText,
+    eligibility_bullets_json: JSON.stringify(bullets),
+    page_fact_schema_version: incomingVersion ?? existingVersion,
+    field_provenance_json: mergedProvenance ? JSON.stringify(mergedProvenance) : null,
+  };
+}
+
+/** Does this canonical OS Opportunity carry ANY valid page fact worth persisting? */
+export function hasAnyPageFact(opp) {
+  return Boolean(
+    cleanEligibilityText(opp?.eligibility_text) ||
+    cleanEligibilityBullets(opp?.eligibility_bullets).length ||
+    cleanSchemaVersion(opp?.page_fact_schema_version) ||
+    cleanFieldProvenance(opp?.field_provenance),
+  );
+}
+
 export default {
   PAGE_FACT_COLUMNS,
   PAGE_FACT_MIGRATION_COLUMNS,
+  PAGE_FACT_MIGRATION_COLUMN_NAMES,
   PAGE_FACT_OS_STORE_COLUMNS,
+  PAGE_FACT_OS_STORE_COLUMN_DEFS,
   PAGE_FACT_TRISTATE_FIELDS,
   cleanEligibilityText,
   cleanEligibilityBullets,
   cleanSchemaVersion,
   cleanFieldProvenance,
   mergeFieldProvenance,
+  buildLivePageFactColumns,
+  buildOsStorePageFactColumns,
+  hasAnyPageFact,
 };

@@ -15,8 +15,7 @@
 import { ACCEPTABLE_REALITY_STATUSES, canonicalOpportunityKey } from './contract.js';
 import { PIPELINE_STAGE, isValidStage, assertTransition } from './stages.js';
 import {
-  cleanEligibilityText, cleanEligibilityBullets, cleanSchemaVersion,
-  cleanFieldProvenance, mergeFieldProvenance,
+  buildOsStorePageFactColumns, hasAnyPageFact, PAGE_FACT_OS_STORE_COLUMN_DEFS,
 } from './pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
@@ -71,7 +70,7 @@ export function upsertOpportunity(store, opp) {
     // Do NOT discard page facts THIS crawler supplied — merge them into the
     // canonical row, never dropping a fact already stored there.
     if (hasAnyPageFact(opp)) {
-      store.update('funding_opportunities', { id: existing.id }, mergePageFactColumns(existing, opp));
+      store.update('funding_opportunities', { id: existing.id }, buildOsStorePageFactColumns(existing, opp));
     }
     return { stored: false, deduped: true, canonical_id: existing.id };
   }
@@ -79,9 +78,10 @@ export function upsertOpportunity(store, opp) {
   // Page-fact provenance (Phase 0.1) — additive, null-default; validated and
   // MERGED with any fact already stored on this id so a re-crawl that lacks a
   // fact never nulls out one already learned (mirrors amount_status). Nothing
-  // populates these yet — for existing rows they stay null/[].
+  // populates these yet — for existing rows they stay null/[]. All page-fact
+  // column shaping lives in the pageFacts registry (single source of truth).
   const existingById = store.get('funding_opportunities', { id: opp.id });
-  const pageFacts = mergePageFactColumns(existingById, opp);
+  const pageFacts = buildOsStorePageFactColumns(existingById, opp);
 
   store.upsert('funding_opportunities', ['id'], {
     id: opp.id, source_id: opp.source_id, external_id: opp.external_id, kind: opp.kind,
@@ -136,42 +136,6 @@ function recordOpportunitySource(store, opportunityId, opp, now) {
     external_id: opp.external_id ?? null, apply_url: opp.apply_url ?? null,
     first_seen_at: now, last_seen_at: now,
   });
-}
-
-/** Does this opportunity carry ANY valid page fact worth persisting? */
-function hasAnyPageFact(opp) {
-  return Boolean(
-    cleanEligibilityText(opp.eligibility_text) ||
-    cleanEligibilityBullets(opp.eligibility_bullets).length ||
-    cleanSchemaVersion(opp.page_fact_schema_version) ||
-    cleanFieldProvenance(opp.field_provenance),
-  );
-}
-
-/**
- * mergePageFactColumns — the OS-store page-fact column values to persist for a
- * write, validated and PRESERVING any fact already on the row that this write
- * lacks. A blank/empty/malformed incoming fact never overwrites a stored one;
- * provenance is merged per canonical field. Returns the OS-store column shape.
- */
-function mergePageFactColumns(existing, opp) {
-  const incomingText = cleanEligibilityText(opp.eligibility_text);
-  const incomingBullets = cleanEligibilityBullets(opp.eligibility_bullets);
-  const incomingVersion = cleanSchemaVersion(opp.page_fact_schema_version);
-  const existingText = existing ? cleanEligibilityText(existing.eligibility_text) : null;
-  const existingBullets = existing ? cleanEligibilityBullets(existing.eligibility_bullets_json) : [];
-  const existingVersion = existing ? cleanSchemaVersion(existing.page_fact_schema_version) : null;
-  const mergedProvenance = mergeFieldProvenance(
-    existing ? existing.field_provenance_json : null,
-    opp.field_provenance,
-  );
-  const bullets = incomingBullets.length ? incomingBullets : existingBullets;
-  return {
-    eligibility_text: incomingText ?? existingText,
-    eligibility_bullets_json: JSON.stringify(bullets),
-    page_fact_schema_version: incomingVersion ?? existingVersion,
-    field_provenance_json: mergedProvenance ? JSON.stringify(mergedProvenance) : null,
-  };
 }
 
 export function getOpportunity(store, id) { return store.get('funding_opportunities', { id }); }
@@ -421,12 +385,14 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   is_rolling INTEGER NOT NULL DEFAULT 0, amount_min REAL, amount_max REAL,
   is_loan INTEGER NOT NULL DEFAULT 0, requires_cost_share INTEGER NOT NULL DEFAULT 0,
   applicant_types_json TEXT, need_categories_json TEXT, geography_json TEXT,
-  -- Page-fact provenance (Phase 0.1) — additive, NULL-default. eligibility_text +
-  -- structured bullets scraped off the page, the extractor schema version, and
-  -- per-field {value, evidence_snippet, source} provenance (also the tri-state
-  -- home for is_loan/requires_cost_share/national — absent key = "not stated").
-  eligibility_text TEXT, eligibility_bullets_json TEXT,
-  page_fact_schema_version INTEGER, field_provenance_json TEXT,
+  -- Page-fact provenance (Phase 0.1) — additive, NULL-default. Column list is
+  -- DRIVEN by the pageFacts registry (PAGE_FACT_OS_STORE_COLUMN_DEFS) so this
+  -- DDL, applySchema's heal loop, and the OS->live mapping can never drift.
+  -- eligibility_text + structured bullets scraped off the page, the extractor
+  -- schema version, and per-field {value, evidence_snippet, source} provenance
+  -- (also the tri-state home for is_loan/requires_cost_share/national — an
+  -- absent key means "not stated").
+  ${PAGE_FACT_OS_STORE_COLUMN_DEFS.join(', ')},
   trust_tier TEXT, reality_status TEXT NOT NULL, content_hash TEXT, evidence_url TEXT,
   fetched_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );

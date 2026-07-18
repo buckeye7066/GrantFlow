@@ -20,9 +20,7 @@ import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
 import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
 import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
-import {
-  cleanEligibilityText, cleanEligibilityBullets, cleanSchemaVersion, cleanFieldProvenance,
-} from '../crawler-os/pageFacts.js';
+import { buildLivePageFactColumns, mergeFieldProvenance } from '../crawler-os/pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -383,27 +381,19 @@ function osOppToLiveRow(o) {
 
   // Page-fact provenance (Phase 0.1) — additive, NULL-default plumbing so a
   // later profile-blind extractor can carry per-field evidence into the catalog.
-  // CONDITIONAL emit: a column is added to the upsert ONLY when the OS row
-  // actually carries that fact. That keeps THREE promises at once —
+  // The OS->live mapping + per-`kind` validation lives in the pageFacts registry
+  // (buildLivePageFactColumns), which emits a live column ONLY when the OS row
+  // carries a VALIDATED fact. That keeps THREE promises at once —
   //   (1) a run that learned nothing writes the exact same row as before this
   //       change (zero behavior change; minimal fixture tables without these
   //       columns keep working),
   //   (2) an upsert never DOWNGRADES stored provenance back to null on a later
-  //       re-crawl that happens to lack it (mirrors the amount_status rule
-  //       above), and
+  //       re-crawl that lacks it (a blank/empty/malformed fact is omitted, and
+  //       the live INTEGER column never sees '' which Postgres rejects), and
   //   (3) when the extractor DOES provide facts, they round-trip faithfully.
-  // "Populated" is VALIDATED, never just non-null: a blank string, an empty
-  // array, an empty/malformed object, or a non-positive-integer version is NOT a
-  // fact, so it is omitted — it can never overwrite a stored fact, and the live
-  // INTEGER column never sees '' (which Postgres rejects).
-  const eligibilityText = cleanEligibilityText(o.eligibility_text);
-  const bullets = cleanEligibilityBullets(o.eligibility_bullets_json);
-  const schemaVersion = cleanSchemaVersion(o.page_fact_schema_version);
-  const provenance = cleanFieldProvenance(o.field_provenance_json);
-  if (eligibilityText !== null) row.eligibility_text = eligibilityText;
-  if (bullets.length) row.eligibility_bullets = JSON.stringify(bullets);
-  if (schemaVersion !== null) row.page_fact_schema_version = schemaVersion;
-  if (provenance !== null) row.field_provenance = JSON.stringify(provenance);
+  // NOTE: `field_provenance` here is the incoming whole-object; persistRun merges
+  // it per-key with the LIVE row so a partial re-crawl never drops stored keys.
+  Object.assign(row, buildLivePageFactColumns(o));
 
   return row;
 }
@@ -504,6 +494,24 @@ export async function persistRun(db, memStore, run, opts = {}) {
       if (existing && existing.id) targetId = existing.id;
     }
     idRemap.set(o.id, targetId);
+    // LIVE-DB per-key provenance merge: the generic upsert REPLACES the whole
+    // field_provenance JSON, so a partial re-crawl (or a dedup write onto an
+    // existing canonical row) would drop keys another extraction already stored.
+    // Merge the incoming provenance with the target row's current value per
+    // canonical field before writing, so both keys survive. Only when this write
+    // actually carries provenance; a write that lacks it never touches the column
+    // (osOppToLiveRow omits it), so stored provenance is preserved untouched.
+    if (row.field_provenance !== undefined) {
+      let existingProvenance = null;
+      try {
+        const cur = await db
+          .prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ? LIMIT 1')
+          .get(targetId);
+        existingProvenance = cur ? cur.field_provenance : null;
+      } catch { /* column absent on a minimal fixture — upsert handles/ fails as before */ }
+      const merged = mergeFieldProvenance(existingProvenance, row.field_provenance);
+      if (merged) row.field_provenance = JSON.stringify(merged);
+    }
     await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId });
     opportunities += 1;
   }

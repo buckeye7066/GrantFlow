@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { ensureAdminSchemaRepair } from './adminSchemaRepair.js';
+import { PAGE_FACT_MIGRATION_COLUMN_NAMES } from '../crawler-os/pageFacts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -273,9 +274,11 @@ export async function checkFundingOpportunitiesSchema(db) {
 
   if (db?.dialect === 'postgres') {
     try {
+      // Page-fact provenance columns (migration 144 / pg 0148) come from the
+      // pageFacts registry so the drift check can never fall out of sync with
+      // what the migration/boot-invariant add. eligibility_bullets pre-existed.
       const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline',
-        // Page-fact provenance (Phase 0.1, migration 144 / pg 0148). eligibility_bullets pre-existed.
-        'eligibility_text', 'page_fact_schema_version', 'field_provenance']
+        ...PAGE_FACT_MIGRATION_COLUMN_NAMES]
 
       const rows = await db
         .prepare(
@@ -346,8 +349,7 @@ export async function checkFundingOpportunitiesSchema(db) {
     }
     
     const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline',
-      // Page-fact provenance (Phase 0.1, migration 144). eligibility_bullets pre-existed.
-      'eligibility_text', 'page_fact_schema_version', 'field_provenance'];
+      ...PAGE_FACT_MIGRATION_COLUMN_NAMES];
     const fundingMissing = targetColumns.filter((col) => !columnNames.includes(col));
     const missingColumns = [
       ...fundingMissing.map((c) => `funding_opportunities.${c}`),
