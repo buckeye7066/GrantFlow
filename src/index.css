@@ -89,6 +89,32 @@ body {
   }
 }
 
+/* Workspace next-step guidance: the single NEXT incomplete step's label
+   pulsates to draw the eye to the one action to take now. Text-only (opacity),
+   so it never harms readability — the label is fully opaque at both ends of the
+   cycle. A static ring + "Next step" badge on the card carries the emphasis for
+   everyone; the pulse is an additive motion cue that is removed for users who
+   opt out of motion (they keep the ring + badge, never a dead end). */
+@keyframes gf-step-next-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.gf-step-next-label {
+  animation: gf-step-next-pulse 1.8s ease-in-out infinite;
+  will-change: opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gf-step-next-label {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 
 /* :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
