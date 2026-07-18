@@ -9,6 +9,7 @@
 
 import { Resend } from 'resend'
 import twilio from 'twilio'
+import { sendTwilioMessage } from './sms.js'
 import { createLogger } from '../utils/logger.js'
 import { t, dayLabel as localizedDayLabel } from './comms/commsMessages.js'
 import { getUserLanguage } from './comms/profileLanguage.js'
@@ -120,11 +121,11 @@ export async function sendDeadlineSms(phone, { grantTitle, daysRemaining, lang =
   }
 
   try {
-    const msg = await client.messages.create(payload)
-    // Twilio can RESOLVE with a failed/undelivered message (errorCode set)
-    // rather than throwing — don't report those as sent.
-    if (msg?.errorCode || msg?.status === 'failed' || msg?.status === 'undelivered') {
-      console.warn('[deadline-sms] Twilio reported failure:', msg?.errorCode || msg?.status)
+    // Checked send: Twilio can RESOLVE with a failed/undelivered message
+    // (errorCode set) rather than throwing — don't report those as sent.
+    const { ok, error } = await sendTwilioMessage(client, payload)
+    if (!ok) {
+      console.warn('[deadline-sms] Twilio reported failure:', error)
       return false
     }
     log.info('[deadline-sms] Sent to', phone.slice(0, 4) + '***')

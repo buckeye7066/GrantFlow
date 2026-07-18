@@ -38,7 +38,6 @@ import {
   ensureOrganizationAccess,
   ensureProfileAccess,
   getAccessibleOrganizationIds,
-  isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 
@@ -1009,9 +1008,14 @@ router.post('/reminders/plan', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_
 
     if (!deadlines || !milestones || deadlines.length === 0 || milestones.length === 0) {
       const snapshot = await (async () => {
-        if (isAdminUser(user)) return await fetchReminderSnapshot(req.db, lookahead)
+        // DB-backed admin only (never the stale-JWT token claim): a demoted
+        // admin must not get a DB-wide snapshot fed into the generated plan.
+        // getAccessibleOrganizationIds returns null for a real admin (=> unscoped)
+        // or a Set (empty => match nothing) for everyone else.
         const orgIds = await getAccessibleOrganizationIds(req.db, user)
-        return await fetchReminderSnapshot(req.db, lookahead, { organizationIds: Array.from(orgIds ?? []) })
+        return await fetchReminderSnapshot(req.db, lookahead, {
+          organizationIds: orgIds === null ? undefined : Array.from(orgIds),
+        })
       })()
       deadlines = deadlines && deadlines.length > 0 ? deadlines : snapshot.urgentDeadlines;
       milestones = milestones && milestones.length > 0 ? milestones : snapshot.upcomingMilestones;

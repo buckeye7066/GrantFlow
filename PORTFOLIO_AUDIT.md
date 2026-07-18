@@ -119,6 +119,38 @@ An adversarial re-review confirmed F2 fully closed but found F1/F3/F4/F5/F6 were
 
 **New/updated regression suites (follow-up):** `remindersDemotedAdminScope.test.js`, `anyaCompleteStepAuthz.test.js`, expanded `documentIngestionSectionAllowlist.test.js` (nested/reserved/fence), expanded `emailSendHonesty.test.js` (application + deadline). All pass; lint + typecheck green.
 
+## 5c. Round 3 — class-closure across siblings (Codex review of commit `3ce4b8b`)
+
+Round-2 confirmed F3b + F5b clean, but F1b/F4b/F6b were still reachable through MORE sibling paths. Round 3 closes each as a *class*, not a single site.
+
+### F1b (class) — token-claim admin must never gate a read: migrated EVERY route-level `isAdminUser(user)` to DB-backed `req.ctx.isAdmin`
+`isAdminUser()` trusts JWT claims (`user.is_admin`/`user.role`/configured email); `req.ctx.isAdmin` is recomputed from `users.is_admin` every request (`requestContext.js`). `attachRequestContext()` is global (server.js:1748) so `req.ctx` is populated in every route handler. **Full list of migrated callers:**
+
+| File | Line(s) | Kind |
+|------|---------|------|
+| `backend/routes/ai.js` | 1012 (`/reminders/plan`) | **DB-wide read** fed into AI plan (the named F1b sibling) |
+| `backend/routes/expenses.js` | 26, 67 | tenant-scope bypass |
+| `backend/routes/milestones.js` | 54, 85 | tenant-scope bypass |
+| `backend/routes/organizations.js` | 58 | tenant-scope bypass |
+| `backend/routes/grants.js` | 518, 700, 790 | scope/endpoint gate |
+| `backend/routes/opportunities.js` | 1097, 1424, 1469, 1575, 1750 | endpoint gate |
+| `backend/routes/hamiltonAutomation.js` | 1575, 1609, 1634, 1684, 1748, 1895 | admin endpoint gate |
+| `backend/routes/discovery.js` | 323, 1024 | admin endpoint gate |
+| `backend/routes/accessGate.js` | 85 | admin router gate |
+| `backend/routes/pricing.js` | 55 | admin router gate |
+| `backend/routes/samOnboardingAudit.js` | 34 | admin router gate |
+| `backend/routes/admin.js` | 1486, 4013 | admin endpoint gate (already behind `ensureAdmin`; defense-in-depth) |
+| `backend/routes/legacyFunctions.js` | 606 | dropped the `\|\| isAdminUser(user)` token OR-fallback |
+| `backend/routes/vnextApplications.js` | 154, 205, 248 | actor labelling |
+
+The migration is fail-closed (`req.ctx?.isAdmin !== true`) and preserves synthetic-admin behavior (admin/health/anya tokens still resolve `ctx.isAdmin=true` via `buildRequestContext`). Unused `isAdminUser` imports removed. Tests: `requestContextAdminResolution.test.js` (linchpin: demoted role:'admin' JWT → `ctx.isAdmin=false`, scoped), `remindersDemotedAdminScope.test.js` (end-to-end route).
+
+### F4b (class) — array elements bypassed recursive sanitization
+`documentIngestion.js` merged AI-supplied ARRAY elements (`normalizeValue` passes objects through untouched), so for `array<object>` fields (e.g. `university_applications.applications`) an element could carry `__proto__`/`constructor`/`prototype` or arbitrary fields. **Fix:** the array branch now sanitizes object elements recursively — `deepStripReservedKeys` drops reserved keys at every depth, and under an active allowlist element keys are restricted to those present across existing elements (no AI-introduced element fields). Primitive-array dedup unchanged. Tests: `documentIngestionSectionAllowlist.test.js` (array `__proto__` + unlisted element key both dropped; reserved key nested inside an element dropped).
+
+### F6b (class) — Twilio no-throw failures reported as sent
+Twilio RESOLVES (doesn't throw) on failed/undelivered with an `errorCode`. **Fix:** one checked helper `sendTwilioMessage(client, payload)` (in `sms.js`) inspects `errorCode`/`status`; **every Twilio caller routes through it:** `sms.sendSms` (used by `commsService`, `smsConsentService`), `auth.js` `sendPhoneVerificationCode`, and `deadlineEmailSmsService.sendDeadlineSms`. The **phone-OTP `/phone/start` was the worst sibling**: it stamped the resend cooldown (`last_sent_at`) and returned 202 "sent" before an un-awaited, unchecked send. It now **awaits** the checked send and only persists the code + stamps cooldown + returns 202 on success; a real delivery failure returns 502 with no cooldown (the user can retry immediately). Tests: `smsSendHonesty.test.js` (`sendTwilioMessage` + `sendSms`: errorCode/status failure → `ok:false`).
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

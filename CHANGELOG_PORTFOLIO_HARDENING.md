@@ -34,6 +34,14 @@ An adversarial re-review found each first-round fix had an adjacent bypass; all 
 
 Compat: `sendResendEmail` is additive (exported). `mergeSectionData` allowlist semantics tightened — an **empty** array now means "accept nothing" (was "no restriction"); the only callers pass either `null` (no restriction) or a non-empty `config.keys`, so production behavior is unchanged.
 
+## Round 3 — class-closure across siblings (see PORTFOLIO_AUDIT.md §5c)
+
+- **Admin authority is now uniformly DB-backed.** Every route-level `isAdminUser(user)` (token-claim) admin check was migrated to `req.ctx.isAdmin` (recomputed from `users.is_admin` each request) across 14 route files, incl. the `/api/ai/reminders/plan` DB-wide read, expenses/milestones/organizations tenant-scope branches, and the Hamilton/opportunities/pricing/accessGate admin gates. A demoted admin holding an unexpired `role:'admin'` JWT is now treated as non-admin. Synthetic admin/health/anya tokens are unaffected.
+- **Document AI array fields are sanitized recursively.** Object elements of `array<object>` profile fields (e.g. `university_applications.applications`) now drop `__proto__`/`constructor`/`prototype` at every depth and, under the schema allowlist, cannot introduce new element fields.
+- **Twilio sends report failure honestly.** A single `sendTwilioMessage` helper (in `sms.js`) checks Twilio's resolved `errorCode`/`status`; all SMS callers route through it. **User-visible:** phone-OTP `/phone/start` now only reports "code sent" and starts the resend cooldown when the SMS actually went out — a Twilio failure returns 502 and lets the user retry immediately instead of silently cooling them down with no message.
+
+Compat: `sendTwilioMessage` is additive (exported from `sms.js`). `/phone/start` returns a new `502 { error_type: 'sms_send_failed' }` on genuine delivery failure (previously a misleading 202). The `isAdminUser` migration is behavior-preserving for real admins and synthetic tokens; only stale-JWT demoted admins change (now correctly denied).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

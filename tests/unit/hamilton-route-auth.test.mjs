@@ -26,6 +26,7 @@ import Database from 'better-sqlite3'
 
 import hamiltonRouter from '../../backend/routes/hamiltonAutomation.js'
 import { recordSession } from '../../backend/services/hamilton/hamiltonCredentialSessionService.js'
+import { attachRequestContext } from '../../backend/middleware/requestContext.js'
 
 // Two users, each owning one profile.
 const USERS = {
@@ -43,6 +44,8 @@ function makeDb() {
     INSERT INTO profiles (id, user_id, display_name) VALUES ('p-B', 'u-B', 'Profile B');
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-A', 'a@test.com', 0, 'user');
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-B', 'b@test.com', 0, 'user');
+    -- The canonical admin is DB-backed (users.is_admin), NOT a token/email claim.
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-admin', 'buckeye7066@gmail.com', 1, 'admin');
   `)
   return db
 }
@@ -56,6 +59,9 @@ function makeApp(db) {
     if (who && USERS[who]) req.user = USERS[who]
     next()
   })
+  // Mirror production: attachRequestContext resolves the DB-backed req.ctx
+  // (isAdmin, accessible sets) that the routes now authorize against.
+  app.use(attachRequestContext())
   app.use('/api/hamilton/automation', hamiltonRouter)
   return app
 }

@@ -56,6 +56,33 @@ describe('mergeSectionData allowlist (untrusted-AI hardening)', () => {
     expect(data.academic_status).not.toHaveProperty('education_level')
   })
 
+  it('sanitizes ARRAY-of-object elements: drops __proto__ and unlisted element keys', () => {
+    // university_applications.applications is array<object> with no item schema.
+    const existing = { applications: [{ school: 'Baseline U', status: 'draft' }] }
+    const incoming = JSON.parse(
+      '{"applications":[{"school":"MIT","status":"applied","secret_admin_flag":true,"__proto__":{"polluted":true}}]}',
+    )
+    const { data } = mergeSectionData(existing, incoming, ['applications'])
+    const mit = data.applications.find((a) => a.school === 'MIT')
+    expect(mit).toBeTruthy()
+    expect(mit.status).toBe('applied')
+    // Unlisted element key (not present in existing elements) dropped.
+    expect(mit).not.toHaveProperty('secret_admin_flag')
+    // Reserved key dropped; global prototype not polluted.
+    expect(Object.prototype.hasOwnProperty.call(mit, '__proto__')).toBe(false)
+    expect({}.polluted).toBeUndefined()
+  })
+
+  it('strips reserved keys nested INSIDE an array element object at any depth', () => {
+    const existing = { applications: [{ school: '', meta: {} }] }
+    const incoming = JSON.parse('{"applications":[{"school":"X","meta":{"__proto__":{"z":1},"note":"ok"}}]}')
+    const { data } = mergeSectionData(existing, incoming, ['applications'])
+    const el = data.applications.find((a) => a.school === 'X')
+    expect(el.meta).toBeTruthy()
+    expect(Object.prototype.hasOwnProperty.call(el.meta, '__proto__')).toBe(false)
+    expect(el.meta.note).toBe('ok')
+  })
+
   it('drops reserved prototype-pollution keys at top level AND nested depth', () => {
     const payload = JSON.parse(
       '{"household_income": 100, "__proto__": {"polluted": true}, "academic_status": {"__proto__": {"x": 1}}}',

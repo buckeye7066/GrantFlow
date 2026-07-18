@@ -36,6 +36,7 @@ vi.mock('../services/hamilton/hamiltonAutomationOrchestrator.js', async (importO
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const hamiltonRouter = (await import('../routes/hamiltonAutomation.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   ensureApplicationTaskSchema,
   ensureApplicationTask,
@@ -55,6 +56,9 @@ function createApp(db, user = { role: 'admin', id: 'admin-1' }) {
     req.user = user
     next()
   })
+  // Mirror production: routes now authorize against the DB-backed req.ctx that
+  // attachRequestContext resolves (admin gates read req.ctx.isAdmin).
+  app.use(attachRequestContext())
   app.use('/api/hamilton/automation', hamiltonRouter)
   return app
 }

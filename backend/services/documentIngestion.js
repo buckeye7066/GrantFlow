@@ -132,6 +132,35 @@ function shouldOverrideString({ key, existingValue, incomingValue }) {
 // (prototype-pollution defense). Dropped regardless of the allowlist.
 const RESERVED_SECTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
+// Recursively strip reserved (prototype-pollution) keys from any value —
+// objects, arrays, and nested combinations. Used to sanitize array elements
+// where there is no per-field schema to allowlist against.
+function deepStripReservedKeys(value) {
+  if (Array.isArray(value)) return value.map(deepStripReservedKeys)
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const [k, v] of Object.entries(value)) {
+      if (RESERVED_SECTION_KEYS.has(k)) continue
+      out[k] = deepStripReservedKeys(v)
+    }
+    return out
+  }
+  return value
+}
+
+// Sanitize a single object element of an untrusted-AI array: drop reserved keys
+// at every depth, and when `allowedKeys` (a Set) is supplied restrict the
+// element's top-level keys to it so AI can't inject new element fields.
+function sanitizeObjectElement(obj, allowedKeys) {
+  const out = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (RESERVED_SECTION_KEYS.has(k)) continue
+    if (allowedKeys && !allowedKeys.has(k)) continue
+    out[k] = deepStripReservedKeys(v)
+  }
+  return out
+}
+
 export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = null) {
   const merged = { ...existing }
   const updatedFields = new Set()
@@ -186,6 +215,32 @@ export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = nul
 
     if (Array.isArray(value)) {
       const existingArr = Array.isArray(existingValue) ? existingValue : []
+
+      // Array-of-objects (schema-open, e.g. university_applications.applications):
+      // element objects previously flowed through normalizeValue() untouched, so
+      // an AI response could persist elements with __proto__/constructor or
+      // arbitrary fields. Sanitize each element recursively: drop reserved keys
+      // at every depth, and — under an active allowlist — restrict element keys
+      // to those already present across the existing elements so untrusted AI
+      // can't inject NEW element fields. If no existing element defines a shape,
+      // fall back to reserved-key stripping only (don't nuke first-time data).
+      const objectElements = value.filter((e) => e && typeof e === 'object' && !Array.isArray(e))
+      if (objectElements.length > 0) {
+        let elementAllow = null
+        if (allow) {
+          const known = new Set()
+          for (const e of existingArr) {
+            if (e && typeof e === 'object' && !Array.isArray(e)) Object.keys(e).forEach((k) => known.add(k))
+          }
+          elementAllow = known.size > 0 ? known : null
+        }
+        const sanitized = objectElements.map((e) => sanitizeObjectElement(e, elementAllow))
+        merged[key] = [...existingArr, ...sanitized]
+        updatedFields.add(key)
+        return
+      }
+
+      // Primitive array (e.g. receives_assistance: ['SNAP','WIC']): dedup as before.
       const fallback = new Set(existingArr.map((entry) => normalizeValue(entry)))
       let added = false
       value.forEach((entry) => {

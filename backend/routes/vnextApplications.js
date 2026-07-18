@@ -4,7 +4,6 @@ import { z } from 'zod'
 import {
   requireAuthenticatedUser,
   ensureProfileAccess,
-  isAdminUser,
 } from '../utils/accessControl.js'
 import { isFeatureEnabled } from '../services/featureFlagService.js'
 import { safeJsonParse, jsonForDb, sqlNowLiteral } from '../vnext/vnextUtils.js'
@@ -151,7 +150,7 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const app = normalizeAppRow(req.db, row)
 
     await writeAuditEvent(req.db, {
-      actor: { type: isAdminUser(user) ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null },
+      actor: { type: req.ctx?.isAdmin === true ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null },
       entity_type: 'vnext_application',
       entity_id: String(app.id),
       action: 'application.created',
@@ -202,7 +201,7 @@ router.post('/:id/transition', mutationRateLimiter, async (req, res) => {
     return errorResponse(res, 400, 'INVALID_TARGET_STATE', 'Invalid targetState')
   }
 
-  const actor = { type: isAdminUser(user) ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null }
+  const actor = { type: req.ctx?.isAdmin === true ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null }
 
   // Always record attempt (even if blocked)
   await writeAuditEvent(req.db, {
@@ -245,7 +244,7 @@ router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
   if (!ok) return
 
   // Ensure missingness + scoring are present (idempotent, deterministic)
-  const actor = { type: isAdminUser(user) ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null }
+  const actor = { type: req.ctx?.isAdmin === true ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null }
   const miss = await computeMissingRequirements(req.db, { applicationId: id, actor })
   if (!miss.ok) {
     return errorResponse(res, 409, miss.error?.code || 'MISSINGNESS_FAILED', miss.error?.message || 'Missingness failed', miss.error)

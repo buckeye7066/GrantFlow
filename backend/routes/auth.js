@@ -6,6 +6,7 @@ import twilio from 'twilio'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
+import { sendTwilioMessage } from '../services/sms.js'
 import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlocklistService.js'
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
@@ -491,10 +492,14 @@ function normalizePhone(phone = '') {
   return trimmed.startsWith('+') ? trimmed : `+${trimmed}`
 }
 
+// Returns { ok, skipped?, error? }. `skipped` = no provider configured (dev):
+// the code is logged and the flow proceeds. `ok:false` (no skip) = a real
+// delivery failure — the caller must NOT claim "sent" or stamp the resend
+// cooldown. Never throws.
 async function sendPhoneVerificationCode(phone, code) {
   if (!twilioClient) {
     console.warn('[auth] Twilio credentials not configured; skipping SMS send. Code:', code, 'Phone:', phone)
-    return
+    return { ok: false, skipped: true, error: 'sms_not_configured' }
   }
 
   try {
@@ -508,11 +513,16 @@ async function sendPhoneVerificationCode(phone, code) {
       payload.from = TWILIO_FROM_NUMBER
     } else {
       console.warn('[auth] No TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID configured; skipping SMS send.')
-      return
+      return { ok: false, skipped: true, error: 'sms_from_not_configured' }
     }
-    await twilioClient.messages.create(payload)
+    // Checked send: Twilio can RESOLVE with a failed/undelivered message
+    // (errorCode set) without throwing.
+    const result = await sendTwilioMessage(twilioClient, payload)
+    if (!result.ok) console.error('[auth] Twilio rejected verification SMS:', result.error)
+    return result
   } catch (error) {
     console.error('[auth] Failed to send SMS code:', error.message)
+    return { ok: false, error: error.message }
   }
 }
 
@@ -2315,6 +2325,19 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
   const codeHash = hashValue(`${normalized}:${code}`)
   const expiresAt = new Date(now.getTime() + PHONE_CODE_TTL * 1000).toISOString()
 
+  // Send FIRST and inspect the result. Twilio can RESOLVE with a failed/
+  // undelivered message without throwing, so a fire-and-forget send would tell
+  // the user "code sent", stamp the resend cooldown, and deliver nothing. Only
+  // persist the code + stamp last_sent_at + return 202 when the send actually
+  // succeeded (or when no provider is configured — the dev path logs the code).
+  const smsResult = await sendPhoneVerificationCode(normalized, code)
+  if (smsResult && smsResult.ok === false && smsResult.skipped !== true) {
+    return res.status(502).json({
+      error: 'Could not send the verification code right now. Please try again.',
+      error_type: 'sms_send_failed',
+    })
+  }
+
   await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
   await req.db
     .prepare(
@@ -2327,8 +2350,6 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
       `,
     )
     .run(codeHash, nowISOString(), credential.id)
-
-  sendPhoneVerificationCode(normalized, code)
 
   // Optional ops alert (never includes the code).
   sendAuthAttemptNotification({

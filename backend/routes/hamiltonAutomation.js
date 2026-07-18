@@ -136,7 +136,7 @@ import { buildHamiltonProfileSummary } from '../services/hamilton/hamiltonProfil
 import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js'
 import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/hamilton/profileFieldTargets.js'
 import { setProfileSectionField } from '../services/profileFieldWriter.js'
-import { isAdminUser, HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
+import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -1572,7 +1572,7 @@ router.get('/portal-policies', async (req, res) => {
 router.post('/portal-policies', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const policy = await upsertPolicy(req.db, req.body || {})
     return res.json({ ok: true, policy })
@@ -1606,7 +1606,7 @@ router.post('/resolved-fields', async (req, res) => {
 router.get('/admin/hard-stops', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const limit = Math.max(1, Math.min(500, Number.parseInt(req.query.limit || '200', 10) || 200))
     // Optional ?profile_id= narrows the checklist to one profile's stops (the
@@ -1631,7 +1631,7 @@ router.get('/admin/hard-stops', async (req, res) => {
 router.post('/admin/hard-stops/:blockerId/resolve', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
   const blockerId = String(req.params.blockerId || '')
   if (!blockerId) return res.status(400).json({ error: 'blocker_id_required' })
   try {
@@ -1681,7 +1681,7 @@ router.post('/admin/hard-stops/:blockerId/resolve', async (req, res) => {
 router.post('/admin/hard-stops/dismiss-all', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
   const note = String(req.body?.note || '').slice(0, 500) || 'Bulk-dismissed from the Hamilton operator dashboard.'
   // Optional: scope the clear to a single profile (the per-profile "Process
   // with Hamilton" page passes this so it only empties that profile's list).
@@ -1745,7 +1745,7 @@ function blockerFieldKey(blocker) {
 router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
 
   const blockerId = String(req.params.blockerId || '')
   if (!blockerId) return res.status(400).json({ error: 'blocker_id_required' })
@@ -1892,7 +1892,7 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
 router.get('/admin/tasks', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const status = String(req.query.status || 'all').toLowerCase()
     const allowed = new Set(['all', 'active', 'blocked', 'failed', 'completed'])

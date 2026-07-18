@@ -65,6 +65,25 @@ export function normalizePhone(raw) {
 }
 
 /**
+ * Single checked Twilio send path. Twilio can RESOLVE (not throw) with a message
+ * whose status is failed/undelivered or that carries an errorCode — a bare await
+ * would then report a non-delivered message as sent. Returns { ok, sid, error }
+ * and never throws for an API-level failure (genuine network throws propagate to
+ * the caller's try/catch). Every Twilio messages.create caller routes through
+ * here so the delivery-honesty check lives in exactly one place.
+ * @param {object} client - a Twilio client
+ * @param {object} payload - client.messages.create payload
+ * @returns {Promise<{ok: boolean, sid: string|null, error: string|null}>}
+ */
+export async function sendTwilioMessage(client, payload) {
+  const msg = await client.messages.create(payload)
+  if (msg?.errorCode || msg?.status === 'failed' || msg?.status === 'undelivered') {
+    return { ok: false, sid: msg?.sid || null, error: `twilio_${msg?.errorCode || msg?.status}` }
+  }
+  return { ok: true, sid: msg?.sid || null, error: null }
+}
+
+/**
  * Send a single SMS. Returns { ok, id?, skipped?, error? } and never throws.
  */
 export async function sendSms({ to, body } = {}) {
@@ -83,9 +102,13 @@ export async function sendSms({ to, body } = {}) {
   }
 
   try {
-    const msg = await client.messages.create(payload)
-    log.info('[sms] sent', { to: normalized.slice(0, 5) + '***', sid: msg?.sid || null })
-    return { ok: true, id: msg?.sid || null }
+    const { ok, sid, error } = await sendTwilioMessage(client, payload)
+    if (!ok) {
+      log.warn('[sms] Twilio reported non-delivery', { to: normalized.slice(0, 5) + '***', error })
+      return { ok: false, error }
+    }
+    log.info('[sms] sent', { to: normalized.slice(0, 5) + '***', sid })
+    return { ok: true, id: sid }
   } catch (err) {
     log.warn('[sms] send failed', { error: err?.message || String(err) })
     return { ok: false, error: err?.message || String(err) }

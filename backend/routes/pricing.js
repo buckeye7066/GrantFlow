@@ -17,7 +17,7 @@
  */
 
 import express from 'express'
-import { isAdminUser, requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
 import { createLogger } from '../utils/logger.js'
 import {
   PRICING_ENV_KEYS,
@@ -52,7 +52,7 @@ const router = express.Router()
 const requireAdmin = (req, res, next) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ ok: false, error: 'admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ ok: false, error: 'admin_only' })
   return next()
 }
 
