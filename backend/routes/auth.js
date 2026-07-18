@@ -1582,7 +1582,74 @@ async function ensurePhoneCredential(db, phone) {
   return { user, credential }
 }
 
-async function attachProfileToUser(db, userId, profileId) {
+/**
+ * Is `profileId` bound to `normalizedEmail`? Used to gate OTP-verify profile
+ * ADOPTION: a verified email/phone code proves control of that CREDENTIAL, not
+ * ownership of an arbitrary unowned profile id. Adoption is permitted only when
+ * the profile is demonstrably the credential-holder's — via the designated map,
+ * an explicit profile_emails access grant, its own basic_information.email, or
+ * its owning user's verified primary email. (Security: tenant-takeover guard.)
+ */
+async function profileIsBoundToEmail(db, profileId, normalizedEmail) {
+  if (!profileId || !normalizedEmail) return false
+
+  // 1) Explicit designated mapping (baseline profiles).
+  try {
+    if (getDesignatedProfileForEmail(normalizedEmail) === profileId) return true
+  } catch {
+    // ignore
+  }
+
+  // 2) profile_emails explicit access mapping FOR THIS profile.
+  try {
+    await ensureProfileEmailSchema(db)
+    const row = await db
+      .prepare(
+        `SELECT 1 AS ok FROM profile_emails WHERE profile_id = ? AND LOWER(TRIM(email)) = ? LIMIT 1`,
+      )
+      .get(profileId, normalizedEmail)
+    if (row?.ok) return true
+  } catch {
+    // ignore
+  }
+
+  // 3) The profile's own basic_information.email.
+  try {
+    const secRow = await db
+      .prepare(
+        `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`,
+      )
+      .get(profileId)
+    if (secRow?.data) {
+      const parsed = JSON.parse(String(secRow.data))
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        normalizeEmail(String(parsed.email || '')) === normalizedEmail
+      ) {
+        return true
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 4) The profile's owning user's primary email (same-account re-claim).
+  try {
+    const owner = await db
+      .prepare(
+        'SELECT u.primary_email AS email FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.id = ? LIMIT 1',
+      )
+      .get(profileId)
+    if (owner?.email && normalizeEmail(String(owner.email)) === normalizedEmail) return true
+  } catch {
+    // ignore
+  }
+
+  return false
+}
+
+async function attachProfileToUser(db, userId, profileId, { verifiedEmail = null } = {}) {
   if (!profileId) {
     return null
   }
@@ -1592,16 +1659,36 @@ async function attachProfileToUser(db, userId, profileId) {
     error.status = 404
     throw error
   }
-  if (profile.user_id && profile.user_id !== userId) {
+  // Re-selecting a profile THIS user already owns is always allowed.
+  if (profile.user_id && String(profile.user_id) === String(userId)) {
+    return profileId
+  }
+  // Owned by someone else — never adoptable via a login credential.
+  if (profile.user_id) {
     const error = new Error('Profile already linked to another user')
     error.status = 403
     throw error
   }
-  if (!profile.user_id) {
-    await db
-      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(userId, profileId)
+  // Unowned profile: ADOPTION must be bound to the PRESENTED credential. A
+  // verified OTP proves control of an email/phone — NOT ownership of an
+  // arbitrary unowned profile id — so an OTP holder who knows an unrelated,
+  // unowned profile id must not be able to claim it (tenant takeover). Only
+  // adopt when the profile's email matches the just-verified email. The phone
+  // path passes no verifiedEmail (no equivalent verified phone→profile binding
+  // exists), so it can only re-select an already-owned profile (handled above)
+  // and can never adopt an unowned one.
+  const normalizedVerifiedEmail = verifiedEmail ? normalizeEmail(verifiedEmail) : null
+  const bound = normalizedVerifiedEmail
+    ? await profileIsBoundToEmail(db, profileId, normalizedVerifiedEmail)
+    : false
+  if (!bound) {
+    const error = new Error('Profile is not associated with the verified credential')
+    error.status = 403
+    throw error
   }
+  await db
+    .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(userId, profileId)
   return profileId
 }
 
@@ -2168,7 +2255,10 @@ router.post('/email/verify', async (req, res) => {
   let activeProfileId = null
   try {
     if (requestedProfileId) {
-      activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId)
+      // Bind adoption to the just-verified EMAIL credential (tenant-takeover guard).
+      activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId, {
+        verifiedEmail: email,
+      })
     }
   } catch (error) {
     return res.status(error.status ?? 400).json({ error: error.message })
@@ -2491,6 +2581,9 @@ router.post('/phone/verify', async (req, res) => {
   let activeProfileId = null
   try {
     if (requestedProfileId) {
+      // No verifiedEmail: a verified phone code has no email→profile binding, so
+      // attachProfileToUser can only RE-SELECT a profile this user already owns
+      // and can never adopt an unowned one (tenant-takeover guard).
       activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId)
     }
   } catch (error) {
@@ -3539,6 +3632,10 @@ export {
   ensurePasswordAuthSchema,
   ensureUserForPasswordAuth,
   beginPasswordSetup,
+  // Exported for the tenant-takeover regression suite: OTP-verify profile
+  // adoption must be bound to the presented credential (see attachProfileToUser).
+  attachProfileToUser,
+  profileIsBoundToEmail,
 }
 
 export default router

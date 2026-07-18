@@ -1846,9 +1846,24 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       return res.status(401).json({ error: 'unauthorized' });
     }
 
-    if (user.userId) {
+    // /api/auth/* is exempt from the enforceResolvedIdentity structural gate
+    // (identity-ESTABLISHING endpoints must run pre-identity), so req.user is NOT
+    // guest-nulled here. But GET /api/auth/me is a user-scoped READ: a deleted-
+    // user JWT or a synthetic-id collision JWT (userId=system_admin_token, no
+    // serviceToken) would otherwise read the self-healed reserved row and get a
+    // 200 user payload. Require a DB-resolved identity (or DB-backed admin), and
+    // source the user id from req.ctx.userId — NEVER the raw JWT claim.
+    if (req.ctx?.identityResolved !== true && req.ctx?.isAdmin !== true) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    const resolvedUserId = req.ctx?.userId ?? null;
+
+    if (resolvedUserId) {
+      // Downstream self-heal + response echo read user.userId; pin it to the
+      // ctx-resolved id so no raw token claim is trusted below this point.
+      user.userId = resolvedUserId;
       let dbUser, profiles;
-      
+
       try {
         dbUser = await req.db
           .prepare(
@@ -1858,7 +1873,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
               WHERE id = ?
             `,
           )
-          .get(user.userId);
+          .get(resolvedUserId);
       } catch (dbError) {
         console.error('[/api/auth/me] Database error fetching user:', dbError);
         return res.status(503).json({
