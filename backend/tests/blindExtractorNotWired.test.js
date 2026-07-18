@@ -37,6 +37,7 @@ const BLIND_MODULES = [
   'blindPageFactExtractor',
   'blindFactsMapper',
   'blindEvidenceValidator',
+  'blindOpportunityKind',
 ]
 
 // Files ALLOWED to reference a blind module: the blind modules themselves and

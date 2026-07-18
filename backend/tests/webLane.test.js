@@ -305,6 +305,10 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       blind_candidates: 1,
       blind_evidenced: 1,
       delta: 0, // 1 blind − 1 current
+      // The one blind candidate carries no classifier label in this mock, so it
+      // tallies conservatively as UNKNOWN. (Per-kind classification is exercised
+      // by the dedicated test below and the classifier's own node:test suite.)
+      by_kind: { direct: 0, aggregator_index: 0, unknown: 1, protected_directory: 0, unverified_index: 0 },
     })
     expect(typeof elapsed_ms).toBe('number')
     expect(elapsed_ms).toBeGreaterThanOrEqual(0)
@@ -313,6 +317,38 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
     expect(liveSnapshot(onStore, onRes)).toEqual(baseline)
     // And no blind candidate was persisted into the catalog.
     expect(storage.listCatalog(onStore).some((c) => /Blind/.test(c.title))).toBe(false)
+  })
+
+  it('flag ON: the shadow counter tallies the classifier per-kind breakdown (trust axis splits only the aggregator bucket)', async () => {
+    // The shadow builder labels each blind candidate with blind_kind + blind_trust
+    // (Phase 1c). Here we inject candidates carrying those labels and assert the
+    // read-only counter tallies them — a DIRECT program, a PROTECTED durable
+    // directory, and an UNVERIFIED open-web list, split across the two fetched
+    // pages. The classifier's OWN correctness is pinned by its node:test suite.
+    const extractPage = vi.fn(async ({ pageUrl }) => {
+      if (pageUrl.includes('nyf.org')) {
+        return [
+          { title: 'Direct A', sponsor: 'Funder A', blind_kind: 'DIRECT_PROGRAM', blind_trust: 'UNVERIFIED' },
+          { title: 'Dir P', sponsor: 'State 211', blind_kind: 'AGGREGATOR_INDEX', blind_trust: 'PROTECTED' },
+        ]
+      }
+      return [
+        { title: 'Dir U', sponsor: 'Blog', blind_kind: 'AGGREGATOR_INDEX', blind_trust: 'UNVERIFIED' },
+        { title: 'Mystery', sponsor: 'X' }, // no label => conservatively UNKNOWN
+      ]
+    })
+    const store = createMemoryStore()
+    const res = await runWebDiscoveryLane(
+      { store, fetcher: fakeFetcher(bodyByUrl), searchWeb: makeSearch(), extractOpportunities: makeExtract(), blindShadow: { extractPage } },
+      { thesis, runId: 'kind1' },
+    )
+    const bk = res.web_lane_blind_shadow.by_kind
+    expect(bk).toEqual({ direct: 1, aggregator_index: 2, unknown: 1, protected_directory: 1, unverified_index: 1 })
+    // INVARIANT: the trust split covers exactly the aggregator bucket.
+    expect(bk.protected_directory + bk.unverified_index).toBe(bk.aggregator_index)
+    // Live path untouched: still exactly the one real opportunity.
+    expect(res.stored).toBe(1)
+    expect(storage.listCatalog(store).length).toBe(1)
   })
 
   it('flag ON with the blind path throwing: live lane still returns normally (best-effort isolation)', async () => {

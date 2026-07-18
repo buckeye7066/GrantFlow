@@ -249,11 +249,12 @@ export function capShadowHtml(html) {
 export async function makeBlindShadow() {
   if (!isWebLaneProfileBlindEnabled()) return null;
   try {
-    const [{ buildLinkInventory }, { extractPageFactsBlind }, { mapBlindFactsToCandidate }, { htmlToText }, aiProviders] =
+    const [{ buildLinkInventory }, { extractPageFactsBlind }, { mapBlindFactsToCandidate }, { classifyBlindOpportunityKind }, { htmlToText }, aiProviders] =
       await Promise.all([
         import('../crawler-os/blindLinkInventory.js'),
         import('../crawler-os/blindPageFactExtractor.js'),
         import('../crawler-os/blindFactsMapper.js'),
+        import('../crawler-os/blindOpportunityKind.js'),
         import('./webGrantExtractor.js'),
         import('../utils/aiProviders.js'),
       ]);
@@ -299,7 +300,19 @@ export async function makeBlindShadow() {
           { pageUrl, pageText, linkInventory },
           { llm: blindLlm, timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : perPageTimeoutMs, signal },
         );
-        return (Array.isArray(facts) ? facts : []).map(mapBlindFactsToCandidate).filter(Boolean);
+        // Phase 1c: label each shadow candidate with its trust-aware KIND
+        // (DIRECT_PROGRAM / AGGREGATOR_INDEX / UNKNOWN) + TRUST (PROTECTED /
+        // UNVERIFIED) using ONLY the same page-derived inputs (candidate +
+        // linkInventory + pageText — never the profile). The labels ride on the
+        // shadow candidate for the web lane's read-only per-kind counter; they are
+        // NEVER persisted and change nothing the live lane returns.
+        return (Array.isArray(facts) ? facts : [])
+          .map(mapBlindFactsToCandidate)
+          .filter(Boolean)
+          .map((candidate) => {
+            const { kind, trust } = classifyBlindOpportunityKind({ candidate, linkInventory, pageText });
+            return { ...candidate, blind_kind: kind, blind_trust: trust };
+          });
       },
     };
   } catch {
