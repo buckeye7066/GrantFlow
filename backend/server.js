@@ -101,7 +101,7 @@ import { runWithSchedulerLock } from './services/schedulerLock.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
-import { ensureProfileEmailSchema, buildGrantScopeFromContext } from './utils/accessControl.js';
+import { ensureProfileEmailSchema, buildGrantScopeFromContext, getOwnedAndGrantedProfileIds } from './utils/accessControl.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
@@ -1956,46 +1956,26 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
             })
           }
         } else {
-          const emails = Array.from(
-            new Set(
-              [dbUser?.primary_email, user?.email]
-                .map((v) => String(v || '').trim().toLowerCase())
-                .filter(Boolean),
-            ),
-          )
-
-          // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
-          try {
-            await ensureProfileEmailSchema(req.db)
-          } catch {
-            // ignore
-          }
-
-          if (emails.length > 0) {
-            const placeholders = emails.map(() => '?').join(', ')
+          // DB-backed: owned + DB-verified-email-granted profiles. The bootstrap
+          // list is NEVER derived from the token email (a JWT could claim
+          // victim@example.com and pick up victim's shared profiles) — same
+          // DB-trusted discipline as GET /api/profiles?scope=mine.
+          const accessibleIds = await getOwnedAndGrantedProfileIds(req.db, user)
+          const idList = Array.from(accessibleIds)
+          if (idList.length > 0) {
+            const placeholders = idList.map(() => '?').join(', ')
             profiles = await req.db
               .prepare(
                 `
-                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status, p.created_at
-                  FROM profiles p
-                  LEFT JOIN profile_emails pe ON pe.profile_id = p.id
-                  WHERE p.user_id = ?
-                     OR lower(pe.email) IN (${placeholders})
-                  ORDER BY p.created_at ASC
-                `,
-              )
-              .all(dbUser.id, ...emails)
-          } else {
-            profiles = await req.db
-              .prepare(
-                `
-                  SELECT id, display_name, organization_id, status
+                  SELECT id, display_name, organization_id, status, created_at
                   FROM profiles
-                  WHERE user_id = ?
+                  WHERE id IN (${placeholders})
                   ORDER BY created_at ASC
                 `,
               )
-              .all(dbUser.id)
+              .all(...idList)
+          } else {
+            profiles = []
           }
         }
       } catch (dbError) {

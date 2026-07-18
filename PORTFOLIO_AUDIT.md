@@ -259,6 +259,21 @@ Round 7 closed the configured-admin-EMAIL path, but the JWT email still granted 
 
 **Confirmations:** email-based profile grants derive ONLY from the DB `primary_email` (+ verified credentials); a JWT email grants nothing; the duplicate `scope=mine` path is removed in favor of the DB-backed accessible set.
 
+## 5i. Round 9 — the root: `ctx.email` is DB-hydrated (token email never becomes access identity) (Codex review of commit `53df6a1f`)
+
+Round 8 fixed two email-grant sites but the ROOT was that `ctx.email` itself was seeded from the token email — so two MORE reachable sites recreated the raw-email grant.
+
+### ROOT [chokepoint] — `requestContext.js`: `ctx.email` no longer comes from the token
+`buildRequestContext:191` did `ctx.email = user.email || user.primary_email` (the JWT payload). Every consumer that read `ctx.email` for access/ownership therefore trusted a token-supplied address. **Fix:** `ctx.email` is initialized null and DB-HYDRATED only from `users.primary_email` (the resolved row); if no row / DB error (and not a synthetic service admin) it stays null (fail closed, consistent with the R5 foundation). The raw token email is preserved separately as **`ctx.tokenEmail`** for DISPLAY/attribution only. After this, the audit (`grep ctx.email`) shows every consumer is either now DB-hydrated (safe) or an attribution/`createdBy`/`actor` label — no access/ownership/grant-write code reads a token-tainted email. (Only `stripe.js` still falls back to `req.user.email` for the Stripe **customer** record email — provider/display data, not a GrantFlow access decision.) Test: `requestContextAdminResolution.test.js` — `ctx.email` = DB `primary_email` while `ctx.tokenEmail` = the token email; no row → `ctx.email` null despite a token email.
+
+### R9-1 [HIGH] `/api/auth/me` still built the profile list from the token email
+`server.js:1959` derived the non-admin bootstrap profile list from `[dbUser.primary_email, user.email]`, so a JWT `{email:'victim@example.com'}` returned victim's `profile_emails`-shared profiles — recreating the grant removed from `scope=mine`. **Fix:** the branch now lists `profiles WHERE id IN (getOwnedAndGrantedProfileIds(req.db, user))` — DB-backed, with `user.email` removed from the SQL entirely.
+
+### R9-2 [HIGH] Document delete spoofed legacy ownership with the token email
+`documents.js:563` set `actorEmail = context.ctx?.email ?? req.user?.email ?? …` and `isProfileOwnerForDelete` treated a saved profile email matching it as ownership for legacy NULL-`user_id` profiles — so `DELETE /api/documents/:id` with a JWT `{email:'victim@example.com'}` against an accessible legacy profile whose allowlist/basic_information email is `victim@example.com` deleted the document. **Fix:** ownership-by-`user_id` is checked first; legacy email ownership now matches ONLY the caller's `getTrustedUserEmails(req.db, req.user)` (DB primary_email + verified credentials) — never `ctx.email`/`req.user.email`.
+
+**Confirmations:** `ctx.email` is DB-hydrated (the token email never drives access); `/api/auth/me` and document-delete no longer grant/authorize from the token email; the whole raw-email-grant class is closed at the chokepoint plus both sites.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

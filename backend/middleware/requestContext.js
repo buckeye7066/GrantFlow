@@ -171,7 +171,11 @@ async function adminSelfHealOrgProfileEmails(db, { actorUserId, isAdmin = false 
 export async function buildRequestContext(db, user) {
   const ctx = {
     userId: null,
+    // DB-hydrated below from users.primary_email — access/ownership/grant code
+    // reads ctx.email and must NEVER see a token-supplied address.
     email: null,
+    // Raw token-supplied email, for DISPLAY / attribution ONLY (never access).
+    tokenEmail: null,
     isAdmin: false,
     activeProfileId: null,
     // IMPORTANT:
@@ -188,7 +192,11 @@ export async function buildRequestContext(db, user) {
 
   // Extract user ID
   ctx.userId = getAuthUserId(user)
-  ctx.email = user.email || user.primary_email || null
+  // The token email is DISPLAY/attribution only. ctx.email (read by access code)
+  // stays null until DB-hydrated from users.primary_email below — a JWT can carry
+  // any email, so it must never seed the identity that grant/ownership code trusts.
+  ctx.tokenEmail = user.email || user.primary_email || null
+  ctx.email = null
   ctx.activeProfileId = getAuthProfileId(user)
 
   // CRITICAL: Admin status is DB-backed ONLY (users.is_admin), with exactly two
@@ -230,7 +238,8 @@ export async function buildRequestContext(db, user) {
         // self-promote (and this path even PERSISTS is_admin=TRUE). Hydrate
         // ctx.email from the row for downstream display, but decide on the DB email.
         const trustedEmail = row.primary_email ? String(row.primary_email).trim().toLowerCase() : null
-        if (trustedEmail && !ctx.email) ctx.email = trustedEmail
+        // DB-hydrate ctx.email from the TRUSTED stored email (never the token).
+        ctx.email = trustedEmail
         const dbEmailIsConfiguredAdmin = Boolean(trustedEmail && isAdminEmail(trustedEmail))
 
         // Configured admin email (from the DB row) whose flag isn't set: upgrade + persist.

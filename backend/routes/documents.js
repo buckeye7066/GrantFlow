@@ -19,7 +19,7 @@ import { hasTierCapability, requireTierCapability, TIER_CAPABILITIES } from '../
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
-import { ensureProfileEmailSchema } from '../utils/accessControl.js'
+import { ensureProfileEmailSchema, getTrustedUserEmails } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:documents')
@@ -560,15 +560,24 @@ async function ensureDocumentDeleteAccess(req, res, context, document) {
   }
 
   const actorUserId = context.ctx?.userId ?? null
-  const actorEmail = context.ctx?.email ?? req.user?.email ?? req.user?.primary_email ?? null
   const actorActiveProfileId = context.ctx?.activeProfileId ? String(context.ctx.activeProfileId) : null
 
   // Legacy sessions can be profile-scoped without a durable profiles.user_id mapping.
   // Treat "active profile" as ownership for destructive actions on that same profile.
+  // (ctx.activeProfileId is DB-validated against the accessible set in requestContext.)
   if (actorActiveProfileId && actorActiveProfileId === profileId) return true
 
-  const ok = await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail })
-  if (ok) return true
+  // Ownership via profiles.user_id (no email needed).
+  if (await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail: null })) return true
+
+  // Legacy NULL-user_id ownership: a saved profile email counts as ownership only
+  // when it matches one of the caller's DB-VERIFIED emails — NEVER the
+  // token-supplied ctx.email/req.user.email (a JWT could claim victim@example.com
+  // against a shared legacy profile and delete its documents).
+  const trustedEmails = await getTrustedUserEmails(req.db, req.user)
+  for (const actorEmail of trustedEmails) {
+    if (await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail })) return true
+  }
 
   console.warn('[documents] delete denied', {
     document_id: document?.id ?? null,

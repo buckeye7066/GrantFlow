@@ -12,6 +12,37 @@
 import { describe, expect, it } from 'vitest'
 import { buildRequestContext } from '../middleware/requestContext.js'
 
+function emailStubDb(usersRow) {
+  return {
+    dialect: 'sqlite',
+    prepare(sql) {
+      const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+      if (norm.includes('from users where id')) return { get: () => usersRow }
+      return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
+    },
+  }
+}
+
+describe('buildRequestContext ctx.email is DB-hydrated (token email never becomes access identity)', () => {
+  it('ctx.email = users.primary_email (DB); ctx.tokenEmail = the raw token email', async () => {
+    const ctx = await buildRequestContext(
+      emailStubDb({ is_admin: 0, primary_email: 'real@db.example' }),
+      { role: 'user', userId: 'u1', email: 'forged@token.example' },
+    )
+    expect(ctx.email).toBe('real@db.example')
+    expect(ctx.tokenEmail).toBe('forged@token.example')
+  })
+
+  it('no users row -> ctx.email is null even though the token supplies an email (fail closed)', async () => {
+    const ctx = await buildRequestContext(
+      emailStubDb(null),
+      { role: 'user', userId: 'u1', email: 'forged@token.example' },
+    )
+    expect(ctx.email).toBeNull()
+    expect(ctx.tokenEmail).toBe('forged@token.example')
+  })
+})
+
 function makeDb({ isAdmin, failUsersLookup = false }) {
   return {
     dialect: 'sqlite',

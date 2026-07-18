@@ -83,6 +83,14 @@ Compat: behavior-preserving for real DB admins, the configured owner (resolved f
 
 Compat: behavior-preserving for users whose DB `primary_email`/verified credentials legitimately match a profile grant; only forged/stale JWT email claims change (now grant nothing). Flagged residual: `agentControlOrchestrator.isControlCenterAdmin` matches the owner via `user.email` but sits behind `/api/admin` `ensureAdmin` (DB-backed) — documented, not changed (a safe fix needs internal-token provenance rework).
 
+## Round 9 — the root: ctx.email is DB-hydrated (see PORTFOLIO_AUDIT.md §5i)
+
+- **Chokepoint fix:** `req.ctx.email` is now hydrated from `users.primary_email` (DB), never from the JWT payload email; the raw token email is preserved as `req.ctx.tokenEmail` for display/attribution only. If the DB email can't be resolved (missing row / DB error) and the caller isn't a synthetic service admin, `ctx.email` is empty (fail closed). This makes every downstream `ctx.email` reader DB-safe at once.
+- **`/api/auth/me`** no longer builds the non-admin profile list from the token email — it uses the DB-backed `getOwnedAndGrantedProfileIds`.
+- **Document delete** legacy-ownership no longer matches saved profile emails against the token email — only the caller's DB-verified emails (`getTrustedUserEmails`).
+
+Compat: attribution/`createdBy`/`actor` labels that read `ctx.email` now show the DB email (or fall back to `userId`) instead of a possibly-token email — a cosmetic change on already-gated paths. Access/ownership behavior is preserved for users whose DB email legitimately matches; only forged/stale token-email claims change (now grant nothing).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).
