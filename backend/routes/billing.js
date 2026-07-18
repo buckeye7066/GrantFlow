@@ -59,7 +59,8 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') {
+  // DB-backed admin only (req.ctx.isAdmin); never the raw JWT role claim.
+  if (req.ctx?.isAdmin !== true) {
     return res.status(403).json({ error: 'Admin privileges required' })
   }
   return next()

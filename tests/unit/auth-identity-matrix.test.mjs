@@ -9,7 +9,7 @@
  *   ✓ Admin token (X-Admin-Token header)              → 200
  *   ✓ Admin token (Authorization: Bearer header)      → 200
  *   ✓ Anya API key (X-Anya-Token header)              → 200
- *   ✓ Signed JWT with admin role                      → 200
+ *   ✓ Signed JWT, admin role, no backing user         → 401 (fail closed, not auto-elevated)
  *
  * Source-level assertion: ANYA_ADMIN_TOKEN is honoured as a fallback for
  * ADMIN_TOKEN (verified by inspecting server.js, no extra server spawn needed).
@@ -186,7 +186,12 @@ test('auth/me: Anya API key via X-Anya-Token header → 200', { timeout: 15_000 
   )
 })
 
-test('auth/me: signed JWT with admin role → 200', { timeout: 15_000 }, async () => {
+test('auth/me: signed JWT with admin role but NO backing user is NOT auto-elevated (fail closed)', { timeout: 15_000 }, async () => {
+  // SECURITY: a signed JWT carrying roles:['admin'] for a userId with no users
+  // row (and not the configured admin email) must NOT be auto-created as an admin
+  // — that self-heal was a privilege-escalation path (a stale/forged admin-role
+  // token minting a DB admin). Admin is DB-backed + fail-closed now; only the
+  // validated synthetic ADMIN_TOKEN / Anya key (asserted above) grant token-admin.
   const token = await signJwt(
     { sub: 'jwt-admin-user', email: 'admin@test.example', roles: ['admin'] },
     TEST_JWT_SECRET,
@@ -196,8 +201,8 @@ test('auth/me: signed JWT with admin role → 200', { timeout: 15_000 }, async (
   })
   assert.strictEqual(
     res.status,
-    200,
-    'JWT with admin role should be accepted and user created on demand',
+    401,
+    'a signed admin-role JWT for a non-existent user must be denied, not auto-elevated to admin',
   )
 })
 

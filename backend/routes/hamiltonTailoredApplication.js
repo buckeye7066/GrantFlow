@@ -83,7 +83,7 @@ async function loadGrantAndAuthorise(req, res, grantId) {
     return null
   }
   const profileId = grant.profile_id
-  if (user.role !== 'admin') {
+  if (req.ctx?.isAdmin !== true) {
     const accessible = await getAccessibleProfileIds(req.db, user)
     if (accessible !== null && !accessible.has(String(profileId))) {
       res.status(403).json({ error: 'forbidden' })

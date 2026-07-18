@@ -12,12 +12,15 @@
 import { describe, expect, it } from 'vitest'
 import { buildRequestContext } from '../middleware/requestContext.js'
 
-function makeDb({ isAdmin }) {
+function makeDb({ isAdmin, failUsersLookup = false }) {
   return {
     dialect: 'sqlite',
     prepare(sql) {
       const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
       if (norm.includes('from users where id')) {
+        if (failUsersLookup) {
+          return { get: () => { throw new Error('simulated context DB failure') } }
+        }
         return { get: () => ({ is_admin: isAdmin ? 1 : 0, primary_email: null }) }
       }
       if (norm.includes('from profiles where user_id')) {
@@ -49,5 +52,29 @@ describe('buildRequestContext DB-backed admin resolution', () => {
     const ctx = await buildRequestContext(makeDb({ isAdmin: true }), user)
     expect(ctx.isAdmin).toBe(true)
     expect(ctx.accessibleProfileIds).toBeNull()
+  })
+
+  it('FAILS CLOSED: a demoted role:admin JWT with a context-DB failure is NOT admin', async () => {
+    const user = { role: 'admin', is_admin: true, roles: ['admin'], userId: 'demoted' }
+    const ctx = await buildRequestContext(makeDb({ isAdmin: false, failUsersLookup: true }), user)
+    expect(ctx.isAdmin).toBe(false)
+  })
+
+  it('a validated synthetic service token stays admin even when the DB lookup fails', async () => {
+    // ADMIN_TOKEN flow: userId is a known synthetic id + is_admin from the token.
+    const user = { role: 'admin', is_admin: true, userId: 'system_admin_token' }
+    const ctx = await buildRequestContext(makeDb({ isAdmin: false, failUsersLookup: true }), user)
+    expect(ctx.isAdmin).toBe(true)
+  })
+
+  it('a raw role:admin JWT whose userId is NOT a synthetic service id never gets admin from the token', async () => {
+    // No users row at all (get -> null) and not the configured admin email.
+    const db = {
+      dialect: 'sqlite',
+      prepare() { return { get: () => null, all: () => [], run: () => ({ changes: 0 }) } },
+    }
+    const user = { role: 'admin', is_admin: true, roles: ['admin'], userId: 'attacker-novel-id' }
+    const ctx = await buildRequestContext(db, user)
+    expect(ctx.isAdmin).toBe(false)
   })
 })

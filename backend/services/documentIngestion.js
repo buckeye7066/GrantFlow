@@ -132,25 +132,10 @@ function shouldOverrideString({ key, existingValue, incomingValue }) {
 // (prototype-pollution defense). Dropped regardless of the allowlist.
 const RESERVED_SECTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
-// Recursively strip reserved (prototype-pollution) keys from any value —
-// objects, arrays, and nested combinations. Used to sanitize array elements
-// where there is no per-field schema to allowlist against.
-function deepStripReservedKeys(value) {
-  if (Array.isArray(value)) return value.map(deepStripReservedKeys)
-  if (value && typeof value === 'object') {
-    const out = {}
-    for (const [k, v] of Object.entries(value)) {
-      if (RESERVED_SECTION_KEYS.has(k)) continue
-      out[k] = deepStripReservedKeys(v)
-    }
-    return out
-  }
-  return value
-}
-
 // Build a RECURSIVE allowed-key shape from the union of existing array elements:
 // { keys: Set<string>, children: { [key]: shape } }. Used to allowlist untrusted
-// AI array-element objects at EVERY depth (not just their top level).
+// AI array-element objects at EVERY depth — nested objects AND nested arrays
+// (the child shape for an array key is derived from that array's object items).
 function buildElementShape(existingElements) {
   const keys = new Set()
   const childGroups = {}
@@ -161,6 +146,13 @@ function buildElementShape(existingElements) {
       keys.add(k)
       if (v && typeof v === 'object' && !Array.isArray(v)) {
         ;(childGroups[k] ||= []).push(v)
+      } else if (Array.isArray(v)) {
+        // Derive the nested array's element-object shape from its object items.
+        for (const item of v) {
+          if (item && typeof item === 'object' && !Array.isArray(item)) {
+            ;(childGroups[k] ||= []).push(item)
+          }
+        }
       }
     }
   }
@@ -171,21 +163,33 @@ function buildElementShape(existingElements) {
   return { keys, children }
 }
 
+// Sanitize an untrusted ARRAY against a shape. Object items are allowlisted
+// against `shape`; nested arrays recurse; primitives pass through. Reserved keys
+// are always dropped (via sanitizeAgainstShape). `shape` null => reserved-only.
+function sanitizeArrayAgainstShape(arr, shape) {
+  return arr.map((item) => {
+    if (Array.isArray(item)) return sanitizeArrayAgainstShape(item, shape)
+    if (item && typeof item === 'object') return sanitizeAgainstShape(item, shape)
+    return item
+  })
+}
+
 // Sanitize an untrusted object against a recursive shape allowlist. Reserved
-// keys are ALWAYS dropped at every depth. When `shape` is non-null, keys not in
-// `shape.keys` are dropped and nested objects recurse into their child shape
-// (unknown nested keys => dropped). When `shape` is null, only reserved-key
-// stripping applies (structure preserved) — the first-time-population fallback.
+// keys are ALWAYS dropped at every depth (objects AND arrays). When `shape` is
+// non-null, keys not in `shape.keys` are dropped and nested objects/arrays
+// recurse into their child shape (unknown nested keys => dropped). When `shape`
+// is null, only reserved-key stripping applies — the first-time-population
+// fallback (structure preserved).
 function sanitizeAgainstShape(obj, shape) {
   const out = {}
   for (const [k, v] of Object.entries(obj)) {
     if (RESERVED_SECTION_KEYS.has(k)) continue
     if (shape && !shape.keys.has(k)) continue
+    const childShape = shape ? shape.children[k] ?? { keys: new Set(), children: {} } : null
     if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const childShape = shape ? shape.children[k] ?? { keys: new Set(), children: {} } : null
       out[k] = sanitizeAgainstShape(v, childShape)
     } else if (Array.isArray(v)) {
-      out[k] = deepStripReservedKeys(v)
+      out[k] = sanitizeArrayAgainstShape(v, childShape)
     } else {
       out[k] = v
     }

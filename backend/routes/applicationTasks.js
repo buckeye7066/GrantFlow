@@ -120,7 +120,7 @@ router.post('/', async (req, res) => {
   const profileId = String(body.profile_id || body.profileId || '')
   if (!profileId) return res.status(400).json({ error: 'profile_id required' })
 
-  if (user.role !== 'admin') {
+  if (req.ctx?.isAdmin !== true) {
     const accessible = await resolveAccessibleProfileIds(req, user)
     if (accessible !== null && !accessible.has(profileId)) {
       return res.status(403).json({ error: 'Forbidden' })

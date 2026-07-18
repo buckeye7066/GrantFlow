@@ -88,6 +88,22 @@ describe('mergeSectionData allowlist (untrusted-AI hardening)', () => {
     expect(el.meta).not.toHaveProperty('secret_admin_flag') // unlisted nested key -> dropped
   })
 
+  it('recursively allowlists nested ARRAYS inside array elements (drops unlisted key + __proto__)', () => {
+    // applications[].tasks is a nested array<object>; its existing shape declares
+    // only `label`. An injected nested-array item field (priority_override) is not
+    // in the shape -> dropped; __proto__ dropped; the known `label` is kept.
+    const existing = { applications: [{ school: '', tasks: [{ label: '' }] }] }
+    const incoming = JSON.parse(
+      '{"applications":[{"school":"Y","tasks":[{"label":"essay","priority_override":"urgent","__proto__":{"z":1}}]}]}',
+    )
+    const { data } = mergeSectionData(existing, incoming, ['applications'])
+    const el = data.applications.find((a) => a.school === 'Y')
+    expect(el.tasks[0].label).toBe('essay')
+    expect(el.tasks[0]).not.toHaveProperty('priority_override')
+    expect(Object.prototype.hasOwnProperty.call(el.tasks[0], '__proto__')).toBe(false)
+    expect({}.z).toBeUndefined()
+  })
+
   it('drops reserved prototype-pollution keys at top level AND nested depth', () => {
     const payload = JSON.parse(
       '{"household_income": 100, "__proto__": {"polluted": true}, "academic_status": {"__proto__": {"x": 1}}}',

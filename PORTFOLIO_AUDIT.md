@@ -190,6 +190,26 @@ Tests: `hamilton-route-auth.test.mjs` gains two demoted-admin (role:'admin' JWT,
 ### F4c — array-element allowlist is now recursive at every depth
 `sanitizeObjectElement` allowlisted only the element's TOP-LEVEL keys; nested values got reserved-key stripping but no allowlist, so `applications[].meta.secret_admin_flag` persisted whenever `meta` was an allowed element key. **Fix:** `buildElementShape()` derives a recursive key-shape from the union of existing array elements; `sanitizeAgainstShape()` enforces it at every depth (reserved keys always dropped; unknown nested keys dropped under an active shape; reserved-only fallback when no existing shape, to preserve first-time population). Test: `documentIngestionSectionAllowlist.test.js` — an unlisted nested key inside an allowed array element (`applications[].meta.secret_admin_flag`) + `__proto__` are both dropped.
 
+## 5e. Round 5 — the foundation fails closed + the last claim-shaped gates (Codex review of commit `b9a79e0`)
+
+Round 4 migrated `role`/`is_admin` gates but Codex found the migration rested on a fail-OPEN foundation plus 5 more sites (2 critical).
+
+### F0 [CRITICAL — the foundation] `req.ctx.isAdmin` now FAILS CLOSED
+`buildRequestContext` (`requestContext.js:204-213`) fell back to the JWT `role`/`is_admin` claim whenever the users-table read returned no row OR threw — so a demoted admin whose context DB read errors (or is induced to error) still resolved `isAdmin=true`, undermining the ENTIRE migration. **Fix:** admin is DB-backed only, with exactly two explicit DB-INDEPENDENT admins that are NOT JWT claims — (a) a **validated synthetic SERVICE token** (`system_admin_token`/`system_anya_token`/`system_health_token`, matched by an explicit id allowlist + `is_admin` from the validated token) and (b) the **server-configured admin email** (`isAdminEmail`). A real user always resolves from `users.is_admin`; a missing row or ANY DB error **fails closed** (never the token claim). The `ensureAdminUser` middleware + the server.js inline equivalent (which INSERT an `is_admin=true` row) were likewise restricted to the synthetic service ids, so a signed `role:'admin'` token with a novel userId can no longer mint a DB admin row. Tests: `requestContextAdminResolution.test.js` — demoted `role:'admin'` JWT + simulated context-DB failure → `isAdmin=false`; synthetic service token stays admin on DB failure; a novel-userId `role:'admin'` token never gets admin.
+
+### The 4 remaining claim-shaped gates + nested arrays
+
+| # | Sev | File:line | Fix |
+|---|-----|-----------|-----|
+| 2 | CRITICAL | `server.js:1913` (a DIFFERENT `/api/auth/me` than authMe.js) | cross-org profile list now gated on `req.ctx.isAdmin \|\| dbUser.is_admin`; the `role:'admin'` self-heal (`:1852`) + profile-less admin fallback (`:2037`) now gate on `req.ctx.isAdmin` |
+| 3 | CRITICAL | `billing.js:61` `requireAdmin` | `req.user.role` → `req.ctx.isAdmin` |
+| 4 | HIGH | `applicationTasks.js:123` | `user.role !== 'admin'` → `req.ctx.isAdmin !== true` |
+| 5 | MED | `documentIngestion.js:187` | nested ARRAYS now recurse the shape allowlist too (`sanitizeArrayAgainstShape`; `buildElementShape` derives child shapes from nested-array object items) |
+
+Plus the exhaustive re-grep caught and migrated: `authMe.js:94/243` (self-heal + fallback → `req.ctx.isAdmin`), `hamiltonPortalSync.js:101`, `hamiltonTailoredApplication.js:86`, `emailGrants.js:58` (ingest token OR), `vehicles.js:53` (ingest token OR).
+
+**Reviewed, confirmed NOT authz/scope decisions** (left intentionally): `auth.js` login-trigger side-effects (2213/2247/2260/2535/2570/3120/3257 — geo-crawl / Anya scheduler / startup audit, reading the FRESH login-time DB user); `authIdentity.js:165` + `server.js:1580` (`tokenRoles.includes('admin')` — identity CONSTRUCTION in the token layer; requestContext's DB-backed answer governs and ignores it for real users); `adminGeoCrawlOnLogin.js`/`anyaLoginTrigger.js` (login behavior); `profileDedupeService.js:1090` (reads a DB users row's `is_admin` for dedupe scoring, not request authz); the `isAdminUser`/`isAdmin` helper definitions (no authz callers remain — verified `grep -E '\bisAdminUser\('` finds only comments). **Confirmation:** `req.ctx.isAdmin` is now the single DB-backed, fail-closed admin authority and every authz/scope gate reads it.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

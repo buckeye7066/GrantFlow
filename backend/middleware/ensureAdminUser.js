@@ -15,6 +15,8 @@
  * @module middleware/ensureAdminUser
  */
 
+import { isSyntheticServiceAdmin } from './requestContext.js'
+
 /**
  * Factory that returns an Express middleware which ensures synthetic admin users exist in the DB.
  *
@@ -27,7 +29,11 @@
 export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
   return function ensureAdminUserMiddleware(req, _res, next) {
     const user = req.user
-    if (!user || user.role !== 'admin' || !user.userId) return next()
+    // Only ensure rows for the VALIDATED synthetic service tokens (system_admin_token /
+    // system_anya_token / system_health_token). Gating on the raw role:'admin' claim
+    // would create an is_admin=true row for any signed token with a novel userId —
+    // effectively minting DB-backed admin from a JWT claim.
+    if (!isSyntheticServiceAdmin(user) || !user.userId) return next()
 
     try {
       const existing = db

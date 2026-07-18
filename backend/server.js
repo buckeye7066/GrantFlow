@@ -87,7 +87,7 @@ import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
-import { attachRequestContext } from './middleware/requestContext.js';
+import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requestContext.js';
 import { ensureAuth, ensureAdmin } from './middleware/auth.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
@@ -1677,9 +1677,11 @@ app.use(async (req, res, next) => {
 
 // Ensure synthetic admin-token users exist so foreign keys don't explode.
 // This keeps admin-token flows (Anya, etc.) stable even on fresh DBs.
+// Restricted to the VALIDATED synthetic service tokens — gating on the raw
+// role:'admin' claim would mint an is_admin=true row from any signed JWT.
 app.use(async (req, _res, next) => {
   const user = req.user
-  if (!user || user.role !== 'admin' || !user.userId) return next()
+  if (!isSyntheticServiceAdmin(user) || !user.userId) return next()
 
   try {
     const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
@@ -1849,7 +1851,11 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       if (!dbUser) {
         // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
         // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
-        if (user.role === 'admin' || user.is_admin === true) {
+        // Gate on the DB-backed req.ctx.isAdmin (true for the validated synthetic
+        // ADMIN_TOKEN / configured-admin-email), NOT the raw JWT role claim — a
+        // signed role:'admin' token with a novel userId must not self-heal into a
+        // new admin row.
+        if (req.ctx?.isAdmin === true) {
           try {
             const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
             const existingByEmail = adminEmail
@@ -1910,8 +1916,10 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       }
 
       try {
-        const isAdminUser =
-          Boolean(dbUser?.is_admin) || user.role === 'admin' || user.is_admin === true
+        // DB-backed admin only (req.ctx.isAdmin fails closed on DB error and never
+        // trusts a JWT role/is_admin claim; dbUser.is_admin is the persisted row).
+        // A demoted admin's stale token must NOT unlock the cross-org profile list.
+        const isAdminUser = req.ctx?.isAdmin === true || Boolean(dbUser?.is_admin)
 
         if (isAdminUser) {
           // Admin UX expects cross-org profile selection.
@@ -2028,7 +2036,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       });
     }
 
-    if (user.role === 'admin') {
+    if (req.ctx?.isAdmin === true) {
       return res.json({
         role: 'admin',
         full_name: user.full_name ?? ADMIN_NAME,

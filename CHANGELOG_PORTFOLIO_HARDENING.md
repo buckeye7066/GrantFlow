@@ -49,6 +49,14 @@ Compat: `sendTwilioMessage` is additive (exported from `sms.js`). `/phone/start`
 
 Compat: behavior-preserving for real admins and synthetic admin/anya tokens (resolved via `req.ctx.isAdmin`); only stale-JWT demoted admins change (now denied). Login-time side-effects (geo-crawl / Anya scheduler) and the ADMIN_TOKEN self-heal path are unchanged. Two isolated route tests were made faithful to prod by mounting the real `attachRequestContext` middleware.
 
+## Round 5 — fail-closed foundation + last claim-shaped gates (see PORTFOLIO_AUDIT.md §5e)
+
+- **`req.ctx.isAdmin` now fails closed.** The context builder previously fell back to the JWT `role`/`is_admin` claim when the users-table read returned no row or errored — so a demoted admin whose DB read failed still resolved as admin. Admin is now DB-backed only, with two explicit DB-independent exceptions that are NOT token claims: a validated synthetic service token (`system_admin_token`/`system_anya_token`/`system_health_token`) and the server-configured admin email. Any DB error or missing row denies admin. The admin-user self-heal middlewares were restricted to those synthetic ids so a signed `role:'admin'` token with a novel userId can't mint an admin row.
+- **Second `/api/auth/me` (in server.js), billing `requireAdmin`, and an application-tasks fence** were still gating on the raw JWT claim — migrated to `req.ctx.isAdmin`. Also migrated: the other `/auth/me` self-heal/fallback branches, `hamiltonPortalSync`, `hamiltonTailoredApplication`, and the `emailGrants`/`vehicles` ingest-auth token ORs.
+- **Nested arrays** inside document-AI array elements are now recursively allowlisted (previously only nested objects were).
+
+Compat: behavior-preserving for real DB admins, the configured owner email, and validated synthetic tokens; only stale/forged `role:'admin'` tokens and DB-error cases change (now denied). Four isolated route-test harnesses were updated to use the validated synthetic ADMIN_TOKEN identity (their previous fake `role:'admin'` user relied on the now-removed fail-open fallback).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

@@ -91,7 +91,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         if (!dbUser) {
           // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
           // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
-          if (user.role === 'admin' || user.is_admin === true) {
+          if (req.ctx?.isAdmin === true) {
             try {
               await db.prepare(
                 `
@@ -240,7 +240,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         })
       }
 
-      if (user.role === 'admin') {
+      if (req.ctx?.isAdmin === true) {
         console.warn('[/api/auth/me] Admin token has no userId â returning profile-less response', {
           email: user.email ?? null,
         })

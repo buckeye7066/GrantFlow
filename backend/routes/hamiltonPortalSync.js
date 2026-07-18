@@ -98,7 +98,7 @@ router.get('/runs', async (req, res) => {
     if (!(await userMayAccessProfile(req, user, profileId))) {
       return res.status(403).json({ error: 'forbidden' })
     }
-  } else if (user?.role !== 'admin') {
+  } else if (req.ctx?.isAdmin !== true) {
     // No profile filter from a non-admin → restrict to their accessible profiles.
     const accessible = await getAccessibleProfileIds(req.db, user)
     if (accessible !== null) {
