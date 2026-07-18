@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Calendar,
+  Check,
   ClipboardList,
   CreditCard,
   FileSearch,
@@ -45,6 +46,7 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
+import { useAnyaPageAdapter } from "@/contexts/AnyaContext"
 import { useSettingsStore } from "@/stores/settingsStore"
 import { useAuthStore } from "@/stores/authStore"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
@@ -71,6 +73,7 @@ import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { runProfileAvatarLookup } from "@/services/profileAvatarAI"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
+import { getWorkspaceStepStatus } from "@/utils/workspaceSteps"
 import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
 import { formatFieldLabel } from "@/utils/fieldDisplay"
 import { EDITABLE_SECTIONS } from "@/config/missingInfoTargets"
@@ -148,40 +151,111 @@ function DeeperSearchChip({ completionPct, nextEmptySectionTitle, onRunDeeperSea
   )
 }
 
-function WorkspaceTabTrigger({ icon: Icon, title, detail, tooltip, value, active = false, compact = false }) {
+function WorkspaceTabTrigger({
+  icon: Icon,
+  title,
+  detail,
+  tooltip,
+  value,
+  active = false,
+  compact = false,
+  // Workspace step state (from the shared getWorkspaceStepStatus selector).
+  // `complete` = the underlying data proves this step is done → green + a large
+  // white checkmark. `isNext` = the single next incomplete step → ring + "Next
+  // step" badge, with the label pulsing (unless the user opts out of motion).
+  complete = false,
+  isNext = false,
+  pulse = false,
+}) {
+  // Card fill: complete (green) wins over active (blue) wins over resting.
+  // emerald-700 (not -600) so white/emerald-50 small label + detail text clear
+  // the AA 4.5:1 body-contrast bar on the green fill.
+  const fillClass = complete
+    ? "border-emerald-600 bg-emerald-700 text-white shadow-sm data-[state=active]:border-emerald-400 data-[state=active]:bg-emerald-700 data-[state=active]:text-white"
+    : active
+      ? "border-blue-300 bg-blue-50 text-blue-950"
+      : "border-slate-200 bg-white text-slate-800"
+
+  // The next step always carries a static ring so reduced-motion users still
+  // get the emphasis; the pulse (below) is an additive motion cue on top.
+  const nextRingClass = isNext
+    ? complete
+      ? "ring-2 ring-emerald-300 ring-offset-2"
+      : "ring-2 ring-blue-400 ring-offset-2"
+    : ""
+
+  // Solid darker-emerald chip so the WHITE checkmark hits a strong contrast
+  // ratio (emerald-900 vs white ≈ 10:1), never a washed-out translucent green.
+  const iconChipClass = complete
+    ? "bg-emerald-900 text-white"
+    : active
+      ? "bg-blue-600 text-white"
+      : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700"
+
+  const detailClass = complete
+    ? compact
+      ? "mt-0.5 block text-[11px] leading-snug text-emerald-50"
+      : "mt-1 block text-xs leading-relaxed text-emerald-50"
+    : compact
+      ? "mt-0.5 block text-[11px] leading-snug text-slate-600"
+      : "mt-1 block text-xs leading-relaxed text-slate-600"
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <TabsTrigger
           value={value}
-          className={`group h-auto w-full cursor-pointer whitespace-normal rounded-lg border text-left shadow-none transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950 hover:shadow-sm focus-visible:ring-blue-500 data-[state=active]:border-blue-300 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-950 data-[state=active]:shadow-none ${
-            compact ? "items-start justify-start gap-2 px-3 py-2.5" : "items-start justify-start gap-3 px-4 py-3.5"
+          data-step-complete={complete ? "true" : undefined}
+          data-step-next={isNext ? "true" : undefined}
+          aria-label={
+            complete
+              ? `${title} — done`
+              : isNext
+                ? `${title} — do this next`
+                : title
+          }
+          className={`group relative h-auto w-full cursor-pointer whitespace-normal rounded-lg border text-left shadow-none transition hover:-translate-y-0.5 hover:shadow-sm focus-visible:ring-blue-500 data-[state=active]:shadow-none ${
+            complete ? "" : "hover:border-blue-200 hover:bg-blue-50/70 hover:text-slate-950"
           } ${
-            active
-              ? "border-blue-300 bg-blue-50 text-blue-950"
-              : "border-slate-200 bg-white text-slate-800"
-          }`}
+            compact ? "items-start justify-start gap-2 px-3 py-2.5" : "items-start justify-start gap-3 px-4 py-3.5"
+          } ${fillClass} ${nextRingClass}`}
         >
           <span
             className={`flex shrink-0 items-center justify-center rounded-md ${
               compact ? "h-8 w-8" : "h-10 w-10"
-            } ${
-              active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-700"
-            }`}
+            } ${iconChipClass}`}
           >
-            <Icon className={compact ? "h-4 w-4" : "h-5 w-5"} />
+            {complete ? (
+              <Check className={compact ? "h-5 w-5" : "h-6 w-6"} strokeWidth={3} aria-hidden="true" />
+            ) : (
+              <Icon className={compact ? "h-4 w-4" : "h-5 w-5"} />
+            )}
           </span>
           <span className="min-w-0 flex-1">
-            <span className={compact ? "block text-xs font-semibold leading-tight" : "block text-sm font-semibold leading-tight"}>
-              {title}
+            <span className="flex items-center gap-2">
+              <span
+                className={`${
+                  compact ? "block text-xs font-semibold leading-tight" : "block text-sm font-semibold leading-tight"
+                } ${isNext && pulse ? "gf-step-next-label" : ""}`}
+              >
+                {title}
+              </span>
+              {isNext ? (
+                <span className="inline-flex shrink-0 items-center rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                  Next step
+                </span>
+              ) : null}
+              {complete ? (
+                <span className="inline-flex shrink-0 items-center rounded-full bg-emerald-800 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                  Done
+                </span>
+              ) : null}
             </span>
-            <span className={compact ? "mt-0.5 block text-[11px] leading-snug text-slate-600" : "mt-1 block text-xs leading-relaxed text-slate-600"}>
-              {detail}
-            </span>
+            <span className={detailClass}>{detail}</span>
           </span>
           <ArrowRight
             className={`mt-1 shrink-0 transition group-hover:translate-x-0.5 ${
-              active ? "text-blue-700" : "text-slate-400 group-hover:text-blue-600"
+              complete ? "text-white/80" : active ? "text-blue-700" : "text-slate-400 group-hover:text-blue-600"
             } ${compact ? "h-3.5 w-3.5" : "h-4 w-4"}`}
           />
         </TabsTrigger>
@@ -202,7 +276,13 @@ function ProfileWorkspaceNav({
   onRunDeeperSearch,
   onCompleteProfile,
   onOpenCoverageEvidence,
+  stepStatus,
+  pulseEnabled = true,
 }) {
+  // Map each primary tab to its shared step state (complete / next). Keyed by
+  // the SAME selector Anya reads, so a green card and Anya's nudge can never
+  // point at different "next steps".
+  const stepByKey = new Map((stepStatus?.steps ?? []).map((step) => [step.key, step]))
   const primaryTabs = [
     {
       value: "profile",
@@ -306,6 +386,22 @@ function ProfileWorkspaceNav({
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workspace</p>
           <h2 className="text-lg font-semibold text-slate-900">Work the profile in order</h2>
+          {stepStatus ? (
+            <p className="mt-1 text-xs text-slate-600">
+              <span className="font-medium text-emerald-700">
+                {stepStatus.completedCount} of {stepStatus.totalCount} steps done
+              </span>
+              {stepStatus.allComplete ? (
+                <span> — every step is complete.</span>
+              ) : stepStatus.nextStep ? (
+                <span>
+                  {" "}
+                  — next up:{" "}
+                  <span className="font-semibold text-blue-700">{stepStatus.nextStep.title}</span>.
+                </span>
+              ) : null}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <DeeperSearchChip
@@ -336,9 +432,19 @@ function ProfileWorkspaceNav({
           aria-label="Main profile workflow"
           className="!grid h-auto w-full grid-cols-1 gap-3 bg-transparent p-0 sm:grid-cols-2 xl:grid-cols-4"
         >
-          {primaryTabs.map((tab) => (
-            <WorkspaceTabTrigger key={tab.value} {...tab} active={activeTab === tab.value} />
-          ))}
+          {primaryTabs.map((tab) => {
+            const step = stepByKey.get(tab.value)
+            return (
+              <WorkspaceTabTrigger
+                key={tab.value}
+                {...tab}
+                active={activeTab === tab.value}
+                complete={Boolean(step?.complete)}
+                isNext={Boolean(step?.isNext)}
+                pulse={pulseEnabled}
+              />
+            )
+          })}
         </TabsList>
         <div className="mt-4 border-t border-slate-200 pt-4">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">More profile tools</p>
@@ -1131,6 +1237,43 @@ export default function ProfileDetail() {
   const nextEmptySection = profileCompletion.nextIncompleteSectionKey
   const nextEmptySectionTitle = nextEmptySection ? (SECTION_METADATA[nextEmptySection]?.title ?? nextEmptySection) : null
 
+  // Ordered Workspace step status (green cards + which one pulses). Same shared
+  // selector Anya reads, so the pulsing "next step" and Anya's guidance agree.
+  const stepStatus = React.useMemo(() => getWorkspaceStepStatus(profile), [profile])
+  // In-app motion opt-out (Comfort tab). The CSS pulse is also gated behind the
+  // OS-level prefers-reduced-motion; this honors the app-level toggle too.
+  const pulseEnabled = !preferences?.reduce_motion
+
+  // Publish the SAME step status into Anya's page context, so when the user
+  // asks Anya "what's next?" she names the exact step the card is pulsing.
+  // Derived from the shared selector — a single source of truth for both.
+  const anyaAdapterState = React.useMemo(() => {
+    if (!profileId || !stepStatus) return null
+    const nextStep = stepStatus.nextStep
+    return {
+      pageType: "profile-workspace",
+      primaryEntityId: profileId,
+      completion: {
+        workspaceStepsCompleted: stepStatus.completedCount,
+        workspaceStepsTotal: stepStatus.totalCount,
+        allWorkspaceStepsComplete: stepStatus.allComplete,
+        nextStepKey: stepStatus.nextStepKey,
+        nextStepTitle: nextStep?.title ?? null,
+        nextStepGuidance: nextStep?.anyaHint ?? null,
+      },
+      suggestedActions: nextStep
+        ? [
+            {
+              type: "navigate",
+              label: nextStep.actionLabel,
+              payload: { path: createPageUrl("ProfileDetail", { id: profileId, tab: nextStep.tab }) },
+            },
+          ]
+        : [],
+    }
+  }, [profileId, stepStatus])
+  useAnyaPageAdapter(anyaAdapterState)
+
   // One-time sync: target_colleges -> university_applications (avoids duplicates, no infinite loop)
   useEffect(() => {
     if (!profileId || !profile) return
@@ -1345,6 +1488,8 @@ export default function ProfileDetail() {
             isHealthProfile={isHealthProfile}
             completionPct={completionPct}
             nextEmptySectionTitle={nextEmptySectionTitle}
+            stepStatus={stepStatus}
+            pulseEnabled={pulseEnabled}
             onRunDeeperSearch={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
             onOpenCoverageEvidence={() => navigate(createPageUrl("CoverageEvidence", { profile_id: profileId }))}
             onCompleteProfile={() => {
