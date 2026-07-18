@@ -235,6 +235,41 @@ export function capShadowHtml(html) {
     : html;
 }
 
+// Phase 1d target-verification "not a real single program" cues, matched as
+// normalized substrings of a FETCHED target page's own text. A page dominated by
+// these is an error/login wall, not a fundable program — so it fails verification
+// even though it returned 2xx. Kept narrow + paired with a thin-page requirement
+// so a real program page that merely has a "Log in" nav link is never rejected.
+const TARGET_LOGIN_CUES = ['enter your password', 'forgot your password', 'forgot password', 'sign in to your account', 'log in to your account', 'please log in', 'please sign in', 'password'];
+const TARGET_ERROR_CUES = ['page not found', '404 error', 'error 404', 'access denied', '403 forbidden', 'account suspended', 'this page has moved', 'no longer available', 'we could not find', "we couldn't find", 'temporarily unavailable', 'service unavailable'];
+// Below this the target copy is too thin to be a real program page; combined with a
+// login/error cue it is treated as an error/login wall.
+const TARGET_THIN_PAGE_CHARS = 1200;
+
+/**
+ * decideTargetVerified — the PURE Phase-1d verdict: given a FETCHED target's kind
+ * (from the 1c classifier), its own text, and status, is it INDEPENDENTLY a real
+ * single program? Verified requires: reachable (asserted by the caller — this runs
+ * only on a 2xx/3xx-final response), NOT an aggregator/directory (1c kind), and NOT
+ * an error/login wall. Exported (and blind-import-free) so the login/error+kind
+ * decision is unit-testable apart from the network + DOM parse.
+ *
+ * @param {{ kind?:string, pageText?:string, status?:number|null }} input
+ * @returns {{ verified:boolean, reason:string }}
+ */
+export function decideTargetVerified({ kind, pageText, status } = {}) {
+  const hay = String(pageText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // A server-error status that still carried a body is not a real program page.
+  if (Number.isFinite(status) && status >= 400) return { verified: false, reason: 'error_status' };
+  const thin = hay.length < TARGET_THIN_PAGE_CHARS;
+  const isError = TARGET_ERROR_CUES.some((c) => hay.includes(c));
+  const isLogin = thin && TARGET_LOGIN_CUES.some((c) => hay.includes(c));
+  if (isError || isLogin) return { verified: false, reason: isError ? 'error_page' : 'login_page' };
+  // An AGGREGATOR/DIRECTORY target is a locator, not a directly-applicable program.
+  if (kind === 'AGGREGATOR_INDEX') return { verified: false, reason: 'aggregator' };
+  return { verified: true, reason: kind || 'reachable' };
+}
+
 /**
  * makeBlindShadow — build the injectable profile-BLIND shadow for the web lane
  * from the Phase-1a modules + a REAL Claude/OpenAI adapter (the same providers
@@ -286,10 +321,46 @@ export async function makeBlindShadow() {
     const maxPages = Number(process.env.WEB_LANE_PROFILE_BLIND_MAX_PAGES) || 8;
     const totalBudgetMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TOTAL_BUDGET_MS) || 6000;
     const perPageTimeoutMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TIMEOUT_MS) || 4000;
+    // Phase 1d INDEPENDENT TARGET VERIFICATION bounds. A SINGLE wall-clock budget +
+    // a max-fetches cap for the whole run, plus a short per-fetch timeout — kept
+    // small so the shadow's extra target fetches can never delay the live lane.
+    const targetVerifyBudgetMs = Number(process.env.WEB_LANE_TARGET_VERIFY_BUDGET_MS) || 5000;
+    const rawTargetMax = process.env.WEB_LANE_TARGET_VERIFY_MAX;
+    const targetVerifyMax = rawTargetMax !== undefined && rawTargetMax !== '' && Number.isFinite(Number(rawTargetMax))
+      ? Number(rawTargetMax) : 5; // allows an explicit 0 (disable) while defaulting to 5
+    const targetVerifyTimeoutMs = Number(process.env.WEB_LANE_TARGET_VERIFY_TIMEOUT_MS) || 3000;
     return {
       maxPages,
       totalBudgetMs,
       perPageTimeoutMs,
+      targetVerifyBudgetMs,
+      targetVerifyMax,
+      targetVerifyTimeoutMs,
+      // Phase 1d: classify a FETCHED target page (the candidate's OWN apply/info
+      // URL, fetched independently by the web lane via the SSRF-safe fetcher). PURE
+      // + page-derived: builds the target's own text + link inventory, reuses the
+      // 1c trust-aware classifier for the aggregator/directory axis, and applies the
+      // login/error heuristic — NO profile, NO network here (the lane owns the
+      // fetch). Best-effort: any failure degrades to a conservative unverified.
+      classifyTarget: async ({ finalUrl, html, status }) => {
+        try {
+          const cappedHtml = capShadowHtml(html);
+          const pageText = htmlToText(cappedHtml, 12000);
+          const linkInventory = buildLinkInventory(cappedHtml, { baseUrl: finalUrl });
+          // Classify the TARGET page itself: a lightweight page-derived candidate
+          // built from the fetched target (title/sponsor unknown here — the kind
+          // axis keys off directory language + link fan-out + apply target, all
+          // page-derived), so the aggregator/directory verdict is about the TARGET.
+          const { kind } = classifyBlindOpportunityKind({
+            candidate: { page_url: finalUrl, info_url: finalUrl },
+            linkInventory,
+            pageText,
+          });
+          return decideTargetVerified({ kind, pageText, status });
+        } catch {
+          return { verified: false, reason: 'classify_error' };
+        }
+      },
       // webLane passes the per-call slice (timeoutMs) + AbortSignal; forward both.
       extractPage: async ({ pageUrl, html, timeoutMs, signal }) => {
         // Cap the raw HTML BEFORE parsing so DOM work is bounded regardless of body size.
@@ -366,6 +437,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // + LLM extraction, then writes finds into the SAME store through the same
   // reality gate + matcher, so persistRun flushes them alongside the API finds.
   // Best-effort and bounded; never blocks or fails the run.
+  //
+  // Phase 1d target verification (shadow, flag ON) is a bounded telemetry-only
+  // step the lane runs WITHOUT blocking its live return — it hands back a promise
+  // (`web.targetVerification`) that we await AFTER persistRun so the live result
+  // and persistence never wait on it (it also runs concurrently with persistRun).
+  let webTargetVerification = null;
   if (isWebDiscoveryEnabled()) {
     try {
       const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }, parity] = await Promise.all([
@@ -403,7 +480,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
         { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage, blindShadow },
         { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages },
       );
-      const { recommendations: webRecs, ...webTelemetry } = web;
+      const { recommendations: webRecs, targetVerification, ...webTelemetry } = web;
+      // The bounded target-verification promise is awaited AFTER persistRun (it
+      // mutates web_lane_blind_shadow.promotion_evidence in place — a shared ref —
+      // so recordWebLaneRun below sees the final counter) and is kept OUT of the
+      // persisted telemetry object.
+      webTargetVerification = targetVerification ?? null;
       run.web_lane = webTelemetry;
       if (Array.isArray(webRecs) && webRecs.length) {
         run.recommendations = [...(run.recommendations ?? []), ...webRecs].sort((a, b) => b.match_score - a.match_score);
@@ -449,6 +531,15 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     };
   }
   const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
+
+  // Now that the live result is persisted, settle the bounded Phase-1d target
+  // verification (started before the lane returned, so it ran CONCURRENTLY with
+  // persistRun and never delayed it) so its promotion_evidence counter is present
+  // on run.web_lane before we record web-lane health telemetry below. Best-effort:
+  // it never throws, and a failure here can never affect the persisted result.
+  if (webTargetVerification) {
+    try { await webTargetVerification; } catch { /* telemetry-only; never fails a crawl */ }
+  }
 
   // Return the full-fidelity stored opportunities (OS shape, with
   // applicant_types/need_categories/geography/kind) so the caller can cross-match

@@ -12,7 +12,8 @@ import { buildLinkInventory } from '../crawler-os/blindLinkInventory.js'
 import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js'
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js'
 import { htmlToText } from '../services/webGrantExtractor.js'
-import { capShadowHtml, MAX_SHADOW_HTML_CHARS } from '../services/crawlerOsService.js'
+import { capShadowHtml, MAX_SHADOW_HTML_CHARS, decideTargetVerified } from '../services/crawlerOsService.js'
+import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js'
 
 const thesis = {
   profile_id: 'p1',
@@ -291,6 +292,9 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       { store: onStore, fetcher: fakeFetcher(bodyByUrl), searchWeb: makeSearch(), extractOpportunities: makeExtract(), blindShadow: { extractPage } },
       { thesis, runId: 'on1' },
     )
+    // Target verification is telemetry-only and runs off the live path; settle it
+    // so promotion_evidence is attached before we assert the counter shape.
+    await onRes.targetVerification
 
     // Shadow ran on both fetched pages; blind produced 1 evidenced candidate.
     expect(extractPage).toHaveBeenCalledTimes(2)
@@ -309,6 +313,18 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       // tallies conservatively as UNKNOWN. (Per-kind classification is exercised
       // by the dedicated test below and the classifier's own node:test suite.)
       by_kind: { direct: 0, aggregator_index: 0, unknown: 1, protected_directory: 0, unverified_index: 0 },
+      // Phase 1d promotion evidence: the one blind candidate exposes NO independent
+      // apply/info target (no apply_url/info_url), so it is source_only — no fetch.
+      promotion_evidence: {
+        target_checked: 1,
+        target_verified: 0,
+        source_only: 1,
+        real_and_matched: 0,
+        target_check_errors: 0,
+        target_fetches: 0,
+        target_capped: false,
+        target_elapsed_ms: 0,
+      },
     })
     expect(typeof elapsed_ms).toBe('number')
     expect(elapsed_ms).toBeGreaterThanOrEqual(0)
@@ -342,6 +358,7 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       { store, fetcher: fakeFetcher(bodyByUrl), searchWeb: makeSearch(), extractOpportunities: makeExtract(), blindShadow: { extractPage } },
       { thesis, runId: 'kind1' },
     )
+    await res.targetVerification // settle the off-live-path telemetry step
     const bk = res.web_lane_blind_shadow.by_kind
     expect(bk).toEqual({ direct: 1, aggregator_index: 2, unknown: 1, protected_directory: 1, unverified_index: 1 })
     // INVARIANT: the trust split covers exactly the aggregator bucket.
@@ -358,6 +375,7 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       { store, fetcher: fakeFetcher(bodyByUrl), searchWeb: makeSearch(), extractOpportunities: makeExtract(), blindShadow: { extractPage } },
       { thesis, runId: 'err1' },
     )
+    await res.targetVerification // settle the off-live-path telemetry step
     // Live path unaffected: still stored the one real opportunity.
     expect(res.ok).toBe(true)
     expect(res.stored).toBe(1)
@@ -375,6 +393,7 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       { store, fetcher: fakeFetcher(bodyByUrl), searchWeb: makeSearch(), extractOpportunities: makeExtract(), blindShadow: { extractPage, maxPages: 1 } },
       { thesis, runId: 'cap1' },
     )
+    await res.targetVerification // settle the off-live-path telemetry step
     // Two pages fetched, but the shadow only ran on the first.
     expect(extractPage).toHaveBeenCalledTimes(1)
     expect(res.web_lane_blind_shadow.pages_shadowed).toBe(1)
@@ -390,6 +409,7 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       { thesis, runId: 'to1' },
     )
     const dt = Date.now() - t0
+    await res.targetVerification // settle the off-live-path telemetry step
     // Live path unaffected and returned normally.
     expect(res.ok).toBe(true)
     expect(res.stored).toBe(1)
@@ -454,6 +474,7 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
       { store, fetcher: fakeFetcher({ 'https://nyf.org/grant': html }), searchWeb, extractOpportunities, blindShadow: { extractPage } },
       { thesis, runId: 'real1' },
     )
+    await res.targetVerification // settle the off-live-path telemetry step
 
     expect(llm).toHaveBeenCalledTimes(1) // the blind extractor really invoked the injected LLM
     const s = res.web_lane_blind_shadow
@@ -464,5 +485,352 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
     // pipeline is pure observation.
     expect(res.stored).toBe(0)
     expect(storage.listCatalog(store).length).toBe(0)
+  })
+})
+
+describe('runWebDiscoveryLane — Phase 1d independent target verification (promotion evidence)', () => {
+  const thesisTv = {
+    profile_id: 'p1',
+    applicant_types: ['nonprofit'],
+    needs: ['youth', 'after school'],
+    location: { state: 'TN', city: 'Nashville' },
+    loan_allowed: false,
+    cost_share_allowed: true,
+  }
+  const SOURCE = 'https://nyf.org/grant'
+  // The live lane always fetches + extracts + stores the one real opportunity from
+  // the source page — every 1d test asserts that live output is untouched.
+  const realOpp = {
+    title: 'Nashville Youth Services Grant',
+    funder: 'Nashville Community Foundation',
+    summary: 'Grants to nonprofits serving youth and after school programs in Tennessee',
+    deadline: '2026-12-01',
+    apply_url: 'https://nyf.org/grant/apply',
+    state: 'TN',
+    relevant: true,
+  }
+  const makeLiveExtract = () => vi.fn(async ({ pageUrl }) => (pageUrl === SOURCE ? [realOpp] : []))
+  const makeSearch = () => vi.fn().mockResolvedValue([{ url: SOURCE, title: 'Youth Fund', snippet: '' }])
+
+  // A tracking fetcher: records every URL it is asked to fetch (so we can assert
+  // the SSRF-safe fetcher is the ONLY fetch path + dedup), serves configured 2xx
+  // bodies, 404s the rest, and can hang / throw for specific target URLs.
+  function makeTrackingFetcher({ bodies = {}, hang = new Set(), throwOn = new Set() } = {}) {
+    const calls = []
+    return {
+      calls,
+      fetch: async (url) => {
+        calls.push(url)
+        if (throwOn.has(url)) throw new Error('fetch boom ' + url)
+        if (hang.has(url)) return new Promise(() => {}) // never resolves — simulates a hung host
+        const body = bodies[url]
+        if (body === undefined || body === null) return { ok: false, status: 404, finalUrl: url, body: null }
+        return { ok: true, status: 200, body, finalUrl: url, contentHash: 'h' + url.length, fetchedAt: '2026-06-29T00:00:00Z' }
+      },
+    }
+  }
+
+  const evidenced = { eligibility: { value: 'x', evidence_snippet: 'youth', source: SOURCE } }
+
+  it('records target_verified vs source_only correctly; real_and_matched only when verified AND evidenced', async () => {
+    const store = createMemoryStore()
+    const fetcher = makeTrackingFetcher({
+      bodies: {
+        [SOURCE]: '<html><body><main>youth grant</main></body></html>',
+        'https://prog.org/apply': '<html><body>real program apply page</body></html>',
+        'https://dir.org/list': '<html><body>a directory</body></html>',
+        // dead.org/404 intentionally absent => fetcher returns ok:false (unreachable)
+      },
+    })
+    // Blind shadow: one page yields three candidates with distinct targets.
+    const extractPage = vi.fn(async () => [
+      { title: 'Verified A', sponsor: 'Funder A', apply_url: 'https://prog.org/apply', field_provenance: evidenced },
+      { title: 'Aggregator B', sponsor: 'Funder B', apply_url: 'https://dir.org/list' },
+      { title: 'Dead C', sponsor: 'Funder C', apply_url: 'https://dead.org/404' },
+    ])
+    // classifyTarget mock: prog.org is a real program, dir.org an aggregator.
+    const classifyTarget = vi.fn(async ({ finalUrl }) => ({ verified: /prog\.org/.test(finalUrl) }))
+
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(), blindShadow: { extractPage, classifyTarget } },
+      { thesis: thesisTv, runId: 'tv-1' },
+    )
+
+    // Live path untouched — and available WITHOUT awaiting target verification.
+    expect(res.stored).toBe(1)
+    expect(storage.listCatalog(store).length).toBe(1)
+
+    // Settle the off-live-path verification to read its telemetry counter.
+    await res.targetVerification
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    expect(pe.target_checked).toBe(3)
+    expect(pe.target_verified).toBe(1)
+    expect(pe.source_only).toBe(2) // aggregator + unreachable
+    expect(pe.real_and_matched).toBe(1) // only the verified AND evidenced candidate
+    expect(pe.target_check_errors).toBe(0)
+    expect(pe.target_fetches).toBe(3)
+    expect(pe.target_capped).toBe(false)
+    // classifyTarget is NOT consulted for an unreachable target (fetch decides first).
+    expect(classifyTarget).toHaveBeenCalledTimes(2)
+  })
+
+  it('is BOUNDED: N hanging targets stay within the single wall-clock budget and the max-fetch cap; live returns normally', async () => {
+    const store = createMemoryStore()
+    const hang = new Set()
+    const candidates = []
+    for (let i = 0; i < 8; i += 1) {
+      const url = `https://slow${i}.org/apply`
+      hang.add(url)
+      candidates.push({ title: `Slow ${i}`, sponsor: `F ${i}`, apply_url: url })
+    }
+    const fetcher = makeTrackingFetcher({ bodies: { [SOURCE]: '<html><body>youth grant</body></html>' }, hang })
+    const extractPage = vi.fn(async () => candidates)
+
+    const t0 = Date.now()
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(),
+        blindShadow: { extractPage, targetVerifyBudgetMs: 600, targetVerifyMax: 5, targetVerifyTimeoutMs: 150 } },
+      { thesis: thesisTv, runId: 'tv-bound' },
+    )
+    const dt = Date.now() - t0
+    await res.targetVerification // settle the off-live-path telemetry step
+
+    // Live path unaffected.
+    expect(res.ok).toBe(true)
+    expect(res.stored).toBe(1)
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    // Never more than the max-fetch cap, and the pass stopped early (capped).
+    expect(pe.target_fetches).toBeLessThanOrEqual(5)
+    expect(pe.target_fetches).toBeGreaterThanOrEqual(1)
+    expect(pe.target_capped).toBe(true)
+    // A hung target is a caught error, never a silent verified.
+    expect(pe.target_verified).toBe(0)
+    expect(pe.target_check_errors).toBeGreaterThanOrEqual(1)
+    // TOTAL target-verify time is bounded by the SINGLE budget, not per-fetch × N.
+    expect(pe.target_elapsed_ms).toBeLessThanOrEqual(600 + 200) // budget + one in-flight slice
+    // ...so the whole live run never waited anywhere near 8×150ms of hung fetches.
+    expect(dt).toBeLessThan(1500)
+  })
+
+  it('best-effort isolation: a throwing fetcher counts errors and never affects the live lane', async () => {
+    const store = createMemoryStore()
+    const throwOn = new Set(['https://boom1.org/apply', 'https://boom2.org/apply'])
+    const fetcher = makeTrackingFetcher({ bodies: { [SOURCE]: '<html><body>youth grant</body></html>' }, throwOn })
+    const extractPage = vi.fn(async () => [
+      { title: 'Boom 1', sponsor: 'F1', apply_url: 'https://boom1.org/apply' },
+      { title: 'Boom 2', sponsor: 'F2', apply_url: 'https://boom2.org/apply' },
+    ])
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(), blindShadow: { extractPage } },
+      { thesis: thesisTv, runId: 'tv-throw' },
+    )
+    await res.targetVerification // settle the off-live-path telemetry step
+    expect(res.ok).toBe(true)
+    expect(res.stored).toBe(1) // live unaffected
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    expect(pe.target_check_errors).toBe(2)
+    expect(pe.target_verified).toBe(0)
+    expect(pe.target_checked).toBe(2)
+  })
+
+  it('uses ONLY the injected SSRF-safe fetcher, DEDUPES shared targets, and NEVER re-fetches the source page', async () => {
+    const store = createMemoryStore()
+    const fetcher = makeTrackingFetcher({
+      bodies: { [SOURCE]: '<html><body>youth grant</body></html>', 'https://shared.org/apply': '<html><body>shared apply</body></html>' },
+    })
+    const extractPage = vi.fn(async () => [
+      { title: 'Shared 1', sponsor: 'F1', apply_url: 'https://shared.org/apply', field_provenance: evidenced },
+      { title: 'Shared 2', sponsor: 'F2', apply_url: 'https://shared.org/apply' }, // same target => dedup
+      { title: 'Source-only', sponsor: 'F3', info_url: SOURCE }, // target IS the source page => no independent fetch
+    ])
+    const classifyTarget = vi.fn(async () => ({ verified: true }))
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(), blindShadow: { extractPage, classifyTarget } },
+      { thesis: thesisTv, runId: 'tv-dedup' },
+    )
+    await res.targetVerification // settle the off-live-path telemetry step
+    // The shared target was fetched exactly once (dedup); the source page was
+    // fetched exactly once — by the LIVE lane — and NEVER re-fetched for verification.
+    expect(fetcher.calls.filter((u) => u === 'https://shared.org/apply').length).toBe(1)
+    expect(fetcher.calls.filter((u) => u === SOURCE).length).toBe(1)
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    expect(pe.target_checked).toBe(3)
+    expect(pe.target_verified).toBe(2) // both shared candidates verified (2nd via cache)
+    expect(pe.source_only).toBe(1) // the source-page-only candidate
+    expect(pe.real_and_matched).toBe(1) // only the evidenced shared candidate
+    expect(pe.target_fetches).toBe(1) // one real network fetch for the two shared candidates
+  })
+
+  it('flag OFF (no blindShadow): no target verification runs and no promotion_evidence key exists', async () => {
+    const store = createMemoryStore()
+    const fetcher = makeTrackingFetcher({ bodies: { [SOURCE]: '<html><body>youth grant</body></html>', 'https://x.org/apply': '<html><body>x</body></html>' } })
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract() /* no blindShadow */ },
+      { thesis: thesisTv, runId: 'tv-off' },
+    )
+    expect('web_lane_blind_shadow' in res).toBe(false)
+    // The only fetch was the LIVE source-page fetch — no target verification at all.
+    expect(fetcher.calls).toEqual([SOURCE])
+    expect(res.stored).toBe(1)
+  })
+
+  it('end-to-end with the REAL classifier verdict: a real program page verifies; an aggregator/directory page is source_only', async () => {
+    // Build the SAME classifyTarget crawlerOsService.makeBlindShadow builds: fetch
+    // bytes → htmlToText + buildLinkInventory → 1c classifier → decideTargetVerified.
+    const classifyTarget = async ({ finalUrl, html, status }) => {
+      const pageText = htmlToText(html, 12000)
+      const linkInventory = buildLinkInventory(html, { baseUrl: finalUrl })
+      const { kind } = classifyBlindOpportunityKind({ candidate: { page_url: finalUrl, info_url: finalUrl }, linkInventory, pageText })
+      return decideTargetVerified({ kind, pageText, status })
+    }
+    const programHtml =
+      '<html><body><main><h1>Nashville Youth Services Grant</h1>' +
+      '<p>The Nashville Community Foundation offers this grant to nonprofits serving youth in Tennessee. ' +
+      'Applications are reviewed annually.</p>' +
+      '<a href="https://prog.org/apply/form">Apply here</a></main></body></html>'
+    // A directory page: many outbound program links + directory language.
+    const dirLinks = Array.from({ length: 20 }, (_, i) => `<a href="https://dir.org/p/${i}">Program ${i}</a>`).join('')
+    const dirHtml =
+      `<html><body><main><h1>Grants Directory</h1><p>Browse our list of grants and search our database of funding.</p>${dirLinks}</main></body></html>`
+
+    const store = createMemoryStore()
+    const fetcher = makeTrackingFetcher({
+      bodies: {
+        [SOURCE]: '<html><body>youth grant</body></html>',
+        'https://prog.org/apply': programHtml,
+        'https://dir.org/directory': dirHtml,
+      },
+    })
+    const extractPage = vi.fn(async () => [
+      { title: 'Prog', sponsor: 'Nashville Community Foundation', apply_url: 'https://prog.org/apply', field_provenance: evidenced },
+      { title: 'Dir', sponsor: 'Some Portal', apply_url: 'https://dir.org/directory' },
+    ])
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(), blindShadow: { extractPage, classifyTarget } },
+      { thesis: thesisTv, runId: 'tv-real' },
+    )
+    await res.targetVerification // settle the off-live-path telemetry step
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    expect(pe.target_verified).toBe(1) // the real program page
+    expect(pe.source_only).toBe(1) // the aggregator/directory page
+    expect(pe.real_and_matched).toBe(1)
+    expect(res.stored).toBe(1) // live untouched
+  })
+
+  it('FINDING 2: a target that hangs the whole budget does NOT delay the live return (verification runs off the live path)', async () => {
+    // The blocker: target verification used to be AWAITED before result.ok and the
+    // return, so a hung target could delay the live result + persistRun by up to
+    // the whole budget. Now the live result is finalized and returned immediately;
+    // verification is a telemetry-only handle the caller settles AFTER persistRun.
+    const store = createMemoryStore()
+    const hang = new Set(['https://slow.org/apply'])
+    const fetcher = makeTrackingFetcher({ bodies: { [SOURCE]: '<html><body>youth grant</body></html>' }, hang })
+    const extractPage = vi.fn(async () => [{ title: 'Slow', sponsor: 'F', apply_url: 'https://slow.org/apply' }])
+
+    const t0 = Date.now()
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(),
+        blindShadow: { extractPage, targetVerifyBudgetMs: 1000, targetVerifyMax: 5, targetVerifyTimeoutMs: 1000 } },
+      { thesis: thesisTv, runId: 'tv-nonblock' },
+    )
+    const liveReturnMs = Date.now() - t0
+
+    // The LIVE result is fully available at return — result.ok, the stored
+    // opportunity, and the catalog are ALL present before verification completes.
+    expect(res.ok).toBe(true)
+    expect(res.stored).toBe(1)
+    expect(storage.listCatalog(store).length).toBe(1)
+    // promotion_evidence is NOT attached yet: it is telemetry-only, off the live path.
+    expect(res.web_lane_blind_shadow.promotion_evidence).toBeUndefined()
+    // The live return time is INDEPENDENT of the ~1s hung-target budget — it did
+    // not wait on target verification at all.
+    expect(liveReturnMs).toBeLessThan(500)
+
+    // Settling the handle is where the slow work is observed — decoupled from and
+    // strictly AFTER the fast live return above.
+    const t1 = Date.now()
+    const pe = await res.targetVerification
+    const verifyMs = Date.now() - t1
+    expect(verifyMs).toBeGreaterThan(liveReturnMs)
+    expect(pe.target_check_errors).toBeGreaterThanOrEqual(1) // the hung target aborted + counted
+    expect(pe.target_verified).toBe(0)
+    // Live result never regressed while verification ran.
+    expect(storage.listCatalog(store).length).toBe(1)
+  })
+
+  it('FINDING 3: a repeatedly-FAILING target is cached — two candidates sharing a throwing url produce exactly ONE fetch', async () => {
+    const store = createMemoryStore()
+    const throwOn = new Set(['https://boom.org/apply'])
+    const fetcher = makeTrackingFetcher({ bodies: { [SOURCE]: '<html><body>youth grant</body></html>' }, throwOn })
+    const extractPage = vi.fn(async () => [
+      { title: 'Boom 1', sponsor: 'F1', apply_url: 'https://boom.org/apply' },
+      { title: 'Boom 2', sponsor: 'F2', apply_url: 'https://boom.org/apply' }, // same failing target
+    ])
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(), blindShadow: { extractPage } },
+      { thesis: thesisTv, runId: 'tv-failcache' },
+    )
+    await res.targetVerification
+    // The failing target was fetched exactly ONCE — the second candidate reused the
+    // cached failure verdict instead of spending another fetch (the dedup now
+    // covers failures/timeouts, not only successes).
+    expect(fetcher.calls.filter((u) => u === 'https://boom.org/apply').length).toBe(1)
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    expect(pe.target_fetches).toBe(1)
+    expect(pe.target_checked).toBe(2)
+    expect(pe.target_check_errors).toBe(1) // the one real attempt
+    expect(pe.source_only).toBe(1) // the deduped repeat (cached not-verified)
+    expect(pe.target_verified).toBe(0)
+  })
+
+  it('FINDING 3: alias (tracking param) and fragment variants of the same target dedup to ONE fetch', async () => {
+    const store = createMemoryStore()
+    const canonical = 'https://prog.org/apply'
+    const fetcher = makeTrackingFetcher({
+      bodies: { [SOURCE]: '<html><body>youth grant</body></html>', [canonical]: '<html><body>real program apply page</body></html>' },
+    })
+    const classifyTarget = vi.fn(async () => ({ verified: true }))
+    const extractPage = vi.fn(async () => [
+      { title: 'Base', sponsor: 'F1', apply_url: 'https://prog.org/apply', field_provenance: evidenced },
+      { title: 'Tracking alias', sponsor: 'F2', apply_url: 'https://prog.org/apply?utm_source=news' }, // tracking param stripped
+      { title: 'Fragment alias', sponsor: 'F3', apply_url: 'https://prog.org/apply#section' }, // fragment never sent on the wire
+    ])
+    const res = await runWebDiscoveryLane(
+      { store, fetcher, searchWeb: makeSearch(), extractOpportunities: makeLiveExtract(), blindShadow: { extractPage, classifyTarget } },
+      { thesis: thesisTv, runId: 'tv-aliasdedup' },
+    )
+    await res.targetVerification
+    // All three collapse to the same normalized fetch identity → ONE network fetch.
+    expect(fetcher.calls.filter((u) => u.startsWith('https://prog.org/apply')).length).toBe(1)
+    const pe = res.web_lane_blind_shadow.promotion_evidence
+    expect(pe.target_fetches).toBe(1)
+    expect(pe.target_checked).toBe(3)
+    expect(pe.target_verified).toBe(3) // base verified; the two aliases reuse the cached verdict
+    expect(pe.real_and_matched).toBe(1) // only the evidenced base candidate
+    // classifyTarget was consulted ONCE — only the single real fetch is classified.
+    expect(classifyTarget).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('decideTargetVerified (Phase 1d pure verdict)', () => {
+  const bigProgram = 'A real funding program page. '.repeat(80) // > thin-page threshold, no bad cues
+  it('verifies a reachable real single program (DIRECT_PROGRAM / UNKNOWN, no bad cues)', () => {
+    expect(decideTargetVerified({ kind: 'DIRECT_PROGRAM', pageText: bigProgram, status: 200 }).verified).toBe(true)
+    expect(decideTargetVerified({ kind: 'UNKNOWN', pageText: bigProgram, status: 200 }).verified).toBe(true)
+  })
+  it('rejects an aggregator/directory target', () => {
+    const v = decideTargetVerified({ kind: 'AGGREGATOR_INDEX', pageText: bigProgram, status: 200 })
+    expect(v.verified).toBe(false)
+    expect(v.reason).toBe('aggregator')
+  })
+  it('rejects an error page (soft-200 or 4xx) and a thin login wall', () => {
+    expect(decideTargetVerified({ kind: 'UNKNOWN', pageText: 'Page not found. Sorry.', status: 200 }).verified).toBe(false)
+    expect(decideTargetVerified({ kind: 'DIRECT_PROGRAM', pageText: bigProgram, status: 404 }).verified).toBe(false)
+    expect(decideTargetVerified({ kind: 'UNKNOWN', pageText: 'Please log in. Enter your password.', status: 200 }).verified).toBe(false)
+  })
+  it('does NOT reject a real program page that merely mentions a login link in long copy', () => {
+    // "password" appears but the page is substantial content, not a thin login wall.
+    const withNav = bigProgram + ' Members can log in with a password to view their account.'
+    expect(decideTargetVerified({ kind: 'DIRECT_PROGRAM', pageText: withNav, status: 200 }).verified).toBe(true)
   })
 })
