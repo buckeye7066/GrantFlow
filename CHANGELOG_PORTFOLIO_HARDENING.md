@@ -98,6 +98,14 @@ Compat: attribution/`createdBy`/`actor` labels that read `ctx.email` now show th
 
 Compat: behavior-preserving for real users, validated service/legacy tokens, and actual profile owners; only stale/deleted-user JWTs and share-only collaborators change (now denied).
 
+## Round 12 — synthetic-id reservation in the helpers, trusted-identity flag, exact-field delete proof (see PORTFOLIO_AUDIT.md §5l)
+
+- **Reserved synthetic ids are rejected without provenance in the access helpers.** A new shared `middleware/syntheticServiceTokens.js` is the single source of truth; `getOwnedAndGrantedProfileIds` and `isAdminUserWithDb` now return empty/false immediately for a userId that collides with `system_admin_token`/`system_anya_token`/`system_health_token` but lacks the `serviceToken` provenance flag — so a self-healed synthetic `users` row can never be hijacked by a colliding-`sub` JWT.
+- **`req.ctx.identityResolved`** is a new trusted-identity flag (true only for a real users row / validated service or legacy-profile-token provenance). Profile subroutes no longer treat a deleted-user `ctx.userId` as ownership — the `canAccessProfileRowFromCtx` and `router.param('id')` fallbacks are gated on it.
+- **Legacy document-delete owner proof is an exact root-field comparison.** The SQLite json1-absent fallback no longer uses a `LIKE` substring (which matched nested contact emails); it parses the section JSON in JS and compares only `basic_information.email`, failing closed on unparseable data.
+
+Compat: behavior-preserving for real users, validated service/legacy tokens, and actual profile owners; only colliding-synthetic-id JWTs, deleted-user JWTs, and nested-email collaborators change (now denied). `isSyntheticServiceAdmin` is re-exported from `requestContext` for existing importers.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

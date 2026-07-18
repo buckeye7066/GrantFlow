@@ -13,7 +13,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 
 const Database = (await import('better-sqlite3')).default
-const { getAccessibleProfileIds, getOwnedAndGrantedProfileIds, getTrustedUserEmails } = await import(
+const { getAccessibleProfileIds, getOwnedAndGrantedProfileIds, getTrustedUserEmails, isAdminUserWithDb } = await import(
   '../utils/accessControl.js'
 )
 
@@ -31,6 +31,9 @@ function makeDb() {
     INSERT INTO profiles (id, user_id, created_by, status) VALUES ('shared', 'owner-x', 'owner-x', 'active');
     -- 'stale-owned' is owned by a DELETED user (no users row for 'deleted-user').
     INSERT INTO profiles (id, user_id, created_by, status) VALUES ('stale-owned', 'deleted-user', 'deleted-user', 'active');
+    -- A self-healed synthetic admin-token row + a profile it "owns" and its email grant.
+    INSERT INTO users (id, is_admin, primary_email) VALUES ('system_admin_token', 1, 'svc@grantflow.app');
+    INSERT INTO profiles (id, user_id, created_by, status) VALUES ('svc-owned', 'system_admin_token', 'system_admin_token', 'active');
     -- 'shared' is granted to board@org.com via the profile_emails allowlist.
     INSERT INTO profile_emails (id, profile_id, email, added_by, created_at) VALUES ('pe1', 'shared', 'board@org.com', 'owner-x', '2026-01-01');
     -- u1 has a VERIFIED secondary email credential board@org.com.
@@ -86,6 +89,36 @@ describe('getOwnedAndGrantedProfileIds FAILS CLOSED for a deleted user (no users
     const svc = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }
     const ids = await getOwnedAndGrantedProfileIds(db, svc)
     expect(ids instanceof Set).toBe(true)
+  })
+})
+
+describe('a synthetic-id JWT WITHOUT service-token provenance is rejected everywhere', () => {
+  let db
+  beforeEach(() => { db = makeDb() })
+
+  it('gets NO profiles from the grant helper even though a users.id row was self-healed', async () => {
+    const jwt = { role: 'user', userId: 'system_admin_token' } // colliding sub, NO serviceToken
+    const owned = await getOwnedAndGrantedProfileIds(db, jwt)
+    expect(owned.size).toBe(0)
+    expect(owned.has('svc-owned')).toBe(false)
+  })
+
+  it('is NOT admin via isAdminUserWithDb (does not honor the self-healed synthetic row)', async () => {
+    const jwt = { role: 'user', userId: 'system_admin_token', roles: ['admin'] }
+    expect(await isAdminUserWithDb(db, jwt)).toBe(false)
+  })
+
+  it('getAccessibleProfileIds returns an EMPTY set (not the admin null sentinel)', async () => {
+    const jwt = { role: 'user', userId: 'system_admin_token' }
+    const ids = await getAccessibleProfileIds(db, jwt)
+    expect(ids instanceof Set).toBe(true)
+    expect(ids.size).toBe(0)
+  })
+
+  it('the REAL service token (serviceToken provenance) still resolves admin', async () => {
+    const svc = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }
+    expect(await isAdminUserWithDb(db, svc)).toBe(true)
+    expect(await getAccessibleProfileIds(db, svc)).toBeNull() // admin sentinel
   })
 })
 

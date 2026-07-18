@@ -144,8 +144,14 @@ function canAccessProfileIdFromCtx(ctx, profileId) {
 function canAccessProfileRowFromCtx(ctx, profileRow) {
   if (!profileRow) return false
   if (canAccessProfileIdFromCtx(ctx, profileRow.id)) return true
-  if (ctx?.userId && profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
-  if (ctx?.userId && profileRow.created_by && String(ctx.userId) === String(profileRow.created_by)) return true
+  // Ownership-by-ctx.userId is honored ONLY for a TRUSTED identity (a real users
+  // row / validated provenance backed the request). A deleted-user JWT leaves
+  // ctx.userId populated but identityResolved=false, so a lingering
+  // profiles.user_id/created_by must NOT grant it access.
+  if (ctx?.identityResolved === true && ctx?.userId) {
+    if (profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
+    if (profileRow.created_by && String(ctx.userId) === String(profileRow.created_by)) return true
+  }
   return false
 }
 
@@ -162,15 +168,17 @@ router.param('id', async (req, res, next, id) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
 
-    // As a last resort, verify ownership by userId (covers cases where access sets are empty/unavailable).
-    if (req.ctx?.userId) {
+    // As a last resort, verify ownership by userId — but ONLY for a TRUSTED
+    // identity (real users row / validated provenance). A deleted-user JWT keeps
+    // ctx.userId set yet identityResolved=false; it must not own a lingering profile.
+    if (req.ctx?.identityResolved === true && req.ctx?.userId) {
       const row = await req.db
         .prepare('SELECT user_id, created_by, status FROM profiles WHERE id = ?')
         .get(String(id))
-        // Soft-deleted profiles must appear as non-existent across all sub-routes.
-              if (row?.status === 'deleted') {
-                      return res.status(404).json({ error: 'Profile not found' })
-                            }
+      // Soft-deleted profiles must appear as non-existent across all sub-routes.
+      if (row?.status === 'deleted') {
+        return res.status(404).json({ error: 'Profile not found' })
+      }
       if (row?.user_id && String(row.user_id) === String(req.ctx.userId)) return next()
       if (row?.created_by && String(row.created_by) === String(req.ctx.userId)) return next()
     }

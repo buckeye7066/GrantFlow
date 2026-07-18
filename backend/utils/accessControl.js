@@ -10,6 +10,7 @@
  * - Email-substring allowlists must not participate in authorization decisions.
  */
 import crypto from 'crypto'
+import { isSyntheticIdWithoutProvenance } from '../middleware/syntheticServiceTokens.js'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -44,6 +45,11 @@ export function isAdminUser(user) {
 }
 
 export async function isAdminUserWithDb(db, user) {
+  // A JWT whose sub collides with a reserved synthetic service id but lacks
+  // service-token provenance must NEVER resolve admin — even if a self-healed
+  // users.id='system_admin_token' row exists. Provenance-validated service tokens
+  // resolve admin earlier (via req.ctx.isAdmin); this guards the direct callers.
+  if (isSyntheticIdWithoutProvenance(user)) return false
   // Some tokens are profile-scoped and don't carry userId.
   // Resolve user_id via profile when needed, then check users.is_admin.
   //
@@ -214,6 +220,12 @@ export async function getTrustedUserEmails(db, user) {
 export async function getOwnedAndGrantedProfileIds(db, user) {
   const ids = new Set()
   const userId = getAuthUserId(user)
+
+  // A userId that collides with a reserved synthetic service id but lacks
+  // service-token provenance (e.g. a signed JWT with sub:'system_admin_token') is
+  // an impersonation attempt — grant NOTHING, and never honor a self-healed
+  // users.id='system_admin_token' row via the users-row gate below.
+  if (isSyntheticIdWithoutProvenance(user)) return ids
 
   // FAIL CLOSED on a missing principal: a stale/forged JWT for a DELETED user
   // (userId present but no users row) must gain NOTHING — even if a lingering

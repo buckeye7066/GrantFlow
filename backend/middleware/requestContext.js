@@ -22,37 +22,17 @@ import {
   ensureProfileEmailSchema,
 } from '../utils/accessControl.js'
 import { isAdminEmail } from '../config/constants.js'
+import {
+  SYNTHETIC_SERVICE_ADMIN_USER_IDS,
+  isSyntheticServiceAdmin,
+} from './syntheticServiceTokens.js'
 import crypto from 'crypto'
+
+// Re-export so existing importers (ensureAdminUser, server.js) keep working.
+export { isSyntheticServiceAdmin } from './syntheticServiceTokens.js'
 
 let lastAdminSelfHealAtMs = 0
 const ADMIN_SELF_HEAL_INTERVAL_MS = 10 * 60 * 1000
-
-// Synthetic SERVICE tokens (ADMIN_TOKEN / bulk key, Anya API key, health token)
-// are validated by safeTokenEqual against configured secrets in the auth layer and
-// have NO real users row. They are the ONLY legitimate token-derived admins — a
-// real user (any other userId) must always resolve from users.is_admin, and a DB
-// error/missing row must FAIL CLOSED, never trust the JWT role/is_admin claim.
-const SYNTHETIC_SERVICE_ADMIN_USER_IDS = new Set([
-  'system_admin_token',
-  'system_anya_token',
-  'system_health_token',
-])
-
-export function isSyntheticServiceAdmin(user) {
-  // Bind synthetic-admin authority to service-token PROVENANCE, not to the id
-  // VALUE. `serviceToken` is set ONLY inside a safeTokenEqual service-token branch
-  // and can never come from a JWT payload — so a signed JWT with sub:'system_admin_token'
-  // (or any colliding synthetic id) does NOT pass this check and falls through to
-  // the normal DB lookup (where it has no is_admin row => non-admin). The id
-  // allowlist is kept as a secondary defense-in-depth constraint.
-  const id = user?.userId
-  return Boolean(
-    user?.serviceToken === true &&
-      user.is_admin === true &&
-      id &&
-      SYNTHETIC_SERVICE_ADMIN_USER_IDS.has(String(id)),
-  )
-}
 
 function normalizeEmail(value) {
   const email = String(value ?? '').trim().toLowerCase()
@@ -177,6 +157,11 @@ export async function buildRequestContext(db, user) {
     // Raw token-supplied email, for DISPLAY / attribution ONLY (never access).
     tokenEmail: null,
     isAdmin: false,
+    // TRUSTED identity: true ONLY when a real users row backed this request, OR a
+    // validated service-token / legacy profile-token provenance did. Routes that
+    // fall back to ownership-by-ctx.userId MUST gate on this — a deleted-user JWT
+    // leaves ctx.userId populated but identityResolved=false (fail closed).
+    identityResolved: false,
     activeProfileId: null,
     // IMPORTANT:
     // - `null` means "all" and MUST be reserved for authenticated admins only.
@@ -212,7 +197,9 @@ export async function buildRequestContext(db, user) {
   // resolved, or a validated synthetic service token. A stale JWT for a
   // deleted/missing user must NOT retain token-userId ownership of its old
   // profiles — access computation below fails closed unless this is true.
-  let identityResolved = syntheticServiceAdmin
+  // Validated provenance tokens (synthetic service token / DB-verified legacy
+  // profile token) are trusted identities even though they have no users row.
+  let identityResolved = syntheticServiceAdmin || user?.profileTokenAuth === true
   try {
     // If we only have a profileId, resolve its owning user first.
     if (!ctx.userId && ctx.activeProfileId) {
@@ -275,6 +262,10 @@ export async function buildRequestContext(db, user) {
     console.warn('[requestContext] Failed to resolve admin status from DB; failing closed:', error?.message)
     ctx.isAdmin = syntheticServiceAdmin
   }
+
+  // Expose the trusted-identity flag so routes never treat a deleted-user
+  // ctx.userId as ownership without a real users row / validated provenance.
+  ctx.identityResolved = identityResolved
 
   // Step 5: Compute accessible profiles and orgs
   if (ctx.isAdmin) {

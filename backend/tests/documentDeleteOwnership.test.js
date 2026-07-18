@@ -61,3 +61,53 @@ describe('isProfileOwnerForDelete — legacy NULL-owner ownership', () => {
     expect(ok).toBe(false)
   })
 })
+
+describe('isProfileOwnerForDelete — SQLite json1-absent fallback compares ONLY the root email', () => {
+  // Force the json_extract path to throw (simulating a build without JSON1) so the
+  // JS-parse fallback runs. It must compare ONLY basic_information.email (root) —
+  // NOT a substring of the whole JSON (which would let a NESTED contact email pass).
+  function stub({ sectionData }) {
+    return {
+      // no `dialect` => sqlite branch
+      prepare(sql) {
+        const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm.includes('from profiles where id')) return { get: () => ({ user_id: null }) } // NULL owner
+        if (norm.includes('json_extract')) return { get: () => { throw new Error('no json1 in this build') } }
+        if (norm.includes('from profile_sections') && norm.includes('data')) {
+          return { get: () => ({ data: sectionData }) }
+        }
+        return { get: () => null }
+      },
+    }
+  }
+
+  it('DENIES when the actor email is only in a NESTED contact field (not root basic_information.email)', async () => {
+    const req = { db: stub({ sectionData: '{"email":"owner@legacy.example","contacts":[{"email":"shared@collab.example"}]}' }) }
+    const ok = await isProfileOwnerForDelete(req, {
+      profileId: 'legacy1',
+      actorUserId: 'collab-user',
+      actorEmail: 'shared@collab.example',
+    })
+    expect(ok).toBe(false)
+  })
+
+  it('ALLOWS the root-email owner via the JS-parse fallback', async () => {
+    const req = { db: stub({ sectionData: '{"email":"owner@legacy.example","contacts":[{"email":"shared@collab.example"}]}' }) }
+    const ok = await isProfileOwnerForDelete(req, {
+      profileId: 'legacy1',
+      actorUserId: 'owner-user',
+      actorEmail: 'owner@legacy.example',
+    })
+    expect(ok).toBe(true)
+  })
+
+  it('FAILS CLOSED on unparseable section JSON', async () => {
+    const req = { db: stub({ sectionData: '{not valid json' }) }
+    const ok = await isProfileOwnerForDelete(req, {
+      profileId: 'legacy1',
+      actorUserId: 'x',
+      actorEmail: 'owner@legacy.example',
+    })
+    expect(ok).toBe(false)
+  })
+})

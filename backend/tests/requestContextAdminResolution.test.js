@@ -191,3 +191,38 @@ describe('buildRequestContext DB-backed admin resolution', () => {
     expect(ctx.accessibleOrgIds.size).toBe(0)
   })
 })
+
+describe('buildRequestContext ctx.identityResolved (trusted-identity flag for ownership fallbacks)', () => {
+  function usersRowStub(row) {
+    return {
+      dialect: 'sqlite',
+      prepare(sql) {
+        const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm.includes('from users where id')) return { get: () => row }
+        return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
+      },
+    }
+  }
+
+  it('true for a real user (users row present)', async () => {
+    const ctx = await buildRequestContext(usersRowStub({ is_admin: 0, primary_email: 'u@x.example' }), { role: 'user', userId: 'u1' })
+    expect(ctx.identityResolved).toBe(true)
+  })
+
+  it('FALSE for a deleted-user JWT (no users row) — ownership fallbacks must not trust ctx.userId', async () => {
+    const ctx = await buildRequestContext(usersRowStub(null), { role: 'user', userId: 'deleted-user' })
+    expect(ctx.identityResolved).toBe(false)
+    expect(ctx.userId).toBe('deleted-user') // still populated, but NOT trusted
+    expect(ctx.accessibleProfileIds instanceof Set && ctx.accessibleProfileIds.size === 0).toBe(true)
+  })
+
+  it('true for a validated synthetic service token', async () => {
+    const ctx = await buildRequestContext(usersRowStub(null), { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
+    expect(ctx.identityResolved).toBe(true)
+  })
+
+  it('true for a DB-verified legacy profile token (profileTokenAuth)', async () => {
+    const ctx = await buildRequestContext(usersRowStub(null), { role: 'user', userId: 'p1', profileId: 'p1', profileTokenAuth: true })
+    expect(ctx.identityResolved).toBe(true)
+  })
+})

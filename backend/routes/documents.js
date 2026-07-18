@@ -521,20 +521,24 @@ export async function isProfileOwnerForDelete(req, { profileId, actorUserId, act
           .get(String(profileId), email)
         if (exists) return true
       } catch {
-        const escaped = email.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-        const exists = await req.db
-          .prepare(
-            `
-              SELECT 1
-              FROM profile_sections
-              WHERE profile_id = ?
-                AND section_key = 'basic_information'
-                AND LOWER(data) LIKE ?
-              LIMIT 1
-            `,
-          )
-          .get(String(profileId), `%"email"%${escaped}%`)
-        if (exists) return true
+        // json1 unavailable: parse the section JSON in JS and compare ONLY the
+        // ROOT basic_information.email. A substring LIKE match would let a NESTED
+        // contact email count as owner proof (a shared collaborator could then
+        // delete). Fail closed on unparseable data.
+        try {
+          const secRow = await req.db
+            .prepare(
+              `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`,
+            )
+            .get(String(profileId))
+          const parsed = secRow?.data
+            ? JSON.parse(typeof secRow.data === 'string' ? secRow.data : String(secRow.data))
+            : null
+          const rootEmail = normalizeEmail(parsed && typeof parsed === 'object' ? parsed.email : null)
+          if (rootEmail && rootEmail === email) return true
+        } catch {
+          // unparseable JSON → fail closed (no ownership)
+        }
       }
     }
   } catch {
