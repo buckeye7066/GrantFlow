@@ -14,6 +14,10 @@
 
 import { ACCEPTABLE_REALITY_STATUSES, canonicalOpportunityKey } from './contract.js';
 import { PIPELINE_STAGE, isValidStage, assertTransition } from './stages.js';
+import {
+  cleanEligibilityText, cleanEligibilityBullets, cleanSchemaVersion,
+  cleanFieldProvenance, mergeFieldProvenance,
+} from './pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
 
@@ -64,8 +68,20 @@ export function upsertOpportunity(store, opp) {
   const existing = store.get('funding_opportunities', { canonical_opportunity_key: canonicalKey });
   if (existing && existing.id !== opp.id) {
     recordOpportunitySource(store, existing.id, opp, now);
+    // Do NOT discard page facts THIS crawler supplied — merge them into the
+    // canonical row, never dropping a fact already stored there.
+    if (hasAnyPageFact(opp)) {
+      store.update('funding_opportunities', { id: existing.id }, mergePageFactColumns(existing, opp));
+    }
     return { stored: false, deduped: true, canonical_id: existing.id };
   }
+
+  // Page-fact provenance (Phase 0.1) — additive, null-default; validated and
+  // MERGED with any fact already stored on this id so a re-crawl that lacks a
+  // fact never nulls out one already learned (mirrors amount_status). Nothing
+  // populates these yet — for existing rows they stay null/[].
+  const existingById = store.get('funding_opportunities', { id: opp.id });
+  const pageFacts = mergePageFactColumns(existingById, opp);
 
   store.upsert('funding_opportunities', ['id'], {
     id: opp.id, source_id: opp.source_id, external_id: opp.external_id, kind: opp.kind,
@@ -78,15 +94,10 @@ export function upsertOpportunity(store, opp) {
     applicant_types_json: JSON.stringify(opp.applicant_types),
     need_categories_json: JSON.stringify(opp.need_categories),
     geography_json: JSON.stringify(opp.geography),
-    // Page-fact provenance (Phase 0.1) — additive, null-default. Round-trips
-    // write->read so a later extractor can populate it; nothing does yet.
-    eligibility_text: opp.eligibility_text ?? null,
-    eligibility_bullets_json: JSON.stringify(opp.eligibility_bullets ?? []),
-    page_fact_schema_version: opp.page_fact_schema_version ?? null,
-    field_provenance_json:
-      opp.field_provenance !== null && opp.field_provenance !== undefined
-        ? JSON.stringify(opp.field_provenance)
-        : null,
+    eligibility_text: pageFacts.eligibility_text,
+    eligibility_bullets_json: pageFacts.eligibility_bullets_json,
+    page_fact_schema_version: pageFacts.page_fact_schema_version,
+    field_provenance_json: pageFacts.field_provenance_json,
     trust_tier: opp.trust_tier, reality_status: opp.reality_status,
     content_hash: opp.evidence?.content_hash ?? null, evidence_url: opp.evidence?.url ?? null,
     fetched_at: opp.evidence?.fetched_at ?? null,
@@ -125,6 +136,42 @@ function recordOpportunitySource(store, opportunityId, opp, now) {
     external_id: opp.external_id ?? null, apply_url: opp.apply_url ?? null,
     first_seen_at: now, last_seen_at: now,
   });
+}
+
+/** Does this opportunity carry ANY valid page fact worth persisting? */
+function hasAnyPageFact(opp) {
+  return Boolean(
+    cleanEligibilityText(opp.eligibility_text) ||
+    cleanEligibilityBullets(opp.eligibility_bullets).length ||
+    cleanSchemaVersion(opp.page_fact_schema_version) ||
+    cleanFieldProvenance(opp.field_provenance),
+  );
+}
+
+/**
+ * mergePageFactColumns — the OS-store page-fact column values to persist for a
+ * write, validated and PRESERVING any fact already on the row that this write
+ * lacks. A blank/empty/malformed incoming fact never overwrites a stored one;
+ * provenance is merged per canonical field. Returns the OS-store column shape.
+ */
+function mergePageFactColumns(existing, opp) {
+  const incomingText = cleanEligibilityText(opp.eligibility_text);
+  const incomingBullets = cleanEligibilityBullets(opp.eligibility_bullets);
+  const incomingVersion = cleanSchemaVersion(opp.page_fact_schema_version);
+  const existingText = existing ? cleanEligibilityText(existing.eligibility_text) : null;
+  const existingBullets = existing ? cleanEligibilityBullets(existing.eligibility_bullets_json) : [];
+  const existingVersion = existing ? cleanSchemaVersion(existing.page_fact_schema_version) : null;
+  const mergedProvenance = mergeFieldProvenance(
+    existing ? existing.field_provenance_json : null,
+    opp.field_provenance,
+  );
+  const bullets = incomingBullets.length ? incomingBullets : existingBullets;
+  return {
+    eligibility_text: incomingText ?? existingText,
+    eligibility_bullets_json: JSON.stringify(bullets),
+    page_fact_schema_version: incomingVersion ?? existingVersion,
+    field_provenance_json: mergedProvenance ? JSON.stringify(mergedProvenance) : null,
+  };
 }
 
 export function getOpportunity(store, id) { return store.get('funding_opportunities', { id }); }

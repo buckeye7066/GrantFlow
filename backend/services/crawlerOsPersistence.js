@@ -20,6 +20,9 @@ import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
 import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
 import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
+import {
+  cleanEligibilityText, cleanEligibilityBullets, cleanSchemaVersion, cleanFieldProvenance,
+} from '../crawler-os/pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -112,11 +115,6 @@ async function cleanupHamiltonRejects(db, memStore, idRemap) {
   }
 
   return cleaned;
-}
-
-/** True when a value is neither null nor undefined (0 / '' / false count as set). */
-function isPresent(v) {
-  return v !== null && v !== undefined;
 }
 
 function jparse(v, fallback) {
@@ -394,12 +392,18 @@ function osOppToLiveRow(o) {
   //       re-crawl that happens to lack it (mirrors the amount_status rule
   //       above), and
   //   (3) when the extractor DOES provide facts, they round-trip faithfully.
-  const bullets = asList(o.eligibility_bullets_json);
-  if (isPresent(o.eligibility_text)) row.eligibility_text = o.eligibility_text;
+  // "Populated" is VALIDATED, never just non-null: a blank string, an empty
+  // array, an empty/malformed object, or a non-positive-integer version is NOT a
+  // fact, so it is omitted — it can never overwrite a stored fact, and the live
+  // INTEGER column never sees '' (which Postgres rejects).
+  const eligibilityText = cleanEligibilityText(o.eligibility_text);
+  const bullets = cleanEligibilityBullets(o.eligibility_bullets_json);
+  const schemaVersion = cleanSchemaVersion(o.page_fact_schema_version);
+  const provenance = cleanFieldProvenance(o.field_provenance_json);
+  if (eligibilityText !== null) row.eligibility_text = eligibilityText;
   if (bullets.length) row.eligibility_bullets = JSON.stringify(bullets);
-  if (isPresent(o.page_fact_schema_version)) row.page_fact_schema_version = o.page_fact_schema_version;
-  const provenance = jparse(o.field_provenance_json, null);
-  if (isPresent(provenance)) row.field_provenance = JSON.stringify(provenance);
+  if (schemaVersion !== null) row.page_fact_schema_version = schemaVersion;
+  if (provenance !== null) row.field_provenance = JSON.stringify(provenance);
 
   return row;
 }

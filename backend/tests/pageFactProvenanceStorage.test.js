@@ -18,6 +18,8 @@ import fs from 'fs'
 import path from 'path'
 import Database from 'better-sqlite3'
 import { persistRun } from '../services/crawlerOsPersistence.js'
+import { ensurePageFactProvenanceColumns } from '../startup/ensureSchemaInvariants.js'
+import { checkFundingOpportunitiesSchema } from '../services/diagnosticsService.js'
 
 // Minimal live-catalog table WITHOUT the page-fact columns — mirrors the many
 // fixture tables across the suite and prod BEFORE migration 144. Used to prove
@@ -159,6 +161,76 @@ describe('page-fact provenance — round-trips when provided', () => {
   })
 })
 
+describe('page-fact provenance — persist-layer validation (finding #3)', () => {
+  const seedRealProvenance = (db) =>
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, canonical_opportunity_key, fingerprint,
+         eligibility_text, page_fact_schema_version, field_provenance)
+       VALUES ('os-1', 'Rural Facilities Grant', 'ck-1', 'ck-1',
+               'Real text.', 2, '{"is_loan":{"value":false}}')`,
+    ).run()
+
+  it('omits blank text / empty bullets / empty object / non-positive version — never overwrites live', async () => {
+    const db = makeMigratedDb()
+    seedRealProvenance(db)
+    await persistRun(db, makeMemStore([osRow({
+      eligibility_text: '   ',
+      eligibility_bullets_json: '[]',
+      page_fact_schema_version: '', // Postgres would reject '' for the INTEGER column
+      field_provenance_json: '{}',
+    })]), {})
+    const row = db
+      .prepare('SELECT eligibility_text, page_fact_schema_version, field_provenance FROM funding_opportunities WHERE id = ?')
+      .get('os-1')
+    expect(row.eligibility_text).toBe('Real text.')
+    expect(row.page_fact_schema_version).toBe(2)
+    expect(JSON.parse(row.field_provenance)).toEqual({ is_loan: { value: false } })
+  })
+
+  it('omits malformed provenance JSON rather than writing garbage', async () => {
+    const db = makeMigratedDb()
+    seedRealProvenance(db)
+    await persistRun(db, makeMemStore([osRow({ field_provenance_json: 'not json at all' })]), {})
+    const row = db.prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ?').get('os-1')
+    expect(JSON.parse(row.field_provenance)).toEqual({ is_loan: { value: false } })
+  })
+
+  it('a valid POSITIVE integer version DOES round-trip', async () => {
+    const db = makeMigratedDb()
+    await persistRun(db, makeMemStore([osRow({ page_fact_schema_version: 5 })]), {})
+    const row = db.prepare('SELECT page_fact_schema_version FROM funding_opportunities WHERE id = ?').get('os-1')
+    expect(row.page_fact_schema_version).toBe(5)
+  })
+})
+
+describe('page-fact provenance — boot invariant + drift check (finding #4)', () => {
+  it('the drift check flags the page-fact columns when missing, and clears once healed', async () => {
+    const db = makeLegacyDb() // funding_opportunities WITHOUT the page-fact columns
+    const before = await checkFundingOpportunitiesSchema(db)
+    const missingBefore = before?.details?.missing_columns || []
+    for (const c of ['eligibility_text', 'page_fact_schema_version', 'field_provenance']) {
+      expect(missingBefore).toContain(`funding_opportunities.${c}`)
+    }
+    // The boot schema invariant heals them (this is what a boot does).
+    await ensurePageFactProvenanceColumns(db)
+    const after = await checkFundingOpportunitiesSchema(db)
+    const missingAfter = after?.details?.missing_columns || []
+    for (const c of ['eligibility_text', 'page_fact_schema_version', 'field_provenance']) {
+      expect(missingAfter).not.toContain(`funding_opportunities.${c}`)
+    }
+  })
+
+  it('ensurePageFactProvenanceColumns is idempotent (heals a legacy DB, no-op when already healed)', async () => {
+    const db = makeLegacyDb()
+    await ensurePageFactProvenanceColumns(db)
+    await ensurePageFactProvenanceColumns(db) // second run must not throw
+    const cols = db.prepare('PRAGMA table_info(funding_opportunities)').all().map((c) => c.name)
+    for (const c of ['eligibility_text', 'page_fact_schema_version', 'field_provenance']) {
+      expect(cols).toContain(c)
+    }
+  })
+})
+
 describe('migration 144 — page-fact provenance columns', () => {
   const sqlitePath = path.join(process.cwd(), 'backend/db/migrations/144_page_fact_provenance.sql')
   const pgPath = path.join(process.cwd(), 'backend/db/postgres/migrations/0148_page_fact_provenance.sql')
@@ -170,24 +242,49 @@ describe('migration 144 — page-fact provenance columns', () => {
     expect(fs.readFileSync(pgPath, 'utf8')).toMatch(/ADD COLUMN IF NOT EXISTS/)
   })
 
-  it('adds the columns on a DB that lacks them, and is idempotent', () => {
-    const db = makeLegacyDb() // funding_opportunities WITHOUT the new columns
+  it('carries the @sqlite-continue-on-idempotent-errors directive', () => {
+    // Without it, on a PARTIALLY-drifted table the first duplicate column aborts
+    // the transaction and the runner stamps the WHOLE migration applied, leaving
+    // later columns permanently missing.
+    expect(fs.readFileSync(sqlitePath, 'utf8')).toMatch(/@sqlite-continue-on-idempotent-errors/)
+  })
+
+  // Mirror the migrate runner's directive path: run each statement, skip ONLY
+  // the "duplicate column name" error.
+  const applyWithDirective = (db) => {
     const sql = fs.readFileSync(sqlitePath, 'utf8')
     const stmts = sql
       .split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n')
       .split(';').map((s) => s.trim()).filter(Boolean)
+    for (const stmt of stmts) {
+      try {
+        db.exec(`${stmt};`)
+      } catch (e) {
+        if (!/duplicate column name/i.test(String(e?.message || e))) throw e
+      }
+    }
+  }
+  const cols = (db) => db.prepare('PRAGMA table_info(funding_opportunities)').all().map((c) => c.name)
+  const ALL = ['eligibility_text', 'page_fact_schema_version', 'field_provenance']
 
-    const applyOnce = () => {
-      for (const stmt of stmts) db.exec(`${stmt};`)
-    }
-    // First application succeeds and adds all three columns.
-    applyOnce()
-    const cols = db.prepare('PRAGMA table_info(funding_opportunities)').all().map((c) => c.name)
-    for (const c of ['eligibility_text', 'page_fact_schema_version', 'field_provenance']) {
-      expect(cols).toContain(c)
-    }
-    // Re-applying the same ALTERs raises the "duplicate column name" error the
-    // migrate runner recognizes as idempotent-already-applied and skips.
-    expect(() => applyOnce()).toThrow(/duplicate column name/)
+  it('applies cleanly from a NONE state (no page-fact columns)', () => {
+    const db = makeLegacyDb()
+    applyWithDirective(db)
+    for (const c of ALL) expect(cols(db)).toContain(c)
+  })
+
+  it('applies cleanly from a PARTIAL-drift state (one column already present)', () => {
+    const db = makeLegacyDb()
+    db.exec('ALTER TABLE funding_opportunities ADD COLUMN eligibility_text TEXT') // pre-existing drift
+    applyWithDirective(db)
+    // The directive skips the duplicate on eligibility_text and STILL adds the rest.
+    for (const c of ALL) expect(cols(db)).toContain(c)
+  })
+
+  it('is a clean no-op from an ALL-present state, and idempotent', () => {
+    const db = makeMigratedDb() // already has all three
+    expect(() => applyWithDirective(db)).not.toThrow()
+    expect(() => applyWithDirective(db)).not.toThrow()
+    for (const c of ALL) expect(cols(db)).toContain(c)
   })
 })

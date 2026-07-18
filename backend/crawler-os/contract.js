@@ -290,9 +290,11 @@ export function makeOpportunity(input = {}) {
     //                               (distinct from matchEngine's DERIVED bullets).
     //   page_fact_schema_version  : which extractor schema produced these facts.
     //   field_provenance          : { field: { value, evidence_snippet, source } }.
-    // TRI-STATE lives in field_provenance: for is_loan / requires_cost_share /
-    // national an ABSENT key means "not stated" — distinct from the coalesced
-    // boolean false in funding/geography that existing consumers keep reading.
+    // TRI-STATE lives in field_provenance under the canonical provenance keys
+    // is_loan / requires_cost_share / national (see the single mapping registry
+    // pageFacts.PAGE_FACT_TRISTATE_FIELDS → live columns is_loan / requires_match
+    // / is_national): an ABSENT key means "not stated" — distinct from the
+    // coalesced boolean false in funding/geography that existing consumers read.
     eligibility_text: input.eligibility_text ?? null,
     eligibility_bullets: Object.freeze([...(input.eligibility_bullets ?? [])]),
     page_fact_schema_version: input.page_fact_schema_version ?? null,

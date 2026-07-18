@@ -1,5 +1,12 @@
+-- @sqlite-continue-on-idempotent-errors
 -- Page-fact provenance (Phase 0.1 of the web-lane de-contamination program).
 -- Twin: postgres migration 0148_page_fact_provenance.sql.
+--
+-- The directive above runs each ALTER statement-by-statement and skips only the
+-- "duplicate column name" error. Without it, on a PARTIALLY-drifted table (one
+-- column already present) the first duplicate aborts the whole transaction and
+-- the runner stamps the migration applied, leaving the later columns MISSING and
+-- undetected. With it, every column is materialized regardless of start state.
 --
 -- ADDITIVE + NULL-default plumbing. Adds durable storage for what a source page
 -- literally stated about an opportunity, with per-field evidence, so a LATER

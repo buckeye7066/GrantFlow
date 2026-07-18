@@ -266,14 +266,16 @@ async function checkTableExists(db, tableName) {
  * empty array when the schema is up to date — CI relies on that to block
  * releases from landing with a drifted schema.
  */
-async function checkFundingOpportunitiesSchema(db) {
+export async function checkFundingOpportunitiesSchema(db) {
   const grantsRequired = ['url', 'matched_needs', 'match_decision', 'match_explanation', 'fingerprint', 'fingerprint_version']
   const grantsCheck = await checkTableColumns(db, 'grants', grantsRequired)
   const crawlerLogsExists = await checkTableExists(db, 'crawler_logs')
 
   if (db?.dialect === 'postgres') {
     try {
-      const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline']
+      const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline',
+        // Page-fact provenance (Phase 0.1, migration 144 / pg 0148). eligibility_bullets pre-existed.
+        'eligibility_text', 'page_fact_schema_version', 'field_provenance']
 
       const rows = await db
         .prepare(
@@ -343,7 +345,9 @@ async function checkFundingOpportunitiesSchema(db) {
       crawlLogsExists = false;
     }
     
-    const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline'];
+    const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline',
+      // Page-fact provenance (Phase 0.1, migration 144). eligibility_bullets pre-existed.
+      'eligibility_text', 'page_fact_schema_version', 'field_provenance'];
     const fundingMissing = targetColumns.filter((col) => !columnNames.includes(col));
     const missingColumns = [
       ...fundingMissing.map((c) => `funding_opportunities.${c}`),

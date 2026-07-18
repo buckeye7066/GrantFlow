@@ -9,12 +9,17 @@
 //      plumbing a later profile-blind extractor will populate.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMemoryStore } from '../store.js';
-import { storage } from '../index.js';
+import Database from 'better-sqlite3';
+import { createMemoryStore, createSqlStore } from '../store.js';
+import { storage, applySchema } from '../index.js';
 import { makeOpportunity, OPPORTUNITY_KIND, REALITY_STATUS, TRUST_TIER } from '../contract.js';
 import { computeMatchDecision } from '../matchEngine.js';
 import { buildThesis } from '../profileIntelligence.js';
 import { SAMPLE_VFD_PROFILE } from './fixtures/fakeFetch.mjs';
+import {
+  PAGE_FACT_COLUMNS, PAGE_FACT_MIGRATION_COLUMNS, PAGE_FACT_TRISTATE_FIELDS,
+  cleanFieldProvenance, cleanSchemaVersion, mergeFieldProvenance,
+} from '../pageFacts.js';
 
 function baseInput(over = {}) {
   return {
@@ -110,4 +115,140 @@ test('matchEngine facade: page-fact fields change NO score or decision', () => {
   }), thesis);
   assert.equal(withFacts.match_score, withoutFacts.match_score);
   assert.equal(withFacts.decision, withoutFacts.decision);
+});
+
+// ---- finding #1: a re-crawl / dedup must never NULL-out stored provenance ----
+
+test('same-id re-crawl WITHOUT facts preserves previously-stored provenance', () => {
+  const store = createMemoryStore();
+  const provenance = { is_loan: { value: false, evidence_snippet: 'grant', source: 'https://x/1' } };
+  storage.upsertOpportunity(store, makeOpportunity(baseInput({
+    eligibility_text: 'Nonprofits only.',
+    eligibility_bullets: ['Must be a nonprofit'],
+    page_fact_schema_version: 2,
+    field_provenance: provenance,
+  })));
+  // A later run of the SAME opportunity that learned no page facts.
+  storage.upsertOpportunity(store, makeOpportunity(baseInput()));
+  const row = storage.getOpportunity(store, 'pf-1');
+  assert.equal(row.eligibility_text, 'Nonprofits only.');
+  assert.deepEqual(JSON.parse(row.eligibility_bullets_json), ['Must be a nonprofit']);
+  assert.equal(row.page_fact_schema_version, 2);
+  assert.deepEqual(JSON.parse(row.field_provenance_json), provenance);
+});
+
+test('same-id re-crawl MERGES provenance per canonical field (new key added, old kept)', () => {
+  const store = createMemoryStore();
+  storage.upsertOpportunity(store, makeOpportunity(baseInput({
+    field_provenance: { is_loan: { value: false, source: 'https://x/1' } },
+  })));
+  storage.upsertOpportunity(store, makeOpportunity(baseInput({
+    field_provenance: { national: { value: true, source: 'https://x/2' } },
+  })));
+  const merged = JSON.parse(storage.getOpportunity(store, 'pf-1').field_provenance_json);
+  assert.equal(merged.is_loan.value, false); // preserved
+  assert.equal(merged.national.value, true); // added
+});
+
+test('cross-source dedup MERGES newly-supplied facts into the canonical row', () => {
+  const store = createMemoryStore();
+  // First crawler stores the canonical row (same canonical key via same title+sponsor+url).
+  storage.upsertOpportunity(store, makeOpportunity({
+    id: 'src-a', source_id: 'grants_gov', kind: OPPORTUNITY_KIND.DIRECT_GRANT,
+    title: 'Shared Program', sponsor: 'USDA', apply_url: 'https://ex.gov/p',
+    reality_status: REALITY_STATUS.VERIFIED, trust_tier: TRUST_TIER.OFFICIAL_API,
+  }));
+  // A DIFFERENT source (different id, same canonical key) supplies page facts.
+  const res = storage.upsertOpportunity(store, makeOpportunity({
+    id: 'src-b', source_id: 'fema_afg', kind: OPPORTUNITY_KIND.DIRECT_GRANT,
+    title: 'Shared Program', sponsor: 'USDA', apply_url: 'https://ex.gov/p',
+    reality_status: REALITY_STATUS.VERIFIED, trust_tier: TRUST_TIER.OFFICIAL_API,
+    eligibility_text: 'Open to rural nonprofits.',
+    field_provenance: { national: { value: true, source: 'https://ex.gov/p' } },
+  }));
+  assert.equal(res.deduped, true);
+  const row = storage.getOpportunity(store, 'src-a'); // the canonical row
+  assert.equal(row.eligibility_text, 'Open to rural nonprofits.');
+  assert.deepEqual(JSON.parse(row.field_provenance_json), { national: { value: true, source: 'https://ex.gov/p' } });
+});
+
+// ---- finding #3 (storage layer): blanks / empty / malformed are NOT facts ----
+
+test('blank / empty / malformed page facts never overwrite stored values', () => {
+  const store = createMemoryStore();
+  const provenance = { is_loan: { value: false, source: 'https://x/1' } };
+  storage.upsertOpportunity(store, makeOpportunity(baseInput({
+    eligibility_text: 'Real text.', eligibility_bullets: ['A bullet'],
+    page_fact_schema_version: 3, field_provenance: provenance,
+  })));
+  // Re-crawl carrying only blanks / empties / a non-positive version.
+  storage.upsertOpportunity(store, makeOpportunity(baseInput({
+    eligibility_text: '   ', eligibility_bullets: [], page_fact_schema_version: 0,
+    field_provenance: {},
+  })));
+  const row = storage.getOpportunity(store, 'pf-1');
+  assert.equal(row.eligibility_text, 'Real text.');
+  assert.deepEqual(JSON.parse(row.eligibility_bullets_json), ['A bullet']);
+  assert.equal(row.page_fact_schema_version, 3);
+  assert.deepEqual(JSON.parse(row.field_provenance_json), provenance);
+});
+
+test('validators reject blanks, non-positive/non-integer versions, and malformed JSON', () => {
+  assert.equal(cleanSchemaVersion(''), null);
+  assert.equal(cleanSchemaVersion(0), null);
+  assert.equal(cleanSchemaVersion(-2), null);
+  assert.equal(cleanSchemaVersion(1.5), null);
+  assert.equal(cleanSchemaVersion('2'), 2);
+  assert.equal(cleanFieldProvenance('{}'), null);
+  assert.equal(cleanFieldProvenance('[]'), null);
+  assert.equal(cleanFieldProvenance('not json'), null);
+  assert.equal(cleanFieldProvenance({ k: 'scalar-not-evidence' }), null);
+  assert.deepEqual(mergeFieldProvenance('{}', { a: { value: 1 } }), { a: { value: 1 } });
+});
+
+// ---- finding #2: applySchema heals the OS-store columns on a pre-change DB ----
+
+test('applySchema heals page-fact columns so an UNSET upsert works on an upgraded store', () => {
+  const raw = new Database(':memory:');
+  applySchema(raw);
+  // Simulate an origin/main OS database that predates the page-fact columns.
+  for (const c of ['eligibility_text', 'eligibility_bullets_json', 'page_fact_schema_version', 'field_provenance_json']) {
+    raw.exec(`ALTER TABLE funding_opportunities DROP COLUMN ${c}`);
+  }
+  // Re-heal (this is what a boot after the upgrade does) and use the SQL store.
+  applySchema(raw);
+  const store = createSqlStore(raw);
+  // An UNSET upsert names all four internal columns — must not throw now.
+  const res = storage.upsertOpportunity(store, makeOpportunity({
+    id: 'up-1', source_id: 'grants_gov', kind: OPPORTUNITY_KIND.DIRECT_GRANT,
+    title: 'Upgraded Store Grant', sponsor: 'USDA', apply_url: 'https://ex.gov/u',
+    reality_status: REALITY_STATUS.VERIFIED, trust_tier: TRUST_TIER.OFFICIAL_API,
+  }));
+  assert.equal(res.stored, true);
+  const row = storage.getOpportunity(store, 'up-1');
+  assert.equal(row.eligibility_text, null);
+  assert.equal(row.field_provenance_json, null);
+  raw.close();
+});
+
+// ---- finding #5: one registry, explicit OS->live mappings, totality ---------
+
+test('page-fact registry is total and reconciles the OS/live vocabularies', () => {
+  // Every column carries both an OS-store and a live column name.
+  for (const c of PAGE_FACT_COLUMNS) {
+    assert.ok(c.osStoreColumn && c.liveColumn && c.field, `column ${c.field} fully mapped`);
+  }
+  // Migration columns are a subset of the live column names and EXCLUDE the
+  // pre-existing eligibility_bullets.
+  const liveCols = new Set(PAGE_FACT_COLUMNS.map((c) => c.liveColumn));
+  for (const m of PAGE_FACT_MIGRATION_COLUMNS) assert.ok(liveCols.has(m.column), `${m.column} is a live page-fact column`);
+  assert.equal(PAGE_FACT_MIGRATION_COLUMNS.some((m) => m.column === 'eligibility_bullets'), false);
+  // The tri-state fields map the canonical provenance key to its live boolean.
+  const byKey = Object.fromEntries(PAGE_FACT_TRISTATE_FIELDS.map((f) => [f.provenanceKey, f.liveColumn]));
+  assert.equal(byKey.is_loan, 'is_loan');
+  assert.equal(byKey.requires_cost_share, 'requires_match');
+  assert.equal(byKey.national, 'is_national');
+  for (const f of PAGE_FACT_TRISTATE_FIELDS) {
+    assert.ok(f.osFundingKey || f.osGeographyKey, `${f.provenanceKey} names an OS source key`);
+  }
 });

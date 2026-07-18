@@ -62,5 +62,13 @@ export function applySchema(db) {
     // audit:allow dynamic-sql — col comes from the hardcoded list above
     try { db.exec(`ALTER TABLE profile_opportunity_matches ADD COLUMN ${col}`); } catch { /* exists */ }
   }
+  // Page-fact provenance (Phase 0.1): heal the OS-store columns on a DB that
+  // predates them, so an unset upsertOpportunity (which always NAMES these
+  // columns) never fails with "no column named eligibility_text" on a store
+  // built by an earlier applySchema.
+  for (const col of ['eligibility_text TEXT', 'eligibility_bullets_json TEXT', 'page_fact_schema_version INTEGER', 'field_provenance_json TEXT']) {
+    // audit:allow dynamic-sql — col comes from the hardcoded list above
+    try { db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col}`); } catch { /* exists */ }
+  }
   return db;
 }
