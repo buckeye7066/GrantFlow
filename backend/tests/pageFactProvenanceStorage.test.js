@@ -163,6 +163,32 @@ describe('page-fact provenance — LIVE-DB per-key provenance merge (finding #1)
     expect(prov).toEqual({ is_loan: { value: false } })
   })
 
+  it('dialect parity: shallow top-level merge FULLY replaces a field object (no stale nested keys), matching PG jsonb ||', async () => {
+    const db = makeMigratedDb()
+    const stored = {
+      is_loan: { value: false, source: 'old', evidence_snippet: 'old' },
+      requires_match: { value: true, source: 's' },
+    }
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, canonical_opportunity_key, fingerprint, field_provenance)
+       VALUES ('os-1', 'Rural Facilities Grant', 'ck-1', 'ck-1', ?)`,
+    ).run(JSON.stringify(stored))
+    const incoming = { is_loan: { value: true, source: 'new' } }
+    await persistRun(db, makeMemStore([osRow({ field_provenance_json: JSON.stringify(incoming) })]), {})
+    const sqliteResult = JSON.parse(
+      db.prepare('SELECT field_provenance FROM funding_opportunities WHERE id = ?').get('os-1').field_provenance,
+    )
+    // A model of Postgres `jsonb ||`: shallow, top-level, incoming-wins-per-key.
+    const pgModel = { ...stored, ...incoming }
+    expect(sqliteResult).toEqual(pgModel)
+    // Concretely: the incoming is_loan object FULLY replaced the stored one — the
+    // stale nested evidence_snippet is GONE (json_patch would have kept it) — and
+    // the untouched requires_match field is preserved.
+    expect(sqliteResult.is_loan).toEqual({ value: true, source: 'new' })
+    expect('evidence_snippet' in sqliteResult.is_loan).toBe(false)
+    expect(sqliteResult.requires_match).toEqual({ value: true, source: 's' })
+  })
+
   it('CONCURRENT persists to the same live row both survive (atomic in-SQL merge, many iterations)', async () => {
     const db = makeMigratedDb()
     for (let i = 0; i < 25; i += 1) {

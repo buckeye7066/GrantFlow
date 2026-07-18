@@ -420,16 +420,30 @@ async function upsertRow(db, table, keyCols, row, { conflictExpr = {} } = {}) {
 
 /**
  * fundingOpportunityConflictExpr — the per-column UPDATE-side overrides for a
- * funding_opportunities upsert. `field_provenance` is MERGED per canonical key
- * with the currently-stored value INSIDE the statement, so two concurrent
- * persists can't read-then-clobber each other (the round-3 race): incoming wins
- * per key, existing keys survive. SQLite uses json_patch (RFC 7396 shallow
- * merge); Postgres uses jsonb `||` on the cast TEXT column, written back as text.
+ * funding_opportunities upsert. `field_provenance` is MERGED with the
+ * currently-stored value INSIDE the statement, so two concurrent persists can't
+ * read-then-clobber each other (the round-3 race). The merge is SHALLOW /
+ * top-level / incoming-wins-per-key: an incoming field's object FULLY REPLACES
+ * the stored field's object (no stale nested keys), other fields are kept.
+ *
+ * Postgres: `jsonb ||` is already a shallow top-level merge.
+ * SQLite: json_patch is a RECURSIVE (RFC 7396) merge that would keep stale
+ * nested keys and DIVERGE from Postgres, so we rebuild the object explicitly
+ * from json_each of both sides — existing keys NOT present in incoming, UNION
+ * all incoming keys (incoming wins) — via json_group_object, with json(value) so
+ * nested objects keep their type. Both are one atomic UPSERT expression.
  */
 function fundingOpportunityConflictExpr(db) {
   const provExpr = db?.dialect === 'postgres'
     ? "(COALESCE(funding_opportunities.field_provenance, '{}')::jsonb || excluded.field_provenance::jsonb)::text"
-    : "json_patch(COALESCE(funding_opportunities.field_provenance, '{}'), excluded.field_provenance)";
+    : `(
+        SELECT json_group_object(key, json(value)) FROM (
+          SELECT key, value FROM json_each(COALESCE(funding_opportunities.field_provenance, '{}'))
+            WHERE key NOT IN (SELECT key FROM json_each(COALESCE(excluded.field_provenance, '{}')))
+          UNION ALL
+          SELECT key, value FROM json_each(COALESCE(excluded.field_provenance, '{}'))
+        )
+      )`;
   return { field_provenance: provExpr };
 }
 
