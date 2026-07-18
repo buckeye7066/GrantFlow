@@ -146,7 +146,11 @@ export default function OpportunitySourceTrace({ opportunity, match, profileName
         <TraceFact icon={Database} label="Found by" value={opportunity.source || recordOrigin} tone="blue" />
         <TraceFact icon={Globe2} label="Link status" value={labelize(linkStatus)} tone={linkTone} />
         <TraceFact icon={ShieldCheck} label="Rules check" value={labelize(complianceStatus)} tone={complianceTone} />
-        <TraceFact icon={Clock3} label="Last checked" value={verifiedAt || discoveredAt || "Not recorded"} />
+        <TraceFact
+          icon={Clock3}
+          label={verifiedAt ? "Last verified" : "Discovered"}
+          value={verifiedAt || discoveredAt || "Not recorded"}
+        />
       </div>
 
       {links.length > 0 ? (

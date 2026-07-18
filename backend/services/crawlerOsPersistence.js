@@ -366,7 +366,14 @@ function osOppToLiveRow(o) {
     is_active: 1,
     is_hidden: 0,
     last_crawled: nowIso(),
-    last_verified_at: o.fetched_at ?? null,
+    // HONESTY: source capture (fetching the LISTING/aggregator page) is NOT a
+    // verification of THIS opportunity's own application target. `o.fetched_at`
+    // is when we scraped the source page — stamping it into `last_verified_at`
+    // lied ("verified" in the UI), and made linkVerificationService SKIP these
+    // rows for ~30 days so their real target was never checked. Only genuine
+    // TARGET verification (linkVerificationService probing the final URL) may set
+    // `last_verified_at`; leaving it out here also means upsert never overwrites a
+    // real prior verification. Source timestamps live on last_crawled/discovered_at.
     discovered_at: o.created_at ?? nowIso(),
     updated_at: nowIso(),
   };

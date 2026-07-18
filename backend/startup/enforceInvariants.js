@@ -2115,6 +2115,120 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
 }
 
 /**
+ * INVARIANT: last_verified_at means a real TARGET verification happened, not a
+ * source scrape. The crawler-os persistence path (crawlerOsPersistence.js) used
+ * to stamp `last_verified_at` from the SOURCE page's `fetched_at` — i.e. when we
+ * fetched the LISTING/aggregator, NOT when we checked the opportunity's own
+ * application target. Three harms followed:
+ *   1. The Source Trace UI showed a "verified" time that was really a scrape time.
+ *   2. linkVerificationService (re-verify after 30d) SKIPPED these rows because
+ *      they looked freshly verified — so their real target was never probed.
+ *   3. A fallback query ordered by last_verified_at boosted these false rows.
+ * The producer is fixed (source capture no longer stamps it); this net repairs
+ * rows ALREADY persisted with the false stamp.
+ *
+ * PRECISE, SAFE PREDICATE — a genuine verification (linkVerificationService, or
+ * opportunityInserter's live-check insert) ALWAYS records who/how it checked:
+ * `verified_by`, `verification_method`, and a real `link_status`
+ * (ok|redirect|broken|skipped). A source-capture false stamp has a
+ * `last_verified_at` timestamp but NONE of that evidence. We only clear rows that
+ * carry a verification TIME with ZERO evidence any verification occurred, scoped
+ * to record_origin='live_crawl' (the crawler-os path that produced the bug).
+ * Clearing to NULL re-queues the row for the real verifier (its candidate query
+ * picks `last_verified_at IS NULL` first). Nothing a real probe touched is moved.
+ *
+ * BOUNDS (mirror enforceAmountEnrichment / url-rescue boot nets so a large
+ * historical backlog can't stampede the verifier or the DB on one boot): at most
+ * VERIFIED_AT_HONESTY_BOOT_LIMIT rows (default 500) cleared per boot in chunks,
+ * within VERIFIED_AT_HONESTY_TIME_BUDGET_MS (default 10s). Each cleared row no
+ * longer matches next boot, so the backlog drains monotonically over boots.
+ * OVERRIDE: ON by default; ENFORCE_VERIFIED_AT_HONESTY=0 for count-only.
+ */
+const VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT = 500
+const VERIFIED_AT_HONESTY_TIME_BUDGET_MS_DEFAULT = 10000
+const VERIFIED_AT_HONESTY_CHUNK = 200
+
+export async function enforceLiveCrawlVerifiedAtHonesty(db) {
+  return runInvariant('live_crawl_verified_at_honesty', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_VERIFIED_AT_HONESTY) === false
+    const bootLimit = _parsePositiveIntEnv(
+      process.env.VERIFIED_AT_HONESTY_BOOT_LIMIT,
+      VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT,
+    )
+    const timeBudgetMs = _parsePositiveIntEnv(
+      process.env.VERIFIED_AT_HONESTY_TIME_BUDGET_MS,
+      VERIFIED_AT_HONESTY_TIME_BUDGET_MS_DEFAULT,
+    )
+
+    // Falsely-stamped rows: a verification TIME with zero verification evidence,
+    // scoped to the crawler-os live_crawl path that produced the bug.
+    const WHERE = `record_origin = 'live_crawl'
+        AND last_verified_at IS NOT NULL
+        AND verified_by IS NULL
+        AND verification_method IS NULL
+        AND (link_status IS NULL OR link_status = 'unverified')`
+
+    let scanned = 0
+    try {
+      const row = await db
+        .prepare(`SELECT COUNT(*) AS c FROM funding_opportunities WHERE ${WHERE}`)
+        .get()
+      scanned = Number(row?.c ?? 0)
+    } catch (err) {
+      // Minimal/fixture DBs may lack these columns — nothing to enforce.
+      log.warn('verified_at_honesty: candidate scan failed (non-fatal)', {
+        error: String(err?.message || err),
+      })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    if (scanned === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) {
+      log.warn('source-scrape false last_verified_at stamps present (repair DISABLED via ENFORCE_VERIFIED_AT_HONESTY=0)', {
+        scanned,
+      })
+      return { scanned, repaired: 0, enforced: false }
+    }
+
+    const startedAt = Date.now()
+    let repaired = 0
+    while (repaired < bootLimit) {
+      if (Date.now() - startedAt > timeBudgetMs) break
+      const chunk = Math.min(VERIFIED_AT_HONESTY_CHUNK, bootLimit - repaired)
+      let n = 0
+      try {
+        const res = await db
+          .prepare(
+            `UPDATE funding_opportunities
+                SET last_verified_at = NULL
+              WHERE id IN (
+                SELECT id FROM funding_opportunities WHERE ${WHERE} LIMIT ?
+              )`,
+          )
+          .run(chunk)
+        n = changesOf(res)
+      } catch (err) {
+        log.warn('verified_at_honesty: clear failed (non-fatal)', {
+          error: String(err?.message || err),
+        })
+        break
+      }
+      repaired += n
+      if (n === 0) break
+    }
+
+    if (repaired > 0) {
+      log.info('cleared source-scrape false last_verified_at stamps; re-queued for real target verification', {
+        scanned,
+        repaired,
+        remaining: Math.max(0, scanned - repaired),
+      })
+    }
+    return { scanned, repaired, enforced: true }
+  })
+}
+
+/**
  * INVARIANT: APPLICATION-URL RESCUE — a real candidate rejected ONLY for a
  * missing URL gets ONE bounded chance to be rescued with a real, live page.
  *
@@ -4419,6 +4533,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
   steps.push(await enforceNoSearchEngineApplicationTargets(db))
+  // Verification-honesty net: clear `last_verified_at` timestamps that the
+  // crawler-os source-capture path stamped from the SOURCE page's fetched_at
+  // (never a real target check), so the recurring verifier stops skipping them
+  // and the Source Trace UI stops showing a scrape time as a "verified" time.
+  // Bounded per boot; only touches rows with a verification time but zero
+  // verification evidence.
+  steps.push(await enforceLiveCrawlVerifiedAtHonesty(db))
   // Application-URL rescue: a candidate rejected ONLY for a missing URL gets
   // ONE bounded, budget-paced chance to be re-driven with a real, liveness-
   // verified page found by title+sponsor web search (never invented). Runs
@@ -4529,6 +4650,8 @@ export const __testables = {
   enforceGrantCatalogLink,
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
+  enforceLiveCrawlVerifiedAtHonesty,
+  VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,
