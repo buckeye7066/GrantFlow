@@ -165,7 +165,7 @@ export default function AdminBroadcast() {
           </CardTitle>
           <CardDescription>
             Send promotions, product changes, or notices to your profiles. Email is sent from{' '}
-            <span className="font-medium">dr.johnwhite@axiombiolabs.org</span>. SMS goes only to numbers that
+            <span className="font-medium">Annie@axiombiolabs.org</span>. SMS goes only to numbers that
             have opted in. Pick a channel, choose recipients, and send.
           </CardDescription>
         </CardHeader>

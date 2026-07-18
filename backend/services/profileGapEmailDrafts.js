@@ -1,6 +1,6 @@
 /**
  * profileGapEmailDrafts.js — when a profile has gaps, draft a warm "a few quick
- * questions" email (Ellie voice) so the owner can review and send it.
+ * questions" email (Annie voice) so the owner can review and send it.
  *
  * SAFETY: like John's outreach, this is DRAFT-ONLY. It never sends. Drafts land in
  * the configured mailbox's Drafts folder (JOHN_PRIMARY_MAILBOX =
@@ -11,6 +11,7 @@
 
 import { createLogger } from '../utils/logger.js'
 import { buildProfileGapPlan } from './profileGapInterview.js'
+import { getJohnConfig } from './john/johnOutreachSafety.js'
 
 const log = createLogger('profileGapEmailDrafts')
 const KV_PREFIX = 'gap_email_draft:'
@@ -101,9 +102,11 @@ export async function draftGapEmailsForIncompleteProfiles(db, {
       if (dryRun) { summary.details.push({ profile_id: p.id, would_draft_to: toEmail, subject: plan.email.subject }); summary.drafted += 1; continue }
 
       if (!provider?.createDraft) { summary.skipped.error += 1; continue }
+      const johnConfig = getJohnConfig()
       const res = await provider.createDraft({
         toEmail, toName: contacts?.display_name || p.display_name || null,
         subject: plan.email.subject, bodyText: plan.email.body,
+        requestedFromAlias: johnConfig.fromAlias, replyTo: johnConfig.replyTo, displayName: johnConfig.displayName,
       })
       await kvSet(db, kvKey, { draft_id: res?.provider_draft_id || null, to: toEmail })
       summary.drafted += 1

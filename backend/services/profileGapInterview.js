@@ -14,7 +14,7 @@
  *     student, caregiver, veteran — plus short value questions for matching-critical
  *     gaps like location and needs), each mapping its answer to a profile section +
  *     field so the front end can persist it directly, and
- *   - a warm, Ellie-voiced gap-explanation email body.
+ *   - a warm, Annie-voiced gap-explanation email body.
  *
  * The dichotomous facet questions write the exact fields profileNormalizer reads to
  * derive effectiveFacets, so "the information determines the type" end to end: the
@@ -181,9 +181,9 @@ export function buildProfileGapPlan(normalized, sections = {}, opts = {}) {
 }
 
 /**
- * buildGapEmail — a warm, Ellie-voiced note explaining what is missing and why it
+ * buildGapEmail — a warm, Annie-voiced note explaining what is missing and why it
  * matters, and inviting the owner to finish with Anya. Consistent with the John →
- * Ellie outreach identity. Plain text; the caller adds the CTA link.
+ * Annie outreach identity. Plain text; the caller adds the CTA link.
  */
 export function buildGapEmail({ displayName = 'there', questions = [], missingLabels = [] } = {}) {
   const topLabels = missingLabels.slice(0, 5)
@@ -192,7 +192,7 @@ export function buildGapEmail({ displayName = 'there', questions = [], missingLa
   const body = [
     `Hello ${displayName},`,
     '',
-    'I am Ellie, from GrantFlow. I would love to start finding funding that fits you, but your profile is missing a few details that the search really depends on. Right now there is not quite enough for me to match you well, so I would rather ask than guess.',
+    'I am Annie, from GrantFlow. I would love to start finding funding that fits you, but your profile is missing a few details that the search really depends on. Right now there is not quite enough for me to match you well, so I would rather ask than guess.',
     '',
     'When you next sign in, I will walk you through a short set of questions (mostly yes or no). The biggest things I still need to know:',
     '',
@@ -201,9 +201,9 @@ export function buildGapEmail({ displayName = 'there', questions = [], missingLa
     'It takes just a couple of minutes, and the more you tell me, the more real, eligible funding I can surface for you, instead of generic results. Nothing here is shared outside your account.',
     '',
     'Warmly,',
-    'Ellie',
+    'Annie',
     'GrantFlow (founded by Dr. John White at Axiom BioLabs)',
-    'Ellie@axiombiolabs.org',
+    'Annie@axiombiolabs.org',
   ].join('\n')
   return { subject, body, question_count: questions.length }
 }
