@@ -154,6 +154,14 @@ export async function sendEmail({ to, cc = null, subject, html, text, from = nul
       payload.reply_to = replyTo
     }
     const result = await resend.emails.send(payload)
+    // The Resend SDK does NOT throw on API-level rejections (invalid recipient,
+    // unverified domain, 4xx/rate-limit); it RESOLVES with { data:null, error }.
+    // Without this check sendEmail returned { ok:true } for mail that never went
+    // out — falsifying comms-broadcast "N sent" counts and 'sent' audit rows.
+    // Mirror the guard already used by sendVerificationEmail/sendPasswordSetupEmail.
+    if (result?.error) {
+      return { ok: false, error: result.error?.message || String(result.error) || 'resend_error' }
+    }
     return { ok: true, id: result?.data?.id || result?.id || null }
   } catch (err) {
     return { ok: false, error: err?.message || String(err) }
@@ -326,7 +334,7 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
     const statusEmoji = success ? '✅' : '❌'
     const subject = `${statusEmoji} Auth Event: ${event}`
 
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from,
       to: notifyEmail,
       subject,
@@ -346,6 +354,11 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
       text: `Auth Event: ${event}\nIdentifier: ${identifier}\nSuccess: ${success}${error ? `\nError: ${error}` : ''}\nTime: ${new Date().toISOString()}${grantFlowLinkFooterText()}`,
     })
 
+    // Resend resolves (does not throw) on API rejection — report honestly.
+    if (result?.error) {
+      console.warn('[email/sendAuthAttemptNotification] Resend API error:', result.error?.message || result.error)
+      return false
+    }
     return true
   } catch (e) {
     console.warn('[email/sendAuthAttemptNotification] Failed to send notification:', e?.message || e)

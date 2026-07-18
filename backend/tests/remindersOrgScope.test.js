@@ -80,3 +80,46 @@ describe('fetchReminderSnapshot org scoping (milestones)', () => {
     expect(snapshot.upcomingMilestones).toHaveLength(2)
   })
 })
+
+/**
+ * SECURITY REGRESSION (cross-tenant leak): an EMPTY organizationIds array means
+ * "the caller has access to no org" and MUST return nothing — it must never be
+ * treated the same as an omitted option (admin/system, DB-wide). The route bug
+ * was passing `[]` for every non-admin (a Set failed `Array.isArray`), which
+ * this function then read as "no filter" and leaked every tenant's rows.
+ */
+describe('fetchReminderSnapshot empty-scope leak guard', () => {
+  let db
+  const due = isoDaysFromToday(5)
+  const soon = isoDaysFromToday(3)
+
+  beforeEach(() => {
+    db = makeDb()
+    db.prepare(
+      `INSERT INTO milestones (id, title, due_date, organization_id, completed)
+       VALUES ('mA', 'Org A milestone', ?, 'orgA', 0),
+              ('mB', 'Org B milestone', ?, 'orgB', 0)`
+    ).run(due, due)
+    db.prepare(
+      `INSERT INTO grants (id, title, status, deadline, organization_id)
+       VALUES ('gA', 'Grant A', 'discovered', ?, 'orgA'),
+              ('gB', 'Grant B', 'discovered', ?, 'orgB')`
+    ).run(soon, soon)
+  })
+
+  it('returns NO milestones when scoped to an empty org set', async () => {
+    const snapshot = await fetchReminderSnapshot(db, 30, { organizationIds: [] })
+    expect(snapshot.upcomingMilestones).toEqual([])
+  })
+
+  it('returns NO deadlines when scoped to an empty org set', async () => {
+    const snapshot = await fetchReminderSnapshot(db, 30, { organizationIds: [] })
+    expect(snapshot.urgentDeadlines).toEqual([])
+  })
+
+  it('still returns everything when the option is OMITTED (admin/system path)', async () => {
+    const snapshot = await fetchReminderSnapshot(db, 30, {})
+    expect(snapshot.upcomingMilestones).toHaveLength(2)
+    expect(snapshot.urgentDeadlines).toHaveLength(2)
+  })
+})

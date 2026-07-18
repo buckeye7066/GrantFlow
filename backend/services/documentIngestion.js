@@ -128,11 +128,20 @@ function shouldOverrideString({ key, existingValue, incomingValue }) {
   return false
 }
 
-function mergeSectionData(existing = {}, incoming = {}) {
+export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = null) {
   const merged = { ...existing }
   const updatedFields = new Set()
 
+  // Untrusted-AI hardening: when the section's known key set is supplied, only
+  // accept keys the schema declares. The `incoming` object is model output
+  // derived from uploaded document text (a prompt-injection surface); without
+  // this allowlist an injected document could make the model emit arbitrary
+  // keys that would be persisted into profile_sections and poison the
+  // eligibility/matching invariants. See PORTFOLIO_AUDIT.md.
+  const allow = Array.isArray(allowedKeys) && allowedKeys.length > 0 ? new Set(allowedKeys) : null
+
   Object.entries(incoming).forEach(([key, rawValue]) => {
+    if (allow && !allow.has(key)) return
     if (rawValue === undefined || rawValue === null) return
     const value = normalizeValue(rawValue)
     const existingValue = merged[key]
@@ -805,7 +814,7 @@ export async function processDocumentIngestionJob({
         const suggestion = result.json
 
         const existing = sections[sectionKey] ?? {}
-        const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+        const { data: merged, updatedFields } = mergeSectionData(existing, suggestion, promptPayload.config?.keys)
 
         if (updatedFields.size > 0) {
           if (!profile?.id) throw new Error('Profile ID required for section updates'); if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
@@ -867,7 +876,7 @@ export async function processDocumentIngestionJob({
             }
 
             const existing = sections[sectionKey] ?? {}
-            const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+            const { data: merged, updatedFields } = mergeSectionData(existing, suggestion, promptPayload.config?.keys)
 
             if (updatedFields.size > 0) {
               if (!profile?.id) throw new Error('Profile ID required for section updates'); if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)

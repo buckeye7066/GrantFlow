@@ -372,6 +372,12 @@ router.post('/reverse-lookup', requireAuthenticatedUserMiddleware, async (req, r
   try {
     const { profile_id } = req.body ?? {}
     if (!profile_id) return res.status(400).json({ error: 'profile_id required' })
+    // Tenant isolation: reverse-lookup loads the target profile's context and
+    // returns its derived attributes (home state, entity type, need categories —
+    // which encode sensitive facts like veteran/disability/housing). Gate on
+    // profile access exactly like the sibling /score and /profile-region routes,
+    // otherwise any authenticated user can read another tenant's profile summary.
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
 
     const { findSimilarOrgsFunders } = await import('../services/reverseLookupService.js')
     const result = await findSimilarOrgsFunders(req.db, profile_id, {

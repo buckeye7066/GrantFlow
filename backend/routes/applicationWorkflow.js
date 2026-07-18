@@ -67,6 +67,15 @@ async function loadApplication(req, res, applicationId) {
   if (row.profile_id) {
     const ok = await ensureProfileAccess(req, res, String(row.profile_id))
     if (!ok) return null
+  } else if (req.ctx?.isAdmin !== true) {
+    // Fail CLOSED on an orphaned (profile_id IS NULL) application: previously
+    // the access check was skipped entirely for such rows, letting any
+    // authenticated user read/mutate another tenant's orphan application.
+    // Only admins (who legitimately span tenants and own orphan cleanup) may
+    // touch a NULL-profile row. Mirrors the fail-closed siblings in
+    // applications.js / vnextApplications.js / applicationTasks.js.
+    res.status(403).json({ error: 'Not authorized to access this application' })
+    return null
   }
   return row
 }
@@ -183,6 +192,10 @@ router.patch('/steps/:stepId/complete', async (req, res) => {
     if (row.profile_id) {
       const ok = await ensureProfileAccess(req, res, String(row.profile_id))
       if (!ok) return
+    } else if (req.ctx?.isAdmin !== true) {
+      // Fail closed on an orphaned (NULL profile_id) application step — see
+      // loadApplication() above for rationale.
+      return res.status(403).json({ error: 'Not authorized to modify this step' })
     }
     await completeApplicationStep(req.db, String(req.params.stepId))
     return res.json({ ok: true })

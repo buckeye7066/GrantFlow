@@ -92,9 +92,19 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
   ]
   const deadlineParams = [todayStr, endDateStr]
 
-  if (organizationIds && organizationIds.length > 0) {
-    deadlineConditions.push(`g.organization_id IN (${organizationIds.map(() => '?').join(',')})`)
-    deadlineParams.push(...organizationIds)
+  // Tenant scope semantics:
+  //   organizationIds === null  -> no scoping requested (admin / system): DB-wide read.
+  //   organizationIds is array  -> scope to it. An EMPTY array means the caller
+  //                                has access to NO org and MUST see nothing —
+  //                                it must never fall through to a DB-wide read
+  //                                (the "empty access set = whole table" leak).
+  if (Array.isArray(organizationIds)) {
+    if (organizationIds.length === 0) {
+      deadlineConditions.push('1 = 0')
+    } else {
+      deadlineConditions.push(`g.organization_id IN (${organizationIds.map(() => '?').join(',')})`)
+      deadlineParams.push(...organizationIds)
+    }
   }
 
   const deadlineRows = await db
@@ -167,11 +177,15 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
   // m.completed predicate differs per dialect and is already baked into milestoneSql; keep the filter separate.
   let milestoneSqlWithScope = milestoneSql
 
-  if (organizationIds && organizationIds.length > 0) {
-    const placeholders = organizationIds.map(() => '?').join(',')
-    const orgClause = `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})`
+  // Same scope semantics as the deadline query above: null = admin/system
+  // (DB-wide); an array scopes; an EMPTY array must match nothing.
+  if (Array.isArray(organizationIds)) {
     // Anchor on `AND m.due_date IS NOT NULL`: it appears verbatim in BOTH dialect
     // queries (the completed-predicate differs per dialect and is baked in above).
+    const orgClause =
+      organizationIds.length === 0
+        ? 'AND 1 = 0'
+        : `AND COALESCE(m.organization_id, g.organization_id) IN (${organizationIds.map(() => '?').join(',')})`
     const scopedSql = milestoneSqlWithScope.replace(
       'AND m.due_date IS NOT NULL',
       `${orgClause}\n            AND m.due_date IS NOT NULL`
@@ -180,9 +194,11 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
       throw new Error('reminders: org-scope anchor not found in milestone SQL')
     }
     milestoneSqlWithScope = scopedSql
-    // The injected org placeholders sit BEFORE the two due_date placeholders in
-    // the SQL, so their values must come first in positional order.
-    milestoneParams.unshift(...organizationIds)
+    if (organizationIds.length > 0) {
+      // The injected org placeholders sit BEFORE the two due_date placeholders in
+      // the SQL, so their values must come first in positional order.
+      milestoneParams.unshift(...organizationIds)
+    }
   }
 
   const milestoneRows = await db.prepare(milestoneSqlWithScope).all(...milestoneParams);
@@ -210,9 +226,15 @@ router.get('/', async (req, res) => {
     
     const snapshot = await (async () => {
       if (isAdminUser(user)) return await fetchReminderSnapshot(req.db)
+      // getAccessibleOrganizationIds returns a Set (never an Array) for non-admins,
+      // or null for a DB-backed admin. The previous `Array.isArray(orgIds)` test was
+      // therefore ALWAYS false, discarding the user's real org set and passing an
+      // empty array — which fetchReminderSnapshot then read as "no filter" and
+      // returned every tenant's grants/milestones. Convert the Set explicitly and
+      // treat null (admin) as unscoped.
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       return await fetchReminderSnapshot(req.db, DAYS_LOOKAHEAD, {
-        organizationIds: Array.isArray(orgIds) ? Array.from(orgIds) : [],
+        organizationIds: orgIds === null ? undefined : Array.from(orgIds),
       })
     })()
     
