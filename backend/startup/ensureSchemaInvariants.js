@@ -686,6 +686,53 @@ export async function ensurePageFactProvenanceColumns(db, { logger = console } =
 }
 
 /**
+ * Content-addressed page-fact cache table (both dialects): `page_fact_cache`
+ * (migration 145 / pg 0149; Phase 0.2 of the web-lane de-contamination program).
+ * ADDITIVE, default-off, ZERO behavior change — a deterministic "same page =>
+ * same facts" store for a LATER profile-blind extractor; NOTHING reads/writes it
+ * yet (wired in Phase 1). Re-asserted at boot (CREATE TABLE IF NOT EXISTS —
+ * idempotent, boot-time, NOT the persistence hot path) so prod heals without a
+ * manual migrate and the drift check (diagnosticsService) has a real table to
+ * verify. The accessor lives in backend/services/pageFactCache.js.
+ */
+export async function ensurePageFactCacheTable(db, { logger = console } = {}) {
+  return runStep(
+    'page_fact_cache_table',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS page_fact_cache (
+            cache_key TEXT PRIMARY KEY,
+            normalized_final_url TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            extractor_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            model TEXT NOT NULL,
+            page_facts_json TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+        `)
+        return
+      }
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS page_fact_cache (
+          cache_key TEXT PRIMARY KEY,
+          normalized_final_url TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          extractor_version TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          model TEXT NOT NULL,
+          page_facts_json TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `)
+    },
+  )
+}
+
+/**
  * profiles.deleted_at column (both dialects).
  *
  * Older production databases can predate this column even though fresh schemas
@@ -1200,6 +1247,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
   ['amount_visibility_columns', ensureAmountVisibilityColumns],
   ['page_fact_provenance_columns', ensurePageFactProvenanceColumns],
+  ['page_fact_cache_table', ensurePageFactCacheTable],
   ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
   ['profile_portal_status', ensurePortalCompletionStatusTable],
   ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],
