@@ -3939,3 +3939,22 @@ CREATE TABLE IF NOT EXISTS behavior_events (
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_events_profile ON behavior_events(profile_id);
 CREATE INDEX IF NOT EXISTS idx_behavior_events_profile_ts ON behavior_events(profile_id, ts);
+
+-- ── Content-addressed page-fact cache (Phase 0.2, de-contamination program) ──
+-- Deterministic "same page => same facts" store so a LATER profile-blind
+-- extractor can reuse an extraction across profiles instead of re-calling the
+-- LLM. ADDITIVE, default-off: NOTHING in the live path reads/writes it yet
+-- (wired in Phase 1). cache_key is a stable hash of (normalized_final_url,
+-- content_hash, extractor_version, prompt_version, model) computed by
+-- computeCacheKey() in backend/services/pageFactCache.js; the five components
+-- are stored as their own columns only for debuggability. Migration 145 / pg 0149.
+CREATE TABLE IF NOT EXISTS page_fact_cache (
+  cache_key TEXT PRIMARY KEY,
+  normalized_final_url TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  model TEXT NOT NULL,
+  page_facts_json TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

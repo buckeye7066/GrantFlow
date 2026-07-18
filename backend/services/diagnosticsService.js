@@ -271,6 +271,10 @@ export async function checkFundingOpportunitiesSchema(db) {
   const grantsRequired = ['url', 'matched_needs', 'match_decision', 'match_explanation', 'fingerprint', 'fingerprint_version']
   const grantsCheck = await checkTableColumns(db, 'grants', grantsRequired)
   const crawlerLogsExists = await checkTableExists(db, 'crawler_logs')
+  // page_fact_cache (migration 145 / pg 0149) — content-addressed page-fact
+  // cache, ADDITIVE + unused (Phase 0.2). Registered here so a missed migration
+  // shows as schema DRIFT instead of silently absent.
+  const pageFactCacheExists = await checkTableExists(db, 'page_fact_cache')
 
   if (db?.dialect === 'postgres') {
     try {
@@ -305,6 +309,7 @@ export async function checkFundingOpportunitiesSchema(db) {
       ]
       const missingTables = []
       if (!crawlerLogsExists) missingTables.push('crawler_logs')
+      if (!pageFactCacheExists) missingTables.push('page_fact_cache')
 
       return {
         funding_opportunities_has_type: columnNames.has('type'),
@@ -357,6 +362,7 @@ export async function checkFundingOpportunitiesSchema(db) {
     ];
     const missingTables = [];
     if (!crawlerLogsExists) missingTables.push('crawler_logs');
+    if (!pageFactCacheExists) missingTables.push('page_fact_cache');
     return {
       funding_opportunities_has_type: columnNames.includes('type'),
       funding_opportunities_has_evidence_url: columnNames.includes('evidence_url'),
