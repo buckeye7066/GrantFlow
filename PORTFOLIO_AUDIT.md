@@ -397,6 +397,28 @@ The r17 credential-bound adoption is only sound if `/email/verify` actually prov
 
 **Confirmation:** the email OTP verifier is not client-readable or brute-forceable — verification is server-side, one-time, expiring, and attempt-limited — so `/email/verify` genuinely proves inbox possession and the r17 credential-bound adoption holds.
 
+## 5s. Round 19 — OTP verification is ATOMIC under concurrency (Codex review of commit `0697ce4`)
+
+The r18 server-side verification was correct sequentially but **not atomic**. `/email/verify` checked the active row's `attempt_count`, then SEPARATELY looked up a matching code, then SEPARATELY incremented attempts or wrote `consumed_at` — independent queries with no transaction, row lock, or affected-row check.
+
+### R19-1 [HIGH] Non-atomic attempt cap + one-time consume (TOCTOU race)
+Under pooled Postgres these are independent statements on independent connections, so: **(a)** parallel WRONG guesses can all observe `attempt_count < max` before any increment lands → the cap is not strictly enforced (online brute-force unbounded); **(b)** two parallel CORRECT submissions can both pass the SELECT before either `consumed_at` write lands → a one-time code **mints multiple sessions**.
+
+**Fix (`backend/routes/auth.js`):** a single choke point, `atomicVerifyOtpCode(db, credentialId, incomingHash, maxAttempts)`, runs the whole check-and-consume inside **one transaction** via the `db.withTransaction` abstraction:
+- **Row lock:** Postgres `SELECT … FOR UPDATE` on the credential's active code rows; SQLite `BEGIN IMMEDIATE` serializes writers (the shim's async-tx lock queues concurrent verifies). Dialect-selected via `tx.dialect`.
+- **Cap re-read under the lock:** `attempt_count >= maxAttempts` → `locked_out`; a locked code stays locked (every further attempt, right or wrong, is refused) until a fresh `/start`. Parallel wrong guesses can no longer slip under the cap.
+- **One-time consume as a single conditional UPDATE requiring exactly one affected row:** `UPDATE … SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`; `changes !== 1` → `already_consumed`. Two parallel correct submissions therefore mint **exactly one** session — the loser is rejected, never a second session.
+- **Raceless failed-attempt increment:** `UPDATE … SET attempt_count = attempt_count + 1 …` (read-modify-write in one statement), serialized by the lock so the cap is exact.
+- **Constant-time compare:** the submitted hash is matched with `timingSafeEqualHex` (crypto.timingSafeEqual over the sha256 digests), not `===`.
+
+**Phone path:** `/phone/verify` had the same read-then-update shape and now uses the SAME `atomicVerifyOtpCode` helper (with `PHONE_MAX_VERIFY_ATTEMPTS`), so a concurrent phone double-submit also mints only one session and the phone attempt cap is exact (it previously had no cap).
+
+**Defense in depth:** added an `/email/verify` rate limiter keyed by **normalized email + IP** (`AUTH_EMAIL_VERIFY_RATE_LIMIT`, default 30 / 10 min) so an attacker cannot cycle through many freshly-started codes for one victim from one host.
+
+**Tests (`otpVerifyAtomicity.test.js`):** (1) full-app — 5 parallel CORRECT submissions of a one-time code → exactly ONE 200 (one session), the rest 400 (consumed once in the DB); N=12 parallel WRONG guesses → at most `EMAIL_MAX_VERIFY_ATTEMPTS` evaluated as invalid, the rest `429 too_many_attempts`, recorded `attempt_count` never exceeds the cap; (2) deterministic helper unit tests — a correct code verifies once then cannot replay (consumed exactly once), and wrong guesses cap then lock out even a subsequently-correct guess. **Verified red** by removing the cap re-read and neutralizing the conditional consume → all four tests (both concurrent + both unit) fail. Note: the single-connection SQLite test harness serializes writers, so it cannot reproduce the pooled-Postgres connection-level race itself; the load-bearing guarantees that DO close the race on both engines — the conditional one-time consume with an affected-row check and the under-lock cap — are what the tests exercise red/green (the `FOR UPDATE` row lock is the Postgres-pool belt-and-suspenders on top).
+
+**Confirmation:** `/email/verify` (and `/phone/verify`) verify inside a row-locked transaction with a conditional one-time consume that requires exactly one affected row and a raceless attempt cap — so an online brute-force is strictly cap-bounded and a one-time code cannot mint multiple sessions under race, keeping the r17 profile adoption genuinely inbox-possession-backed.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

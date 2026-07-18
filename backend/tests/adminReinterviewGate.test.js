@@ -52,6 +52,7 @@ function normalizeArgs(args) {
 class SqliteShim {
   constructor() {
     this._db = new Database(':memory:')
+    this.dialect = 'sqlite'
   }
   prepare(sql) {
     const stmt = this._db.prepare(sql)
@@ -63,6 +64,19 @@ class SqliteShim {
   }
   exec(sql) { this._db.exec(sql) }
   raw() { return this._db }
+  // Mirror backend/db SqliteDb.withTransaction (manual BEGIN IMMEDIATE) so the
+  // atomic OTP verification path exercises a real transaction under test.
+  async withTransaction(fn) {
+    this._db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = await fn(this)
+      this._db.exec('COMMIT')
+      return result
+    } catch (err) {
+      try { this._db.exec('ROLLBACK') } catch { /* ignore */ }
+      throw err
+    }
+  }
 }
 
 function seedSchema(db) {

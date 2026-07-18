@@ -157,6 +157,14 @@ Compat: behavior-preserving for real users (adopt/re-select their own or their-e
 
 Compat: behavior-preserving for the real login flow (a user who receives the emailed code still verifies); only the offline-recoverable token verifier and the tokenOk DB-skip change (both removed). New test: `emailOtpTokenNoVerifier.test.js` (3, full-app), verified red under the pre-fix behavior. Two tests that relied on the token bypass (`refreshLoginRecording`, `adminReinterviewGate`) were made prod-faithful (seed the real server-side DB code row).
 
+## Round 19 — OTP verification is atomic under concurrency (see PORTFOLIO_AUDIT.md §5s)
+
+- **[HIGH] Closed the OTP verify TOCTOU race.** The r18 verification checked the attempt cap, then separately matched a code, then separately incremented/consumed — no transaction or affected-row check. Under pooled Postgres, parallel wrong guesses could all slip under the cap, and two parallel correct submissions could both consume a one-time code and mint two sessions. New choke point `atomicVerifyOtpCode` runs the whole check-and-consume in ONE transaction: Postgres `SELECT … FOR UPDATE` / SQLite `BEGIN IMMEDIATE`; cap re-read under the lock (locked code stays locked); one-time consume as a single conditional `UPDATE … WHERE consumed_at IS NULL` that must affect exactly one row (else `already_consumed` — no second session); raceless `attempt_count + 1`; constant-time hash compare (`timingSafeEqualHex`).
+- **Phone parity:** `/phone/verify` had the same shape and now uses the same helper (`PHONE_MAX_VERIFY_ATTEMPTS`) — one session per one-time phone code, exact cap (it had none before).
+- **Defense in depth:** `/email/verify` rate limiter keyed by normalized email + IP (`AUTH_EMAIL_VERIFY_RATE_LIMIT`, default 30/10 min).
+
+Compat: behavior-preserving for the normal single-request login (correct code → session; wrong → invalid; too many → 429); only concurrent double-submit and parallel brute-force change (now strictly bounded / single-session). New test `otpVerifyAtomicity.test.js` (4: 2 concurrent full-app + 2 deterministic helper units), verified red by removing the cap + one-time-consume logic. Two SQLite test shims (`refreshLoginRecording`, `adminReinterviewGate`) gained `withTransaction`/`dialect` to mirror the real `SqliteDb`. `findMatchingActiveVerificationCode` (superseded) removed.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

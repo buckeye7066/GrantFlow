@@ -139,6 +139,7 @@ const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS
 // invalidated (lockout). Bounds an ONLINE brute-force of the 6-digit space; the
 // verifier is never exposed to the client, so there is no offline attack.
 const EMAIL_MAX_VERIFY_ATTEMPTS = Math.max(3, parseInt(process.env.AUTH_EMAIL_MAX_VERIFY_ATTEMPTS, 10) || 6)
+const PHONE_MAX_VERIFY_ATTEMPTS = Math.max(3, parseInt(process.env.AUTH_PHONE_MAX_VERIFY_ATTEMPTS, 10) || 6)
 const PHONE_CODE_TTL = parseSeconds(process.env.AUTH_PHONE_CODE_TTL, 600) // seconds
 const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS, 60) // seconds
 const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
@@ -226,6 +227,18 @@ const passwordRateLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+// Defense-in-depth on top of the atomic per-code attempt cap: bound the total
+// /email/verify requests per (normalized email + IP) so an attacker can't cycle
+// through many freshly-started codes for one victim from one host. `normalizeEmail`
+// is a hoisted function declaration, so referencing it here is safe.
+const emailVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: Number.parseInt(process.env.AUTH_EMAIL_VERIFY_RATE_LIMIT ?? '30', 10),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `${normalizeEmail(req.body?.email ?? '')}|${req.ip}`,
+})
+
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
 }
@@ -278,6 +291,23 @@ function isValidEmail(email) {
 
 function hashValue(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+// Constant-time comparison of two hex digests (both are sha256 hex here). Avoids
+// leaking, via response timing, how many leading bytes of the stored code hash a
+// guess matched.
+function timingSafeEqualHex(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  let ba
+  let bb
+  try {
+    ba = Buffer.from(a, 'hex')
+    bb = Buffer.from(b, 'hex')
+  } catch {
+    return false
+  }
+  if (ba.length === 0 || ba.length !== bb.length) return false
+  return crypto.timingSafeEqual(ba, bb)
 }
 
 function base64UrlToken(bytes = 32) {
@@ -353,24 +383,84 @@ function signOtpToken({ kind, identifier, ttlSeconds }) {
   )
 }
 
-async function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
-  const now = nowISOString()
-  const rows = await db
-    .prepare(
-      `
-        SELECT *
-        FROM user_verification_codes
-        WHERE credential_id = ?
-          AND consumed_at IS NULL
-          AND (expires_at IS NULL OR expires_at >= ?)
-        ORDER BY created_at DESC
-        LIMIT 10
-      `,
-    )
-    .all(credentialId, now)
+/**
+ * Atomically verify a submitted OTP against the server-side one-time code rows.
+ *
+ * Runs inside a SINGLE transaction so the attempt cap and one-time consumption
+ * are race-free even under pooled/concurrent Postgres (the TOCTOU class):
+ *   - Postgres locks the credential's active rows with `FOR UPDATE`; SQLite's
+ *     `BEGIN IMMEDIATE` serializes writers — so concurrent verifies for the same
+ *     credential execute one at a time.
+ *   - The attempt cap is re-read UNDER the lock, so parallel WRONG guesses cannot
+ *     all observe `attempt_count < max` and slip past the cap. Once the cap is
+ *     reached the active code stays LOCKED (every further attempt — right or
+ *     wrong — is rejected) until a fresh /start mints a new code.
+ *   - A CORRECT guess consumes via a single conditional `UPDATE ... WHERE
+ *     consumed_at IS NULL` that must affect exactly ONE row; two parallel correct
+ *     submissions therefore yield exactly one success (one session) — the loser
+ *     gets `already_consumed`, never a second session.
+ *   - The code compare is constant-time (`timingSafeEqualHex`).
+ *
+ * Returns: 'ok' | 'invalid' | 'already_consumed' | 'locked_out'.
+ */
+async function atomicVerifyOtpCode(db, credentialId, incomingHash, maxAttempts) {
+  return db.withTransaction(async (tx) => {
+    const now = nowISOString()
+    const lockClause = tx.dialect === 'postgres' ? ' FOR UPDATE' : ''
 
-  if (!Array.isArray(rows) || rows.length === 0) return null
-  return rows.find((row) => row && row.code_hash === incomingHash) ?? null
+    const active = await tx
+      .prepare(
+        `
+          SELECT id, code_hash, attempt_count
+          FROM user_verification_codes
+          WHERE credential_id = ?
+            AND consumed_at IS NULL
+            AND (expires_at IS NULL OR expires_at >= ?)
+          ORDER BY created_at DESC
+          LIMIT 10${lockClause}
+        `,
+      )
+      .all(credentialId, now)
+
+    const latest = Array.isArray(active) && active.length > 0 ? active[0] : null
+
+    // Cap enforced UNDER the lock (re-read). Locked codes stay locked.
+    if (latest && Number(latest.attempt_count || 0) >= maxAttempts) {
+      return 'locked_out'
+    }
+
+    const match = Array.isArray(active)
+      ? active.find((row) => timingSafeEqualHex(row.code_hash, incomingHash))
+      : null
+
+    if (!match) {
+      // Wrong code: raceless conditional increment of the active-code counter and
+      // the credential counter. Serialized by the lock, so the cap is exact.
+      if (latest?.id) {
+        await tx
+          .prepare(`UPDATE user_verification_codes SET attempt_count = attempt_count + 1 WHERE id = ? AND consumed_at IS NULL`)
+          .run(latest.id)
+      }
+      await tx.prepare(`UPDATE user_credentials SET attempt_count = attempt_count + 1 WHERE id = ?`).run(credentialId)
+      return 'invalid'
+    }
+
+    // Correct code: one-time consume — a single conditional UPDATE that MUST
+    // affect exactly one row. A parallel winner already flipped consumed_at →
+    // 0 rows → 'already_consumed' (no second session).
+    const consume = await tx
+      .prepare(
+        `UPDATE user_verification_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`,
+      )
+      .run(now, match.id, now)
+    if (Number(consume?.changes ?? 0) !== 1) {
+      return 'already_consumed'
+    }
+    await tx
+      .prepare(`UPDATE user_credentials SET verified_at = COALESCE(verified_at, ?), attempt_count = 0 WHERE id = ?`)
+      .run(now, credentialId)
+    return 'ok'
+  })
 }
 
 function nowISOString() {
@@ -2088,7 +2178,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
   }
 })
 
-router.post('/email/verify', async (req, res) => {
+router.post('/email/verify', emailVerifyLimiter, async (req, res) => {
   if (isOtpLoginRetired()) return otpLoginRetired(res)
   const emailRaw = req.body?.email
   const codeRaw = req.body?.code
@@ -2135,146 +2225,30 @@ router.post('/email/verify', async (req, res) => {
   // /email/verify genuinely prove inbox possession (and thus makes the r17
   // credential-bound profile adoption sound).
   //
-  // Lockout FIRST: cap wrong guesses against the active code so an online
-  // brute-force of the 1,000,000-code space is bounded. On exhaustion the code
-  // is invalidated and a fresh /email/start is required.
-  const activeCode = await req.db
-    .prepare(
-      `
-        SELECT id, attempt_count
-        FROM user_verification_codes
-        WHERE credential_id = ?
-          AND consumed_at IS NULL
-          AND (expires_at IS NULL OR expires_at >= ?)
-        ORDER BY created_at DESC
-        LIMIT 1
-      `,
-    )
-    .get(credential.id, nowISOString())
-
-  if (activeCode && Number(activeCode.attempt_count || 0) >= EMAIL_MAX_VERIFY_ATTEMPTS) {
-    // Invalidate every active code for this credential so the space cannot be
-    // exhausted by requesting the same code repeatedly.
-    await req.db
-      .prepare(
-        `UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`,
-      )
-      .run(nowISOString(), credential.id)
-    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'too_many_attempts' }).catch(e => console.warn('[background]', e?.message || e))
-    return res.status(429).json({
-      error: 'Too many attempts. Request a new code.',
-      error_type: 'too_many_attempts',
-    })
+  // Done ATOMICALLY (row-locked transaction): the attempt cap and one-time
+  // consumption cannot be raced — parallel wrong guesses can't slip past the cap,
+  // and two parallel correct submissions of the one-time code mint exactly one
+  // session (never two). See atomicVerifyOtpCode.
+  let outcome
+  try {
+    outcome = await atomicVerifyOtpCode(req.db, credential.id, incomingHash, EMAIL_MAX_VERIFY_ATTEMPTS)
+  } catch (dbError) {
+    routeLogger.error('[auth/email/verify] Atomic verification failed:', dbError)
+    return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  const codeRow = await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
-
-  if (!codeRow) {
-    // Provide a more accurate error (expired vs already used vs invalid) without exposing the code.
-    const matchedAny = await req.db
-      .prepare(
-        `
-          SELECT id, expires_at, consumed_at
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND code_hash = ?
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(credential.id, incomingHash)
-
-    if (matchedAny?.consumed_at) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
-      return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
-    }
-    if (matchedAny?.expires_at && matchedAny.expires_at < nowISOString()) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(e => console.warn('[background]', e?.message || e))
-      return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
-    }
-
-    const hasAnyActive = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) as c
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND consumed_at IS NULL
-            AND (expires_at IS NULL OR expires_at >= ?)
-        `,
-      )
-      .get(credential.id, nowISOString())
-      ?.c
-
-    if (!hasAnyActive) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(e => console.warn('[background]', e?.message || e))
-      return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
-    }
-
-    // Increment attempt count on the latest active code (if any) to support abuse monitoring.
-    const latest = await req.db
-      .prepare(
-        `
-          SELECT id
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND consumed_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(credential.id)
-
-    if (latest?.id) {
-      await req.db
-        .prepare(
-          `
-            UPDATE user_verification_codes
-            SET attempt_count = attempt_count + 1
-            WHERE id = ?
-          `,
-        )
-        .run(latest.id)
-    }
-
-    await req.db
-      .prepare(
-        `
-          UPDATE user_credentials
-          SET attempt_count = attempt_count + 1
-          WHERE id = ?
-        `,
-      )
-      .run(credential.id)
-
+  if (outcome === 'locked_out') {
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'too_many_attempts' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(429).json({ error: 'Too many attempts. Request a new code.', error_type: 'too_many_attempts' })
+  }
+  if (outcome === 'already_consumed') {
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
+  }
+  if (outcome !== 'ok') {
     sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(400).json({ error: 'Invalid verification code' })
   }
-
-  // One-time consumption: mark the matched server-side code row used so it can
-  // never be replayed (codeRow is always a real DB row now).
-  if (codeRow.id) {
-    await req.db
-      .prepare(
-        `
-          UPDATE user_verification_codes
-          SET consumed_at = ?
-          WHERE id = ?
-        `,
-      )
-      .run(nowISOString(), codeRow.id)
-  }
-
-  await req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET verified_at = COALESCE(verified_at, ?),
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), credential.id)
 
   // Reload user if needed.
   if (!user) {
@@ -2523,73 +2497,30 @@ router.post('/phone/verify', async (req, res) => {
   }
 
   const incomingHash = hashValue(`${normalized}:${code}`)
-  const codeRow = await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
-  if (!codeRow) {
-    const latest = await req.db
-      .prepare(
-        `
-          SELECT id
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND consumed_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(credential.id)
-
-    if (latest?.id) {
-      await req.db
-        .prepare(
-          `
-            UPDATE user_verification_codes
-            SET attempt_count = attempt_count + 1
-            WHERE id = ?
-          `,
-        )
-        .run(latest.id)
-    }
-
-    await req.db
-      .prepare(
-        `
-          UPDATE user_credentials
-          SET attempt_count = attempt_count + 1
-          WHERE id = ?
-        `,
-      )
-      .run(credential.id)
-
-    sendAuthAttemptNotification({
-      event: 'phone_verify',
-      identifier: normalized,
-      success: false,
-      error: 'invalid_code',
-    }).catch(e => console.warn('[background]', e?.message || e))
-    return res.status(400).json({ error: 'Invalid verification code' })
+  // Same ATOMIC, race-free verification as the email path (row-locked tx): the
+  // one-time phone code cannot mint two sessions under a concurrent double-submit,
+  // and the attempt cap is exact under parallel wrong guesses.
+  let outcome
+  try {
+    outcome = await atomicVerifyOtpCode(req.db, credential.id, incomingHash, PHONE_MAX_VERIFY_ATTEMPTS)
+  } catch (dbError) {
+    routeLogger.error('[auth/phone/verify] Atomic verification failed:', dbError)
+    return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  await req.db
-    .prepare(
-      `
-        UPDATE user_verification_codes
-        SET consumed_at = ?
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), codeRow.id)
-
-  await req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET verified_at = COALESCE(verified_at, ?),
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), credential.id)
+  if (outcome === 'locked_out') {
+    sendAuthAttemptNotification({ event: 'phone_verify', identifier: normalized, success: false, error: 'too_many_attempts' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(429).json({ error: 'Too many attempts. Request a new code.', error_type: 'too_many_attempts' })
+  }
+  if (outcome === 'already_consumed') {
+    sendAuthAttemptNotification({ event: 'phone_verify', identifier: normalized, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
+  }
+  if (outcome !== 'ok') {
+    sendAuthAttemptNotification({ event: 'phone_verify', identifier: normalized, success: false, error: 'invalid_code' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(400).json({ error: 'Invalid verification code' })
+  }
 
   const user = await getUserById(req.db, credential.user_id)
   if (!user) {
@@ -3666,6 +3597,10 @@ export {
   // adoption must be bound to the presented credential (see attachProfileToUser).
   attachProfileToUser,
   profileIsBoundToEmail,
+  // Exported for the OTP-atomicity regression suite: one-time consume + raceless
+  // attempt cap (see atomicVerifyOtpCode).
+  atomicVerifyOtpCode,
+  EMAIL_MAX_VERIFY_ATTEMPTS,
 }
 
 export default router
