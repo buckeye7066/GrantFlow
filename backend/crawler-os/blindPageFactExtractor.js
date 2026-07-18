@@ -334,10 +334,30 @@ export async function extractPageFactsBlind(input, deps) {
     const pageUrlCanon = canonicalizeUrl(pageUrl);
     if (!pageUrlCanon) return [];
 
-    // Drop null/garbage inventory entries defensively (an external caller may pass
-    // an unclean array); keep only well-formed { id, url } entries.
+    // Sanitize the inventory: an external caller may pass an unclean or hostile
+    // array, so trust NOTHING from it. Re-canonicalize every url through the
+    // http(s)-only canonicalizer (drops javascript:/data:/mailto:/tel: etc. so a
+    // hostile entry can never taint apply_url/info_url), keep only well-formed
+    // { id, url } entries, truncate strings, and bound the count so the prompt
+    // stays bounded regardless of what the caller supplies. buildLinkInventory
+    // output is already canonical, so this is idempotent on the real path.
+    const MAX_INVENTORY_ENTRIES = 200;
+    const MAX_LINK_ID_CHARS = 40;
+    const MAX_LINK_TEXT_CHARS = 200;
     const inventory = (Array.isArray(linkInventory) ? linkInventory : [])
-      .filter((l) => l && typeof l === 'object' && typeof l.url === 'string' && typeof l.id === 'string');
+      .map((l) => {
+        if (!l || typeof l !== 'object' || typeof l.id !== 'string' || typeof l.url !== 'string') return null;
+        const url = canonicalizeUrl(l.url); // null for non-http(s) schemes
+        if (!url) return null;
+        return {
+          id: l.id.slice(0, MAX_LINK_ID_CHARS),
+          url,
+          text: typeof l.text === 'string' ? l.text.slice(0, MAX_LINK_TEXT_CHARS) : '',
+          apply_intent: l.apply_intent === true,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, MAX_INVENTORY_ENTRIES);
 
     const timeoutMs = Number.isFinite(safeDeps.timeoutMs) && safeDeps.timeoutMs > 0
       ? safeDeps.timeoutMs : DEFAULT_LLM_TIMEOUT_MS;

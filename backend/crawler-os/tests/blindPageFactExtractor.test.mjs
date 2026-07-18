@@ -74,6 +74,42 @@ test('happy path: extracts page facts with inventory-selected apply/info URLs', 
   assert.equal(f.field_provenance.is_loan.value, false);
 });
 
+test('a caller-supplied inventory url with a non-http(s) scheme never reaches apply_url', async () => {
+  // The extractor must trust NOTHING from a caller-supplied inventory: an entry
+  // whose url is javascript:/data:/mailto: must be dropped (re-canonicalized to
+  // null), so the model selecting it yields a fallback, NOT the tainted url.
+  const hostileInventory = [
+    { id: 'L1', url: 'javascript:alert(1)', text: 'Apply now', apply_intent: true },
+    { id: 'L2', url: 'https://foundation.example.org/faq', text: 'FAQ', apply_intent: false },
+    { id: 'L3', url: 'data:text/html,<script>', text: 'Details', apply_intent: false },
+  ];
+  const llm = mockLlm({ apply_link_id: 'L1', info_link_id: 'L3' });
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: hostileInventory },
+    { llm },
+  ))[0];
+  assert.notEqual(f.apply_url, 'javascript:alert(1)', 'javascript: url must never reach apply_url');
+  assert.notEqual(f.info_url, 'data:text/html,<script>', 'data: url must never reach info_url');
+  assert.equal(f.apply_url, null, 'the dropped javascript entry yields no apply_url');
+  // the only valid entry (L2, https) is still selectable
+  assert.ok(!f.apply_url || /^https?:\/\//.test(f.apply_url));
+  assert.ok(!f.info_url || /^https?:\/\//.test(f.info_url));
+});
+
+test('a hostile/oversized caller inventory is bounded and never throws', async () => {
+  const huge = Array.from({ length: 5000 }, (_i, n) => ({
+    id: `L${n}`.padEnd(500, 'x'),
+    url: `https://foundation.example.org/x${n}`,
+    text: 'y'.repeat(5000),
+    apply_intent: false,
+  }));
+  const facts = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: huge },
+    { llm: mockLlm({ apply_link_id: null, info_link_id: null }) },
+  );
+  assert.ok(Array.isArray(facts), 'never throws on an oversized inventory');
+});
+
 test('page_url / info_url / apply_url are DISTINCT', async () => {
   const f = (await extractPageFactsBlind(
     { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
