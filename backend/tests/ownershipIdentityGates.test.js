@@ -21,6 +21,7 @@ const grantAppsRouter = (await import('../routes/grantApplications.js')).default
 const foundationsRouter = (await import('../routes/foundations.js')).default
 const anyaMatchRouter = (await import('../routes/anyaMatchSuggestions.js')).default
 const savedGrantsRouter = (await import('../routes/savedGrants.js')).default
+const pricingRouter = (await import('../routes/pricing.js')).default
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -165,6 +166,36 @@ describe('round-14 named routes deny stale/synthetic identities (explicit requir
   })
 })
 
+describe('GET /api/pricing/my-estimate/:profileId requires identity + profile access', () => {
+  let db
+  beforeEach(() => { db = makeDb() })
+
+  it('DENIES a deleted-user JWT (403)', async () => {
+    const res = await request(appWith(db, DELETED, pricingRouter, '/api/pricing'))
+      .get('/api/pricing/my-estimate/p-real')
+    expect(res.status).toBe(403)
+  })
+
+  it('DENIES a synthetic-collision JWT (403)', async () => {
+    const res = await request(appWith(db, SYNTH_COLLISION, pricingRouter, '/api/pricing'))
+      .get('/api/pricing/my-estimate/p-svc')
+    expect(res.status).toBe(403)
+  })
+
+  it('DENIES a real user requesting ANOTHER profile\'s estimate (403)', async () => {
+    const res = await request(appWith(db, REAL, pricingRouter, '/api/pricing'))
+      .get('/api/pricing/my-estimate/p-stale') // owned by deleted-user, not by REAL
+    expect(res.status).toBe(403)
+  })
+
+  it('ALLOWS the owner requesting their own estimate (not 403)', async () => {
+    const res = await request(appWith(db, REAL, pricingRouter, '/api/pricing'))
+      .get('/api/pricing/my-estimate/p-real')
+    expect(res.status).not.toBe(403)
+    expect(res.status).not.toBe(401)
+  })
+})
+
 describe('enforceResolvedIdentity middleware (structural close) nulls unresolved caller ids', () => {
   function run(reqCtx, reqUser) {
     const req = { ctx: reqCtx, user: reqUser }
@@ -173,15 +204,34 @@ describe('enforceResolvedIdentity middleware (structural close) nulls unresolved
     return { req, called }
   }
 
-  it('NULLS ctx.userId and req.user.userId/id/user_id for an unresolved non-admin', () => {
+  it('clears the WHOLE untrusted identity surface (id, profileId, email, role, is_admin) -> guest', () => {
     const { req } = run(
-      { userId: 'deleted', isAdmin: false, identityResolved: false, accessibleProfileIds: new Set() },
-      { role: 'user', userId: 'deleted', id: 'deleted', user_id: 'deleted' },
+      { userId: 'system_admin_token', email: 'svc@grantflow.app', activeProfileId: 'p-svc', isAdmin: false, identityResolved: false, accessibleProfileIds: new Set() },
+      { role: 'admin', is_admin: true, roles: ['admin'], userId: 'system_admin_token', id: 'system_admin_token', user_id: 'system_admin_token', profileId: 'p-svc', profile_id: 'p-svc', email: 'svc@grantflow.app', primary_email: 'svc@grantflow.app' },
     )
+    // ctx: every identity field cleared; empty (never null/all-access) sets.
     expect(req.ctx.userId).toBeNull()
-    expect(req.user.userId).toBeNull()
-    expect(req.user.id).toBeNull()
-    expect(req.user.user_id).toBeNull()
+    expect(req.ctx.email).toBeNull()
+    expect(req.ctx.activeProfileId).toBeNull()
+    expect(req.ctx.accessibleProfileIds instanceof Set && req.ctx.accessibleProfileIds.size === 0).toBe(true)
+    // req.user: reduced to a guest — no id/profileId/email/role/is_admin survive.
+    expect(req.user.role).toBe('guest')
+    expect(req.user.userId ?? null).toBeNull()
+    expect(req.user.id ?? null).toBeNull()
+    expect(req.user.profileId ?? null).toBeNull()
+    expect(req.user.email ?? null).toBeNull()
+    expect(req.user.is_admin ?? null).toBeNull()
+    expect(req.user.roles ?? null).toBeNull()
+  })
+
+  it('clears the surface even when only a token profileId/email survives (no ctx.userId)', () => {
+    const { req } = run(
+      { userId: null, isAdmin: false, identityResolved: false },
+      { role: 'user', profileId: 'p-svc', email: 'svc@grantflow.app' },
+    )
+    expect(req.user.role).toBe('guest')
+    expect(req.user.profileId ?? null).toBeNull()
+    expect(req.user.email ?? null).toBeNull()
   })
 
   it('leaves a trusted identity (identityResolved=true) untouched', () => {

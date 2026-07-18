@@ -17,7 +17,7 @@
  */
 
 import express from 'express'
-import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware, requireResolvedIdentity, ensureProfileAccess } from '../utils/accessControl.js'
 import { createLogger } from '../utils/logger.js'
 import {
   PRICING_ENV_KEYS,
@@ -59,6 +59,11 @@ const requireAdmin = (req, res, next) => {
 // ── User-facing endpoints (auth required, no admin) ────────────────────────
 router.get('/my-estimate/:profileId', requireAuthenticatedUserMiddleware, async (req, res) => {
   try {
+    // A deleted-user/synthetic JWT must not read estimates; and any caller may
+    // only read a profile they can access (not "load all, filter by id").
+    if (!requireResolvedIdentity(req, res)) return
+    if (!(await ensureProfileAccess(req, res, String(req.params.profileId)))) return
+
     if (!readEnvFlag(PRICING_ENV_KEYS.PRICING_SHOW_CLIENT_ESTIMATE, false)) {
       return res.status(200).json({
         ok: true,
@@ -66,7 +71,7 @@ router.get('/my-estimate/:profileId', requireAuthenticatedUserMiddleware, async 
         message: 'Pricing will be reviewed after intake.',
       })
     }
-    const quotes = await listQuotes(req.db, { limit: 1 })
+    const quotes = await listQuotes(req.db, { profileId: String(req.params.profileId), limit: 1 })
     const own = (quotes.items || []).find((q) => q.profile_id === req.params.profileId)
     if (!own) {
       return res.status(200).json({

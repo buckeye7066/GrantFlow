@@ -125,6 +125,14 @@ Compat: behavior-preserving for real users, validated service/legacy tokens, and
 
 Compat: behavior-preserving for real users, validated tokens, admins, and the signup flow; only deleted-user and synthetic-collision JWTs change (now denied everywhere). Two existing tests updated to prod-faithful contexts (`savedGrantsProfileScope` gains a `req.ctx` with `identityResolved:true`; the colliding-JWT admin-route assertion accepts 401 or 403 — both denied).
 
+## Round 15 — clear the whole untrusted identity surface + deny-on-unresolved helpers (see PORTFOLIO_AUDIT.md §5o)
+
+- **The structural gate now clears the ENTIRE untrusted identity surface.** r14 nulled only `userId`, so a synthetic-collision JWT rehydrated admin/all-access via the surviving token `profileId` (→ owning user), token email (→ user), or role/is_admin claim. `enforceResolvedIdentity` now nulls `ctx.userId/email/activeProfileId`, empties the accessible sets, and reduces `req.user` to a guest — so no helper can re-resolve identity or admin from any token field.
+- **Defense in depth in `isAdminUserWithDb`:** a resolved userId (via a token `profileId`) or an email-matched row whose id is a reserved synthetic service id now returns false without `serviceToken` provenance.
+- **`GET /api/pricing/my-estimate/:profileId`** now requires a resolved identity and `ensureProfileAccess(:profileId)`, and scopes the quote query by `profileId` (added a `profileId` filter to `listQuotes`).
+
+Compat: behavior-preserving for real users, admins, validated tokens, and the auth flow (`/api/auth/*` exempt); only deleted-user and synthetic-collision JWTs change (now fully denied — no admin, no profile access via any token field).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

@@ -43,15 +43,33 @@ export function enforceResolvedIdentity() {
     // still a trusted principal (provenance-bound).
     if (isSyntheticServiceAdmin(req.user)) return next()
 
-    // Only act when an UNRESOLVED caller id is actually present (guests already
-    // have none). Null it everywhere so no user-scoped route can authorize on it.
-    if (ctx.userId) {
+    // Any identity surface present on an UNRESOLVED non-admin request is
+    // untrusted. Nulling ONLY the userId is not enough: downstream helpers
+    // (isAdminUserWithDb, getAccessibleProfileIds) can RE-RESOLVE identity/admin
+    // from a surviving token profileId (profile_id -> owning user), token email
+    // (email -> user), or role/is_admin claim. So we clear the ENTIRE surface and
+    // reduce req.user to a GUEST, so NO downstream helper can rehydrate identity
+    // or admin from ANY token field (id, profileId, email, role, is_admin, roles).
+    const u = req.user
+    const hasIdentitySurface =
+      ctx.userId ||
+      ctx.activeProfileId ||
+      ctx.email ||
+      (u &&
+        typeof u === 'object' &&
+        (u.userId || u.id || u.user_id || u.profileId || u.profile_id || u.email || u.primary_email))
+
+    if (hasIdentitySurface) {
+      // ctx: drop every identity field; empty (never null/all-access) sets.
       ctx.userId = null
-      if (!(ctx.accessibleProfileIds instanceof Set)) ctx.accessibleProfileIds = new Set()
-      if (!(ctx.accessibleOrgIds instanceof Set)) ctx.accessibleOrgIds = new Set()
-      if (req.user && typeof req.user === 'object') {
-        req.user = { ...req.user, userId: null, id: null, user_id: null }
-      }
+      ctx.email = null
+      ctx.activeProfileId = null
+      ctx.accessibleProfileIds = new Set()
+      ctx.accessibleOrgIds = new Set()
+      // req.user: canonical guest shape — no id/profileId/email/role/is_admin/roles
+      // survive for any helper (getAuthUserId/getAuthProfileId/collectUserEmails/
+      // isAdminUserWithDb) to re-resolve from.
+      req.user = { role: 'guest', profileId: null }
     }
     next()
   }

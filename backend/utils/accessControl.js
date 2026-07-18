@@ -10,7 +10,7 @@
  * - Email-substring allowlists must not participate in authorization decisions.
  */
 import crypto from 'crypto'
-import { isSyntheticIdWithoutProvenance } from '../middleware/syntheticServiceTokens.js'
+import { isSyntheticIdWithoutProvenance, isReservedSyntheticUserId } from '../middleware/syntheticServiceTokens.js'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -68,6 +68,13 @@ export async function isAdminUserWithDb(db, user) {
       resolvedUserId = profileRow?.user_id
     }
 
+    // A resolved userId that is a reserved synthetic service id (e.g. reached via a
+    // token profile_id -> profiles.user_id='system_admin_token') must NOT resolve
+    // admin without service-token provenance — never honor the self-healed synthetic row.
+    if (resolvedUserId && isReservedSyntheticUserId(resolvedUserId) && user?.serviceToken !== true) {
+      return false
+    }
+
     // Fallback: resolve via email if present.
     // This is still DB-backed (users table), not an allowlist.
     if (!resolvedUserId) {
@@ -102,6 +109,9 @@ export async function isAdminUserWithDb(db, user) {
             .get(...emails)
         }
         if (!row) return false
+        // A token email that matches a self-healed synthetic-admin row must not
+        // grant admin without service-token provenance.
+        if (isReservedSyntheticUserId(row.id) && user?.serviceToken !== true) return false
         return Boolean(row.is_admin === true || row.is_admin === 1)
       }
       return false

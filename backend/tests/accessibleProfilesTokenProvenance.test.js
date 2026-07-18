@@ -120,6 +120,20 @@ describe('a synthetic-id JWT WITHOUT service-token provenance is rejected everyw
     expect(await isAdminUserWithDb(db, svc)).toBe(true)
     expect(await getAccessibleProfileIds(db, svc)).toBeNull() // admin sentinel
   })
+
+  it('cannot REHYDRATE admin via a token profileId that maps to the synthetic-admin row', async () => {
+    // r14 hole: userId nulled but profileId survives -> profiles.user_id -> synthetic row.
+    const viaProfile = { role: 'user', userId: null, profileId: 'p-svc' } // no serviceToken
+    expect(await isAdminUserWithDb(db, viaProfile)).toBe(false)
+    const ids = await getAccessibleProfileIds(db, viaProfile)
+    expect(ids).not.toBeNull() // never the all-access sentinel
+    expect(ids.size).toBe(0)
+  })
+
+  it('cannot REHYDRATE admin via a token email that matches the synthetic-admin row', async () => {
+    const viaEmail = { role: 'user', userId: null, email: 'svc@grantflow.app' } // no serviceToken
+    expect(await isAdminUserWithDb(db, viaEmail)).toBe(false)
+  })
 })
 
 describe('email-based profile grants derive from DB-verified emails only', () => {

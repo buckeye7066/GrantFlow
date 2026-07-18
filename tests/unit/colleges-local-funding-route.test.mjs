@@ -10,6 +10,24 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createHmac } from 'node:crypto'
 import { createServer as createNetServer } from 'node:net'
+import Database from 'better-sqlite3'
+
+// A real authenticated user has a users row; without one, buildRequestContext
+// resolves identityResolved=false and enforceResolvedIdentity treats the token as
+// a deleted/invalid user (401). Seed the row so these tests exercise a genuine
+// authenticated user against the colleges route.
+function seedTestUser(dbPath) {
+  const db = new Database(dbPath)
+  try {
+    db.pragma('busy_timeout = 5000')
+    db.prepare('INSERT OR IGNORE INTO users (id, primary_email) VALUES (?, ?)').run(
+      'test-user-id',
+      'test@example.com',
+    )
+  } finally {
+    db.close()
+  }
+}
 
 const TEST_JWT_SECRET = 'test-secret'
 
@@ -108,7 +126,7 @@ function startServer(extraEnv = {}) {
     await new Promise((resolve) => child.once('exit', resolve))
   }
 
-  return { ready, stop }
+  return { ready, stop, dbPath }
 }
 
 async function fetchJson(url, init = {}) {
@@ -147,6 +165,7 @@ test('colleges local-funding: 400 when zip missing', async () => {
     await srv.stop()
     throw err
   }
+  seedTestUser(srv.dbPath)
 
   try {
     const { status, json } = await fetchJson(`http://127.0.0.1:${port}/api/colleges/local-funding`, {
@@ -162,6 +181,7 @@ test('colleges local-funding: 400 when zip missing', async () => {
 test('colleges local-funding: 400 when zip invalid', async () => {
   const srv = startServer()
   const { port } = await srv.ready
+  seedTestUser(srv.dbPath)
 
   try {
     const { status, json } = await fetchJson(
@@ -178,6 +198,7 @@ test('colleges local-funding: 400 when zip invalid', async () => {
 test('colleges local-funding: 200 with valid zip', async () => {
   const srv = startServer()
   const { port } = await srv.ready
+  seedTestUser(srv.dbPath)
 
   try {
     const { status, json } = await fetchJson(
