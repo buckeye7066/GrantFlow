@@ -78,6 +78,15 @@ export function upsertOpportunity(store, opp) {
     applicant_types_json: JSON.stringify(opp.applicant_types),
     need_categories_json: JSON.stringify(opp.need_categories),
     geography_json: JSON.stringify(opp.geography),
+    // Page-fact provenance (Phase 0.1) — additive, null-default. Round-trips
+    // write->read so a later extractor can populate it; nothing does yet.
+    eligibility_text: opp.eligibility_text ?? null,
+    eligibility_bullets_json: JSON.stringify(opp.eligibility_bullets ?? []),
+    page_fact_schema_version: opp.page_fact_schema_version ?? null,
+    field_provenance_json:
+      opp.field_provenance !== null && opp.field_provenance !== undefined
+        ? JSON.stringify(opp.field_provenance)
+        : null,
     trust_tier: opp.trust_tier, reality_status: opp.reality_status,
     content_hash: opp.evidence?.content_hash ?? null, evidence_url: opp.evidence?.url ?? null,
     fetched_at: opp.evidence?.fetched_at ?? null,
@@ -365,6 +374,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   is_rolling INTEGER NOT NULL DEFAULT 0, amount_min REAL, amount_max REAL,
   is_loan INTEGER NOT NULL DEFAULT 0, requires_cost_share INTEGER NOT NULL DEFAULT 0,
   applicant_types_json TEXT, need_categories_json TEXT, geography_json TEXT,
+  -- Page-fact provenance (Phase 0.1) — additive, NULL-default. eligibility_text +
+  -- structured bullets scraped off the page, the extractor schema version, and
+  -- per-field {value, evidence_snippet, source} provenance (also the tri-state
+  -- home for is_loan/requires_cost_share/national — absent key = "not stated").
+  eligibility_text TEXT, eligibility_bullets_json TEXT,
+  page_fact_schema_version INTEGER, field_provenance_json TEXT,
   trust_tier TEXT, reality_status TEXT NOT NULL, content_hash TEXT, evidence_url TEXT,
   fetched_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );

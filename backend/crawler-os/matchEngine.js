@@ -281,6 +281,19 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     trust_tier: opportunity.trust_tier ?? null,
     reality_status: opportunity.reality_status ?? null,
     verification: opportunity.verification ?? null,
+    // Page-fact provenance (Phase 0.1) — carried through so downstream consumers
+    // CAN read it, without changing any score. NOTHING populates these yet, so
+    // for every existing opportunity they are null: `eligibility_text` is a
+    // Boolean-filtered input to the canonical engine's eligibility-completeness
+    // CONFIDENCE fallback, and null behaves exactly as today's absent value.
+    // The DERIVED `eligibility_bullets` above (from applicant types) is left
+    // untouched so scoring is unchanged; the raw scraped bullets ride alongside.
+    eligibility_text: opportunity.eligibility_text ?? null,
+    page_fact_eligibility_bullets: Array.isArray(opportunity.eligibility_bullets)
+      ? opportunity.eligibility_bullets
+      : [],
+    page_fact_schema_version: opportunity.page_fact_schema_version ?? null,
+    field_provenance: opportunity.field_provenance ?? null,
   };
 }
 

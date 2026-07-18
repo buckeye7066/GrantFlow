@@ -281,6 +281,22 @@ export function makeOpportunity(input = {}) {
       content_hash: input.evidence?.content_hash ?? null,
       fetched_at: input.evidence?.fetched_at ?? null,
     }),
+    // --- Page-fact provenance (Phase 0.1, web-lane de-contamination) ----------
+    // ADDITIVE + NULL-default plumbing so a LATER profile-blind extractor can
+    // record what a source page literally stated, with per-field evidence. NOTHING
+    // populates these today — they default null/empty and change no score.
+    //   eligibility_text          : the raw eligibility prose off the page.
+    //   eligibility_bullets       : structured eligibility bullets off the page
+    //                               (distinct from matchEngine's DERIVED bullets).
+    //   page_fact_schema_version  : which extractor schema produced these facts.
+    //   field_provenance          : { field: { value, evidence_snippet, source } }.
+    // TRI-STATE lives in field_provenance: for is_loan / requires_cost_share /
+    // national an ABSENT key means "not stated" — distinct from the coalesced
+    // boolean false in funding/geography that existing consumers keep reading.
+    eligibility_text: input.eligibility_text ?? null,
+    eligibility_bullets: Object.freeze([...(input.eligibility_bullets ?? [])]),
+    page_fact_schema_version: input.page_fact_schema_version ?? null,
+    field_provenance: input.field_provenance ?? null,
     created_at: input.created_at ?? new Date().toISOString(),
     raw: input.raw ?? null,
   });

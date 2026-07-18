@@ -114,6 +114,11 @@ async function cleanupHamiltonRejects(db, memStore, idRemap) {
   return cleaned;
 }
 
+/** True when a value is neither null nor undefined (0 / '' / false count as set). */
+function isPresent(v) {
+  return v !== null && v !== undefined;
+}
+
 function jparse(v, fallback) {
   if (v === null || v === undefined) return fallback;
   if (typeof v !== 'string') return v;
@@ -334,7 +339,7 @@ function osOppToLiveRow(o) {
     title: o.title,
     description: o.summary,
   });
-  return {
+  const row = {
     id: o.id,
     title: o.title ?? '(untitled opportunity)', // only NOT NULL column
     sponsor: o.sponsor ?? null,
@@ -377,6 +382,26 @@ function osOppToLiveRow(o) {
     discovered_at: o.created_at ?? nowIso(),
     updated_at: nowIso(),
   };
+
+  // Page-fact provenance (Phase 0.1) — additive, NULL-default plumbing so a
+  // later profile-blind extractor can carry per-field evidence into the catalog.
+  // CONDITIONAL emit: a column is added to the upsert ONLY when the OS row
+  // actually carries that fact. That keeps THREE promises at once —
+  //   (1) a run that learned nothing writes the exact same row as before this
+  //       change (zero behavior change; minimal fixture tables without these
+  //       columns keep working),
+  //   (2) an upsert never DOWNGRADES stored provenance back to null on a later
+  //       re-crawl that happens to lack it (mirrors the amount_status rule
+  //       above), and
+  //   (3) when the extractor DOES provide facts, they round-trip faithfully.
+  const bullets = asList(o.eligibility_bullets_json);
+  if (isPresent(o.eligibility_text)) row.eligibility_text = o.eligibility_text;
+  if (bullets.length) row.eligibility_bullets = JSON.stringify(bullets);
+  if (isPresent(o.page_fact_schema_version)) row.page_fact_schema_version = o.page_fact_schema_version;
+  const provenance = jparse(o.field_provenance_json, null);
+  if (isPresent(provenance)) row.field_provenance = JSON.stringify(provenance);
+
+  return row;
 }
 
 async function upsertRow(db, table, keyCols, row) {

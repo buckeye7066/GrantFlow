@@ -449,5 +449,18 @@ All three degrade cleanly without `OPENAI_API_KEY` (no-op / honest
 ## Known gaps / TODOs (must become hard rules once implemented)
 
 - Standardized crawler output schema: `{ raw, normalized, score_0_1, explain, provenance }`
+  - **Page-fact provenance storage (Phase 0.1, LAID — extractor not yet built).**
+    `funding_opportunities` carries additive, NULL-default columns
+    `eligibility_text`, `eligibility_bullets` (pre-existing), `page_fact_schema_version`,
+    and `field_provenance` (JSON `{ field: { value, evidence_snippet, source } }`).
+    Migration `144` / pg `0148` (guarded numbered migration, NOT `ensureOsTables`).
+    The OS opportunity shape (`contract.makeOpportunity`) carries the fields;
+    `storage.upsertOpportunity`, `osOppToLiveRow`, and the `crawler-os/matchEngine`
+    facade thread them through so they round-trip write→read. **Nothing populates
+    them yet — they default null and change no matching / scoring / behavior.** The
+    tri-state for `is_loan` / `requires_match` / `is_national` lives in
+    `field_provenance`: an ABSENT key means "not stated", distinct from the boolean
+    columns' coalesced false (which existing consumers keep reading unchanged). A
+    later profile-blind extractor is the consumer that will fill these.
 - Deterministic pipeline runner: every crawler × every profile, persist results with score > 0.50
 - Stripe end-to-end billing contract and idempotent webhook handling
