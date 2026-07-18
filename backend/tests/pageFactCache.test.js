@@ -22,6 +22,7 @@ import {
   getCachedPageFacts,
   putCachedPageFacts,
   CACHE_KEY_COMPONENTS,
+  MAX_PAGE_FACTS_JSON_BYTES,
 } from '../services/pageFactCache.js'
 import { ensurePageFactCacheTable } from '../startup/ensureSchemaInvariants.js'
 
@@ -70,21 +71,41 @@ describe('computeCacheKey — deterministic + collision-resistant', () => {
     }
   })
 
-  it('nullish components coerce stably (missing === null === undefined === "")', () => {
-    const withEmpty = computeCacheKey({ ...COMPONENTS, model: '' })
-    const withNull = computeCacheKey({ ...COMPONENTS, model: null })
-    const withUndef = computeCacheKey({ ...COMPONENTS, model: undefined })
-    const omitted = computeCacheKey({
-      normalizedFinalUrl: COMPONENTS.normalizedFinalUrl,
-      contentHash: COMPONENTS.contentHash,
-      extractorVersion: COMPONENTS.extractorVersion,
-      promptVersion: COMPONENTS.promptVersion,
-    })
-    expect(withNull).toBe(withEmpty)
-    expect(withUndef).toBe(withEmpty)
-    expect(omitted).toBe(withEmpty)
-    // ...and a coerced-empty component is still distinct from the populated one.
-    expect(withEmpty).not.toBe(computeCacheKey(COMPONENTS))
+  it('REJECTS a non-string or empty component (throws) — the real contract', () => {
+    // The contract is five non-empty STRINGS. Anything else must throw, NOT be
+    // lossily coerced to a string before hashing (that is what let distinct
+    // logical tuples collide onto one key and corrupt the cache via the upsert).
+    for (const bad of [1, 0, false, true, null, undefined, {}, ['a', 'b'], '']) {
+      for (const field of CACHE_KEY_COMPONENTS) {
+        expect(
+          () => computeCacheKey({ ...COMPONENTS, [field]: bad }),
+          `component ${field}=${JSON.stringify(bad)} must throw`,
+        ).toThrow(TypeError)
+      }
+    }
+    // A missing (omitted) component also throws.
+    expect(() =>
+      computeCacheKey({
+        normalizedFinalUrl: COMPONENTS.normalizedFinalUrl,
+        contentHash: COMPONENTS.contentHash,
+        extractorVersion: COMPONENTS.extractorVersion,
+        promptVersion: COMPONENTS.promptVersion,
+      }),
+    ).toThrow(TypeError)
+  })
+
+  it('distinct STRING values that only LOOK alike do not collide (no lossy coercion)', () => {
+    // These string pairs would have collided under the old String()-coercion of
+    // 1/false/null: the string forms are legitimate distinct components and MUST
+    // yield distinct keys. (The non-string originals now throw — asserted above.)
+    const key = (model) => computeCacheKey({ ...COMPONENTS, model })
+    expect(key('1')).not.toBe(key('true'))
+    expect(key('false')).not.toBe(key('0'))
+    expect(key('null')).not.toBe(key('undefined'))
+    expect(key('[object Object]')).not.toBe(key('{}'))
+    // All five above are also distinct from each other and from the base model.
+    const keys = new Set(['1', 'true', 'false', '0', 'null', 'undefined', 'claude-3'].map(key))
+    expect(keys.size).toBe(7)
   })
 
   it('cannot be collided by delimiter shuffling between components', () => {
@@ -155,6 +176,37 @@ describe('miss + corruption semantics', () => {
     // A throw here would fail the test — proving "never throws"; the result is a miss.
     const result = await getCachedPageFacts(db, key)
     expect(result).toBeNull()
+  })
+})
+
+describe('size cap (per-value bound; table-level retention is a Phase 1 TODO)', () => {
+  it('put REFUSES an over-cap payload (returns false, writes nothing)', async () => {
+    const db = makeMigratedDb()
+    const key = computeCacheKey(COMPONENTS)
+    const huge = { blob: 'x'.repeat(MAX_PAGE_FACTS_JSON_BYTES + 100) }
+    expect(await putCachedPageFacts(db, key, COMPONENTS, huge)).toBe(false)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM page_fact_cache').get().n).toBe(0)
+  })
+
+  it('put ACCEPTS a payload at/under the cap', async () => {
+    const db = makeMigratedDb()
+    const key = computeCacheKey(COMPONENTS)
+    const facts = { blob: 'y'.repeat(1000) }
+    expect(await putCachedPageFacts(db, key, COMPONENTS, facts)).toBe(true)
+    expect(await getCachedPageFacts(db, key)).toEqual(facts)
+  })
+
+  it('get treats an OVER-CAP stored row as a MISS (null), never a throw', async () => {
+    const db = makeMigratedDb()
+    const key = 'oversized'
+    // Valid JSON, but past the cap — a defensive miss (the caller recomputes).
+    const oversized = JSON.stringify({ blob: 'z'.repeat(MAX_PAGE_FACTS_JSON_BYTES + 100) })
+    db.prepare(
+      `INSERT INTO page_fact_cache
+        (cache_key, normalized_final_url, content_hash, extractor_version, prompt_version, model, page_facts_json)
+       VALUES (?, '', '', '', '', '', ?)`,
+    ).run(key, oversized)
+    expect(await getCachedPageFacts(db, key)).toBeNull()
   })
 })
 
