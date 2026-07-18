@@ -159,6 +159,13 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         perPageTimeoutMs: Number.isFinite(blindShadow.perPageTimeoutMs) && blindShadow.perPageTimeoutMs > 0 ? Math.floor(blindShadow.perPageTimeoutMs) : 4000,
         pagesRun: 0, pages_shadowed: 0, errors: 0, timeouts: 0, capped: false, elapsedMs: 0,
         current_candidates: 0, blind_candidates: 0, blind_evidenced: 0,
+        // Phase 1c per-kind breakdown of the blind candidates (trust-aware
+        // classifier labels, tallied read-only). protected_directory +
+        // unverified_index === aggregator_index by construction. Blind candidates
+        // arrive already labeled by the shadow builder (the sanctioned seam that
+        // imports the classifier); this lane only COUNTS them, so it stays
+        // blind-import-free.
+        by_kind: { direct: 0, aggregator_index: 0, unknown: 0, protected_directory: 0, unverified_index: 0 },
       }
     : null;
   // The smallest slice worth attempting: below this the LLM cannot plausibly
@@ -336,6 +343,22 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           shadow.blind_evidenced += list.filter(
             (c) => c && c.field_provenance && typeof c.field_provenance === 'object' && Object.keys(c.field_provenance).length > 0,
           ).length;
+          // Per-kind tally (Phase 1c). Each blind candidate carries a `blind_kind`
+          // + `blind_trust` label from the classifier; an unlabeled candidate
+          // (e.g. an older/mock shadow) counts conservatively as UNKNOWN. The trust
+          // axis only ever splits the AGGREGATOR_INDEX bucket.
+          for (const c of list) {
+            const kind = c && typeof c.blind_kind === 'string' ? c.blind_kind : 'UNKNOWN';
+            if (kind === 'DIRECT_PROGRAM') {
+              shadow.by_kind.direct += 1;
+            } else if (kind === 'AGGREGATOR_INDEX') {
+              shadow.by_kind.aggregator_index += 1;
+              if (c && c.blind_trust === 'PROTECTED') shadow.by_kind.protected_directory += 1;
+              else shadow.by_kind.unverified_index += 1;
+            } else {
+              shadow.by_kind.unknown += 1;
+            }
+          }
         } catch {
           // Best-effort isolation: a blind failure/timeout never affects the live
           // lane. A timeout is counted as itself, never as a silent 0-cand success.
@@ -367,6 +390,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       blind_candidates: shadow.blind_candidates,
       blind_evidenced: shadow.blind_evidenced,
       delta: shadow.blind_candidates - shadow.current_candidates,
+      by_kind: shadow.by_kind,
     };
   }
   result.seeded_adopted_urls = [...seededAdopted];
