@@ -75,6 +75,14 @@ Finishes the principle across the three remaining token-claim vectors plus an ar
 
 Compat: behavior-preserving for real DB admins, the configured owner (resolved from their stored email), validated service tokens, and the non-prod legacy profile token; only forged/stale JWT claims change (now denied). First-time untrusted-AI population of an empty `array<object>` field is now conservatively dropped until a trusted element shape exists.
 
+## Round 8 — email-based profile grants derive only from the DB-verified email (see PORTFOLIO_AUDIT.md §5h)
+
+- **Email-based profile access is now DB-verified-email-only.** `getAccessibleProfileIds` matched profile email grants against the token-supplied `req.user.email`, so a signed/stale JWT claiming `victim@example.com` picked up victim's shared profiles. Grants now derive from `getTrustedUserEmails` — the user's DB `users.primary_email` plus verified `user_credentials` — never the token email.
+- **The duplicate `GET /api/profiles?scope=mine` email logic is removed** in favor of the shared DB-backed `getOwnedAndGrantedProfileIds` helper; no route re-derives access from `req.user.email`.
+- **The `basic_information` email auto-link** (which writes a `profile_emails` grant) now checks the caller's DB-verified emails, not the token email.
+
+Compat: behavior-preserving for users whose DB `primary_email`/verified credentials legitimately match a profile grant; only forged/stale JWT email claims change (now grant nothing). Flagged residual: `agentControlOrchestrator.isControlCenterAdmin` matches the owner via `user.email` but sits behind `/api/admin` `ensureAdmin` (DB-backed) — documented, not changed (a safe fix needs internal-token provenance rework).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

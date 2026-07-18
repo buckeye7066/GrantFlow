@@ -243,6 +243,22 @@ The same "trust a JWT claim as authorization" disease on three OTHER claims (ema
 
 **Confirmations:** the configured admin email is honored only from a DB-bound email; token `profile_id` no longer self-authorizes (DB-backed accessible set + legacy-token provenance flag); a demoted admin-role JWT can't set an admin SQL `actorRole`; the array sanitizer enforces a shape even when the base is empty.
 
+## 5h. Round 8 — email-based profile grants derive only from the DB-verified email (Codex review of commit `1fd5dedd`)
+
+Round 7 closed the configured-admin-EMAIL path, but the JWT email still granted PROFILE access through the email-GRANT-MATCHING path (a different site) plus a duplicate hand-rolled copy.
+
+### R8-1 [HIGH] JWT email granted profile access via `getAccessibleProfileIds`
+`accessControl.js:195` built its email-grant set from `collectUserEmails(user)`, which includes the token-supplied `user.email`. `buildRequestContext` passes the raw auth user in, so a signed/stale JWT `{sub:'attacker', email:'victim@example.com'}` added every profile mapped to `victim@example.com` (via `profile_emails` or `basic_information.email`) into `req.ctx.accessibleProfileIds` — enabling `GET /api/profiles/victim` / section writes. **Fix:** new `getTrustedUserEmails(db, user)` derives emails ONLY from DB state — `users.primary_email` + VERIFIED `user_credentials` (email-OTP with `verified_at`) — looked up by the resolved userId; the token `user.email` is never used for grants. The grant logic was extracted into `getOwnedAndGrantedProfileIds` (no admin short-circuit) with `getAccessibleProfileIds` as the admin-aware wrapper. Test: `accessibleProfilesTokenProvenance.test.js` — a JWT email ≠ DB email gets nothing; a DB-verified email that matches a grant resolves it.
+
+### R8-2 [MED] Duplicate raw-JWT-email grant path in `GET /api/profiles?scope=mine`
+`profiles.js:671-751` hand-rolled the SAME email logic from `user.primary_email` AND `user.email`, so `scope=mine` with a JWT `{email:'victim@example.com'}` listed victim's shared profiles even after R8-1. **Fix:** the branch now calls the shared DB-backed `getOwnedAndGrantedProfileIds(req.db, user)` (personal owned/created + DB-verified-email-granted set, even for admins); the duplicate raw-email logic is deleted. No route re-derives access from `req.user.email`.
+
+### Audit (other `req.user.email` / `collectUserEmails` / `user.email` sites)
+- **Fixed:** `profiles.js` `basic_information` auto-link (`canAutoLink`) compared the profile email against `user.primary_email`/`user.email` to decide whether to WRITE a `profile_emails` grant — now compares against `getTrustedUserEmails` (DB-verified) for non-admins.
+- **Flagged (not changed):** `agentControlOrchestrator.isControlCenterAdmin(user)` still matches the owner via `user.email` — but every caller is behind `/api/admin` `ensureAdmin` (DB-backed `req.ctx.isAdmin`), so a forged-email-only JWT cannot reach it, and an internal minted service JWT deliberately carries the owner email to pass it; a safe fix needs internal-token provenance rework (out of scope for a focused pass). The remaining `user.email` reads in `billing.js`/`maintenance.js`/`adminAgentControl.js`/`hamiltonAutomation.js` (consent/`grantedBy`/`requestedBy` labels), `stripe.js`/`documents.js` (provider/actor email), `authMe.js` (self-heal/display), and `announcements.js` (per-user seen-key fallback) are audit-attribution / display / provider values on already-access-gated paths, NOT access decisions.
+
+**Confirmations:** email-based profile grants derive ONLY from the DB `primary_email` (+ verified credentials); a JWT email grants nothing; the duplicate `scope=mine` path is removed in favor of the DB-backed accessible set.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

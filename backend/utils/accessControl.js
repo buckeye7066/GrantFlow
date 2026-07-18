@@ -170,9 +170,48 @@ export function getAuthProfileId(user) {
   return user?.profileId ?? user?.profile_id ?? null
 }
 
-export async function getAccessibleProfileIds(db, user) {
-  if (await isAdminUserWithDb(db, user)) return null
+/**
+ * DB-TRUSTED email addresses for a user: users.primary_email plus any VERIFIED
+ * email credential (user_credentials type='email_otp' with verified_at set),
+ * looked up by the RESOLVED userId. It NEVER returns the token-supplied
+ * user.email — a signed/stale JWT could otherwise claim victim@example.com and
+ * pick up every profile mapped to that email (profile_emails / basic_information).
+ * Email-based access/grant decisions must use ONLY these DB-verified addresses.
+ */
+export async function getTrustedUserEmails(db, user) {
+  const emails = new Set()
+  const userId = getAuthUserId(user)
+  if (!userId) return []
+  try {
+    const row = await db.prepare('SELECT primary_email FROM users WHERE id = ?').get(String(userId))
+    const primary = normalizeEmail(row?.primary_email)
+    if (primary) emails.add(primary)
+  } catch {
+    // ignore (missing users row / schema)
+  }
+  // DB-verified secondary emails (email-OTP credentials that were actually verified).
+  try {
+    const rows = await db
+      .prepare("SELECT identifier FROM user_credentials WHERE user_id = ? AND type = 'email_otp' AND verified_at IS NOT NULL")
+      .all(String(userId))
+    for (const r of rows || []) {
+      const e = normalizeEmail(r?.identifier)
+      if (e) emails.add(e)
+    }
+  } catch {
+    // ignore (older schema without user_credentials)
+  }
+  return Array.from(emails)
+}
 
+/**
+ * DB-trusted personal profile set: profiles owned/created by the user, profiles
+ * granted to the user's DB-VERIFIED email(s) (never a token email), and — only
+ * via the legacy profile-token provenance flag — the token profileId. Does NOT
+ * short-circuit for admins; callers wanting the admin all-access sentinel use
+ * getAccessibleProfileIds.
+ */
+export async function getOwnedAndGrantedProfileIds(db, user) {
   const ids = new Set()
   const userId = getAuthUserId(user)
   if (userId) {
@@ -191,8 +230,9 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
 
-  // Allow additional profile access via email mapping (e.g. board members).
-  const emails = collectUserEmails(user)
+  // Additional profile access via email mapping (e.g. board members) derives from
+  // DB-TRUSTED emails ONLY — never the token-supplied user.email.
+  const emails = await getTrustedUserEmails(db, user)
   if (emails.length > 0) {
     // 1) Explicit allowlist table (profile_emails).
     try {
@@ -313,6 +353,11 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
   return ids
+}
+
+export async function getAccessibleProfileIds(db, user) {
+  if (await isAdminUserWithDb(db, user)) return null
+  return getOwnedAndGrantedProfileIds(db, user)
 }
 
 /**

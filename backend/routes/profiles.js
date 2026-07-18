@@ -27,6 +27,8 @@ import {
   isAdminUserWithDb,
   getAuthUserId,
   getAccessibleProfileIds,
+  getOwnedAndGrantedProfileIds,
+  getTrustedUserEmails,
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
@@ -668,88 +670,13 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // "My Profiles" scope: return only profiles owned-by or shared-to this user,
     // even if the caller is an admin (admins otherwise see ALL profiles).
     if (scopeMine) {
-      const emails = []
-      const primary = normalizeEmail(user?.primary_email)
-      const secondary = normalizeEmail(user?.email)
-      if (primary) emails.push(primary)
-      if (secondary && secondary !== primary) emails.push(secondary)
-
-      if (!userId && emails.length === 0) return res.status(401).json({ error: 'Authentication required' })
-
-      const ids = new Set()
-
-      if (userId) {
-        const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
-        for (const row of owned || []) {
-          if (row?.id) ids.add(String(row.id))
-        }
-        try {
-          const created = await req.db.prepare('SELECT id FROM profiles WHERE created_by = ?').all(String(userId))
-          for (const row of created || []) {
-            if (row?.id) ids.add(String(row.id))
-          }
-        } catch {
-          // ignore schema drift
-        }
-      }
-
-      if (emails.length > 0) {
-        // 1) Explicit allowlist table (profile_emails).
-        try {
-          const placeholders = emails.map(() => '?').join(', ')
-          const rows = await req.db
-            .prepare(
-              `
-                SELECT DISTINCT profile_id
-                FROM profile_emails
-                WHERE lower(email) IN (${placeholders})
-              `,
-            )
-            .all(...emails)
-          for (const row of rows || []) {
-            if (row?.profile_id) ids.add(String(row.profile_id))
-          }
-        } catch {
-          // ignore (schema may not exist yet)
-        }
-
-        // 2) Backfill: match profile basic_information.email against the user (like accessControl fallback).
-        try {
-          const placeholders = emails.map(() => '?').join(', ')
-          if (req.db?.dialect === 'postgres') {
-            const rows = await req.db
-              .prepare(
-                `
-                  SELECT DISTINCT ps.profile_id
-                  FROM profile_sections ps
-                  WHERE ps.section_key = 'basic_information'
-                    AND LOWER((ps.data::jsonb ->> 'email')) IN (${placeholders})
-                `,
-              )
-              .all(...emails)
-            for (const row of rows || []) {
-              if (row?.profile_id) ids.add(String(row.profile_id))
-            }
-          } else {
-            const rows = await req.db
-              .prepare(
-                `
-                  SELECT DISTINCT ps.profile_id
-                  FROM profile_sections ps
-                  WHERE ps.section_key = 'basic_information'
-                    AND LOWER(json_extract(ps.data, '$.email')) IN (${placeholders})
-                `,
-              )
-              .all(...emails)
-            for (const row of rows || []) {
-              if (row?.profile_id) ids.add(String(row.profile_id))
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-
+      // "My Profiles" = the DB-trusted owned/created + DB-verified-email-granted
+      // set, even for admins (who otherwise see ALL profiles). Driven off the
+      // shared DB-backed helper so NO route re-derives access from the
+      // token-supplied req.user.email (a JWT could otherwise claim
+      // victim@example.com and list victim's shared profiles).
+      if (!userId) return res.status(401).json({ error: 'Authentication required' })
+      const ids = await getOwnedAndGrantedProfileIds(req.db, user)
       const idList = Array.from(ids)
       if (idList.length === 0) return res.json([])
 
@@ -3255,14 +3182,15 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   try {
     if (sectionKey === 'basic_information') {
       const isAdmin = req.ctx?.isAdmin === true
-      const user = req.user ?? {}
-      const primary = normalizeEmail(user?.primary_email)
-      const secondary = normalizeEmail(user?.email)
-      
+
       // Sync the main email field
       const email = normalizeEmail(guardedData?.email)
       if (email && isValidEmail(email)) {
-        const canAutoLink = isAdmin || email === primary || email === secondary
+        // Only auto-LINK (grant) an email when it is the caller's OWN
+        // DB-VERIFIED email — never the token-supplied req.user.email (a JWT could
+        // otherwise claim any address). Admin actions are trusted + audited.
+        const trustedEmails = isAdmin ? [] : await getTrustedUserEmails(req.db, req.user)
+        const canAutoLink = isAdmin || trustedEmails.includes(email)
 
         if (canAutoLink) {
           await addProfileEmails(req.db, {
