@@ -1212,7 +1212,15 @@ router.post('/', createProfileLimiter, async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
-    
+
+    // ctx.userId becomes the new/adopted profile's owner (profileUserId) below.
+    // A deleted-user JWT or a synthetic-id collision keeps ctx.userId populated
+    // but identityResolved=false — it must NOT create/adopt an owned profile under
+    // that stale/reserved id (it could adopt+mutate a lingering profiles.user_id row).
+    if (req.ctx?.identityResolved !== true) {
+      return res.status(403).json({ error: 'Not authorized to create a profile' })
+    }
+
     if (user_id && user_id !== userId) {
       return res.status(403).json({ 
         error: 'Endusers can only create profiles for themselves' 

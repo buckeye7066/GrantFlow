@@ -20,7 +20,7 @@ function makeApp(sqlite, ctx) {
 function freshDb() {
   const sqlite = new Database(':memory:')
   sqlite.exec(`
-    CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT);
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT, status TEXT DEFAULT 'active');
     CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT);
   `)
   return sqlite
@@ -43,7 +43,9 @@ describe('GET /api/outreach-logs', () => {
     try {
       sqlite.prepare('INSERT INTO organizations (id, name) VALUES (?, ?)').run('o1', 'Org One')
       sqlite.prepare('INSERT INTO profiles (id, user_id, organization_id) VALUES (?, ?, ?)').run('p1', 'u1', 'o1')
-      const app = makeApp(sqlite, { userId: 'u1', activeProfileId: 'p1', isAdmin: false })
+      // The DB-backed accessible set is what requestContext computes for u1 (who
+      // owns p1); the route decides access from it, not from ctx.userId.
+      const app = makeApp(sqlite, { userId: 'u1', activeProfileId: 'p1', isAdmin: false, accessibleProfileIds: new Set(['p1']) })
 
       // Create a log (POST resolves profile_id from the body)...
       const created = await request(app)

@@ -106,6 +106,18 @@ Compat: behavior-preserving for real users, validated service/legacy tokens, and
 
 Compat: behavior-preserving for real users, validated service/legacy tokens, and actual profile owners; only colliding-synthetic-id JWTs, deleted-user JWTs, and nested-email collaborators change (now denied). `isSyntheticServiceAdmin` is re-exported from `requestContext` for existing importers.
 
+## Round 13 — comprehensive ctx.userId ownership-gate audit (see PORTFOLIO_AUDIT.md §5m)
+
+Closed the remaining `ctx.userId`-as-ownership fallbacks a full backend audit surfaced:
+- **`POST /api/profiles`** (create/adopt) now requires `req.ctx.identityResolved === true` for non-admins — a deleted-user or synthetic-id-collision JWT can no longer adopt/create an owned profile under its stale/reserved id.
+- **`/api/outreach-logs`** access is decided by the canonical DB-backed `req.ctx.accessibleProfileIds` (fails closed) instead of `ctx.userId === profiles.user_id`; soft-deleted profiles are rejected.
+- **`/api/auth/me`** `is_admin` (and the admin profile-list gate) now come from `req.ctx.isAdmin` only — never `dbUser.is_admin`, which a self-healed synthetic row would report true for a colliding JWT.
+- **`/api/grant-applications`** (all user-scoped handlers) gained a router-level guard denying non-admins without a resolved identity.
+
+Attribution-only uses of `ctx.userId` (crawl-job `user_id`, `approved_by`/`created_by`/`updated_by` labels) were reviewed and left as-is (not access decisions). No `is_admin`/`role` response field is sourced from a raw `dbUser`/token value anymore.
+
+Compat: behavior-preserving for real users, validated service/legacy tokens, and admins; only deleted-user and synthetic-collision JWTs change (now denied everywhere).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

@@ -1999,7 +1999,10 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           primary_email: dbUser.primary_email,
           primary_phone: dbUser.primary_phone,
           avatar_url: dbUser.avatar_url,
-          is_admin: Boolean(dbUser.is_admin),
+          // Canonical, DB-backed admin (fails closed; rejects a synthetic-id
+          // collision) — NEVER the raw dbUser.is_admin row, which a self-healed
+          // users.id='system_admin_token' row would report true for a colliding JWT.
+          is_admin: req.ctx?.isAdmin === true,
           // Durable onboarding/tour state (has_completed_onboarding,
           // guided_cycle_tour_status, ...) -- THIS is the handler that actually
           // serves every GET /api/auth/me request (registered on `app` before

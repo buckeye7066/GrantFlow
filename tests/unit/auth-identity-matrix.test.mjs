@@ -232,6 +232,18 @@ test('admin route: signed JWT whose sub COLLIDES with a synthetic service id is 
     headers: { 'X-Admin-Token': TEST_ADMIN_TOKEN },
   })
   assert.notStrictEqual(real.status, 403, 'the real ADMIN_TOKEN service token must still clear the admin gate')
+
+  // /api/auth/me must report is_admin:false for the colliding JWT — even though a
+  // users.id='system_admin_token' row was self-healed by the real ADMIN_TOKEN
+  // flow above (is_admin comes from ctx.isAdmin, never dbUser.is_admin).
+  const me = await fetch(`http://127.0.0.1:${sharedPort}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (me.status === 200) {
+    const body = await me.json()
+    assert.notStrictEqual(body?.user?.is_admin, true, 'colliding JWT must NOT be reported is_admin:true by /auth/me')
+    assert.ok(!Array.isArray(body?.profiles) || body.profiles.length === 0, 'colliding JWT must not receive admin-scoped profiles')
+  }
 })
 
 test('auth identity matrix — teardown shared server', async () => {

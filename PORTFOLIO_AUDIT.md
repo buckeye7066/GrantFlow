@@ -299,6 +299,21 @@ Round 10 removed the `activeProfileId==profileId` delete shortcut and made `ctx.
 
 **Confirmations:** synthetic-id JWTs are rejected without provenance in both `getOwnedAndGrantedProfileIds` and `isAdminUserWithDb`; profile subroutes no longer treat a deleted-user `ctx.userId` as owner (gated on `ctx.identityResolved`); legacy delete owner proof is an exact root-field comparison (no substring).
 
+## 5m. Round 13 — comprehensive `ctx.userId` ownership-gate audit (Codex review of commit `4330040`)
+
+The `ctx.userId`-without-`identityResolved` ownership fallback existed on more routes than the r12 `router.param` gate covered. This round fixes the 3 named sites and audits/gates EVERY remaining one.
+
+| Site | Kind | Fix |
+|------|------|-----|
+| `profiles.js:1210` `POST /api/profiles` (create/adopt) | No `:id` param → r12 `router.param` gate never runs; `profileUserId = ctx.userId` adopts/creates an owned profile | Non-admins now require `req.ctx.identityResolved === true` before `ctx.userId` becomes the profile owner (covers deleted-user + synthetic-collision) |
+| `outreachLogs.js:34` local `ensureProfileAccess` | Granted on `ctx.userId === profiles.user_id` with no `identityResolved` (GET/POST/DELETE all route through it) | Access decided by the canonical DB-backed `req.ctx.accessibleProfileIds` (fails closed for stale/synthetic); also rejects soft-deleted profiles |
+| `server.js:2002` + `authMe.js:143` `/api/auth/me` `is_admin` | Sourced from `dbUser.is_admin` — a self-healed `users.id='system_admin_token'` row reported `is_admin:true` for a colliding JWT | `is_admin` / the admin profile-list gate now come from `req.ctx.isAdmin` only (never `dbUser.is_admin`) |
+| `grantApplications.js` (7 handlers) | Non-admins scope queries `WHERE user_id = ctx.userId` (found by audit) | Router-level guard: non-admin without `identityResolved` → 403 (guest still gets the handler's 401) |
+
+**Audited & confirmed NOT ownership/authority decisions (left as-is):** `crawlers.js:1155` (`user_id` attribution on a crawl job), `yanaOutreach.js:183/215` (`approved_by_user_id` attribution), `grantApplications` `createdBy`/`updated_by` labels, `hamiltonHardStopResolver.js:264` / `anyaToolRegistry` `userId ?? 'anya_owner'` (attribution). `profiles.js:147-183` was already `identityResolved`-gated in r12. No other `is_admin`/`role` response field is sourced from a raw `dbUser`/token value — all admin responses now derive from `ctx.isAdmin`.
+
+**Confirmations:** every `ctx.userId` ownership fallback is `identityResolved`-gated (or routed through the canonical accessible set); `is_admin` responses come from `ctx.isAdmin`. Regression: `ownershipIdentityGates.test.js` — deleted-user & synthetic-collision JWTs → 403 on POST /api/profiles, GET /api/outreach-logs, GET /api/grant-applications; real user passes. `auth-identity-matrix.test.mjs` — colliding JWT → `/auth/me` `is_admin:false` + no admin profiles.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

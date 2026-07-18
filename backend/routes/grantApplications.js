@@ -10,6 +10,17 @@ const routeLogger = createLogger('route:grantApplications')
 
 const router = express.Router()
 
+// Every route here is user-scoped (non-admins filter WHERE user_id = ctx.userId).
+// A deleted-user / synthetic-id-collision JWT keeps ctx.userId populated but has
+// no trusted identity — it must NOT scope to (read/write) rows keyed to that
+// stale/reserved id. Admins pass; a genuine guest (no userId) falls through to the
+// handler's own 401; a non-admin with an UNRESOLVED identity is denied here.
+router.use((req, res, next) => {
+  if (req.ctx?.isAdmin === true || req.ctx?.identityResolved === true) return next()
+  if (!req.ctx?.userId) return next()
+  return res.status(403).json({ error: 'Not authorized' })
+})
+
 const VALID_STATUSES = new Set([
   'draft', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'withdrawn',
 ])
