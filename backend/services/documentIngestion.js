@@ -128,19 +128,29 @@ function shouldOverrideString({ key, existingValue, incomingValue }) {
   return false
 }
 
+// Keys that must never be written from untrusted AI output at any depth
+// (prototype-pollution defense). Dropped regardless of the allowlist.
+const RESERVED_SECTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = null) {
   const merged = { ...existing }
   const updatedFields = new Set()
 
-  // Untrusted-AI hardening: when the section's known key set is supplied, only
-  // accept keys the schema declares. The `incoming` object is model output
-  // derived from uploaded document text (a prompt-injection surface); without
-  // this allowlist an injected document could make the model emit arbitrary
-  // keys that would be persisted into profile_sections and poison the
-  // eligibility/matching invariants. See PORTFOLIO_AUDIT.md.
-  const allow = Array.isArray(allowedKeys) && allowedKeys.length > 0 ? new Set(allowedKeys) : null
+  // Untrusted-AI hardening. `incoming` is model output derived from uploaded
+  // document text (a prompt-injection surface). Two guards, applied at EVERY
+  // depth of the recursion:
+  //   1. Drop reserved keys (__proto__/constructor/prototype) — prototype pollution.
+  //   2. When an allowlist is supplied, only accept keys in it. `allowedKeys === null`
+  //      means "no restriction" (trusted/non-AI callers); an ARRAY — even empty —
+  //      restricts (empty => accept nothing). Nested object fields are schema-open
+  //      (e.g. basic_information.academic_status is `type:'object'` with no
+  //      sub-schema), so under an active allowlist a nested object may only REFRESH
+  //      keys ALREADY present — untrusted AI cannot INTRODUCE new nested keys, which
+  //      blocks the academic_status.education_level eligibility-poisoning class.
+  const allow = Array.isArray(allowedKeys) ? new Set(allowedKeys) : null
 
   Object.entries(incoming).forEach(([key, rawValue]) => {
+    if (RESERVED_SECTION_KEYS.has(key)) return
     if (allow && !allow.has(key)) return
     if (rawValue === undefined || rawValue === null) return
     const value = normalizeValue(rawValue)
@@ -197,7 +207,12 @@ export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = nul
 
     if (typeof value === 'object' && value) {
       const existingObj = typeof existingValue === 'object' && existingValue ? existingValue : {}
-      const nestedResult = mergeSectionData(existingObj, value)
+      // Under an active allowlist, restrict nested keys to those already present
+      // on the profile (schema-open object field) so untrusted AI cannot seed new
+      // eligibility-bearing nested fields. Non-AI callers (allow === null) recurse
+      // unrestricted, preserving prior behavior (reserved keys are still dropped).
+      const nestedAllow = allow ? Object.keys(existingObj) : null
+      const nestedResult = mergeSectionData(existingObj, value, nestedAllow)
       merged[key] = nestedResult.data
       if (nestedResult.updatedFields.size > 0) {
         updatedFields.add(key)

@@ -26,7 +26,8 @@ vi.mock('resend', () => ({
 process.env.RESEND_API_KEY = 'test_key_re_1234567890'
 process.env.FROM_EMAIL = 'noreply@example.com'
 
-const { sendEmail } = await import('../services/email.js')
+const { sendEmail, sendApplicationEmail } = await import('../services/email.js')
+const { sendDeadlineEmail } = await import('../services/deadlineEmailSmsService.js')
 
 describe('sendEmail honest failure reporting', () => {
   beforeEach(() => {
@@ -46,5 +47,37 @@ describe('sendEmail honest failure reporting', () => {
     const res = await sendEmail({ to: 'good@example.com', subject: 'Hi', text: 'Body' })
     expect(res.ok).toBe(true)
     expect(res.id).toBe('msg_success_1')
+  })
+})
+
+describe('sendApplicationEmail honest failure reporting (adjacent direct-send path)', () => {
+  beforeEach(() => sendMock.mockClear())
+
+  it('THROWS (does not report sent) when Resend resolves with an error', async () => {
+    nextResult = { data: null, error: { message: 'Domain not verified' } }
+    await expect(sendApplicationEmail('a@example.com', { foo: 'bar' })).rejects.toThrow(
+      /Failed to send application email/i,
+    )
+  })
+
+  it('returns true on a genuine success', async () => {
+    nextResult = { data: { id: 'app_1' }, error: null }
+    await expect(sendApplicationEmail('a@example.com', { foo: 'bar' })).resolves.toBe(true)
+  })
+})
+
+describe('sendDeadlineEmail honest failure reporting (adjacent direct-send path)', () => {
+  beforeEach(() => sendMock.mockClear())
+
+  it('returns false when Resend resolves with an error', async () => {
+    nextResult = { data: null, error: { message: 'rate limited' } }
+    const ok = await sendDeadlineEmail('a@example.com', { grantTitle: 'G', daysRemaining: 2, deadline: '2026-01-01' })
+    expect(ok).toBe(false)
+  })
+
+  it('returns true on a genuine success', async () => {
+    nextResult = { data: { id: 'dl_1' }, error: null }
+    const ok = await sendDeadlineEmail('a@example.com', { grantTitle: 'G', daysRemaining: 2, deadline: '2026-01-01' })
+    expect(ok).toBe(true)
   })
 })

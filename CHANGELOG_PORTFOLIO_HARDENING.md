@@ -23,6 +23,17 @@ Branch `claude/portfolio-hardening-2026-07-18` (off `93d271c0`). Six confirmed c
 ## Rollback
 - Pure code changes on the worktree branch; revert the commit `fix: harden grantflow against confirmed contract violations` to restore prior behavior. No data written, nothing to un-migrate.
 
+## Follow-up round — adjacent-path closures (see PORTFOLIO_AUDIT.md §5b)
+
+An adversarial re-review found each first-round fix had an adjacent bypass; all closed:
+- **reminders**: removed the deprecated token-claim admin fast-path so a demoted admin holding a stale role:'admin' JWT is DB-scoped (not DB-wide).
+- **Anya `application.completeStep`**: now authorizes (resolve owner → verify applicationId → profile access; orphan rows admin-only) BEFORE completing a step.
+- **document AI merge**: reserved keys (`__proto__`/`constructor`/`prototype`) dropped at every depth; nested schema-open objects can only refresh existing keys (no AI-introduced nested eligibility fields); empty allowlist now accepts nothing.
+- **prompt fence**: angle brackets in the untrusted context are escaped so document text can't forge the `</APPLICANT_CONTEXT>` sentinel.
+- **email honesty**: `sendApplicationEmail` + deadline email/SMS now report Resend/Twilio rejections as failures via a single checked `sendResendEmail` helper (exported from `email.js`); `sendEmail` also routes through it.
+
+Compat: `sendResendEmail` is additive (exported). `mergeSectionData` allowlist semantics tightened — an **empty** array now means "accept nothing" (was "no restriction"); the only callers pass either `null` (no restriction) or a non-empty `config.keys`, so production behavior is unchanged.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

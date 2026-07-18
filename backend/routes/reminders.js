@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getAccessibleOrganizationIds, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { getAccessibleOrganizationIds, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:reminders')
@@ -225,13 +225,14 @@ router.get('/', async (req, res) => {
     }
     
     const snapshot = await (async () => {
-      if (isAdminUser(user)) return await fetchReminderSnapshot(req.db)
-      // getAccessibleOrganizationIds returns a Set (never an Array) for non-admins,
-      // or null for a DB-backed admin. The previous `Array.isArray(orgIds)` test was
-      // therefore ALWAYS false, discarding the user's real org set and passing an
-      // empty array — which fetchReminderSnapshot then read as "no filter" and
-      // returned every tenant's grants/milestones. Convert the Set explicitly and
-      // treat null (admin) as unscoped.
+      // Admin authority MUST be DB-backed only. The previous `isAdminUser(user)`
+      // fast-path trusted a token role claim, so a user demoted in
+      // `users.is_admin` but still holding an unexpired role:'admin' JWT got an
+      // unscoped DB-wide read of every tenant's data. getAccessibleOrganizationIds
+      // is the single source of truth: it returns null for a DB-backed admin
+      // (=> unscoped) or a Set of the caller's orgs (empty Set => match nothing).
+      // fetchReminderSnapshot treats an omitted option as unscoped and an EMPTY
+      // array as "match nothing", so every non-DB-admin is always scoped.
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       return await fetchReminderSnapshot(req.db, DAYS_LOOKAHEAD, {
         organizationIds: orgIds === null ? undefined : Array.from(orgIds),
