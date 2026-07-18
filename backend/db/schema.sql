@@ -290,7 +290,19 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Crawler OS durable cross-source dedup key (migration 121).
   -- Source-independent identity from contract.canonicalOpportunityKey;
   -- NULL for legacy rows (NULLs are distinct under the UNIQUE index).
-  canonical_opportunity_key TEXT
+  canonical_opportunity_key TEXT,
+
+  -- Page-fact provenance (Phase 0.1 web-lane de-contamination, migration 144 /
+  -- pg 0148). ADDITIVE + NULL-default plumbing: durable storage for what a
+  -- source page literally stated, so a LATER profile-blind extractor can
+  -- populate it. Nothing writes these yet. eligibility_bullets already exists
+  -- above; these add the free-text eligibility, the extractor schema version,
+  -- and per-field {value, evidence_snippet, source} provenance JSON (also the
+  -- tri-state home for is_loan/requires_match/is_national — an absent key means
+  -- "not stated", distinct from the boolean columns' coalesced false).
+  eligibility_text TEXT,
+  page_fact_schema_version INTEGER,
+  field_provenance TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint

@@ -32,6 +32,7 @@
  */
 
 import { ensureAgentSubsystemTables } from '../utils/ensureAgentSubsystemTables.js'
+import { PAGE_FACT_MIGRATION_COLUMNS } from '../crawler-os/pageFacts.js'
 
 /**
  * Wraps a single invariant step in a try/catch that logs but never
@@ -645,6 +646,46 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
 }
 
 /**
+ * Page-fact provenance columns (both dialects) on funding_opportunities:
+ * eligibility_text / page_fact_schema_version / field_provenance (migration
+ * 144 / pg 0148; eligibility_bullets pre-existed). ADDITIVE, NULL-default
+ * plumbing for a later profile-blind extractor — re-asserted at boot so prod
+ * heals without a manual migrate, and so the drift check (diagnosticsService)
+ * has real columns to verify. Column list comes from the single page-fact
+ * registry so this can never drift from what storage writes.
+ */
+export async function ensurePageFactProvenanceColumns(db, { logger = console } = {}) {
+  return runStep(
+    'page_fact_provenance_columns',
+    '[database]',
+    logger,
+    async () => {
+      const columns = PAGE_FACT_MIGRATION_COLUMNS.map((c) => [c.column, c.type])
+      if (db?.dialect === 'postgres') {
+        for (const [col, type] of columns) {
+          // audit:allow dynamic-sql — col/type come from the hardcoded page-fact registry
+          await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS ${col} ${type}`)
+        }
+        return
+      }
+      let existing = new Set()
+      try {
+        const cols = await db.prepare('PRAGMA table_info(funding_opportunities)').all() // audit:allow dynamic-sql
+        existing = new Set((Array.isArray(cols) ? cols : []).map((c) => c?.name))
+      } catch {
+        existing = new Set()
+      }
+      for (const [col, type] of columns) {
+        if (!existing.has(col)) {
+          // audit:allow dynamic-sql — col/type come from the hardcoded page-fact registry
+          await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col} ${type}`)
+        }
+      }
+    },
+  )
+}
+
+/**
  * profiles.deleted_at column (both dialects).
  *
  * Older production databases can predate this column even though fresh schemas
@@ -1158,6 +1199,7 @@ const SCHEMA_INVARIANT_STEPS = [
   ['users_last_login_at_column', ensureUsersLastLoginAtColumn],
   ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
   ['amount_visibility_columns', ensureAmountVisibilityColumns],
+  ['page_fact_provenance_columns', ensurePageFactProvenanceColumns],
   ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
   ['profile_portal_status', ensurePortalCompletionStatusTable],
   ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],

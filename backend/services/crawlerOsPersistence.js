@@ -20,6 +20,7 @@ import { PROTECTED_PIPELINE_STATUSES } from '../startup/enforceInvariants.js';
 import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
 import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
+import { buildLivePageFactColumns } from '../crawler-os/pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -334,7 +335,7 @@ function osOppToLiveRow(o) {
     title: o.title,
     description: o.summary,
   });
-  return {
+  const row = {
     id: o.id,
     title: o.title ?? '(untitled opportunity)', // only NOT NULL column
     sponsor: o.sponsor ?? null,
@@ -377,16 +378,73 @@ function osOppToLiveRow(o) {
     discovered_at: o.created_at ?? nowIso(),
     updated_at: nowIso(),
   };
+
+  // Page-fact provenance (Phase 0.1) — additive, NULL-default plumbing so a
+  // later profile-blind extractor can carry per-field evidence into the catalog.
+  // The OS->live mapping + per-`kind` validation lives in the pageFacts registry
+  // (buildLivePageFactColumns), which emits a live column ONLY when the OS row
+  // carries a VALIDATED fact. That keeps THREE promises at once —
+  //   (1) a run that learned nothing writes the exact same row as before this
+  //       change (zero behavior change; minimal fixture tables without these
+  //       columns keep working),
+  //   (2) an upsert never DOWNGRADES stored provenance back to null on a later
+  //       re-crawl that lacks it (a blank/empty/malformed fact is omitted, and
+  //       the live INTEGER column never sees '' which Postgres rejects), and
+  //   (3) when the extractor DOES provide facts, they round-trip faithfully.
+  // NOTE: `field_provenance` here is the incoming whole-object; persistRun merges
+  // it per-key with the LIVE row so a partial re-crawl never drops stored keys.
+  Object.assign(row, buildLivePageFactColumns(o));
+
+  return row;
 }
 
-async function upsertRow(db, table, keyCols, row) {
+/**
+ * upsertRow — INSERT ... ON CONFLICT DO UPDATE. `conflictExpr` optionally maps a
+ * column to the SQL expression used on the UPDATE side (default `excluded.<col>`)
+ * so a column can be MERGED with its current value ATOMICALLY inside the single
+ * statement (no read-then-write race). The expression may reference `excluded.`
+ * (the would-be-inserted value) and `<table>.<col>` (the current stored value).
+ */
+async function upsertRow(db, table, keyCols, row, { conflictExpr = {} } = {}) {
   const cols = Object.keys(row);
   const placeholders = cols.map(() => '?').join(', ');
-  const updates = cols.filter((c) => !keyCols.includes(c)).map((c) => `${c} = excluded.${c}`).join(', ');
+  const updates = cols
+    .filter((c) => !keyCols.includes(c))
+    .map((c) => `${c} = ${conflictExpr[c] ?? `excluded.${c}`}`)
+    .join(', ');
   const sql =
     `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders}) ` +
     `ON CONFLICT (${keyCols.join(', ')}) DO UPDATE SET ${updates}`;
   await db.prepare(sql).run(...cols.map((c) => row[c]));
+}
+
+/**
+ * fundingOpportunityConflictExpr — the per-column UPDATE-side overrides for a
+ * funding_opportunities upsert. `field_provenance` is MERGED with the
+ * currently-stored value INSIDE the statement, so two concurrent persists can't
+ * read-then-clobber each other (the round-3 race). The merge is SHALLOW /
+ * top-level / incoming-wins-per-key: an incoming field's object FULLY REPLACES
+ * the stored field's object (no stale nested keys), other fields are kept.
+ *
+ * Postgres: `jsonb ||` is already a shallow top-level merge.
+ * SQLite: json_patch is a RECURSIVE (RFC 7396) merge that would keep stale
+ * nested keys and DIVERGE from Postgres, so we rebuild the object explicitly
+ * from json_each of both sides — existing keys NOT present in incoming, UNION
+ * all incoming keys (incoming wins) — via json_group_object, with json(value) so
+ * nested objects keep their type. Both are one atomic UPSERT expression.
+ */
+function fundingOpportunityConflictExpr(db) {
+  const provExpr = db?.dialect === 'postgres'
+    ? "(COALESCE(funding_opportunities.field_provenance, '{}')::jsonb || excluded.field_provenance::jsonb)::text"
+    : `(
+        SELECT json_group_object(key, json(value)) FROM (
+          SELECT key, value FROM json_each(COALESCE(funding_opportunities.field_provenance, '{}'))
+            WHERE key NOT IN (SELECT key FROM json_each(COALESCE(excluded.field_provenance, '{}')))
+          UNION ALL
+          SELECT key, value FROM json_each(COALESCE(excluded.field_provenance, '{}'))
+        )
+      )`;
+  return { field_provenance: provExpr };
 }
 
 /**
@@ -475,7 +533,18 @@ export async function persistRun(db, memStore, run, opts = {}) {
       if (existing && existing.id) targetId = existing.id;
     }
     idRemap.set(o.id, targetId);
-    await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId });
+    // LIVE-DB per-key provenance merge, done ATOMICALLY inside the single UPSERT
+    // (fundingOpportunityConflictExpr) so two concurrent persists can't
+    // read-then-clobber each other. The generic upsert would REPLACE the whole
+    // field_provenance JSON — dropping keys another extraction stored — so the
+    // conflict expression json_patch/jsonb-merges incoming over the current value
+    // (incoming wins per key, existing keys survive). A write that carries no
+    // provenance never names the column (osOppToLiveRow omits it), so stored
+    // provenance is untouched; there is no read-then-write gap and no fetch that
+    // could error into a null-clobber.
+    await upsertRow(db, 'funding_opportunities', ['id'], { ...row, id: targetId }, {
+      conflictExpr: fundingOpportunityConflictExpr(db),
+    });
     opportunities += 1;
   }
 

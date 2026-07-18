@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { ensureAdminSchemaRepair } from './adminSchemaRepair.js';
+import { PAGE_FACT_MIGRATION_COLUMN_NAMES } from '../crawler-os/pageFacts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -266,14 +267,18 @@ async function checkTableExists(db, tableName) {
  * empty array when the schema is up to date — CI relies on that to block
  * releases from landing with a drifted schema.
  */
-async function checkFundingOpportunitiesSchema(db) {
+export async function checkFundingOpportunitiesSchema(db) {
   const grantsRequired = ['url', 'matched_needs', 'match_decision', 'match_explanation', 'fingerprint', 'fingerprint_version']
   const grantsCheck = await checkTableColumns(db, 'grants', grantsRequired)
   const crawlerLogsExists = await checkTableExists(db, 'crawler_logs')
 
   if (db?.dialect === 'postgres') {
     try {
-      const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline']
+      // Page-fact provenance columns (migration 144 / pg 0148) come from the
+      // pageFacts registry so the drift check can never fall out of sync with
+      // what the migration/boot-invariant add. eligibility_bullets pre-existed.
+      const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline',
+        ...PAGE_FACT_MIGRATION_COLUMN_NAMES]
 
       const rows = await db
         .prepare(
@@ -343,7 +348,8 @@ async function checkFundingOpportunitiesSchema(db) {
       crawlLogsExists = false;
     }
     
-    const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline'];
+    const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline',
+      ...PAGE_FACT_MIGRATION_COLUMN_NAMES];
     const fundingMissing = targetColumns.filter((col) => !columnNames.includes(col));
     const missingColumns = [
       ...fundingMissing.map((c) => `funding_opportunities.${c}`),
