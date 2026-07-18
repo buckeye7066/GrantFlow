@@ -118,6 +118,13 @@ Attribution-only uses of `ctx.userId` (crawl-job `user_id`, `approved_by`/`creat
 
 Compat: behavior-preserving for real users, validated service/legacy tokens, and admins; only deleted-user and synthetic-collision JWTs change (now denied everywhere).
 
+## Round 14 — structural fail-closed identity gate ends the ungated-caller-id class (see PORTFOLIO_AUDIT.md §5n)
+
+- **One middleware closes the class.** New `enforceResolvedIdentity` (mounted after `attachRequestContext`, before the routers) nulls the caller id on BOTH `ctx.userId` and `req.user.userId`/`id`/`user_id` for any non-admin request whose identity did not resolve to a trusted principal (deleted-user JWT / synthetic-id collision). Every user-scoped route — audited or not, reading `ctx.userId` OR `req.user.userId` — then fails closed. `/api/auth/*` is exempt (it gates itself). Real users, admins, validated service/legacy tokens, and guests are unaffected; the signup/adopt path (real users row) is verified unaffected.
+- **The 3 newly-found routes** (`/api/foundations/calendar/deadlines`, `/api/anya-match-suggestions` `/pending`+accept+dismiss, `/api/saved-grants` GET/POST/PATCH/DELETE) also gained explicit `requireResolvedIdentity` gates (defense in depth), and take the caller id from `req.ctx.userId`.
+
+Compat: behavior-preserving for real users, validated tokens, admins, and the signup flow; only deleted-user and synthetic-collision JWTs change (now denied everywhere). Two existing tests updated to prod-faithful contexts (`savedGrantsProfileScope` gains a `req.ctx` with `identityResolved:true`; the colliding-JWT admin-route assertion accepts 401 or 403 — both denied).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

@@ -88,6 +88,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requestContext.js';
+import { enforceResolvedIdentity } from './middleware/enforceResolvedIdentity.js';
 import { ensureAuth, ensureAdmin } from './middleware/auth.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
@@ -1760,6 +1761,13 @@ app.use(async (req, _res, next) => {
 // Attach canonical request context (MUST run after auth middleware)
 // This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
 app.use(attachRequestContext())
+
+// STRUCTURAL fail-closed identity gate: for a request whose identity did NOT
+// resolve to a trusted principal (deleted-user JWT / synthetic-id collision) and
+// which is not an admin, NULL the caller id on both ctx and req.user so no
+// user-scoped route can authorize/scope on a stale/reserved id. Runs BEFORE
+// profileContext so the SQL tenant context also sees the nulled identity.
+app.use(enforceResolvedIdentity());
 
 // Wrap route handlers in an AsyncLocalStorage profile context after auth and
 // request context are known, so SQL tenant guards see the real user/profile.

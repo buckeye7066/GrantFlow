@@ -9,7 +9,7 @@
 
 import { Router } from 'express'
 import crypto from 'node:crypto'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireResolvedIdentity } from '../utils/accessControl.js'
 import {
   assessOpportunityTrust,
   buildTrustMetadata,
@@ -114,7 +114,8 @@ router.get('/', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    const userId = user.userId
+    if (!requireResolvedIdentity(req, res)) return
+    const userId = req.ctx?.userId ?? user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 
@@ -176,7 +177,8 @@ router.post('/', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    const userId = user.userId
+    if (!requireResolvedIdentity(req, res)) return
+    const userId = req.ctx?.userId ?? user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 
@@ -222,7 +224,8 @@ router.patch('/:opportunityId/notes', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    const userId = user.userId
+    if (!requireResolvedIdentity(req, res)) return
+    const userId = req.ctx?.userId ?? user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 
@@ -257,7 +260,8 @@ router.delete('/:opportunityId', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    const userId = user.userId
+    if (!requireResolvedIdentity(req, res)) return
+    const userId = req.ctx?.userId ?? user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 

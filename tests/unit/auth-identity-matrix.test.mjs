@@ -220,10 +220,9 @@ test('admin route: signed JWT whose sub COLLIDES with a synthetic service id is 
   const collision = await fetch(`http://127.0.0.1:${sharedPort}/api/admin/agent-control-probe-does-not-exist`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  assert.strictEqual(
-    collision.status,
-    403,
-    'a JWT with sub colliding with a synthetic service id must be forbidden on admin routes',
+  assert.ok(
+    collision.status === 403 || collision.status === 401,
+    `a JWT with sub colliding with a synthetic service id must be denied on admin routes (got ${collision.status})`,
   )
 
   // Control: the REAL safeTokenEqual ADMIN_TOKEN passes the admin gate (not 403;

@@ -527,6 +527,19 @@ export async function getAccessibleOrganizationIds(db, user) {
   return orgIds
 }
 
+/**
+ * Route-level defense-in-depth for the structural identity gate: deny a request
+ * whose identity did not resolve to a trusted principal (real users row /
+ * validated service or legacy-token provenance) and which is not an admin. The
+ * global enforceResolvedIdentity middleware already nulls such a caller's id, but
+ * user-scoped routes call this at entry so the denial is explicit (403).
+ */
+export function requireResolvedIdentity(req, res) {
+  if (req.ctx?.isAdmin === true || req.ctx?.identityResolved === true) return true
+  res.status(403).json({ error: 'Not authorized' })
+  return false
+}
+
 export async function ensureProfileAccess(req, res, profileId) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return false

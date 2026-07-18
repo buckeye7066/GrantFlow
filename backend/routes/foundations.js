@@ -10,6 +10,7 @@ import {
   requireAuthenticatedUser,
   requireAuthenticatedUserMiddleware,
   ensureProfileAccess,
+  requireResolvedIdentity,
 } from '../utils/accessControl.js'
 import * as propublica from '../src/integrations/propublica990.js'
 import * as nsf from '../src/integrations/nsfAwards.js'
@@ -164,10 +165,15 @@ router.get('/federal/search', async (req, res) => {
  */
 router.get('/calendar/deadlines', async (req, res) => {
   if (!requireAuthenticatedUser(req, res)) return
+  // Deleted-user / synthetic-collision JWTs (identityResolved=false) must not
+  // reach the user-scoped pipeline query below.
+  if (!requireResolvedIdentity(req, res)) return
 
   try {
     const userId = req.ctx?.userId
     const profileId = req.query.profileId || null
+    // An explicit profileId must be one the caller can access (fail closed).
+    if (profileId && !(await ensureProfileAccess(req, res, String(profileId)))) return
     const month = req.query.month || null // YYYY-MM format
 
     let dateFilter = ''

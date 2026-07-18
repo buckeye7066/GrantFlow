@@ -14,9 +14,13 @@ import { describe, expect, it, beforeEach } from 'vitest'
 
 const Database = (await import('better-sqlite3')).default
 const { attachRequestContext } = await import('../middleware/requestContext.js')
+const { enforceResolvedIdentity } = await import('../middleware/enforceResolvedIdentity.js')
 const profilesRouter = (await import('../routes/profiles.js')).default
 const outreachRouter = (await import('../routes/outreachLogs.js')).default
 const grantAppsRouter = (await import('../routes/grantApplications.js')).default
+const foundationsRouter = (await import('../routes/foundations.js')).default
+const anyaMatchRouter = (await import('../routes/anyaMatchSuggestions.js')).default
+const savedGrantsRouter = (await import('../routes/savedGrants.js')).default
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -121,5 +125,87 @@ describe('GET /api/grant-applications denies stale/synthetic identities', () => 
     const res = await request(appWith(db, REAL, grantAppsRouter, '/api/grant-applications'))
       .get('/api/grant-applications')
     expect(res.status).toBe(200)
+  })
+})
+
+describe('round-14 named routes deny stale/synthetic identities (explicit requireResolvedIdentity gate)', () => {
+  let db
+  beforeEach(() => { db = makeDb() })
+
+  for (const [label, user] of [['deleted-user', DELETED], ['synthetic-collision', SYNTH_COLLISION]]) {
+    it(`GET /api/foundations/calendar/deadlines denies a ${label} JWT (403)`, async () => {
+      const res = await request(appWith(db, user, foundationsRouter, '/api/foundations'))
+        .get('/api/foundations/calendar/deadlines')
+      expect(res.status).toBe(403)
+    })
+    it(`GET /api/anya-match-suggestions/pending denies a ${label} JWT (403)`, async () => {
+      const res = await request(appWith(db, user, anyaMatchRouter, '/api/anya-match-suggestions'))
+        .get('/api/anya-match-suggestions/pending')
+      expect(res.status).toBe(403)
+    })
+    it(`GET /api/saved-grants denies a ${label} JWT (403)`, async () => {
+      const res = await request(appWith(db, user, savedGrantsRouter, '/api/saved-grants'))
+        .get('/api/saved-grants')
+      expect(res.status).toBe(403)
+    })
+    it(`POST /api/saved-grants denies a ${label} JWT (403)`, async () => {
+      const res = await request(appWith(db, user, savedGrantsRouter, '/api/saved-grants'))
+        .post('/api/saved-grants').send({ opportunity_id: 'opp-1' })
+      expect(res.status).toBe(403)
+    })
+  }
+
+  it('a real user is NOT denied by the identity gate on these routes', async () => {
+    const anya = await request(appWith(db, REAL, anyaMatchRouter, '/api/anya-match-suggestions'))
+      .get('/api/anya-match-suggestions/pending')
+    expect(anya.status).not.toBe(403)
+    const saved = await request(appWith(db, REAL, savedGrantsRouter, '/api/saved-grants'))
+      .get('/api/saved-grants')
+    expect(saved.status).not.toBe(403)
+  })
+})
+
+describe('enforceResolvedIdentity middleware (structural close) nulls unresolved caller ids', () => {
+  function run(reqCtx, reqUser) {
+    const req = { ctx: reqCtx, user: reqUser }
+    let called = false
+    enforceResolvedIdentity()(req, {}, () => { called = true })
+    return { req, called }
+  }
+
+  it('NULLS ctx.userId and req.user.userId/id/user_id for an unresolved non-admin', () => {
+    const { req } = run(
+      { userId: 'deleted', isAdmin: false, identityResolved: false, accessibleProfileIds: new Set() },
+      { role: 'user', userId: 'deleted', id: 'deleted', user_id: 'deleted' },
+    )
+    expect(req.ctx.userId).toBeNull()
+    expect(req.user.userId).toBeNull()
+    expect(req.user.id).toBeNull()
+    expect(req.user.user_id).toBeNull()
+  })
+
+  it('leaves a trusted identity (identityResolved=true) untouched', () => {
+    const { req } = run(
+      { userId: 'u1', isAdmin: false, identityResolved: true, accessibleProfileIds: new Set(['p1']) },
+      { role: 'user', userId: 'u1' },
+    )
+    expect(req.ctx.userId).toBe('u1')
+    expect(req.user.userId).toBe('u1')
+  })
+
+  it('leaves an admin untouched', () => {
+    const { req } = run(
+      { userId: 'system_admin_token', isAdmin: true, identityResolved: false },
+      { role: 'admin', userId: 'system_admin_token' },
+    )
+    expect(req.ctx.userId).toBe('system_admin_token')
+  })
+
+  it('leaves a validated synthetic service token untouched', () => {
+    const { req } = run(
+      { userId: 'system_admin_token', isAdmin: false, identityResolved: false },
+      { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' },
+    )
+    expect(req.ctx.userId).toBe('system_admin_token')
   })
 })

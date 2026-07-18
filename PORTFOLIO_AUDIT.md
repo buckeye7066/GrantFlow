@@ -314,6 +314,27 @@ The `ctx.userId`-without-`identityResolved` ownership fallback existed on more r
 
 **Confirmations:** every `ctx.userId` ownership fallback is `identityResolved`-gated (or routed through the canonical accessible set); `is_admin` responses come from `ctx.isAdmin`. Regression: `ownershipIdentityGates.test.js` — deleted-user & synthetic-collision JWTs → 403 on POST /api/profiles, GET /api/outreach-logs, GET /api/grant-applications; real user passes. `auth-identity-matrix.test.mjs` — colliding JWT → `/auth/me` `is_admin:false` + no admin profiles.
 
+## 5n. Round 14 — STRUCTURAL close: one fail-closed identity gate ends the class (Codex review of commit `ca2056a`)
+
+The r13 grep audited only `ctx.userId` (not `req.user.userId`) and missed 3 more routes. This round stops the whack-a-mole with a single source-level enforcement plus the 3 named fixes.
+
+### Structural close — `enforceResolvedIdentity` middleware (the class ENDS here)
+New `middleware/enforceResolvedIdentity.js`, mounted globally right after `attachRequestContext` (server.js:1763) and before `profileContext`. For any request that is NOT an admin and whose `ctx.identityResolved !== true` (and not a validated synthetic service token), it **NULLS the caller id on BOTH surfaces** — `ctx.userId` AND `req.user.userId`/`id`/`user_id` — and keeps the accessible sets empty. Every downstream user-scoped query (`WHERE user_id = ?`, `row.user_id === userId`) then matches nothing / hits the route's own `if (!userId) 401`, so **audited AND unaudited routes fail closed** without each needing its own gate. `/api/auth/*` is exempt (it manages its own identity — sources `is_admin` from `ctx.isAdmin`, returns 401 for a stale token). Trusted identities (real users row, admins, validated service/health/legacy tokens) and guests are untouched. **Verified safe for signup/adopt:** a new signup that adopts a profile has a real `users` row → `identityResolved=true` → unaffected.
+
+### The 3 named routes (also fixed explicitly — defense in depth)
+| Route | Fix |
+|-------|-----|
+| `GET /api/foundations/calendar/deadlines` | `requireResolvedIdentity` gate + `ensureProfileAccess` for an explicit `profileId` |
+| `anyaMatchSuggestions.js` `/pending` + `loadAuthorizedSuggestion` | `requireResolvedIdentity` gate; caller id taken from `req.ctx.userId` |
+| `savedGrants.js` GET/POST/PATCH/DELETE | `requireResolvedIdentity` gate; caller id from `req.ctx.userId` |
+
+A shared `requireResolvedIdentity(req, res)` helper (accessControl) is the explicit 403 gate.
+
+### Audit — `req.user.userId` / `req.user.id` ownership reads
+Every route that reads `req.user.userId`/`id` for an ownership/scope decision (foundations, anyaMatchSuggestions, savedGrants, grantApplications, profiles, grants, billing, stripe, onboarding, services, schoolPortal, portalSyncHealth, and ~15 more) is now covered by the structural middleware — for an unresolved/synthetic identity the read returns `null`, so the query fails closed. No user-scoped route (via `ctx.userId` OR `req.user.userId`) authorizes on an unresolved/synthetic identity.
+
+**Confirmations:** a single fail-closed middleware nulls the unresolved/synthetic caller id on both `ctx` and `req.user`; the 3 named routes are additionally gated; no user-scoped route authorizes on an unresolved identity. Tests: `ownershipIdentityGates.test.js` — deleted-user + synthetic-collision JWTs → 403 on foundations/anya/saved-grants (+ the r11-13 routes), real user + service token pass; the middleware unit test asserts the null-on-both-surfaces behavior; `auth-identity-matrix.test.mjs` — colliding JWT denied on `/api/admin/*` and `is_admin:false` on `/auth/me`.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.
