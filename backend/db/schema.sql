@@ -771,6 +771,12 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at DATETIME
 );
 
+-- At most ONE user per phone number (round 22): backstop for idempotent first-ever
+-- /phone/start (INSERT ... ON CONFLICT (primary_phone) DO NOTHING).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone
+  ON users (primary_phone)
+  WHERE primary_phone IS NOT NULL;
+
 -- saved_grants: profile-scoped favorites/bookmarks. Each user can save the
 -- same opportunity independently under each of their profiles. Legacy rows
 -- created before migration 075 keep profile_id=NULL and are visible to all
