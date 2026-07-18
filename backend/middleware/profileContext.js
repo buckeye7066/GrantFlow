@@ -34,10 +34,13 @@ function extractProfileId(req) {
 }
 
 function extractRole(req) {
-  if (req?.ctx?.isAdmin) return 'admin'
-  if (req?.ctx?.role) return String(req.ctx.role).toLowerCase()
-  const role = req?.user?.role || req?.user?.actorRole || req?.auth?.role || null
-  return role ? String(role).toLowerCase() : null
+  // The SQL tenant guard (scopedQuery ADMIN_ROLES) bypasses profile-scope
+  // enforcement for actorRole 'admin'. That authority is DB-backed ONLY: derive
+  // it exclusively from req.ctx.isAdmin (resolved by requestContext from
+  // users.is_admin / validated service-token provenance, fail-closed). NEVER fall
+  // back to req.user.role — a demoted admin (ctx.isAdmin=false) whose JWT still
+  // claims role:'admin' must NOT get an admin actorRole and skip tenant scoping.
+  return req?.ctx?.isAdmin === true ? 'admin' : 'user'
 }
 
 export function profileContextMiddleware() {

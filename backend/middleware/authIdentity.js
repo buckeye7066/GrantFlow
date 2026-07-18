@@ -273,6 +273,11 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                   userId: profile.id,   // required for audit trails and Anya grounding
                   profileId: profile.id,
                   profileName: profile.display_name,
+                  // Provenance: this profileId came from a DB-verified legacy
+                  // profile bearer TOKEN (non-prod, opt-in), NOT a JWT claim. Only
+                  // this flag lets getAccessibleProfileIds treat the profileId as
+                  // access proof (a JWT payload can never set it).
+                  profileTokenAuth: true,
                 }
                 handled = true
               }

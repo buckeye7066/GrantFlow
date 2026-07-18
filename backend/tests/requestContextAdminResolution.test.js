@@ -96,6 +96,40 @@ describe('buildRequestContext DB-backed admin resolution', () => {
     expect(ctx.isAdmin).toBe(false)
   })
 
+  it('a JWT carrying the CONFIGURED admin email but no is_admin DB row is NOT admin', async () => {
+    // The token supplies email=buckeye7066@gmail.com (the configured admin), but
+    // there is no users row. The configured-admin-email elevation must be honored
+    // ONLY from a trusted DB email, never a token claim -> non-admin.
+    const db = {
+      dialect: 'sqlite',
+      prepare(sql) {
+        const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm.includes('from users where id')) return { get: () => null }
+        return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
+      },
+    }
+    const user = { role: 'user', userId: 'attacker', email: 'buckeye7066@gmail.com' }
+    const ctx = await buildRequestContext(db, user)
+    expect(ctx.isAdmin).toBe(false)
+  })
+
+  it('a real DB user whose STORED email is the configured admin resolves to admin', async () => {
+    const db = {
+      dialect: 'sqlite',
+      prepare(sql) {
+        const norm = String(sql).replace(/\s+/g, ' ').trim().toLowerCase()
+        if (norm.includes('from users where id')) {
+          // is_admin flag not yet set, but the trusted stored email is configured admin.
+          return { get: () => ({ is_admin: 0, primary_email: 'buckeye7066@gmail.com' }) }
+        }
+        return { get: () => null, all: () => [], run: () => ({ changes: 0 }) }
+      },
+    }
+    const user = { role: 'user', userId: 'realowner' }
+    const ctx = await buildRequestContext(db, user)
+    expect(ctx.isAdmin).toBe(true)
+  })
+
   it('FAIL-CLOSED never carries the null all-access sentinel (accessible sets coerced to empty)', async () => {
     // Repro of the coordinator scenario: the context admin lookup (SELECT
     // is_admin, primary_email ...) TIMES OUT -> isAdmin=false (fail closed), but

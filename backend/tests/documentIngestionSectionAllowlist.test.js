@@ -124,6 +124,28 @@ describe('mergeSectionData allowlist (untrusted-AI hardening)', () => {
     expect(data.applications.every((a) => !Array.isArray(a))).toBe(true)
   })
 
+  it('EMPTY base: an array<object> injection stores NONE of the unlisted keys (no reserved-only fallback)', () => {
+    // No existing applications shape -> the derived shape is empty -> every
+    // unlisted key is dropped and the fully-unlisted element collapses to {} and
+    // is filtered out. (Array-of-arrays form too.)
+    const incoming = JSON.parse(
+      '{"applications":[[{"name":"X","status":"a","secret_admin_flag":true,"__proto__":{"polluted":true}}]]}',
+    )
+    const { data } = mergeSectionData({}, incoming, ['applications'])
+    const apps = data.applications || []
+    expect(apps.every((a) => !a || !('secret_admin_flag' in a))).toBe(true)
+    expect(apps.every((a) => !Array.isArray(a))).toBe(true)
+    expect({}.polluted).toBeUndefined()
+  })
+
+  it('an OBJECT injected into an array<string> field is dropped (string array stays clean)', () => {
+    const existing = { receives_assistance: ['SNAP'] }
+    const incoming = JSON.parse('{"receives_assistance":[{"secret":true,"__proto__":{"polluted":true}}]}')
+    const { data } = mergeSectionData(existing, incoming, ['receives_assistance'])
+    expect(data.receives_assistance).toEqual(['SNAP'])
+    expect({}.polluted).toBeUndefined()
+  })
+
   it('drops reserved prototype-pollution keys at top level AND nested depth', () => {
     const payload = JSON.parse(
       '{"household_income": 100, "__proto__": {"polluted": true}, "academic_status": {"__proto__": {"x": 1}}}',

@@ -65,6 +65,16 @@ Compat: behavior-preserving for real DB admins, the configured owner email, and 
 
 Compat: behavior-preserving for real DB admins, the configured owner email, and the validated ADMIN_TOKEN/Anya/health service tokens; only forged/colliding tokens and DB-error cases change (now denied). Four route-test harnesses and the auth-identity matrix were updated to the provenance model.
 
+## Round 7 — no JWT-supplied claim grants authority by value (see PORTFOLIO_AUDIT.md §5g)
+
+Finishes the principle across the three remaining token-claim vectors plus an array-sanitizer edge:
+- **Configured admin EMAIL** is honored only from the trusted DB users-row email — a JWT that carries the configured admin address can no longer self-promote (or persist `is_admin=TRUE`).
+- **Token `profile_id`** no longer self-authorizes a tenant: accessible profiles come from DB ownership / email grants; a JWT `profile_id` is honored only via a `profileTokenAuth` provenance flag set solely in the DB-verified legacy profile-token branch.
+- **Raw JWT admin role** can no longer set an admin SQL `actorRole` — the AsyncLocalStorage tenant-guard role derives from `req.ctx.isAdmin` only, so a demoted admin's stale `role:'admin'` token stays profile-scoped.
+- **Document-AI array sanitizer** now enforces a shape even on an empty base (drops unlisted keys instead of falling back to reserved-only) and drops objects injected into `array<string>` fields.
+
+Compat: behavior-preserving for real DB admins, the configured owner (resolved from their stored email), validated service tokens, and the non-prod legacy profile token; only forged/stale JWT claims change (now denied). First-time untrusted-AI population of an empty `array<object>` field is now conservatively dropped until a trusted element shape exists.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

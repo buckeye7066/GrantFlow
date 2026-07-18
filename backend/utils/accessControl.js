@@ -286,14 +286,16 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
 
-  // Token-scoped profileId is always treated as accessible for the session.
-  // This prevents lockouts for legacy profiles that lack user_id/profile_emails mappings.
-  // Security note: This is intentional per product requirements to maintain backward compatibility.
-  // Tokens are already validated by auth middleware, so compromised tokens are a separate concern
-  // that should be addressed via token rotation, expiry, and monitoring rather than here.
-  const tokenProfileId = getAuthProfileId(user)
-  if (tokenProfileId) {
-    ids.add(tokenProfileId)
+  // A token-scoped profileId is access proof ONLY for the DB-verified legacy
+  // profile bearer token (provenance flag `profileTokenAuth`, set solely in the
+  // legacy-token auth branch — non-prod, opt-in). A JWT's payload.profile_id is
+  // just a claim and MUST NOT self-authorize an arbitrary tenant: accessible
+  // profiles are derived from DB ownership / email grants above. A stale/forged
+  // JWT profile_id is rejected here and re-validated against this set by
+  // requestContext (activeProfileId is dropped when not in the accessible set).
+  if (user?.profileTokenAuth === true) {
+    const tokenProfileId = getAuthProfileId(user)
+    if (tokenProfileId) ids.add(tokenProfileId)
   }
 
   // Strip soft-deleted profiles so they never appear in the accessible set.

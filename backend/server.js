@@ -1669,6 +1669,10 @@ app.use(async (req, res, next) => {
             role: 'user',
             profileId: profile.id,
             profileName: profile.display_name,
+            // Provenance: DB-verified legacy profile bearer TOKEN (non-prod,
+            // opt-in), NOT a JWT claim. Only this flag lets getAccessibleProfileIds
+            // treat the profileId as access proof.
+            profileTokenAuth: true,
           };
           handled = true;
         }

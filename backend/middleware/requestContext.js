@@ -200,9 +200,6 @@ export async function buildRequestContext(db, user) {
   // missing row FAILS CLOSED — we NEVER fall back to the token's role/is_admin
   // claim, or a demoted admin whose context DB read errors would still be admin.
   const syntheticServiceAdmin = isSyntheticServiceAdmin(user)
-  // `ctx.email` may not be present on the JWT (older tokens / some oauth flows);
-  // recomputed after we potentially hydrate ctx.email from the DB row.
-  let emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
   try {
     // If we only have a profileId, resolve its owning user first.
     if (!ctx.userId && ctx.activeProfileId) {
@@ -227,11 +224,17 @@ export async function buildRequestContext(db, user) {
         .get(String(ctx.userId))
       if (row) {
         ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
-        if (row.primary_email && !ctx.email) ctx.email = row.primary_email
-        emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
+        // The configured-admin-email elevation is honored ONLY from the TRUSTED
+        // stored email (row.primary_email), NEVER from the token-supplied
+        // user.email — a JWT could otherwise carry the configured admin email and
+        // self-promote (and this path even PERSISTS is_admin=TRUE). Hydrate
+        // ctx.email from the row for downstream display, but decide on the DB email.
+        const trustedEmail = row.primary_email ? String(row.primary_email).trim().toLowerCase() : null
+        if (trustedEmail && !ctx.email) ctx.email = trustedEmail
+        const dbEmailIsConfiguredAdmin = Boolean(trustedEmail && isAdminEmail(trustedEmail))
 
-        // Configured admin email whose DB flag isn't set yet: upgrade + persist.
-        if (!ctx.isAdmin && emailIsConfiguredAdmin) {
+        // Configured admin email (from the DB row) whose flag isn't set: upgrade + persist.
+        if (!ctx.isAdmin && dbEmailIsConfiguredAdmin) {
           ctx.isAdmin = true
           try {
             await db
@@ -242,19 +245,20 @@ export async function buildRequestContext(db, user) {
           }
         }
       } else {
-        // Real user id but NO users row → FAIL CLOSED (never trust the token
-        // claim). Only the server-configured admin email may still elevate.
-        ctx.isAdmin = emailIsConfiguredAdmin
+        // Real user id but NO users row → FAIL CLOSED. A configured admin email
+        // from a TOKEN is not trusted; only a validated service token elevates.
+        ctx.isAdmin = false
       }
     } else {
-      ctx.isAdmin = emailIsConfiguredAdmin
+      // No resolvable identity → not admin.
+      ctx.isAdmin = false
     }
   } catch (error) {
-    // FAIL CLOSED on DB error. Never trust the JWT role/is_admin claim. Only the
-    // DB-INDEPENDENT admins survive: a validated synthetic service token or the
-    // server-configured admin email.
+    // FAIL CLOSED on DB error. Never trust the JWT role/is_admin/email claims. Only
+    // a validated synthetic service token survives (its authority is the verified
+    // token, not the DB).
     console.warn('[requestContext] Failed to resolve admin status from DB; failing closed:', error?.message)
-    ctx.isAdmin = syntheticServiceAdmin || emailIsConfiguredAdmin
+    ctx.isAdmin = syntheticServiceAdmin
   }
 
   // Step 5: Compute accessible profiles and orgs

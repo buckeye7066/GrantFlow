@@ -225,6 +225,24 @@ After admin resolution catches a DB error and sets `ctx.isAdmin=false`, the non-
 
 **Confirmations:** synthetic-admin authority is bound to verified service-token provenance (JWT `sub` collision denied on `/api/admin/*`); nested array-of-arrays can't smuggle keys/prototype; a fail-closed (`isAdmin=false`) context can never carry a null all-access sentinel.
 
+## 5g. Round 7 — finish the principle: no JWT-supplied claim grants authority by value (Codex review of commit `9951cb0`)
+
+The same "trust a JWT claim as authorization" disease on three OTHER claims (email, profile_id, role) plus an array-sanitizer edge. Every JWT-supplied claim that grants authority is now DB-derived or provenance-flagged.
+
+### R7-1 [HIGH] Configured admin EMAIL let a signed JWT become admin
+`requestContext.js:205` derived `emailIsConfiguredAdmin` from `req.user.email` (the JWT-supplied email) and used it to set `ctx.isAdmin` when the users row was missing AND to promote (and PERSIST `is_admin=TRUE`) a non-admin row. A `Bearer JWT {sub:'attacker', email:'<configured-admin>', roles:['user']}` → admin. **Fix:** the configured-admin-email elevation is computed ONLY from the TRUSTED stored `row.primary_email` (never the token email); a missing row / DB error FAILS CLOSED unless `isSyntheticServiceAdmin`. Tests: `requestContextAdminResolution.test.js` — JWT with the configured admin email but no `is_admin` row → not admin; a real DB user whose stored email is the configured admin → admin.
+
+### R7-2 [HIGH] JWT profile_id self-authorized arbitrary profile access
+`accessControl.js:294` unconditionally added `getAuthProfileId(user)` (the token's `profile_id`) to the accessible set, so a signed JWT chose its own tenant (`profile_id:'victim'`). **Fix:** the token profile_id is access proof ONLY for the DB-verified legacy profile bearer token — a `profileTokenAuth` provenance flag set solely in the legacy-token auth branch (never from a JWT payload). Accessible profiles otherwise derive from DB ownership / email grants; a JWT `profile_id` is re-validated against that set by `requestContext` (activeProfileId dropped when not accessible). Test: `accessibleProfilesTokenProvenance.test.js` — JWT `profile_id` for an unowned profile is NOT accessible; real ownership + the legacy token still resolve.
+
+### R7-3 [MED] Raw JWT admin role bypassed the SQL tenant guard
+`profileContext.js:36` `extractRole` fell back to `req.user.role`, so a demoted admin (`ctx.isAdmin=false`) whose JWT still said `role:'admin'` got `actorRole:'admin'` — and `scopedQuery` SKIPS profile-scope enforcement for `ADMIN_ROLES`. **Fix:** `actorRole` derives from `req.ctx.isAdmin` ONLY (`ctx.isAdmin === true ? 'admin' : 'user'`); a JWT role claim never sets an admin SQL actor. Test: `profileContextActorRole.test.js` — a `roles:['admin']` JWT with `ctx.isAdmin=false` → `actorRole='user'` (query stays scoped).
+
+### R7-4 [MED] Array sanitizer wasn't shape-enforcing on an empty base
+`documentIngestion.js:271` fell back to `activeShape=null` (reserved-only) when the existing array had no object-element shape, so on an EMPTY base an injected `applications:[[{…}]]` kept every non-reserved key, and OBJECTS could be stored in an `array<string>` field. **Fix:** under an active allowlist the derived shape is ALWAYS enforced (an empty existing shape → empty key set → all unlisted keys dropped, fully-unlisted elements collapse to `{}` and are filtered out); objects injected into a string array (whose string elements yield an empty object-shape) are dropped. Tests: `documentIngestionSectionAllowlist.test.js` — empty base + `applications:[[{…unlisted…}]]` stores none of the unlisted keys, no pollution; an object injected into `receives_assistance` is dropped.
+
+**Confirmations:** the configured admin email is honored only from a DB-bound email; token `profile_id` no longer self-authorizes (DB-backed accessible set + legacy-token provenance flag); a demoted admin-role JWT can't set an admin SQL `actorRole`; the array sanitizer enforces a shape even when the base is empty.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

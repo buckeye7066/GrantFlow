@@ -285,16 +285,21 @@ export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = nul
       // shape sanitizer, so nested array-of-arrays can't smuggle keys/prototype.
       const objectElements = collectObjectElements(value)
       if (objectElements.length > 0) {
-        // Under an active allowlist, derive a RECURSIVE key shape from the
-        // existing elements and enforce it at every depth so untrusted AI cannot
-        // introduce new element fields OR new nested fields (e.g.
-        // applications[].meta.secret_admin_flag). With no existing shape we fall
-        // back to reserved-key stripping only (first-time population is preserved).
+        // Under an active allowlist, derive a RECURSIVE key shape from the existing
+        // elements and enforce it at every depth. We do NOT fall back to
+        // reserved-only when the base has no shape: with an EMPTY existing shape
+        // the derived shape has an empty key set, so every unlisted key is dropped
+        // and a fully-unlisted element collapses to {} and is filtered out. This
+        // means untrusted AI cannot introduce new element fields on a first-time
+        // (empty-base) array<object>, and OBJECTS injected into an array<string>
+        // field (whose string elements yield an empty object-shape) are dropped.
+        // Non-AI callers (allow === null) keep reserved-only stripping (shape null).
         const shape = allow ? buildElementShape(existingArr) : null
-        const activeShape = shape && shape.keys.size > 0 ? shape : null
-        const sanitized = objectElements.map((e) => sanitizeAgainstShape(e, activeShape))
+        const sanitized = objectElements
+          .map((e) => sanitizeAgainstShape(e, shape))
+          .filter((e) => allow === null || Object.keys(e).length > 0)
         merged[key] = [...existingArr, ...sanitized]
-        updatedFields.add(key)
+        if (sanitized.length > 0) updatedFields.add(key)
         return
       }
 
