@@ -113,14 +113,19 @@ function toCandidate(ex, evidence, thesis, page) {
  * into `store` (so the caller's persistRun flushes them).
  *
  * @param {{ store, fetcher:{fetch:Function}, searchWeb:Function, extractOpportunities:Function, blindShadow? }} deps
- * @param {{ extractPage:Function, maxPages?:number }} [deps.blindShadow] Phase-1b
- *   profile-BLIND shadow observer (WEB_LANE_PROFILE_BLIND). When the caller injects
- *   it (flag ON), the lane ALSO re-extracts each already-fetched page through the
- *   profile-blind path via `extractPage({pageUrl,html}) => Promise<Array<candidate>>`
+ * @param {{ extractPage:Function, maxPages?:number, totalBudgetMs?:number, perPageTimeoutMs?:number }} [deps.blindShadow]
+ *   Phase-1b profile-BLIND shadow observer (WEB_LANE_PROFILE_BLIND). When the caller
+ *   injects it (flag ON), the lane ALSO re-extracts each already-fetched page through
+ *   the profile-blind path via
+ *   `extractPage({pageUrl,html,timeoutMs,signal}) => Promise<Array<candidate>>`
  *   and records a read-only `web_lane_blind_shadow` delta counter. It NEVER writes
- *   to `store`, never touches what the live lane returns/persists, and any
- *   error/timeout is caught. Absent (flag OFF) => this path never runs and the
- *   counter never exists (byte-identical control flow, return, and writes).
+ *   to `store`, never touches what the live lane returns/persists. A single
+ *   wall-clock `totalBudgetMs` (default 6000) caps the TOTAL time the live loop
+ *   awaits blind work all run; each page is awaited ≤ min(`perPageTimeoutMs`
+ *   default 4000, budget remaining), raced against that deadline with the signal
+ *   aborted on timeout, so blind work can never stall live. Absent (flag OFF) =>
+ *   this path never runs and the counter never exists (byte-identical control
+ *   flow, return, and writes).
  * @param {{ thesis, matchProfiles?, floor?, runId?, maxQueries?, resultsPerQuery?, maxPages?, seedPages? }} opts
  * @param {Array<{url,title?,snippet?}>} [opts.seedPages] Known funding pages to
  *   fetch IN ADDITION to this run's search hits — see SEED PAGES below.
@@ -137,14 +142,28 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // injected a valid blind shadow (WEB_LANE_PROFILE_BLIND ON). While null, NOTHING
   // below reads it — no blind extraction runs and `web_lane_blind_shadow` is never
   // attached, so a flag-off run is byte-identical to the pre-1b baseline.
+  //
+  // COST/LATENCY GUARANTEE: the shadow is best-effort observation and must NEVER
+  // delay the live lane. A SINGLE wall-clock budget (`totalBudgetMs`) caps the
+  // TOTAL time the live loop will ever await blind work across the whole run — not
+  // per-page × pages. Each page is awaited for at most min(perPageTimeoutMs,
+  // budget-remaining), the lane races it against that deadline and ABORTS on
+  // timeout (so a hung provider cannot stall live), and once the budget is spent
+  // no further page is shadowed (capped). A timeout is counted as such — never as
+  // a silent 0-candidate success.
   const shadow = (blindShadow && typeof blindShadow.extractPage === 'function')
     ? {
         extractPage: blindShadow.extractPage,
         maxPages: Number.isFinite(blindShadow.maxPages) && blindShadow.maxPages > 0 ? Math.floor(blindShadow.maxPages) : 8,
-        pagesRun: 0, pages_shadowed: 0, errors: 0, capped: false,
+        totalBudgetMs: Number.isFinite(blindShadow.totalBudgetMs) && blindShadow.totalBudgetMs > 0 ? Math.floor(blindShadow.totalBudgetMs) : 6000,
+        perPageTimeoutMs: Number.isFinite(blindShadow.perPageTimeoutMs) && blindShadow.perPageTimeoutMs > 0 ? Math.floor(blindShadow.perPageTimeoutMs) : 4000,
+        pagesRun: 0, pages_shadowed: 0, errors: 0, timeouts: 0, capped: false, elapsedMs: 0,
         current_candidates: 0, blind_candidates: 0, blind_evidenced: 0,
       }
     : null;
+  // The smallest slice worth attempting: below this the LLM cannot plausibly
+  // answer, so we stop rather than spend the tail of the budget on sure timeouts.
+  const SHADOW_MIN_SLICE_MS = 250;
   const thesis = opts.thesis ?? {};
   const matchProfiles = (opts.matchProfiles && opts.matchProfiles.length) ? opts.matchProfiles : [thesis];
   const runId = opts.runId ?? null;
@@ -231,14 +250,14 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     catch { extracted = []; }
 
     // Count the current (profile-conditioned) path's candidates for THIS page so
-    // the blind shadow can report a per-page delta. Live-path only; the shadow
-    // reads it and never influences it.
+    // the blind shadow can report a per-page delta. Shadow-only bookkeeping: it is
+    // touched ONLY when the shadow is active, so a flag-off run does no extra work.
     let pageCurrentCandidates = 0;
     for (const ex of Array.isArray(extracted) ? extracted : []) {
       const cand = toCandidate(ex, evidence, thesis, page);
       if (!cand) continue;
       result.extracted += 1;
-      pageCurrentCandidates += 1;
+      if (shadow) pageCurrentCandidates += 1;
 
       const verdict = enforceReality(cand, { thesis, source: WEB_SOURCE, evidence });
       if (!verdict.ok) {
@@ -283,15 +302,33 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     // Read-only observation on the SAME already-fetched page bytes (`resp.body`,
     // no extra network fetch). It re-extracts through the profile-blind path and
     // records a delta counter ONLY — it never writes to `store`, never touches
-    // `result.recommendations`/`stored`/matches, and any error/timeout is caught
-    // so the live lane is unaffected. Bounded by `shadow.maxPages` per run.
+    // `result.recommendations`/`stored`/matches. Bounded by `shadow.maxPages` AND
+    // a single wall-clock `totalBudgetMs`: each page is awaited for at most
+    // min(perPageTimeoutMs, budget remaining), the await is RACED against that
+    // deadline (and the extractPage AbortSignal fired) so a hung provider can
+    // never stall the live lane, and once the budget is spent the shadow stops.
     if (shadow) {
-      if (shadow.pagesRun >= shadow.maxPages) {
+      const remainingBudget = shadow.totalBudgetMs - shadow.elapsedMs;
+      if (shadow.pagesRun >= shadow.maxPages || remainingBudget < SHADOW_MIN_SLICE_MS) {
         shadow.capped = true;
       } else {
         shadow.pagesRun += 1;
+        const sliceMs = Math.min(shadow.perPageTimeoutMs, remainingBudget);
+        const controller = new AbortController();
+        const startedAt = Date.now();
+        let timer;
+        let timedOut = false;
         try {
-          const blind = await shadow.extractPage({ pageUrl: evidence.url, html: resp.body });
+          const deadline = new Promise((_, reject) => {
+            timer = setTimeout(() => { timedOut = true; controller.abort(); reject(new Error('shadow_timeout')); }, sliceMs);
+          });
+          // Thread the deadline (timeoutMs) + AbortSignal into extractPage so the
+          // blind extractor self-bounds AND the provider call can be cancelled;
+          // the lane's own race is the authoritative live-latency bound.
+          const work = Promise.resolve(
+            shadow.extractPage({ pageUrl: evidence.url, html: resp.body, timeoutMs: sliceMs, signal: controller.signal }),
+          );
+          const blind = await Promise.race([work, deadline]);
           const list = Array.isArray(blind) ? blind : [];
           shadow.pages_shadowed += 1;
           shadow.current_candidates += pageCurrentCandidates;
@@ -300,8 +337,13 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
             (c) => c && c.field_provenance && typeof c.field_provenance === 'object' && Object.keys(c.field_provenance).length > 0,
           ).length;
         } catch {
-          // Best-effort isolation: a blind failure/timeout never affects the live lane.
-          shadow.errors += 1;
+          // Best-effort isolation: a blind failure/timeout never affects the live
+          // lane. A timeout is counted as itself, never as a silent 0-cand success.
+          if (timedOut) shadow.timeouts += 1;
+          else shadow.errors += 1;
+        } finally {
+          clearTimeout(timer);
+          shadow.elapsedMs += Date.now() - startedAt;
         }
       }
     }
@@ -318,7 +360,9 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       ran: true,
       pages_shadowed: shadow.pages_shadowed,
       errors: shadow.errors,
+      timeouts: shadow.timeouts,
       capped: shadow.capped,
+      elapsed_ms: shadow.elapsedMs,
       current_candidates: shadow.current_candidates,
       blind_candidates: shadow.blind_candidates,
       blind_evidenced: shadow.blind_evidenced,

@@ -221,12 +221,30 @@ export function isWebLaneProfileBlindEnabled() {
   return /^(1|true|yes|on)$/i.test(String(process.env.WEB_LANE_PROFILE_BLIND ?? '').trim());
 }
 
+// A blind shadow page's raw HTML is truncated to this many chars BEFORE any DOM
+// parse (htmlToText + buildLinkInventory both `cheerio.load`, which is unbounded
+// on input and would block the event loop synchronously on a multi-MB body). The
+// extractor already caps its OUTPUT; this caps the INPUT work. A funding page's
+// meaningful copy is far under this; the tail is nav/scripts/comments.
+export const MAX_SHADOW_HTML_CHARS = 500_000;
+
+/** Truncate raw page HTML to a bounded size before any (synchronous) DOM parse. */
+export function capShadowHtml(html) {
+  return typeof html === 'string' && html.length > MAX_SHADOW_HTML_CHARS
+    ? html.slice(0, MAX_SHADOW_HTML_CHARS)
+    : html;
+}
+
 /**
  * makeBlindShadow — build the injectable profile-BLIND shadow for the web lane
  * from the Phase-1a modules + a REAL Claude/OpenAI adapter (the same providers
  * `webGrantExtractor` uses). Returns null (shadow OFF) when the flag is off or any
  * dependency fails to load — the lane then runs exactly as before. Best-effort by
- * construction: the extractor never throws and enforces its own timeout.
+ * construction: the extractor never throws and enforces its own timeout, and the
+ * caller (webLane) additionally races each call against a wall-clock budget.
+ *
+ * Callers should only invoke this when the flag is ON (the caller guards the
+ * await), so a flag-off run never crosses this async boundary.
  */
 export async function makeBlindShadow() {
   if (!isWebLaneProfileBlindEnabled()) return null;
@@ -242,9 +260,13 @@ export async function makeBlindShadow() {
     const openai = aiProviders.getOpenAIOptional();
     // Injected LLM adapter: async ({system,prompt,signal}) => object. Reuses the
     // repo's OpenAI→Anthropic JSON fallback; the extractor's coerceLlmJson reads
-    // the returned { json } shape. The extractor wraps this in its own timeout.
-    const blindLlm = async ({ system, prompt }) =>
-      aiProviders.invokeJsonWithFallback({
+    // the returned { json } shape. `invokeJsonWithFallback` has no AbortSignal
+    // parameter (its HTTP call cannot be truly cancelled), so on abort we STOP
+    // AWAITING it — the underlying call resolves on its own internal LLM deadline
+    // and is GC'd; what matters is that neither this adapter nor the live lane
+    // keeps awaiting past the timeout.
+    const blindLlm = async ({ system, prompt, signal }) => {
+      const call = aiProviders.invokeJsonWithFallback({
         openai,
         system,
         prompt,
@@ -253,16 +275,29 @@ export async function makeBlindShadow() {
         anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
         openaiModel: process.env.WEB_DISCOVERY_MODEL_OPENAI || 'gpt-4o-mini',
       });
-    const timeoutMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TIMEOUT_MS) || undefined;
+      if (!signal) return call;
+      if (signal.aborted) return null;
+      return Promise.race([
+        call,
+        new Promise((resolve) => { signal.addEventListener('abort', () => resolve(null), { once: true }); }),
+      ]);
+    };
     const maxPages = Number(process.env.WEB_LANE_PROFILE_BLIND_MAX_PAGES) || 8;
+    const totalBudgetMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TOTAL_BUDGET_MS) || 6000;
+    const perPageTimeoutMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TIMEOUT_MS) || 4000;
     return {
       maxPages,
-      extractPage: async ({ pageUrl, html }) => {
-        const pageText = htmlToText(html, 12000);
-        const linkInventory = buildLinkInventory(html, { baseUrl: pageUrl });
+      totalBudgetMs,
+      perPageTimeoutMs,
+      // webLane passes the per-call slice (timeoutMs) + AbortSignal; forward both.
+      extractPage: async ({ pageUrl, html, timeoutMs, signal }) => {
+        // Cap the raw HTML BEFORE parsing so DOM work is bounded regardless of body size.
+        const cappedHtml = capShadowHtml(html);
+        const pageText = htmlToText(cappedHtml, 12000);
+        const linkInventory = buildLinkInventory(cappedHtml, { baseUrl: pageUrl });
         const facts = await extractPageFactsBlind(
           { pageUrl, pageText, linkInventory },
-          { llm: blindLlm, timeoutMs },
+          { llm: blindLlm, timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : perPageTimeoutMs, signal },
         );
         return (Array.isArray(facts) ? facts : []).map(mapBlindFactsToCandidate).filter(Boolean);
       },
@@ -347,7 +382,9 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       // ALSO runs the profile-blind extractor on each already-fetched page and
       // emits a read-only `web_lane_blind_shadow` delta. null (flag off / load
       // failure) => the lane runs exactly as before. Never changes live results.
-      const blindShadow = await makeBlindShadow();
+      // Flag-OFF short-circuits BEFORE the await, so an off run never crosses the
+      // shadow-builder's async boundary — no extra work, no behavior change.
+      const blindShadow = isWebLaneProfileBlindEnabled() ? await makeBlindShadow() : null;
 
       const web = await runWebDiscoveryLane(
         { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage, blindShadow },

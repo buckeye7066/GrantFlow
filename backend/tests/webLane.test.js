@@ -12,6 +12,7 @@ import { buildLinkInventory } from '../crawler-os/blindLinkInventory.js'
 import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js'
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js'
 import { htmlToText } from '../services/webGrantExtractor.js'
+import { capShadowHtml, MAX_SHADOW_HTML_CHARS } from '../services/crawlerOsService.js'
 
 const thesis = {
   profile_id: 'p1',
@@ -293,16 +294,20 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
 
     // Shadow ran on both fetched pages; blind produced 1 evidenced candidate.
     expect(extractPage).toHaveBeenCalledTimes(2)
-    expect(onRes.web_lane_blind_shadow).toEqual({
+    const { elapsed_ms, ...counter } = onRes.web_lane_blind_shadow
+    expect(counter).toEqual({
       ran: true,
       pages_shadowed: 2,
       errors: 0,
+      timeouts: 0,
       capped: false,
       current_candidates: 1, // only nyf.org yields a current-path candidate
       blind_candidates: 1,
       blind_evidenced: 1,
       delta: 0, // 1 blind − 1 current
     })
+    expect(typeof elapsed_ms).toBe('number')
+    expect(elapsed_ms).toBeGreaterThanOrEqual(0)
 
     // Live outputs are byte-identical to the flag-off baseline: nothing leaked.
     expect(liveSnapshot(onStore, onRes)).toEqual(baseline)
@@ -338,6 +343,38 @@ describe('runWebDiscoveryLane — profile-BLIND shadow (WEB_LANE_PROFILE_BLIND, 
     expect(extractPage).toHaveBeenCalledTimes(1)
     expect(res.web_lane_blind_shadow.pages_shadowed).toBe(1)
     expect(res.web_lane_blind_shadow.capped).toBe(true)
+  })
+
+  it('flag ON with the blind path hanging on EVERY page: live returns within the single wall-clock budget; timeouts counted (not silent success)', async () => {
+    const extractPage = vi.fn(() => new Promise(() => {})) // never resolves — simulates a hung provider
+    const store = createMemoryStore()
+    const t0 = Date.now()
+    const res = await runWebDiscoveryLane(
+      { store, fetcher: fakeFetcher(bodyByUrl), searchWeb: makeSearch(), extractOpportunities: makeExtract(), blindShadow: { extractPage, totalBudgetMs: 600, perPageTimeoutMs: 150 } },
+      { thesis, runId: 'to1' },
+    )
+    const dt = Date.now() - t0
+    // Live path unaffected and returned normally.
+    expect(res.ok).toBe(true)
+    expect(res.stored).toBe(1)
+    expect(storage.listCatalog(store).length).toBe(1)
+    // A hung page is counted as a TIMEOUT, never as a 0-candidate success.
+    expect(res.web_lane_blind_shadow.timeouts).toBeGreaterThanOrEqual(1)
+    expect(res.web_lane_blind_shadow.pages_shadowed).toBe(0)
+    expect(res.web_lane_blind_shadow.blind_candidates).toBe(0)
+    // TOTAL shadow time is bounded by the SINGLE budget (not per-page × pages)...
+    expect(res.web_lane_blind_shadow.elapsed_ms).toBeLessThanOrEqual(600)
+    // ...so the whole live run never waited anywhere near per-page(150) × pages,
+    // let alone the ~160s the un-bounded default (8×20s) would have added.
+    expect(dt).toBeLessThan(1500)
+  })
+
+  it('caps oversized page HTML before any DOM parse (bounded synchronous work)', () => {
+    const huge = 'a'.repeat(MAX_SHADOW_HTML_CHARS * 4)
+    expect(huge.length).toBeGreaterThan(MAX_SHADOW_HTML_CHARS)
+    expect(capShadowHtml(huge).length).toBe(MAX_SHADOW_HTML_CHARS) // truncated BEFORE cheerio.load
+    const small = '<html><body>hi</body></html>'
+    expect(capShadowHtml(small)).toBe(small) // a normal body is untouched
   })
 
   it('flag ON with the REAL Phase-1a blind pipeline (mock LLM): extracts an evidenced candidate from the fetched page', async () => {

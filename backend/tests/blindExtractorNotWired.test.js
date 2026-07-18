@@ -39,11 +39,15 @@ const BLIND_MODULES = [
   'blindEvidenceValidator',
 ]
 
-// Files ALLOWED to reference a blind module: the blind modules themselves, their
-// tests, and the ONE Phase-1b shadow-wiring seam (crawlerOsService.makeBlindShadow).
-const ALLOWED_BASENAMES = new Set([
-  ...BLIND_MODULES.map((m) => `${m}.js`),
-  'crawlerOsService.js', // the sanctioned shadow seam (builds + injects blindShadow)
+// Files ALLOWED to reference a blind module: the blind modules themselves and
+// their tests (matched by basename — a blind module may import a sibling anywhere).
+const ALLOWED_BASENAMES = new Set(BLIND_MODULES.map((m) => `${m}.js`))
+
+// The ONE Phase-1b shadow-wiring seam, allowlisted by EXACT repo-relative path
+// (not basename) so only THIS crawlerOsService — not a stray copy elsewhere — may
+// import the blind modules to build + inject the blindShadow.
+const ALLOWED_RELPATHS = new Set([
+  'backend/services/crawlerOsService.js',
 ])
 
 // Named "live" sources that must STAY blind-free — the profile-conditioned
@@ -100,6 +104,7 @@ describe('blind extraction modules are wired only at the sanctioned shadow seam'
         const rel = path.relative(REPO_ROOT, file).split(path.sep).join('/')
         const base = path.basename(file)
         if (ALLOWED_BASENAMES.has(base)) continue // a blind module (may import a sibling)
+        if (ALLOWED_RELPATHS.has(rel)) continue // the exact sanctioned shadow seam
         if (isTestFile(rel)) continue // tests may import the modules under test
         const text = fs.readFileSync(file, 'utf8')
         // Whole-file scan (not line-by-line) so multiline imports are covered.
