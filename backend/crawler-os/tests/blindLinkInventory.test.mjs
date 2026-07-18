@@ -29,17 +29,43 @@ test('extracts absolute links from anchors and resolves relative hrefs against b
   assert.equal(inv.length, 2);
 });
 
-test('strips tracking params but KEEPS identity-bearing params', () => {
+test('strips KNOWN tracking params but PRESERVES identity params (incl. ref/campaign_id)', () => {
   const html = `
     <a href="https://f.org/grant?id=987&utm_source=news&utm_medium=email&fbclid=XYZ&gclid=abc">Grant 987</a>
-    <a href="https://f.org/x?award=A1&ref=twitter&mc_cid=9">Award A1</a>`;
+    <a href="https://f.org/x?award=A1&ref=partner-42&campaign_id=spring&mc_cid=9">Award A1</a>`;
   const inv = buildLinkInventory(html, { baseUrl: BASE });
   const g = inv.find((l) => l.url.includes('/grant'));
   assert.ok(g.url.includes('id=987'), 'identity param id kept');
   assert.ok(!/utm_|fbclid|gclid/.test(g.url), 'tracking params stripped');
   const a = inv.find((l) => l.url.includes('/x'));
   assert.ok(a.url.includes('award=A1'), 'identity param award kept');
-  assert.ok(!/ref=|mc_cid/.test(a.url), 'ref/mc_cid stripped');
+  assert.ok(a.url.includes('ref=partner-42'), 'ref is identity-bearing and PRESERVED');
+  assert.ok(a.url.includes('campaign_id=spring'), 'campaign_id is PRESERVED (may distinguish links)');
+  assert.ok(!/mc_cid/.test(a.url), 'known tracking param mc_cid stripped');
+});
+
+test('two links that differ ONLY by ?ref stay DISTINCT (no smuggling a non-inventory URL)', () => {
+  const html = `
+    <a href="https://f.org/apply?ref=grant-A">Apply A</a>
+    <a href="https://f.org/apply?ref=grant-B">Apply B</a>`;
+  const inv = buildLinkInventory(html, { baseUrl: BASE });
+  assert.equal(inv.length, 2, 'ref distinguishes the two real links — not collapsed');
+  // Only grant-A is in the inventory; a model returning grant-B is REJECTED, and
+  // there is no bare https://f.org/apply third-URL to fall back onto.
+  const invA = [inv[0]];
+  assert.equal(resolveInventoryLink(invA, 'https://f.org/apply?ref=grant-B'), null);
+  assert.equal(resolveInventoryLink(invA, 'https://f.org/apply'), null, 'no stripped third-URL match');
+  assert.equal(resolveInventoryLink(invA, 'https://f.org/apply?ref=grant-A').url, 'https://f.org/apply?ref=grant-A');
+});
+
+test('SPA fragments app#/grant-A vs app#/grant-B stay DISTINCT (fragment preserved)', () => {
+  const html = `
+    <a href="https://f.org/app#/grant-A">A</a>
+    <a href="https://f.org/app#/grant-B">B</a>`;
+  const inv = buildLinkInventory(html, { baseUrl: BASE });
+  assert.equal(inv.length, 2, 'hash route identity preserved — not collapsed to /app');
+  assert.equal(resolveInventoryLink([inv[0]], 'https://f.org/app#/grant-B'), null);
+  assert.equal(resolveInventoryLink([inv[0]], 'https://f.org/app'), null);
 });
 
 test('captures an inline FORM action and its submit label', () => {

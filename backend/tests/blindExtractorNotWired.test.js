@@ -49,8 +49,17 @@ const NAMED_LIVE_SOURCES = [
   'backend/crawler-os/pipeline.js',
 ]
 
-const IMPORT_RE = new RegExp(
-  `(?:import|require)\\s*(?:[^'"\`]*from\\s*)?['"\`][^'"\`]*\\b(${BLIND_MODULES.join('|')})\\b`,
+// A module SPECIFIER (the quoted path in any import/require/export ... from /
+// dynamic import()) that names a blind module. Because every one of those forms
+// — static `import ... from`, `import(...)`, `require(...)`, `export ... from`,
+// even multiline imports — routes through a QUOTED specifier string, matching the
+// basename inside ANY quoted string is a robust superset that a line-oriented
+// `import`-prefixed regex would miss (multiline / dynamic / re-export). The
+// specifier is single-line even when the import statement spans lines, so a
+// whole-file scan with this catches them all.
+const SPECIFIER_RE = new RegExp(
+  `['"\`][^'"\`\\n]*(?:${BLIND_MODULES.join('|')})[^'"\`\\n]*['"\`]`,
+  'g',
 )
 
 function listSourceFiles(root) {
@@ -85,8 +94,10 @@ describe('Phase 1a blind extraction modules are not wired into the live path', (
         if (ALLOWED_BASENAMES.has(base)) continue // a blind module (may import a sibling)
         if (isTestFile(rel)) continue // tests may import the modules under test
         const text = fs.readFileSync(file, 'utf8')
-        for (const line of text.split('\n')) {
-          if (IMPORT_RE.test(line)) violations.push(`${rel}  ${line.trim().slice(0, 160)}`)
+        // Whole-file scan (not line-by-line) so multiline imports are covered.
+        const matches = text.match(SPECIFIER_RE)
+        if (matches) {
+          for (const m of matches) violations.push(`${rel}  ${m.slice(0, 160)}`)
         }
       }
     }
