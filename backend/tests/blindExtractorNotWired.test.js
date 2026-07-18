@@ -1,17 +1,21 @@
 /**
- * STATIC TRIPWIRE — the Phase 1a profile-blind extraction modules are ADDITIVE
- * and NOT wired into the live web lane yet.
+ * STATIC TRIPWIRE — the profile-blind extraction modules are wired ONLY at the
+ * sanctioned Phase-1b SHADOW seam, and nowhere near the live scoring path.
  *
- * Phase 1a ships pure/injectable extraction MODULES only (buildLinkInventory,
- * extractPageFactsBlind, mapBlindFactsToCandidate, validateEvidenceSpans). A
- * LATER sub-PR wires them behind the WEB_LANE_PROFILE_BLIND flag in shadow /
- * dry-run. Until then NOTHING in the live path may import them — importing one
- * would silently change discovery behavior, defeating "zero behavior change".
+ * Phase 1a shipped pure/injectable extraction MODULES (buildLinkInventory,
+ * extractPageFactsBlind, mapBlindFactsToCandidate, validateEvidenceSpans).
+ * Phase 1b wires them in SHADOW behind WEB_LANE_PROFILE_BLIND (default OFF):
+ * `crawlerOsService.makeBlindShadow()` is the ONE seam that imports them, builds a
+ * `blindShadow` dep, and injects it into `runWebDiscoveryLane` — which reads it
+ * for a read-only delta counter and NEVER lets a blind candidate be scored or
+ * persisted. The live extraction/mapping/scoring files must still NOT import a
+ * blind module: `webLane.js` receives the shadow by INJECTION (not import), and
+ * `webGrantExtractor.js` / `matchEngine.js` / `pipeline.js` stay blind-free so the
+ * profile-conditioned live path is untouched.
  *
- * This guard fails if any non-test source file OUTSIDE the blind module set
- * imports a blind module. The blind modules importing EACH OTHER is expected and
- * excluded. When the wiring PR lands, it updates this test (adds the wiring file
- * to ALLOWED) in the same change that makes the import real.
+ * This guard fails if any non-test source file OUTSIDE the allowlist imports a
+ * blind module. When a later phase promotes the blind path (e.g. the WRITES flag),
+ * it updates this test in the same change that makes the new import real.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -35,16 +39,20 @@ const BLIND_MODULES = [
   'blindEvidenceValidator',
 ]
 
-// Files ALLOWED to reference a blind module: the blind modules themselves and
-// their tests. (A future wiring PR adds its file here.)
-const ALLOWED_BASENAMES = new Set(BLIND_MODULES.map((m) => `${m}.js`))
+// Files ALLOWED to reference a blind module: the blind modules themselves, their
+// tests, and the ONE Phase-1b shadow-wiring seam (crawlerOsService.makeBlindShadow).
+const ALLOWED_BASENAMES = new Set([
+  ...BLIND_MODULES.map((m) => `${m}.js`),
+  'crawlerOsService.js', // the sanctioned shadow seam (builds + injects blindShadow)
+])
 
-// Named "live" sources the task calls out explicitly — asserted directly so a
+// Named "live" sources that must STAY blind-free — the profile-conditioned
+// extraction/mapping/scoring path. webLane receives the shadow by INJECTION, so
+// it too must not statically import a blind module. Asserted directly so a
 // regression is unmistakable even if the general scan is ever weakened.
 const NAMED_LIVE_SOURCES = [
   'backend/crawler-os/webLane.js',
   'backend/services/webGrantExtractor.js',
-  'backend/services/crawlerOsService.js',
   'backend/crawler-os/matchEngine.js',
   'backend/crawler-os/pipeline.js',
 ]
@@ -84,8 +92,8 @@ function isTestFile(rel) {
   return /\.(test|spec)\./.test(rel) || /[\\/](tests|__tests__|test)[\\/]/.test(rel)
 }
 
-describe('Phase 1a blind extraction modules are not wired into the live path', () => {
-  it('no live (non-test, non-blind) source imports a blind module', () => {
+describe('blind extraction modules are wired only at the sanctioned shadow seam', () => {
+  it('no live source outside the allowlist imports a blind module', () => {
     const violations = []
     for (const root of SCAN_ROOTS) {
       for (const file of listSourceFiles(root)) {
@@ -103,8 +111,10 @@ describe('Phase 1a blind extraction modules are not wired into the live path', (
     }
     expect(
       violations,
-      'Phase 1a modules must stay UNUSED by the live lane (additive, zero behavior change). ' +
-        'A later PR wires them behind WEB_LANE_PROFILE_BLIND and updates this guard:\n' +
+      'Blind modules may be imported ONLY by the blind modules themselves and the ' +
+        'sanctioned shadow seam (crawlerOsService.makeBlindShadow). A new importer ' +
+        'either belongs on the allowlist (with a phase note) or is leaking the blind ' +
+        'path into live code:\n' +
         violations.join('\n'),
     ).toEqual([])
   })

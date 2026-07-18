@@ -112,19 +112,39 @@ function toCandidate(ex, evidence, thesis, page) {
  * runWebDiscoveryLane — execute the open-web lane for one thesis, writing finds
  * into `store` (so the caller's persistRun flushes them).
  *
- * @param {{ store, fetcher:{fetch:Function}, searchWeb:Function, extractOpportunities:Function }} deps
+ * @param {{ store, fetcher:{fetch:Function}, searchWeb:Function, extractOpportunities:Function, blindShadow? }} deps
+ * @param {{ extractPage:Function, maxPages?:number }} [deps.blindShadow] Phase-1b
+ *   profile-BLIND shadow observer (WEB_LANE_PROFILE_BLIND). When the caller injects
+ *   it (flag ON), the lane ALSO re-extracts each already-fetched page through the
+ *   profile-blind path via `extractPage({pageUrl,html}) => Promise<Array<candidate>>`
+ *   and records a read-only `web_lane_blind_shadow` delta counter. It NEVER writes
+ *   to `store`, never touches what the live lane returns/persists, and any
+ *   error/timeout is caught. Absent (flag OFF) => this path never runs and the
+ *   counter never exists (byte-identical control flow, return, and writes).
  * @param {{ thesis, matchProfiles?, floor?, runId?, maxQueries?, resultsPerQuery?, maxPages?, seedPages? }} opts
  * @param {Array<{url,title?,snippet?}>} [opts.seedPages] Known funding pages to
  *   fetch IN ADDITION to this run's search hits — see SEED PAGES below.
  * @returns {Promise<object>} lane telemetry
  */
 export async function runWebDiscoveryLane(deps, opts = {}) {
-  const { store, fetcher, searchWeb, extractOpportunities } = deps;
+  const { store, fetcher, searchWeb, extractOpportunities, blindShadow } = deps;
   const result = { ok: false, queries: [], pages: 0, seeded: 0, fetched: 0, extracted: 0, stored: 0, deduped: 0, rejected: 0, recommendations: [] };
   if (!store || !fetcher?.fetch || typeof searchWeb !== 'function' || typeof extractOpportunities !== 'function') {
     result.reason = 'web_lane_deps_missing';
     return result;
   }
+  // Profile-BLIND shadow accumulator (Phase 1b). Non-null ONLY when the caller
+  // injected a valid blind shadow (WEB_LANE_PROFILE_BLIND ON). While null, NOTHING
+  // below reads it — no blind extraction runs and `web_lane_blind_shadow` is never
+  // attached, so a flag-off run is byte-identical to the pre-1b baseline.
+  const shadow = (blindShadow && typeof blindShadow.extractPage === 'function')
+    ? {
+        extractPage: blindShadow.extractPage,
+        maxPages: Number.isFinite(blindShadow.maxPages) && blindShadow.maxPages > 0 ? Math.floor(blindShadow.maxPages) : 8,
+        pagesRun: 0, pages_shadowed: 0, errors: 0, capped: false,
+        current_candidates: 0, blind_candidates: 0, blind_evidenced: 0,
+      }
+    : null;
   const thesis = opts.thesis ?? {};
   const matchProfiles = (opts.matchProfiles && opts.matchProfiles.length) ? opts.matchProfiles : [thesis];
   const runId = opts.runId ?? null;
@@ -210,10 +230,15 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     try { extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body, thesis, query: page.query }); }
     catch { extracted = []; }
 
+    // Count the current (profile-conditioned) path's candidates for THIS page so
+    // the blind shadow can report a per-page delta. Live-path only; the shadow
+    // reads it and never influences it.
+    let pageCurrentCandidates = 0;
     for (const ex of Array.isArray(extracted) ? extracted : []) {
       const cand = toCandidate(ex, evidence, thesis, page);
       if (!cand) continue;
       result.extracted += 1;
+      pageCurrentCandidates += 1;
 
       const verdict = enforceReality(cand, { thesis, source: WEB_SOURCE, evidence });
       if (!verdict.ok) {
@@ -253,9 +278,53 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         }
       }
     }
+
+    // ── Profile-BLIND shadow (Phase 1b, WEB_LANE_PROFILE_BLIND) ──────────────
+    // Read-only observation on the SAME already-fetched page bytes (`resp.body`,
+    // no extra network fetch). It re-extracts through the profile-blind path and
+    // records a delta counter ONLY — it never writes to `store`, never touches
+    // `result.recommendations`/`stored`/matches, and any error/timeout is caught
+    // so the live lane is unaffected. Bounded by `shadow.maxPages` per run.
+    if (shadow) {
+      if (shadow.pagesRun >= shadow.maxPages) {
+        shadow.capped = true;
+      } else {
+        shadow.pagesRun += 1;
+        try {
+          const blind = await shadow.extractPage({ pageUrl: evidence.url, html: resp.body });
+          const list = Array.isArray(blind) ? blind : [];
+          shadow.pages_shadowed += 1;
+          shadow.current_candidates += pageCurrentCandidates;
+          shadow.blind_candidates += list.length;
+          shadow.blind_evidenced += list.filter(
+            (c) => c && c.field_provenance && typeof c.field_provenance === 'object' && Object.keys(c.field_provenance).length > 0,
+          ).length;
+        } catch {
+          // Best-effort isolation: a blind failure/timeout never affects the live lane.
+          shadow.errors += 1;
+        }
+      }
+    }
   }
 
   result.ok = true;
+  // Additive shadow delta (mirrors the SEMANTIC_RECALL additive-counter
+  // precedent). Present ONLY when the flag is ON; absent otherwise so a flag-off
+  // run is byte-identical. Blind candidates are NEVER persisted — this is pure
+  // observation (current-path vs blind-path counts, and how many blind candidates
+  // carried page-supported evidence).
+  if (shadow) {
+    result.web_lane_blind_shadow = {
+      ran: true,
+      pages_shadowed: shadow.pages_shadowed,
+      errors: shadow.errors,
+      capped: shadow.capped,
+      current_candidates: shadow.current_candidates,
+      blind_candidates: shadow.blind_candidates,
+      blind_evidenced: shadow.blind_evidenced,
+      delta: shadow.blind_candidates - shadow.current_candidates,
+    };
+  }
   result.seeded_adopted_urls = [...seededAdopted];
   result.seeded_adopted = seededAdopted.size;
   result.recommendations.sort((a, b) => b.match_score - a.match_score);

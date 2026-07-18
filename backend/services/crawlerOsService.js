@@ -208,6 +208,70 @@ export function isWebDiscoveryEnabled() {
   return String(process.env.WEB_DISCOVERY_ENABLED ?? 'true').toLowerCase() !== 'false';
 }
 
+/**
+ * isWebLaneProfileBlindEnabled — Phase 1b SHADOW gate for the profile-BLIND
+ * extractor. Default OFF: the blind path is pure observation and must not run in
+ * prod until proven. When ON (`WEB_LANE_PROFILE_BLIND=1`/true), the web lane ALSO
+ * re-extracts each already-fetched page through the profile-blind path and emits
+ * a read-only `web_lane_blind_shadow` delta counter — it changes NOTHING the live
+ * lane returns or persists (no shadow candidate is scored or written). The writes
+ * flag (WEB_LANE_PROFILE_BLIND_WRITES) is a LATER phase and is not read here.
+ */
+export function isWebLaneProfileBlindEnabled() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.WEB_LANE_PROFILE_BLIND ?? '').trim());
+}
+
+/**
+ * makeBlindShadow — build the injectable profile-BLIND shadow for the web lane
+ * from the Phase-1a modules + a REAL Claude/OpenAI adapter (the same providers
+ * `webGrantExtractor` uses). Returns null (shadow OFF) when the flag is off or any
+ * dependency fails to load — the lane then runs exactly as before. Best-effort by
+ * construction: the extractor never throws and enforces its own timeout.
+ */
+export async function makeBlindShadow() {
+  if (!isWebLaneProfileBlindEnabled()) return null;
+  try {
+    const [{ buildLinkInventory }, { extractPageFactsBlind }, { mapBlindFactsToCandidate }, { htmlToText }, aiProviders] =
+      await Promise.all([
+        import('../crawler-os/blindLinkInventory.js'),
+        import('../crawler-os/blindPageFactExtractor.js'),
+        import('../crawler-os/blindFactsMapper.js'),
+        import('./webGrantExtractor.js'),
+        import('../utils/aiProviders.js'),
+      ]);
+    const openai = aiProviders.getOpenAIOptional();
+    // Injected LLM adapter: async ({system,prompt,signal}) => object. Reuses the
+    // repo's OpenAI→Anthropic JSON fallback; the extractor's coerceLlmJson reads
+    // the returned { json } shape. The extractor wraps this in its own timeout.
+    const blindLlm = async ({ system, prompt }) =>
+      aiProviders.invokeJsonWithFallback({
+        openai,
+        system,
+        prompt,
+        temperature: 0.1,
+        maxTokens: 1600,
+        anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
+        openaiModel: process.env.WEB_DISCOVERY_MODEL_OPENAI || 'gpt-4o-mini',
+      });
+    const timeoutMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TIMEOUT_MS) || undefined;
+    const maxPages = Number(process.env.WEB_LANE_PROFILE_BLIND_MAX_PAGES) || 8;
+    return {
+      maxPages,
+      extractPage: async ({ pageUrl, html }) => {
+        const pageText = htmlToText(html, 12000);
+        const linkInventory = buildLinkInventory(html, { baseUrl: pageUrl });
+        const facts = await extractPageFactsBlind(
+          { pageUrl, pageText, linkInventory },
+          { llm: blindLlm, timeoutMs },
+        );
+        return (Array.isArray(facts) ? facts : []).map(mapBlindFactsToCandidate).filter(Boolean);
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 function skippedDiscoveryResult(profileId, reason) {
   return {
     run: { skipped: true, reason, profile_id: profileId, planned: 0, stored: 0, rejected: 0, sources: [], zero_result: null },
@@ -279,8 +343,14 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
         seedPages = await parity.loadGapSeedPagesForProfile(db, profileId);
       } catch { seedPages = []; }
 
+      // Phase 1b SHADOW (WEB_LANE_PROFILE_BLIND, default OFF): when ON, the lane
+      // ALSO runs the profile-blind extractor on each already-fetched page and
+      // emits a read-only `web_lane_blind_shadow` delta. null (flag off / load
+      // failure) => the lane runs exactly as before. Never changes live results.
+      const blindShadow = await makeBlindShadow();
+
       const web = await runWebDiscoveryLane(
-        { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage },
+        { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage, blindShadow },
         { thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages },
       );
       const { recommendations: webRecs, ...webTelemetry } = web;
