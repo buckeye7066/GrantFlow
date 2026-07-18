@@ -182,7 +182,7 @@ export async function runNightlyMaintenanceSweep(db, { force = false, now = new 
   }
 
   // Gap-email review drafts: when a profile is incomplete, draft a warm "a few
-  // quick questions" email (Ellie voice) into the owner's mailbox for review.
+  // quick questions" email (Annie voice) into the owner's mailbox for review.
   // DRAFT-ONLY, never sends. No-op unless GAP_EMAIL_DRAFTS_ENABLED=true, so this
   // is inert by default. Best-effort — never blocks the sweep.
   try {

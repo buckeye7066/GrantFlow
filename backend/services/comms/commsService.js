@@ -9,7 +9,7 @@
  *
  * Email goes out via Resend (backend/services/email.js); SMS via Twilio
  * (backend/services/sms.js). Owner-initiated email is sent FROM the configured
- * broadcast alias (default dr.johnwhite@axiombiolabs.org) so recipients see the
+ * broadcast alias (default Annie@axiombiolabs.org) so recipients see the
  * human alias rather than the transactional FROM_EMAIL.
  *
  * Contact model:
@@ -34,12 +34,15 @@ const log = createLogger('comms')
 
 /** The human alias owner-initiated email is sent from. */
 export function broadcastFromEmail() {
-  return (process.env.BROADCAST_FROM_EMAIL || 'dr.johnwhite@axiombiolabs.org').trim()
+  return (process.env.BROADCAST_FROM_EMAIL || 'Annie@axiombiolabs.org').trim()
 }
 
-/** The owner alias inbound "Email us" messages are delivered to. */
+/** The owner alias inbound "Email us" messages are delivered to. Independent
+ *  of broadcastFromEmail() — that alias is not a provisioned mailbox, so
+ *  inbound replies must keep landing at the real dr.johnwhite mailbox unless
+ *  explicitly overridden. */
 export function ownerAliasEmail() {
-  return (process.env.OWNER_ALIAS_EMAIL || process.env.BROADCAST_FROM_EMAIL || 'dr.johnwhite@axiombiolabs.org').trim()
+  return (process.env.OWNER_ALIAS_EMAIL || 'dr.johnwhite@axiombiolabs.org').trim()
 }
 
 let _ensured = false

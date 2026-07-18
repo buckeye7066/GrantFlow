@@ -18,7 +18,7 @@ describe('buildProfileGapPlan', () => {
     // A gap-explanation email is produced.
     expect(plan.email).toBeTruthy()
     expect(plan.email.subject).toMatch(/questions/i)
-    expect(plan.email.body).toMatch(/Ellie/)
+    expect(plan.email.body).toMatch(/Annie/)
     expect(plan.email.body).toMatch(/Hello Kathy,/)
   })
 

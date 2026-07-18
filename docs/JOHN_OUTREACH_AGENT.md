@@ -38,9 +38,9 @@ manually.
 | Variable | Default |
 | --- | --- |
 | `JOHN_PRIMARY_MAILBOX` | `dr.johnwhite@axiombiolabs.org` |
-| `JOHN_FROM_ALIAS` | `Ellie@axiombiolabs.org` |
-| `JOHN_REPLY_TO` | `Ellie@axiombiolabs.org` |
-| `JOHN_DISPLAY_NAME` | `Ellie | GrantFlow` |
+| `JOHN_FROM_ALIAS` | `Annie@axiombiolabs.org` |
+| `JOHN_REPLY_TO` | `Annie@axiombiolabs.org` |
+| `JOHN_DISPLAY_NAME` | `Annie | GrantFlow` |
 
 John talks to Microsoft Graph via app-only OAuth2 (`client_credentials`).
 Configure these:
@@ -64,14 +64,14 @@ Secrets are masked (`maskSecrets`) before any log line is written.
 
 ## Alias setup
 
-John tries to set `From: Ellie | GrantFlow <Ellie@axiombiolabs.org>`
+John tries to set `From: Annie | GrantFlow <Annie@axiombiolabs.org>`
 on every draft. If Microsoft Graph rejects that header (because the app
 lacks SendAs for the alias mailbox), John retries **without** the From
 header. The result is recorded on the draft:
 
 ```json
 {
-  "requested_from_alias": "Ellie@axiombiolabs.org",
+  "requested_from_alias": "Annie@axiombiolabs.org",
   "actual_from": "dr.johnwhite@axiombiolabs.org",
   "alias_verified": true,
   "alias_send_supported": false,
@@ -233,7 +233,7 @@ To start manually instead, leave the scheduler disabled and use the Admin
 - "Alias not verified": run `POST /api/john/verify-alias`. If the response
   is `provider_not_configured`, the MICROSOFT_* env is missing.
 - "Alias verified, send not supported": the Azure AD app does not have
-  SendAs / SendOnBehalfOf permission on `Ellie@axiombiolabs.org`.
+  SendAs / SendOnBehalfOf permission on `Annie@axiombiolabs.org`.
   Either grant that permission, or accept that drafts will be marked
   `needs_sender_alias_review` and Dr. White will fix the From line in
   Outlook before sending.
