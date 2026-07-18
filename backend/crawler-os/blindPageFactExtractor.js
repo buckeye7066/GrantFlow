@@ -344,11 +344,16 @@ export async function extractPageFactsBlind(input, deps) {
     const MAX_INVENTORY_ENTRIES = 200;
     const MAX_LINK_ID_CHARS = 40;
     const MAX_LINK_TEXT_CHARS = 200;
+    const MAX_LINK_URL_CHARS = 2048; // a real link url is never longer; longer => reject
     const inventory = (Array.isArray(linkInventory) ? linkInventory : [])
+      // Cap the RAW array FIRST so preprocessing (map/canonicalize) is bounded no
+      // matter how large a hostile caller array is.
+      .slice(0, MAX_INVENTORY_ENTRIES)
       .map((l) => {
         if (!l || typeof l !== 'object' || typeof l.id !== 'string' || typeof l.url !== 'string') return null;
+        if (l.url.length > MAX_LINK_URL_CHARS) return null; // over-long url rejected BEFORE canonicalize
         const url = canonicalizeUrl(l.url); // null for non-http(s) schemes
-        if (!url) return null;
+        if (!url || url.length > MAX_LINK_URL_CHARS) return null;
         return {
           id: l.id.slice(0, MAX_LINK_ID_CHARS),
           url,
@@ -356,8 +361,7 @@ export async function extractPageFactsBlind(input, deps) {
           apply_intent: l.apply_intent === true,
         };
       })
-      .filter(Boolean)
-      .slice(0, MAX_INVENTORY_ENTRIES);
+      .filter(Boolean);
 
     const timeoutMs = Number.isFinite(safeDeps.timeoutMs) && safeDeps.timeoutMs > 0
       ? safeDeps.timeoutMs : DEFAULT_LLM_TIMEOUT_MS;

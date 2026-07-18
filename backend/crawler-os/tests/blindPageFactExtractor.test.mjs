@@ -110,6 +110,20 @@ test('a hostile/oversized caller inventory is bounded and never throws', async (
   assert.ok(Array.isArray(facts), 'never throws on an oversized inventory');
 });
 
+test('an over-long inventory url is rejected and cannot reach apply_url or bloat the prompt', async () => {
+  const longUrl = 'https://foundation.example.org/apply?x=' + 'a'.repeat(250000);
+  const inv = [
+    { id: 'L1', url: longUrl, text: 'Apply', apply_intent: true },
+    { id: 'L2', url: 'https://foundation.example.org/faq', text: 'FAQ', apply_intent: false },
+  ];
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: inv },
+    { llm: mockLlm({ apply_link_id: 'L1', info_link_id: 'L2' }) },
+  ))[0];
+  assert.notEqual(f.apply_url, longUrl, 'an over-long url must not reach apply_url');
+  assert.equal(f.apply_url, null, 'the dropped over-long entry yields no apply_url');
+});
+
 test('page_url / info_url / apply_url are DISTINCT', async () => {
   const f = (await extractPageFactsBlind(
     { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
