@@ -214,6 +214,27 @@ export async function getTrustedUserEmails(db, user) {
 export async function getOwnedAndGrantedProfileIds(db, user) {
   const ids = new Set()
   const userId = getAuthUserId(user)
+
+  // FAIL CLOSED on a missing principal: a stale/forged JWT for a DELETED user
+  // (userId present but no users row) must gain NOTHING — even if a lingering
+  // profiles.user_id / created_by still references that id. Require a real users
+  // row for the resolved userId, OR a validated provenance token that legitimately
+  // has no users row (synthetic service token / DB-verified legacy profile token).
+  // Centralized here so EVERY caller — scope=mine, /api/auth/me, and
+  // ensureProfileAccess (via getAccessibleProfileIds) — inherits the guard rather
+  // than relying on ctx.accessibleProfileIds.
+  const hasProvenance = user?.serviceToken === true || user?.profileTokenAuth === true
+  if (!hasProvenance) {
+    if (!userId) return ids
+    let userRow = null
+    try {
+      userRow = await db.prepare('SELECT id FROM users WHERE id = ?').get(String(userId))
+    } catch {
+      return ids // DB error → fail closed
+    }
+    if (!userRow) return ids // deleted / nonexistent user → no profiles
+  }
+
   if (userId) {
     const rows = await db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(userId)
     rows.forEach((row) => {

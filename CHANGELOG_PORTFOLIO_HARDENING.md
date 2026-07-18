@@ -91,6 +91,13 @@ Compat: behavior-preserving for users whose DB `primary_email`/verified credenti
 
 Compat: attribution/`createdBy`/`actor` labels that read `ctx.email` now show the DB email (or fall back to `userId`) instead of a possibly-token email — a cosmetic change on already-gated paths. Access/ownership behavior is preserved for users whose DB email legitimately matches; only forged/stale token-email claims change (now grant nothing).
 
+## Round 11 — grant helper fails closed on missing user; share ≠ delete-owner (see PORTFOLIO_AUDIT.md §5k)
+
+- **`getOwnedAndGrantedProfileIds` now fails closed for a deleted/nonexistent user.** It requires a real `users` row for the resolved userId (or a validated synthetic-service / legacy-profile-token provenance) before applying any ownership/email/legacy grant — so a stale JWT for a deleted user gains no profiles even if `profiles.user_id` still references it. Centralized in the helper so every direct caller (`?scope=mine`, `/api/auth/me`, `ensureProfileAccess`) is covered.
+- **Legacy NULL-owner document delete no longer treats a shared `profile_emails` email as ownership.** Destructive ownership for a NULL-`user_id` profile is proven only by the profile's own `basic_information.email`; a collaborator shared via `profile_emails` gets 403 on delete.
+
+Compat: behavior-preserving for real users, validated service/legacy tokens, and actual profile owners; only stale/deleted-user JWTs and share-only collaborators change (now denied).
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

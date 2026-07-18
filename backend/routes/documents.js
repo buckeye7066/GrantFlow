@@ -19,7 +19,7 @@ import { hasTierCapability, requireTierCapability, TIER_CAPABILITIES } from '../
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
-import { ensureProfileEmailSchema, getTrustedUserEmails } from '../utils/accessControl.js'
+import { getTrustedUserEmails } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:documents')
@@ -470,7 +470,7 @@ function normalizeEmail(value) {
   return v
 }
 
-async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail }) {
+export async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail }) {
   if (!profileId || !actorUserId) return false
   const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(profileId))
   const ownerUserId = row?.user_id ? String(row.user_id) : null
@@ -480,22 +480,15 @@ async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail
     return ownerUserId === String(actorUserId)
   }
 
-  // Legacy profiles may have NULL user_id. Treat a matching saved email as ownership.
+  // Legacy profiles may have NULL user_id. Ownership for a DESTRUCTIVE action is
+  // proven ONLY by the profile's own identity email (basic_information.email) —
+  // NOT by profile_emails, which is the SHARE allowlist: a collaborator merely
+  // shared onto a legacy profile must NOT be able to delete its documents.
   const email = normalizeEmail(actorEmail)
   if (!email) return false
 
-  // 1) profile_emails allowlist (self-healing / explicit share)
-  try {
-    await ensureProfileEmailSchema(req.db)
-    const exists = await req.db
-      .prepare('SELECT 1 FROM profile_emails WHERE profile_id = ? AND lower(email) = ? LIMIT 1')
-      .get(String(profileId), email)
-    if (exists) return true
-  } catch {
-    // ignore (best-effort)
-  }
-
-  // 2) basic_information.email (JSON) fallback
+  // basic_information.email (the profile's owner-identity email) is the ONLY
+  // legacy-owner proof. Never profile_emails (shares).
   try {
     if (req.db?.dialect === 'postgres') {
       const exists = await req.db

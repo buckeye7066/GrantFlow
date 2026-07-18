@@ -29,6 +29,8 @@ function makeDb() {
     INSERT INTO profiles (id, user_id, created_by, status) VALUES ('own1', 'u1', 'u1', 'active');
     INSERT INTO profiles (id, user_id, created_by, status) VALUES ('victim', 'someone-else', 'someone-else', 'active');
     INSERT INTO profiles (id, user_id, created_by, status) VALUES ('shared', 'owner-x', 'owner-x', 'active');
+    -- 'stale-owned' is owned by a DELETED user (no users row for 'deleted-user').
+    INSERT INTO profiles (id, user_id, created_by, status) VALUES ('stale-owned', 'deleted-user', 'deleted-user', 'active');
     -- 'shared' is granted to board@org.com via the profile_emails allowlist.
     INSERT INTO profile_emails (id, profile_id, email, added_by, created_at) VALUES ('pe1', 'shared', 'board@org.com', 'owner-x', '2026-01-01');
     -- u1 has a VERIFIED secondary email credential board@org.com.
@@ -55,6 +57,35 @@ describe('getAccessibleProfileIds token profile_id provenance', () => {
     const legacyTokenUser = { role: 'user', userId: 'own1', profileId: 'own1', profileTokenAuth: true }
     const ids = await getAccessibleProfileIds(db, legacyTokenUser)
     expect(ids.has('own1')).toBe(true)
+  })
+})
+
+describe('getOwnedAndGrantedProfileIds FAILS CLOSED for a deleted user (no users row)', () => {
+  let db
+  beforeEach(() => { db = makeDb() })
+
+  it('a stale JWT for a DELETED user gains NOTHING even if profiles.user_id still references it', async () => {
+    // 'deleted-user' has no users row but still owns 'stale-owned'.
+    const staleJwt = { role: 'user', userId: 'deleted-user' }
+    const owned = await getOwnedAndGrantedProfileIds(db, staleJwt)
+    expect(owned.has('stale-owned')).toBe(false)
+    expect(owned.size).toBe(0)
+    // And through the admin-aware wrapper (used by ensureProfileAccess):
+    const accessible = await getAccessibleProfileIds(db, staleJwt)
+    expect(accessible.has('stale-owned')).toBe(false)
+  })
+
+  it('a REAL user (with a users row) still resolves their owned profiles', async () => {
+    const ids = await getOwnedAndGrantedProfileIds(db, { role: 'user', userId: 'u1' })
+    expect(ids.has('own1')).toBe(true)
+  })
+
+  it('a validated synthetic service token is not blocked by the users-row gate', async () => {
+    // serviceToken provenance skips the users-row requirement; it simply has no
+    // owned/granted personal profiles here (returns an empty set, does not throw).
+    const svc = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }
+    const ids = await getOwnedAndGrantedProfileIds(db, svc)
+    expect(ids instanceof Set).toBe(true)
   })
 })
 

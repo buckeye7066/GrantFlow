@@ -274,6 +274,18 @@ Round 8 fixed two email-grant sites but the ROOT was that `ctx.email` itself was
 
 **Confirmations:** `ctx.email` is DB-hydrated (the token email never drives access); `/api/auth/me` and document-delete no longer grant/authorize from the token email; the whole raw-email-grant class is closed at the chokepoint plus both sites.
 
+## 5k. Round 11 — grant helper fails closed for a missing users row + share ≠ delete-ownership (Codex review of commit `6cc4620e`)
+
+Round 10 removed the `activeProfileId==profileId` delete shortcut and made `ctx.accessibleProfileIds` empty for a missing users row, but two HIGH gaps remained because the checks weren't centralized in the helpers themselves.
+
+### R11-1 [HIGH] Deleted-user JWTs regained profile ownership through the grant helper
+`accessControl.js:214-231` `getOwnedAndGrantedProfileIds` added profiles where `profiles.user_id`/`created_by` === the token userId WITHOUT first proving a `users` row still exists. The R10 `requestContext` fix only helped consumers that read `ctx.accessibleProfileIds` — but `scope=mine` (`profiles.js:679`), `/api/auth/me` (`server.js:1963`), and every `ensureProfileAccess` route (via `getAccessibleProfileIds`) call the helper DIRECTLY. A stale JWT `sub=deleted-user` with a lingering `profiles.user_id=deleted-user` still returned that profile. **Fix (centralized fail-closed):** the helper now requires a real `users` row for the resolved userId — OR a validated provenance token that legitimately has no row (synthetic service token / DB-verified legacy profile token) — BEFORE applying any ownership/email/legacy grant; otherwise it returns an EMPTY set. Every caller inherits the guard. Test: `accessibleProfilesTokenProvenance.test.js` — a stale JWT for a deleted user gets NO profiles (helper + `getAccessibleProfileIds`); a real user still gets theirs; a synthetic service token isn't blocked.
+
+### R11-2 [HIGH] NULL-owner document delete treated a shared `profile_emails` email as OWNER proof
+`documents.js:487-493` `isProfileOwnerForDelete` returned true for a NULL-`user_id` profile when the actor's DB-trusted email appeared in `profile_emails` — but `profile_emails` is the SHARE allowlist, so a collaborator merely shared onto a legacy profile could DELETE its documents. **Fix:** the `profile_emails` branch is removed from delete-ownership; legacy NULL-owner delete proof is now ONLY the profile's own identity email (`basic_information.email`). A share-only user gets 403 on delete; the actual owner still deletes. Test: `documentDeleteOwnership.test.js` — a `profile_emails`-share email → denied; the `basic_information.email` owner → allowed.
+
+**Confirmations:** the grant helper itself fails closed for a missing `users` row (so every direct caller — scope=mine, /auth/me, ensureProfileAccess — is safe); legacy NULL-owner document delete no longer accepts a shared `profile_emails` email as ownership (share ≠ owner).
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.

@@ -264,6 +264,8 @@ describe('Hamilton authorize route — JWT-shaped req.user with userId-only', ()
       CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
       CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT, is_admin INTEGER DEFAULT 0, role TEXT);
       INSERT INTO profiles (id, user_id, display_name) VALUES ('p-z', 'u-z', 'Z');
+      -- u-z must exist as a real users row (a deleted user gets no profile access).
+      INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-z', 'z@test.com', 0, 'user');
     `)
     const app = express()
     app.use(express.json())
