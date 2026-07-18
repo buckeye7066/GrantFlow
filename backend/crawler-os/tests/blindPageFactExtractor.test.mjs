@@ -1,0 +1,187 @@
+// tests/blindPageFactExtractor.test.mjs
+//
+// Phase 1a — the PROFILE-BLIND extractor + evidence-span validator. These pin:
+// URL grounding (a model URL not in the inventory is rejected), page_url /
+// info_url / apply_url distinctness, fallback-to-info_url (never apply_url),
+// safe parsing of malformed output, profile-blindness (no such input in the
+// signature => byte-identical facts), and evidence-span code-verification.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { extractPageFactsBlind } from '../blindPageFactExtractor.js';
+import { validateEvidenceSpans, isSupportedSnippet } from '../blindEvidenceValidator.js';
+import { buildLinkInventory } from '../blindLinkInventory.js';
+
+const PAGE_URL = 'https://foundation.example.org/scholarship';
+const PAGE_TEXT = [
+  'The Example Foundation Scholarship supports first-generation college students.',
+  'Awards range from 1,000 to 5,000 dollars. Applicants must reside in Ohio.',
+  'This is a grant, not a loan. No cost share is required.',
+  'Apply through our online portal.',
+].join(' ');
+const HTML = `
+  <main>
+    <a href="https://foundation.example.org/apply-online">Apply online</a>
+    <a href="https://foundation.example.org/faq">FAQ</a>
+  </main>`;
+
+const INVENTORY = buildLinkInventory(HTML, { baseUrl: PAGE_URL });
+
+// A deterministic mock LLM: returns a fixed, well-formed extraction.
+function mockLlm(overrides = {}) {
+  const opp = {
+    title: 'Example Foundation Scholarship',
+    funder: 'Example Foundation',
+    summary: 'Supports first-generation college students.',
+    eligibility_text: 'Applicants must reside in Ohio.',
+    eligibility_bullets: ['first-generation college students', 'reside in Ohio'],
+    need_categories: ['education'],
+    amount_min: 1000,
+    amount_max: 5000,
+    national: false,
+    states: ['OH'],
+    is_loan: false,
+    requires_cost_share: false,
+    apply_link_id: 'L1',
+    info_link_id: 'L2',
+    evidence: {
+      eligibility: 'Applicants must reside in Ohio.',
+      amount: 'Awards range from 1,000 to 5,000 dollars.',
+      is_loan: 'This is a grant, not a loan.',
+      requires_cost_share: 'No cost share is required.',
+      national: 'Applicants must reside in Ohio.',
+    },
+    ...overrides,
+  };
+  return async () => JSON.stringify({ opportunities: [opp] });
+}
+
+test('happy path: extracts page facts with inventory-selected apply/info URLs', async () => {
+  const facts = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm: mockLlm() },
+  );
+  assert.equal(facts.length, 1);
+  const f = facts[0];
+  assert.equal(f.apply_url, 'https://foundation.example.org/apply-online');
+  assert.equal(f.info_url, 'https://foundation.example.org/faq');
+  assert.equal(f.page_url, PAGE_URL);
+  assert.equal(f.eligibility_text, 'Applicants must reside in Ohio.');
+  assert.deepEqual(f.geography.states, ['OH']);
+  assert.equal(f.amount_min, 1000);
+  assert.equal(f.amount_max, 5000);
+  assert.equal(f.field_provenance.is_loan.value, false);
+});
+
+test('page_url / info_url / apply_url are DISTINCT', async () => {
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm: mockLlm() },
+  ))[0];
+  assert.notEqual(f.apply_url, f.info_url);
+  assert.notEqual(f.apply_url, f.page_url);
+  assert.notEqual(f.info_url, f.page_url);
+});
+
+test('a URL the model returns that is NOT in the inventory is REJECTED', async () => {
+  const llm = mockLlm({ apply_link_id: null, apply_url: 'https://evil.example/phish', info_link_id: null });
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm },
+  ))[0];
+  assert.equal(f.apply_url, null, 'hallucinated apply URL rejected');
+  // No real apply/info link resolved => fallback lands in info_url, never apply.
+  assert.equal(f.info_url, PAGE_URL);
+  assert.notEqual(f.apply_url, 'https://evil.example/phish');
+});
+
+test('fallback (no real apply link) goes to info_url, NEVER apply_url', async () => {
+  // Model picks the FAQ (info) but no apply link.
+  const llm = mockLlm({ apply_link_id: null, info_link_id: 'L2' });
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm },
+  ))[0];
+  assert.equal(f.apply_url, null);
+  assert.equal(f.info_url, 'https://foundation.example.org/faq');
+});
+
+test('the model selecting the PAGE itself as apply is treated as a fallback', async () => {
+  const invWithSelf = buildLinkInventory(
+    `<a href="${PAGE_URL}">this page</a><a href="https://foundation.example.org/faq">FAQ</a>`,
+    { baseUrl: PAGE_URL },
+  );
+  const llm = mockLlm({ apply_link_id: 'L1', info_link_id: null }); // L1 == page url
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: invWithSelf },
+    { llm },
+  ))[0];
+  assert.equal(f.apply_url, null, 'page-as-apply is a fallback, not a real apply link');
+  assert.equal(f.info_url, PAGE_URL);
+});
+
+test('malformed LLM output => [] and never throws', async () => {
+  for (const bad of ['not json', '', '{oops', null, undefined, 42, { nope: true }, async () => { throw new Error('boom'); }]) {
+    const llm = typeof bad === 'function' ? bad : async () => bad;
+    const out = await extractPageFactsBlind(
+      { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+      { llm },
+    );
+    assert.deepEqual(out, [], `bad output ${JSON.stringify(bad)} => []`);
+  }
+});
+
+test('PROFILE-BLIND: signature has no thesis/query/profile param', () => {
+  // Static assertion on the function's declared parameters: the destructured
+  // input object is the ONLY data input, and there is no positional profile arg.
+  const src = extractPageFactsBlind.toString();
+  const header = src.slice(0, src.indexOf(')') + 1);
+  assert.ok(!/thesis|profile|query|seed/i.test(header), `blind signature must not name a profile input: ${header}`);
+  assert.ok(/\binput\b/.test(header) && /\bdeps\b/.test(header), `signature is (input, deps): ${header}`);
+});
+
+test('DETERMINISM: same page + same mocked output => byte-identical facts', async () => {
+  const a = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm: mockLlm() },
+  );
+  const b = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm: mockLlm() },
+  );
+  assert.equal(JSON.stringify(a), JSON.stringify(b));
+});
+
+test('an unsupported evidence snippet is DROPPED from the extractor output', async () => {
+  // The model cites a snippet for is_loan that is NOT on the page.
+  const llm = mockLlm({ evidence: { is_loan: 'The moon is made of cheese.' } });
+  const f = (await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+    { llm },
+  ))[0];
+  assert.ok(!f.field_provenance || !f.field_provenance.is_loan, 'unsupported is_loan provenance dropped');
+  assert.ok(f.evidence_validation && f.evidence_validation.dropped.some((d) => d.field === 'is_loan'));
+});
+
+// --- the validator in isolation --------------------------------------------
+test('validateEvidenceSpans: keeps a real substring, drops a fabricated one', () => {
+  const facts = {
+    field_provenance: {
+      good: { value: true, evidence_snippet: 'must reside in Ohio' },
+      bad: { value: false, evidence_snippet: 'this text is nowhere on the page' },
+      unsnippeted: { value: true }, // no snippet => not snippet-verifiable, kept
+    },
+  };
+  const { facts: out, dropped } = validateEvidenceSpans(facts, PAGE_TEXT);
+  assert.ok(out.field_provenance.good, 'supported snippet kept');
+  assert.ok(!out.field_provenance.bad, 'fabricated snippet dropped');
+  assert.ok(out.field_provenance.unsnippeted, 'un-snippeted entry kept');
+  assert.equal(dropped.length, 1);
+  assert.equal(dropped[0].field, 'bad');
+});
+
+test('isSupportedSnippet: normalized (whitespace/case-insensitive) substring', () => {
+  assert.equal(isSupportedSnippet('AWARDS RANGE from 1,000', PAGE_TEXT), true);
+  assert.equal(isSupportedSnippet('awards   range\n  from 1,000', PAGE_TEXT), true);
+  assert.equal(isSupportedSnippet('', PAGE_TEXT), false, 'empty snippet is not evidence');
+  assert.equal(isSupportedSnippet('unrelated claim', PAGE_TEXT), false);
+});
