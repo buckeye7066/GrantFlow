@@ -172,6 +172,13 @@ Compat: behavior-preserving for the normal single-request login (correct code �
 
 Compat: behavior-preserving for the normal login (start → verify newest code → session); only stale/locked older codes change (now always invalidated at the next start and never consumable). New test `otpLockoutBypass.test.js` (4: dialect-agnostic unit for both shared helpers + full-app email + full-app phone), verified red by reverting both fixes (reproduces the bypass). `insertFreshVerificationCode` exported for the suite.
 
+## Round 21 — one active OTP holds under concurrent /start (serialize + partial-unique-index) (see PORTFOLIO_AUDIT.md §5u)
+
+- **[HIGH] Closed the concurrent-/start multi-active-code race.** r20's `insertFreshVerificationCode` made one caller's invalidate+insert atomic but didn't serialize two callers; on Postgres READ COMMITTED, two `/start` for the same credential could both invalidate before either insert was visible and leave TWO active codes (reopening the r20 lockout-bypass surface). Fix, both halves: (1) the mint now locks the parent credential row (`SELECT … FOR UPDATE` on Postgres; SQLite `BEGIN IMMEDIATE`) FIRST, re-checks the resend cooldown under the lock, and updates credential metadata in the same transaction — returning `{minted, retryAfterSeconds}` so `/start` 429s when throttled; (2) new migration `136_one_active_otp_code.sql` (+ Postgres `0140_…`, + `schema.sql`) adds a **partial unique index** `ON user_verification_codes(credential_id) WHERE consumed_at IS NULL` as a hard DB backstop (idempotent; de-dupes pre-existing violations first). The helper tolerates a unique-violation (23505 / SQLITE_CONSTRAINT_UNIQUE) as "another start won".
+- All r19/r20 properties preserved (row-locked verify, matched-row cap, one-affected-row consume, constant-time compare, phone parity, email+IP limiter, single active code).
+
+Compat: behavior-preserving for normal login (one start → one active code → verify); only concurrent starts change (serialized to one active code). New tests in `otpLockoutBypass.test.js` (concurrent-mint→one active; partial-unique-index rejects a 2nd active; migrated-DB rejects a 2nd active; concurrent /email+/phone start→one active), plus the r20/r19 guarantees still hold. Honest limitation noted: SQLite serializes writers so the true pooled-PG race isn't reproducible; the partial-unique-index backstop is the storage-level guarantee.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

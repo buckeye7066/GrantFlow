@@ -848,6 +848,13 @@ CREATE TABLE IF NOT EXISTS user_verification_codes (
   metadata TEXT
 );
 
+-- Exactly ONE consumable active OTP code per credential (round 21). Active =
+-- consumed_at IS NULL; the mint (insertFreshVerificationCode) invalidates prior
+-- active rows before inserting, so this never false-conflicts on expired rows.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_uvc_one_active_per_credential
+  ON user_verification_codes (credential_id)
+  WHERE consumed_at IS NULL;
+
 -- One-time password setup tokens (first-login password setup via emailed link).
 CREATE TABLE IF NOT EXISTS password_setup_tokens (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

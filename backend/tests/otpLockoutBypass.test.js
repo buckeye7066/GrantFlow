@@ -37,7 +37,7 @@ describe('single-active-code + matched-row cap (shared email/phone helpers)', ()
   function makeDb() {
     const raw = new Database(':memory:')
     raw.exec(`
-      CREATE TABLE user_credentials (id TEXT PRIMARY KEY, attempt_count INTEGER DEFAULT 0, verified_at TEXT);
+      CREATE TABLE user_credentials (id TEXT PRIMARY KEY, attempt_count INTEGER DEFAULT 0, verified_at TEXT, secret_hash TEXT, last_sent_at TEXT);
       CREATE TABLE user_verification_codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT, credential_id TEXT NOT NULL, code_hash TEXT NOT NULL,
         expires_at TEXT, consumed_at TEXT, attempt_count INTEGER DEFAULT 0,
@@ -52,9 +52,15 @@ describe('single-active-code + matched-row cap (shared email/phone helpers)', ()
         const stmt = raw.prepare(sql)
         return { run: async (...a) => stmt.run(...a), get: async (...a) => stmt.get(...a), all: async (...a) => stmt.all(...a) }
       },
+      _txLock: null,
+      // Mirror the real SqliteDb: serialize async transactions so concurrent
+      // callers don't collide on BEGIN IMMEDIATE ("transaction within a transaction").
       async withTransaction(fn) {
+        while (this._txLock) await this._txLock
+        let unlock
+        this._txLock = new Promise((r) => { unlock = r })
         raw.exec('BEGIN IMMEDIATE')
-        try { const r = await fn(this); raw.exec('COMMIT'); return r } catch (e) { try { raw.exec('ROLLBACK') } catch { /* ignore */ } throw e }
+        try { const r = await fn(this); raw.exec('COMMIT'); return r } catch (e) { try { raw.exec('ROLLBACK') } catch { /* ignore */ } throw e } finally { this._txLock = null; unlock() }
       },
     }
   }
@@ -87,6 +93,38 @@ describe('single-active-code + matched-row cap (shared email/phone helpers)', ()
     // The capped row was never consumed.
     const capped = db._raw.prepare(`SELECT consumed_at FROM user_verification_codes WHERE code_hash = ?`).get(hashValue('p:111111'))
     expect(capped.consumed_at).toBeNull()
+  })
+
+  it('concurrent insertFreshVerificationCode for one credential leaves exactly one active code', async () => {
+    // NOTE: the shim's withTransaction (BEGIN IMMEDIATE) serializes writers, as
+    // the real SqliteDb does; on Postgres the per-credential SELECT ... FOR UPDATE
+    // provides the same serialization. True pooled-Postgres concurrency isn't
+    // reproducible here, so this asserts the serialized-mint outcome and the
+    // partial-unique-index backstop below is the storage-level guarantee.
+    const db = makeDb()
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) => insertFreshVerificationCode(db, 'cred-1', hashValue(`p:concur${i}`), future())),
+    )
+    expect(activeCount(db)).toBe(1)
+  })
+
+  it('the partial unique index REJECTS a second active code (DB backstop)', () => {
+    const raw = new Database(':memory:')
+    raw.exec(`
+      CREATE TABLE user_verification_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, credential_id TEXT NOT NULL, code_hash TEXT NOT NULL,
+        expires_at TEXT, consumed_at TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX ux_uvc_one_active_per_credential
+        ON user_verification_codes (credential_id) WHERE consumed_at IS NULL;
+    `)
+    const ins = (hash) => raw.prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES ('cred-1', ?, ?)`).run(hash, future())
+    ins(hashValue('p:aaa')) // first active code — OK
+    // A second UNCONSUMED code for the same credential is rejected by the index.
+    expect(() => ins(hashValue('p:bbb'))).toThrow(/unique/i)
+    // Consuming the first frees the slot for a new active code.
+    raw.prepare(`UPDATE user_verification_codes SET consumed_at = ? WHERE code_hash = ?`).run(now(), hashValue('p:aaa'))
+    expect(() => ins(hashValue('p:bbb'))).not.toThrow()
   })
 })
 
@@ -181,6 +219,75 @@ describe('full-app PHONE: locked-out code cannot be verified after a fresh /star
     expect(resA.body.accessToken).toBeUndefined()
 
     // Exactly one consumable active code remains.
+    const active = await db.prepare(
+      `SELECT COUNT(*) c FROM user_verification_codes WHERE credential_id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`,
+    ).get(cred.id, now())
+    expect(Number(active.c)).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Full-app CONCURRENT /start: racing mints for the same credential must leave
+// exactly one active code (serialized per credential + partial-unique-index
+// backstop). On the single-connection SQLite harness writers serialize (as the
+// real SqliteDb does); true pooled-Postgres FOR UPDATE contention isn't
+// reproducible here — the storage-level backstop (unit-tested above) is the hard
+// guarantee. See r19 for the same honest-limitation note.
+// ---------------------------------------------------------------------------
+describe('full-app CONCURRENT /start leaves exactly one active OTP code per credential', () => {
+  let app, db
+  beforeAll(async () => { const l = await getAppAndDb(); app = l.app; db = l.db })
+  beforeEach(() => resetDb(db))
+
+  const activeEmail = (email) =>
+    db.prepare(
+      `SELECT COUNT(*) c FROM user_verification_codes vc JOIN user_credentials uc ON uc.id = vc.credential_id
+       WHERE uc.identifier = ? AND vc.consumed_at IS NULL AND (vc.expires_at IS NULL OR vc.expires_at >= ?)`,
+    ).get(email, now())
+
+  it('EMAIL: N concurrent /email/start for one credential -> one active code, one 202', async () => {
+    const email = 'concurrent-email@example.test'
+    // Create the credential first, then clear the cooldown so all N race the mint.
+    expect((await request(app).post('/api/auth/email/start').send({ email })).status).toBe(202)
+    db.prepare(`UPDATE user_credentials SET last_sent_at = NULL WHERE identifier = ?`).run(email)
+
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => request(app).post('/api/auth/email/start').send({ email })),
+    )
+    // Serialized mint + under-lock cooldown re-check: exactly one wins.
+    expect(results.filter((r) => r.status === 202).length).toBe(1)
+    // The invariant: exactly one consumable active code.
+    expect(Number(activeEmail(email).c)).toBe(1)
+  })
+
+  it('the migration created the partial unique index (migrated DB rejects a 2nd active code)', async () => {
+    const email = 'index-backstop@example.test'
+    expect((await request(app).post('/api/auth/email/start').send({ email })).status).toBe(202)
+    const cred = await db.prepare(`SELECT id FROM user_credentials WHERE identifier = ? AND type = 'email_otp'`).get(email)
+    // Clear the existing active code, then insert one active code directly.
+    await db.prepare(`UPDATE user_verification_codes SET consumed_at = ? WHERE credential_id = ? AND consumed_at IS NULL`).run(now(), cred.id)
+    await db.prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`).run(cred.id, hashValue('x:1'), future())
+    // A SECOND unconsumed code for the same credential is rejected by the index
+    // created in migration 136 (the r21 DB backstop).
+    let threw = false
+    try {
+      await db.prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`).run(cred.id, hashValue('x:2'), future())
+    } catch (e) {
+      threw = /unique/i.test(String(e?.message))
+    }
+    expect(threw).toBe(true)
+  })
+
+  it('PHONE: N concurrent /phone/start for one credential -> one active code', async () => {
+    const phone = '+15550002222'
+    expect((await request(app).post('/api/auth/phone/start').send({ phone })).status).toBe(202)
+    const cred = await db.prepare(`SELECT id FROM user_credentials WHERE identifier = ? AND type = 'phone_otp'`).get(phone)
+    db.prepare(`UPDATE user_credentials SET last_sent_at = NULL WHERE id = ?`).run(cred.id)
+
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => request(app).post('/api/auth/phone/start').send({ phone })),
+    )
+    expect(results.filter((r) => r.status === 202).length).toBe(1)
     const active = await db.prepare(
       `SELECT COUNT(*) c FROM user_verification_codes WHERE credential_id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`,
     ).get(cred.id, now())

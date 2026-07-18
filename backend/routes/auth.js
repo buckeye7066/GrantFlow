@@ -1796,29 +1796,80 @@ async function insertVerificationCode(db, credentialId, codeHash, expiresAtIso) 
   ).run(credentialId, codeHash, expiresAtIso)
 }
 
+function isUniqueViolation(err) {
+  if (!err) return false
+  const code = String(err.code || '')
+  return code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE' || /unique constraint/i.test(String(err.message || ''))
+}
+
 /**
  * Mint a fresh OTP code AND invalidate every prior active code for this
  * credential in ONE transaction, so a credential has at most ONE consumable
- * active code at a time.
+ * active code at a time — SERIALIZED per credential so concurrent /start cannot
+ * leave multiple active rows.
  *
- * Without this, /email/start and /phone/start APPENDED rows and left older
- * active rows unconsumed. A row that had already hit maxAttempts stayed active,
- * so an attacker could mint a fresh code and then verify the OLDER, locked-out
- * code (its cap was never re-checked against the newest row) — a lockout bypass,
- * and by alternating /start + guess, unlimited attempts against a target code.
- * The invalidate+insert are atomic (transaction isolation: no observer ever sees
- * two active codes, nor zero mid-swap).
+ * Without the single-active-code invariant, /start APPENDED rows and left older
+ * active rows unconsumed: a locked-out older code stayed verifiable after a fresh
+ * start (lockout bypass; alternating /start + guess → unlimited attempts).
+ *
+ * Concurrency: one caller's invalidate+insert is atomic, but two callers for the
+ * SAME credential could (on Postgres READ COMMITTED) both invalidate before
+ * either insert was visible and leave TWO active rows. So:
+ *   - Postgres locks the parent credential row (SELECT ... FOR UPDATE) FIRST, so
+ *     a second concurrent /start waits, sees the first's inserted row, and
+ *     invalidates it. SQLite's BEGIN IMMEDIATE already serializes writers.
+ *   - The resend cooldown is RE-CHECKED under the lock (two racing /start can't
+ *     both pass), and the credential metadata (secret_hash / last_sent_at /
+ *     attempt reset) is updated in the SAME transaction so it can't interleave.
+ *   - A partial unique index (credential_id WHERE consumed_at IS NULL) is the DB
+ *     backstop: a second active row is rejected (23505) even if a future caller
+ *     skips the lock — treated here as "another start won" (invariant still holds).
+ *
+ * Returns { minted: true } on success, or { minted: false, retryAfterSeconds }
+ * when the cooldown (re-checked under the lock) or the backstop rejects the mint.
  */
-async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAtIso) {
+async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAtIso, { cooldownSeconds = 0 } = {}) {
   return db.withTransaction(async (tx) => {
+    const now = nowISOString()
+
+    // Serialize concurrent /start for THIS credential.
+    if (tx.dialect === 'postgres') {
+      await tx.prepare(`SELECT id FROM user_credentials WHERE id = ? FOR UPDATE`).get(credentialId)
+    }
+
+    // Re-check the resend cooldown UNDER the lock (raceless).
+    if (cooldownSeconds > 0) {
+      const cred = await tx.prepare(`SELECT last_sent_at FROM user_credentials WHERE id = ?`).get(credentialId)
+      if (cred?.last_sent_at) {
+        const elapsedMs = Date.now() - new Date(cred.last_sent_at).getTime()
+        if (Number.isFinite(elapsedMs) && elapsedMs >= 0 && elapsedMs < cooldownSeconds * 1000) {
+          return { minted: false, retryAfterSeconds: Math.ceil((cooldownSeconds * 1000 - elapsedMs) / 1000) }
+        }
+      }
+    }
+
     await tx
-      .prepare(
-        `UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`,
-      )
-      .run(nowISOString(), credentialId)
+      .prepare(`UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`)
+      .run(now, credentialId)
+    try {
+      await tx
+        .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`)
+        .run(credentialId, codeHash, expiresAtIso)
+    } catch (err) {
+      // DB backstop tripped: another active code exists (a caller that skipped the
+      // lock won the race). The one-active-code invariant still holds.
+      if (isUniqueViolation(err)) {
+        return { minted: false, retryAfterSeconds: Math.max(1, cooldownSeconds || 1) }
+      }
+      throw err
+    }
+
+    // Credential metadata in the SAME serialized transaction.
     await tx
-      .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`)
-      .run(credentialId, codeHash, expiresAtIso)
+      .prepare(`UPDATE user_credentials SET secret_hash = ?, last_sent_at = ?, attempt_count = 0 WHERE id = ?`)
+      .run(codeHash, now, credentialId)
+
+    return { minted: true }
   })
 }
 
@@ -2111,20 +2162,20 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     })
     
     try {
-      // Invalidate prior active codes + insert the fresh one atomically, so only
-      // the newest code is ever verifiable (no locked-out older row survives).
-      await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt)
-      await req.db
-        .prepare(
-          `
-            UPDATE user_credentials
-            SET secret_hash = ?,
-                last_sent_at = ?,
-                attempt_count = 0
-            WHERE id = ?
-          `,
-        )
-        .run(codeHash, nowISOString(), credential.id)
+      // Serialized single-active-code mint: invalidate prior active codes + insert
+      // the fresh one + reset credential metadata in ONE per-credential-locked
+      // transaction (cooldown re-checked under the lock). No locked-out older row
+      // survives, and concurrent /start can't leave two active codes.
+      const mint = await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt, {
+        cooldownSeconds: EMAIL_RESEND_COOLDOWN,
+      })
+      if (!mint.minted) {
+        return res.status(429).json({
+          error: `Please wait ${mint.retryAfterSeconds} seconds before requesting another code`,
+          error_type: 'rate_limit_cooldown',
+          retry_after_seconds: mint.retryAfterSeconds,
+        })
+      }
       routeLogger.info('[auth/email/start] Verification code stored in database for:', email)
     } catch (dbError) {
       routeLogger.error('[auth/email/start] Database error storing verification code:', dbError)
@@ -2468,20 +2519,19 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     })
   }
 
-  // Invalidate prior active codes + insert the fresh one atomically (single
-  // consumable active code per credential — no locked-out older row survives).
-  await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt)
-  await req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET secret_hash = ?,
-            last_sent_at = ?,
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(codeHash, nowISOString(), credential.id)
+  // Serialized single-active-code mint: invalidate prior active codes + insert
+  // the fresh one + reset credential metadata in ONE per-credential-locked
+  // transaction (cooldown re-checked under the lock), so concurrent /phone/start
+  // can't leave two active codes and no locked-out older row survives.
+  const mint = await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt, {
+    cooldownSeconds: PHONE_RESEND_COOLDOWN,
+  })
+  if (!mint.minted) {
+    return res.status(429).json({
+      error: 'Verification already sent',
+      retry_after_seconds: mint.retryAfterSeconds,
+    })
+  }
 
   // Optional ops alert (never includes the code).
   sendAuthAttemptNotification({
