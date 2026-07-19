@@ -364,7 +364,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
       // Broken post-condition alone (no failed file) still flips it — the schema-OK path is closed.
       expect(summarizeBootHealthLine({ dedupe: badHealth })).not.toBe('schema check: OK')
     })
-  })
+  }, 20000)  // heavy: runs the full migration chain + health check three times; 5s default flakes under parallel-file load
 
   it('[r29 MED] applyLikeRunner shares the REAL runner predicate — an absent/renamed-table statement FAILS the harness (no masked error)', () => {
     const raw = new Database(':memory:')
