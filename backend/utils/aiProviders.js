@@ -72,6 +72,27 @@ export function getOpenAIOptional({ timeoutMs = null, maxRetries = null } = {}) 
   }
 }
 
+/**
+ * Public, role-split accessor for the Anthropic client — mirrors
+ * getOpenAIOptional(). Returns the cached Anthropic client, or null when
+ * ANTHROPIC_API_KEY is absent/removed. Additive: it wraps the private
+ * getAnthropicClient() without changing any existing export or the
+ * OpenAI-first fallback behavior of invokeTextWithFallback/invokeJsonWithFallback.
+ *
+ * Used by the adversarial-repair loop to call Claude DIRECTLY as the code
+ * AUTHOR (fable) — distinct from the fallback wrappers, where Anthropic is only
+ * the OpenAI backstop, never the primary role.
+ *
+ * @returns {Promise<import('@anthropic-ai/sdk').default|null>}
+ */
+export async function getAnthropicOptional() {
+  try {
+    return await getAnthropicClient()
+  } catch {
+    return null
+  }
+}
+
 export async function invokeTextWithFallback({
   openai = null,
   system = null,

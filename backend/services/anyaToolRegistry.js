@@ -5364,6 +5364,135 @@ registerTool({
   },
 })
 
+registerTool({
+  name: 'owner.adversarial_repair',
+  description:
+    'OWNER ONLY. Two-model adversarial code repair: Claude (author/"fable") writes a unified diff for a finding, OpenAI (verifier/"sol") adversarially reviews it, and they iterate until the verifier is satisfied or gives up. FAILS CLOSED — a missing/erroring verifier returns "unverified" and applies NOTHING; the loop never claims "clean" without a passing adversarial verdict. On a verified diff with dryRun=false it dispatches the CI-gated code-fix workflow (opens a PR, never direct-to-main). Refuses protected paths (migrations, schema, workflows, auth, billing, lockfiles) and refuses to dispatch while the `.agent-edit-lock` is held.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      finding: {
+        description:
+          'The bug to repair — a structured finding object OR a plain-text description. Provide this or `instructions`.',
+      },
+      instructions: {
+        type: 'string',
+        description: 'Plain-text description of the repair to make (alias for a string `finding`).',
+      },
+      filePath: { type: 'string', description: 'Repo-relative path of the file to repair (under backend/, src/, or scripts/).' },
+      dryRun: { type: 'boolean', description: 'When true (default), return the verified diff + trail WITHOUT landing anything.' },
+      landMode: { type: 'string', enum: ['pr', 'direct'], description: 'How a clean verified diff lands (dryRun=false): "pr" (default) opens a CI-gated PR; "direct" auto-merges to main after release:gates pass (no human approval; critical paths auto-route back to PR).' },
+      automerge: { type: 'boolean', description: 'PR path only: queue CI-gated auto-merge on the PR (default false).' },
+      maxRounds: { type: 'integer', minimum: 1, maximum: 5, description: 'Max author↔verifier rounds (default 3).' },
+    },
+    required: ['filePath'],
+  },
+  handler: async (params, context) => {
+    const filePath = String(params?.filePath || '').trim()
+    if (!filePath) {
+      const error = new Error('filePath is required')
+      error.status = 400
+      throw error
+    }
+    const finding = params?.finding ?? params?.instructions ?? null
+    if (finding === null || finding === undefined || (typeof finding === 'string' && !finding.trim())) {
+      const error = new Error('Provide `finding` (object or text) or `instructions`.')
+      error.status = 400
+      throw error
+    }
+
+    const resolved = path.resolve(REPO_ROOT, filePath)
+    if (!isUnderAllowedRoots(resolved)) {
+      const error = new Error('File path is outside of permitted directories')
+      error.status = 400
+      throw error
+    }
+    const stats = await safeStat(resolved)
+    if (!stats || !stats.isFile()) {
+      const error = new Error('File not found')
+      error.status = 404
+      throw error
+    }
+    const fileText = await fs.readFile(resolved, 'utf8')
+
+    const dryRun = params?.dryRun !== false
+    const automerge = params?.automerge === true
+    const landMode = params?.landMode === 'direct' ? 'direct' : 'pr'
+    const maxRounds = Math.max(1, Math.min(Number(params?.maxRounds) || 3, 5))
+
+    const { generateVerifiedRepair } = await import('./anyaAdversarialRepairLoop.js')
+    // authorFn/verifierFn ride in on the trusted server-side context only (same
+    // pattern as context.getOpenAI / context.fetchImpl) so tests can drive the
+    // loop deterministically without a provider; production never sets them.
+    const repair = await generateVerifiedRepair({
+      finding,
+      fileText,
+      filePath,
+      maxRounds,
+      ...(typeof context?.authorFn === 'function' ? { authorFn: context.authorFn } : {}),
+      ...(typeof context?.verifierFn === 'function' ? { verifierFn: context.verifierFn } : {}),
+    })
+
+    const base = {
+      file: filePath,
+      status: repair.status,
+      rounds: repair.rounds,
+      trail: repair.trail,
+      reason: repair.reason,
+    }
+
+    // Anything other than a clean, verified diff applies NOTHING.
+    if (repair.status !== 'clean') {
+      return { ...base, applied: false, dispatched: false }
+    }
+
+    // Verified clean. In dryRun, return the diff for review without landing.
+    if (dryRun) {
+      return { ...base, applied: false, dispatched: false, dry_run: true, land_mode: landMode, diff: repair.diff, paths: repair.paths }
+    }
+
+    // Live apply. Refuse (PR OR direct) if the multi-agent edit lock is held —
+    // do NOT land while a human + another assistant are actively editing.
+    const { isAgentEditLockPresent } = await import('../utils/agentEditLock.js')
+    if (isAgentEditLockPresent(REPO_ROOT)) {
+      return {
+        ...base,
+        applied: false,
+        dispatched: false,
+        landed: false,
+        edit_lock_held: true,
+        message:
+          'Refusing to land: `.agent-edit-lock` is present at the repo root (a human + another assistant are editing). Verified diff withheld; retry once the lock is released.',
+      }
+    }
+
+    // Route the verified diff through the SAME gated apply layer. landMode 'pr'
+    // opens a CI-gated PR; 'direct' auto-merges to main AFTER release:gates pass
+    // (critical paths downgrade back to PR). Never a raw fs write to main.
+    const { landVerifiedPatch } = await import('./anyaCodeFixDispatch.js')
+    const landing = await landVerifiedPatch({
+      patch: repair.diff,
+      title: `fix(anya): adversarially-verified repair for ${filePath}`,
+      landMode,
+      automerge,
+      fetchImpl: typeof context?.fetchImpl === 'function' ? context.fetchImpl : null,
+    })
+    return {
+      ...base,
+      applied: landing.ok === true,
+      dispatched: landing.dispatched === true,
+      landed: landing.landed === true,
+      land_mode: landing.land_mode,
+      downgraded_to_pr: landing.downgraded_to_pr === true,
+      land_note: landing.land_note || null,
+      diff: repair.diff,
+      paths: repair.paths,
+      landing,
+    }
+  },
+})
+
 // ── Coverage-sweep observability (Agent Observability Rule read side) ────────
 // The nightly per-profile result-coverage sweep persists its outcome to
 // system_kv `coverage_audit_last_run` (heartbeat status:'running' before the

@@ -16,6 +16,16 @@ on:
         required: false
         type: string
         default: "false"
+      land_mode:
+        description: "pr = open a PR (default); direct = admin-merge to main after gates pass (no human approval, build gate kept); gate_only = apply+gates+push branch then STOP (app-side lander merges on a green run)"
+        required: false
+        type: string
+        default: "pr"
+      branch:
+        description: "Explicit branch name to push (used by gate_only so the app can find + merge it). Empty = auto-generate."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -70,7 +80,13 @@ jobs:
       - name: Preflight gates
         run: npm run release:gates
 
-      - name: Create branch, commit, push, and open PR
+      # NOTE: this step runs AFTER the gate steps above (corruption guard, code
+      # quality, release:gates). `set -euo pipefail` + step ordering guarantees
+      # a RED gate fails the job BEFORE any branch is pushed or merged — so a fix
+      # that is adversarially clean but fails release:gates NEVER lands on main,
+      # in ANY land_mode. The gate is preserved; only the human-approval step is
+      # removed for land_mode=direct.
+      - name: Create branch, commit, push, and land per land_mode
         env:
           # Prefer a PAT when provisioned: PRs created with the default
           # GITHUB_TOKEN do not trigger `on: pull_request` CI runs, so the
@@ -79,10 +95,17 @@ jobs:
           GH_TOKEN: ${{ secrets.ANYA_PR_TOKEN != '' && secrets.ANYA_PR_TOKEN || secrets.GITHUB_TOKEN }}
           PR_TITLE_INPUT: ${{ inputs.pr_title }}
           AUTOMERGE_INPUT: ${{ inputs.automerge }}
+          LAND_MODE_INPUT: ${{ inputs.land_mode }}
+          BRANCH_INPUT: ${{ inputs.branch }}
         run: |
           set -euo pipefail
 
-          BRANCH_NAME="anya-fix/$(date -u +%Y%m%d-%H%M%S)"
+          LAND_MODE="${LAND_MODE_INPUT:-pr}"
+          if [ -n "$BRANCH_INPUT" ]; then
+            BRANCH_NAME="$BRANCH_INPUT"
+          else
+            BRANCH_NAME="anya-fix/$(date -u +%Y%m%d-%H%M%S)"
+          fi
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -97,16 +120,30 @@ jobs:
           git commit -m "fix: apply Anya code fix patch" -m "$PR_TITLE"
           git push origin "$BRANCH_NAME"
 
+          # gate_only: gates already passed (prior steps). Push the branch and
+          # STOP. The app-side lander polls this run's conclusion and admin-merges
+          # only on success — it owns the merge decision.
+          if [ "$LAND_MODE" = "gate_only" ]; then
+            echo "gate_only: branch $BRANCH_NAME pushed after passing gates; app-side lander will merge on green."
+            exit 0
+          fi
+
           gh pr create \
             --base main \
             --head "$BRANCH_NAME" \
             --title "$PR_TITLE" \
-            --body "This PR was automatically created by the Anya Code Fix PR workflow after applying the provided patch. Merging is gated by the required CI checks on main."
+            --body "This PR was automatically created by the Anya Code Fix PR workflow after applying the provided patch and passing release:gates."
 
-          # CI-gated auto-merge: never a direct merge — GitHub only completes
-          # this once every required branch-protection check is green. Failure
-          # to queue (e.g. auto-merge disabled) leaves the PR open for review.
-          if [ "$AUTOMERGE_INPUT" = "true" ]; then
+          if [ "$LAND_MODE" = "direct" ]; then
+            # DIRECT: the build gate (release:gates) already ran and passed as a
+            # prior step, so admin-merge immediately — removes the HUMAN approval
+            # wait, NOT the build gate. --admin bypasses required-approvals branch
+            # protection; the merge cannot be reached if any gate step failed.
+            gh pr merge "$BRANCH_NAME" --squash --admin \
+              || echo "admin merge could not complete; PR remains open for manual review."
+          elif [ "$AUTOMERGE_INPUT" = "true" ]; then
+            # CI-gated auto-merge: GitHub completes it once every required
+            # branch-protection check is green. Failure to queue leaves the PR open.
             gh pr merge "$BRANCH_NAME" --squash --auto \
               || echo "auto-merge could not be queued; PR remains open for manual review."
           fi
