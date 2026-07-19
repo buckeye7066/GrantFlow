@@ -1,15 +1,22 @@
--- Round 21/22/23: at most ONE user per phone number, kept on the CREDENTIAL-OWNED
--- user. Twin of sqlite migration 137_users_primary_phone_unique.sql. Backstop for
--- the serialized, idempotent first-ever /phone/start (INSERT ... ON CONFLICT
--- (primary_phone) DO NOTHING).
+-- Round 21/22/23: at most ONE user per phone number (idempotent first-ever
+-- /phone/start), with the phone kept on the CREDENTIAL-OWNED user.
 --
--- De-dup keeps the phone on the phone_otp credential's user (not merely the oldest)
--- so the credential is never stranded on a nulled-phone user (which would make
--- /phone/verify hit this unique index AFTER consuming the code -> persistent 500s).
+-- ensurePhoneCredential creates a user by primary_phone. Two concurrent first-ever
+-- /phone/start could each create a user (there was no unique guard on
+-- users.primary_phone) -> duplicate users. The route now serializes creation and
+-- uses INSERT ... ON CONFLICT (primary_phone) DO NOTHING; this partial unique index
+-- is the DB backstop.
+--
+-- De-dup MUST keep the phone on the user that the phone_otp CREDENTIAL points at —
+-- NOT merely the oldest row. Otherwise (round 22 bug) the credential could be left
+-- pointing at a user whose primary_phone got nulled; /phone/verify would then try to
+-- set the phone back on that user and hit this unique index — AFTER consuming the
+-- code — giving the user PERSISTENT 500s on a correct code.
 
 -- Round 26: CAPTURE the dup->canonical identity into a DURABLE table BEFORE Step 1
--- nulls the duplicates' primary_phone, so the forward repair migration 0142 (which
--- identifies duplicates by phone) is not a silent no-op (Codex r26 #1).
+-- nulls the duplicates' primary_phone. The forward repair migration (148/0152)
+-- identifies duplicates by phone; if the phone were already nulled its repair would
+-- be a silent no-op (Codex r26 #1). The map survives; 148 consumes it.
 CREATE TABLE IF NOT EXISTS phone_dedupe_map (
   dup_user_id TEXT NOT NULL,
   canonical_user_id TEXT NOT NULL,
@@ -24,7 +31,9 @@ WHERE d.primary_phone IS NOT NULL AND uc.user_id <> d.id
 ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
 
 -- Step 1: null primary_phone on every user that is NOT the canonical owner of its
--- current phone (canonical = the credential-owned user if present, else oldest).
+-- current phone. Canonical = the phone_otp credential's user for that phone if one
+-- exists (credential-owned), else the oldest user with the phone. Non-destructive:
+-- only a duplicate phone linkage is cleared; no user rows or profiles are deleted.
 UPDATE users
 SET primary_phone = NULL
 WHERE primary_phone IS NOT NULL
@@ -38,8 +47,10 @@ WHERE primary_phone IS NOT NULL
      LIMIT 1)
   );
 
--- Step 2: restore the phone on a credential-owned user that lost it (earlier
--- age-based de-dup), only when no other user currently holds it.
+-- Step 2: if a credential-owned user lost its phone (e.g. an earlier age-based
+-- de-dup run nulled it), restore the phone on THAT user — but only when no other
+-- user currently holds it (so we never create a new duplicate). This guarantees the
+-- credential-owned user keeps the phone, so /phone/verify never re-conflicts.
 UPDATE users
 SET primary_phone = (
   SELECT uc.identifier FROM user_credentials uc

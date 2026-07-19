@@ -8,7 +8,7 @@
  * /phone/verify would try to set the phone back on that nulled user and hit the new
  * unique index — AFTER consuming the code — giving PERSISTENT 500s on a correct code.
  *
- * This applies the ACTUAL migration SQL (137) to a seeded fixture. Red-able: the old
+ * This applies the ACTUAL migration SQL (147) to a seeded fixture. Red-able: the old
  * age-based migration keeps the oldest and strands the credential.
  */
 
@@ -31,7 +31,7 @@ const asDbShim = (raw) => ({
   },
 })
 const MIGRATION = fs.readFileSync(
-  path.resolve('backend/db/migrations/137_users_primary_phone_unique.sql'),
+  path.resolve('backend/db/migrations/147_users_primary_phone_unique.sql'),
   'utf8',
 )
 
@@ -99,23 +99,23 @@ describe('phone de-dup migration keeps the phone on the credential-owned user', 
 })
 
 // ---------------------------------------------------------------------------
-// Round 24: the FORWARD repair migration 138 runs on an already-137-stamped DB
-// (137 was edited in place and never re-runs) AND repoints stranded ownership.
+// Round 24: the FORWARD repair migration 148 runs on an already-147-stamped DB
+// (147 was edited in place and never re-runs) AND repoints stranded ownership.
 // ---------------------------------------------------------------------------
 const SCHEMA = fs.readFileSync(path.resolve('backend/db/schema.sql'), 'utf8')
-const MIG138 = fs.readFileSync(path.resolve('backend/db/migrations/138_repair_phone_dedupe_repoint.sql'), 'utf8')
-// The round-22 age-based 137 (what an already-stamped DB actually ran).
-const AGE_BASED_137 = `
+const MIG148 = fs.readFileSync(path.resolve('backend/db/migrations/148_repair_phone_dedupe_repoint.sql'), 'utf8')
+// The round-22 age-based 147 (what an already-stamped DB actually ran).
+const AGE_BASED_147 = `
   UPDATE users SET primary_phone = NULL
   WHERE primary_phone IS NOT NULL AND EXISTS (
     SELECT 1 FROM users older WHERE older.primary_phone = users.primary_phone AND older.primary_phone IS NOT NULL
       AND (older.created_at < users.created_at OR (older.created_at = users.created_at AND older.id < users.id)));
   CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL;`
 
-const MIG138_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0142_repair_phone_dedupe_repoint.sql'), 'utf8')
+const MIG148_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0152_repair_phone_dedupe_repoint.sql'), 'utf8')
 // Round 32: forward migrations that re-apply the broadened malformed-audit to already-stamped DBs.
-const MIG139 = fs.readFileSync(path.resolve('backend/db/migrations/139_repair_malformed_profile_audit.sql'), 'utf8')
-const MIG139_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0143_repair_malformed_profile_audit.sql'), 'utf8')
+const MIG149 = fs.readFileSync(path.resolve('backend/db/migrations/149_repair_malformed_profile_audit.sql'), 'utf8')
+const MIG149_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0153_repair_malformed_profile_audit.sql'), 'utf8')
 
 // Build the FULL migrated schema with the REAL migration-runner semantics (Codex r28):
 // apply schema.sql then every migration, tolerating ONLY the "already applied / idempotent
@@ -141,7 +141,7 @@ function fullDb() {
   raw.pragma('foreign_keys = OFF') // fixtures seed rows without full FK graphs
   raw.exec(SCHEMA)
   for (const { name, sql } of ALL_MIGRATIONS) applyLikeRunner(raw, name, sql)
-  // Reset dedupe state applied by 137/138 above so each fixture starts clean.
+  // Reset dedupe state applied by 147/148 above so each fixture starts clean.
   raw.exec('DROP INDEX IF EXISTS ux_users_primary_phone; DELETE FROM phone_dedupe_map; DELETE FROM phone_dedupe_conflicts;')
   return raw
 }
@@ -155,14 +155,14 @@ const profileOwner = (raw, profileId) => raw.prepare(`SELECT user_id FROM profil
 const stripeOwner = (raw, custId) => raw.prepare(`SELECT user_id FROM stripe_customers WHERE stripe_customer_id = ?`).get(custId)?.user_id
 const conflicts = (raw) => raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts`).get().c
 
-const MIG137 = fs.readFileSync(path.resolve('backend/db/migrations/137_users_primary_phone_unique.sql'), 'utf8')
-// The REAL prod order: 137 (capture map -> null non-canonical phones -> index) THEN 138 (repair).
-const runRepair = (raw) => { raw.exec(MIG137); raw.exec(MIG138) }
+const MIG147 = fs.readFileSync(path.resolve('backend/db/migrations/147_users_primary_phone_unique.sql'), 'utf8')
+// The REAL prod order: 147 (capture map -> null non-canonical phones -> index) THEN 148 (repair).
+const runRepair = (raw) => { raw.exec(MIG147); raw.exec(MIG148) }
 
 // BY-CONSTRUCTION GUARD (Codex r27 #3): the two-owner inventory is INTROSPECTED from
 // the live migrated schema, not a hardcoded list — so a two-owner table added by any
 // future migration is automatically checked. The migration's classification is the
-// single source of truth (generated alongside 138/0142).
+// single source of truth (generated alongside 148/0152).
 const CLASSIFICATION = JSON.parse(fs.readFileSync(path.resolve('backend/tests/fixtures/phoneDedupeClassification.json'), 'utf8'))
 const EXEMPT = new Set(CLASSIFICATION.exempt)
 function twoOwnerTables(raw) {
@@ -195,8 +195,8 @@ function userStripeSplits(raw) {
   return n
 }
 
-describe('forward repair migration 138 (already-137-stamped DBs) + ownership repoint', () => {
-  it('the SQLite (138) and Postgres (0142) shared complex logic (merge + collapse + phone-fix) is byte-identical', () => {
+describe('forward repair migration 148 (already-147-stamped DBs) + ownership repoint', () => {
+  it('the SQLite (148) and Postgres (0152) shared complex logic (merge + collapse + phone-fix) is byte-identical', () => {
     // The two files differ ONLY in the documented dialect spots (the SAFE-JSON detect read
     // and the move/revoke exec: SQLite static vs PG existence-guarded DO block). The
     // complex, correctness-critical shared logic — the _members/_group/_merge build, the
@@ -205,28 +205,28 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     // Region from the _members build through the end of the collapse (before MOVE).
     const mergeCollapse = (s) => strip(s.split('DROP TABLE IF EXISTS _members;')[1].split('-- MOVE')[0]).trim()
     const phoneFix = (s) => strip(s.split('Keep the phone on the credential-owned user')[1]).trim()
-    expect(mergeCollapse(MIG138_PG)).toBe(mergeCollapse(MIG138))
-    expect(phoneFix(MIG138_PG)).toBe(phoneFix(MIG138))
+    expect(mergeCollapse(MIG148_PG)).toBe(mergeCollapse(MIG148))
+    expect(phoneFix(MIG148_PG)).toBe(phoneFix(MIG148))
     // And both derive move/revoke from the SAME generated classification (single source of truth).
     for (const t of [...CLASSIFICATION.moveProfile, ...CLASSIFICATION.moveAccount]) {
-      expect(MIG138).toContain(`UPDATE ${t} SET user_id`)
-      expect(MIG138_PG).toContain(`'${t}'`)
+      expect(MIG148).toContain(`UPDATE ${t} SET user_id`)
+      expect(MIG148_PG).toContain(`'${t}'`)
     }
   })
 
   it('[r28] the migration references NO renamed-away/absent table (no yana_* abort) and every referenced table EXISTS in the live schema', () => {
     // yana_* were renamed to hamilton_* (sqlite 090 / pg 0086); referencing them aborts PG.
     const yanaRef = /\byana_(authorizations|runs|autopilot_runs|blockers|resolved_fields|saved_sessions|payment_authorizations|attestation_authorizations)\b/
-    expect(yanaRef.test(MIG138.replace(/--.*/g, ''))).toBe(false)
-    expect(yanaRef.test(MIG138_PG.replace(/--.*/g, ''))).toBe(false)
+    expect(yanaRef.test(MIG148.replace(/--.*/g, ''))).toBe(false)
+    expect(yanaRef.test(MIG148_PG.replace(/--.*/g, ''))).toBe(false)
     // Every table the SQLite migration MOVES/REVOKES must exist in the real migrated schema.
     const raw = fullDb()
     const existing = new Set(raw.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all().map((r) => r.name))
     const referenced = [...CLASSIFICATION.moveProfile, ...CLASSIFICATION.moveAccount, ...CLASSIFICATION.revoke]
     const missing = referenced.filter((t) => !existing.has(t))
     expect(missing).toEqual([])
-    // Postgres 0142 existence-guards each table (to_regclass) so an absent/renamed table is skipped.
-    expect(MIG138_PG).toContain('to_regclass(t) IS NOT NULL')
+    // Postgres 0152 existence-guards each table (to_regclass) so an absent/renamed table is skipped.
+    expect(MIG148_PG).toContain('to_regclass(t) IS NOT NULL')
   })
 
   it('[r27 #3 GUARD] every two-owner table in the live migrated schema is classified (move / revoke / exempt)', () => {
@@ -254,7 +254,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('sp', 'stranger', 'Stranger')`).run()
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('sp', 'basic_information', ?)`).run(JSON.stringify({ phone: p }))
 
-    raw.exec(MIG138)
+    raw.exec(MIG148)
 
     // NO cross-account merge: the stranger's profile + credential stay theirs.
     expect(profileOwner(raw, 'sp')).toBe('stranger')
@@ -292,7 +292,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
 
   it('[r31 HIGH] EVERY malformed basic_information on a NULL-phone/no-map user is flagged — no text heuristic (phone under any key / numeric-only / any case)', () => {
     const raw = fullDb()
-    // Three already-137-stamped duplicates (primary_phone NULLED, NO proven map) whose ONLY
+    // Three already-147-stamped duplicates (primary_phone NULLED, NO proven map) whose ONLY
     // remaining phone evidence is a MALFORMED basic_information — but the phone does NOT sit
     // under a lowercase 'phone' key, so the r30 `LIKE '%phone%'` gate would SILENTLY DROP them.
     // The corrupt evidence itself must be surfaced regardless of its (unreadable) text.
@@ -307,7 +307,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
       raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, 'basic_information', ?)`).run(`p-${uid}`, data)
     }
 
-    expect(() => raw.exec(MIG138)).not.toThrow() // the flag INSERT itself must never abort on a malformed row
+    expect(() => raw.exec(MIG148)).not.toThrow() // the flag INSERT itself must never abort on a malformed row
 
     // ALL THREE recorded for operator review — none silently skipped for lacking the word 'phone'.
     for (const uid of Object.keys(malformed)) {
@@ -323,17 +323,17 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('vdup', NULL, '2026-01-03')`).run()
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('vp', 'vdup', 'VD')`).run()
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('vp', 'basic_information', ?)`).run(JSON.stringify({ email: 'v@x.com' }))
-    raw.exec(MIG138)
+    raw.exec(MIG148)
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='vdup'`).get().c).toBe(0)
   })
 
-  it('[r32 HIGH] forward 139 re-applies the broadened malformed-audit to an already-138-stamped DB (in-place 138 edit never re-runs by filename)', () => {
-    // An already-138/0142-stamped DB that ran the r30 LIKE-gated behavior MISSED malformed rows
+  it('[r32 HIGH] forward 149 re-applies the broadened malformed-audit to an already-148-stamped DB (in-place 148 edit never re-runs by filename)', () => {
+    // An already-148/0152-stamped DB that ran the r30 LIKE-gated behavior MISSED malformed rows
     // whose corrupt text lacked the literal 'phone'. Because the boot runner selects by filename
-    // (files.filter(f => !applied.has(f))), the in-place r30/r31 edits to 138 never re-run there.
-    // Forward 139 fixes exactly that DB. Simulate it: malformed rows present, 138 already ran and
+    // (files.filter(f => !applied.has(f))), the in-place r30/r31 edits to 148 never re-run there.
+    // Forward 149 fixes exactly that DB. Simulate it: malformed rows present, 148 already ran and
     // left them UNFLAGGED (the r30 miss) — represented here by an empty conflicts table.
-    const raw = fullDb() // fullDb runs all migrations incl. 139 then CLEARS the dedupe tables → clean slate
+    const raw = fullDb() // fullDb runs all migrations incl. 149 then CLEARS the dedupe tables → clean slate
     const missed = {
       's-contact': '{"contact": "+15557770000" broken json',
       's-numeric': '{ 15557770001 ',
@@ -344,21 +344,21 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
       raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, 'S')`).run(`p-${uid}`, uid)
       raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, 'basic_information', ?)`).run(`p-${uid}`, data)
     }
-    // PRECONDITION (the r30 miss): with 138 already stamped and NOT re-run, these stay unflagged.
+    // PRECONDITION (the r30 miss): with 148 already stamped and NOT re-run, these stay unflagged.
     for (const uid of Object.keys(missed)) {
       expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid).c).toBe(0)
     }
 
     // The forward migration surfaces every previously-missed malformed row.
-    expect(() => raw.exec(MIG139)).not.toThrow()
+    expect(() => raw.exec(MIG149)).not.toThrow()
     for (const uid of Object.keys(missed)) {
       expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid)?.reason).toBe('pre-map-malformed-profile, manual review')
       expect(profileOwner(raw, `p-${uid}`)).toBe(uid) // detect-only, nothing moved
     }
     expect(userProfileSplits(raw)).toBe(0)
 
-    // IDEMPOTENT: re-running 139 is a no-op (no double-flag — sentinel canonical id + ON CONFLICT).
-    raw.exec(MIG139)
+    // IDEMPOTENT: re-running 149 is a no-op (no double-flag — sentinel canonical id + ON CONFLICT).
+    raw.exec(MIG149)
     for (const uid of Object.keys(missed)) {
       expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid).c).toBe(1)
     }
@@ -367,34 +367,34 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('svalid', NULL, '2026-01-05')`).run()
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pvalid', 'svalid', 'V')`).run()
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('pvalid', 'basic_information', ?)`).run(JSON.stringify({ email: 'v@x.com' }))
-    raw.exec(MIG139)
+    raw.exec(MIG149)
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='svalid'`).get().c).toBe(0)
   })
 
-  it('[r32 HIGH] fresh install (138 then 139) does not double-flag; 139 is a safe no-op after 138 already flagged', () => {
+  it('[r32 HIGH] fresh install (148 then 149) does not double-flag; 149 is a safe no-op after 148 already flagged', () => {
     const raw = fullDb()
     const p = '+15556660000'
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('fdup', NULL, '2026-01-01')`).run()
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('fp', 'fdup', 'F')`).run()
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('fp', 'basic_information', ?)`).run('{"contact": "' + p + '" broken')
 
-    // Fresh prod order: 138 (current r31 predicate) flags it, THEN 139 runs as a no-op.
-    raw.exec(MIG138)
+    // Fresh prod order: 148 (current r31 predicate) flags it, THEN 149 runs as a no-op.
+    raw.exec(MIG148)
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='fdup'`).get().c).toBe(1)
-    raw.exec(MIG139)
+    raw.exec(MIG149)
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='fdup'`).get().c).toBe(1) // no double-flag
   })
 
-  it('[r32] forward 139 (SQLite) and 0143 (Postgres) share byte-identical audit logic (only json_valid vs pdedupe_is_json differs)', () => {
+  it('[r32] forward 149 (SQLite) and 0153 (Postgres) share byte-identical audit logic (only json_valid vs pdedupe_is_json differs)', () => {
     // Normalize away comments, the PG-only pg_temp helper block, and the dialect validity check,
     // then the remaining INSERT logic must be byte-identical across the two forward migrations.
     const strip = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('--') && l.trim() !== '').join('\n')
     const core = (s) => strip(s.split('INSERT INTO phone_dedupe_conflicts')[1])
       .replace('AND pg_temp.pdedupe_is_json(ps.data) = false', 'AND <<validity>>')
       .replace('AND json_valid(ps.data) = 0', 'AND <<validity>>')
-    expect(core(MIG139_PG)).toBe(core(MIG139))
+    expect(core(MIG149_PG)).toBe(core(MIG149))
     // Both use the sentinel canonical id + ON CONFLICT DO NOTHING (idempotent, no double-flag).
-    for (const m of [MIG139, MIG139_PG]) {
+    for (const m of [MIG149, MIG149_PG]) {
       expect(m).toContain(`'(unknown-malformed-profile)'`)
       expect(m).toContain('ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING')
       expect(m).toContain('pre-map-malformed-profile, manual review')
@@ -434,9 +434,9 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
       // KEY: even with ZERO missing columns/tables (schema check would say OK), a failed
       // repair OR a broken post-condition flips the line OFF OK — it can't hide.
       expect(summarizeBootHealthLine({ missingCols: [], missingTables: [], failed: [], dedupe: { ok: true, problems: [] } })).toBe('schema check: OK')
-      const failedLine = summarizeBootHealthLine({ missingCols: [], missingTables: [], failed: ['138_repair_phone_dedupe_repoint.sql'], dedupe: badHealth })
+      const failedLine = summarizeBootHealthLine({ missingCols: [], missingTables: [], failed: ['148_repair_phone_dedupe_repoint.sql'], dedupe: badHealth })
       expect(failedLine).not.toBe('schema check: OK')
-      expect(failedLine).toMatch(/failed_migrations=138_repair_phone_dedupe_repoint\.sql/)
+      expect(failedLine).toMatch(/failed_migrations=148_repair_phone_dedupe_repoint\.sql/)
       expect(failedLine).toMatch(/phone_dedupe=/)
       // Broken post-condition alone (no failed file) still flips it — the schema-OK path is closed.
       expect(summarizeBootHealthLine({ dedupe: badHealth })).not.toBe('schema check: OK')
@@ -454,36 +454,36 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     expect(() => applyLikeRunner(raw, 'x.sql', `CREATE TABLE t (id TEXT);`)).not.toThrow()
   })
 
-  it('the runner selects 138 even when 137 is already stamped (forward migration, not an in-place edit)', () => {
+  it('the runner selects 148 even when 147 is already stamped (forward migration, not an in-place edit)', () => {
     // Mirrors migrate.js: `pending = files.filter(f => !applied.has(f))`.
     const dir = path.resolve('backend/db/migrations')
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
-    expect(files).toContain('137_users_primary_phone_unique.sql')
-    expect(files).toContain('138_repair_phone_dedupe_repoint.sql')
-    // A DB that already ran through 137 (age-based) has it stamped; the in-place
-    // r23 edit to 137 would NEVER re-run — but 138 is a NEW filename, so:
-    const applied = new Set(files.filter((f) => f <= '137_users_primary_phone_unique.sql'))
+    expect(files).toContain('147_users_primary_phone_unique.sql')
+    expect(files).toContain('148_repair_phone_dedupe_repoint.sql')
+    // A DB that already ran through 147 (age-based) has it stamped; the in-place
+    // r23 edit to 147 would NEVER re-run — but 148 is a NEW filename, so:
+    const applied = new Set(files.filter((f) => f <= '147_users_primary_phone_unique.sql'))
     const pending = files.filter((f) => !applied.has(f))
-    expect(pending).toContain('138_repair_phone_dedupe_repoint.sql')
+    expect(pending).toContain('148_repair_phone_dedupe_repoint.sql')
     // Postgres twin exists too.
-    expect(fs.existsSync(path.resolve('backend/db/postgres/migrations/0142_repair_phone_dedupe_repoint.sql'))).toBe(true)
+    expect(fs.existsSync(path.resolve('backend/db/postgres/migrations/0152_repair_phone_dedupe_repoint.sql'))).toBe(true)
   })
 
-  it('repairs an age-based-137 DB: credential-owned user regains the phone, oldest nulled, one holder', () => {
+  it('repairs an age-based-147 DB: credential-owned user regains the phone, oldest nulled, one holder', () => {
     const raw = fullDb()
     // Credential owned by the NEWER user (u-canonical); an older duplicate exists.
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-old', ?, '2026-01-01T00:00:00Z')`).run(phone)
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-canonical', ?, '2026-02-01T00:00:00Z')`).run(phone)
     raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('c1', 'u-canonical', 'phone_otp', ?)`).run(phone)
 
-    // Simulate the r22-stamped state: the age-based 137 already ran (kept the OLDEST,
+    // Simulate the r22-stamped state: the age-based 147 already ran (kept the OLDEST,
     // nulled the credential-owned u-canonical → stranded credential).
-    raw.exec(AGE_BASED_137)
+    raw.exec(AGE_BASED_147)
     expect(phoneOf(raw, 'u-old')).toBe(phone)
     expect(phoneOf(raw, 'u-canonical')).toBeNull() // credential stranded on a nulled-phone user
 
-    // The FORWARD migration 138 repairs it.
-    raw.exec(MIG138)
+    // The FORWARD migration 148 repairs it.
+    raw.exec(MIG148)
     expect(phoneOf(raw, 'u-canonical')).toBe(phone) // credential-owned user regains the phone
     expect(phoneOf(raw, 'u-old')).toBeNull()
     expect(phoneCountOn(raw, phone)).toBe(1)
@@ -564,7 +564,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
 
   it('is idempotent (re-run is a no-op) and a fresh install is a safe no-op', () => {
     const raw = fullDb()
-    // Fresh install (corrected 137 already created the index; no dups).
+    // Fresh install (corrected 147 already created the index; no dups).
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u1', ?, '2026-01-01T00:00:00Z')`).run(phone)
     raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('c1', 'u1', 'phone_otp', ?)`).run(phone)
     raw.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL')
@@ -579,16 +579,16 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
   })
 
   // ---- Round 26 ----
-  it('[r26 #1] 137 (which nulls the dup phone) THEN 138 still repairs — the durable map survives the null (no silent no-op)', () => {
+  it('[r26 #1] 147 (which nulls the dup phone) THEN 148 still repairs — the durable map survives the null (no silent no-op)', () => {
     const raw = fullDb()
     seedPhoneDup(raw)
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
 
-    raw.exec(MIG137) // captures phone_dedupe_map, THEN nulls u-dup's phone
+    raw.exec(MIG147) // captures phone_dedupe_map, THEN nulls u-dup's phone
     expect(phoneOf(raw, 'u-dup')).toBeNull() // phone gone — the old repair would no-op here
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map`).get().c).toBe(1) // but the map survives
 
-    raw.exec(MIG138)
+    raw.exec(MIG148)
     // Repair still ran: the mergeable dup's profile moved to the canonical.
     expect(profileOwner(raw, 'p-dup')).toBe('u-canonical')
     expect(userProfileSplits(raw)).toBe(0)
@@ -715,10 +715,10 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     expect(userProfileSplits(raw)).toBe(0)
   })
 
-  it('[r28 #2] pre-map (old-52caf99-137) stamped DB: a nulled candidate is RECORDED for manual review, NEVER auto-merged (fail closed)', () => {
+  it('[r28 #2] pre-map (old-52caf99-147) stamped DB: a nulled candidate is RECORDED for manual review, NEVER auto-merged (fail closed)', () => {
     const raw = fullDb()
     const p = '+15552220000'
-    // r23-137-stamped state: a nulled user with a profile whose trace phone matches the canonical.
+    // r23-147-stamped state: a nulled user with a profile whose trace phone matches the canonical.
     // We CANNOT prove they were the phone's duplicate, so we must NOT auto-merge.
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('pre-dup', NULL, '2026-01-01')`).run()
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('pre-can', ?, '2026-02-01')`).run(p)
@@ -726,7 +726,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pre-p', 'pre-dup', 'PD')`).run()
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('pre-p', 'basic_information', ?)`).run(JSON.stringify({ phone: p }))
 
-    raw.exec(MIG138) // only 138 runs (old 137 stamped)
+    raw.exec(MIG148) // only 148 runs (old 147 stamped)
 
     // NOT merged (their profile stays theirs), NOT in the proven map — but RECORDED (not silent).
     expect(profileOwner(raw, 'pre-p')).toBe('pre-dup')

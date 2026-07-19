@@ -1,6 +1,6 @@
--- Round 24/25/26/27/28/29: FORWARD repair migration (Postgres twin of sqlite 138_repair_phone_dedupe_repoint.sql).
+-- Round 24/25/26/27/28/29: FORWARD repair migration (Postgres twin of sqlite 148_repair_phone_dedupe_repoint.sql).
 --
--- Runs AFTER 137 (which captures the dup->canonical identity into phone_dedupe_map
+-- Runs AFTER 147 (which captures the dup->canonical identity into phone_dedupe_map
 -- BEFORE nulling the duplicates' primary_phone). Re-applies the credential-owned phone
 -- fix + index itself so it also repairs stamped DBs. Idempotent + fresh no-op.
 --
@@ -13,7 +13,7 @@
 -- Two-owner tables enumerated from the FULL migrated schema, each classified
 -- MOVE / REVOKE / EXEMPT; existence-guarded on Postgres (renamed-away yana_* skipped).
 --
--- PROVEN MAP ONLY: entries come from 137's pre-null capture or 138's live-capture of a
+-- PROVEN MAP ONLY: entries come from 147's pre-null capture or 148's live-capture of a
 -- dup that STILL holds its phone. A coincidental profile-phone match is NEVER
 -- auto-merged; such candidates are recorded as operator conflicts and moved by NOTHING.
 --

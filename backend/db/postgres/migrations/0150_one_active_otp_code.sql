@@ -1,5 +1,5 @@
 -- Round 21: exactly ONE consumable active OTP code per credential.
--- Twin of sqlite migration 136_one_active_otp_code.sql.
+-- Twin of sqlite migration 146_one_active_otp_code.sql.
 --
 -- DB-level backstop for the per-credential serialized mint in
 -- insertFreshVerificationCode: on Postgres READ COMMITTED, two concurrent
