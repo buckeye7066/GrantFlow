@@ -99,14 +99,31 @@ const AGE_BASED_137 = `
       AND (older.created_at < users.created_at OR (older.created_at = users.created_at AND older.id < users.id)));
   CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL;`
 
+const MIG138_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0142_repair_phone_dedupe_repoint.sql'), 'utf8')
+
 function fullDb() {
   const raw = new Database(':memory:')
   raw.exec(SCHEMA)
+  raw.pragma('foreign_keys = OFF') // fixtures seed rows without full FK graphs
   raw.exec('DROP INDEX IF EXISTS ux_users_primary_phone') // allow seeding duplicate phones
   return raw
 }
+const seedPhoneDup = (raw, { dupCreated = '2026-01-01T00:00:00Z', canCreated = '2026-02-01T00:00:00Z' } = {}) => {
+  raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-dup', ?, ?)`).run(phone, dupCreated)
+  raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-canonical', ?, ?)`).run(phone, canCreated)
+  raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('c1', 'u-canonical', 'phone_otp', ?)`).run(phone)
+}
+// The account an ownership FK ultimately resolves to (via the parent resource).
+const profileOwner = (raw, profileId) => raw.prepare(`SELECT user_id FROM profiles WHERE id = ?`).get(profileId)?.user_id
+const stripeOwner = (raw, custId) => raw.prepare(`SELECT user_id FROM stripe_customers WHERE stripe_customer_id = ?`).get(custId)?.user_id
+const conflicts = (raw) => raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts`).get().c
 
 describe('forward repair migration 138 (already-137-stamped DBs) + ownership repoint', () => {
+  it('the SQLite (138) and Postgres (0142) SQL bodies are identical (dialect parity)', () => {
+    const body = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n').trim()
+    expect(body(MIG138_PG)).toBe(body(MIG138))
+  })
+
   it('the runner selects 138 even when 137 is already stamped (forward migration, not an in-place edit)', () => {
     // Mirrors migrate.js: `pending = files.filter(f => !applied.has(f))`.
     const dir = path.resolve('backend/db/migrations')
@@ -144,23 +161,75 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     // has it → no unique conflict / no 500.
   })
 
-  it('repoints a non-canonical duplicate\'s PROFILE and saved_grant to the canonical user (nothing stranded)', () => {
+  it('MERGEABLE (canonical owns nothing): fully merges the dup — profile + grant move together to canonical, no split', () => {
     const raw = fullDb()
-    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-dup', ?, '2026-01-01T00:00:00Z')`).run(phone)
-    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-canonical', ?, '2026-02-01T00:00:00Z')`).run(phone)
-    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('c1', 'u-canonical', 'phone_otp', ?)`).run(phone)
-    // The non-canonical duplicate OWNS a profile + a saved_grant.
+    seedPhoneDup(raw)
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
     raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg1', 'u-dup', 'p-dup', 'opp1')`).run()
 
     raw.exec(MIG138)
 
-    // Phone resolves (via credential) to u-canonical — and its data is now attached there.
     expect(phoneOf(raw, 'u-canonical')).toBe(phone)
-    expect(raw.prepare(`SELECT user_id FROM profiles WHERE id='p-dup'`).get().user_id).toBe('u-canonical')
+    // Profile AND its saved_grant moved to canonical — the grant's user_id matches its profile's owner.
+    expect(profileOwner(raw, 'p-dup')).toBe('u-canonical')
     expect(raw.prepare(`SELECT user_id FROM saved_grants WHERE id='sg1'`).get().user_id).toBe('u-canonical')
-    // Nothing left under the stranded duplicate.
-    expect(raw.prepare(`SELECT COUNT(*) c FROM profiles WHERE user_id='u-dup'`).get().c).toBe(0)
+    expect(raw.prepare(`SELECT user_id FROM saved_grants WHERE id='sg1'`).get().user_id).toBe(profileOwner(raw, 'p-dup'))
+    expect(conflicts(raw)).toBe(0) // cleanly merged, no unresolved conflict
+  })
+
+  it('UNMERGEABLE (both own a PROFILE): NO split — dup profile + its grant stay TOGETHER on the dup; conflict recorded', () => {
+    const raw = fullDb()
+    seedPhoneDup(raw)
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-can', 'u-canonical', 'Canon Profile')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg1', 'u-dup', 'p-dup', 'opp1')`).run()
+
+    raw.exec(MIG138)
+
+    // CORE INVARIANT: the grant's user_id must equal the owner of its profile_id — never split.
+    const sgUser = raw.prepare(`SELECT user_id FROM saved_grants WHERE id='sg1'`).get().user_id
+    expect(sgUser).toBe(profileOwner(raw, 'p-dup'))
+    // Left fully self-consistent on the dup (not half-moved to canonical).
+    expect(profileOwner(raw, 'p-dup')).toBe('u-dup')
+    expect(sgUser).toBe('u-dup')
+    // Only the canonical keeps the phone; the conflict is recorded for the owner.
+    expect(phoneOf(raw, 'u-canonical')).toBe(phone)
+    expect(phoneOf(raw, 'u-dup')).toBeNull()
+    expect(conflicts(raw)).toBe(1)
+  })
+
+  it('UNMERGEABLE (both have a STRIPE customer): service_purchases are NOT left referencing a customer under a different user', () => {
+    const raw = fullDb()
+    seedPhoneDup(raw)
+    raw.prepare(`INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES ('u-canonical', 'cus_can')`).run()
+    raw.prepare(`INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES ('u-dup', 'cus_dup')`).run()
+    raw.prepare(`INSERT INTO service_purchases (id, user_id, service_id, client_category, pricing_model, status, stripe_customer_id) VALUES ('sp', 'u-dup', 'svc1', 'cat', 'flat', 'paid', 'cus_dup')`).run()
+
+    raw.exec(MIG138)
+
+    // CORE INVARIANT: the purchase's user_id must equal the owner of its stripe_customer_id.
+    const sp = raw.prepare(`SELECT user_id, stripe_customer_id FROM service_purchases WHERE id='sp'`).get()
+    expect(sp.user_id).toBe(stripeOwner(raw, sp.stripe_customer_id))
+    // Both left on the dup (consistent), never split onto the canonical's customer.
+    expect(sp.user_id).toBe('u-dup')
+    expect(stripeOwner(raw, 'cus_dup')).toBe('u-dup')
+    expect(conflicts(raw)).toBe(1)
+  })
+
+  it('UNMERGEABLE (both have user_preferences): consistent, no split, dup left intact', () => {
+    const raw = fullDb()
+    seedPhoneDup(raw)
+    raw.prepare(`INSERT INTO user_preferences (user_id) VALUES ('u-canonical')`).run()
+    raw.prepare(`INSERT INTO user_preferences (user_id) VALUES ('u-dup')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
+
+    raw.exec(MIG138)
+
+    // both-prefs → unmergeable → nothing moves; dup keeps its profile + prefs together.
+    expect(profileOwner(raw, 'p-dup')).toBe('u-dup')
+    expect(raw.prepare(`SELECT COUNT(*) c FROM user_preferences WHERE user_id='u-dup'`).get().c).toBe(1)
+    expect(conflicts(raw)).toBe(1)
+    expect(phoneOf(raw, 'u-canonical')).toBe(phone)
   })
 
   it('is idempotent (re-run is a no-op) and a fresh install is a safe no-op', () => {

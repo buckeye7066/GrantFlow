@@ -204,6 +204,14 @@ Compat: behavior-preserving for normal login; only the de-dup canonical choice, 
 
 Compat: behavior-preserving; the forward migration repairs stranded phone credentials + ownership on already-deployed DBs. New tests in `otpPhoneDedupMigration.test.js` (forward-migration selection; age-based-137-then-138 repair; profile/saved_grant repoint; idempotent + fresh-install no-op), verified red by removing the repoint / restore steps.
 
+## Round 25 — phone-dedup moves data as consistent units, never splitting ownership (see PORTFOLIO_AUDIT.md §5y)
+
+- **[HIGH x2] Fixed split-ownership from the r24 per-table conflict-skip.** r24 could leave a row with `user_id` on the canonical but `profile_id`/`stripe_customer_id` on the duplicate (e.g. profile stays on dup while its saved_grants moved to canonical; service_purchases moved while stripe_customer stayed). `138`/`0142` rewritten to move each duplicate as an ALL-OR-NOTHING unit: a `mergeable` dup (canonical + dup don't both own any 1-per-user resource — profile / stripe_customer / user_preferences) has ALL its owned rows moved to the canonical (no collisions possible, so no split); an UNMERGEABLE dup has NOTHING moved (stays fully self-consistent, loses only phone login) and is recorded in a new `phone_dedupe_conflicts` table for manual owner reconciliation.
+- Core invariant: after the migration, no row's user_id / profile_id / stripe_customer_id point at different accounts. Membership-PK and credential-UNIQUE collisions are still guarded (skipping a redundant row never splits). Idempotent + fresh no-op. `138` and `0142` SQL bodies are identical (parity-tested).
+- All r19–r24 preserved. New `phone_dedupe_conflicts` table added to schema.sql + the migration.
+
+Compat: behavior-preserving; the migration cleanly merges reconcilable duplicates and leaves genuinely-ambiguous ones intact-and-recorded (no silent split, no data loss). New tests in `otpPhoneDedupMigration.test.js` (mergeable full-merge; unmergeable both-profiles / both-stripe / both-prefs cross-FK-consistency; SQLite/Postgres body parity), verified red by reintroducing the split.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

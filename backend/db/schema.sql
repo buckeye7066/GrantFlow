@@ -777,6 +777,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone
   ON users (primary_phone)
   WHERE primary_phone IS NOT NULL;
 
+-- Round 25: genuinely-unmergeable phone duplicates (canonical + dup both own a
+-- 1-per-user resource) are left fully self-consistent and recorded here for the
+-- owner to reconcile manually (migration 138/0142 populates this).
+CREATE TABLE IF NOT EXISTS phone_dedupe_conflicts (
+  dup_user_id TEXT NOT NULL,
+  canonical_user_id TEXT NOT NULL,
+  phone TEXT,
+  reason TEXT,
+  recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (dup_user_id, canonical_user_id)
+);
+
 -- saved_grants: profile-scoped favorites/bookmarks. Each user can save the
 -- same opportunity independently under each of their profiles. Legacy rows
 -- created before migration 075 keep profile_id=NULL and are visible to all

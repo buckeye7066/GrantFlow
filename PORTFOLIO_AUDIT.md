@@ -508,6 +508,28 @@ Conflicts are handled conservatively (repoint only when the canonical has no col
 
 **Confirmation:** the repair runs on already-stamped DBs via the new forward migrations `138`/`0142`, and all dependent ownership (profiles + the audited account-level join tables) is repointed to the canonical credential-owner — no stranded data, no post-migration verify 500.
 
+## 5y. Round 25 — the repair moves data as CONSISTENT UNITS (no split ownership) (Codex review of commit `bd80ba5`)
+
+The r24 repoint used a per-table conflict-SKIP strategy that could leave **split** ownership: a row's `user_id` pointing at the canonical while its `profile_id`/`stripe_customer_id` pointed at the duplicate.
+
+### R25-1 [HIGH] Duplicate profiles stranded data when the canonical already had a profile
+r24 moved a dup profile only when the canonical had none; if BOTH owned profiles, the profile stayed on the dup but the dup's `saved_grants` were moved to `user_id=canonical` while still `profile_id=p-dup` → a **split** grant the canonical's phone login (which enumerates by `profiles.user_id`) can't see.
+
+### R25-2 [HIGH] Conflict-skipped singletons split billing/account ownership
+`stripe_customers` repoint was skipped when the canonical already had one, but `service_purchases` moved **unconditionally** → `service_purchases.user_id=canonical` with `stripe_customer_id=cus_dup` (still under the dup) → billing under the nulled-phone dup; the same silent-skip risk existed for other singleton resources.
+
+**Core invariant enforced:** after the migration, for EVERY row, its `user_id` AND `profile_id` AND `stripe_customer_id` (and any ownership FK) refer to the SAME account — never half-merged.
+
+**Fix (chosen model — endorsed by the reviewer's option list; `138`/`0142` rewritten, dialect-identical):** move each duplicate as an **ALL-OR-NOTHING unit**, gated on a `mergeable` flag computed per dup = *the canonical and the dup do NOT both own any 1-per-user resource* (`profiles`, `stripe_customers`, `user_preferences`):
+- **Mergeable dup** → move **every** owned row to the canonical. Because no 1-per-user resource collides (by definition), every `user_id`/`profile_id`/`stripe_customer_id` reference stays aligned under the canonical. (Membership PK and credential `UNIQUE(type,identifier)` collisions are still guarded — skipping a redundant row never splits, since those reference shared/self resources.)
+- **Unmergeable dup** → move **NOTHING**. The duplicate stays fully self-consistent (every row still points at it); it only loses phone login (the phone belongs to the canonical via the credential — recoverable via its email/password), and the conflict is **recorded** in a new `phone_dedupe_conflicts` table (`dup_user_id`, `canonical_user_id`, `phone`, `reason`) for the owner to reconcile manually.
+
+Either way, no row is ever left with a split parent. Idempotent + re-runnable; fresh install is a no-op.
+
+**Tests (`otpPhoneDedupMigration.test.js`):** the SQLite `138` and Postgres `0142` SQL **bodies are identical** (dialect-parity guard); MERGEABLE (canonical owns nothing) → profile + its `saved_grant` move together to the canonical, `grant.user_id == profileOwner(grant.profile_id)`, no conflict; UNMERGEABLE both-profiles → the grant's `user_id` **equals its profile's owner** (both stay on the dup), phone on the canonical, conflict recorded; UNMERGEABLE both-stripe → `service_purchases.user_id == stripeOwner(stripe_customer_id)` (both on the dup — no billing split); UNMERGEABLE both-prefs → consistent; plus the r24 age-based-137 repair, forward-migration selection, idempotent + fresh no-op. **Verified red:** reintroducing the split (moving `saved_grants` unconditionally) fails the cross-FK-consistency assertion.
+
+**Confirmation:** after the repair, no row has `user_id`/`profile_id`/`stripe_customer_id` pointing at different accounts (no split ownership); every duplicate is either cleanly merged into the canonical or left fully self-consistent (phone-login-lost, recorded in `phone_dedupe_conflicts` for manual reconciliation).
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.
