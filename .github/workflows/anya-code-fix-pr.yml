@@ -17,12 +17,22 @@ on:
         type: string
         default: "false"
       land_mode:
-        description: "pr = open a PR (default); direct = admin-merge to main after gates pass (no human approval, build gate kept); gate_only = apply+gates+push branch then STOP (app-side lander merges on a green run)"
+        description: "pr = open a PR (default, optional CI-gated auto-merge); gate_only = apply + run release:gates + assert ONLY declared files changed + push branch, then STOP. There is NO direct admin-merge here: the direct-to-main merge lives entirely in the backend (landPatchDirectToMain), gated by a single-use HMAC token + head_sha binding. A raw workflow_dispatch can NEVER admin-merge."
         required: false
         type: string
         default: "pr"
       branch:
-        description: "Explicit branch name to push (used by gate_only so the app can find + merge it). Empty = auto-generate."
+        description: "Explicit branch name to push (gate_only passes a fresh unique branch the backend lander later merges). Empty = auto-generate."
+        required: false
+        type: string
+        default: ""
+      patch_sha256:
+        description: "sha256 of patch_content, computed by the backend. gate_only refuses if the applied patch does not match."
+        required: false
+        type: string
+        default: ""
+      expected_paths:
+        description: "Newline-separated repo-relative paths the validated patch declared. gate_only refuses if the working tree changes ANY other file."
         required: false
         type: string
         default: ""
@@ -42,11 +52,22 @@ jobs:
         shell: bash
         env:
           PATCH_CONTENT: ${{ inputs.patch_content }}
+          PATCH_SHA256_INPUT: ${{ inputs.patch_sha256 }}
         run: |
           set -euo pipefail
           git config --global core.autocrlf false
           git config --global core.eol lf
           printf '%s' "$PATCH_CONTENT" > /tmp/patch.diff
+
+          # Bind the applied bytes to what the backend validated: sha256 of the
+          # exact patch_content must equal the backend-supplied patch_sha256.
+          if [ -n "$PATCH_SHA256_INPUT" ]; then
+            ACTUAL_SHA="$(printf '%s' "$PATCH_CONTENT" | sha256sum | awk '{print $1}')"
+            if [ "$ACTUAL_SHA" != "$PATCH_SHA256_INPUT" ]; then
+              echo "patch_content sha256 ($ACTUAL_SHA) does not match backend-declared patch_sha256 ($PATCH_SHA256_INPUT) — refusing."
+              exit 1
+            fi
+          fi
 
           if git apply --check /tmp/patch.diff; then
             git apply /tmp/patch.diff
@@ -68,8 +89,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      # `npm ci` with NO install fallback: `npm install` would rewrite
+      # package-lock.json, and that churn would ride along into the commit
+      # (Sol HIGH #3). A lockfile mismatch must FAIL the job, not be papered over.
       - name: Install deps
-        run: npm ci --include=optional || npm install --include=optional
+        run: npm ci --include=optional
 
       - name: Corruption hotspot guard
         run: node scripts/guard-corruption-hotspots.mjs
@@ -80,13 +104,23 @@ jobs:
       - name: Preflight gates
         run: npm run release:gates
 
+      # After gates, ASSERT the working tree contains ONLY the files the
+      # validated patch declared (no lockfile churn, generated artifacts, or
+      # gate-written files) and that none hit the critical-path denylist. FAILS
+      # the job on any undeclared/forbidden change, so exactly the verified diff
+      # can be committed — nothing more (Sol HIGH #3).
+      - name: Assert only declared files changed
+        if: ${{ inputs.expected_paths != '' }}
+        env:
+          EXPECTED_PATHS: ${{ inputs.expected_paths }}
+        run: node scripts/assert-direct-land-tree.mjs
+
       # NOTE: this step runs AFTER the gate steps above (corruption guard, code
-      # quality, release:gates). `set -euo pipefail` + step ordering guarantees
-      # a RED gate fails the job BEFORE any branch is pushed or merged — so a fix
-      # that is adversarially clean but fails release:gates NEVER lands on main,
-      # in ANY land_mode. The gate is preserved; only the human-approval step is
-      # removed for land_mode=direct.
-      - name: Create branch, commit, push, and land per land_mode
+      # quality, release:gates, declared-files assertion). `set -euo pipefail` +
+      # step ordering guarantees a RED gate fails the job BEFORE any branch is
+      # pushed — so a fix that is adversarially clean but fails release:gates (or
+      # the declared-files assertion) NEVER lands, in ANY land_mode.
+      - name: Create branch, commit, push
         env:
           # Prefer a PAT when provisioned: PRs created with the default
           # GITHUB_TOKEN do not trigger `on: pull_request` CI runs, so the
@@ -97,6 +131,7 @@ jobs:
           AUTOMERGE_INPUT: ${{ inputs.automerge }}
           LAND_MODE_INPUT: ${{ inputs.land_mode }}
           BRANCH_INPUT: ${{ inputs.branch }}
+          EXPECTED_PATHS: ${{ inputs.expected_paths }}
         run: |
           set -euo pipefail
 
@@ -116,15 +151,31 @@ jobs:
           fi
 
           git checkout -b "$BRANCH_NAME"
-          git add -A
+
+          # Commit ONLY the declared files when expected_paths was supplied
+          # (never `git add -A` in that case), so an undeclared change can never
+          # ride along. Without expected_paths (legacy manual PR dispatch) fall
+          # back to add -A, but gate_only ALWAYS requires expected_paths below.
+          if [ -n "$EXPECTED_PATHS" ]; then
+            printf '%s\n' "$EXPECTED_PATHS" | while IFS= read -r p; do
+              [ -n "$p" ] && git add -- "$p"
+            done
+          else
+            git add -A
+          fi
           git commit -m "fix: apply Anya code fix patch" -m "$PR_TITLE"
           git push origin "$BRANCH_NAME"
 
-          # gate_only: gates already passed (prior steps). Push the branch and
-          # STOP. The app-side lander polls this run's conclusion and admin-merges
-          # only on success — it owns the merge decision.
+          # gate_only: gates + declared-files assertion already passed. Push the
+          # branch and STOP. The BACKEND lander polls this run's conclusion +
+          # head_sha and merges only on green + a valid single-use token + a
+          # still-matching head. This workflow NEVER admin-merges.
           if [ "$LAND_MODE" = "gate_only" ]; then
-            echo "gate_only: branch $BRANCH_NAME pushed after passing gates; app-side lander will merge on green."
+            if [ -z "$EXPECTED_PATHS" ]; then
+              echo "gate_only requires expected_paths (declared-files guard) — refusing."
+              exit 1
+            fi
+            echo "gate_only: branch $BRANCH_NAME pushed after passing gates; backend lander will merge on green."
             exit 0
           fi
 
@@ -134,16 +185,10 @@ jobs:
             --title "$PR_TITLE" \
             --body "This PR was automatically created by the Anya Code Fix PR workflow after applying the provided patch and passing release:gates."
 
-          if [ "$LAND_MODE" = "direct" ]; then
-            # DIRECT: the build gate (release:gates) already ran and passed as a
-            # prior step, so admin-merge immediately — removes the HUMAN approval
-            # wait, NOT the build gate. --admin bypasses required-approvals branch
-            # protection; the merge cannot be reached if any gate step failed.
-            gh pr merge "$BRANCH_NAME" --squash --admin \
-              || echo "admin merge could not complete; PR remains open for manual review."
-          elif [ "$AUTOMERGE_INPUT" = "true" ]; then
-            # CI-gated auto-merge: GitHub completes it once every required
-            # branch-protection check is green. Failure to queue leaves the PR open.
+          # PR path only: optional CI-gated auto-merge. GitHub completes it once
+          # every required branch-protection check is green (never an admin
+          # bypass here). Failure to queue leaves the PR open for review.
+          if [ "$AUTOMERGE_INPUT" = "true" ]; then
             gh pr merge "$BRANCH_NAME" --squash --auto \
               || echo "auto-merge could not be queued; PR remains open for manual review."
           fi

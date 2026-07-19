@@ -246,6 +246,7 @@ export async function runSam(args = {}) {
           findings,
           repairPlan,
           runId,
+          db,
           maxRounds: 3,
         })
       } catch (advErr) {

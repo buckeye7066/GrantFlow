@@ -62,6 +62,7 @@ export async function runAdversarialRepairs({
   findings = [],
   repairPlan = [],
   runId = null,
+  db = null,
   env = process.env,
   maxRounds = 3,
   maxRepairs = Number(process.env.SAM_ADVERSARIAL_MAX_REPAIRS) || 3,
@@ -164,6 +165,7 @@ export async function runAdversarialRepairs({
         title: `fix(sam): adversarially-verified repair for ${finding.title || filePath}`,
         landMode, // 'pr' (default) or 'direct'; critical paths auto-downgrade to PR.
         automerge: false, // Sam proposes; a human/branch-protection merges on the PR path.
+        db, // enables single-use nonce enforcement on the direct path
         env,
       })
     } catch (err) {

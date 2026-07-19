@@ -1,9 +1,10 @@
 /**
- * Direct-to-main landing for the adversarial-repair capability.
- *
- * The build gate (release:gates) is NEVER removed — only the human-approval
- * step is, for landMode:'direct'. These tests inject the gate outcome + merge
- * seam so a RED gate provably lands NOTHING, without touching GitHub.
+ * Direct-to-main landing, hardened per Sol's review:
+ *   - the merge is a BACKEND action gated by a single-use HMAC token + head_sha
+ *     binding + fresh-branch requirement (the workflow can NEVER admin-merge),
+ *   - only the exact declared patch files may land (assertTreeMatchesDeclared),
+ *   - the build gate (release:gates) is never removed.
+ * All seams injected; no network, no real DB.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -12,8 +13,10 @@ import { fileURLToPath } from 'node:url'
 
 import {
   landVerifiedPatch,
-  resolveDirectLanding,
   landPatchDirectToMain,
+  resolveDirectLanding,
+  assertTreeMatchesDeclared,
+  parsePorcelainPaths,
   __testing__,
 } from '../services/anyaCodeFixDispatch.js'
 import { invokeTool } from '../services/anyaToolRegistry.js'
@@ -33,80 +36,136 @@ function goodDiff(file = 'backend/services/example.js') {
   ].join('\n')
 }
 
-const ENV = { GITHUB_TOKEN: 't', GITHUB_REPO: 'buckeye7066/GrantFlow' }
+const ENV = { GITHUB_TOKEN: 't', GITHUB_REPO: 'buckeye7066/GrantFlow', DIRECT_LAND_TOKEN_SECRET: 's3cr3t' }
+const HEAD = 'abc123abc123abc123abc123abc123abc123abcd'
+
+/** Injectable stubs for a happy direct land; override per-test. */
+function stubs(over = {}) {
+  const calls = { merges: [], consumed: [], triggered: [] }
+  const used = new Set()
+  return {
+    calls,
+    triggerGateRun: over.triggerGateRun || (async (a) => { calls.triggered.push(a); return { ok: true } }),
+    pollGateConclusion: over.pollGateConclusion || (async () => ({ conclusion: 'success', runId: 1, headSha: HEAD })),
+    branchExists: over.branchExists || (async () => false),
+    getBranchSha: over.getBranchSha || (async () => HEAD),
+    mergeToMain: over.mergeToMain || (async (a) => { calls.merges.push(a); return { ok: true, merged: true, sha: a.sha } }),
+    consumeNonce: over.consumeNonce || (async (_db, nonce) => { if (used.has(nonce)) return { ok: false, reason: 'reused' }; used.add(nonce); calls.consumed.push(nonce); return { ok: true } }),
+    now: over.now || (() => 1000),
+  }
+}
 
 describe('resolveDirectLanding (pure routing)', () => {
   it("keeps a 'pr' request on the PR path", () => {
-    const d = resolveDirectLanding({ paths: ['backend/services/x.js'], landMode: 'pr', env: {} })
-    expect(d.landMode).toBe('pr')
-    expect(d.downgraded).toBe(false)
+    expect(resolveDirectLanding({ paths: ['backend/services/x.js'], landMode: 'pr', env: {} }).landMode).toBe('pr')
   })
   it("routes a non-critical 'direct' request direct", () => {
-    const d = resolveDirectLanding({ paths: ['backend/services/x.js'], landMode: 'direct', env: {} })
-    expect(d.landMode).toBe('direct')
+    expect(resolveDirectLanding({ paths: ['backend/services/x.js'], landMode: 'direct', env: {} }).landMode).toBe('direct')
   })
   it('downgrades a critical-path direct request to PR (no override)', () => {
     const d = resolveDirectLanding({ paths: ['backend/db/migrations/9.sql'], landMode: 'direct', env: {} })
     expect(d.landMode).toBe('pr')
     expect(d.downgraded).toBe(true)
-    expect(d.note).toMatch(/critical path/i)
   })
-  it('allows a critical-path direct request when ADVERSARIAL_DIRECT_ALLOW_CRITICAL=true', () => {
+  it('allows critical direct with ADVERSARIAL_DIRECT_ALLOW_CRITICAL=true', () => {
     const d = resolveDirectLanding({ paths: ['backend/db/migrations/9.sql'], landMode: 'direct', env: { ADVERSARIAL_DIRECT_ALLOW_CRITICAL: 'true' } })
     expect(d.landMode).toBe('direct')
-    expect(d.downgraded).toBe(false)
   })
 })
 
-describe('landPatchDirectToMain — gate before merge', () => {
-  it('gates GREEN → admin-merge to main is invoked; landed', async () => {
-    const merges = []
-    const res = await landPatchDirectToMain({
-      patch: goodDiff(),
-      env: ENV,
-      triggerGateRun: async () => ({ ok: true }),
-      pollGateConclusion: async () => 'success',
-      mergeToMain: async (a) => { merges.push(a); return { ok: true, merged: true, pr_number: 7 } },
-    })
-    expect(res.ok).toBe(true)
+describe('assertTreeMatchesDeclared (Sol HIGH #3 — only declared files land)', () => {
+  it('passes when only declared files changed', () => {
+    const porcelain = ' M backend/services/example.js\n'
+    expect(assertTreeMatchesDeclared({ porcelain, expectedPaths: ['backend/services/example.js'] }).ok).toBe(true)
+  })
+  it('FAILS on an undeclared change (lockfile churn)', () => {
+    const porcelain = ' M backend/services/example.js\n M package-lock.json\n'
+    const r = assertTreeMatchesDeclared({ porcelain, expectedPaths: ['backend/services/example.js'] })
+    expect(r.ok).toBe(false)
+    expect(r.unexpected).toContain('package-lock.json')
+  })
+  it('FAILS when a declared path is itself a forbidden critical path', () => {
+    const porcelain = ' M backend/db/migrations/9.sql\n'
+    const r = assertTreeMatchesDeclared({ porcelain, expectedPaths: ['backend/db/migrations/9.sql'] })
+    expect(r.ok).toBe(false)
+    expect(r.forbidden).toContain('backend/db/migrations/9.sql')
+  })
+  it('parsePorcelainPaths handles renames', () => {
+    expect(parsePorcelainPaths('R  a/old.js -> a/new.js\n')).toEqual(['a/old.js', 'a/new.js'])
+  })
+})
+
+describe('landPatchDirectToMain — token + SHA binding (Sol CRITICAL + HIGH #2)', () => {
+  it('happy path: fresh branch + green gate + valid token + matching head → merges with sha', async () => {
+    const s = stubs()
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
     expect(res.landed).toBe(true)
-    expect(res.gate_conclusion).toBe('success')
-    expect(merges.length).toBe(1)
+    expect(res.head_sha).toBe(HEAD)
+    expect(s.calls.merges.length).toBe(1)
+    expect(s.calls.merges[0].sha).toBe(HEAD) // sha passed so GitHub refuses a moved head
+    expect(s.calls.consumed.length).toBe(1)
   })
 
-  it('gates RED → NOTHING lands on main (merge never called), gate failure reported', async () => {
-    let merged = false
-    const res = await landPatchDirectToMain({
-      patch: goodDiff(),
-      env: ENV,
-      triggerGateRun: async () => ({ ok: true }),
-      pollGateConclusion: async () => 'failure',
-      mergeToMain: async () => { merged = true; return { ok: true } },
-    })
-    expect(merged).toBe(false)
+  it('NO secret → inert (refuse), nothing merges', async () => {
+    const s = stubs()
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: { ...ENV, DIRECT_LAND_TOKEN_SECRET: '' }, ...s })
     expect(res.landed).toBe(false)
-    expect(res.ok).toBe(false)
+    expect(res.step).toBe('secret')
+    expect(s.calls.merges.length).toBe(0)
+  })
+
+  it('pre-existing / reused branch → rejected, nothing merges', async () => {
+    const s = stubs({ branchExists: async () => true })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
+    expect(res.landed).toBe(false)
+    expect(res.step).toBe('branch')
+    expect(s.calls.merges.length).toBe(0)
+  })
+
+  it('gates RED → nothing lands (merge never called)', async () => {
+    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'failure', runId: 2, headSha: HEAD }) })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
+    expect(res.landed).toBe(false)
     expect(res.gate_conclusion).toBe('failure')
     expect(res.error).toMatch(/release:gates/i)
+    expect(s.calls.merges.length).toBe(0)
   })
 
-  it('a failed gate-run dispatch lands nothing', async () => {
-    let merged = false
-    const res = await landPatchDirectToMain({
-      patch: goodDiff(),
-      env: ENV,
-      triggerGateRun: async () => ({ ok: false, error: 'boom' }),
-      pollGateConclusion: async () => 'success',
-      mergeToMain: async () => { merged = true; return { ok: true } },
-    })
-    expect(merged).toBe(false)
+  it('head MOVED between gate-green and merge → refused (no merge)', async () => {
+    const s = stubs({ getBranchSha: async () => 'movedmovedmovedmovedmovedmovedmovedmoved' })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
+    expect(res.landed).toBe(false)
+    expect(res.step).toBe('head_moved')
+    expect(s.calls.merges.length).toBe(0)
+  })
+
+  it('gate reported no head_sha → refused (cannot bind)', async () => {
+    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'success', runId: 3, headSha: null }) })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
+    expect(res.landed).toBe(false)
+    expect(res.step).toBe('head_sha')
+    expect(s.calls.merges.length).toBe(0)
+  })
+
+  it('reused nonce → refused (single-use enforced), no merge', async () => {
+    const s = stubs({ consumeNonce: async () => ({ ok: false, reason: 'reused' }) })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
+    expect(res.landed).toBe(false)
+    expect(res.step).toBe('nonce')
+    expect(s.calls.merges.length).toBe(0)
+  })
+
+  it('failed gate-run dispatch → nothing merges', async () => {
+    const s = stubs({ triggerGateRun: async () => ({ ok: false, error: 'boom' }) })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
     expect(res.landed).toBe(false)
     expect(res.step).toBe('gate_dispatch')
+    expect(s.calls.merges.length).toBe(0)
   })
 })
 
 describe('landVerifiedPatch — mode routing', () => {
-  it("landMode 'pr' dispatches the PR workflow with land_mode:'pr'", async () => {
+  it("landMode 'pr' dispatches the PR workflow with land_mode:'pr' + patch_sha256", async () => {
     let body = null
     const res = await landVerifiedPatch({
       patch: goodDiff(),
@@ -118,77 +177,65 @@ describe('landVerifiedPatch — mode routing', () => {
     expect(res.land_mode).toBe('pr')
     expect(body.inputs.land_mode).toBe('pr')
     expect(body.inputs.automerge).toBe('true')
+    expect(typeof body.inputs.patch_sha256).toBe('string')
+    expect(body.inputs.patch_sha256.length).toBe(64)
+    expect(body.inputs.expected_paths).toContain('backend/services/example.js')
   })
 
-  it("landMode 'direct' + clean + gates GREEN → auto-merge (NOT a PR-open)", async () => {
-    let merged = false
+  it("landMode 'direct' + green → merges (never opens a PR via fetch)", async () => {
+    const s = stubs()
     let prFetch = false
     const res = await landVerifiedPatch({
       patch: goodDiff(),
       landMode: 'direct',
       env: ENV,
-      fetchImpl: async () => { prFetch = true; return { status: 204 } }, // would be the PR dispatch
-      triggerGateRun: async () => ({ ok: true }),
-      pollGateConclusion: async () => 'success',
-      mergeToMain: async () => { merged = true; return { ok: true, merged: true } },
+      fetchImpl: async () => { prFetch = true; return { status: 204 } },
+      ...s,
     })
     expect(res.land_mode).toBe('direct')
     expect(res.landed).toBe(true)
-    expect(merged).toBe(true)
-    expect(prFetch).toBe(false) // never opened a PR
+    expect(s.calls.merges.length).toBe(1)
+    expect(prFetch).toBe(false)
   })
 
   it("landMode 'direct' + gates RED → nothing lands", async () => {
-    let merged = false
-    const res = await landVerifiedPatch({
-      patch: goodDiff(),
-      landMode: 'direct',
-      env: ENV,
-      triggerGateRun: async () => ({ ok: true }),
-      pollGateConclusion: async () => 'failure',
-      mergeToMain: async () => { merged = true; return { ok: true } },
-    })
-    expect(merged).toBe(false)
+    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'failure', runId: 9, headSha: HEAD }) })
+    const res = await landVerifiedPatch({ patch: goodDiff(), landMode: 'direct', env: ENV, ...s })
     expect(res.landed).toBe(false)
-    expect(res.error).toMatch(/release:gates/i)
+    expect(s.calls.merges.length).toBe(0)
   })
 
-  it("landMode 'direct' + CRITICAL path → routed to PR, NOT direct-merged", async () => {
-    let merged = false
+  it("landMode 'direct' + CRITICAL path → routed to PR (not direct)", async () => {
+    const s = stubs()
     const res = await landVerifiedPatch({
       patch: goodDiff('backend/db/migrations/9_x.sql'),
       landMode: 'direct',
-      env: ENV, // ADVERSARIAL_DIRECT_ALLOW_CRITICAL not set
+      env: ENV, // ALLOW_CRITICAL not set
       fetchImpl: async () => ({ status: 204 }),
-      triggerGateRun: async () => ({ ok: true }),
-      pollGateConclusion: async () => 'success',
-      mergeToMain: async () => { merged = true; return { ok: true } },
+      ...s,
     })
     expect(res.land_mode).toBe('pr')
     expect(res.downgraded_to_pr).toBe(true)
     expect(res.land_note).toMatch(/critical path/i)
-    expect(merged).toBe(false)
+    expect(s.calls.merges.length).toBe(0)
   })
 
-  it('CRITICAL path + ADVERSARIAL_DIRECT_ALLOW_CRITICAL=true → allowed direct', async () => {
-    let merged = false
+  it('CRITICAL + ADVERSARIAL_DIRECT_ALLOW_CRITICAL=true → allowed direct', async () => {
+    const s = stubs()
     const res = await landVerifiedPatch({
       patch: goodDiff('backend/db/migrations/9_x.sql'),
       landMode: 'direct',
       env: { ...ENV, ADVERSARIAL_DIRECT_ALLOW_CRITICAL: 'true' },
-      triggerGateRun: async () => ({ ok: true }),
-      pollGateConclusion: async () => 'success',
-      mergeToMain: async () => { merged = true; return { ok: true, merged: true } },
+      ...s,
     })
     expect(res.land_mode).toBe('direct')
-    expect(res.downgraded_to_pr).toBe(false)
-    expect(merged).toBe(true)
     expect(res.landed).toBe(true)
+    expect(s.calls.merges.length).toBe(1)
   })
 })
 
-describe('defaultTriggerGateRun dispatches gate_only', () => {
-  it("sends land_mode:'gate_only' + the branch to the workflow", async () => {
+describe('defaultTriggerGateRun dispatches gate_only with the guard inputs', () => {
+  it("sends land_mode:'gate_only' + branch + patch_sha256 + expected_paths", async () => {
     let body = null
     const r = await __testing__.defaultTriggerGateRun({
       patch: goodDiff(),
@@ -200,12 +247,13 @@ describe('defaultTriggerGateRun dispatches gate_only', () => {
     expect(r.ok).toBe(true)
     expect(body.inputs.land_mode).toBe('gate_only')
     expect(body.inputs.branch).toBe('anya-direct/b1')
+    expect(body.inputs.patch_sha256.length).toBe(64)
+    expect(body.inputs.expected_paths).toContain('backend/services/example.js')
   })
 })
 
-describe('owner.adversarial_repair — unverified verdict + direct lands NOTHING (fail-closed)', () => {
+describe('owner.adversarial_repair — unverified verdict + direct lands NOTHING', () => {
   it('a throwing verifier yields "unverified" and never dispatches, even in direct mode', async () => {
-    // Guard: skip if a real edit-lock happens to be present (would short-circuit earlier).
     const lock = path.join(REPO_ROOT, '.agent-edit-lock')
     const lockPresent = fs.existsSync(lock)
     let fetchCalled = false
@@ -221,47 +269,34 @@ describe('owner.adversarial_repair — unverified verdict + direct lands NOTHING
       },
     )
     const out = result.output
-    if (lockPresent) {
-      // With a lock the verdict would still be unverified — either way nothing lands.
-      expect(out.applied).toBe(false)
-    } else {
-      expect(out.status).toBe('unverified')
-    }
+    if (!lockPresent) expect(out.status).toBe('unverified')
     expect(out.applied).toBe(false)
     expect(out.landed).toBeFalsy()
     expect(fetchCalled).toBe(false)
   })
 })
 
-// Structural guarantee: the workflow runs release:gates BEFORE any merge step,
-// and direct uses --admin. This is what makes "gates RED → nothing lands" hold
-// in CI (the gate step failing aborts the job before the branch is pushed).
-describe('anya-code-fix-pr.yml structural gate-before-merge', () => {
-  const wfPath = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '..',
-    '..',
-    '.github',
-    'workflows',
-    'anya-code-fix-pr.yml',
-  )
+// Structural: the workflow has NO admin-merge; gate_only enforces the guards.
+describe('anya-code-fix-pr.yml structural safety', () => {
+  const wfPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'anya-code-fix-pr.yml')
   const yaml = fs.readFileSync(wfPath, 'utf8')
 
-  it('runs release:gates before the land/merge step', () => {
-    const gatesIdx = yaml.indexOf('release:gates')
-    const mergeIdx = yaml.indexOf('gh pr merge')
-    expect(gatesIdx).toBeGreaterThan(-1)
-    expect(mergeIdx).toBeGreaterThan(-1)
-    expect(gatesIdx).toBeLessThan(mergeIdx)
+  it('contains NO admin merge anywhere (a raw dispatch can never admin-merge)', () => {
+    expect(yaml).not.toMatch(/--admin/)
   })
 
-  it('direct mode uses an admin merge and gate_only exits before opening a PR', () => {
-    expect(yaml).toMatch(/gh pr merge "\$BRANCH_NAME" --squash --admin/)
-    expect(yaml).toMatch(/land_mode/)
-    // gate_only short-circuits (exit 0) before `gh pr create`
-    const gateOnlyExit = yaml.indexOf('gate_only')
-    const prCreate = yaml.indexOf('gh pr create')
-    expect(gateOnlyExit).toBeGreaterThan(-1)
-    expect(gateOnlyExit).toBeLessThan(prCreate)
+  it('runs release:gates before any push, and gate_only requires expected_paths', () => {
+    const gatesIdx = yaml.indexOf('release:gates')
+    const pushIdx = yaml.indexOf('git push origin')
+    expect(gatesIdx).toBeGreaterThan(-1)
+    expect(gatesIdx).toBeLessThan(pushIdx)
+    expect(yaml).toMatch(/gate_only requires expected_paths/i)
+  })
+
+  it('uses npm ci with NO npm install fallback, asserts declared files, binds patch sha', () => {
+    expect(yaml).toMatch(/npm ci --include=optional\s*$/m)
+    expect(yaml).not.toMatch(/npm ci.*\|\|\s*npm install/)
+    expect(yaml).toMatch(/assert-direct-land-tree\.mjs/)
+    expect(yaml).toMatch(/patch_sha256/)
   })
 })

@@ -5476,6 +5476,7 @@ registerTool({
       title: `fix(anya): adversarially-verified repair for ${filePath}`,
       landMode,
       automerge,
+      db: context?.db ?? null,
       fetchImpl: typeof context?.fetchImpl === 'function' ? context.fetchImpl : null,
     })
     return {
