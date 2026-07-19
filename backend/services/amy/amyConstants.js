@@ -134,13 +134,18 @@ export const CODE_TARGETS = Object.freeze({
     hint: 'Candidates stored but none reached ACCEPT — decision thresholds or need/eligibility credit miss this category.',
   },
   [FINDING_TYPES.FALSE_POSITIVE]: {
-    file: 'backend/services/matchEngine.js',
+    // The generic vocabulary, not the engine: the engine's generic-only ACCEPT
+    // cap is structural and reads this registry, so the actionable remedy is a
+    // vocabulary phrase (Amy's `relevance_precision` lever writes here).
+    // Declared DIRECTORY locators are NOT false positives — they are pointers
+    // admitted at REVIEW by the locator rule.
+    file: 'backend/config/genericTitleVocabulary.js',
     line: 1,
     severity: SEVERITY.HIGH,
-    hint: 'A generic/directory-style result was ACCEPTED for a specific profile — scoring is over-crediting weak signals (false positive).',
+    hint: 'A generic-titled (non-locator) result was ACCEPTED for a specific profile — the generic vocabulary does not yet catch this phrasing, so the engine\'s generic-only ACCEPT cap could not hold it at REVIEW.',
   },
   [FINDING_TYPES.BAD_MATCH]: {
-    file: 'backend/services/matching/relevanceFilter.js',
+    file: 'backend/services/relevanceFilter.js',
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'An accepted result is a borderline/likely-irrelevant match for this profile category — relevance/eligibility rules under-filter it.',
@@ -158,7 +163,7 @@ export const CODE_TARGETS = Object.freeze({
     hint: 'A profile signal Amy set did not flow into the thesis (needs/geo/type empty) — check the facet field mapping.',
   },
   [FINDING_TYPES.POLICY_REJECTION]: {
-    file: 'backend/services/matching/relevanceFilter.js',
+    file: 'backend/services/relevanceFilter.js',
     line: 1,
     severity: SEVERITY.MEDIUM,
     hint: 'Results were dropped by a relevance/eligibility policy — verify the rule is not over-rejecting this category.',

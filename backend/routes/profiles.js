@@ -1979,12 +1979,68 @@ router.get('/:id', async (req, res) => {
     }
   }
 
+  // Workspace step-completion signals (consumed by src/utils/workspaceSteps.js
+  // for the green/pulse step cards + Anya's next-step guidance). Each is a
+  // COUNT so "done" is a fact the data proves, never a stamp. All are
+  // schema-tolerant: a missing table/column defaults the count to 0 (the step
+  // simply reads as not-yet-complete) rather than 500-ing the detail view.
+  let pipelineCount = 0
+  try {
+    const pipelineCountRow = await req.db
+      .prepare(
+        `SELECT COUNT(*) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+      )
+      .get(row.id, ...activeStatuses)
+    pipelineCount = pipelineCountRow?.total ?? 0
+  } catch (error) {
+    const msg = error?.message || String(error)
+    if (/profile_id/i.test(msg)) {
+      try {
+        const pipelineCountRow = await req.db
+          .prepare(
+            `SELECT COUNT(*) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+          )
+          .get(row.organization_id, ...activeStatuses)
+        pipelineCount = pipelineCountRow?.total ?? 0
+      } catch (fallbackError) {
+        console.warn('[profiles] pipeline count query failed:', fallbackError?.message)
+      }
+    } else {
+      console.warn('[profiles] pipeline count query failed:', msg)
+    }
+  }
+
+  let documentCount = 0
+  try {
+    const docRow = await req.db
+      .prepare('SELECT COUNT(*) as total FROM profile_documents WHERE profile_id = ?')
+      .get(row.id)
+    documentCount = docRow?.total ?? 0
+  } catch (error) {
+    console.warn('[profiles] document count query failed:', error?.message)
+  }
+
+  let actionPlanCount = 0
+  try {
+    const planRow = await req.db
+      .prepare(
+        "SELECT COUNT(*) as total FROM documents WHERE profile_id = ? AND type = 'project_action_plan'",
+      )
+      .get(row.id)
+    actionPlanCount = planRow?.total ?? 0
+  } catch (error) {
+    console.warn('[profiles] action-plan count query failed:', error?.message)
+  }
+
   return res.json({
     ...mapProfile(row),
     sections,
     billing,
     pipeline_funds_total: pipelineTotal,
     pipeline_unvalued_count: pipelineUnvalued,
+    pipeline_count: pipelineCount,
+    document_count: documentCount,
+    action_plan_count: actionPlanCount,
   })
 })
 

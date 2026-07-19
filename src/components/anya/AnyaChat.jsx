@@ -30,8 +30,10 @@ import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
 import { createPageUrl } from "@/utils"
 import { useFeatureFlags } from "@/lib/featureFlags"
 import { apiFetch } from "@/api/client"
+import { getProfile } from "@/api/profiles"
 import { isRealProfileId } from "@/api/profileIdGuards"
-import { useQueryClient } from "@tanstack/react-query"
+import { getNextIncompleteStep } from "@/utils/workspaceSteps"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Dialog,
   DialogContent,
@@ -469,6 +471,17 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   const effectiveProfileId = profileId && profileId !== '__admin__' ? profileId : null
   const [isUnavailable, setIsUnavailable] = useState(false)
   const queryClient = useQueryClient()
+
+  // Read the SAME profile detail the Workspace page reads (identical query key
+  // + fn → react-query dedupes to one fetch and one cached object). This lets
+  // Anya's next-step guidance come from the exact same object the pulsing step
+  // cards use, so the two can never disagree about the next logical step.
+  const { data: workspaceProfile } = useQuery({
+    queryKey: ["profile", effectiveProfileId],
+    queryFn: () => getProfile(effectiveProfileId),
+    enabled: Boolean(effectiveProfileId) && isRealProfileId(effectiveProfileId),
+    staleTime: 30_000,
+  })
   const log = useMemo(() => createLogger("AnyaChat"), [])
   const location = useLocation()
   const currentPage = currentPageProp ?? resolvePageName(location?.pathname) ?? "Unknown"
@@ -683,8 +696,25 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     if (isFirstRun) return
     if (typeof window === "undefined") return
     if (sessionStorage.getItem(NUDGE_SS_KEY)) return
-    if (!profiles || profiles.length === 0) return
 
+    // Preferred: the SAME next logical step the Workspace's pulsing step card
+    // points at. Derived from the shared getNextIncompleteStep selector over the
+    // same profile-detail object, so Anya's nudge and the pulsing card agree by
+    // construction. Only fires when we actually have the profile detail loaded.
+    if (workspaceProfile) {
+      const nextStep = getNextIncompleteStep(workspaceProfile)
+      if (nextStep) {
+        setNudgeMessage(nextStep.anyaHint)
+        sessionStorage.setItem(NUDGE_SS_KEY, "1")
+      }
+      // Every step complete → nothing to nudge; don't fall through to the
+      // coarser section-% tip (it would contradict the "all done" state).
+      return
+    }
+
+    // Fallback (no profile detail yet, e.g. Anya open on a non-profile page):
+    // the coarse section-completeness tip from the profiles list.
+    if (!profiles || profiles.length === 0) return
     const activeProfile =
       profiles.find((p) => String(p.id) === String(effectiveProfileId)) ?? profiles[0]
     if (!activeProfile) return
@@ -700,7 +730,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
       setNudgeMessage(nudge)
       sessionStorage.setItem(NUDGE_SS_KEY, "1")
     }
-  }, [isFirstRun, profiles, effectiveProfileId])
+  }, [isFirstRun, profiles, effectiveProfileId, workspaceProfile])
 
   const hasMessages = messages.length > 0
   const hasTasks = tasks.length > 0

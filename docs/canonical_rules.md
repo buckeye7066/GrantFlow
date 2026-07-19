@@ -87,6 +87,73 @@ persisted in `system_kv` `web_parity_benchmark`, asserted nightly by Sam's
 benchmark failure feeds Amy's work queue (`system_kv` `web_parity_gap_queue`)
 and the adapter wishlist — a failure is queued work, never a shrug.
 
+#### A funding source found for a profile gets ADDED (owner rule, 2026-07-16)
+
+> **If a funding source is found that meets a profile's needs, add that funding
+> source.** Finding it and filing it is not finding it. A queue with no consumer
+> is a record of the gap, not a fix for it.
+
+This is the rule the gap queue existed to serve and did not. The benchmark found
+real funding pages GrantFlow lacked, wrote them to `web_parity_gap_queue`, and
+**nothing ever read that key** — so the same real sources were re-found and
+re-filed every night while the owner's report asked him to adjudicate them by
+hand ("candidate queue — nothing auto-added", 2026-07-15, fleet parity 41.2 and
+falling). The finding was correct every night; only the loop was open.
+
+How it is enforced, and why automating it lowers no bar:
+
+- `loadGapSeedPagesForProfile()` (`services/webParityBenchmark.js`) hands a
+  profile's pending candidates to its next discovery run as **seed pages**
+  (`opts.seedPages`, `crawler-os/webLane.js`), bounded by
+  `GAP_SEED_LIMIT_PER_RUN`.
+- **A seed is a URL, not a verdict.** It enters the web lane at exactly the
+  place a search hit does and is then fetched (SSRF-safe), LLM-extracted,
+  reality-gated, deduped and scored by the canonical match engine like anything
+  else. Being found by the benchmark buys a page a LOOK — never a catalog row,
+  never a match, never a score. Seeding is therefore *strictly* the removal of a
+  search's failure to find; every substantive gate still decides.
+- **The gates' verdict is recorded, not the attempt.** The lane reports which
+  seeds actually produced a catalog row (`seeded_adopted_urls`), and
+  `markGapCandidateOutcomes()` marks each offered candidate `adopted` or
+  `gated_out`. Both are terminal: a page the reality gate refused cannot answer
+  differently next time, and leaving it `candidate` would rebuild the write-only
+  queue. "We seeded 8 pages" must never be reported as "we added 8 sources" —
+  that is the read-green-while-doing-nothing class this repo has now shipped
+  three times (#941, #944, and this queue).
+
+**Generalize:** any queue this system writes must name its consumer. A finding
+that only accumulates is an unpaid debt that reads like diligence.
+
+#### The adapter wishlist asks an answerable question, and something answers it
+
+The same rule, applied to the second write-only queue (2026-07-16). The fleet
+gap scoreboard's **adapter wishlist** is legitimate — "a lane the registry lacks
+is a structural gap, never a silent miss" — but it was neither honest nor
+actioned:
+
+- **It asked unanswerable questions.** `signals.health` conflates diagnoses with
+  support needs, disability descriptors and canonical flags, so the disease-lane
+  loop demanded a *disease source lane* for `lodging`, `unsteady gait`,
+  `clawing effect in hands` and `mobility_needs`. Provenance is now recorded at
+  the write site (`health_conditions` vs `health_support`); only diagnoses reach
+  that loop, and support needs become a NEED question whose fix is a one-line
+  alias, not a new lane. **A denylist cannot fix a free-text field** — that is
+  why `NON_DISEASE_HEALTH_SIGNALS` never converged.
+- **It answered coverage on a coincidence.** A condition counted as covered when
+  any ≥4-char word of it appeared in a haystack that included the source's free-text
+  `source_id`/`name`. Coverage is now decided only by a source's CURATED
+  vocabulary (`keywords[]` + `need_categories[]`), which every `disease_specific`
+  source must therefore carry.
+- **Nothing acted on it.** A `no_disease_source` gap is now a bounded search whose
+  real hits are queued for GATED adoption via the same seeding lane; an adopted
+  source **retires** the entry through the `condition_source_coverage` overlay
+  (the scoreboard reads the static registry, so without that overlay a closed gap
+  re-emits forever — convergence with a footnote is not convergence).
+- **When nothing exists, say so.** After `MAX_ATTEMPTS` honest searches the entry
+  is marked `exhausted` and **stays visible** carrying what was tried. "Nobody has
+  looked" and "we looked and there is nothing" are different facts (G0); a wishlist
+  that reads the same on night 1 and night 30 is wallpaper, not a finding.
+
 ### The self-improvement loop (first-class rule: the system may only get better)
 
 > **Every owner-verified outcome becomes a golden expectation; every benchmark
@@ -339,6 +406,8 @@ DDL stays in `ensureSchemaInvariants.js`; data-repair invariants go here.
 | **No search-engine application targets** (G6 "URL is valid and non-placeholder") — a search-engine RESULTS url (google.com/search?q=…, bing.com/search, …) is never a portal/application target on `application_tasks`, `funding_opportunities`, or `grants` | `enforceNoSearchEngineApplicationTargets()` (nulls the URL, reclassifies non-terminal tasks to blocked/unknown_application_method; bounded + idempotent; disable via `ENFORCE_URL_HYGIENE=0`). Producers gated at `opportunityInserter.upsertFundingOpportunity` + `hamiltonAutomationClassifier.readUrl` via the canonical `isSearchEngineUrl()` (urlRules.js) | `backend/tests/enforceInvariants.test.js` ("enforceNoSearchEngineApplicationTargets") |
 | **Status provenance honesty** (G0 truthful data) — a protected `submitted` status means a human/Hamilton actually submitted; bulk imports stamped rows `submitted` from the SOURCE's own listing status (grants.gov "(posted)") with `submitted_date` NULL, permanently shielding never-scored, often-ineligible rows from every purge/re-score net (the HUD Section 4 $42M class) | `enforceImportedStatusHonesty()` — surgical demote to `discovered` ONLY when status `submitted` + `submitted_date IS NULL` + import/repair provenance (adapter "(posted)" notes or `admin_schema_repair` explanation) all hold; real submissions and human-noted rows are never touched; `ENFORCE_STATUS_PROVENANCE=0` for count-only | `backend/tests/enforceInvariants.test.js` ("enforceImportedStatusHonesty") |
 | **Award-amount acquisition** (G2 useful discovery; G0 no-invented-data) — when an active-pipeline source carries no dollar figure but the funder's OWN page states one, GrantFlow reads the page instead of leaving the row blank (only ~18% of the catalog carried amounts; most pipelines honestly summed to $0). Write-side guards: untrusted-source structured amounts outside the $100–$10M plausibility window demote to TEXT (`resolveOpportunityAmounts` — a $42M program appropriation is not a per-award ceiling; boot net: `enforceGrantAmountBackfill` step 0 strips fabricated numerics already persisted and cleans grant values inherited from them, never touching user-entered asks or awarded money), and floor→ceiling ranges wider than `WIDE_AWARD_RANGE_RATIO` (10×) default `amount_requested` from the FLOOR | `enforceAmountEnrichment()` — bounded per boot (`AMOUNT_ENRICH_BOOT_LIMIT` 10, `AMOUNT_ENRICH_TIME_BUDGET_MS` 20s); SSRF-safe crawler-os fetcher + conservative `awardAmountExtractor` (per-award phrasings only; program totals stay text-only); attempted ids in `system_kv`; `ENFORCE_AMOUNT_ENRICHMENT=0` for count-only. Service: `backend/services/amountEnrichment.js` | `backend/tests/enforceInvariants.test.js` ("enforceAmountEnrichment") + `backend/tests/amountEnrichment.test.js` |
+| **A pipeline grant is LINKED to its catalog row when one plainly exists** (G2 useful discovery; the #954 census blind spot, 2026-07-17) — the amount nets reach a grant ONLY through `funding_opportunity_id`, so an unlinked grant is structurally invisible to enrichment and backfill and reads as `unanswered_no_catalog_row` (82 of 313 active rows in prod). The crawler often wrote the grant AND its catalog twin from one result but omitted the link; a shared URL is a canonical-dedup-identity tier, so grant + active catalog row at the same url are the same opportunity | `enforceGrantCatalogLink()` (`backend/startup/enforceInvariants.js`), run BEFORE `enforceAmountEnrichment` so a link is enriched the same boot. Links ONLY on URL identity (normalized) + EXACTLY ONE active match (2+ = ambiguous, never guessed) + NO profile conflict (a URL coincidence must not cross a pipeline — G4/G8); NULL→value only; bounded (`GRANT_CATALOG_LINK_LIMIT`); `ENFORCE_GRANT_CATALOG_LINK=0` for count-only. Reference only `source_url`/`application_url`/`evidence_url` (prod has a bare `url` the SQLite schema lacks — the schema-drift trap) | `backend/tests/enforceInvariants.test.js` ("enforceGrantCatalogLink") |
+| **"No amount" and "no amount PUBLISHED" are different facts** (G0 no-invented-data; owner rule 2026-07-17) — only a READ can tell them apart, and until now the read's answer was discarded. `not_listed` is the extractor's DEFAULT: it means *nobody found a figure*, i.e. SILENCE, and it may never license a claim about the funder. `none_published` is the DENIAL: the funder's own page/API was actually read and states no per-award figure. Recording it is EVIDENCE (read, never invented); a `thin_page`/4xx is NOT a denial (we learned we cannot READ the source, not that it pays nothing — those rows need an adapter and must stay visible). **Consequence for health checks: a metric must measure US, not THE WORLD.** `pipeline.amountCoverage` failed nightly on a `pct < 60` bar, but coverage is capped by what share of funders publish figures at all (honest ceiling ~21%; prod 2026-07-17 `remaining=2 / exhausted=132` — the backlog was DRAINED). It now asserts every active row has an ANSWER — a value, an evidenced `none_published`, an honest label, or DIRECTORY-by-design — and fails on rows it cannot explain, grouped by why. Amy's `amount_recall_miss` uses the same rule, which is what makes the owner's "50/50 clean" flywheel goal reachable at all | `AMOUNT_STATUS_NONE_PUBLISHED` (`services/awardAmountExtractor.js`), written ONLY by `enforceAmountEnrichment` on `page_read && !found` — never by an extractor default or an ingest. `pipeline.amountCoverage` (`services/sam/samRegistry.js`) + `AMOUNT_UNKNOWABLE_STATUSES` (`services/amy/amyReport.js`). Un-burn: migrations 141/0145 | `backend/tests/pipelineAmountCoverageRatchet.test.js` ("A WIPED row still counts as a MISS") + `backend/tests/enforceInvariants.test.js` ("RECORDS the denial" / "does NOT record a denial when the page could not be READ") + `backend/tests/amyAgent.test.js` |
 | **Admins are never re-interviewed** (owner-directed, 2026-07-06) — an ADMIN/owner account is interviewed by Anya at most once; a secondary login must never re-open the interview, regardless of `pending_reinterview` bulk-reset backfills. Non-admin users keep the deliberate reset flow | `enforceAdminReinterviewSuppression()` — resolves `users.guided_cycle_tour_status = 'pending_reinterview'` to `'completed'` for admin rows that already had their first-run (`has_completed_onboarding`, `onboarding_completed_at`, or any prior `last_login_at`); a genuinely fresh admin keeps their one first-run. Per-call first line: `resolveGuidedCycleTourStatus()` (`backend/services/onboardingGates.js`) at every auth-payload serialization (`buildUserPayload`, `GET /api/auth/me`, `PATCH /api/auth/onboarding-state`); UI belt-and-suspenders: the global `LoginGapInterviewLauncher` mount never interviews an admin (only the sequenced ResetOnboardingFlow pass may) | `backend/tests/adminReinterviewGate.test.js` + `backend/tests/enforceInvariants.test.js` ("runner") |
 | **Amy synthetic profiles expire** (owner-directed, 2026-07-06 — "make sure those profiles are getting deleted afterwards") — a synthetic crawler-training profile (`created_by='agent:amy'`, metadata `synthetic:true` + `allow_sam_cleanup:true`) past its `expires_at` never outlives the next boot. Amy's end-of-run cleanup is scoped to the ids crawled in THAT run (`onlyIds`), so a run whose discovery skipped/threw deleted NOTHING and leftovers from prior runs were permanently out of scope (prod: 13 live synthetics, lifetime reap count 0) | `enforceAmySyntheticExpiry()` — delegates to the canonical `cleanupExpiredAmyProfiles()` (`backend/services/amy/amyProfileStore.js`), the same guarded sweep used by the unscoped expired-only pass at the end of every `runAmyTraining` (telemetry event `amy.cleanup.expired_sweep`) and the nightly maintenance sweep; guards never weakened: non-Amy rows never scanned, designated profiles never touched, `allow_sam_cleanup`/`synthetic` required, never-crawled rows reaped only far past TTL (`AMY_NEVER_CRAWLED_MAX_AGE_HOURS`, default 96h), 6h crawled grace for mid-flight runs; `ENFORCE_AMY_SYNTHETIC_EXPIRY=0` for count-only | `backend/tests/enforceInvariants.test.js` ("enforceAmySyntheticExpiry") + `backend/tests/amyAgent.test.js` |
 | **Application-URL rescue** (G0 no-invented-data + G2 anti-zero-result) — a real candidate rejected ONLY for a missing URL (stage `url`, reason `missing_application_url`; docs/email/LLM extracts with title+sponsor but no link) gets ONE bounded, budget-paced chance to be rescued with a real, LIVENESS-VERIFIED page found by searching its own title+sponsor; a URL is never invented, guessed, or synthesized, and a search-provider outage never burns a candidate's one chance | `enforceApplicationUrlRescue()` (re-drives the rejection's `raw_meta.candidate` snapshot through the FULL `upsertFundingOpportunity` gate stack with the found URL; `system_kv` cursor `url_rescue_last_rejection_id` gives each rejection exactly one attempt and is NOT advanced when every search in a run came back empty/failed; bounds: `URL_RESCUE_BOOT_LIMIT` default 8, `URL_RESCUE_TIME_BUDGET_MS` default 20000; `ENFORCE_URL_RESCUE=0` for count-only). Finder: `findOfficialUrlForOpportunity()` (`backend/services/urlEnrichment.js`: searchWeb → token-overlap plausibility → `checkUrl` probe); write-side first line: the url-gate `logRejection` in `opportunityInserter.js` persists the reconstructable candidate snapshot | `backend/tests/enforceInvariants.test.js` ("enforceApplicationUrlRescue") + `backend/tests/urlEnrichment.test.js` |
@@ -380,5 +449,18 @@ All three degrade cleanly without `OPENAI_API_KEY` (no-op / honest
 ## Known gaps / TODOs (must become hard rules once implemented)
 
 - Standardized crawler output schema: `{ raw, normalized, score_0_1, explain, provenance }`
+  - **Page-fact provenance storage (Phase 0.1, LAID — extractor not yet built).**
+    `funding_opportunities` carries additive, NULL-default columns
+    `eligibility_text`, `eligibility_bullets` (pre-existing), `page_fact_schema_version`,
+    and `field_provenance` (JSON `{ field: { value, evidence_snippet, source } }`).
+    Migration `144` / pg `0148` (guarded numbered migration, NOT `ensureOsTables`).
+    The OS opportunity shape (`contract.makeOpportunity`) carries the fields;
+    `storage.upsertOpportunity`, `osOppToLiveRow`, and the `crawler-os/matchEngine`
+    facade thread them through so they round-trip write→read. **Nothing populates
+    them yet — they default null and change no matching / scoring / behavior.** The
+    tri-state for `is_loan` / `requires_match` / `is_national` lives in
+    `field_provenance`: an ABSENT key means "not stated", distinct from the boolean
+    columns' coalesced false (which existing consumers keep reading unchanged). A
+    later profile-blind extractor is the consumer that will fill these.
 - Deterministic pipeline runner: every crawler × every profile, persist results with score > 0.50
 - Stripe end-to-end billing contract and idempotent webhook handling

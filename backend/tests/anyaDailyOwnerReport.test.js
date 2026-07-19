@@ -153,6 +153,42 @@ describe('buildOwnerReport — coverage gaps section', () => {
   })
 })
 
+describe('buildOwnerReport — competitive crawler research section', () => {
+  const sampleResearch = () => ({
+    latest: {
+      generated_at: '2026-07-14T06:00:00Z',
+      candidates_scanned: 12,
+      overall: 'Adopt 990 ingestion.',
+      findings: [
+        { source_title: 'grant-crawler', technique: 'async 990 ingestion', more_optimal: true, suggestion: 'add a 990 adapter', archetypes: ['nonprofit_org'], effort: 'medium' },
+      ],
+    },
+  })
+
+  it('renders the research section in text + HTML when research data exists', () => {
+    const { text, html } = buildOwnerReport(sampleRun(), { research: sampleResearch() })
+    expect(text).toMatch(/COMPETITIVE CRAWLER RESEARCH/)
+    expect(text).toMatch(/async 990 ingestion/)
+    expect(text).toMatch(/add a 990 adapter/)
+    expect(html).toMatch(/Competitive crawler research/)
+    expect(html).toMatch(/Techniques worth stealing/)
+  })
+
+  it('omits the section entirely when there is no research data', () => {
+    const { text, html } = buildOwnerReport(sampleRun(), {})
+    expect(text).not.toMatch(/COMPETITIVE CRAWLER RESEARCH/)
+    expect(html).not.toMatch(/Competitive crawler research/)
+  })
+
+  it('escapes HTML in research findings', () => {
+    const research = sampleResearch()
+    research.latest.findings[0].technique = '<script>alert(1)</script>'
+    const { html } = buildOwnerReport(sampleRun(), { research })
+    expect(html).not.toMatch(/<script>alert/)
+    expect(html).toMatch(/&lt;script&gt;/)
+  })
+})
+
 describe('recipient', () => {
   it('defaults to the admin email, honours override', () => {
     expect(__testing__.recipient()).toMatch(/@/)

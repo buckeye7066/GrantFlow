@@ -25,7 +25,7 @@ export function canonicalResultShape() {
     amount_max: 'number?',
     amount_description: 'string?',
     amount_text: 'string?',
-    amount_status: 'known|estimated|range|varies|not_listed|contact_required?',
+    amount_status: 'known|estimated|range|varies|not_listed|contact_required|none_published?',
     eligibility_summary: 'string?',
     match_score: 'number',
     match_decision: 'ACCEPT|REVIEW|REJECT',

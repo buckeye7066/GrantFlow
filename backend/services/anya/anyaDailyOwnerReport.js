@@ -22,6 +22,7 @@
 import { sendEmail as defaultSendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { maskSecrets, latestRun as defaultLatestRun, getRun as defaultGetRun } from '../sam/samAuditStore.js'
+import { summarizeCrawlerResearch } from '../amy/crawlerCompetitiveResearch.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('anyaDailyOwnerReport')
@@ -78,8 +79,14 @@ async function defaultLoadCoverageGaps(db, { now = null } = {}) {
     const endMs = now instanceof Date ? now.getTime() : Date.now()
     const startIso = new Date(endMs - 24 * 60 * 60 * 1000).toISOString()
     const events = await readActivityEvents(db, { agents: ['amy', 'sam', 'anya'], startIso, limit: 60 }).catch(() => [])
+    // What the wishlist consumer has actually tried per condition — this is what
+    // turns "add a cipn source" (an ask the owner cannot action) into "we searched
+    // 3× and found nothing; likely none exists" (a fact).
+    const conditionSearch = await import('../coverageAudit/conditionSourceSearch.js')
+      .then((m) => m.readConditionSearchEvidence(db))
+      .catch(() => null)
     if (!scoreboard && (!Array.isArray(events) || events.length === 0)) return null
-    return { scoreboard, events: Array.isArray(events) ? events : [] }
+    return { scoreboard, events: Array.isArray(events) ? events : [], conditionSearch }
   } catch {
     return null
   }
@@ -94,6 +101,22 @@ async function defaultLoadWebParity(db) {
   try {
     const { readWebParityBenchmark } = await import('../webParityBenchmark.js')
     const store = await readWebParityBenchmark(db).catch(() => null)
+    return store?.latest ? store : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Load Amy's competitive crawler research for the digest (system_kv
+ * `amy_crawler_research`, refreshed by the throttled nightly research pass —
+ * owner directive 2026-07-14). Best-effort — the section is omitted until the
+ * research goal has run at least once.
+ */
+async function defaultLoadCrawlerResearch(db) {
+  try {
+    const { readCrawlerResearch } = await import('../amy/crawlerCompetitiveResearch.js')
+    const store = await readCrawlerResearch(db).catch(() => null)
     return store?.latest ? store : null
   } catch {
     return null
@@ -198,10 +221,34 @@ export function summarizeAmyFlywheel(amy) {
  * @param {{scoreboard?:object|null, events?:Array|null}} gaps
  * @returns {{headline:string, topGaps:string[], wishlist:string[], changed:string[], needsOwner:string[]}|null}
  */
+/**
+ * What the wishlist consumer has actually TRIED for a condition.
+ *
+ * "Nobody has looked yet" and "we looked and there is nothing" are different facts,
+ * and a wishlist that cannot tell them apart is asking the owner to adjudicate
+ * blind. Mirrors the remaining-vs-exhausted distinction the amount sweep needed:
+ * an entry that reads the same on night 1 and night 30 is not a finding, it is
+ * wallpaper. Never suppresses the entry — a structural gap stays visible.
+ */
+function conditionSearchNote(detail, searchEvidence) {
+  const key = String(detail || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const rec = searchEvidence?.[key]
+  if (!rec) return ' [not yet searched]'
+  const when = String(rec.searched_at || '').slice(0, 10)
+  if (rec.candidates_queued > 0) {
+    return ` [searched ${rec.queries_run} queries ${when} → ${rec.candidates_queued} candidate source(s) queued; pending the gates on the next crawl]`
+  }
+  if (rec.exhausted) {
+    return ` [searched ${rec.attempts}× through ${when} → 0 real sources found; likely none exists]`
+  }
+  return ` [searched ${rec.queries_run} queries ${when} → 0 found; will retry]`
+}
+
 export function summarizeCoverageGaps(gaps) {
   if (!gaps || (!gaps.scoreboard && !(Array.isArray(gaps.events) && gaps.events.length > 0))) return null
   const board = gaps.scoreboard || null
   const events = Array.isArray(gaps.events) ? gaps.events : []
+  const searchEvidence = gaps.conditionSearch || null
 
   const boardGaps = Array.isArray(board?.gaps) ? board.gaps : []
   const headline = board
@@ -211,7 +258,10 @@ export function summarizeCoverageGaps(gaps) {
   const topGaps = boardGaps.slice(0, 5).map((g) => `${g.count} profile(s): ${g.statement}`)
   const wishlist = (Array.isArray(board?.adapter_wishlist) ? board.adapter_wishlist : [])
     .slice(0, 5)
-    .map((w) => `${w.detail || w.lane || 'lane'} — ${w.statement} (${w.affected_profiles_count} profile(s); ${w.suggested_action || 'add a source adapter'})`)
+    .map((w) => {
+      const note = w.gap_class === 'no_disease_source' ? conditionSearchNote(w.detail, searchEvidence) : ''
+      return `${w.detail || w.lane || 'lane'} — ${w.statement} (${w.affected_profiles_count} profile(s); ${w.suggested_action || 'add a source adapter'})${note}`
+    })
 
   // Autonomous vs needs-owner, straight from telemetry: succeeded events are
   // the changes the agents made themselves; blocked/failed events (plus the
@@ -281,8 +331,11 @@ export function summarizeWebParity(parity) {
  * (see summarizeCoverageGaps).
  * `parity` (optional) adds the "Google-bar benchmark" section
  * (see summarizeWebParity).
+ * `research` (optional) adds the "Competitive crawler research" section — Amy's
+ * scan of how other crawler codebases work + implementation suggestions
+ * (see summarizeCrawlerResearch).
  */
-export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null, research = null } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -393,10 +446,29 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     t.push(paritySummary.headline)
     paritySummary.perProfile.forEach((p) => t.push(`  • ${p}`))
     if (paritySummary.webOnlyTop.length) {
-      t.push('Top web-only finds awaiting your judgment (candidate queue — nothing auto-added):')
+      // These are QUEUED FOR ADOPTION, not homework for the owner. Each is
+      // seeded into the profile's next discovery run and added if — and only if
+      // — the full gate stack (fetch → extract → reality gate → match engine)
+      // accepts it; the run then marks it adopted or gated_out. Saying
+      // "awaiting your judgment / nothing auto-added" here was true until the
+      // seeding lane existed and would now be a lie in the owner's inbox.
+      t.push('Top web-only finds (queued — seeded into each profile\'s next crawl, added if the gates accept):')
       paritySummary.webOnlyTop.forEach((w) => t.push(`  • ${w}`))
     } else {
       t.push('No real web-only finds — GrantFlow covered everything the web session produced.')
+    }
+  }
+  const researchSummary = summarizeCrawlerResearch(research)
+  if (researchSummary) {
+    t.push('')
+    t.push('COMPETITIVE CRAWLER RESEARCH (how other codebases do it)')
+    t.push('========================================================')
+    t.push(researchSummary.headline)
+    if (researchSummary.findings.length) {
+      t.push('Techniques worth stealing (candidates — nothing changed automatically):')
+      researchSummary.findings.forEach((f) => t.push(`  • ${f}`))
+    } else if (researchSummary.allClear) {
+      t.push('Nothing beat our current crawler approach this run.')
     }
   }
   t.push('')
@@ -515,7 +587,7 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         if (!ps) return ''
         const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
         const webOnlyHtml = ps.webOnlyTop.length
-          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds awaiting your judgment (candidate queue — nothing auto-added):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
+          ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds (queued — seeded into each profile&rsquo;s next crawl, added if the gates accept):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
           : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
         return `
       <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Google-bar benchmark</h3>
@@ -523,6 +595,22 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         <div style="font-weight:600;color:#334155;">${esc(ps.headline)}</div>
         ${list(ps.perProfile)}
         ${webOnlyHtml}
+      </div>`
+      })()}
+      ${(() => {
+        const rs = summarizeCrawlerResearch(research)
+        if (!rs) return ''
+        const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+        const findingsHtml = rs.findings.length
+          ? `<div style="margin-top:8px;"><strong style="color:#1d4ed8;">Techniques worth stealing (candidates — nothing changed automatically):</strong>${list(rs.findings, '#1e3a8a')}</div>`
+          : rs.allClear
+            ? '<div style="margin-top:8px;color:#166534;">Nothing beat our current crawler approach this run.</div>'
+            : ''
+        return `
+      <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Competitive crawler research</h3>
+      <div style="font-size:13px;">
+        <div style="font-weight:600;color:#334155;">${esc(rs.headline)}</div>
+        ${findingsHtml}
       </div>`
       })()}
 
@@ -551,6 +639,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
  *        the gap scoreboard + 24h amy/sam/anya activity loader)
  * @param {Function} [opts.loadParity] injectable db->web_parity_benchmark store
  *        (defaults to the system_kv reader; section omitted when never run)
+ * @param {Function} [opts.loadResearch] injectable db->amy_crawler_research store
+ *        (defaults to the system_kv reader; section omitted until the research
+ *        goal has run once)
  * @param {Date} [opts.now]
  * @returns {Promise<{ran:boolean, sent:boolean, reason?:string, run_id?:string|null, to?:string, stats?:object}>}
  */
@@ -562,6 +653,7 @@ export async function runAnyaDailyOwnerReport(db, {
   loadAmy = defaultLoadAmy,
   loadGaps = defaultLoadCoverageGaps,
   loadParity = defaultLoadWebParity,
+  loadResearch = defaultLoadCrawlerResearch,
   now = null,
 } = {}) {
   try {
@@ -576,7 +668,8 @@ export async function runAnyaDailyOwnerReport(db, {
     const amy = await loadAmy(db).catch(() => null)
     const gaps = await loadGaps(db, { now }).catch(() => null)
     const parity = await loadParity(db).catch(() => null)
-    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps, parity })
+    const research = await loadResearch(db).catch(() => null)
+    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps, parity, research })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {

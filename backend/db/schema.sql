@@ -154,8 +154,19 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Best-available amount TEXT + explicit status when no per-award number is
   -- knowable (awardAmountExtractor.js): a row is never silently blank.
   amount_text TEXT,
-  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
+  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required','none_published')),
   amount_confidence REAL,
+  -- Set once enforceAmountEnrichment() is DONE with this row, so the sweep
+  -- excludes tried rows in SQL instead of after the LIMIT (a JS filter after
+  -- LIMIT wedged enrichment at a fixed 200-row window). Stays NULL while a
+  -- TRANSIENT fetch failure is still worth retrying, so an outage never burns a
+  -- row's chance -- the mark means "we learned this row's answer", not "we
+  -- pointed a fetcher at it".
+  amount_enrich_attempted_at TEXT,
+  -- Tries so far. Bounds the retry above (AMOUNT_ENRICH_MAX_ATTEMPTS) so a
+  -- permanently-down host cannot be re-fetched nightly forever, and orders
+  -- candidates fewest-attempts-first so retries never starve fresh rows.
+  amount_enrich_attempts INTEGER DEFAULT 0,
 
   deadline DATE,
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),
@@ -279,7 +290,19 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- Crawler OS durable cross-source dedup key (migration 121).
   -- Source-independent identity from contract.canonicalOpportunityKey;
   -- NULL for legacy rows (NULLs are distinct under the UNIQUE index).
-  canonical_opportunity_key TEXT
+  canonical_opportunity_key TEXT,
+
+  -- Page-fact provenance (Phase 0.1 web-lane de-contamination, migration 144 /
+  -- pg 0148). ADDITIVE + NULL-default plumbing: durable storage for what a
+  -- source page literally stated, so a LATER profile-blind extractor can
+  -- populate it. Nothing writes these yet. eligibility_bullets already exists
+  -- above; these add the free-text eligibility, the extractor schema version,
+  -- and per-field {value, evidence_snippet, source} provenance JSON (also the
+  -- tri-state home for is_loan/requires_match/is_national — an absent key means
+  -- "not stated", distinct from the boolean columns' coalesced false).
+  eligibility_text TEXT,
+  page_fact_schema_version INTEGER,
+  field_provenance TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
@@ -489,8 +512,14 @@ CREATE TABLE IF NOT EXISTS grants (
   -- pipeline cards can show honest "varies / contact funder / not listed"
   -- states instead of a blank when no dollar figure is knowable.
   amount_text TEXT,
-  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required')),
+  amount_status TEXT CHECK(amount_status IN ('known','estimated','range','varies','not_listed','contact_required','none_published')),
   amount_confidence REAL,
+  -- Direct grant amount-enrichment attempt state (migration 142/0146): a grant
+  -- with a URL but no catalog twin is read directly by
+  -- enforceGrantDirectAmountEnrichment; these mirror the catalog columns so the
+  -- burn/retry logic is identical.
+  amount_enrich_attempted_at TEXT,
+  amount_enrich_attempts INTEGER DEFAULT 0,
 
   status TEXT DEFAULT 'discovered' CHECK(status IN (
         -- Canonical pipeline (RC-13, shared/pipelineStages.js):
@@ -3945,3 +3974,22 @@ CREATE TABLE IF NOT EXISTS behavior_events (
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_events_profile ON behavior_events(profile_id);
 CREATE INDEX IF NOT EXISTS idx_behavior_events_profile_ts ON behavior_events(profile_id, ts);
+
+-- ── Content-addressed page-fact cache (Phase 0.2, de-contamination program) ──
+-- Deterministic "same page => same facts" store so a LATER profile-blind
+-- extractor can reuse an extraction across profiles instead of re-calling the
+-- LLM. ADDITIVE, default-off: NOTHING in the live path reads/writes it yet
+-- (wired in Phase 1). cache_key is a stable hash of (normalized_final_url,
+-- content_hash, extractor_version, prompt_version, model) computed by
+-- computeCacheKey() in backend/services/pageFactCache.js; the five components
+-- are stored as their own columns only for debuggability. Migration 145 / pg 0149.
+CREATE TABLE IF NOT EXISTS page_fact_cache (
+  cache_key TEXT PRIMARY KEY,
+  normalized_final_url TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  model TEXT NOT NULL,
+  page_facts_json TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

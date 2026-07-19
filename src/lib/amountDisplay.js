@@ -9,7 +9,19 @@
 export const AMOUNT_STATUS_LABEL = Object.freeze({
   varies: 'Amount varies',
   contact_required: 'Contact funder for amount',
+  // We have not found a figure. Nobody may have looked yet — this is the
+  // extractor's default, i.e. SILENCE about the funder, so the label says
+  // what is true of US.
   not_listed: 'Amount not listed',
+  // We READ the funder's own page/API and it states no per-award figure
+  // (enforceAmountEnrichment, AMOUNT_STATUS_NONE_PUBLISHED). That is a fact
+  // about the FUNDER and a strictly better thing to tell the user than
+  // "not listed" — and far better than the bare "Not stated" a caller would
+  // otherwise fall back to. Benefit programs, food banks and 211-style
+  // services are real, valuable matches that simply publish no award size;
+  // rendering them as an absence is how a full pipeline reads as
+  // "qualifies for nothing" (the pipelineValue.js doctrine).
+  none_published: 'Funder states no set amount',
   estimated: 'Estimated amount',
 })
 

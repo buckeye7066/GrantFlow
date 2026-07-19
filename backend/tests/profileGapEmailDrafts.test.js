@@ -42,7 +42,7 @@ describe('draftGapEmailsForIncompleteProfiles', () => {
     const arg = provider.createDraft.mock.calls[0][0]
     expect(arg.toEmail).toBe('kathy@example.com')
     expect(arg.subject).toMatch(/questions/i)
-    expect(arg.bodyText).toMatch(/Ellie/)
+    expect(arg.bodyText).toMatch(/Annie/)
   })
 
   it('is idempotent — a second run does not re-draft the same profile', async () => {

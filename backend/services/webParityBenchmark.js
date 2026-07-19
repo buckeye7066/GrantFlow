@@ -66,6 +66,14 @@ export const GAP_QUEUE_KV_KEY = 'web_parity_gap_queue'
 /** system_kv key holding the golden-profile expectations (shared with Sam's coverage.goldenOutcomes). */
 export const GOLDEN_KV_KEY = 'golden_outcome_expectations'
 
+/**
+ * system_kv key: conditions an ADOPTED source now covers. Read by
+ * coverageEvidenceService's overlay so a closed wishlist gap stops re-emitting.
+ * Mirrors `CONDITION_COVERAGE_KV_KEY` there — kept as a literal to avoid an import
+ * cycle (coverageEvidenceService already imports nothing from this module).
+ */
+export const CONDITION_COVERAGE_KV_KEY = 'condition_source_coverage'
+
 /** Mandatory search budget per profile — an owner-quality web session, bounded. */
 export const MAX_QUERIES_PER_PROFILE = 6
 export const MAX_RESULTS_PER_QUERY = 10
@@ -84,6 +92,13 @@ export const MAX_STORED_MATCHES = 50
 
 /** Cap on the candidate gap queue (oldest entries beyond the cap are dropped). */
 export const GAP_QUEUE_CAP = 200
+
+/**
+ * Seeds handed to ONE discovery run. Each seed costs a fetch + an LLM
+ * extraction, so this is bounded like every other lane budget; leftovers stay
+ * 'candidate' and are offered to the next run rather than dropped.
+ */
+export const GAP_SEED_LIMIT_PER_RUN = 8
 
 /** Web-only finds carried per profile in `latest` (evidence + owner report). */
 const WEB_ONLY_TOP_CAP = 5
@@ -360,7 +375,11 @@ export async function appendGapCandidates(db, entries = [], { now = new Date() }
       profile_id: e.profile_id,
       need: e.need ?? null,
       domain: e.domain ?? extractHostname(e.url) ?? null,
-      source: 'web_parity_benchmark',
+      // The queue has more than one producer now (the Google-bar benchmark and the
+      // adapter-wishlist condition search). Hardcoding the benchmark here would make
+      // the queue misreport its own origin — and provenance is the thing that lets
+      // anyone tell which loop is working.
+      source: e.source ?? 'web_parity_benchmark',
       status: 'candidate',
       found_at: at,
     })
@@ -369,6 +388,113 @@ export async function appendGapCandidates(db, entries = [], { now = new Date() }
   const candidates = [...byKey.values()].slice(-GAP_QUEUE_CAP)
   await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates }, at)
   return { appended, total: candidates.length }
+}
+
+/**
+ * Seed pages for ONE profile's next discovery run — the consumer side of the
+ * owner's standing rule: "if a funding source is found that meets the needs of a
+ * profile, ADD that funding source."
+ *
+ * Until this existed the gap queue was write-only. The benchmark found real
+ * funding pages GrantFlow lacked, filed them honestly as candidates, and nothing
+ * ever read the file — so the same pages were re-found and re-filed every night
+ * and the owner was asked to adjudicate them by hand ("candidate queue — nothing
+ * auto-added", 2026-07-15). The queue was a record of the gap, not a fix for it.
+ *
+ * These URLs are handed to the web lane as seed pages, where they are fetched,
+ * LLM-extracted, reality-gated, deduped and scored by the canonical match engine
+ * exactly like a search hit. So "auto-add" never means "trust the benchmark": it
+ * means the gates get to SEE a page they were previously never handed. A seed
+ * that is a directory, a stub, out of scope, or simply not a match is rejected
+ * by the same rules as everything else — which is why this can be automatic
+ * without lowering any bar.
+ *
+ * `pending_only` (default) skips candidates already resolved, so a page the
+ * gates have judged is not re-fetched on every crawl.
+ *
+ * @returns {Promise<Array<{url,title,snippet}>>} bounded, oldest-first
+ */
+export async function loadGapSeedPagesForProfile(db, profileId, { limit = GAP_SEED_LIMIT_PER_RUN, pendingOnly = true } = {}) {
+  if (!db?.prepare || !profileId) return []
+  const queue = await readWebParityGapQueue(db)
+  return queue
+    .filter((c) => String(c?.profile_id) === String(profileId))
+    .filter((c) => (pendingOnly ? (c?.status ?? 'candidate') === 'candidate' : true))
+    .filter((c) => /^https?:\/\//i.test(String(c?.url || '')))
+    .slice(0, Math.max(0, limit))
+    .map((c) => ({ url: c.url, title: c.title ?? null, snippet: c.need ? `need: ${c.need}` : null }))
+}
+
+/**
+ * Record what the gates decided about seeded candidates, so the queue stops
+ * re-offering a page that has already had its chance and the owner report can
+ * show the rule WORKING (adopted) or honestly not (gated_out) instead of an
+ * ever-growing pile of unjudged links.
+ *
+ * `adoptedUrls` are the seeds that became catalog rows this run; every other
+ * seed offered this run was seen by the gates and refused. Both are terminal:
+ * re-fetching a page the reality gate rejected cannot produce a different
+ * answer, and leaving it 'candidate' would rebuild the write-only queue.
+ */
+export async function markGapCandidateOutcomes(db, { offeredUrls = [], adoptedUrls = [], profileId = null, now = new Date() } = {}) {
+  if (!db?.prepare || offeredUrls.length === 0) return { adopted: 0, gated_out: 0 }
+  const adopted = new Set(adoptedUrls.map(normalizeUrlKey).filter(Boolean))
+  const offered = new Set(offeredUrls.map(normalizeUrlKey).filter(Boolean))
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
+
+  const queue = await readWebParityGapQueue(db)
+  let adoptedCount = 0
+  let gatedCount = 0
+  // Conditions whose gap an ADOPTED source just closed — see creditConditionCoverage.
+  const coveredConditions = new Set()
+  const next = queue.map((c) => {
+    if (profileId !== null && String(c?.profile_id) !== String(profileId)) return c
+    const key = normalizeUrlKey(c?.url)
+    if (!key || !offered.has(key)) return c
+    if (adopted.has(key)) {
+      adoptedCount += 1
+      if (c?.source === 'condition_source_search' && c?.need) coveredConditions.add(String(c.need))
+      return { ...c, status: 'adopted', resolved_at: at }
+    }
+    gatedCount += 1
+    return { ...c, status: 'gated_out', resolved_at: at }
+  })
+  await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates: next }, at)
+  if (coveredConditions.size) await creditConditionCoverage(db, [...coveredConditions], { now })
+  return { adopted: adoptedCount, gated_out: gatedCount, conditions_covered: coveredConditions.size }
+}
+
+/**
+ * Credit a condition as COVERED because a real source for it was adopted.
+ *
+ * THIS IS WHAT MAKES THE ADAPTER WISHLIST CONVERGE. `conditionCoveredBySource`
+ * matches against the STATIC sourceRegistry, but an adopted source lands in
+ * `funding_opportunities`, which that registry never sees. Without this credit, the
+ * wishlist consumer could find and adopt a real epilepsy source and the scoreboard
+ * would STILL report "No disease-specific source lane exists for epilepsy" every
+ * night forever — permanently holding one of the 10 wishlist slots and starving new
+ * gaps. That is not convergence; it is the same finding with a footnote, and it
+ * fails the rule that discovered sources RETIRE wishlist items.
+ *
+ * Only conditions whose candidate survived the FULL gate stack (fetch → LLM extract
+ * → reality gate → dedupe → canonical match engine → a real catalog row) reach here,
+ * so this can never manufacture coverage the system does not have (G0).
+ */
+export async function creditConditionCoverage(db, conditions = [], { now = new Date() } = {}) {
+  if (!db?.prepare || !conditions.length) return { credited: 0 }
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
+  const key = (c) => String(c || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const existing = await kvGetJson(db, CONDITION_COVERAGE_KV_KEY)
+  const set = new Set(Array.isArray(existing?.conditions) ? existing.conditions : [])
+  let credited = 0
+  for (const c of conditions) {
+    const k = key(c)
+    if (!k || set.has(k)) continue
+    set.add(k)
+    credited += 1
+  }
+  if (credited) await kvSet(db, CONDITION_COVERAGE_KV_KEY, { updated_at: at, conditions: [...set] }, at)
+  return { credited, total: set.size }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

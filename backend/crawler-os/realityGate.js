@@ -34,13 +34,65 @@ const GEO_STUB_TITLE = [
 /**
  * enforceReality — the single verdict function.
  *
+ * COMPOSED from two internal passes with no behavior change from the original
+ * single-body version:
+ *   - applyGlobalRealityChecks(candidate, ctx) — the profile-INDEPENDENT checks
+ *     (placeholder/mock, real sponsor, geo-stub, safe/https URL, expired
+ *     deadline, evidence-driven reality status). Its verdict depends only on the
+ *     candidate + source + evidence, never on the profile thesis.
+ *   - applyProfilePolicy(candidate, ctx) — the profile-DEPENDENT policy (loan
+ *     gating + cost-share gating), which reads the thesis.
+ *
+ * The original ran the two profile checks BETWEEN the URL check and the deadline
+ * check, so rejection precedence is: {placeholder, sponsor, geo-stub, URL} win
+ * over profile policy, and profile policy wins over {expired deadline}. Because
+ * EXPIRED_DEADLINE is the ONLY global rejection that originally came AFTER the
+ * profile checks, that reason cleanly marks the precedence boundary below —
+ * every other global rejection outranks profile policy, and profile policy
+ * outranks a global accept OR an expired-deadline rejection. This reproduces
+ * the original accept/reject decisions, order, reason strings, and reality_status
+ * byte-for-byte.
+ *
  * @param {object} candidate parser candidate
  * @param {{ thesis?:object, source?:object, evidence?:object }} ctx
  * @returns {{ ok:boolean, reality_status:string, trust_score:number,
  *   verdict_reasons:string[], dedup_key:string, kind:string, reason?:string }}
  */
 export function enforceReality(candidate, ctx = {}) {
-  const thesis = ctx.thesis ?? {};
+  const global = applyGlobalRealityChecks(candidate, ctx);
+
+  // A pre-profile global rejection (placeholder/sponsor/geo-stub/URL) wins
+  // outright, exactly as in the original order. The lone global rejection that
+  // originally followed the profile checks is EXPIRED_DEADLINE, so it does NOT
+  // short-circuit here — profile policy gets to reject first.
+  if (!global.ok && global.reason !== REASON.EXPIRED_DEADLINE) return global;
+
+  // Profile policy (loan + cost-share) ran after the URL check and before the
+  // deadline check in the original, so it outranks both a global accept and an
+  // expired-deadline rejection.
+  const profileRejection = applyProfilePolicy(candidate, ctx);
+  if (profileRejection) return profileRejection;
+
+  // No profile rejection: fall back to the global verdict — either the
+  // expired-deadline rejection or the accept with its reality_status.
+  return global;
+}
+
+/**
+ * applyGlobalRealityChecks — the profile-INDEPENDENT reality verdict.
+ *
+ * Runs every check whose outcome does NOT depend on the profile thesis:
+ * placeholder/mock content, real sponsor, geo-stub, safe/https URL, expired
+ * deadline, and the evidence-driven reality_status/trust_score/dedup_key.
+ * Returns the same verdict shape as enforceReality (a reject(...) object or a
+ * full accept object). Given the same candidate + source + evidence, the result
+ * is identical regardless of ctx.thesis — that isolation is the whole point of
+ * the split.
+ *
+ * @param {object} candidate parser candidate
+ * @param {{ source?:object, evidence?:object }} ctx (thesis is intentionally unused)
+ */
+export function applyGlobalRealityChecks(candidate, ctx = {}) {
   const source = ctx.source ?? {};
   const reasons = [];
   const kind = classifyKind(candidate, source);
@@ -85,15 +137,6 @@ export function enforceReality(candidate, ctx = {}) {
     }
   }
 
-  // Loan gating (per profile).
-  if (candidate.is_loan === true && !thesis.loan_allowed) {
-    return reject(REASON.LOAN_NOT_ALLOWED, ['loan product but profile does not allow loans'], kind, candidate, source);
-  }
-  // Cost-share / matching-fund gating (per profile).
-  if (candidate.requires_cost_share === true && !thesis.cost_share_allowed) {
-    return reject(REASON.COST_SHARE_NOT_ALLOWED, ['requires cost-share/match but profile disallows'], kind, candidate, source);
-  }
-
   // Deadline classification.
   const dl = classifyDeadline(candidate);
   if (dl.expired) {
@@ -120,6 +163,34 @@ export function enforceReality(candidate, ctx = {}) {
   reasons.unshift(`accepted as ${kind} (${realityStatus})`);
   return { ok: true, reality_status: realityStatus, trust_score: trustScore,
     verdict_reasons: reasons, dedup_key: dedupKey, kind };
+}
+
+/**
+ * applyProfilePolicy — the profile-DEPENDENT gating (loan + cost-share).
+ *
+ * Reads ctx.thesis (loan_allowed / cost_share_allowed). Returns a reject(...)
+ * object when the candidate is disallowed by policy, or null when policy is
+ * satisfied. The returned rejection carries the same kind/dedup_key the original
+ * inline checks produced (kind via classifyKind against ctx.source).
+ *
+ * @param {object} candidate parser candidate
+ * @param {{ thesis?:object, source?:object }} ctx
+ * @returns {object|null} reject verdict or null when policy passes
+ */
+export function applyProfilePolicy(candidate, ctx = {}) {
+  const thesis = ctx.thesis ?? {};
+  const source = ctx.source ?? {};
+  const kind = classifyKind(candidate, source);
+
+  // Loan gating (per profile).
+  if (candidate.is_loan === true && !thesis.loan_allowed) {
+    return reject(REASON.LOAN_NOT_ALLOWED, ['loan product but profile does not allow loans'], kind, candidate, source);
+  }
+  // Cost-share / matching-fund gating (per profile).
+  if (candidate.requires_cost_share === true && !thesis.cost_share_allowed) {
+    return reject(REASON.COST_SHARE_NOT_ALLOWED, ['requires cost-share/match but profile disallows'], kind, candidate, source);
+  }
+  return null;
 }
 
 // ---- internals ------------------------------------------------------------
@@ -178,4 +249,4 @@ function reject(reasonCode, details, kind, candidate, source) {
   };
 }
 
-export default { enforceReality };
+export default { enforceReality, applyGlobalRealityChecks, applyProfilePolicy };

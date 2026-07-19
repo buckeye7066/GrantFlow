@@ -14,6 +14,9 @@
 
 import { ACCEPTABLE_REALITY_STATUSES, canonicalOpportunityKey } from './contract.js';
 import { PIPELINE_STAGE, isValidStage, assertTransition } from './stages.js';
+import {
+  buildOsStorePageFactColumns, hasAnyPageFact, PAGE_FACT_OS_STORE_COLUMN_DEFS,
+} from './pageFacts.js';
 
 const nowIso = () => new Date().toISOString();
 
@@ -64,8 +67,21 @@ export function upsertOpportunity(store, opp) {
   const existing = store.get('funding_opportunities', { canonical_opportunity_key: canonicalKey });
   if (existing && existing.id !== opp.id) {
     recordOpportunitySource(store, existing.id, opp, now);
+    // Do NOT discard page facts THIS crawler supplied — merge them into the
+    // canonical row, never dropping a fact already stored there.
+    if (hasAnyPageFact(opp)) {
+      store.update('funding_opportunities', { id: existing.id }, buildOsStorePageFactColumns(existing, opp));
+    }
     return { stored: false, deduped: true, canonical_id: existing.id };
   }
+
+  // Page-fact provenance (Phase 0.1) — additive, null-default; validated and
+  // MERGED with any fact already stored on this id so a re-crawl that lacks a
+  // fact never nulls out one already learned (mirrors amount_status). Nothing
+  // populates these yet — for existing rows they stay null/[]. All page-fact
+  // column shaping lives in the pageFacts registry (single source of truth).
+  const existingById = store.get('funding_opportunities', { id: opp.id });
+  const pageFacts = buildOsStorePageFactColumns(existingById, opp);
 
   store.upsert('funding_opportunities', ['id'], {
     id: opp.id, source_id: opp.source_id, external_id: opp.external_id, kind: opp.kind,
@@ -78,6 +94,10 @@ export function upsertOpportunity(store, opp) {
     applicant_types_json: JSON.stringify(opp.applicant_types),
     need_categories_json: JSON.stringify(opp.need_categories),
     geography_json: JSON.stringify(opp.geography),
+    // Page-fact columns spread straight from the registry-driven builder (keyed
+    // by PAGE_FACT_OS_STORE_COLUMNS) so a future registry addition can't be
+    // silently dropped by a hand-copied property list.
+    ...pageFacts,
     trust_tier: opp.trust_tier, reality_status: opp.reality_status,
     content_hash: opp.evidence?.content_hash ?? null, evidence_url: opp.evidence?.url ?? null,
     fetched_at: opp.evidence?.fetched_at ?? null,
@@ -365,6 +385,14 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   is_rolling INTEGER NOT NULL DEFAULT 0, amount_min REAL, amount_max REAL,
   is_loan INTEGER NOT NULL DEFAULT 0, requires_cost_share INTEGER NOT NULL DEFAULT 0,
   applicant_types_json TEXT, need_categories_json TEXT, geography_json TEXT,
+  -- Page-fact provenance (Phase 0.1) — additive, NULL-default. Column list is
+  -- DRIVEN by the pageFacts registry (PAGE_FACT_OS_STORE_COLUMN_DEFS) so this
+  -- DDL, applySchema's heal loop, and the OS->live mapping can never drift.
+  -- eligibility_text + structured bullets scraped off the page, the extractor
+  -- schema version, and per-field {value, evidence_snippet, source} provenance
+  -- (also the tri-state home for is_loan/requires_cost_share/national — an
+  -- absent key means "not stated").
+  ${PAGE_FACT_OS_STORE_COLUMN_DEFS.join(', ')},
   trust_tier TEXT, reality_status TEXT NOT NULL, content_hash TEXT, evidence_url TEXT,
   fetched_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );

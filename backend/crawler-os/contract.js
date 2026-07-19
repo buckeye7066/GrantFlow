@@ -256,6 +256,16 @@ export function makeOpportunity(input = {}) {
     funding: Object.freeze({
       amount_min: input.funding?.amount_min ?? null,
       amount_max: input.funding?.amount_max ?? null,
+      // Amount VISIBILITY travels with the canonical row (normalizer resolves it
+      // via awardAmountExtractor). "$0" and "no amount stated" are different
+      // facts: when no per-award number is knowable the row still carries the
+      // honest label + status ('varies' | 'contact_required' | 'not_listed' | …)
+      // instead of a silent blank. This block is a WHITELIST — a key absent here
+      // is dropped from the canonical row without warning, so any new amount
+      // field must be added in both places.
+      amount_text: input.funding?.amount_text ?? null,
+      amount_status: input.funding?.amount_status ?? null,
+      amount_confidence: input.funding?.amount_confidence ?? null,
       is_loan: input.funding?.is_loan ?? false,
       requires_cost_share: input.funding?.requires_cost_share ?? false,
       currency: input.funding?.currency ?? 'USD',
@@ -271,6 +281,24 @@ export function makeOpportunity(input = {}) {
       content_hash: input.evidence?.content_hash ?? null,
       fetched_at: input.evidence?.fetched_at ?? null,
     }),
+    // --- Page-fact provenance (Phase 0.1, web-lane de-contamination) ----------
+    // ADDITIVE + NULL-default plumbing so a LATER profile-blind extractor can
+    // record what a source page literally stated, with per-field evidence. NOTHING
+    // populates these today — they default null/empty and change no score.
+    //   eligibility_text          : the raw eligibility prose off the page.
+    //   eligibility_bullets       : structured eligibility bullets off the page
+    //                               (distinct from matchEngine's DERIVED bullets).
+    //   page_fact_schema_version  : which extractor schema produced these facts.
+    //   field_provenance          : { field: { value, evidence_snippet, source } }.
+    // TRI-STATE lives in field_provenance under the canonical provenance keys
+    // is_loan / requires_cost_share / national (see the single mapping registry
+    // pageFacts.PAGE_FACT_TRISTATE_FIELDS → live columns is_loan / requires_match
+    // / is_national): an ABSENT key means "not stated" — distinct from the
+    // coalesced boolean false in funding/geography that existing consumers read.
+    eligibility_text: input.eligibility_text ?? null,
+    eligibility_bullets: Object.freeze([...(input.eligibility_bullets ?? [])]),
+    page_fact_schema_version: input.page_fact_schema_version ?? null,
+    field_provenance: input.field_provenance ?? null,
     created_at: input.created_at ?? new Date().toISOString(),
     raw: input.raw ?? null,
   });

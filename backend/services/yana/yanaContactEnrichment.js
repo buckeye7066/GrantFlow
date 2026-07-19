@@ -16,7 +16,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
-import { homepageNameScore, isExcludedEmail, isExcludedUrl } from './prospectExclusions.js'
+import { homepageNameScore, isExcludedEmail, isExcludedUrl, isPlausibleHomepage } from './prospectExclusions.js'
 import { enrichOrgContact } from '../shared/orgContactEnrichment.js'
 
 const log = createLogger('yanaContactEnrichment')
@@ -115,15 +115,28 @@ export function makeContactEnricher(deps = {}) {
       }
 
       // Candidate homepages: real-looking, not a directory, not an excluded
-      // competitor/aggregator (e.g. the org's Instrumentl listing). Then prefer
-      // the one whose hostname actually matches the org name, so we don't grab a
-      // random unrelated site and scrape someone else's contact email.
+      // competitor/aggregator (e.g. the org's Instrumentl listing). Keep each
+      // result's TITLE — it's what lets a legitimate abbreviated domain
+      // (upenn.edu titled "University of Pennsylvania") prove itself.
       const candidates = (results || [])
-        .map((r) => String(r?.url || '').trim())
-        .filter((u) => u && looksLikeOfficialSite(u) && !isExcludedUrl(u))
+        .map((r) => ({ url: String(r?.url || '').trim(), title: String(r?.title || '') }))
+        .filter((c) => c.url && looksLikeOfficialSite(c.url) && !isExcludedUrl(c.url))
       if (candidates.length === 0) return { ok: false, reason: 'no_homepage_found' }
-      candidates.sort((a, b) => homepageNameScore(b, name) - homepageNameScore(a, name))
-      const homepage = candidates[0]
+      candidates.sort((a, b) => homepageNameScore(b.url, name) - homepageNameScore(a.url, name))
+
+      // REQUIRE a plausible match, don't merely prefer one. Sorting alone has no
+      // floor: when nothing matched the org, candidates[0] was still accepted and
+      // its email scraped, so unrelated sites' addresses were attached to real
+      // orgs (ten universities sharing helpdesk@franklin.edu; a newspaper's
+      // address on fourteen nonprofits). An unenriched lead waits harmlessly at
+      // needs_enrichment; a lead carrying a stranger's address makes John draft
+      // outreach to the wrong organization.
+      const match = candidates.find((c) => isPlausibleHomepage(c, name))
+      if (!match) {
+        log.info(`enrich: no plausible homepage for "${name}" (best: ${candidates[0].url}) — leaving unenriched`)
+        return { ok: false, reason: 'no_plausible_homepage' }
+      }
+      const homepage = match.url
 
       let email = null
       let excerpt = null

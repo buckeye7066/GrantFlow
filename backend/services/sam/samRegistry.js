@@ -28,6 +28,30 @@
 
 import { SAM_CATEGORIES, SEVERITY } from './samTypes.js'
 import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../../config/pipelineValue.js'
+import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY } from '../amy/amyConstants.js'
+
+/**
+ * Exclude Amy's SYNTHETIC-profile grants from a pipeline-health metric.
+ *
+ * Amy dumps up to 50 synthetic training profiles a night (each with many grant
+ * rows) to stress the crawlers, and the reaper deletes them after each run
+ * (`enforceAmySyntheticExpiry`). They are NOT real client pipeline: including
+ * them makes a coverage metric measure Amy's rotation schedule, not crawler
+ * quality. Measured 2026-07-17: a nightly cohort added 188 unvalued grants and
+ * ZERO valued ones, dragging pipeline-$ coverage 18% → 11% and tripping the
+ * regression RATCHET — a false "amounts are being destroyed" alarm on a night
+ * nothing was destroyed. That is the same "measure the world, not us" failure
+ * the #954 census set out to kill, one level down in the ratchet. The synthetic
+ * side has its OWN telemetry (Amy's cohort scoreboard + `amount_recall_miss`);
+ * this metric is the owner-facing REAL-pipeline number.
+ *
+ * `created_by = 'agent:amy'` is the canonical synthetic marker (amyConstants —
+ * the same scope `listAmyProfiles`/`cleanupExpiredAmyProfiles` use). A profile
+ * row is required to exclude, so a grant with a NULL/absent profile is KEPT
+ * (real by default — a synthetic is only ever excluded on positive evidence).
+ */
+const NON_SYNTHETIC_PIPELINE = (alias) =>
+  `NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = ${alias}.profile_id AND p.created_by = '${AMY_ORIGIN_CREATED_BY}')`
 
 // ---------------------------------------------------------------------------
 // Shape constants
@@ -45,6 +69,70 @@ export const CHECK_KIND = Object.freeze({
 // cutoff with its 'T' separator sorts AFTER every same-date SQLite timestamp,
 // so same-day comparisons silently misclassify. Both formats are returned in
 // the shape the engine actually stores.
+/** system_kv key: rolling pipeline-$ coverage history (the no-regression ratchet). */
+export const AMOUNT_COVERAGE_KV_KEY = 'pipeline_amount_coverage_history'
+
+/** Coverage POINTS of drop vs the previous run that count as a regression. */
+export const AMOUNT_COVERAGE_REGRESSION_POINTS = 5
+
+/** History ring size (Sam runs ~daily ⇒ about a month of trend). */
+const AMOUNT_COVERAGE_HISTORY = 30
+
+/**
+ * Read/append the coverage history ring.
+ *
+ * WHY THIS EXISTS. This check only ever compared coverage to an ABSOLUTE bar
+ * (`pct < 60`), so it printed the identical "LOW" line at 21%, at 15% and at 18%.
+ * On 2026-07-16 a re-crawl bug wiped award amounts for hours and drove coverage
+ * 21% → 15%; Sam said exactly what it says every other day, and the owner had no
+ * way to tell "recovering" from "actively being destroyed". A level tells you
+ * where you are; only a TREND tells you which way you are going, and this
+ * subsystem's whole failure mode is work being silently undone.
+ *
+ * The web-parity benchmark next door already ratchets on regression
+ * (`REGRESSION_POINTS`, "the system may only get better"). Coverage never did.
+ * Best-effort: a ratchet must never fail the check it decorates.
+ */
+async function readAmountCoverageHistory(db) {
+  try {
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_COVERAGE_KV_KEY)
+    const parsed = row?.value ? JSON.parse(row.value) : null
+    return Array.isArray(parsed?.runs) ? parsed.runs : []
+  } catch {
+    return []
+  }
+}
+
+async function appendAmountCoverageHistory(db, entry) {
+  try {
+    const runs = [...(await readAmountCoverageHistory(db)), entry].slice(-AMOUNT_COVERAGE_HISTORY)
+    const value = JSON.stringify({ updated_at: entry.at, runs })
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, entry.at, AMOUNT_COVERAGE_KV_KEY)
+    if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(AMOUNT_COVERAGE_KV_KEY, value, entry.at)
+    }
+    return runs
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Did coverage REGRESS vs the previous run?
+ *
+ * Compares against the PREVIOUS run rather than the all-time peak, matching the
+ * web-parity ratchet: a peak comparison would red forever after one legitimate
+ * dip, and a finding that can never go green is one the owner learns to ignore.
+ * Pure; exported for tests.
+ */
+export function detectCoverageRegression(previousPct, currentPct, points = AMOUNT_COVERAGE_REGRESSION_POINTS) {
+  if (!Number.isFinite(previousPct) || !Number.isFinite(currentPct)) return null
+  const delta = currentPct - previousPct
+  if (delta > -points) return null
+  return { previous_pct: previousPct, current_pct: currentPct, delta }
+}
+
 function timeCutoff(db, msAgo) {
   const iso = new Date(Date.now() - msAgo).toISOString()
   if (db?.dialect === 'postgres') return iso
@@ -351,22 +439,25 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // amount anywhere (an ingest/extraction gap Amy's amount_recall_miss
     // findings and the awardAmountExtractor patterns are meant to close).
     id: 'pipeline.amountCoverage',
-    label: 'Pipeline dollar-value coverage (active grants with a knowable amount)',
+    label: 'Pipeline dollar-value answers (every active grant has an honest amount answer)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Measures what share of active pipeline grants carry a usable dollar value (amount_requested/max/min) and what share of the active catalog has amounts. Flags when coverage is low enough that profile Pipeline Potential figures materially understate reality.',
+    description: 'Asserts every active pipeline grant has an ANSWER about its award amount — a dollar value, an evidenced "this funder publishes none", or no-per-award-figure-by-design — and flags the rows that have no answer, grouped by why. Also reports raw coverage and ratchets it against the previous run so a writer silently REMOVING amounts still fails.',
     async run({ db } = {}) {
       if (!db) return { ok: true, skipped: true, summary: 'no db handle; amount coverage read skipped' }
       const statusesSql = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
       let grants
       let catalog
+      let answers
       try {
         grants = await db
           .prepare(
             `SELECT COUNT(*) AS total,
                     SUM(CASE WHEN ${pipelineValueSql('grants')} > 0 THEN 1 ELSE 0 END) AS with_value
-               FROM grants WHERE status IN (${statusesSql})`,
+               FROM grants
+              WHERE status IN (${statusesSql})
+                AND ${NON_SYNTHETIC_PIPELINE('grants')}`,
           )
           .get()
         catalog = await db
@@ -379,24 +470,181 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       } catch (err) {
         return { ok: true, skipped: true, summary: `amount coverage query failed: ${err?.message || err}` }
       }
+
+      // THE ANSWER CENSUS runs in its OWN try/catch, and deliberately cannot take
+      // the ratchet down with it. The ratchet is the WIPE detector — the one
+      // thing here that caught a live bug (#950/#951) — and it needs nothing but
+      // the two counts above. Folding the census into the same try meant one
+      // typo, one column a DB has not migrated yet, and the whole check returns
+      // `skipped: true` → reads GREEN while a writer quietly destroys amounts.
+      // That is this subsystem's signature failure and it is not being rebuilt
+      // here: a census that cannot run degrades to "census unavailable", never to
+      // "everything is fine".
+      let censusError = null
+      try {
+        // Every active row gets an ANSWER classification. The predicates read an
+        // answer off EITHER the grant itself OR its linked catalog row, because
+        // an amount can now be recorded in two places: on the catalog row (the
+        // enrichment sweep) or directly on an orphan grant with no catalog twin
+        // (enforceGrantDirectAmountEnrichment). `attempted` follows the same
+        // rule — the catalog row's mark when linked, the grant's own mark when an
+        // orphan — so a read-but-silent row is `unreadable` regardless of which
+        // path read it, and a never-looked-at row is `never_read` backlog.
+        const V = pipelineValueSql('g')
+        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) = 'directory'`
+        // NULL-safe (COALESCE): amount_status is NULL on many rows, and a raw
+        // `col = 'x'` yields NULL there, which poisons every `NOT (...)` below via
+        // three-valued logic (NULL AND anything = NULL → the CASE never fires and
+        // the row silently vanishes from the count). Every status comparison here
+        // must fold NULL to '' first.
+        const nonePub = `(COALESCE(g.amount_status, '') = 'none_published' OR COALESCE(fo.amount_status, '') = 'none_published')`
+        const honestLabel =
+          `(COALESCE(g.amount_status, '') IN ('varies', 'contact_required', 'estimated')` +
+          ` OR COALESCE(g.amount_text, '') <> ''` +
+          ` OR COALESCE(fo.amount_status, '') IN ('varies', 'contact_required', 'estimated')` +
+          ` OR COALESCE(fo.amount_text, '') <> '')`
+        // Read-mark that applies to THIS row: the catalog row's when linked, the
+        // grant's own when an orphan (COALESCE picks whichever is present).
+        const attempted = `COALESCE(fo.amount_enrich_attempted_at, g.amount_enrich_attempted_at)`
+        // A row with no value, not a directory, no denial and no honest label.
+        const unanswered = `${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND NOT ${honestLabel}`
+        answers = await db
+          .prepare(
+            `SELECT
+               SUM(CASE WHEN ${V} > 0 THEN 1 ELSE 0 END) AS carried,
+               SUM(CASE WHEN ${V} = 0 AND ${isDir} THEN 1 ELSE 0 END) AS by_design,
+               SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND ${nonePub} THEN 1 ELSE 0 END) AS answered_none_published,
+               SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND ${honestLabel} THEN 1 ELSE 0 END) AS answered_text,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL THEN 1 ELSE 0 END) AS unanswered_unreadable,
+               SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL THEN 1 ELSE 0 END) AS unanswered_no_catalog_row
+             FROM grants g
+             LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+            WHERE g.status IN (${statusesSql})
+              AND ${NON_SYNTHETIC_PIPELINE('g')}`,
+          )
+          .get()
+      } catch (err) {
+        censusError = String(err?.message || err)
+      }
       const total = Number(grants?.total) || 0
       const withValue = Number(grants?.with_value) || 0
       const catTotal = Number(catalog?.total) || 0
       const catWith = Number(catalog?.with_amount) || 0
+      const carried = Number(answers?.carried) || 0
+      const byDesign = Number(answers?.by_design) || 0
+      const nonePublished = Number(answers?.answered_none_published) || 0
+      const answeredText = Number(answers?.answered_text) || 0
+      const noCatalogRow = Number(answers?.unanswered_no_catalog_row) || 0
+      const neverRead = Number(answers?.unanswered_never_read) || 0
+      const unreadable = Number(answers?.unanswered_unreadable) || 0
+      const census = answers
+        ? {
+            carried,
+            answered_none_published: nonePublished,
+            answered_text: answeredText,
+            no_amount_by_design: byDesign,
+            unanswered_no_catalog_row: noCatalogRow,
+            unanswered_never_read: neverRead,
+            unanswered_unreadable: unreadable,
+          }
+        : {}
       if (total < 20) return { ok: true, summary: `Only ${total} active pipeline grants — coverage check not meaningful yet.` }
       const pct = Math.round((withValue / total) * 100)
       const catPct = catTotal > 0 ? Math.round((catWith / catTotal) * 100) : 0
-      const summary = `${withValue}/${total} (${pct}%) active pipeline grants carry a dollar value; catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
-      if (pct < 60) {
+
+      // Ratchet: record this reading and compare it to the previous one. A LEVEL
+      // cannot distinguish "climbing back" from "being destroyed" — both look like
+      // "LOW" — and this subsystem's characteristic failure is work being silently
+      // undone (a re-crawl wiped amounts 21% → 15% on 2026-07-16 while this check
+      // printed its usual line).
+      const history = await readAmountCoverageHistory(db)
+      const previous = history.length ? history[history.length - 1] : null
+      const regression = detectCoverageRegression(Number(previous?.pct), pct)
+      await appendAmountCoverageHistory(db, { at: new Date().toISOString(), pct, with_value: withValue, total })
+
+      const trend = previous ? ` (was ${previous.pct}% on ${String(previous.at).slice(0, 10)})` : ''
+      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+
+      // A DROP is reported even when the level is above the bar, and takes
+      // precedence when below it: "we went backwards" is a different, more urgent
+      // fact than "we are low", and it is the one that names an active bug.
+      if (regression) {
         return {
           ok: false,
-          summary: `Pipeline-$ coverage LOW: ${summary}`,
-          evidence: { active_grants: total, with_value: withValue, coverage_pct: pct, catalog_total: catTotal, catalog_with_amount: catWith, catalog_pct: catPct },
-          recommended_fix: 'The boot nets now ACQUIRE amounts, not just copy them: enforceAmountEnrichment fetches the funder\'s own page for active-pipeline sources with no dollar figure (bounded per boot; see pipeline.invariantSweepOutcomes for what it learned), and enforceGrantAmountBackfill mirrors catalog amounts onto pipeline rows. A persistently low residual after those means INGEST never captured amounts: extend awardAmountExtractor patterns for the text phrasings on failing sources, and make structured adapters map their award-size fields into amount_min/amount_max. Amy\'s amount_recall_miss findings name the profile shapes/sources where the gap concentrates.',
+          summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${pct}%): ${summary}`,
+          // The census rides along: on a wipe it shows exactly where the rows
+          // went (they stay MISSES — a wiped row keeps its honest status and is
+          // never `none_published`, because no read ever denied it).
+          evidence: { ...regression, active_grants: total, with_value: withValue, catalog_pct: catPct, ...census },
+          recommended_fix: 'Coverage falling means something is REMOVING amounts, not just failing to find them — treat it as an active bug, not a backlog. Group the metric BY WRITER first (`SELECT record_origin, COUNT(*), COUNT(*) FILTER (WHERE amount_max > 0) FROM funding_opportunities GROUP BY record_origin`): a single origin collapsing is the fingerprint. That query exposed the 2026-07-16 defect in one shot (live_crawl 2.4% vs funding_api 17%), where a re-crawl treated an ingest carrying no amount as the source asserting it had none, and `amount_enrich_attempted_at` survived the wipe so each row was burned blank forever. Also check the enforce-invariants summary (pipeline.invariantSweepOutcomes) for a net stripping values.',
+          confidence: 0.8,
+        }
+      }
+
+      // THE BAR IS "DOES EVERY ROW HAVE AN ANSWER?", NOT "IS COVERAGE HIGH?"
+      //
+      // This check used to fail whenever raw coverage sat under 60%. It printed
+      // the same LOW line every night for a year while five PRs (#941-#951)
+      // fixed real defects underneath it, because the bar measured THE WORLD,
+      // not US: coverage is capped by what share of funders publish a per-award
+      // figure at all, and the honest measured ceiling is ~21% (prod, 2026-07-16:
+      // remaining=2, exhausted=131 — the backlog is DRAINED; those rows publish
+      // no figure anywhere). A bar nothing can reach is not a standard, it is a
+      // nightly false alarm — and an owner who learns to scroll past this finding
+      // is exactly how the real one (a re-crawl WIPING amounts) goes unread.
+      //
+      // What IS ours to hold: every active row must have an honest ANSWER —
+      // a dollar value, an evidenced "read it, this funder publishes none"
+      // (`none_published`, written only after a real read), an honest label
+      // ("varies"/"contact funder"), or no-per-award-figure-BY-DESIGN (a
+      // DIRECTORY locator is a pointer, never an award — the same doctrine
+      // `unvaluedCountSql` states and Amy's false_positive detector already
+      // applies). That set DRAINS and stays drained, and every residual names
+      // its own fix instead of shrugging at a percentage.
+      //
+      // "$0" and "no amount stated" are DIFFERENT facts (config/pipelineValue.js).
+      // This check was the one surface that conflated them.
+      // The ratchet above has already run and already returned on a regression.
+      // Only now may a broken census matter — and it degrades to "unknown", not
+      // to "ok". Reporting raw coverage keeps the reading honest and visible.
+      if (censusError || !answers) {
+        return {
+          ok: true,
+          skipped: true,
+          summary: `amount answer census unavailable (${censusError || 'no rows'}) — raw reading only: ${summary}`,
+          evidence: { active_grants: total, with_value: withValue, coverage_pct: pct, catalog_pct: catPct },
+        }
+      }
+
+      const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct }
+
+      // `never_read` is BACKLOG, not a defect: the enrichment sweeps are bounded
+      // per night and drain it (catalog rows via enforceAmountEnrichment, orphan
+      // grants via enforceGrantDirectAmountEnrichment). It fails only if it
+      // STALLS — the sweeps' own remaining/exhausted telemetry owns that. Failing
+      // on it here would re-create the nightly-noise problem one rung down.
+      //
+      // The ONLY genuinely-unanswered class is `unreadable`: a row whose source
+      // WAS read and came back a JS shell / dead page, so no amount of fetching
+      // can ever help — it names real ADAPTER work (the report itself says
+      // "persistent classes need a code change"). Orphan grants used to fail here
+      // as `no_catalog_row`; now they are read directly, so they either get an
+      // answer, sit in `never_read` backlog, or land here as honestly unreadable.
+      if (unreadable > 0) {
+        return {
+          ok: false,
+          summary: `${unreadable} active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter. ${summary}`,
+          evidence: fullCensus,
+          recommended_fix: 'These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. Identify the hosts: group the unreadable rows by source_url host. sam.gov is deliberately NOT adapted (its award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.',
           confidence: 0.85,
         }
       }
-      return { ok: true, summary }
+      return {
+        ok: true,
+        summary: `All ${total} real active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting a read` : ''}). ${summary}`,
+        evidence: fullCensus,
+      }
     },
   },
   {
@@ -777,6 +1025,98 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         ok: true,
         summary: `All golden outcomes hold: ${expectations.length} profile(s), ${assertions} source assertion(s) verified.`,
         evidence: { profiles: expectations.length, assertions },
+      }
+    },
+  },
+  {
+    // Golden AMOUNT sentinel (2026-07-17). The golden-outcome check above guards
+    // SOURCE coverage per profile; this one guards the AWARD FIGURE. After
+    // live-verifying that a known funder's page yields its real per-award amount
+    // (Coca-Cola Scholars = $20,000, not the $237,500 program total the extractor
+    // used to grab), append an expectation so a future extractor/enrichment
+    // regression that re-introduces a wrong figure reds Anya's morning report
+    // instead of quietly inflating a client's Pipeline Potential.
+    //
+    // system_kv 'golden_amount_expectations' as
+    //   [{ label, url_contains, expect_max, [over_factor=3], [under_factor=5] }]
+    // A live grant whose url matches AND whose value sits outside
+    // [expect_max/under_factor, expect_max*over_factor] is a regression. A row
+    // with NO amount yet is BACKLOG, never a failure — the sweep will read it.
+    // Expectations are DATA, not code: verify a fix live, then append.
+    id: 'coverage.goldenAmounts',
+    label: 'Golden-amount sentinel (per-award figures stay correct)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Asserts owner-verified per-award amounts (system_kv golden_amount_expectations) have not regressed to a program total or a wrong figure. Fails open when no expectations are recorded or system_kv is unavailable. A row with no amount yet is backlog, not a failure.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'golden amounts: db unavailable' }
+      let row
+      try {
+        row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('golden_amount_expectations')
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!row?.value) {
+        return { ok: true, skipped: true, summary: 'No golden amount expectations recorded yet (system_kv golden_amount_expectations absent).' }
+      }
+      let expectations = null
+      try { expectations = JSON.parse(row.value) } catch { expectations = null }
+      if (!Array.isArray(expectations) || expectations.length === 0) {
+        return { ok: false, summary: 'golden_amount_expectations exists but is not a non-empty JSON array.', evidence: { raw: String(row.value).slice(0, 200) } }
+      }
+      const statusesSql = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      const failures = []
+      let assertions = 0
+      for (const exp of expectations) {
+        const urlContains = String(exp?.url_contains || '').toLowerCase()
+        const expectMax = Number(exp?.expect_max)
+        if (!urlContains || !Number.isFinite(expectMax) || expectMax <= 0) continue
+        const over = Number(exp?.over_factor) > 1 ? Number(exp.over_factor) : 3
+        const under = Number(exp?.under_factor) > 1 ? Number(exp.under_factor) : 5
+        const hi = expectMax * over
+        const lo = expectMax / under
+        assertions += 1
+        let rows = []
+        try {
+          // Match the funder's own url on the grant OR its linked catalog row;
+          // only rows that ACTUALLY carry a value are judged (no amount = backlog).
+          // audit:allow dynamic-sql — statusesSql is the frozen PIPELINE_ACTIVE_STATUSES constant
+          rows = await db.prepare(
+            `SELECT g.id, COALESCE(NULLIF(g.amount_requested,0), NULLIF(g.amount_max,0), NULLIF(g.amount_min,0),
+                                   NULLIF(fo.amount_max,0), NULLIF(fo.amount_min,0), 0) AS value
+               FROM grants g
+               LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+              WHERE g.status IN (${statusesSql})
+                AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+                AND (LOWER(COALESCE(g.url,'')) LIKE '%' || ? || '%'
+                     OR LOWER(COALESCE(g.application_url,'')) LIKE '%' || ? || '%'
+                     OR LOWER(COALESCE(fo.source_url,'')) LIKE '%' || ? || '%')`,
+          ).all(urlContains, urlContains, urlContains)
+        } catch { rows = [] }
+        const offenders = (rows || []).filter((r) => Number(r.value) > 0 && (Number(r.value) > hi || Number(r.value) < lo))
+        if (offenders.length > 0) {
+          failures.push({
+            label: exp.label || urlContains,
+            expect_max: expectMax,
+            acceptable_band: [Math.round(lo), Math.round(hi)],
+            found: offenders.slice(0, 5).map((r) => Number(r.value)),
+          })
+        }
+      }
+      if (failures.length > 0) {
+        return {
+          ok: false,
+          summary: `GOLDEN AMOUNT REGRESSION: ${failures.map((f) => `${f.label} expected ~$${f.expect_max.toLocaleString()} but pipeline shows $${f.found.map((v) => v.toLocaleString()).join('/$')}`).join('; ')}.`,
+          evidence: { failures, expectations: expectations.length },
+          recommended_fix: 'A funder\'s per-award figure regressed — almost always the extractor grabbing a PROGRAM TOTAL again (awardAmountExtractor aggregate exclusion: "N awards up to $X", "annual scholarships of $X"). Re-read the offending grant\'s page with enrichOpportunityAmountFromSource and confirm the aggregate guards still fire; if a re-crawl re-wrote the wrong value, check opportunityInserter. Never edit the amount by hand — fix the reader so it stays correct.',
+          confidence: 0.9,
+        }
+      }
+      return {
+        ok: true,
+        summary: `All golden amounts hold: ${assertions} funder amount assertion(s) within band.`,
+        evidence: { assertions },
       }
     },
   },

@@ -32,6 +32,7 @@
  */
 
 import { ensureAgentSubsystemTables } from '../utils/ensureAgentSubsystemTables.js'
+import { PAGE_FACT_MIGRATION_COLUMNS } from '../crawler-os/pageFacts.js'
 
 /**
  * Wraps a single invariant step in a try/catch that logs but never
@@ -581,6 +582,21 @@ export async function ensureProfilePreferredLanguageColumn(db, { logger = consol
  * awardAmountExtractor.resolveOpportunityAmounts and mirrored onto grants by
  * enforceGrantAmountBackfill(). Re-asserted at boot so prod heals without a
  * manual migrate.
+ *
+ * `amount_enrich_attempted_at` (funding_opportunities only) records that
+ * enforceAmountEnrichment() is DONE with this row, so the sweep can exclude
+ * already-tried rows IN SQL rather than after the LIMIT. It replaces the
+ * `system_kv amount_enrich_attempted_ids` ring, which capped at 2000 ids
+ * and — because the candidate query LIMITed before the JS filter — wedged the
+ * whole sweep at a fixed 200-row window once those rows were attempted.
+ * Attempt-state belongs on the row it describes, not in a side blob.
+ *
+ * `amount_enrich_attempts` counts the TRIES. The mark above is one-shot and
+ * permanent, so it can only be set once we have actually learned something
+ * about the row; a host that 503'd tonight has taught us nothing. The counter
+ * is what lets a transient failure be retried a bounded number of times
+ * (AMOUNT_ENRICH_MAX_ATTEMPTS) without a permanently-down host being re-fetched
+ * forever and starving never-tried rows out of the nightly budget.
  */
 export async function ensureAmountVisibilityColumns(db, { logger = console } = {}) {
   return runStep(
@@ -588,12 +604,21 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
     '[database]',
     logger,
     async () => {
-      const columns = [
-        ['amount_text', 'TEXT'],
-        ['amount_status', 'TEXT'],
-        ['amount_confidence', 'REAL'],
-      ]
-      for (const table of ['funding_opportunities', 'grants']) {
+      const columnsByTable = {
+        funding_opportunities: [
+          ['amount_text', 'TEXT'],
+          ['amount_status', 'TEXT'],
+          ['amount_confidence', 'REAL'],
+          ['amount_enrich_attempted_at', 'TEXT'],
+          ['amount_enrich_attempts', 'INTEGER'],
+        ],
+        grants: [
+          ['amount_text', 'TEXT'],
+          ['amount_status', 'TEXT'],
+          ['amount_confidence', 'REAL'],
+        ],
+      }
+      for (const [table, columns] of Object.entries(columnsByTable)) {
         if (db?.dialect === 'postgres') {
           for (const [col, type] of columns) {
             // audit:allow dynamic-sql — table/col/type come from hardcoded module-local constants
@@ -616,6 +641,93 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
           }
         }
       }
+    },
+  )
+}
+
+/**
+ * Page-fact provenance columns (both dialects) on funding_opportunities:
+ * eligibility_text / page_fact_schema_version / field_provenance (migration
+ * 144 / pg 0148; eligibility_bullets pre-existed). ADDITIVE, NULL-default
+ * plumbing for a later profile-blind extractor — re-asserted at boot so prod
+ * heals without a manual migrate, and so the drift check (diagnosticsService)
+ * has real columns to verify. Column list comes from the single page-fact
+ * registry so this can never drift from what storage writes.
+ */
+export async function ensurePageFactProvenanceColumns(db, { logger = console } = {}) {
+  return runStep(
+    'page_fact_provenance_columns',
+    '[database]',
+    logger,
+    async () => {
+      const columns = PAGE_FACT_MIGRATION_COLUMNS.map((c) => [c.column, c.type])
+      if (db?.dialect === 'postgres') {
+        for (const [col, type] of columns) {
+          // audit:allow dynamic-sql — col/type come from the hardcoded page-fact registry
+          await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS ${col} ${type}`)
+        }
+        return
+      }
+      let existing = new Set()
+      try {
+        const cols = await db.prepare('PRAGMA table_info(funding_opportunities)').all() // audit:allow dynamic-sql
+        existing = new Set((Array.isArray(cols) ? cols : []).map((c) => c?.name))
+      } catch {
+        existing = new Set()
+      }
+      for (const [col, type] of columns) {
+        if (!existing.has(col)) {
+          // audit:allow dynamic-sql — col/type come from the hardcoded page-fact registry
+          await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col} ${type}`)
+        }
+      }
+    },
+  )
+}
+
+/**
+ * Content-addressed page-fact cache table (both dialects): `page_fact_cache`
+ * (migration 145 / pg 0149; Phase 0.2 of the web-lane de-contamination program).
+ * ADDITIVE, default-off, ZERO behavior change — a deterministic "same page =>
+ * same facts" store for a LATER profile-blind extractor; NOTHING reads/writes it
+ * yet (wired in Phase 1). Re-asserted at boot (CREATE TABLE IF NOT EXISTS —
+ * idempotent, boot-time, NOT the persistence hot path) so prod heals without a
+ * manual migrate and the drift check (diagnosticsService) has a real table to
+ * verify. The accessor lives in backend/services/pageFactCache.js.
+ */
+export async function ensurePageFactCacheTable(db, { logger = console } = {}) {
+  return runStep(
+    'page_fact_cache_table',
+    '[database]',
+    logger,
+    async () => {
+      if (db?.dialect === 'postgres') {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS page_fact_cache (
+            cache_key TEXT PRIMARY KEY,
+            normalized_final_url TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            extractor_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            model TEXT NOT NULL,
+            page_facts_json TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+        `)
+        return
+      }
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS page_fact_cache (
+          cache_key TEXT PRIMARY KEY,
+          normalized_final_url TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          extractor_version TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          model TEXT NOT NULL,
+          page_facts_json TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `)
     },
   )
 }
@@ -1134,6 +1246,8 @@ const SCHEMA_INVARIANT_STEPS = [
   ['users_last_login_at_column', ensureUsersLastLoginAtColumn],
   ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
   ['amount_visibility_columns', ensureAmountVisibilityColumns],
+  ['page_fact_provenance_columns', ensurePageFactProvenanceColumns],
+  ['page_fact_cache_table', ensurePageFactCacheTable],
   ['ingestion_provenance_tables', ensureIngestionProvenanceTables],
   ['profile_portal_status', ensurePortalCompletionStatusTable],
   ['portal_autopilot_identity', ensurePortalAutopilotIdentityTables],

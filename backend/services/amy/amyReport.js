@@ -16,6 +16,8 @@ import { DEFAULT_MIN_SCORE, ACCEPT_SCORE, REVIEW_SCORE } from '../../config/matc
 import { isStudentAidOpportunity } from '../matchEngine.js'
 import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
+import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabulary.js'
+import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -63,12 +65,46 @@ function looksLikeGeoIssue(text) {
 
 // Generic/directory-style titles that should NOT be high-confidence ACCEPTs for
 // a specific synthetic profile — an ACCEPT here is a likely false positive.
-const GENERIC_TITLE_RX =
-  /\b(directory|resource (guide|center|finder)|funding finder|benefit finder|general (funding|assistance)|find (funding|grants|help)|grant search|search portal|list of|database of|portal)\b/i
+//
+// isGenericTitle comes from backend/config/genericTitleVocabulary.js, the ONE
+// registry the engine's ACCEPT cap reads too. This detector used to carry its
+// own GENERIC_TITLE_RX which shared only 4 of ~12 terms with the gate's list,
+// so Amy flagged phrasings no gate could act on. Totality test:
+// backend/tests/genericTitleVocabulary.test.js.
 
-function isGenericTitle(title) {
-  return GENERIC_TITLE_RX.test(String(title ?? ''))
+// A DIRECTORY locator is a declared pointer, not a claimed award. It is titled
+// generically BY DESIGN ("… Resource Directory") and reaches the recommendation
+// list through isRecommendable()'s locator rule at REVIEW — computeMatchDecision
+// no longer lets one claim ACCEPT. So a locator is not evidence of a relevance
+// defect, and counting one as a false positive measured the naming convention
+// rather than the matcher. A generic-titled NON-locator that clears ACCEPT is
+// still a real false positive and still counts below.
+function isLocatorKind(kind) {
+  return String(kind ?? '').toUpperCase() === 'DIRECTORY'
 }
+
+// amount_status values that mean "the funder itself states no per-award figure"
+// — an honest answer, not a recall failure.
+//
+// 'not_listed' is deliberately NOT here, and that has always been right: it is
+// the extractor's DEFAULT, so it means "nobody found a figure" and cannot tell
+// a real extraction miss from a funder that publishes none. Silence is not a
+// denial. Keeping it in the denominator is what makes this finding able to fire.
+//
+// 'none_published' IS here: it is written ONLY by enforceAmountEnrichment after
+// the funder's own page or API was actually READ and stated no per-award figure
+// (awardAmountExtractor.AMOUNT_STATUS_NONE_PUBLISHED). That is evidence about
+// the world, not an absence in our DB — the one thing that can honestly retire
+// a row from this finding.
+//
+// Why it matters here: on 2026-07-16 this finding fired for 28 of 50 synthetic
+// profiles, every one of them on rows whose funders publish nothing (benefit
+// programs, food-bank locators, SSI). Amy could not know that, because the read
+// that proved it threw its own answer away. So the cohort could never come back
+// clean, and the owner's standing "50/50 clean → notify me once" goal was
+// unreachable BY CONSTRUCTION. Do not add 'not_listed' here to make the number
+// look better — that would delete the finding rather than answer it.
+const AMOUNT_UNKNOWABLE_STATUSES = new Set(['varies', 'contact_required', AMOUNT_STATUS_NONE_PUBLISHED])
 
 function normLower(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -174,18 +210,31 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     topical: topicalEvidenceOf(r),
     decision: decisionUpper(r.decision),
     title: r.title ?? null,
+    locator: isLocatorKind(r.kind),
     generic: isGenericTitle(r.title),
+    // generic AND no concrete anchor — "Cancer Resource Directory" is generic
+    // by title but is genuinely a cancer row, so it is not genericOnly.
+    genericOnly: isGenericOnly(r.title),
   }))
 
-  // False positives / bad matches: a generic/directory-style result that the
-  // engine ACCEPTED (or scored at/above ACCEPT) for a SPECIFIC profile.
+  // False positives: a generic-ONLY listing (no concrete anchor) that the engine
+  // still ACCEPTED as a strong match for a SPECIFIC profile.
+  //
+  // Two deliberate narrowings:
+  //  - DIRECTORY locators are excluded: they are pointers admitted at REVIEW by
+  //    the locator rule, so a high score on one is topical fit, not an over-claim.
+  //  - the DECISION is what counts, not the raw score. matchEngine's generic-only
+  //    cap holds these at REVIEW while their topical score legitimately stays at
+  //    or above ACCEPT_SCORE — firing on `score >= ACCEPT_SCORE` would report a
+  //    false positive the engine had already prevented.
+  // Post-cap this should be structurally impossible; if it fires, the cap leaked.
   const falsePositives = candidates.filter(
-    (c) => c.generic && (c.decision === 'ACCEPT' || c.score >= ACCEPT_SCORE),
+    (c) => c.genericOnly && !c.locator && c.decision === 'ACCEPT',
   )
   if (falsePositives.length > 0) {
     findings.push(
       makeFinding(FINDING_TYPES.FALSE_POSITIVE, {
-        message: `${scenario.label}: ${falsePositives.length} generic/directory result(s) were ACCEPTED as strong matches (likely false positive).`,
+        message: `${scenario.label}: ${falsePositives.length} generic non-directory listing(s) were ACCEPTED as strong matches despite the generic-only cap (likely false positive — the vocabulary may not yet cover this phrasing).`,
         excerpt: falsePositives.map((c) => `${c.score}:${c.title}`).slice(0, 4).join('; '),
         evidence: { ...baseEvidence, false_positive_titles: falsePositives.map((c) => c.title).slice(0, 6) },
       }),
@@ -280,14 +329,32 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     (r) => String(r.kind ?? '').toUpperCase() !== 'DIRECTORY',
   )
   const withAmount = grantShaped.filter(
-    (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0 || num(r.amount) > 0,
+    (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0,
   )
-  if (grantShaped.length >= 5 && withAmount.length === 0) {
+  // A funder that states "amounts vary" / "contact us" — or whose page we READ
+  // and which states no figure at all ('none_published') — has told us the
+  // truth: there IS no per-award number to extract. Counting those rows as an
+  // extraction gap measures the funder's disclosure, not our recall. Rows with
+  // no status at all, or 'not_listed' (nobody has looked yet, or looked and the
+  // answer was never written down), stay in the denominator — those are where a
+  // real extraction miss hides.
+  const amountUnknowable = grantShaped.filter((r) =>
+    AMOUNT_UNKNOWABLE_STATUSES.has(String(r.amount_status ?? '').toLowerCase()),
+  )
+  const measurable = grantShaped.length - amountUnknowable.length
+  if (measurable >= 5 && withAmount.length === 0) {
     findings.push(
       makeFinding(FINDING_TYPES.AMOUNT_RECALL_MISS, {
-        message: `${scenario.label}: 0 of ${grantShaped.length} grant-shaped stored candidates carry an award amount — this profile shape's pipeline value will display ~$0 (amount extraction/adapter gap, not a recall gap).`,
+        message: `${scenario.label}: 0 of ${measurable} grant-shaped stored candidates whose funder could state an award amount carry one — this profile shape's pipeline value will display ~$0 (amount extraction/adapter gap, not a recall gap).`,
         excerpt: grantShaped.slice(0, 4).map((r) => r.title).filter(Boolean).join('; '),
-        evidence: { ...baseEvidence, results: recommendations.length, grant_shaped: grantShaped.length, with_amount: 0 },
+        evidence: {
+          ...baseEvidence,
+          results: recommendations.length,
+          grant_shaped: grantShaped.length,
+          measurable,
+          amount_unknowable: amountUnknowable.length,
+          with_amount: 0,
+        },
       }),
     )
   }
@@ -398,6 +465,11 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     sources_failed: failedSources.length,
     candidates,
     false_positives: falsePositives.length,
+    // The offending TITLES, not just the count: proposeGenericTitleAdditions()
+    // mines these for the generic phrasing that let the row through, which is
+    // what makes the `relevance_precision` approval item actionable instead of
+    // a number with no remedy attached.
+    false_positive_titles: falsePositives.map((c) => c.title).filter(Boolean),
     ineligible_accepts: ineligibleAccepts.length,
     findings,
   }

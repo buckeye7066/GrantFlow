@@ -25,6 +25,7 @@ import {
   laneForSource,
   extractMatchEvidence,
   buildCoverageEvidence,
+  conditionCoveredBySource,
 } from '../services/coverageEvidenceService.js'
 import { sourceIds, allSources } from '../crawler-os/sourceRegistry.js'
 
@@ -555,5 +556,151 @@ describe('state_programs lane totality', () => {
       expect(getAdapter(id), `${id} has no adapter factory`).toBeTruthy()
       expect(LANE_OF_SOURCE[id], `${id} missing from LANE_OF_SOURCE`).toBe('state_programs')
     }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// conditionCoveredBySource — the coverage FLOOR.
+//
+// The old rule was `hay.includes(token) || token.split('_').some(t => t.length>=4
+// && hay.includes(t))` over a haystack of need_categories + source_id + name +
+// keywords. Because source_id/name are FREE TEXT, that was a floor of ONE SHARED
+// WORD — the #937/#943 class ("a shared word is a coincidence, not an identity") —
+// and it fired in prod: Reeve "covered" the condition `physical` via the phrase
+// "physical disability" in its name, and anything named "...disease" covered
+// chronic kidney disease.
+//
+// The fix matches ONLY the curated vocabulary (keywords + need_categories), which
+// is why every disease_specific source must carry keywords (totality-tested below).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('conditionCoveredBySource — the coverage floor', () => {
+  const DISEASE_IDS = Object.entries(LANE_OF_SOURCE)
+    .filter(([, lane]) => lane === 'disease_specific')
+    .map(([id]) => id)
+  const diseaseSources = () => allSources().filter((s) => DISEASE_IDS.includes(s.source_id))
+  const coveredBy = (condition) => diseaseSources().filter((s) => conditionCoveredBySource(condition, s))
+
+  it('EVERY disease_specific source carries curated keywords (totality)', () => {
+    // Without keywords a source is invisible to condition matching and mints a
+    // false "no source lane exists" wishlist entry every night. cancer_care and
+    // alzheimers_gov_services shipped for months with none.
+    for (const s of diseaseSources()) {
+      expect(Array.isArray(s.keywords) && s.keywords.length > 0, `${s.source_id} has no keywords[]`).toBe(true)
+    }
+  })
+
+  // The regressions a stricter "every distinctive token must match" rule would have
+  // caused — each of these was covered before and MUST stay covered.
+  it.each([
+    ['breast cancer', 'cancer_care'],
+    ['stage 4 breast cancer', 'cancer_care'],
+    ['cancer survivor', 'cancer_care'],
+    ['alzheimers disease', 'alzheimers_gov_services'],
+    ['vascular dementia', 'alzheimers_gov_services'],
+    ['early onset alzheimers', 'alzheimers_gov_services'],
+    ['dementia', 'alzheimers_gov_services'],
+    ['wheelchair user', 'reeve_foundation_paralysis'],
+    ['spinal cord injury', 'reeve_foundation_paralysis'],
+    ['complex ptsd', 'samhsa_findtreatment'],
+    ['obstructive sleep apnea', 'asaa_cpap_assistance'],
+  ])('keeps covering %s (via %s)', (condition, expectedSource) => {
+    expect(coveredBy(condition).map((s) => s.source_id)).toContain(expectedSource)
+  })
+
+  it('covers the ADJECTIVE form real profiles type ("diabetic", not "diabetes")', () => {
+    // Prod 2026-07-16 carried the condition "diabetic". Token matching does not
+    // stem, so the curated vocabulary must carry both forms.
+    expect(coveredBy('diabetic').length).toBeGreaterThan(0)
+    expect(coveredBy('type 2 diabetes').length).toBeGreaterThan(0)
+  })
+
+  it('is strictly better than the one-word floor it replaced (A/B on the real registry)', () => {
+    // The OLD rule, inline, so this test proves the change MATTERS without
+    // depending on git history: each case below returned true under it.
+    const oldRule = (cond, s) => {
+      const token = String(cond || '').toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      const hay = [...(s.need_categories || []), s.source_id, s.name, ...(s.keywords || [])].join(' ').toLowerCase()
+      return hay.includes(token) || token.split('_').some((t) => t.length >= 4 && hay.includes(t))
+    }
+    const falseCovers = [
+      ['chronic kidney disease', 'needymeds_diagnosis_assistance'], // shared word: 'chronic'
+      ['medical debt', 'mercy_medical_angels'],                     // 'medical' in source_id/name
+      ['physical therapy', 'reeve_foundation_paralysis'],           // 'physical' inside a keyword phrase
+    ]
+    for (const [cond, sid] of falseCovers) {
+      const src = allSources().find((s) => s.source_id === sid)
+      expect(oldRule(cond, src), `${cond}/${sid} should have been a FALSE cover before`).toBe(true)
+      expect(conditionCoveredBySource(cond, src), `${cond}/${sid} must no longer be covered`).toBe(false)
+    }
+    // ...and it does not achieve that by breaking true covers:
+    const cancerCare = allSources().find((s) => s.source_id === 'cancer_care')
+    expect(oldRule('breast cancer', cancerCare)).toBe(true)
+    expect(conditionCoveredBySource('breast cancer', cancerCare)).toBe(true)
+  })
+
+  it('does NOT cover on a single coincidental shared word', () => {
+    const needymeds = allSources().find((s) => s.source_id === 'needymeds_diagnosis_assistance')
+    const mercy = allSources().find((s) => s.source_id === 'mercy_medical_angels')
+    const reeve = allSources().find((s) => s.source_id === 'reeve_foundation_paralysis')
+    // shared word 'chronic' only — a kidney condition is not a NeedyMeds diagnosis lane
+    expect(conditionCoveredBySource('chronic kidney disease', needymeds)).toBe(false)
+    // 'medical' lives in the source_id/name, which is no longer consulted
+    expect(conditionCoveredBySource('medical debt', mercy)).toBe(false)
+    // 'physical' inside the keyword phrase "physical disability" ≠ physical therapy
+    expect(conditionCoveredBySource('physical therapy', reeve)).toBe(false)
+  })
+
+  it('covers CANONICAL FLAG tokens, which arrive underscored', () => {
+    // REGRESSION (prod 2026-07-16). Health signals come in two shapes: free text
+    // ("breast cancer") and canonical flags minted with underscores
+    // ("hearing_impairment") by profileHelpers. The old rule split on `_` before
+    // matching, so it saw "hearing"; the new rule matched the raw string and
+    // silently stopped covering EVERY underscore flag — `hearing_impairment` became
+    // a false "no source lane exists" the moment it shipped, with
+    // hlaa_financial_assistance sitting right there. Caught only by rebuilding the
+    // scoreboard against real prod profiles.
+    expect(coveredBy('hearing_impairment').map((s) => s.source_id)).toContain('hlaa_financial_assistance')
+    expect(coveredBy('hearing impairment').map((s) => s.source_id)).toContain('hlaa_financial_assistance')
+  })
+
+  it('covers diagnoses spelled out the way real profiles type them', () => {
+    // SAMHSA plainly covers these; only its vocabulary was missing the long forms.
+    // Token matching neither stems nor expands acronyms.
+    expect(coveredBy('post-traumatic stress disorder').map((s) => s.source_id)).toContain('samhsa_findtreatment')
+    expect(coveredBy('major depressive disorder').map((s) => s.source_id)).toContain('samhsa_findtreatment')
+    expect(coveredBy('ptsd').map((s) => s.source_id)).toContain('samhsa_findtreatment')
+  })
+
+  it('still reports an honestly uncovered flag as a gap (no vision lane exists)', () => {
+    // The underscore fix must not paper over a REAL gap: nothing in the registry
+    // serves vision, so visual_impairment stays a true structural finding.
+    expect(coveredBy('visual_impairment')).toHaveLength(0)
+  })
+
+  it('matches on whole tokens only — `renal` must not hit inside `adrenal`', () => {
+    const fake = { source_id: 'x', name: 'x', keywords: ['adrenal insufficiency'], need_categories: [] }
+    expect(conditionCoveredBySource('renal failure', fake)).toBe(false)
+    expect(conditionCoveredBySource('adrenal insufficiency', fake)).toBe(true)
+  })
+
+  it('leaves a genuinely uncovered diagnosis honestly uncovered', () => {
+    for (const c of ['cipn', 'epilepsy', 'obesity', 'retina detachment (left eye)']) {
+      expect(coveredBy(c), `${c} should still be an honest gap`).toHaveLength(0)
+    }
+  })
+
+  it('an ADOPTED source retires the gap via the overlay (this is what converges)', () => {
+    const src = allSources().find((s) => s.source_id === 'cancer_care')
+    expect(conditionCoveredBySource('epilepsy', src)).toBe(false)
+    // Once the consumer's find survives the full gate stack, the condition is
+    // credited — otherwise the wishlist re-emits "no lane for epilepsy" forever.
+    const overlay = new Set(['epilepsy'])
+    expect(conditionCoveredBySource('epilepsy', src, overlay)).toBe(true)
+  })
+
+  it('a source with no curated vocabulary covers nothing (never vacuously true)', () => {
+    const bare = { source_id: 'bare', name: 'Bare source', keywords: [], need_categories: [] }
+    expect(conditionCoveredBySource('anything at all', bare)).toBe(false)
+    expect(conditionCoveredBySource('chronic condition', bare)).toBe(false)
   })
 })

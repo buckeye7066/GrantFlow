@@ -266,6 +266,47 @@ export function createOutlookProvider({
   }
 
   /**
+   * Delete a DRAFT message from the mailbox (Graph DELETE → Deleted Items).
+   *
+   * Guarded: it re-reads the message first and refuses anything that is not
+   * `isDraft`, so a bug or a bad id can never remove a real sent/received mail.
+   * A 404 counts as success — the draft is already gone, which is the desired
+   * end state and keeps the caller idempotent.
+   *
+   * Only ever called for drafts whose recipient provably fails the plausibility
+   * gate (see johnDraftPlausibilityPurge).
+   */
+  async function deleteDraft({ messageId }) {
+    if (!ready) {
+      const err = new Error(`Outlook provider not configured (missing ${missing || 'fetch'})`)
+      err.code = 'JOHN_OUTLOOK_NOT_CONFIGURED'
+      throw err
+    }
+    if (!messageId) throw new Error('deleteDraft: messageId is required')
+
+    // Refuse to delete anything that isn't still a draft.
+    const existing = await getMessage(messageId)
+    if (!existing.ok) {
+      if (existing.notFound) return { ok: true, alreadyGone: true }
+      return { ok: false, status: existing.status, detail: existing.detail }
+    }
+    if (existing.message?.isDraft === false) {
+      return { ok: false, refused: 'not_a_draft' }
+    }
+
+    const token = await getAccessToken()
+    const mailbox = encodeURIComponent(config.primaryMailbox)
+    const url = `${GRAPH_BASE}/users/${mailbox}/messages/${encodeURIComponent(messageId)}`
+    const res = await fetchImpl(url, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (res.ok || res.status === 204) return { ok: true }
+    if (res.status === 404) return { ok: true, alreadyGone: true }
+    return { ok: false, status: res.status, detail: redact(await safeText(res)) }
+  }
+
+  /**
    * Update the subject/body of an existing draft via Graph PATCH. Only drafts
    * (isDraft === true) can be edited; Graph rejects edits to sent items. Returns
    * { ok, provider_draft_id } or throws with a redacted detail.
@@ -448,6 +489,7 @@ export function createOutlookProvider({
     missing,
     createDraft,
     getMessage,
+    deleteDraft,
     updateDraftBody,
     listDrafts,
     listInboxMessages,

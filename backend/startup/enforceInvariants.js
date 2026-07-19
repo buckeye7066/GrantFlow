@@ -57,12 +57,12 @@ import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
-import { PIPELINE_ACTIVE_STATUSES, WIDE_AWARD_RANGE_RATIO } from '../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, WIDE_AWARD_RANGE_RATIO, pipelineValueSql } from '../config/pipelineValue.js'
 import { dedupeProfileDisplayName } from '../../shared/nameParsing.js'
 import { resolveProfileType, getParentChain } from '../services/profileTypeRegistry.js'
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
-import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE } from '../services/awardAmountExtractor.js'
+import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE, AMOUNT_STATUS_NONE_PUBLISHED } from '../services/awardAmountExtractor.js'
 import { AUTO_ADD_SCORE, DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
@@ -2115,6 +2115,120 @@ export async function enforceNoSearchEngineApplicationTargets(db) {
 }
 
 /**
+ * INVARIANT: last_verified_at means a real TARGET verification happened, not a
+ * source scrape. The crawler-os persistence path (crawlerOsPersistence.js) used
+ * to stamp `last_verified_at` from the SOURCE page's `fetched_at` — i.e. when we
+ * fetched the LISTING/aggregator, NOT when we checked the opportunity's own
+ * application target. Three harms followed:
+ *   1. The Source Trace UI showed a "verified" time that was really a scrape time.
+ *   2. linkVerificationService (re-verify after 30d) SKIPPED these rows because
+ *      they looked freshly verified — so their real target was never probed.
+ *   3. A fallback query ordered by last_verified_at boosted these false rows.
+ * The producer is fixed (source capture no longer stamps it); this net repairs
+ * rows ALREADY persisted with the false stamp.
+ *
+ * PRECISE, SAFE PREDICATE — a genuine verification (linkVerificationService, or
+ * opportunityInserter's live-check insert) ALWAYS records who/how it checked:
+ * `verified_by`, `verification_method`, and a real `link_status`
+ * (ok|redirect|broken|skipped). A source-capture false stamp has a
+ * `last_verified_at` timestamp but NONE of that evidence. We only clear rows that
+ * carry a verification TIME with ZERO evidence any verification occurred, scoped
+ * to record_origin='live_crawl' (the crawler-os path that produced the bug).
+ * Clearing to NULL re-queues the row for the real verifier (its candidate query
+ * picks `last_verified_at IS NULL` first). Nothing a real probe touched is moved.
+ *
+ * BOUNDS (mirror enforceAmountEnrichment / url-rescue boot nets so a large
+ * historical backlog can't stampede the verifier or the DB on one boot): at most
+ * VERIFIED_AT_HONESTY_BOOT_LIMIT rows (default 500) cleared per boot in chunks,
+ * within VERIFIED_AT_HONESTY_TIME_BUDGET_MS (default 10s). Each cleared row no
+ * longer matches next boot, so the backlog drains monotonically over boots.
+ * OVERRIDE: ON by default; ENFORCE_VERIFIED_AT_HONESTY=0 for count-only.
+ */
+const VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT = 500
+const VERIFIED_AT_HONESTY_TIME_BUDGET_MS_DEFAULT = 10000
+const VERIFIED_AT_HONESTY_CHUNK = 200
+
+export async function enforceLiveCrawlVerifiedAtHonesty(db) {
+  return runInvariant('live_crawl_verified_at_honesty', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_VERIFIED_AT_HONESTY) === false
+    const bootLimit = _parsePositiveIntEnv(
+      process.env.VERIFIED_AT_HONESTY_BOOT_LIMIT,
+      VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT,
+    )
+    const timeBudgetMs = _parsePositiveIntEnv(
+      process.env.VERIFIED_AT_HONESTY_TIME_BUDGET_MS,
+      VERIFIED_AT_HONESTY_TIME_BUDGET_MS_DEFAULT,
+    )
+
+    // Falsely-stamped rows: a verification TIME with zero verification evidence,
+    // scoped to the crawler-os live_crawl path that produced the bug.
+    const WHERE = `record_origin = 'live_crawl'
+        AND last_verified_at IS NOT NULL
+        AND verified_by IS NULL
+        AND verification_method IS NULL
+        AND (link_status IS NULL OR link_status = 'unverified')`
+
+    let scanned = 0
+    try {
+      const row = await db
+        .prepare(`SELECT COUNT(*) AS c FROM funding_opportunities WHERE ${WHERE}`)
+        .get()
+      scanned = Number(row?.c ?? 0)
+    } catch (err) {
+      // Minimal/fixture DBs may lack these columns — nothing to enforce.
+      log.warn('verified_at_honesty: candidate scan failed (non-fatal)', {
+        error: String(err?.message || err),
+      })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    if (scanned === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) {
+      log.warn('source-scrape false last_verified_at stamps present (repair DISABLED via ENFORCE_VERIFIED_AT_HONESTY=0)', {
+        scanned,
+      })
+      return { scanned, repaired: 0, enforced: false }
+    }
+
+    const startedAt = Date.now()
+    let repaired = 0
+    while (repaired < bootLimit) {
+      if (Date.now() - startedAt > timeBudgetMs) break
+      const chunk = Math.min(VERIFIED_AT_HONESTY_CHUNK, bootLimit - repaired)
+      let n = 0
+      try {
+        const res = await db
+          .prepare(
+            `UPDATE funding_opportunities
+                SET last_verified_at = NULL
+              WHERE id IN (
+                SELECT id FROM funding_opportunities WHERE ${WHERE} LIMIT ?
+              )`,
+          )
+          .run(chunk)
+        n = changesOf(res)
+      } catch (err) {
+        log.warn('verified_at_honesty: clear failed (non-fatal)', {
+          error: String(err?.message || err),
+        })
+        break
+      }
+      repaired += n
+      if (n === 0) break
+    }
+
+    if (repaired > 0) {
+      log.info('cleared source-scrape false last_verified_at stamps; re-queued for real target verification', {
+        scanned,
+        repaired,
+        remaining: Math.max(0, scanned - repaired),
+      })
+    }
+    return { scanned, repaired, enforced: true }
+  })
+}
+
+/**
  * INVARIANT: APPLICATION-URL RESCUE — a real candidate rejected ONLY for a
  * missing URL gets ONE bounded chance to be rescued with a real, live page.
  *
@@ -2843,33 +2957,197 @@ export async function enforceImportedStatusHonesty(db) {
  * (the nightly sweep's dedicated enrichment pass) may override both via
  * deps.limit / deps.timeBudgetMs — the boot path stays cheap by default.
  */
+/**
+ * INVARIANT: A PIPELINE GRANT IS LINKED TO ITS CATALOG ROW WHEN ONE EXISTS
+ * (the amount-answer census blind spot, 2026-07-17).
+ *
+ * THE GAP THIS CLOSES
+ * -------------------
+ * `enforceAmountEnrichment` and `enforceGrantAmountBackfill` both reach a grant
+ * ONLY through `grants.funding_opportunity_id` — they JOIN or subquery on it. A
+ * grant with that column NULL is therefore STRUCTURALLY invisible to every
+ * amount net: it can never be enriched, can never inherit a catalog amount, and
+ * shows up in `pipeline.amountCoverage` as `unanswered_no_catalog_row`. Prod
+ * 2026-07-17: 82 of 313 active pipeline grants were unlinked, and the coverage
+ * check (correctly) failed on the 70 of them with no amount — a real gap the
+ * #954 census SURFACED but did not close.
+ *
+ * Many of those grants DO have a catalog twin — the crawler upserts a
+ * `funding_opportunities` row AND a `grants` row from the same result
+ * (`crawlerManager.js`), but the grant was written without the link. The two
+ * rows share a URL, which is one of the tiers of the canonical dedup identity
+ * (`canonicalOpportunityKey`: external_id → title+sponsor → URL), so a grant and
+ * an active catalog row at the SAME url are the same real-world opportunity.
+ *
+ * THE RULE (high-precision; a wrong link is cross-profile bleed — never guess)
+ * ---------------------------------------------------------------------------
+ * Link an unlinked active-pipeline grant to a catalog row ONLY when ALL hold:
+ *   1. URL IDENTITY — the grant's own URL (`url`/`application_url`), normalized
+ *      (lowercase, trailing '/' stripped), equals a normalized URL on the
+ *      catalog row (`source_url`/`url`/`application_url`).
+ *   2. EXACTLY ONE active catalog row matches. Two or more is AMBIGUOUS (a
+ *      shared directory URL) and is left alone — counted, never guessed. This is
+ *      the same posture as `reconcileConvertedApplications` ("ambiguous matches
+ *      flagged, never guessed").
+ *   3. NO PROFILE CONFLICT — if BOTH rows carry a `profile_id` and they differ,
+ *      skip. A profile-scoped catalog row belongs to a different pipeline; the
+ *      URL coincidence must not cross that boundary (G4/G8). A NULL on either
+ *      side is profile-agnostic and compatible.
+ * Only NULL → value: an existing link is never touched. Idempotent (a linked
+ * grant leaves the candidate set) and bounded (`GRANT_CATALOG_LINK_LIMIT`).
+ *
+ * It runs immediately BEFORE `enforceAmountEnrichment` so a grant linked this
+ * boot gets its amount read/inherited in the SAME sweep — the whole point.
+ *
+ * OVERRIDE: ON by default; `ENFORCE_GRANT_CATALOG_LINK=0` for count-only.
+ */
+export async function enforceGrantCatalogLink(db) {
+  return runInvariant('grant_catalog_link', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('funding_opportunity_id') || !grantCols.has('url')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_CATALOG_LINK) === false
+    const LIMIT = Math.max(1, Number(process.env.GRANT_CATALOG_LINK_LIMIT) || 500)
+
+    // RTRIM(x, '/') strips trailing slashes on BOTH sqlite and postgres (both
+    // read the 2nd arg as a character set). LOWER folds case. Kept as one
+    // expression so the candidate scan and the per-row match use IDENTICAL
+    // normalization — a mismatch there would link on a near-miss.
+    const norm = (col) => `RTRIM(LOWER(COALESCE(${col}, '')), '/')`
+    const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+
+    let candidates = []
+    try {
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.profile_id,
+                  ${norm('g.url')} AS u1, ${norm('g.application_url')} AS u2
+             FROM grants g
+            WHERE g.status IN (${statuses})
+              AND g.funding_opportunity_id IS NULL
+              AND COALESCE(g.url, g.application_url, '') <> ''
+            ORDER BY g.id ASC
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+    } catch (err) {
+      log.warn('grant_catalog_link: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    const fresh = Array.isArray(candidates) ? candidates : []
+    if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+
+    let linked = 0
+    let ambiguous = 0
+    let unlinkable = 0
+    for (const g of fresh) {
+      // The grant carries at least one non-empty normalized URL (WHERE guard).
+      const urls = [g.u1, g.u2].filter((u) => u && u.length)
+      let matches = []
+      try {
+        // Match ANY of the grant's URLs against ANY catalog URL column, on an
+        // ACTIVE row, that is profile-compatible. DISTINCT id so a row matching
+        // on two columns counts once. The profile guard: skip a catalog row
+        // owned by a DIFFERENT profile than the grant (a URL coincidence must
+        // not cross a pipeline boundary); NULL on either side is compatible.
+        // Catalog URL columns that exist in BOTH dialects. Prod Postgres also
+        // has a bare `url` column, but the SQLite schema does not, and a live
+        // probe confirmed `url` adds ZERO matches the other three columns miss —
+        // so referencing it would break CI (SQLite) for no coverage. Schema
+        // drift is the hazard, not the missing column (the #946/#954 lesson).
+        const placeholders = urls.map(() => '?').join(', ')
+        matches = await db
+          .prepare(
+            `SELECT DISTINCT fo.id, fo.profile_id
+               FROM funding_opportunities fo
+              WHERE fo.is_active
+                AND (
+                     ${norm('fo.source_url')} IN (${placeholders})
+                  OR ${norm('fo.application_url')} IN (${placeholders})
+                  OR ${norm('fo.evidence_url')} IN (${placeholders})
+                )`,
+          )
+          .all(...urls, ...urls, ...urls)
+      } catch (err) {
+        log.warn('grant_catalog_link: match query failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+        continue
+      }
+
+      const compatible = (Array.isArray(matches) ? matches : []).filter((m) => {
+        const gp = g.profile_id === null || g.profile_id === undefined ? '' : String(g.profile_id)
+        const fp = m.profile_id === null || m.profile_id === undefined ? '' : String(m.profile_id)
+        // Compatible unless BOTH sides name a profile and they disagree.
+        return !(gp && fp && gp !== fp)
+      })
+
+      if (compatible.length === 0) { unlinkable++; continue }
+      if (compatible.length > 1) { ambiguous++; continue } // never guess
+
+      if (disabled) { linked++; continue } // count-only: what WOULD link
+      try {
+        // Guarded to NULL → value: the WHERE re-asserts the row is still
+        // unlinked, so a concurrent writer that linked it first is never
+        // overwritten. is_active is re-checked so a row deactivated between
+        // scan and write is not linked.
+        const res = await db
+          .prepare(
+            `UPDATE grants
+                SET funding_opportunity_id = ?
+              WHERE id = ?
+                AND funding_opportunity_id IS NULL
+                AND EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = ? AND fo.is_active)`,
+          )
+          .run(compatible[0].id, g.id, compatible[0].id)
+        if (changesOf(res) > 0) linked++
+      } catch (err) {
+        log.warn('grant_catalog_link: link write failed (non-fatal)', { grant: g.id, error: String(err?.message || err) })
+      }
+    }
+
+    if (linked > 0) {
+      log.info('linked unlinked pipeline grants to their catalog rows', { linked, ambiguous, unlinkable, enforced: !disabled })
+    }
+    return { scanned: fresh.length, repaired: linked, ambiguous, unlinkable, enforced: !disabled }
+  })
+}
+
 export async function enforceAmountEnrichment(db, deps = {}) {
   return runInvariant('amount_enrichment', async () => {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
     const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.AMOUNT_ENRICH_BOOT_LIMIT ?? '10', 10) || 10)
     const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.AMOUNT_ENRICH_TIME_BUDGET_MS ?? '20000', 10) || 20000)
-    const ATTEMPTED_KV_KEY = 'amount_enrich_attempted_ids'
-    const ATTEMPTED_MAX_REMEMBERED = 2000
-
-    // Previously-attempted ids (bounded ring in system_kv; tolerate absence).
-    let attempted = []
-    try {
-      await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
-      const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(ATTEMPTED_KV_KEY)
-      const parsed = row?.value ? JSON.parse(row.value) : null
-      if (Array.isArray(parsed)) attempted = parsed.filter((v) => typeof v === 'string')
-    } catch { /* missing table → best-effort, may refetch */ }
-    const attemptedSet = new Set(attempted)
+    const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
 
     // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
-    // numeric amount, no text yet (or explicitly not_listed), has a page.
+    // numeric amount, no text yet (or explicitly not_listed), has a page, and
+    // NOT already attempted.
+    //
+    // The attempted-exclusion MUST be part of this query, not a JS filter after
+    // it. The previous implementation SELECTed `LIMIT 200` and then dropped
+    // already-attempted rows in JS: once those 200 arbitrary rows had all been
+    // tried (~2 nights at the nightly budget), every subsequent run filtered
+    // them all away, reported "0 candidates", and never reached row 201. The
+    // sweep read as green while doing nothing — which is why raising the
+    // nightly budget to 120 on 2026-07-08 left coverage pinned at ~12%.
     let candidates = []
+    let attemptedColumnMissing = false
     try {
       const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
       candidates = await db
         .prepare(
-          `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url
+          // fo.source / fo.source_id / fo.record_origin are what the amount
+          // ADAPTER registry routes on (services/sources/amountAdapters.js): the
+          // source identifies whose API can answer this row, and source_id (the
+          // opportunity NUMBER) is how a row whose URL carries no numeric id is
+          // resolved. Selecting only URLs would silently degrade every adapter
+          // to URL-pattern matching and drop the rows that need it most.
+          `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url,
+                  fo.source, fo.source_id, fo.record_origin,
+                  COALESCE(fo.amount_enrich_attempts, 0) AS attempts
              FROM funding_opportunities fo
              JOIN grants g ON g.funding_opportunity_id = fo.id
             WHERE g.status IN (${statuses})
@@ -2877,16 +3155,25 @@ export async function enforceAmountEnrichment(db, deps = {}) {
               AND COALESCE(fo.amount_max, 0) <= 0
               AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
               AND fo.amount_text IS NULL
+              AND fo.amount_enrich_attempted_at IS NULL
               AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
-            LIMIT 200`,
+            ORDER BY COALESCE(fo.amount_enrich_attempts, 0) ASC, fo.id ASC
+            LIMIT ?`,
         )
-        .all()
+        .all(Math.max(LIMIT, 1))
     } catch (err) {
-      log.warn('amount_enrichment: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
-      return { scanned: 0, repaired: 0, skipped: 'query' }
+      // A DB that predates ensureAmountVisibilityColumns() has no attempted
+      // column. Count-only rather than silently falling back to the wedged
+      // ring — boot re-asserts the column, so this self-heals next start.
+      attemptedColumnMissing = /amount_enrich_attempted_at/i.test(String(err?.message || err))
+      log.warn('amount_enrichment: candidate scan failed (non-fatal)', {
+        error: String(err?.message || err),
+        attemptedColumnMissing,
+      })
+      return { scanned: 0, repaired: 0, skipped: attemptedColumnMissing ? 'schema' : 'query' }
     }
 
-    const fresh = (candidates || []).filter((c) => c?.id && !attemptedSet.has(String(c.id)))
+    const fresh = candidates || []
     if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
     if (disabled) {
       log.warn('amount-less active pipeline sources present (enrichment DISABLED via ENFORCE_AMOUNT_ENRICHMENT=0)', {
@@ -2898,17 +3185,72 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     const { enrichOpportunityAmountFromSource } =
       deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
 
+    // Record one try. `attempts` always increments; `amount_enrich_attempted_at`
+    // is the PERMANENT one-shot mark and is set only when we have actually
+    // learned this row's answer:
+    //
+    //   - page_read      → the extractor scanned real copy. Done either way: an
+    //                      amount found, or an honest "this page states none".
+    //   - !transient     → a stable fact about the URL (404/410, or a JS shell
+    //                      that will be thin every night). Another fetch cannot
+    //                      teach us more, so stop asking.
+    //   - out of retries → transient, but it has had MAX_ATTEMPTS bad nights.
+    //                      Give up rather than re-fetch it forever.
+    //
+    // Everything else stays NULL and is retried — which is what the invariant
+    // table has always CLAIMED ("a provider outage never burns a candidate's
+    // one chance") but the code did not do: it marked unconditionally and put
+    // the retry rule in a catch block that the service — documented "never
+    // throws" — could not reach. Prod 2026-07-15: 30 rows burned, 0 amounts.
+    const recordAttempt = async (id, { burn, attempts }) => {
+      try {
+        await db
+          .prepare(
+            `UPDATE funding_opportunities
+                SET amount_enrich_attempts = ?,
+                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
+              WHERE id = ?`,
+          )
+          .run(attempts, burn ? new Date().toISOString() : null, id)
+      } catch { /* best-effort; a missed mark only costs one re-fetch */ }
+    }
+
     const startedAt = Date.now()
     let attemptedNow = 0
     let enriched = 0
     let textOnly = 0
+    // Rows whose source was read and honestly states no per-award figure. NOT a
+    // failure: it is the sweep learning the answer, and the only thing that lets
+    // a coverage metric stop counting the row as a miss forever.
+    let nonePublished = 0
+    let fetchFailed = 0
+    let retryable = 0
     for (const cand of fresh) {
       if (attemptedNow >= LIMIT) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
-      attemptedSet.add(String(cand.id))
       try {
         const res = await enrichOpportunityAmountFromSource(cand, deps)
+        const attempts = Number(cand.attempts ?? 0) + 1
+        // The service never throws, so this — not a catch block — is the only
+        // place the outage-must-not-burn rule can actually be enforced.
+        const outOfRetries = attempts >= MAX_ATTEMPTS
+        const burn = res?.page_read === true || res?.transient !== true || outOfRetries
+        if (res?.page_read !== true) {
+          fetchFailed++
+          if (!burn) retryable++
+        }
+        // The mark is recorded AFTER the writes below, never before. It used to
+        // run here — so when a write threw, the row was already burned and the
+        // catch block's "non-fatal, will retry" was a LIE: the candidate query
+        // excludes marked rows, so it could never be retried. That is not
+        // hypothetical: the grants.gov adapter shipped returning the STRING
+        // 'high' for `amount_confidence` (a REAL column). Postgres threw
+        // `invalid input syntax for type real: "high"`, and 10 rows whose
+        // amounts the API had ALREADY returned were burned holding nothing.
+        // Every unit test passed — SQLite is typeless.
+        //
+        // Burn on what we LEARNED and successfully STORED, not on what we tried.
         if (res?.found && res.amounts) {
           await db
             .prepare(
@@ -2924,42 +3266,337 @@ export async function enforceAmountEnrichment(db, deps = {}) {
               res.amounts.amount_status, res.amounts.amount_confidence, cand.id,
             )
           enriched++
-        } else if (res?.amount_text || (res?.amount_status && res.amount_status !== 'not_listed')) {
-          // No per-award number, but the page yielded an honest label
-          // ("varies", "contact funder", program-total excerpt) — better than blank.
+        } else if (res?.page_read === true) {
+          // The source's own page/API was READ and states no per-award figure.
+          // That is an ANSWER about this row, and until now it was thrown away:
+          // the branch only wrote a status when it was NOT 'not_listed', which
+          // is precisely the value the extractor returns for "read it, no figure
+          // here". So the one fact worth recording — a DENIAL, gathered nightly
+          // at real fetch cost — was the one fact never written down, and the
+          // row became indistinguishable from one nothing had ever looked at.
+          //
+          // Downstream (pipeline.amountCoverage, Amy's amount_recall_miss) that
+          // conflation is the difference between "the crawler missed an amount"
+          // and "this funder publishes none" — an unreachable bar vs a real one.
+          //
+          // A better label the page DID state ('varies', 'contact_required', a
+          // program-total excerpt) is more informative than the bare denial, so
+          // it wins; `none_published` is the floor, not an override.
+          const readStatus =
+            res.amount_status && res.amount_status !== 'not_listed'
+              ? res.amount_status
+              : AMOUNT_STATUS_NONE_PUBLISHED
           await db
             .prepare(
+              // Guarded to silence-or-nothing: a row that already carries an
+              // honest status (or a real amount that landed between the scan and
+              // now) is never downgraded by a later read.
               `UPDATE funding_opportunities
                   SET amount_text = COALESCE(?, amount_text),
-                      amount_status = COALESCE(?, amount_status)
-                WHERE id = ? AND amount_text IS NULL`,
+                      amount_status = ?
+                WHERE id = ?
+                  AND (amount_status IS NULL OR amount_status = 'not_listed')
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0`,
             )
-            .run(res.amount_text ?? null, res.amount_status ?? null, cand.id)
-          textOnly++
+            .run(res.amount_text ?? null, readStatus, cand.id)
+          if (readStatus === AMOUNT_STATUS_NONE_PUBLISHED) nonePublished++
+          else textOnly++
         }
+        // Reached only when every write above SUCCEEDED.
+        await recordAttempt(cand.id, { burn, attempts })
       } catch (err) {
-        log.warn('amount_enrichment: enrich failed (non-fatal)', {
+        // enrichOpportunityAmountFromSource is documented "never throws" and
+        // returns its failures, so reaching here means a DB WRITE above failed.
+        // The row is deliberately left UNMARKED, which is what makes the
+        // "will retry" below true rather than a comforting lie — the mark now
+        // runs only after the writes succeed. Do NOT move the retry rule into
+        // this block: that was the original #944 bug (the guard sat in an
+        // unreachable path while the mark ran unconditionally).
+        fetchFailed++
+        retryable++
+        log.warn('amount_enrichment: write failed — row left unmarked so it WILL be retried', {
           opportunity: cand.id, error: String(err?.message || err),
         })
       }
     }
 
-    // Persist the attempted ring (most recent last, bounded). UPDATE-then-
-    // INSERT matches the braveBudget/system_kv convention (shim-safe).
+    // Remaining backlog, so Anya's report can show this converging (or not)
+    // instead of only ever seeing this pass's bounded slice.
+    //
+    // `remaining` ALONE cannot tell success from exhaustion: it counts only
+    // never-marked rows, so it falls to 0 both when every row got an amount and
+    // when every row was tried and yielded nothing. Those look identical in the
+    // report, and the second is the failure this fix exists for. So also count
+    // `exhausted` — rows we are permanently done with that still carry no
+    // dollar figure. remaining→0 with a large `exhausted` is the sweep finishing
+    // with the coverage gap INTACT, which means the pages do not state amounts
+    // and the answer is an adapter (grants.gov and sam.gov both have APIs), not
+    // more fetching.
+    let remaining = null
+    let exhausted = null
     try {
-      const ring = [...attemptedSet].slice(-ATTEMPTED_MAX_REMEMBERED)
-      const value = JSON.stringify(ring)
-      const iso = new Date().toISOString()
-      const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, iso, ATTEMPTED_KV_KEY)
-      if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
-        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(ATTEMPTED_KV_KEY, value, iso)
-      }
-    } catch { /* best-effort */ }
+      const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+      // TWO DIFFERENT QUESTIONS — do not re-merge these predicates.
+      //
+      // `remaining` = "how many rows are still WAITING for a read?", so it must
+      // mirror the CANDIDATE query exactly (silence-only status, no amount text)
+      // or it reports a backlog the sweep would never actually pick up.
+      //
+      // `exhausted` = "done with, still no dollar figure" — a fact about the
+      // OUTCOME, which the invariant table defines without reference to status or
+      // text. It must therefore NOT filter on them: once a read records its
+      // answer (`none_published`, or a 'varies' label), the row is precisely what
+      // `exhausted` exists to count, and a shared predicate silently dropped it
+      // from BOTH buckets — making a fully-answered fleet look like an empty one.
+      const stillUnread = `COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
+              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
+              AND fo.amount_text IS NULL
+              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`
+      const noFigure = `COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
+              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL`
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const row = await db
+        .prepare(
+          `SELECT COUNT(DISTINCT fo.id) AS n
+             FROM funding_opportunities fo
+             JOIN grants g ON g.funding_opportunity_id = fo.id
+            WHERE g.status IN (${statuses})
+              AND ${stillUnread}
+              AND fo.amount_enrich_attempted_at IS NULL`,
+        )
+        .get()
+      remaining = Number(row?.n ?? 0)
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const done = await db
+        .prepare(
+          `SELECT COUNT(DISTINCT fo.id) AS n
+             FROM funding_opportunities fo
+             JOIN grants g ON g.funding_opportunity_id = fo.id
+            WHERE g.status IN (${statuses})
+              AND ${noFigure}
+              AND fo.amount_enrich_attempted_at IS NOT NULL`,
+        )
+        .get()
+      exhausted = Number(done?.n ?? 0)
+    } catch { /* best-effort telemetry */ }
 
-    if (enriched > 0 || textOnly > 0) {
-      log.info('enriched catalog award amounts from funder pages', { attempted: attemptedNow, enriched, textOnly })
+    if (enriched > 0 || textOnly > 0 || nonePublished > 0) {
+      log.info('enriched catalog award amounts from funder pages', {
+        attempted: attemptedNow, enriched, textOnly, nonePublished, fetchFailed, retryable, remaining, exhausted,
+      })
     }
-    return { scanned: fresh.length, attempted: attemptedNow, repaired: enriched, textOnly, enforced: true }
+    return {
+      scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
+      textOnly, nonePublished, fetchFailed, retryable, remaining, exhausted, enforced: true,
+    }
+  })
+}
+
+/**
+ * INVARIANT: A GRANT WITH NO CATALOG TWIN IS READ DIRECTLY (the last mile of the
+ * amount-answer census, 2026-07-17).
+ *
+ * `enforceAmountEnrichment` reads CATALOG rows; it reaches a grant only through
+ * `funding_opportunity_id`. `enforceGrantCatalogLink` links the grants that have
+ * a catalog twin — but ~38 active-pipeline grants in prod have NO twin at all
+ * (Eldercare Locator, Coca-Cola Scholars, FAFSA — curated resources inserted
+ * directly as grants). Nothing reads them, so they sit in
+ * `pipeline.amountCoverage` as `unanswered_no_catalog_row` forever, and the
+ * finding can never go green while a real, answerable row has simply never been
+ * looked at.
+ *
+ * This sweep reads such a grant's OWN url via the SAME service the catalog sweep
+ * uses (`enrichOpportunityAmountFromSource`, adapter-then-fetch, SSRF-safe) and
+ * records the answer ON THE GRANT: a scholarship page yields a real amount; a
+ * locator/benefit page yields an evidenced `none_published` (an honest denial,
+ * not a blank). A JS shell / dead page stays `page_read:false` → NOT burned as a
+ * denial (we learned we cannot read it, not that it pays nothing) → it remains
+ * an honest `unanswered_unreadable` that names real adapter work.
+ *
+ * Burn/retry semantics are IDENTICAL to the catalog sweep (the whole reason the
+ * grant carries its own `amount_enrich_attempted_at`/`amount_enrich_attempts`,
+ * migration 142/0146): burn on `page_read` or a stable non-transient failure or
+ * after MAX_ATTEMPTS; a provider outage never burns a row; the mark is written
+ * only AFTER the amount write succeeds. Amy synthetic-profile grants are excluded
+ * (they are training artifacts, not real pipeline). Runs AFTER
+ * `enforceGrantCatalogLink` so a grant that COULD link is linked first and read
+ * through the catalog path; only genuine orphans reach here.
+ *
+ * OVERRIDE: ON by default; `ENFORCE_GRANT_DIRECT_AMOUNT=0` for count-only.
+ */
+export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
+  return runInvariant('grant_direct_amount', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('amount_enrich_attempted_at') || !grantCols.has('url')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_DIRECT_AMOUNT) === false
+    const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.GRANT_DIRECT_AMOUNT_BOOT_LIMIT ?? '10', 10) || 10)
+    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.GRANT_DIRECT_AMOUNT_TIME_BUDGET_MS ?? '20000', 10) || 20000)
+    const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
+    const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+    const VAL = pipelineValueSql('g')
+
+    let candidates = []
+    try {
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.url, g.application_url, COALESCE(g.amount_enrich_attempts, 0) AS attempts
+             FROM grants g
+            WHERE g.status IN (${statuses})
+              AND g.funding_opportunity_id IS NULL
+              AND ${VAL} = 0
+              AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
+              AND (g.amount_text IS NULL OR g.amount_text = '')
+              AND g.amount_enrich_attempted_at IS NULL
+              AND COALESCE(g.url, g.application_url, '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+            ORDER BY COALESCE(g.amount_enrich_attempts, 0) ASC, g.id ASC
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+    } catch (err) {
+      log.warn('grant_direct_amount: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    const fresh = Array.isArray(candidates) ? candidates : []
+    if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) return { scanned: fresh.length, repaired: 0, enforced: false }
+
+    const { enrichOpportunityAmountFromSource } =
+      deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
+
+    const recordAttempt = async (id, { burn, attempts }) => {
+      try {
+        await db
+          .prepare(
+            `UPDATE grants
+                SET amount_enrich_attempts = ?,
+                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
+              WHERE id = ?`,
+          )
+          .run(attempts, burn ? new Date().toISOString() : null, id)
+      } catch { /* best-effort; a missed mark only costs one re-fetch */ }
+    }
+
+    const startedAt = Date.now()
+    let attemptedNow = 0
+    let enriched = 0
+    let nonePublished = 0
+    let textOnly = 0
+    let fetchFailed = 0
+    let retryable = 0
+    for (const g of fresh) {
+      if (attemptedNow >= LIMIT) break
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break
+      attemptedNow++
+      try {
+        // The service reads source_url ?? application_url ?? evidence_url. A grant
+        // carries no source/source_id, so the API-adapter lane is a no-op here and
+        // the page fetch runs — correct: an orphan grant at a grants.gov/sam.gov
+        // URL will read as a thin_page and stay honestly unreadable, exactly like
+        // the catalog path.
+        const res = await enrichOpportunityAmountFromSource(
+          { source_url: g.url ?? g.application_url ?? null },
+          deps,
+        )
+        const attempts = Number(g.attempts ?? 0) + 1
+        const outOfRetries = attempts >= MAX_ATTEMPTS
+        const burn = res?.page_read === true || res?.transient !== true || outOfRetries
+        if (res?.page_read !== true) {
+          fetchFailed++
+          if (!burn) retryable++
+        }
+        if (res?.found && res.amounts) {
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_min = ?, amount_max = ?, amount_text = ?,
+                      amount_status = ?, amount_confidence = ?
+                WHERE id = ?
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND COALESCE(amount_requested, 0) <= 0`,
+            )
+            .run(
+              res.amounts.amount_min, res.amounts.amount_max, res.amounts.amount_text,
+              res.amounts.amount_status, res.amounts.amount_confidence, g.id,
+            )
+          enriched++
+        } else if (res?.page_read === true) {
+          // Read, no per-award figure → record the evidenced denial (or a better
+          // honest label the page stated). Same rule as the catalog sweep:
+          // `none_published` is the floor; a real 'varies'/'contact_required' wins.
+          const readStatus =
+            res.amount_status && res.amount_status !== 'not_listed'
+              ? res.amount_status
+              : AMOUNT_STATUS_NONE_PUBLISHED
+          await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_text = COALESCE(?, amount_text),
+                      amount_status = ?
+                WHERE id = ?
+                  AND (amount_status IS NULL OR amount_status = 'not_listed')
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND COALESCE(amount_requested, 0) <= 0`,
+            )
+            .run(res.amount_text ?? null, readStatus, g.id)
+          if (readStatus === AMOUNT_STATUS_NONE_PUBLISHED) nonePublished++
+          else textOnly++
+        }
+        // Mark only AFTER the write succeeds (the #946 rule): a failed write
+        // leaves the row unmarked so "will retry" is true, not a comforting lie.
+        await recordAttempt(g.id, { burn, attempts })
+      } catch (err) {
+        fetchFailed++
+        retryable++
+        log.warn('grant_direct_amount: write failed — grant left unmarked so it WILL be retried', {
+          grant: g.id, error: String(err?.message || err),
+        })
+      }
+    }
+
+    let remaining = null
+    let exhausted = null
+    try {
+      // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const stillUnread = `${VAL} = 0
+              AND g.funding_opportunity_id IS NULL
+              AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
+              AND (g.amount_text IS NULL OR g.amount_text = '')
+              AND COALESCE(g.url, g.application_url, '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')`
+      const r = await db.prepare(
+        `SELECT COUNT(*) AS n FROM grants g
+          WHERE g.status IN (${statuses}) AND ${stillUnread} AND g.amount_enrich_attempted_at IS NULL`,
+      ).get()
+      remaining = Number(r?.n ?? 0)
+      const done = await db.prepare(
+        `SELECT COUNT(*) AS n FROM grants g
+          WHERE g.status IN (${statuses}) AND ${VAL} = 0 AND g.funding_opportunity_id IS NULL
+            AND COALESCE(g.url, g.application_url, '') <> ''
+            AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+            AND g.amount_enrich_attempted_at IS NOT NULL`,
+      ).get()
+      exhausted = Number(done?.n ?? 0)
+    } catch { /* best-effort telemetry */ }
+
+    if (enriched > 0 || nonePublished > 0 || textOnly > 0) {
+      log.info('read orphan pipeline grants directly for award amounts', {
+        attempted: attemptedNow, enriched, nonePublished, textOnly, fetchFailed, retryable, remaining, exhausted,
+      })
+    }
+    return {
+      scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
+      nonePublished, textOnly, fetchFailed, retryable, remaining, exhausted, enforced: true,
+    }
   })
 }
 
@@ -3621,6 +4258,190 @@ export async function enforceAmySyntheticExpiry(db, deps = {}) {
   })
 }
 
+/**
+ * A Yana lead's contact email actually belongs to THAT organization.
+ *
+ * Prod damage (2026-07-15): contact enrichment sorted candidate homepages by
+ * name score but took the top one unconditionally, so when nothing matched the
+ * org it scraped an unrelated site's address — helpdesk@franklin.edu on 10
+ * distinct orgs, a newspaper's admin@conwaydailysun.com on 14, worldatlas /
+ * mathway / roblox addresses on dozens more; 147 of 490 enriched candidates
+ * shared an address with a DIFFERENT org. Each one makes John draft outreach to
+ * the wrong organization. The per-call gate is `isPlausibleHomepage` in the
+ * enricher; this is the net for rows already persisted (and for any future path
+ * that writes a contact email).
+ *
+ * Repair = strip the address and send the lead back to `needs_enrichment` with
+ * a fresh retry budget, so the now-gated enricher can find the RIGHT address.
+ * It never invents a contact and never deletes a lead — the org keeps its
+ * identity and simply waits until it is honestly reachable.
+ *
+ * Deliberately conservative about what it strips: only when the email's domain
+ * carries NO distinctive token of the org name. A legitimate abbreviated domain
+ * (upenn.edu for University of Pennsylvania) is stripped here but re-accepted on
+ * the next enrichment pass, which sees the page TITLE this row no longer has —
+ * self-healing, and it never leaves a WRONG address in place.
+ *
+ * Count-only via ENFORCE_LEAD_CONTACT_PLAUSIBILITY=0. Bounded per boot.
+ */
+/**
+ * INVARIANT: no LIVE draft in the mailbox is addressed to the wrong organization.
+ *
+ * enforceLeadContactPlausibility() repairs the LEAD, but a draft John already
+ * wrote from a bad lead keeps sitting in Drafts with the wrong recipient — and
+ * a draft is one click (or one stray automation) from being sent to a stranger.
+ * On 2026-07-15, 9 of 10 live drafts were addressed to an unrelated business
+ * (`willienelson.com` for the "Willie Julie Educational Foundation",
+ * `robertsoncountyfuneralhome.com` for the "Robertson Community Health
+ * Foundation"). `purgeImplausibleDrafts()` already existed and could have caught
+ * them, but NOTHING ever called it — it was reachable only via a manual
+ * `POST /api/john/purge-implausible`. Per the choke-point rule, the mailbox
+ * residue needs the same boot net the lead data has.
+ *
+ * Archives the row + removes the draft from the mailbox (Graph DELETE → Deleted
+ * Items, recoverable; the provider REFUSES anything that is not still a draft,
+ * so a sent message is never touched). The lead returns to enrichment and John
+ * can re-draft it correctly — nothing is lost, and a wrong-org draft cannot sit
+ * there waiting to be sent.
+ *
+ * NEVER sends. NEVER judges on a guess: a draft with no org name or no
+ * recipient is skipped, not purged.
+ *
+ * OVERRIDE: ON by default; ENFORCE_JOHN_DRAFT_PLAUSIBILITY=0 for count-only
+ * (dry-run — reports what WOULD be purged and touches nothing).
+ * Bound: JOHN_DRAFT_PLAUSIBILITY_LIMIT (default 200).
+ */
+export async function enforceJohnDraftPlausibility(db, deps = {}) {
+  return runInvariant('john_draft_plausibility', async () => {
+    try {
+      // Table is john_email_drafts (NOT john_drafts — the indexes are named
+      // idx_john_drafts_*, which is a trap: probing the wrong name returns
+      // skipped:'schema' and the whole invariant no-ops while reading green).
+      await db.prepare('SELECT recipient_email FROM john_email_drafts LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const dryRun = _parseBoolEnv(process.env.ENFORCE_JOHN_DRAFT_PLAUSIBILITY) === false
+    const limit = Math.max(1, Number(process.env.JOHN_DRAFT_PLAUSIBILITY_LIMIT || 200))
+
+    // Lazy imports — keep the boot module from statically pulling the john/Graph
+    // graph (same precedent as enforceLeadContactPlausibility).
+    const { purgeImplausibleDrafts } =
+      deps.purgeImpl ? { purgeImplausibleDrafts: deps.purgeImpl } : await import('../services/john/johnDraftPlausibilityPurge.js')
+
+    // No provider (Graph not configured) → still archive the ROWS? No: the store
+    // must keep telling the truth about what is in the mailbox, so without a
+    // provider we report only. The purge itself enforces that rule per-draft.
+    let provider = deps.provider ?? null
+    if (!provider && !dryRun) {
+      try {
+        const [{ getJohnConfig }, { createOutlookProvider }] = await Promise.all([
+          import('../services/john/johnOutreachSafety.js'),
+          import('../services/john/johnOutlookProvider.js'),
+        ])
+        const p = createOutlookProvider({ config: getJohnConfig(), logger: log })
+        provider = p?.ready ? p : null
+      } catch { provider = null }
+    }
+
+    const result = await purgeImplausibleDrafts(db, { provider, dryRun: dryRun || !provider, limit })
+
+    if ((result?.implausible ?? 0) > 0) {
+      const mode = dryRun ? 'DISABLED via ENFORCE_JOHN_DRAFT_PLAUSIBILITY=0' : (provider ? 'purged' : 'no Outlook provider — report only')
+      log.warn('drafts addressed to the WRONG organization present', {
+        implausible: result.implausible,
+        purged: result.purged ?? 0,
+        mode,
+        orgs: (result.items || []).slice(0, 6).map((i) => `${i.organization_name} → ${i.recipient_email}`),
+      })
+    }
+    return {
+      scanned: result?.scanned ?? 0,
+      repaired: result?.purged ?? 0,
+      implausible: result?.implausible ?? 0,
+      mailboxDeleted: result?.mailbox_deleted ?? 0,
+      failed: result?.failed ?? 0,
+      enforced: !dryRun && Boolean(provider),
+    }
+  })
+}
+
+export async function enforceLeadContactPlausibility(db) {
+  return runInvariant('lead_contact_plausibility', async () => {
+    try {
+      await db.prepare('SELECT contact_email FROM yana_lead_candidates LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+
+    const enforce = _parseBoolEnv(process.env.ENFORCE_LEAD_CONTACT_PLAUSIBILITY) !== false
+    const limit = Math.max(1, Number(process.env.LEAD_CONTACT_PLAUSIBILITY_LIMIT || 500))
+    // Lazy import — keeps the boot module from statically pulling the yana graph
+    // (same precedent as enforceAmySyntheticExpiry).
+    const { isPlausibleHomepage } = await import('../services/yana/prospectExclusions.js')
+
+    const rows = await db
+      .prepare(
+        `SELECT id, organization_name, contact_email
+           FROM yana_lead_candidates
+          WHERE contact_email IS NOT NULL AND TRIM(contact_email) <> ''
+          ORDER BY updated_at DESC
+          LIMIT ?`,
+      )
+      .all(limit)
+
+    const bad = []
+    for (const row of rows || []) {
+      const domain = String(row.contact_email).split('@')[1]
+      if (!domain || !row.organization_name) continue
+      // Title-less check: the stored row has no page title to vouch for an
+      // abbreviation, so this is the hostname-only bar. Stripping is safe (the
+      // gated re-enrichment restores a real match); keeping a wrong one is not.
+      if (!isPlausibleHomepage({ url: `https://${domain}`, title: '' }, row.organization_name)) {
+        bad.push(row)
+      }
+    }
+
+    if (!enforce) {
+      if (bad.length > 0) {
+        log.warn('Yana leads carry an implausible contact email (repair DISABLED via ENFORCE_LEAD_CONTACT_PLAUSIBILITY=0)', {
+          wouldRepair: bad.length,
+          scanned: rows?.length || 0,
+          examples: bad.slice(0, 3).map((b) => `${b.organization_name} → ${b.contact_email}`),
+        })
+      }
+      return { scanned: rows?.length || 0, repaired: 0, wouldRepair: bad.length, enforced: false }
+    }
+
+    const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+    let repaired = 0
+    for (const row of bad) {
+      await db
+        .prepare(
+          `UPDATE yana_lead_candidates
+              SET contact_email = NULL,
+                  qualification_status = 'needs_enrichment',
+                  pushed_to_john = 0,
+                  enrich_attempts = 0,
+                  contact_confidence = 0,
+                  updated_at = ${nowFn}
+            WHERE id = ?`,
+        )
+        .run(String(row.id))
+      repaired += 1
+    }
+    if (repaired > 0) {
+      log.info('stripped implausible contact emails from Yana leads (returned to needs_enrichment)', {
+        repaired,
+        scanned: rows?.length || 0,
+        examples: bad.slice(0, 3).map((b) => `${b.organization_name} → ${b.contact_email}`),
+      })
+    }
+    return { scanned: rows?.length || 0, repaired, enforced: true }
+  })
+}
+
 export async function runEnforceInvariants(db, { logger = log } = {}) {
   if (!db || typeof db.prepare !== 'function') {
     logger?.warn?.('runEnforceInvariants: no usable db handle; skipping')
@@ -3649,11 +4470,21 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // every Pipeline Potential surface can see the money that is actually there.
   // MUST run before the individual amount ceiling so the ceiling operates on
   // honest (backfilled) values.
+  // Catalog LINK first: an unlinked grant is invisible to BOTH amount nets
+  // below (they only reach a grant through funding_opportunity_id). Linking it
+  // to its catalog twin here — URL-identity, exactly-one, profile-safe — puts it
+  // in reach of the enrichment + backfill in the SAME boot.
+  steps.push(await enforceGrantCatalogLink(db))
   // Amount ACQUISITION first: read the funder's own page for active-pipeline
   // sources that carry no dollar figure (bounded per boot), so the backfill
   // right after can mirror freshly-learned amounts onto the grants same-boot.
   steps.push(await enforceAmountEnrichment(db))
   steps.push(await enforceGrantAmountBackfill(db))
+  // Last mile: a grant with NO catalog twin is invisible to both nets above.
+  // Read its own url directly (scholarship → amount; locator → honest
+  // none_published), so an answerable orphan never sits in the coverage census
+  // as unanswered just because nothing looked at it.
+  steps.push(await enforceGrantDirectAmountEnrichment(db))
   // Amount-sanity net: purge institutional-scale ($ > ceiling) grants that were
   // mis-matched into an INDIVIDUAL/student pipeline (the ">$3M potential" bug).
   // Runs after the relevance floor because those below-floor rows are cheaper to
@@ -3702,6 +4533,13 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // target — null it wherever it was persisted and reclassify affected tasks
   // to the truthful unknown_application_method state.
   steps.push(await enforceNoSearchEngineApplicationTargets(db))
+  // Verification-honesty net: clear `last_verified_at` timestamps that the
+  // crawler-os source-capture path stamped from the SOURCE page's fetched_at
+  // (never a real target check), so the recurring verifier stops skipping them
+  // and the Source Trace UI stops showing a scrape time as a "verified" time.
+  // Bounded per boot; only touches rows with a verification time but zero
+  // verification evidence.
+  steps.push(await enforceLiveCrawlVerifiedAtHonesty(db))
   // Application-URL rescue: a candidate rejected ONLY for a missing URL gets
   // ONE bounded, budget-paced chance to be re-driven with a real, liveness-
   // verified page found by title+sponsor web search (never invented). Runs
@@ -3730,6 +4568,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // discovery skips/errors (empty crawled-id list), so without this net
   // synthetics accumulate forever (the 13-live/0-reaped prod class).
   steps.push(await enforceAmySyntheticExpiry(db))
+  steps.push(await enforceLeadContactPlausibility(db))
+  // AFTER the lead repair: the lead is the cause, the draft is the residue.
+  // Repairing the lead first means a draft purged here can be re-drafted from a
+  // corrected lead on the next John pass.
+  steps.push(await enforceJohnDraftPlausibility(db))
 
   const failed = steps.filter((s) => !s.ok).length
   const totalRepaired = steps.reduce((sum, s) => sum + (Number(s.repaired) || 0), 0)
@@ -3804,7 +4647,11 @@ export const __testables = {
   enforceGrantAmountBackfill,
   enforceNoDanglingMatches,
   enforceImportedStatusHonesty,
+  enforceGrantCatalogLink,
   enforceAmountEnrichment,
+  enforceGrantDirectAmountEnrichment,
+  enforceLiveCrawlVerifiedAtHonesty,
+  VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT,
   resolveIndividualAmountCeiling,
   isIndividualProfileType,
   parseIncomeValue,
@@ -3813,4 +4660,6 @@ export const __testables = {
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,
+  enforceLeadContactPlausibility,
+  enforceJohnDraftPlausibility,
 }

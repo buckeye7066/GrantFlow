@@ -797,6 +797,11 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'CancerCare',
     resource_title: 'CancerCare financial assistance',
     resource_summary: 'Financial and practical-support assistance information for people affected by cancer. Eligibility and available funds vary, so this is surfaced for review rather than promised as an award.',
+    // `keywords` are the CURATED vocabulary conditionCoveredBySource matches on.
+    // They are not decoration: the coverage haystack is keywords + need_categories
+    // ONLY, so a disease source without them is invisible to condition matching
+    // and mints a false "no source lane exists" wishlist entry every night.
+    keywords: ['cancer', 'oncology', 'chemotherapy', 'radiation therapy', 'tumor', 'leukemia', 'lymphoma', 'melanoma', 'carcinoma', 'metastatic'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['cancer_support'],
@@ -845,6 +850,10 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Alzheimers.gov',
     resource_title: 'Dementia local services finder',
     resource_summary: 'Official federal dementia resource for finding local services, support, and care resources for people living with dementia and their caregivers.',
+    // Curated match vocabulary (see cancer_care). 'alzheimers' must be spelled
+    // BOTH ways: the possessive form is what people actually type, and token
+    // matching does not fold an apostrophe.
+    keywords: ['dementia', 'alzheimers', "alzheimer's", 'alzheimer', 'memory loss', 'memory care', 'cognitive decline', 'vascular dementia', 'lewy body'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['dementia_support'],
@@ -1471,6 +1480,12 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'NeedyMeds',
     resource_title: 'NeedyMeds medication and healthcare cost assistance finder',
     resource_summary: 'Directory of patient-assistance programs, copay assistance foundations, drug discount programs, and diagnosis-based medical financial aid. A directory/referral lane, not a direct cash grant.',
+    // Curated match vocabulary (see cancer_care). NeedyMeds is DIAGNOSIS-agnostic
+    // — it indexes patient-assistance programs by condition — so these name the
+    // cost/medication axis it genuinely covers rather than claiming any specific
+    // disease. Do NOT add broad disease names here to make gaps disappear: that
+    // would manufacture coverage the source does not have (G0).
+    keywords: ['copay', 'copayment', 'prescription', 'medication', 'patient assistance', 'drug costs', 'diabetes', 'insulin', 'hypercholesterolemia', 'high cholesterol'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family'],
     need_categories: ['medical', 'medication', 'medical_bills', 'cancer_support'],
@@ -1632,7 +1647,7 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Christopher & Dana Reeve Foundation',
     resource_title: 'Reeve Foundation paralysis & mobility-impairment support',
     resource_summary: 'National Paralysis Resource Center: information specialists, peer support, and pointers to financial help (adaptive equipment, home modification, wheelchair funding) for people living with paralysis or mobility impairment.',
-    keywords: ['mobility impairment', 'mobility', 'paralysis', 'spinal cord injury', 'wheelchair', 'adaptive equipment'],
+    keywords: ['mobility impairment', 'mobility', 'paralysis', 'spinal cord injury', 'wheelchair', 'adaptive equipment', 'physical disability', 'physical impairment'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical', 'disability'],
@@ -1686,7 +1701,11 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'Substance Abuse and Mental Health Services Administration',
     resource_title: 'FindTreatment.gov — confidential mental-health & substance-use treatment locator',
     resource_summary: 'Official SAMHSA locator for state-licensed mental-health and substance-use treatment, including PTSD and trauma care; filters for sliding-scale fees, payment assistance, and free/low-cost programs.',
-    keywords: ['ptsd', 'trauma', 'mental health treatment', 'depression', 'anxiety', 'substance use', 'counseling'],
+    // Real profiles spell diagnoses out ("post-traumatic stress disorder", "major
+    // depressive disorder"); token matching does not stem or expand acronyms, so
+    // the curated vocabulary must carry BOTH forms or SAMHSA — which plainly does
+    // cover them — reads as no lane at all. Same class as 'diabetic' vs 'diabetes'.
+    keywords: ['ptsd', 'post-traumatic stress disorder', 'post traumatic stress disorder', 'trauma', 'mental health treatment', 'depression', 'depressive disorder', 'major depressive disorder', 'anxiety', 'substance use', 'counseling'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical'],
@@ -1720,10 +1739,106 @@ export const SOURCES = Object.freeze([
     sponsor_name: 'NeedyMeds',
     resource_title: 'NeedyMeds diagnosis-based assistance directory (hypertension, heart disease & chronic conditions)',
     resource_summary: 'Directory of assistance programs organized by diagnosis — medication cost help, copay cards, and condition-specific funds for hypertension, high blood pressure, heart disease, diabetes, and other chronic conditions.',
-    keywords: ['hypertension', 'high blood pressure', 'heart disease', 'diabetes', 'medication assistance', 'copay assistance', 'chronic condition'],
+    // 'diabetic' is the ADJECTIVE form real profiles actually type (prod
+    // 2026-07-16 carried the condition "diabetic", not "diabetes"). Token
+    // matching does not stem, so the curated vocabulary must carry both forms
+    // or a genuinely covered condition mints a false wishlist entry.
+    keywords: ['hypertension', 'high blood pressure', 'heart disease', 'diabetes', 'diabetic', 'medication assistance', 'copay assistance', 'chronic condition'],
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran'],
     need_categories: ['medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  // ── Adapter-wishlist lanes (2026-07-15). Amy's fleet coverage-gap scoreboard
+  //    reported no disease/need lane for transportation, deaf/hearing loss,
+  //    assistive technology, or sleep apnea. All URLs verified live 2026-07-15
+  //    (curl -L → 200 with a browser UA).
+  {
+    source_id: 'mercy_medical_angels',
+    name: 'Mercy Medical Angels — travel to medical care',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.mercymedical.org/',
+    sponsor_name: 'Mercy Medical Angels',
+    resource_title: 'Mercy Medical Angels — free transportation to medical treatment',
+    resource_summary: 'Charitable transportation to medical care at no cost to the patient: volunteer air transport (Mid-Atlantic), plus commercial airline tickets, ground transportation, and gas cards nationwide. Eligibility guidelines apply, so this is surfaced for review rather than promised as an award.',
+    keywords: ['transportation', 'medical transportation', 'travel to treatment', 'gas card', 'bus pass', 'rides to appointments', 'non-emergency medical transportation'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['transportation', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    source_id: 'pan_foundation_nemt_directory',
+    name: 'PAN Foundation — non-emergency medical transportation directory',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.panfoundation.org/nemt-directory/',
+    sponsor_name: 'Patient Access Network (PAN) Foundation',
+    resource_title: 'PAN Foundation non-emergency medical transportation (NEMT) directory',
+    resource_summary: 'Directory of organizations that help patients get to medical appointments — ground rides, volunteer drivers, air travel, and fuel assistance, listed by need and region. A locator: programs set their own eligibility.',
+    keywords: ['transportation', 'medical transportation', 'non-emergency medical transportation', 'nemt', 'rides to appointments', 'volunteer driver', 'travel assistance'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['transportation', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  {
+    source_id: 'hlaa_financial_assistance',
+    name: 'Hearing Loss Association of America — hearing help & financial assistance',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://hearingloss.org/hearing-help/financial-assistance/',
+    sponsor_name: 'Hearing Loss Association of America',
+    resource_title: 'HLAA financial assistance for hearing aids & hearing care',
+    resource_summary: 'Guide to financial help for people who are deaf or hard of hearing: hearing-aid assistance programs, state and national funds, and low-cost hearing-care routes. Eligibility and available funds vary by program, so this is surfaced for review rather than promised as an award.',
+    // 'hearing impairment' / 'hearing' are the CANONICAL FLAG forms profileHelpers
+    // mints (`hearing_impairment`); without them the flag reads as an uncovered
+    // condition even though this is exactly its lane.
+    keywords: ['deaf', 'hard of hearing', 'hearing loss', 'hearing impairment', 'hearing', 'hearing aid', 'hearing aids', 'cochlear implant', 'hearing care', 'assistive listening'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['medical', 'disability', 'equipment'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 72,
+  },
+  {
+    source_id: 'at3_state_at_programs',
+    name: 'AT3 Center — state assistive technology (AT Act) programs',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.at3center.net/state-at-programs',
+    sponsor_name: 'AT3 Center (Assistive Technology Act programs)',
+    resource_title: 'State assistive technology program finder (device demo, borrowing & reuse)',
+    resource_summary: 'Finder for the federally funded AT Act program in every state and territory: try-before-you-buy device demonstration, short-term device borrowing, and refurbished device reuse/exchange — services that do not create debt. NOTE: some states ALSO list a separate "financial loan" / alternative-financing product (repayable debt) on the same page; those are governed by the profile\'s own loan preference, which is why this source is declared loan_allowed.',
+    keywords: ['assistive technology', 'assistive device', 'adaptive equipment', 'durable medical equipment', 'device loan', 'device reuse', 'wheelchair', 'communication device', 'at act'],
+    directory: true, loan_allowed: true, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['disability', 'equipment', 'technology', 'medical'],
+    geography: { national: true, states: [] },
+    default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
+    crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,
+  },
+  {
+    source_id: 'asaa_cpap_assistance',
+    name: 'CPAP Assistance Program (American Sleep Apnea Association / WSCN)',
+    source_type: 'directory',
+    trust_tier: TRUST_TIER.AGGREGATOR,
+    base_url: 'https://www.sleephealth.org/asaa/cap-program/',
+    sponsor_name: 'American Sleep Apnea Association (Wellness, Sleep & Circadian Network)',
+    resource_title: 'CPAP Assistance Program — low-cost CPAP machines, masks & supplies',
+    resource_summary: 'Assistance program for sleep-apnea patients who cannot afford CPAP equipment: donated machines refurbished to the applicant\'s own prescription, plus mask and yearly-supply packages. Not a loan and not repayable — a flat program fee applies (machine package and supply tiers are priced separately), and a current CPAP prescription is required.',
+    keywords: ['sleep apnea', 'cpap', 'apnea', 'bipap', 'sleep study', 'cpap mask', 'cpap supplies', 'sleep disorder'],
+    directory: true, loan_allowed: false, cost_share_allowed: false,
+    applicant_types: ['individual', 'family', 'veteran'],
+    need_categories: ['medical', 'equipment'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 70,

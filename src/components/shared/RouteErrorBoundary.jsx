@@ -4,31 +4,19 @@ import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
-import { maybeReloadForStaleChunk } from "@/utils/lazyWithRetry"
+import { maybeReloadForStaleChunk, looksLikeStaleChunkError } from "@/utils/lazyWithRetry"
 import { captureFrontendException } from "@/utils/observability.js"
 import { reportClientError } from "@/utils/reportClientError.js"
 
 const MAX_RETRIES = 3
 
-// Errors that mean "the user is on an old deploy and asked for a chunk
-// that no longer exists" — solved by reloading to pick up the new
-// index.html. The lazyWithRetry helper already auto-reloads once;
-// anything that bubbles up to the boundary means that auto-reload was
-// already attempted and failed (or the error came from a non-lazy
-// dynamic import). Either way, the right CTA is "Reload to get the
-// latest version" rather than "Try Again", which would just refail.
-function isStaleChunkError(error) {
-  const msg = String(error?.message ?? error ?? '')
-  const name = String(error?.name ?? '')
-  return (
-    /Failed to fetch dynamically imported module/i.test(msg) ||
-    /Importing a module script failed/i.test(msg) ||
-    /error loading dynamically imported module/i.test(msg) ||
-    /Loading chunk \d+ failed/i.test(msg) ||
-    /MIME type/i.test(msg) ||
-    /ChunkLoadError/i.test(name)
-  )
-}
+// "The user is on an old deploy and asked for a chunk that no longer matches
+// the current build" — solved by reloading to pick up the new index.html. This
+// predicate is the single shared choke point in lazyWithRetry (a hand-kept copy
+// here previously drifted and missed the `.default` shape, sending a recoverable
+// stale-deploy crash straight to an owner-facing 500). When it matches, the
+// right CTA is "Reload to get the latest version" rather than "Try Again".
+const isStaleChunkError = looksLikeStaleChunkError
 
 export default class RouteErrorBoundary extends React.Component {
   constructor(props) {
@@ -45,25 +33,31 @@ export default class RouteErrorBoundary extends React.Component {
     this.setState({ errorCount: newCount })
 
     // Auto-recover from a stale-deploy chunk: try exactly one reload (shared
-    // dedupe with lazyWithRetry, so we never loop). If we already reloaded
-    // once, fall through to the manual "Reload to update" CTA below.
-    if (isStaleChunkError(error)) {
-      maybeReloadForStaleChunk(error)
-    }
+    // dedupe with lazyWithRetry, so we never loop). Returns true only when a
+    // reload was actually triggered; false if we already reloaded once (chunk
+    // is genuinely gone) or it's not a stale-chunk error at all.
+    const staleChunk = isStaleChunkError(error)
+    const reloadingForStaleChunk = staleChunk && maybeReloadForStaleChunk(error)
 
     // Keep this log — it's the primary breadcrumb when users report "blank screen".
     captureFrontendException(error, {
       area: 'route_boundary',
       route: this.props.routeName ?? null,
       errorCount: newCount,
-      stale_chunk: isStaleChunkError(error),
+      stale_chunk: staleChunk,
+      auto_reloading: reloadingForStaleChunk,
       requestId: error?.requestId ?? error?.request_id ?? null,
       componentStack: info?.componentStack,
     })
 
-    // Also email the owner an analyzed report (non-admin users only; self-skips
-    // for admins server-side). Fire-and-forget, swallows all failures.
-    reportClientError(error, { componentStack: info?.componentStack })
+    // Email the owner an analyzed report (non-admin users only; self-skips for
+    // admins server-side) — but NOT when we're auto-recovering with a reload.
+    // A stale-deploy crash that a single reload fixes is invisible to the user
+    // and must not page the owner; we only alert if the reload didn't resolve
+    // it (recentlyReloaded → reloadingForStaleChunk is false).
+    if (!reloadingForStaleChunk) {
+      reportClientError(error, { componentStack: info?.componentStack })
+    }
 
     console.error("[RouteErrorBoundary] route crash", {
       route: this.props.routeName ?? null,

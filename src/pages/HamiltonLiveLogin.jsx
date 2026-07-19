@@ -42,8 +42,14 @@ export default function HamiltonLiveLogin() {
   const imgRef = useRef(typeof Image !== 'undefined' ? new Image() : null)
   const streamRef = useRef(null)
   const focusedRef = useRef(false)
+  const paintedRef = useRef(false)
 
   const [connected, setConnected] = useState(false)
+  // Whether at least one frame has actually been PAINTED to the canvas. The SSE
+  // stream can be "connected" (HTTP open) while zero frames have drawn, so this
+  // — not `connected` — drives the "Live" indicator and dismisses the loading
+  // overlay. Without it a blank white canvas would falsely read as "Live".
+  const [painted, setPainted] = useState(false)
   const [streamError, setStreamError] = useState(null)
   const [busy, setBusy] = useState(null) // 'complete' | 'cancel' | null
   const [doneMessage, setDoneMessage] = useState(null)
@@ -61,10 +67,13 @@ export default function HamiltonLiveLogin() {
     img.onload = () => {
       const w = frame?.metadata?.deviceWidth || img.naturalWidth
       const h = frame?.metadata?.deviceHeight || img.naturalHeight
-      if (canvas.width !== w) canvas.width = w
-      if (canvas.height !== h) canvas.height = h
+      if (w && canvas.width !== w) canvas.width = w
+      if (h && canvas.height !== h) canvas.height = h
       const ctx = canvas.getContext('2d')
-      if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        if (!paintedRef.current) { paintedRef.current = true; setPainted(true) }
+      }
     }
     img.src = `data:image/jpeg;base64,${frame.data}`
   }, [])
@@ -75,6 +84,8 @@ export default function HamiltonLiveLogin() {
       return undefined
     }
     setStreamError(null)
+    paintedRef.current = false
+    setPainted(false)
     const handle = streamCloudLogin(liveSessionId, {
       onOpen: () => setConnected(true),
       onFrame: (frame) => drawFrame(frame),
@@ -234,8 +245,8 @@ export default function HamiltonLiveLogin() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className="flex items-center gap-1 text-xs text-slate-400">
-            {connected ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-amber-400" />}
-            {connected ? 'Live' : 'Connecting…'}
+            {connected && painted ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-amber-400" />}
+            {connected && painted ? 'Live' : painted ? 'Reconnecting…' : 'Connecting…'}
           </span>
           <Button size="sm" disabled={busy === 'complete'} onClick={handleDone}>
             {busy === 'complete' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1.5 h-4 w-4" />}
@@ -249,13 +260,13 @@ export default function HamiltonLiveLogin() {
 
       {/* Live viewport */}
       <div className="relative flex flex-1 items-center justify-center overflow-auto p-2 sm:p-4">
-        {!connected && !streamError && (
+        {!painted && !streamError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-400">
             <Loader2 className="h-8 w-8 animate-spin" />
-            <p className="text-sm">Opening your secure login window…</p>
+            <p className="text-sm">{connected ? 'Loading the live view…' : 'Opening your secure login window…'}</p>
           </div>
         )}
-        {streamError && !connected && (
+        {streamError && !painted && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-slate-300">
             <WifiOff className="h-8 w-8 text-amber-400" />
             <p className="max-w-md text-sm">{explainStreamError(streamError)}</p>

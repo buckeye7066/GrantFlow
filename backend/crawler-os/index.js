@@ -53,6 +53,7 @@ export { createAdminControl, CONTROL_STATE, ADMIN_EMAIL } from './adminControl.j
 
 // convenience: apply the production schema to a better-sqlite3-style db.
 import { SCHEMA_DDL } from './storage.js';
+import { PAGE_FACT_OS_STORE_COLUMN_DEFS } from './pageFacts.js';
 export function applySchema(db) {
   if (!db || typeof db.exec !== 'function') throw new Error('applySchema: db with .exec required');
   db.exec(SCHEMA_DDL);
@@ -61,6 +62,15 @@ export function applySchema(db) {
   for (const col of ['source_query TEXT', 'discovered_via TEXT']) {
     // audit:allow dynamic-sql — col comes from the hardcoded list above
     try { db.exec(`ALTER TABLE profile_opportunity_matches ADD COLUMN ${col}`); } catch { /* exists */ }
+  }
+  // Page-fact provenance (Phase 0.1): heal the OS-store columns on a DB that
+  // predates them, so an unset upsertOpportunity (which always NAMES these
+  // columns) never fails with "no column named eligibility_text" on a store
+  // built by an earlier applySchema. DRIVEN by the pageFacts registry so this
+  // heal list can never drift from what SCHEMA_DDL / upsertOpportunity emit.
+  for (const col of PAGE_FACT_OS_STORE_COLUMN_DEFS) {
+    // audit:allow dynamic-sql — col comes from the hardcoded registry defs
+    try { db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col}`); } catch { /* exists */ }
   }
   return db;
 }

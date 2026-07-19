@@ -23,7 +23,7 @@ import { getAdapter } from './adapters/index.js';
 import { parse } from './parsers.js';
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision } from './matchEngine.js';
+import { computeMatchDecision, isRecommendable } from './matchEngine.js';
 import { buildEvolutionSignals } from './profileEvolution.js';
 import { CRAWLER_OUTCOME, MATCH_DECISION, OPPORTUNITY_KIND, REASON, canonicalOpportunityKey } from './contract.js';
 import {
@@ -74,7 +74,7 @@ export async function runDiscovery(deps, opts = {}) {
       // source_query and discovered_via; here only the source id applies).
       upsertMatch(store, { ...decision, discovered_via: canonicalOpp.source_id ?? null });
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
-      if (decision.decision === MATCH_DECISION.ACCEPT && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
+      if (isRecommendable(canonicalOpp, decision.decision) && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
         // topical_evidence: legacy weighted-evidence subscale, retained so Amy's
         // weight-tuning validation can measure where the W_* weights still act
@@ -82,7 +82,7 @@ export async function runDiscovery(deps, opts = {}) {
         // kind travels with the recommendation so downstream honesty checks
         // (Amy's amount-recall evaluator) can tell a DIRECTORY locator — which
         // never carries a per-award dollar amount by design — from a grant row.
-        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, amount_status: canonicalOpp.funding?.amount_status ?? null, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
       }
     }
   }

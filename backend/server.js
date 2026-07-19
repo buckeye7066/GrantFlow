@@ -126,6 +126,7 @@ import { runLinkVerification, getLinkHealthSummary } from './services/linkVerifi
 import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
+import { runGracefulShutdown } from './startup/gracefulShutdown.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -933,20 +934,42 @@ if (!app.locals.db_startup_error) {
   // not actually run at boot in prod despite the docs claiming "step 9 on every
   // boot". Wire it here directly. runEnforceInvariants is internally per-step
   // guarded + idempotent; wrap the orchestrator too so the server still starts.
-  try {
-    const { runEnforceInvariants } = await import('./startup/enforceInvariants.js')
-    const summary = await runEnforceInvariants(db, { logger: console })
-    if (summary?.totalRepaired) {
-      console.info('[enforce-invariants] boot sweep repaired rows', {
-        ran: summary.ran, failed: summary.failed, totalRepaired: summary.totalRepaired,
-      })
+  // DEFERRED UNTIL AFTER app.listen() — see runBootInvariantSweep() below.
+  //
+  // This used to `await` here, ~1900 lines before the server binds a port. The
+  // sweep is not a schema gate: it is ~20 data-repair passes, several of which do
+  // NETWORK I/O (the amount sweep spends a 20s budget on grants.gov API calls,
+  // URL rescue spends 20s on web searches, John's draft purge calls Microsoft
+  // Graph). All of that ran BEFORE the app could answer a single request.
+  //
+  // Railway healthchecks `/readyz` with `healthcheckTimeout: 300`. While nothing
+  // is listening the edge cannot reach the app at all, so the probe gets a 502 —
+  // not the honest 503 `/readyz` would return — and once boot outran the deadline
+  // Railway declared the deployment CRASHED and emailed the owner, even though
+  // the service came up fine moments later. Six deploys on 2026-07-16 produced
+  // exactly that (observed live: `healthz=200` while `readyz=502`).
+  //
+  // Nothing about these repairs needs to gate traffic: every step is idempotent,
+  // individually guarded, and explicitly non-fatal. Migrations still block listen
+  // (serving reads against an unmigrated schema WOULD be wrong) — the sweep does
+  // not have to.
+  const runBootInvariantSweep = async () => {
+    try {
+      const { runEnforceInvariants } = await import('./startup/enforceInvariants.js')
+      const summary = await runEnforceInvariants(db, { logger: console })
+      if (summary?.totalRepaired) {
+        console.info('[enforce-invariants] boot sweep repaired rows', {
+          ran: summary.ran, failed: summary.failed, totalRepaired: summary.totalRepaired,
+        })
+      }
+    } catch (enforceErr) {
+      console.warn(
+        '[enforce-invariants] orchestrator threw (non-fatal):',
+        enforceErr?.message || enforceErr,
+      )
     }
-  } catch (enforceErr) {
-    console.warn(
-      '[enforce-invariants] orchestrator threw (non-fatal):',
-      enforceErr?.message || enforceErr,
-    )
   }
+  app.locals.runBootInvariantSweep = runBootInvariantSweep
 
   // Register the lead sources John drafts outreach from (johnYanaBridge now
   // aggregates over MULTIPLE sources). Yana = Client Discoverer; Robert hands
@@ -2845,33 +2868,21 @@ app.use((req, res) => {
 // Graceful shutdown handling
 let server = null
 
+let shuttingDown = false
 function gracefulShutdown(signal) {
   if (!server) return
+  if (shuttingDown) return
+  shuttingDown = true
   console.log(`\nReceived ${signal}, closing server gracefully...`);
-  
-  server.close(async () => {
-    console.log('HTTP server closed');
-    
-    try {
-      const maybe = db?.close?.()
-      if (maybe && typeof maybe.then === 'function') {
-        await maybe
-      }
-      console.log('Database connection closed');
-    } catch (error) {
-      console.error('Error closing database:', error);
-    }
-    await flushObservability();
-    
-    console.log('Graceful shutdown complete');
-    process.exit(0);
+  // The full rationale (the "Deploy Crashed"-on-every-deploy bug) lives in
+  // backend/startup/gracefulShutdown.js. Behavior is unit-tested there.
+  runGracefulShutdown({
+    server,
+    closeDb: () => db?.close?.(),
+    flush: flushObservability,
+    exit: (code) => process.exit(code),
+    graceMs: Number(process.env.SHUTDOWN_GRACE_MS || 15000),
   });
-  
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
 }
 
 if (process.env.NODE_ENV !== 'test') {
@@ -2891,6 +2902,28 @@ if (process.env.NODE_ENV !== 'test') {
   // exceed keepAliveTimeout or Node kills sockets mid-request-header.
   server.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS || 620_000);
   server.headersTimeout = server.keepAliveTimeout + 5_000;
+
+  // Run the boot data-repair sweep ONCE THE PORT IS OPEN, not before it.
+  //
+  // It still runs on EVERY boot — the guarantee CLAUDE.md makes ("boot wires the
+  // invariant sweep directly so it cannot be skipped by self-heal schedule
+  // changes") is unchanged. What changes is that it no longer holds the port
+  // shut while it makes network calls, which is what made Railway's healthcheck
+  // read 502 and declare the deployment crashed.
+  //
+  // Deliberately NOT awaited: the listen callback must return so the event loop
+  // can serve the healthcheck. The sweep is per-step guarded and non-fatal, and
+  // it reports its own outcome to system_kv (Sam's pipeline.invariantSweepOutcomes
+  // reads it), so a failure is still observable rather than silent.
+  server.on('listening', () => {
+    const sweep = app.locals.runBootInvariantSweep
+    if (typeof sweep !== 'function') return;
+    setImmediate(() => {
+      sweep().catch((err) => {
+        console.warn('[enforce-invariants] deferred boot sweep failed (non-fatal):', err?.message || err);
+      });
+    });
+  });
 
   server.on('error', (err) => {
     const code = err?.code || 'UNKNOWN';
@@ -3029,14 +3062,18 @@ if (process.env.NODE_ENV !== 'test') {
     // Runs regardless of whether the Amy scheduler is enabled.
     ;(async () => {
       try {
-        const [{ hydrateScoringTuning }, { hydrateCoverageOverrides }] = await Promise.all([
+        const [{ hydrateScoringTuning }, { hydrateCoverageOverrides }, { hydrateGenericTitleAdditions }] = await Promise.all([
           import('./config/scoringTuning.js'),
           import('./services/amy/crawlerCoverageEditor.js'),
+          import('./services/amy/relevanceVocabularyEditor.js'),
         ])
         const scoring = await hydrateScoringTuning(db)
         const coverage = await hydrateCoverageOverrides(db)
-        if (scoring || coverage) {
-          console.log('[Server] Amy tuning hydrated:', JSON.stringify({ scoring: scoring || null, coverage_sources: coverage ? Object.keys(coverage).length : 0 }))
+        // Owner-approved generic-title phrases (Amy's relevance_precision
+        // lever). kv is the durable record — a container filesystem is not.
+        const relevance = await hydrateGenericTitleAdditions(db)
+        if (scoring || coverage || relevance) {
+          console.log('[Server] Amy tuning hydrated:', JSON.stringify({ scoring: scoring || null, coverage_sources: coverage ? Object.keys(coverage).length : 0, generic_title_phrases: relevance ? relevance.length : 0 }))
         }
       } catch (hydErr) {
         console.warn('[Server] Amy tuning hydrate skipped:', hydErr?.message || hydErr)
