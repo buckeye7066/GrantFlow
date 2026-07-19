@@ -137,6 +137,15 @@ export function capForVerifier(diff) {
 // Normalizers (pure)
 // ---------------------------------------------------------------------------
 
+/** Normalize a repo-relative path for a set-equality comparison. Pure. */
+export function normalizeRepoPath(p) {
+  return String(p ?? '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '')
+    .trim()
+}
+
 /** Coerce whatever authorFn returned into a trimmed diff string (or ''). */
 function normalizeDiff(result) {
   if (result === null || result === undefined) return ''
@@ -303,6 +312,11 @@ async function verifyWithRetry(args, { verifierFn, logger, retries = 1 }) {
  * @param {Function} [args.authorFn]      ({finding,fileText,filePath,residualFeedback,round}) => diff-string
  * @param {Function} [args.verifierFn]    ({finding,diff,filePath}) => {verdict,residual,regressions}
  * @param {number} [args.maxRounds=3]
+ * @param {string[]} [args.allowedPaths]  TRUSTED target path set. When provided,
+ *        a clean diff whose extracted paths are NOT a subset of this set is
+ *        REJECTED — a clean verdict cannot authorize edits to a file the caller
+ *        never targeted (prompt-injection / author-or-verifier drift). The
+ *        caller derives the workflow expected_paths from THIS set, not the diff.
  * @param {object} [args.logger]
  * @returns {Promise<{status:'clean'|'unverified'|'no_fix'|'rejected',
  *                    diff:string|null, rounds:number, trail:object[],
@@ -315,8 +329,13 @@ export async function generateVerifiedRepair({
   authorFn = (a) => defaultAuthorFn(a),
   verifierFn = (a) => defaultVerifierFn(a),
   maxRounds = 3,
+  allowedPaths = null,
   logger = defaultLogger,
 } = {}) {
+  const trustedSet =
+    Array.isArray(allowedPaths) && allowedPaths.length > 0
+      ? new Set(allowedPaths.map(normalizeRepoPath))
+      : null
   const trail = []
   const rounds = Math.max(1, Number(maxRounds) || 1)
   let residualFeedback = null
@@ -387,6 +406,25 @@ export async function generateVerifiedRepair({
           reason: `verified diff rejected by dispatch gate: ${validation.reason}`,
         }
       }
+      // Trusted-target guard: the model-authored diff may touch ONLY the paths
+      // the caller pre-validated. A clean verdict cannot smuggle an edit to a
+      // second (even non-denied) file into the landed set.
+      if (trustedSet) {
+        const outside = validation.paths
+          .map(normalizeRepoPath)
+          .filter((p) => !trustedSet.has(p))
+        if (outside.length > 0) {
+          const uniqueOutside = [...new Set(outside)]
+          trail.push({ round, phase: 'validate', outcome: 'rejected', reason: `paths outside trusted set: ${uniqueOutside.join(', ')}` })
+          return {
+            status: 'rejected',
+            diff: null,
+            rounds: round,
+            trail,
+            reason: `verified diff touches path(s) outside the trusted target set: ${uniqueOutside.join(', ')}`,
+          }
+        }
+      }
       return {
         status: 'clean',
         diff,
@@ -423,6 +461,7 @@ export const __testHelpers = {
   buildVerifierSystemPrompt,
   buildVerifierUserPrompt,
   capForVerifier,
+  normalizeRepoPath,
   defaultAuthorFn,
   defaultVerifierFn,
   MAX_VERIFY_DIFF_CHARS,

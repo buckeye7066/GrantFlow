@@ -1,4 +1,9 @@
 name: Anya Code Fix PR
+# The run-name embeds the (unique) landing branch so the backend direct-lander
+# can CORRELATE this workflow_dispatch run to its branch — the run is dispatched
+# on `main`, so its head_sha is main's, not the branch commit; correlation is by
+# name, and the merged commit is read from the pushed branch ref.
+run-name: "Anya Code Fix ${{ inputs.land_mode }} ${{ inputs.branch }}"
 on:
   workflow_dispatch:
     inputs:

@@ -39,16 +39,24 @@ function goodDiff(file = 'backend/services/example.js') {
 const ENV = { GITHUB_TOKEN: 't', GITHUB_REPO: 'buckeye7066/GrantFlow', DIRECT_LAND_TOKEN_SECRET: 's3cr3t' }
 const HEAD = 'abc123abc123abc123abc123abc123abc123abcd'
 
-/** Injectable stubs for a happy direct land; override per-test. */
+/**
+ * Injectable stubs for a happy direct land; override per-test.
+ * The merge SHA is read from the PUSHED branch ref (getBranchSha), NOT the
+ * poll — the gate run is dispatched on main so its head_sha is main's. Two
+ * getBranchSha reads occur (bind, then pre-merge re-check); `shaSeq` supplies
+ * them so a head_moved race can be simulated.
+ */
 function stubs(over = {}) {
   const calls = { merges: [], consumed: [], triggered: [] }
   const used = new Set()
+  const shaSeq = over.shaSeq || [HEAD, HEAD]
+  let shaReads = 0
   return {
     calls,
     triggerGateRun: over.triggerGateRun || (async (a) => { calls.triggered.push(a); return { ok: true } }),
-    pollGateConclusion: over.pollGateConclusion || (async () => ({ conclusion: 'success', runId: 1, headSha: HEAD })),
+    pollGateConclusion: over.pollGateConclusion || (async () => ({ conclusion: 'success', runId: 1 })),
     branchExists: over.branchExists || (async () => false),
-    getBranchSha: over.getBranchSha || (async () => HEAD),
+    getBranchSha: over.getBranchSha || (async () => { const v = shaSeq[Math.min(shaReads, shaSeq.length - 1)]; shaReads += 1; return v }),
     mergeToMain: over.mergeToMain || (async (a) => { calls.merges.push(a); return { ok: true, merged: true, sha: a.sha } }),
     consumeNonce: over.consumeNonce || (async (_db, nonce) => { if (used.has(nonce)) return { ok: false, reason: 'reused' }; used.add(nonce); calls.consumed.push(nonce); return { ok: true } }),
     now: over.now || (() => 1000),
@@ -122,8 +130,19 @@ describe('landPatchDirectToMain — token + SHA binding (Sol CRITICAL + HIGH #2)
     expect(s.calls.merges.length).toBe(0)
   })
 
+  it('binds the merge to the PUSHED branch commit, not the dispatch/main sha', async () => {
+    // The poll returns NO sha (dispatch run head = main); the pushed commit is
+    // read from the branch ref. The merge must be bound to the pushed sha.
+    const PUSHED = 'push99push99push99push99push99push99push9'
+    const s = stubs({ shaSeq: [PUSHED, PUSHED] })
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
+    expect(res.landed).toBe(true)
+    expect(res.head_sha).toBe(PUSHED)
+    expect(s.calls.merges[0].sha).toBe(PUSHED)
+  })
+
   it('gates RED → nothing lands (merge never called)', async () => {
-    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'failure', runId: 2, headSha: HEAD }) })
+    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'failure', runId: 2 }) })
     const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
     expect(res.landed).toBe(false)
     expect(res.gate_conclusion).toBe('failure')
@@ -131,19 +150,19 @@ describe('landPatchDirectToMain — token + SHA binding (Sol CRITICAL + HIGH #2)
     expect(s.calls.merges.length).toBe(0)
   })
 
-  it('head MOVED between gate-green and merge → refused (no merge)', async () => {
-    const s = stubs({ getBranchSha: async () => 'movedmovedmovedmovedmovedmovedmovedmoved' })
+  it('head MOVED between bind and merge → refused (no merge)', async () => {
+    const s = stubs({ shaSeq: [HEAD, 'movedmovedmovedmovedmovedmovedmovedmoved'] })
     const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
     expect(res.landed).toBe(false)
     expect(res.step).toBe('head_moved')
     expect(s.calls.merges.length).toBe(0)
   })
 
-  it('gate reported no head_sha → refused (cannot bind)', async () => {
-    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'success', runId: 3, headSha: null }) })
+  it('green run but NO pushed commit (ref missing) → refused (cannot bind)', async () => {
+    const s = stubs({ getBranchSha: async () => null })
     const res = await landPatchDirectToMain({ patch: goodDiff(), env: ENV, ...s })
     expect(res.landed).toBe(false)
-    expect(res.step).toBe('head_sha')
+    expect(res.step).toBe('no_pushed_commit')
     expect(s.calls.merges.length).toBe(0)
   })
 
@@ -199,10 +218,22 @@ describe('landVerifiedPatch — mode routing', () => {
   })
 
   it("landMode 'direct' + gates RED → nothing lands", async () => {
-    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'failure', runId: 9, headSha: HEAD }) })
+    const s = stubs({ pollGateConclusion: async () => ({ conclusion: 'failure', runId: 9 }) })
     const res = await landVerifiedPatch({ patch: goodDiff(), landMode: 'direct', env: ENV, ...s })
     expect(res.landed).toBe(false)
     expect(s.calls.merges.length).toBe(0)
+  })
+
+  it('expected_paths passed to landVerifiedPatch derives the workflow guard set (not the diff)', async () => {
+    let body = null
+    await landVerifiedPatch({
+      patch: goodDiff('backend/services/example.js'),
+      landMode: 'pr',
+      expectedPaths: ['backend/services/example.js'],
+      env: ENV,
+      fetchImpl: async (_u, opts) => { body = JSON.parse(opts.body); return { status: 204 } },
+    })
+    expect(body.inputs.expected_paths).toBe('backend/services/example.js')
   })
 
   it("landMode 'direct' + CRITICAL path → routed to PR (not direct)", async () => {
@@ -298,5 +329,9 @@ describe('anya-code-fix-pr.yml structural safety', () => {
     expect(yaml).not.toMatch(/npm ci.*\|\|\s*npm install/)
     expect(yaml).toMatch(/assert-direct-land-tree\.mjs/)
     expect(yaml).toMatch(/patch_sha256/)
+  })
+
+  it('sets a run-name embedding the branch so the backend can correlate the run', () => {
+    expect(yaml).toMatch(/^run-name:.*inputs\.branch/m)
   })
 })

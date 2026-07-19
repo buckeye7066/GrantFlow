@@ -233,6 +233,7 @@ export async function dispatchCodeFixWorkflow({
   landMode = 'pr',
   branch = '',
   allowCriticalPaths = false,
+  expectedPaths = null,
   fetchImpl = null,
   env = process.env,
 } = {}) {
@@ -292,9 +293,17 @@ export async function dispatchCodeFixWorkflow({
           branch: String(branch || '').slice(0, 200),
           // The gate_only workflow re-validates the ACTUAL applied patch against
           // these: sha256(patch_content) must equal patch_sha256, and the tree
-          // must contain ONLY expected_paths (newline-separated).
+          // must contain ONLY expected_paths (newline-separated). expected_paths
+          // comes from the caller's TRUSTED target set when supplied — never
+          // solely from the model-authored diff — falling back to the diff's own
+          // paths only for legacy callers (which already passed the denylist).
           patch_sha256: sha256Hex(patch),
-          expected_paths: (validation.paths || []).join('\n').slice(0, 4000),
+          expected_paths: (Array.isArray(expectedPaths) && expectedPaths.length > 0
+            ? expectedPaths.map((p) => String(p).replace(/\\/g, '/'))
+            : validation.paths || []
+          )
+            .join('\n')
+            .slice(0, 4000),
         },
       }),
     })
@@ -360,13 +369,14 @@ export function buildDirectLandBranch(seed = '') {
 }
 
 /** Default gate-run trigger — dispatch the workflow in gate_only mode. */
-async function defaultTriggerGateRun({ patch, title, branch, allowCriticalPaths, fetchImpl, env }) {
+async function defaultTriggerGateRun({ patch, title, branch, allowCriticalPaths, expectedPaths, fetchImpl, env }) {
   return dispatchCodeFixWorkflow({
     patch,
     title,
     landMode: 'gate_only',
     branch,
     allowCriticalPaths,
+    expectedPaths,
     fetchImpl,
     env,
   })
@@ -404,37 +414,40 @@ async function defaultGetBranchSha({ branch, fetchImpl, env }) {
 }
 
 /**
- * Default gate poller — poll the workflow run for `branch` until it concludes.
- * Returns { conclusion:'success'|'failure'|'timed_out', runId, headSha } — the
- * head_sha the gate actually ran against, so the merge can be bound to THAT sha.
- * Never throws.
+ * Default gate poller. A gate_only run is dispatched on `main` (the workflow
+ * CREATES the landing branch commit INSIDE the job), so its `head_sha` is main's
+ * — NOT the commit we intend to merge, and `?branch=<landing branch>` never
+ * matches it. We therefore correlate the run by its RUN NAME (the workflow sets
+ * `run-name` to include the unique landing branch) and return only the
+ * conclusion + runId. The commit to merge is read separately from the pushed
+ * branch ref (getBranchSha) — that is the real gated commit. Never throws.
+ *
+ * Returns { conclusion:'success'|'failure'|'timed_out', runId }.
  */
 async function defaultPollGateConclusion({ branch, fetchImpl, env, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const { token, repo } = resolveCodeFixGitHubConfig(env)
   const doFetch = fetchImpl || globalThis.fetch
-  if (!token || typeof doFetch !== 'function') return { conclusion: 'failure', runId: null, headSha: null }
+  if (!token || typeof doFetch !== 'function') return { conclusion: 'failure', runId: null }
   const deadline = Date.now() + GATE_POLL_TIMEOUT_MS
-  const url = `https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?branch=${encodeURIComponent(branch)}&per_page=1`
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=30`
+  const matchesBranch = (run) =>
+    String(run?.display_title || run?.name || '').includes(branch)
   while (Date.now() < deadline) {
     try {
       const res = await doFetch(url, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
       })
       const body = await res.json().catch(() => null)
-      const run = body?.workflow_runs?.[0]
+      const run = (body?.workflow_runs || []).find(matchesBranch)
       if (run && run.status === 'completed') {
-        return {
-          conclusion: run.conclusion === 'success' ? 'success' : 'failure',
-          runId: run.id ?? null,
-          headSha: run.head_sha ?? null,
-        }
+        return { conclusion: run.conclusion === 'success' ? 'success' : 'failure', runId: run.id ?? null }
       }
     } catch {
       /* transient — keep polling until the deadline */
     }
     await sleep(GATE_POLL_INTERVAL_MS)
   }
-  return { conclusion: 'timed_out', runId: null, headSha: null }
+  return { conclusion: 'timed_out', runId: null }
 }
 
 /**
@@ -487,11 +500,15 @@ async function defaultAdminMergeToMain({ branch, sha, title, fetchImpl, env }) {
  *   - a server secret (DIRECT_LAND_TOKEN_SECRET) exists (else inert → caller
  *     should fall back to a PR),
  *   - a FRESH, unique branch that does not already exist,
- *   - the gate_only workflow run for THAT branch concluded 'success',
- *   - the branch head STILL equals the exact head_sha the gate ran against,
- *   - a single-use HMAC token bound to sha256(patch)+head_sha+nonce+expiry
+ *   - the gate_only workflow run correlated to THAT branch concluded 'success',
+ *   - the branch was actually pushed (its ref resolves to a real commit) — that
+ *     pushed commit is the gated code (the workflow runs release:gates + the
+ *     declared-files assertion BEFORE it pushes), and it is what we merge (NOT
+ *     the dispatch run's head_sha, which is main),
+ *   - the branch head is STABLE across a re-read (no racing push), and
+ *   - a single-use HMAC token bound to sha256(patch)+pushed_sha+nonce+expiry
  *     verifies and its nonce has never been consumed,
- * and the merge itself passes that head_sha so GitHub refuses a moved head.
+ * and the merge itself passes that pushed_sha so GitHub refuses a moved head.
  *
  * @returns {Promise<{ok:boolean, landed:boolean, step:string, branch?:string,
  *   gate_conclusion?:string, head_sha?:string, merge?:object, error?:string}>}
@@ -501,6 +518,7 @@ export async function landPatchDirectToMain({
   title = '',
   branch = null,
   allowCriticalPaths = false,
+  expectedPaths = null,
   fetchImpl = null,
   env = process.env,
   db = null,
@@ -523,20 +541,22 @@ export async function landPatchDirectToMain({
   }
 
   // FRESH, unique branch — reject a reused/pre-existing name (stale green run /
-  // racing push guard).
+  // racing push guard). Because it did not exist before this land, the only run
+  // that can push it is the one we trigger.
   const landBranch = branch || buildDirectLandBranch(title)
   if (await branchExists({ branch: landBranch, fetchImpl, env })) {
     return { ok: false, landed: false, step: 'branch', branch: landBranch, error: `branch ${landBranch} already exists — refusing to reuse for a direct land.` }
   }
 
-  const trigger = await triggerGateRun({ patch, title, branch: landBranch, allowCriticalPaths, fetchImpl, env })
+  const trigger = await triggerGateRun({ patch, title, branch: landBranch, allowCriticalPaths, expectedPaths, fetchImpl, env })
   if (!trigger?.ok) {
     return { ok: false, landed: false, step: 'gate_dispatch', branch: landBranch, error: trigger?.error || 'gate-run dispatch failed' }
   }
 
+  // Correlate the run by name (see defaultPollGateConclusion): the run is
+  // dispatched on main, so its head_sha is main — NOT what we merge.
   const gate = await pollGateConclusion({ branch: landBranch, fetchImpl, env })
   const conclusion = typeof gate === 'string' ? gate : gate?.conclusion
-  const gateHeadSha = typeof gate === 'object' ? gate?.headSha : null
   if (conclusion !== 'success') {
     return {
       ok: false,
@@ -547,35 +567,43 @@ export async function landPatchDirectToMain({
       error: `release:gates ${conclusion} — the fix is adversarially clean but does NOT land on main (build gate protects prod).`,
     }
   }
-  if (!gateHeadSha) {
-    return { ok: false, landed: false, step: 'head_sha', branch: landBranch, gate_conclusion: 'success', error: 'gate run reported no head_sha — cannot bind the merge to a verified commit.' }
+
+  // The commit to merge is the ACTUAL pushed branch commit. The gate_only
+  // workflow ran release:gates + the declared-files assertion BEFORE pushing, so
+  // this ref IS the gated code. A green run that pushed nothing (no ref) means
+  // the gate failed before the push — refuse.
+  const pushedSha = await getBranchSha({ branch: landBranch, fetchImpl, env })
+  if (!pushedSha) {
+    return { ok: false, landed: false, step: 'no_pushed_commit', branch: landBranch, gate_conclusion: 'success', error: 'gate run concluded success but pushed no branch commit — refusing to merge.' }
   }
 
-  // The ref must STILL point at the exact commit the gate ran against.
-  const currentSha = await getBranchSha({ branch: landBranch, fetchImpl, env })
-  if (currentSha && String(currentSha) !== String(gateHeadSha)) {
-    return { ok: false, landed: false, step: 'head_moved', branch: landBranch, gate_conclusion: 'success', head_sha: gateHeadSha, error: `branch head moved after the gate (${gateHeadSha} → ${currentSha}) — refusing to merge un-gated code.` }
-  }
-
-  // Issue + verify the single-use HMAC proof bound to patch + THIS head_sha.
-  const issued = issueDirectLandToken({ patch, headSha: gateHeadSha, now: now(), secret })
-  const verify = verifyDirectLandToken({ ...issued, patch, headSha: gateHeadSha, secret, now: now() })
+  // Issue + verify the single-use HMAC proof bound to patch + the PUSHED commit.
+  const issued = issueDirectLandToken({ patch, headSha: pushedSha, now: now(), secret })
+  const verify = verifyDirectLandToken({ ...issued, patch, headSha: pushedSha, secret, now: now() })
   if (!verify.ok) {
-    return { ok: false, landed: false, step: 'token', branch: landBranch, head_sha: gateHeadSha, error: `direct-land token invalid: ${verify.reason}` }
+    return { ok: false, landed: false, step: 'token', branch: landBranch, head_sha: pushedSha, error: `direct-land token invalid: ${verify.reason}` }
   }
   const consumed = await consumeNonce(db, issued.nonce, { now: now() })
   if (!consumed.ok) {
-    return { ok: false, landed: false, step: 'nonce', branch: landBranch, head_sha: gateHeadSha, error: `direct-land authorization not single-use-safe: ${consumed.reason}` }
+    return { ok: false, landed: false, step: 'nonce', branch: landBranch, head_sha: pushedSha, error: `direct-land authorization not single-use-safe: ${consumed.reason}` }
   }
 
-  const merge = await mergeToMain({ branch: landBranch, sha: gateHeadSha, title, fetchImpl, env })
+  // Immediately before merge, re-read the ref: it must STILL be the pushed
+  // commit (no racing push between binding and merge).
+  const stillSha = await getBranchSha({ branch: landBranch, fetchImpl, env })
+  if (String(stillSha || '') !== String(pushedSha)) {
+    return { ok: false, landed: false, step: 'head_moved', branch: landBranch, gate_conclusion: 'success', head_sha: pushedSha, error: `branch head moved after the gate (${pushedSha} → ${stillSha}) — refusing to merge un-gated code.` }
+  }
+
+  // Pass the pushed sha so GitHub itself 409s if the head moved concurrently.
+  const merge = await mergeToMain({ branch: landBranch, sha: pushedSha, title, fetchImpl, env })
   return {
     ok: merge?.ok === true,
     landed: merge?.ok === true,
     step: 'merge',
     branch: landBranch,
     gate_conclusion: 'success',
-    head_sha: gateHeadSha,
+    head_sha: pushedSha,
     token_nonce: issued.nonce,
     merge,
   }
@@ -598,6 +626,7 @@ export async function landVerifiedPatch({
   title = '',
   landMode = 'pr',
   automerge = false,
+  expectedPaths = null,
   fetchImpl = null,
   env = process.env,
   db = null,
@@ -619,7 +648,7 @@ export async function landVerifiedPatch({
 
   if (decision.landMode === 'pr') {
     // PR path (existing gate; strict forbidden-path block re-applied inside).
-    const result = await dispatchCodeFixWorkflow({ patch, title, automerge, landMode: 'pr', fetchImpl, env })
+    const result = await dispatchCodeFixWorkflow({ patch, title, automerge, landMode: 'pr', expectedPaths, fetchImpl, env })
     return {
       ...result,
       land_mode: 'pr',
@@ -635,6 +664,7 @@ export async function landVerifiedPatch({
     patch,
     title,
     allowCriticalPaths,
+    expectedPaths,
     fetchImpl,
     env,
     db,

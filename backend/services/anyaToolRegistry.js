@@ -5421,6 +5421,11 @@ registerTool({
     const landMode = params?.landMode === 'direct' ? 'direct' : 'pr'
     const maxRounds = Math.max(1, Math.min(Number(params?.maxRounds) || 3, 5))
 
+    // TRUSTED target set = exactly the owner-supplied file. A clean diff that
+    // edits any other path is rejected, and the workflow expected_paths derives
+    // from THIS set — never from the model-authored diff alone.
+    const trustedPath = String(filePath).replace(/\\/g, '/')
+
     const { generateVerifiedRepair } = await import('./anyaAdversarialRepairLoop.js')
     // authorFn/verifierFn ride in on the trusted server-side context only (same
     // pattern as context.getOpenAI / context.fetchImpl) so tests can drive the
@@ -5430,6 +5435,7 @@ registerTool({
       fileText,
       filePath,
       maxRounds,
+      allowedPaths: [trustedPath],
       ...(typeof context?.authorFn === 'function' ? { authorFn: context.authorFn } : {}),
       ...(typeof context?.verifierFn === 'function' ? { verifierFn: context.verifierFn } : {}),
     })
@@ -5477,6 +5483,7 @@ registerTool({
       landMode,
       automerge,
       db: context?.db ?? null,
+      expectedPaths: [trustedPath],
       fetchImpl: typeof context?.fetchImpl === 'function' ? context.fetchImpl : null,
     })
     return {

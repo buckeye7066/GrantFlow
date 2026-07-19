@@ -179,6 +179,71 @@ describe('generateVerifiedRepair — fail-closed loop', () => {
   })
 })
 
+describe('generateVerifiedRepair — trusted target-path guard (Sol HIGH #2)', () => {
+  const TARGET = 'backend/services/example.js'
+  const OTHER = 'backend/services/other.js'
+
+  function twoFileDiff(f1, f2) {
+    return [
+      `diff --git a/${f1} b/${f1}`, `--- a/${f1}`, `+++ b/${f1}`, '@@ -1 +1 @@', '-a', '+b',
+      `diff --git a/${f2} b/${f2}`, `--- a/${f2}`, `+++ b/${f2}`, '@@ -1 +1 @@', '-c', '+d', '',
+    ].join('\n')
+  }
+
+  it('a clean diff touching a SECOND (non-denied) path beyond the trusted set → rejected, nothing lands', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING,
+      fileText: 'const x = 1',
+      filePath: TARGET,
+      allowedPaths: [TARGET], // owner supplied exactly one file
+      authorFn: async () => twoFileDiff(TARGET, OTHER), // author smuggles a 2nd edit
+      verifierFn: async () => ({ verdict: 'clean', residual: [], regressions: [] }),
+    })
+    expect(res.status).toBe('rejected')
+    expect(res.diff).toBeNull()
+    expect(res.reason).toMatch(/outside the trusted target set/i)
+    expect(res.reason).toContain(OTHER)
+  })
+
+  it('a clean diff touching ONLY the trusted path → clean', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING,
+      fileText: 'const x = 1',
+      filePath: TARGET,
+      allowedPaths: [TARGET],
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'clean', residual: [], regressions: [] }),
+    })
+    expect(res.status).toBe('clean')
+    expect(res.paths).toContain(TARGET)
+  })
+
+  it('Sam-style: a diff touching a path NOT in the safe affected_files set → rejected', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING,
+      fileText: 'x',
+      filePath: 'src/a.jsx',
+      allowedPaths: ['src/a.jsx', 'src/b.jsx'], // the safe affected_files
+      authorFn: async () => goodDiff('src/c.jsx'), // not in the set
+      verifierFn: async () => ({ verdict: 'clean', residual: [], regressions: [] }),
+    })
+    expect(res.status).toBe('rejected')
+    expect(res.reason).toContain('src/c.jsx')
+  })
+
+  it('a subset of the trusted set (touches one of two allowed) → clean', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING,
+      fileText: 'x',
+      filePath: 'src/a.jsx',
+      allowedPaths: ['src/a.jsx', 'src/b.jsx'],
+      authorFn: async () => goodDiff('src/a.jsx'),
+      verifierFn: async () => ({ verdict: 'clean', residual: [], regressions: [] }),
+    })
+    expect(res.status).toBe('clean')
+  })
+})
+
 describe('owner.adversarial_repair — owner gate (h)', () => {
   it('is hidden from a non-owner admin but shown to the owner', () => {
     const adminTools = listToolMetadata({ isAdmin: true, email: 'other-admin@example.com' }).map((t) => t.name)
@@ -213,13 +278,14 @@ describe('owner.adversarial_repair — edit-lock (g)', () => {
     if (!preexisting && fs.existsSync(LOCK)) fs.rmSync(LOCK)
   })
 
+  const TARGET = 'backend/services/anyaAdversarialRepairLoop.js'
   async function invokeWithLock(landMode) {
     let fetchCalled = false
     const result = await invokeTool(
       'owner.adversarial_repair',
       {
         // repair a real, readable, non-forbidden file
-        filePath: 'backend/services/anyaAdversarialRepairLoop.js',
+        filePath: TARGET,
         finding: 'trivial',
         dryRun: false, // force the land path so the lock check is reached
         landMode,
@@ -227,8 +293,9 @@ describe('owner.adversarial_repair — edit-lock (g)', () => {
       {
         ctx: { isAdmin: true, email: OWNER, userId: 'owner1' },
         user: { role: 'admin', email: OWNER },
-        // clean author + verifier so the loop returns a verified diff
-        authorFn: async () => goodDiff(),
+        // clean author + verifier so the loop returns a verified diff. The diff
+        // must touch ONLY the trusted target file (the owner-supplied filePath).
+        authorFn: async () => goodDiff(TARGET),
         verifierFn: async () => ({ verdict: 'clean', residual: [], regressions: [] }),
         fetchImpl: async () => {
           fetchCalled = true

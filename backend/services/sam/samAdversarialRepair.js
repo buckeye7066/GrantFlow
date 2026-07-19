@@ -101,7 +101,11 @@ export async function runAdversarialRepairs({
       out.notes.push({ finding_id: finding.id, outcome: 'skipped', reason: 'affected_files_not_all_safe' })
       continue
     }
-    // The loop repairs a single file; target the first safe file.
+    // The loop repairs a single file; target the first safe file. The TRUSTED
+    // target set is the safe affected_files (each already re-checked with
+    // isPathSafeForFix above): a clean diff may touch ONLY those, and the
+    // workflow expected_paths derives from THIS set, not the model diff.
+    const trustedPaths = affected.map((f) => String(f).replace(/\\/g, '/'))
     const filePath = affected[0]
 
     let fileText
@@ -126,6 +130,7 @@ export async function runAdversarialRepairs({
         fileText,
         filePath,
         maxRounds,
+        allowedPaths: trustedPaths,
       })
     } catch (err) {
       out.notes.push({ finding_id: finding.id, outcome: 'error', reason: String(err?.message || err) })
@@ -166,6 +171,7 @@ export async function runAdversarialRepairs({
         landMode, // 'pr' (default) or 'direct'; critical paths auto-downgrade to PR.
         automerge: false, // Sam proposes; a human/branch-protection merges on the PR path.
         db, // enables single-use nonce enforcement on the direct path
+        expectedPaths: trustedPaths, // workflow guard set = trusted, not the model diff
         env,
       })
     } catch (err) {
