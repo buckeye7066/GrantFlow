@@ -222,6 +222,15 @@ Compat: behavior-preserving; the migration cleanly merges reconcilable duplicate
 
 Compat: behavior-preserving; the forward migration cleanly merges reconcilable phone duplicates (moving all owned data, revoking stale auth/sessions) and leaves ambiguous ones intact-and-recorded — never split, never aborting. New/updated tests in `otpPhoneDedupMigration.test.js` (ordering, collision-no-abort, revoke-vs-move, multi-duplicate invariant sweep), verified red per finding.
 
+## Round 27 — live-schema-introspected guard + multi-dup groups + pre-map path (see PORTFOLIO_AUDIT.md §5aa)
+
+- **[HIGH #3, foundational] The two-owner inventory is now INTROSPECTED from the full migrated schema, not schema.sql.** r26's hardcoded 20-table list missed ~18 two-owner tables created by later migrations (grant_applications, anya_match_suggestions, yana_*, hamilton_portal_credentials, payment_access_events, …) → those rows split. The test now enumerates every user_id+profile_id / user_id+stripe_customer_id table from the live schema and FAILS on any unclassified one. Full classification (38 profile + 1 stripe): 24 user-data + 5 account MOVED, 12 security session/auth/payment/credential REVOKED, 2 actor/audit (audit_logs, agent_activity_events) EXEMPT. The migration move/revoke covers all discovered tables.
+- **[HIGH #1] Multi-dup groups never abort or split.** Mergeability + collision-collapse are now computed PER CANONICAL PHONE GROUP (canonical + ALL its dups), not per pair — so dup-vs-dup collisions on saved_grants / user_organizations / 1-per-user resources are collapsed to one survivor before the move (no UNIQUE-abort), and a group where 2+ members own a 1-per-user resource is wholly unmergeable (nothing moved, all recorded).
+- **[HIGH #2] Pre-map (52caf99-137) stamped DBs are no longer silently skipped.** 138/0142 reconstruct a nulled dup from a durable trace (the dup profile's basic_information phone matching a canonical's phone_otp credential) and repair it; what can't be reconstructed is left operator-visible, never a silent empty no-op.
+- All r19–r26 preserved. 138/0142 bodies identical except the one documented JSON-extraction dialect line (parity-tested); idempotent + fresh no-op. A generated `phoneDedupeClassification.json` is the single source of truth for the classification.
+
+Compat: behavior-preserving; the forward migration now covers the FULL two-owner surface, handles multi-dup groups without aborting, and repairs/flags pre-map states. New/updated tests in `otpPhoneDedupMigration.test.js` (introspection guard, multi-dup no-abort, group-unmergeable, pre-map reconstruction), all verified red per finding.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

@@ -101,11 +101,19 @@ const AGE_BASED_137 = `
 
 const MIG138_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0142_repair_phone_dedupe_repoint.sql'), 'utf8')
 
+// The FULL migrated schema (schema.sql + ALL migrations) so every two-owner table the
+// migration touches (grant_applications, anya_match_suggestions, yana_*, hamilton_*, …)
+// actually exists — matching the real runtime the migration runs against.
+const ALL_MIGRATIONS = fs.readdirSync(path.resolve('backend/db/migrations'))
+  .filter((f) => f.endsWith('.sql')).sort()
+  .map((f) => fs.readFileSync(path.resolve('backend/db/migrations', f), 'utf8'))
 function fullDb() {
   const raw = new Database(':memory:')
-  raw.exec(SCHEMA)
   raw.pragma('foreign_keys = OFF') // fixtures seed rows without full FK graphs
-  raw.exec('DROP INDEX IF EXISTS ux_users_primary_phone') // allow seeding duplicate phones
+  raw.exec(SCHEMA)
+  for (const m of ALL_MIGRATIONS) { try { raw.exec(m) } catch { /* tolerate idempotent/ordering errors, like the runner */ } }
+  // Reset dedupe state applied by 137/138 above so each fixture starts clean.
+  raw.exec('DROP INDEX IF EXISTS ux_users_primary_phone; DELETE FROM phone_dedupe_map; DELETE FROM phone_dedupe_conflicts;')
   return raw
 }
 const seedPhoneDup = (raw, { dupCreated = '2026-01-01T00:00:00Z', canCreated = '2026-02-01T00:00:00Z' } = {}) => {
@@ -122,33 +130,65 @@ const MIG137 = fs.readFileSync(path.resolve('backend/db/migrations/137_users_pri
 // The REAL prod order: 137 (capture map -> null non-canonical phones -> index) THEN 138 (repair).
 const runRepair = (raw) => { raw.exec(MIG137); raw.exec(MIG138) }
 
-// BY-CONSTRUCTION GUARD: every table with BOTH user_id and profile_id (audited from
-// schema.sql). After the repair NONE may have user_id and profile_id pointing at
-// different accounts. This catches any two-owner table the migration forgot to handle.
-const TWO_OWNER_PROFILE = [
-  'saved_grants', 'anya_sessions', 'anya_runs', 'anya_tool_usage', 'service_purchases', 'pricing_quotes',
-  'anya_onboarding_events', 'agent_activity_events', 'student_portals', 'application_portal_links',
-  'application_tasks', 'hamilton_runs', 'hamilton_autopilot_runs', 'hamilton_blockers', 'hamilton_resolved_fields',
-  'user_sessions', 'hamilton_authorizations', 'hamilton_saved_sessions', 'hamilton_payment_authorizations',
-  'hamilton_attestation_authorizations',
-]
+// BY-CONSTRUCTION GUARD (Codex r27 #3): the two-owner inventory is INTROSPECTED from
+// the live migrated schema, not a hardcoded list — so a two-owner table added by any
+// future migration is automatically checked. The migration's classification is the
+// single source of truth (generated alongside 138/0142).
+const CLASSIFICATION = JSON.parse(fs.readFileSync(path.resolve('backend/tests/fixtures/phoneDedupeClassification.json'), 'utf8'))
+const EXEMPT = new Set(CLASSIFICATION.exempt)
+function twoOwnerTables(raw) {
+  const tbls = raw.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all().map((r) => r.name)
+  const profile = [], stripe = []
+  for (const t of tbls) {
+    const cols = raw.prepare(`PRAGMA table_info(${JSON.stringify(t)})`).all().map((c) => c.name)
+    if (cols.includes('user_id') && cols.includes('profile_id')) profile.push(t)
+    if (cols.includes('user_id') && cols.includes('stripe_customer_id')) stripe.push(t)
+  }
+  return { profile, stripe }
+}
+// Sweep EVERY (non-exempt) two-owner table in the LIVE schema for a user_id/owner mismatch.
 function userProfileSplits(raw) {
   let n = 0
-  for (const t of TWO_OWNER_PROFILE) {
+  for (const t of twoOwnerTables(raw).profile) {
+    if (EXEMPT.has(t)) continue
     n += raw.prepare(`SELECT COUNT(*) c FROM ${t} x JOIN profiles p ON p.id = x.profile_id
       WHERE x.user_id IS NOT NULL AND p.user_id IS NOT NULL AND x.user_id <> p.user_id`).get().c
   }
   return n
 }
-const userStripeSplits = (raw) => raw.prepare(
-  `SELECT COUNT(*) c FROM service_purchases x JOIN stripe_customers s ON s.stripe_customer_id = x.stripe_customer_id
-   WHERE x.user_id IS NOT NULL AND s.user_id IS NOT NULL AND x.user_id <> s.user_id`,
-).get().c
+function userStripeSplits(raw) {
+  let n = 0
+  for (const t of twoOwnerTables(raw).stripe) {
+    if (t === 'stripe_customers' || EXEMPT.has(t)) continue
+    n += raw.prepare(`SELECT COUNT(*) c FROM ${t} x JOIN stripe_customers s ON s.stripe_customer_id = x.stripe_customer_id
+      WHERE x.user_id IS NOT NULL AND s.user_id IS NOT NULL AND x.user_id <> s.user_id`).get().c
+  }
+  return n
+}
 
 describe('forward repair migration 138 (already-137-stamped DBs) + ownership repoint', () => {
-  it('the SQLite (138) and Postgres (0142) SQL bodies are identical (dialect parity)', () => {
-    const body = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n').trim()
+  it('the SQLite (138) and Postgres (0142) bodies match except the one documented dialect line (JSON extraction)', () => {
+    // Only intentional dialect difference: the pre-map reconstruction's JSON phone read
+    // (SQLite json_extract(...) vs Postgres ...::jsonb->>'phone'). Everything else identical.
+    const body = (s) => s.split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .map((l) => l.replace(/json_extract\(ps\.data, '\$\.phone'\)/, 'JSONPHONE').replace(/\(ps\.data::jsonb->>'phone'\)/, 'JSONPHONE'))
+      .join('\n').trim()
     expect(body(MIG138_PG)).toBe(body(MIG138))
+  })
+
+  it('[r27 #3 GUARD] every two-owner table in the live migrated schema is classified (move / revoke / exempt)', () => {
+    const raw = fullDb()
+    const { profile } = twoOwnerTables(raw)
+    const classified = new Set([...CLASSIFICATION.moveProfile, ...CLASSIFICATION.moveAccount, ...CLASSIFICATION.revoke, ...CLASSIFICATION.exempt])
+    // Every discovered two-owner (user_id+profile_id) table MUST be explicitly classified —
+    // a new one added by a future migration fails here until a human classifies it.
+    const unclassified = profile.filter((t) => !classified.has(t))
+    expect(unclassified).toEqual([])
+    // Sanity: the discovery actually found the known later-migration tables (not just schema.sql's).
+    expect(profile).toContain('grant_applications')
+    expect(profile).toContain('anya_match_suggestions')
+    expect(profile).toContain('hamilton_portal_credentials')
   })
 
   it('the runner selects 138 even when 137 is already stamped (forward migration, not an in-place edit)', () => {
@@ -363,5 +403,72 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     // RED-ABLE: introduce a split and the guard catches it.
     raw.prepare(`UPDATE saved_grants SET user_id='u-can' WHERE id='sud'`).run() // user_id=u-can but profile_id=pu-dup(u-dup)
     expect(userProfileSplits(raw)).toBeGreaterThan(0)
+  })
+
+  it('[r27 #1] a MULTI-DUP group (2 dups -> 1 canonical) with dup-vs-dup collisions does NOT abort; one survivor; no split', () => {
+    const raw = fullDb()
+    const p = '+15551110000'
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('d1', ?, '2026-01-01')`).run(p)
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('d2', ?, '2026-01-02')`).run(p)
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('cann', ?, '2026-02-01')`).run(p)
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('cc', 'cann', 'phone_otp', ?)`).run(p)
+    // Only ONE member owns a profile -> group mergeable.
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pd1', 'd1', 'D1')`).run()
+    // dup-vs-dup collision on the NULL-profile legacy unique (both dups saved the same opp).
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('g1', 'd1', NULL, 'oX')`).run()
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('g2', 'd2', NULL, 'oX')`).run()
+    // dup-vs-dup collision on user_organizations PK.
+    raw.prepare(`INSERT INTO organizations (id, name) VALUES ('org1', 'Org1')`).run()
+    raw.prepare(`INSERT INTO user_organizations (user_id, organization_id) VALUES ('d1', 'org1')`).run()
+    raw.prepare(`INSERT INTO user_organizations (user_id, organization_id) VALUES ('d2', 'org1')`).run()
+
+    expect(() => runRepair(raw)).not.toThrow() // must NEVER abort on a dup-vs-dup collision
+
+    // Exactly one survivor per unique key, all under the canonical.
+    expect(raw.prepare(`SELECT COUNT(*) c FROM saved_grants WHERE user_id='cann' AND profile_id IS NULL AND opportunity_id='oX'`).get().c).toBe(1)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM user_organizations WHERE user_id='cann' AND organization_id='org1'`).get().c).toBe(1)
+    expect(profileOwner(raw, 'pd1')).toBe('cann')
+    expect(conflicts(raw)).toBe(0) // clean group merge
+    expect(userProfileSplits(raw)).toBe(0)
+  })
+
+  it('[r27 #1b] a MULTI-DUP group where TWO members own a profile is UNMERGEABLE as a whole (nothing moved, all recorded)', () => {
+    const raw = fullDb()
+    const p = '+15551119999'
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('e1', ?, '2026-01-01')`).run(p)
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('e2', ?, '2026-01-02')`).run(p)
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('ecan', ?, '2026-02-01')`).run(p)
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('ec', 'ecan', 'phone_otp', ?)`).run(p)
+    // TWO dups own profiles -> group over-owns a 1-per-user resource -> UNMERGEABLE.
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pe1', 'e1', 'E1')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pe2', 'e2', 'E2')`).run()
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('eg', 'e1', 'pe1', 'oY')`).run()
+
+    expect(() => runRepair(raw)).not.toThrow()
+    // Nothing moved (consistent), every dup recorded for manual reconciliation.
+    expect(profileOwner(raw, 'pe1')).toBe('e1')
+    expect(profileOwner(raw, 'pe2')).toBe('e2')
+    expect(conflicts(raw)).toBe(2) // both dups recorded
+    expect(userProfileSplits(raw)).toBe(0)
+  })
+
+  it('[r27 #2] pre-map (old-52caf99-137) stamped DB: dup phone already nulled -> reconstructed from the profile trace + repaired (NOT a silent no-op)', () => {
+    const raw = fullDb()
+    const p = '+15552220000'
+    // Simulate the r23-137-stamped state: dup already nulled, canonical holds the phone+credential.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('pre-dup', NULL, '2026-01-01')`).run()
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('pre-can', ?, '2026-02-01')`).run(p)
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('pc', 'pre-can', 'phone_otp', ?)`).run(p)
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pre-p', 'pre-dup', 'PD')`).run()
+    // Durable trace: the dup profile still records the phone in basic_information.
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('pre-p', 'basic_information', ?)`).run(JSON.stringify({ phone: p }))
+
+    // Only 138 runs (137 is "stamped" from the old version and does not re-run).
+    raw.exec(MIG138)
+
+    // Reconstructed from the trace and merged -> NOT a silent empty no-op.
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map`).get().c).toBeGreaterThan(0)
+    expect(profileOwner(raw, 'pre-p')).toBe('pre-can')
+    expect(userProfileSplits(raw)).toBe(0)
   })
 })

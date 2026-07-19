@@ -1,0 +1,53 @@
+{
+  "moveProfile": [
+    "saved_grants",
+    "anya_sessions",
+    "anya_runs",
+    "anya_tool_usage",
+    "anya_onboarding_events",
+    "anya_match_suggestions",
+    "service_purchases",
+    "pricing_quotes",
+    "profile_pricing",
+    "service_agreements",
+    "admin_pricing_notifications",
+    "onboarding_sessions",
+    "grant_applications",
+    "student_portals",
+    "application_portal_links",
+    "application_tasks",
+    "hamilton_runs",
+    "hamilton_autopilot_runs",
+    "hamilton_blockers",
+    "hamilton_resolved_fields",
+    "yana_runs",
+    "yana_autopilot_runs",
+    "yana_blockers",
+    "yana_resolved_fields"
+  ],
+  "moveAccount": [
+    "profiles",
+    "user_preferences",
+    "stripe_customers",
+    "user_providers",
+    "user_credentials"
+  ],
+  "revoke": [
+    "user_sessions",
+    "hamilton_authorizations",
+    "hamilton_saved_sessions",
+    "hamilton_payment_authorizations",
+    "hamilton_attestation_authorizations",
+    "hamilton_portal_credentials",
+    "hamilton_session_capture_requests",
+    "yana_authorizations",
+    "yana_saved_sessions",
+    "yana_payment_authorizations",
+    "yana_attestation_authorizations",
+    "payment_access_events"
+  ],
+  "exempt": [
+    "audit_logs",
+    "agent_activity_events"
+  ]
+}
