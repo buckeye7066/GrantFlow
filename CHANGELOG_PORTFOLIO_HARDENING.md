@@ -187,6 +187,15 @@ Compat: behavior-preserving for normal login (one start → one active code → 
 
 Compat: behavior-preserving for normal login; only concurrent/first-ever starts and configured-email send failures change (winner-only send, compensation, no duplicate users). New tests: `otpStartOrdering.test.js` (compensation unit + first-ever/post-cooldown concurrent) and `otpEmailSendCompensation.test.js` (mocked configured email: failure→502+compensation+retry-unblocked; success→sender-once). Honest limitation noted: SQLite serializes writers so the true pooled-PG race isn't reproducible; the phone-uniqueness partial index is the storage-level backstop.
 
+## Round 23 — de-dup keeps the credential-owned user + scoped/late-safe OTP compensation (see PORTFOLIO_AUDIT.md §5w)
+
+- **[HIGH] Phone de-dup migration keeps the phone on the credential-owned user.** r22 kept the OLDEST duplicate-phone user and nulled the rest, which could strand the `phone_otp` credential on a nulled-phone user → `/phone/verify` re-hits the unique index after consuming the code → persistent 500s. Migration `137_…`/`0141_…` now: null the phone on every non-canonical owner (canonical = the credential's user if present, else oldest), then restore the phone on a credential-owned user an earlier run nulled (when free). Idempotent, non-destructive.
+- **[MED] Configured email failures after the route timeout are now compensated.** On a configured-provider timeout, a late handler on the send promise runs `compensateFailedOtpSend` if the send eventually fails — no active/verifiable/undelivered code + preserved cooldown leak. Unconfigured/dev stays tolerant; a late success keeps the code.
+- **[MED] Compensation is scoped to the exact failing mint.** `insertFreshVerificationCode` returns the minted code id (`RETURNING id`) + mint timestamp; `compensateFailedOtpSend(db, cred, { codeId, sentAt })` only invalidates THAT code if still active and only rewinds `last_sent_at` if it still equals that mint — so a slow send's late failure can't destroy a newer good code or erase its cooldown. Idempotent; phone + email.
+- All r19–r22 properties preserved.
+
+Compat: behavior-preserving for normal login; only the de-dup canonical choice, late-configured-email failures, and superseded-mint compensation change. New tests: `otpPhoneDedupMigration.test.js` (migration fixture, red-able), plus late-failure/late-success + scoped-compensation cases in `otpEmailSendCompensation.test.js` / `otpStartOrdering.test.js`. Honest limitation noted: SQLite serializes writers so the true pooled-PG race isn't reproducible; the migration fixture + partial unique index are the storage-level guarantees.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

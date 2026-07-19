@@ -1856,10 +1856,11 @@ async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAt
     await tx
       .prepare(`UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`)
       .run(now, credentialId)
+    let inserted
     try {
-      await tx
-        .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?)`)
-        .run(credentialId, codeHash, expiresAtIso)
+      inserted = await tx
+        .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?) RETURNING id`)
+        .get(credentialId, codeHash, expiresAtIso)
     } catch (err) {
       // DB backstop tripped: another active code exists (a caller that skipped the
       // lock won the race). The one-active-code invariant still holds.
@@ -1874,7 +1875,9 @@ async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAt
       .prepare(`UPDATE user_credentials SET secret_hash = ?, last_sent_at = ?, attempt_count = 0 WHERE id = ?`)
       .run(codeHash, now, credentialId)
 
-    return { minted: true }
+    // Return the EXACT minted code id + mint timestamp so a later send-failure can
+    // compensate ONLY this mint (never a newer good code — see compensateFailedOtpSend).
+    return { minted: true, codeId: inserted?.id ?? null, sentAt: now }
   })
 }
 
@@ -1882,17 +1885,27 @@ async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAt
  * Compensate a mint whose delivery (email/SMS) FAILED after the code was minted.
  * The winner of the serialized mint sends AFTER minting; if the send then fails,
  * we must not leave (a) a verifiable code the user never received, or (b) a
- * cooldown that blocks a retry for a code that never arrived. So, in one
- * transaction: invalidate the active code AND rewind last_sent_at.
+ * cooldown that blocks a retry for a code that never arrived.
+ *
+ * SCOPED to the EXACT failing mint (`codeId` + `sentAt` from insertFreshVerificationCode):
+ * a slow send that fails AFTER a retry already minted+sent a NEWER code must NOT
+ * destroy that newer good code or erase its cooldown. So we only invalidate THIS
+ * code row if it is STILL active, and only rewind last_sent_at if it STILL equals
+ * this mint's timestamp (a newer mint moved it → leave it). Idempotent + safe to
+ * call once even if the mint was already superseded.
  */
-async function compensateFailedOtpSend(db, credentialId) {
+async function compensateFailedOtpSend(db, credentialId, { codeId = null, sentAt = null } = {}) {
   return db.withTransaction(async (tx) => {
-    await tx
-      .prepare(`UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`)
-      .run(nowISOString(), credentialId)
-    await tx
-      .prepare(`UPDATE user_credentials SET last_sent_at = NULL WHERE id = ?`)
-      .run(credentialId)
+    if (codeId) {
+      await tx
+        .prepare(`UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE id = ? AND consumed_at IS NULL`)
+        .run(nowISOString(), codeId)
+    }
+    if (sentAt) {
+      await tx
+        .prepare(`UPDATE user_credentials SET last_sent_at = NULL WHERE id = ? AND last_sent_at = ?`)
+        .run(credentialId, sentAt)
+    }
   })
 }
 
@@ -2184,6 +2197,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       ttlSeconds: EMAIL_CODE_TTL,
     })
     
+    let mintScope = null
     try {
       // Serialized single-active-code mint: invalidate prior active codes + insert
       // the fresh one + reset credential metadata in ONE per-credential-locked
@@ -2199,6 +2213,8 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
           retry_after_seconds: mint.retryAfterSeconds,
         })
       }
+      // Scope any later compensation to EXACTLY this mint (never a newer good code).
+      mintScope = { codeId: mint.codeId, sentAt: mint.sentAt }
       routeLogger.info('[auth/email/start] Verification code stored in database for:', email)
     } catch (dbError) {
       routeLogger.error('[auth/email/start] Database error storing verification code:', dbError)
@@ -2210,26 +2226,32 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     }
 
     // The serialized mint already ran ABOVE, so only the WINNER reaches this send
-    // (a racing /start 429s at the mint). Distinguish three outcomes:
+    // (a racing /start 429s at the mint). Distinguish outcomes:
     //   'sent'    → delivered; keep the code.
-    //   'timeout' → provider async/queued; keep the code (tolerant), 202 + notice.
-    //   'failed'  → DEFINITIVE failure; COMPENSATE (invalidate the code + rewind
-    //               last_sent_at) and 502, so no verifiable code the user never
-    //               received and a retry isn't cooldown-blocked. Symmetric w/ phone.
+    //   'failed'  → DEFINITIVE failure (only when CONFIGURED); COMPENSATE this mint
+    //               + 502 — no verifiable code the user never received, retry not
+    //               cooldown-blocked. Symmetric with phone.
+    //   'timeout' → tolerant (202 + notice, keep the code) BUT, for a CONFIGURED
+    //               provider, attach a LATE handler so a failure that resolves AFTER
+    //               the route timeout still compensates this exact mint (else an
+    //               active, verifiable, undelivered code + preserved cooldown would
+    //               leak — the very failure mode r22 removed).
     routeLogger.info('[auth/email/start] Attempting to send verification email to:', email)
     // A DEFINITIVE failure only counts when the email service is actually
-    // configured. Unconfigured/dev returns false (and phone returns skipped) — that
-    // is the deliberate "code stored, delivery may be delayed" path, NOT a failure
-    // to compensate (compensating there would break local/dev + queued providers).
+    // configured. Unconfigured/dev returns false — the deliberate "code stored,
+    // delivery may be delayed" path, NOT a failure (compensating there would break
+    // local/dev + queued providers).
     const emailConfigured = isEmailServiceConfigured()
     let emailSent = false
     let sendFailed = false
     try {
       const timeoutMs = Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000)
+      // The underlying send promise (already catches its own rejection → 'failed').
+      const sendPromise = Promise.resolve()
+        .then(() => sendVerificationEmail(email, code))
+        .then((ok) => (ok === true ? 'sent' : 'failed'), () => 'failed')
       const outcome = await Promise.race([
-        Promise.resolve()
-          .then(() => sendVerificationEmail(email, code))
-          .then((ok) => (ok === true ? 'sent' : 'failed'), () => 'failed'),
+        sendPromise,
         new Promise((resolve) => setTimeout(() => resolve('timeout'), timeoutMs)),
       ])
       if (outcome === 'sent') {
@@ -2241,6 +2263,20 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       } else {
         // Unconfigured, or a timeout that may still be queued — tolerant; keep the code.
         console.warn('[auth/email/start] Email not sent (unconfigured or queued) for:', email)
+        // Configured + timed out: watch the underlying send; if it LATER fails,
+        // compensate THIS mint (scoped, so a retry's newer code is never touched).
+        if (outcome === 'timeout' && emailConfigured && mintScope) {
+          const scope = mintScope
+          sendPromise.then((late) => {
+            if (late !== 'sent') {
+              compensateFailedOtpSend(req.db, credential.id, scope)
+                .catch(e => console.warn('[auth/email/start] late compensation failed:', e?.message || e))
+            }
+          }, () => {
+            compensateFailedOtpSend(req.db, credential.id, scope)
+              .catch(e => console.warn('[auth/email/start] late compensation failed:', e?.message || e))
+          })
+        }
       }
     } catch (emailError) {
       console.error('[auth/email/start] Unexpected error sending email:', emailError)
@@ -2248,7 +2284,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     }
 
     if (sendFailed) {
-      await compensateFailedOtpSend(req.db, credential.id).catch(e => console.warn('[auth/email/start] compensation failed:', e?.message || e))
+      await compensateFailedOtpSend(req.db, credential.id, mintScope || {}).catch(e => console.warn('[auth/email/start] compensation failed:', e?.message || e))
       sendAuthAttemptNotification({ event: 'email_start', identifier: email, success: false, error: 'email_send_failed' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(502).json({
         error: 'Could not send the verification email right now. Please try again.',
@@ -2573,7 +2609,7 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
   // verifiable code the user never received and a retry isn't cooldown-blocked.
   const smsResult = await sendPhoneVerificationCode(normalized, code)
   if (smsResult && smsResult.ok === false && smsResult.skipped !== true) {
-    await compensateFailedOtpSend(req.db, credential.id).catch(e => console.warn('[auth/phone/start] compensation failed:', e?.message || e))
+    await compensateFailedOtpSend(req.db, credential.id, { codeId: mint.codeId, sentAt: mint.sentAt }).catch(e => console.warn('[auth/phone/start] compensation failed:', e?.message || e))
     return res.status(502).json({
       error: 'Could not send the verification code right now. Please try again.',
       error_type: 'sms_send_failed',

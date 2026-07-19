@@ -17,7 +17,7 @@ process.env.AUTH_EMAIL_RATE_LIMIT = '1000'
 import { vi, describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import request from 'supertest'
 
-const state = vi.hoisted(() => ({ sendCalls: 0, shouldSucceed: false }))
+const state = vi.hoisted(() => ({ sendCalls: 0, shouldSucceed: false, delayMs: 0 }))
 
 vi.mock('../services/email.js', async (importOriginal) => {
   const actual = await importOriginal()
@@ -26,6 +26,7 @@ vi.mock('../services/email.js', async (importOriginal) => {
     isEmailServiceConfigured: () => true,
     sendVerificationEmail: vi.fn(async () => {
       state.sendCalls += 1
+      if (state.delayMs) await new Promise((r) => setTimeout(r, state.delayMs))
       return state.shouldSucceed
     }),
   }
@@ -42,7 +43,16 @@ const activeCodes = (db, email) =>
 
 let app, db
 beforeAll(async () => { const l = await getAppAndDb(); app = l.app; db = l.db })
-beforeEach(() => { resetDb(db); state.sendCalls = 0 })
+beforeEach(() => { resetDb(db); state.sendCalls = 0; state.delayMs = 0 })
+
+async function waitFor(pred, { timeoutMs = 3000, stepMs = 25 } = {}) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (await pred()) return true
+    await new Promise((r) => setTimeout(r, stepMs))
+  }
+  return false
+}
 
 describe('/email/start winner-only send + compensation (configured email service)', () => {
   it('a configured send FAILURE → 502, code invalidated, last_sent_at rewound (retry unblocked)', async () => {
@@ -82,5 +92,46 @@ describe('/email/start winner-only send + compensation (configured email service
     expect(results.filter((r) => r.status === 202).length).toBe(1)
     expect(state.sendCalls).toBe(1)
     expect(Number(activeCodes(db, email).c)).toBe(1)
+  })
+
+  it('a configured send that fails AFTER the route timeout is still compensated (late failure)', async () => {
+    const prevTimeout = process.env.AUTH_EMAIL_SEND_TIMEOUT_MS
+    process.env.AUTH_EMAIL_SEND_TIMEOUT_MS = '80'
+    state.shouldSucceed = false
+    state.delayMs = 300 // resolves (false) well AFTER the 80ms route timeout
+    const email = 'late-fail@example.test'
+    try {
+      // The route times out → tolerant 202 (code kept for now).
+      const res = await request(app).post('/api/auth/email/start').send({ email })
+      expect(res.status).toBe(202)
+      // The late handler compensates once the underlying send resolves false.
+      const compensated = await waitFor(async () => Number(activeCodes(db, email).c) === 0)
+      expect(compensated).toBe(true)
+      const cred = db.prepare(`SELECT last_sent_at FROM user_credentials WHERE identifier = ?`).get(email)
+      expect(cred.last_sent_at).toBeNull()
+    } finally {
+      process.env.AUTH_EMAIL_SEND_TIMEOUT_MS = prevTimeout ?? ''
+      state.delayMs = 0
+    }
+  })
+
+  it('a configured send that SUCCEEDS after the timeout keeps the code (late success, no compensation)', async () => {
+    const prevTimeout = process.env.AUTH_EMAIL_SEND_TIMEOUT_MS
+    process.env.AUTH_EMAIL_SEND_TIMEOUT_MS = '80'
+    state.shouldSucceed = true
+    state.delayMs = 300 // resolves (true) after the timeout
+    const email = 'late-success@example.test'
+    try {
+      const res = await request(app).post('/api/auth/email/start').send({ email })
+      expect(res.status).toBe(202)
+      // Give the late handler time to (not) run; the code must remain active.
+      await new Promise((r) => setTimeout(r, 400))
+      expect(Number(activeCodes(db, email).c)).toBe(1)
+      const cred = db.prepare(`SELECT last_sent_at FROM user_credentials WHERE identifier = ?`).get(email)
+      expect(cred.last_sent_at).not.toBeNull()
+    } finally {
+      process.env.AUTH_EMAIL_SEND_TIMEOUT_MS = prevTimeout ?? ''
+      state.delayMs = 0
+    }
   })
 })

@@ -57,14 +57,37 @@ describe('compensateFailedOtpSend (send-failure compensation)', () => {
     }
   }
 
-  it('invalidates the active code and clears last_sent_at (no usable unsent code, retry unblocked)', async () => {
+  it('invalidates THE MINTED code and clears last_sent_at (no usable unsent code, retry unblocked)', async () => {
     const db = makeDb()
+    const sentAt = '2026-07-18T00:00:00.000Z'
     db._raw.prepare(`UPDATE user_verification_codes SET expires_at = ?`).run(future())
-    await compensateFailedOtpSend(db, 'cred-1')
+    const codeId = db._raw.prepare(`SELECT id FROM user_verification_codes LIMIT 1`).get().id
+    await compensateFailedOtpSend(db, 'cred-1', { codeId, sentAt })
     const active = db._raw.prepare(`SELECT COUNT(*) c FROM user_verification_codes WHERE consumed_at IS NULL`).get()
     expect(active.c).toBe(0)
     const cred = db._raw.prepare(`SELECT last_sent_at FROM user_credentials WHERE id='cred-1'`).get()
     expect(cred.last_sent_at).toBeNull()
+  })
+
+  it('is SCOPED: does not invalidate a NEWER code nor rewind a NEWER cooldown', async () => {
+    const db = makeDb()
+    // Old mint: code id=1, sentAt = the seeded value.
+    const oldSentAt = '2026-07-18T00:00:00.000Z'
+    const oldCodeId = db._raw.prepare(`SELECT id FROM user_verification_codes LIMIT 1`).get().id
+    db._raw.prepare(`UPDATE user_verification_codes SET consumed_at = ? WHERE id = ?`).run(new Date().toISOString(), oldCodeId)
+    // A retry minted a NEWER active code and moved the cooldown.
+    const newSentAt = '2026-07-18T00:05:00.000Z'
+    db._raw.prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES ('cred-1', 'new', ?)`).run(future())
+    db._raw.prepare(`UPDATE user_credentials SET last_sent_at = ? WHERE id = 'cred-1'`).run(newSentAt)
+
+    // The OLD request's late failure compensates its OWN (already-consumed) mint.
+    await compensateFailedOtpSend(db, 'cred-1', { codeId: oldCodeId, sentAt: oldSentAt })
+
+    // The NEWER code is still active and the NEWER cooldown is intact.
+    const active = db._raw.prepare(`SELECT COUNT(*) c FROM user_verification_codes WHERE consumed_at IS NULL`).get()
+    expect(active.c).toBe(1)
+    const cred = db._raw.prepare(`SELECT last_sent_at FROM user_credentials WHERE id='cred-1'`).get()
+    expect(cred.last_sent_at).toBe(newSentAt)
   })
 })
 
