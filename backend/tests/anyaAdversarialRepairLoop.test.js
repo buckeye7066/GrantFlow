@@ -244,6 +244,111 @@ describe('generateVerifiedRepair — trusted target-path guard (Sol HIGH #2)', (
   })
 })
 
+describe('generateVerifiedRepair — materiality gate (do not burn rounds on non-material findings)', () => {
+  const TARGET = 'backend/services/example.js'
+  const minor = { severity: 'low', title: 'theoretical edge', problem: 'only an exotic hand-crafted payload hits it', realistic_input: false, affects_goal: false }
+  const material = { severity: 'high', title: 'auth bypass', problem: 'a real user reaches it and it affects auth', realistic_input: true, affects_goal: true }
+
+  it('a MATERIAL residual → still iterates and blocks (unchanged)', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 2,
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [material], regressions: [] }),
+    })
+    expect(res.status).toBe('rejected')
+  })
+
+  it('ONLY minor residuals → accepted_with_residuals, documented, NO extra round', async () => {
+    let authorCalls = 0
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 3,
+      authorFn: async () => { authorCalls += 1; return goodDiff(TARGET) },
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [minor], regressions: [] }),
+    })
+    expect(res.status).toBe('accepted_with_residuals')
+    expect(res.diff).toContain('diff --git')
+    expect(res.residuals).toHaveLength(1)
+    expect(res.residuals[0].title).toBe('theoretical edge')
+    expect(authorCalls).toBe(1) // did NOT spend another round
+  })
+
+  it('a MIX (1 material + 1 minor) → iterates on the MATERIAL only', async () => {
+    let verifyCalls = 0
+    const feedback = []
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 3,
+      authorFn: async ({ residualFeedback }) => { feedback.push(residualFeedback); return goodDiff(TARGET) },
+      verifierFn: async () => {
+        verifyCalls += 1
+        if (verifyCalls === 1) return { verdict: 'needs_work', residual: [material, minor], regressions: [] }
+        return { verdict: 'clean', residual: [], regressions: [] }
+      },
+    })
+    expect(res.status).toBe('clean')
+    expect(feedback[1]).toContain('auth bypass')
+    expect(feedback[1]).not.toContain('theoretical edge')
+  })
+
+  it('cap hit with a MATERIAL residual still open → rejected', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 1,
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [material], regressions: [] }),
+    })
+    expect(res.status).toBe('rejected')
+    expect(res.reason).toMatch(/MATERIAL/i)
+  })
+
+  it('cap hit with ONLY minor residuals → accepted_with_residuals (SHIP, never rejected)', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 1,
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [minor], regressions: [] }),
+    })
+    expect(res.status).toBe('accepted_with_residuals')
+    expect(res.residuals).toHaveLength(1)
+  })
+
+  it('a REGRESSION is always material (a fix that introduces a bug is never accepted-with-residuals)', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 1,
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [minor], regressions: ['drops a null guard'] }),
+    })
+    expect(res.status).toBe('rejected')
+  })
+
+  it("materiality:'any' restores strict behavior — a minor residual still blocks", async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 1, materiality: 'any',
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [minor], regressions: [] }),
+    })
+    expect(res.status).toBe('rejected')
+  })
+
+  it('an UNCLASSIFIED residual defaults to material (fail closed for a legacy verifier)', async () => {
+    const res = await generateVerifiedRepair({
+      finding: FINDING, fileText: 'x', filePath: TARGET, maxRounds: 1,
+      authorFn: async () => goodDiff(TARGET),
+      verifierFn: async () => ({ verdict: 'needs_work', residual: [{ severity: 'low', title: 't', problem: 'p' }], regressions: [] }),
+    })
+    expect(res.status).toBe('rejected')
+  })
+
+  it('assessMateriality classifies per the threshold', () => {
+    const { assessMateriality } = __testHelpers
+    const a = assessMateriality({ residual: [material, minor], regressions: [] }, 'material')
+    expect(a.material).toHaveLength(1)
+    expect(a.minor).toHaveLength(1)
+    expect(a.hasMaterial).toBe(true)
+    const b = assessMateriality({ residual: [minor], regressions: [] }, 'material')
+    expect(b.hasMaterial).toBe(false)
+    const c = assessMateriality({ residual: [minor], regressions: [] }, 'any')
+    expect(c.hasMaterial).toBe(true) // 'any' => everything material
+  })
+})
+
 describe('owner.adversarial_repair — owner gate (h)', () => {
   it('is hidden from a non-owner admin but shown to the owner', () => {
     const adminTools = listToolMetadata({ isAdmin: true, email: 'other-admin@example.com' }).map((t) => t.name)

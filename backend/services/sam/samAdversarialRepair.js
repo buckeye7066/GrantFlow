@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 import { isPathSafeForFix } from './samSafeFixes.js'
 import { getSamPolicy, assertCommitAllowed } from './samPolicy.js'
 import { buildFixBranchName } from './samGit.js'
-import { generateVerifiedRepair } from '../anyaAdversarialRepairLoop.js'
+import { generateVerifiedRepair, isLandableStatus } from '../anyaAdversarialRepairLoop.js'
 import { landVerifiedPatch } from '../anyaCodeFixDispatch.js'
 import { isAgentEditLockPresent } from '../../utils/agentEditLock.js'
 
@@ -137,7 +137,7 @@ export async function runAdversarialRepairs({
       continue
     }
 
-    if (repair.status !== 'clean') {
+    if (!isLandableStatus(repair.status)) {
       // Apply NOTHING; record why so the finding stays visible + explainable.
       out.notes.push({
         finding_id: finding.id,
@@ -149,7 +149,7 @@ export async function runAdversarialRepairs({
       continue
     }
 
-    // Clean, adversarially-verified diff. Charter gate: branch-only, never main.
+    // Landable ('clean' or 'accepted_with_residuals'). Charter gate: branch-only, never main.
     const branch = buildFixBranchName(runId)
     const gate = assertCommitAllowed({ branch }, effectivePolicy)
     if (!gate.allowed) {
@@ -189,6 +189,8 @@ export async function runAdversarialRepairs({
     out.proposals.push({
       finding_id: finding.id,
       file: filePath,
+      status: repair.status, // 'clean' | 'accepted_with_residuals'
+      accepted_residuals: Array.isArray(repair.residuals) ? repair.residuals : [],
       rounds: repair.rounds,
       land_mode: landing?.land_mode,
       downgraded_to_pr: landing?.downgraded_to_pr === true,

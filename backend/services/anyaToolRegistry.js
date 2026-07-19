@@ -5440,20 +5440,26 @@ registerTool({
       ...(typeof context?.verifierFn === 'function' ? { verifierFn: context.verifierFn } : {}),
     })
 
+    const { isLandableStatus } = await import('./anyaAdversarialRepairLoop.js')
     const base = {
       file: filePath,
       status: repair.status,
       rounds: repair.rounds,
       trail: repair.trail,
       reason: repair.reason,
+      // Accepted low-impact residuals are SURFACED, never hidden — the owner
+      // sees exactly what was documented-and-accepted vs iterated-on.
+      accepted_residuals: Array.isArray(repair.residuals) ? repair.residuals : [],
     }
 
-    // Anything other than a clean, verified diff applies NOTHING.
-    if (repair.status !== 'clean') {
+    // A landable status is 'clean' OR 'accepted_with_residuals' (a fix whose only
+    // remaining issues are low-impact + goal-irrelevant, documented above).
+    // unverified / no_fix / rejected apply NOTHING.
+    if (!isLandableStatus(repair.status)) {
       return { ...base, applied: false, dispatched: false }
     }
 
-    // Verified clean. In dryRun, return the diff for review without landing.
+    // Landable. In dryRun, return the diff for review without landing.
     if (dryRun) {
       return { ...base, applied: false, dispatched: false, dry_run: true, land_mode: landMode, diff: repair.diff, paths: repair.paths }
     }

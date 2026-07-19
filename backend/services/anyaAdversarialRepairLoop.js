@@ -39,6 +39,17 @@ import { createLogger } from '../utils/logger.js'
 
 const defaultLogger = createLogger('services:anyaAdversarialRepairLoop')
 
+/**
+ * The statuses a caller may LAND (dispatch a PR / merge). Both a fully clean fix
+ * and a fix accepted-with-documented-low-impact-residuals are landable; the
+ * residuals are surfaced (never hidden) so the owner sees exactly what was
+ * accepted. Everything else (unverified/no_fix/rejected) applies NOTHING.
+ */
+export const LANDABLE_STATUSES = Object.freeze(['clean', 'accepted_with_residuals'])
+export function isLandableStatus(status) {
+  return LANDABLE_STATUSES.includes(String(status))
+}
+
 // Cap the diff we hand the verifier. The verifier judges ONLY the DIFF (never
 // two full file copies), so this bounds token cost while keeping the whole
 // change visible for a normal repair.
@@ -102,9 +113,22 @@ export function buildVerifierSystemPrompt() {
     '  (c) other variants of the SAME bug class the diff leaves open,',
     '  (d) edge cases the diff mishandles (null/empty/error/async/boundary).',
     'Only return verdict "clean" when you cannot find a single real problem.',
+    '',
+    'For EACH residual you report, ALSO classify its MATERIALITY with two booleans',
+    'so the loop does not burn rounds fixing things that do not matter:',
+    '  "realistic_input": true if a REALISTIC input would trigger it — a real user,',
+    '    or normal (NON-adversarial, non-hand-crafted) app/LLM output; false if ONLY',
+    '    a deliberately-crafted exotic/pathological payload would reach it.',
+    '  "affects_goal": true if it affects a CORE goal — security / auth / payment /',
+    '    data-integrity, or correctness a user actually experiences; false if it is',
+    '    cosmetic, purely theoretical, or goal-irrelevant.',
+    'Do NOT inflate materiality: a theoretical edge case that no realistic input',
+    'hits AND that touches no core goal must be marked realistic_input:false AND',
+    'affects_goal:false. Be honest — over-marking wastes effort, under-marking ships bugs.',
     'Return ONLY JSON of the exact shape:',
     '{"verdict":"clean"|"needs_work",',
-    ' "residual":[{"severity":"low"|"medium"|"high","title":string,"problem":string}],',
+    ' "residual":[{"severity":"low"|"medium"|"high","title":string,"problem":string,',
+    '   "realistic_input":boolean,"affects_goal":boolean}],',
     ' "regressions":[string]}',
     'residual and regressions MUST be empty when verdict is "clean".',
   ].join('\n')
@@ -167,6 +191,12 @@ export function normalizeVerdict(raw) {
           severity: String(r?.severity || 'medium').toLowerCase(),
           title: String(r?.title || '').slice(0, 200),
           problem: String(r?.problem || '').slice(0, 1000),
+          // Materiality classification. FAIL CLOSED: a field is only treated as
+          // "not material" when the verifier says so EXPLICITLY (=== false). An
+          // omitted/unknown classification stays material, so an unclassified
+          // residual still blocks/iterates exactly as before this gate existed.
+          realistic_input: r?.realistic_input !== false,
+          affects_goal: r?.affects_goal !== false,
         }))
         .filter((r) => r.title || r.problem)
     : []
@@ -179,6 +209,45 @@ export function normalizeVerdict(raw) {
     return { verdict: 'needs_work', residual, regressions }
   }
   return { verdict, residual, regressions }
+}
+
+/**
+ * Supported materiality thresholds — how strict the "keep iterating" bar is:
+ *   'any'      → every residual is material (never accept-with-residuals; the
+ *                pre-gate behavior — tighten to this to require a fully clean fix)
+ *   'material' → (default) material if a realistic input WOULD trigger it OR it
+ *                affects a core goal (security/auth/payment/data-integrity/
+ *                user-visible correctness)
+ *   'both'     → material only if realistic_input AND affects_goal (loosest)
+ */
+export const MATERIALITY_THRESHOLDS = Object.freeze(['any', 'material', 'both'])
+export const DEFAULT_MATERIALITY = 'material'
+
+/**
+ * Is a single residual MATERIAL under the given threshold? A residual is treated
+ * as material unless the verifier EXPLICITLY marked both dimensions sub-threshold
+ * (normalizeVerdict already fails closed on omitted fields). Pure.
+ */
+export function isResidualMaterial(residual, threshold = DEFAULT_MATERIALITY) {
+  const realistic = residual?.realistic_input !== false
+  const goal = residual?.affects_goal !== false
+  if (threshold === 'any') return true
+  if (threshold === 'both') return realistic && goal
+  return realistic || goal // 'material' (default)
+}
+
+/**
+ * Split a verdict's residuals into material vs minor, and decide whether the
+ * loop must keep iterating. Regressions (introduced bugs) are ALWAYS material —
+ * a fix that introduces a new bug is never shipped. Pure.
+ */
+export function assessMateriality(verdict, threshold = DEFAULT_MATERIALITY) {
+  const residuals = Array.isArray(verdict?.residual) ? verdict.residual : []
+  const regressions = Array.isArray(verdict?.regressions) ? verdict.regressions : []
+  const material = residuals.filter((r) => isResidualMaterial(r, threshold))
+  const minor = residuals.filter((r) => !isResidualMaterial(r, threshold))
+  const hasMaterial = material.length > 0 || regressions.length > 0
+  return { material, minor, regressions, hasMaterial }
 }
 
 /** Render a verdict's residual/regressions into feedback text for the author. */
@@ -317,10 +386,16 @@ async function verifyWithRetry(args, { verifierFn, logger, retries = 1 }) {
  *        REJECTED — a clean verdict cannot authorize edits to a file the caller
  *        never targeted (prompt-injection / author-or-verifier drift). The
  *        caller derives the workflow expected_paths from THIS set, not the diff.
+ * @param {'any'|'material'|'both'} [args.materiality='material']  the MATERIALITY
+ *        threshold. The loop re-iterates only while a MATERIAL residual remains
+ *        (a realistic input WOULD trigger it, or it affects a core goal); when
+ *        the only remaining residuals are provably low-impact AND goal-irrelevant
+ *        it ACCEPTS the fix and documents them (status 'accepted_with_residuals')
+ *        rather than burning rounds. 'any' restores the strict pre-gate behavior.
  * @param {object} [args.logger]
- * @returns {Promise<{status:'clean'|'unverified'|'no_fix'|'rejected',
+ * @returns {Promise<{status:'clean'|'accepted_with_residuals'|'unverified'|'no_fix'|'rejected',
  *                    diff:string|null, rounds:number, trail:object[],
- *                    reason:string|null, paths?:string[]}>}
+ *                    reason:string|null, residuals?:object[], paths?:string[]}>}
  */
 export async function generateVerifiedRepair({
   finding,
@@ -330,6 +405,7 @@ export async function generateVerifiedRepair({
   verifierFn = (a) => defaultVerifierFn(a),
   maxRounds = 3,
   allowedPaths = null,
+  materiality = DEFAULT_MATERIALITY,
   logger = defaultLogger,
 } = {}) {
   const trustedSet =
@@ -392,54 +468,73 @@ export async function generateVerifiedRepair({
       regressions: verdict.regressions,
     })
 
-    if (verdict.verdict === 'clean') {
-      // Even a clean verdict does not authorize a forbidden/malformed patch.
-      // Reuse the SAME gate the CI/PR dispatcher enforces.
+    // Shared accept-gate: before accepting ANY diff (clean OR
+    // accepted-with-residuals) it must pass the SAME dispatch gate (shape +
+    // forbidden-path denylist) AND the trusted-target guard. Returns
+    // { rejected } to short-circuit, or { paths } when the diff may be accepted.
+    const gateDiffForAccept = () => {
       const validation = validatePatchForDispatch(diff)
       if (!validation.ok) {
         trail.push({ round, phase: 'validate', outcome: 'rejected', reason: validation.reason })
-        return {
-          status: 'rejected',
-          diff: null,
-          rounds: round,
-          trail,
-          reason: `verified diff rejected by dispatch gate: ${validation.reason}`,
-        }
+        return { rejected: { status: 'rejected', diff: null, rounds: round, trail, reason: `verified diff rejected by dispatch gate: ${validation.reason}` } }
       }
       // Trusted-target guard: the model-authored diff may touch ONLY the paths
-      // the caller pre-validated. A clean verdict cannot smuggle an edit to a
-      // second (even non-denied) file into the landed set.
+      // the caller pre-validated (prompt-injection / author drift).
       if (trustedSet) {
-        const outside = validation.paths
-          .map(normalizeRepoPath)
-          .filter((p) => !trustedSet.has(p))
+        const outside = validation.paths.map(normalizeRepoPath).filter((p) => !trustedSet.has(p))
         if (outside.length > 0) {
           const uniqueOutside = [...new Set(outside)]
           trail.push({ round, phase: 'validate', outcome: 'rejected', reason: `paths outside trusted set: ${uniqueOutside.join(', ')}` })
-          return {
-            status: 'rejected',
-            diff: null,
-            rounds: round,
-            trail,
-            reason: `verified diff touches path(s) outside the trusted target set: ${uniqueOutside.join(', ')}`,
-          }
+          return { rejected: { status: 'rejected', diff: null, rounds: round, trail, reason: `verified diff touches path(s) outside the trusted target set: ${uniqueOutside.join(', ')}` } }
         }
       }
+      return { paths: validation.paths }
+    }
+
+    if (verdict.verdict === 'clean') {
+      const gated = gateDiffForAccept()
+      if (gated.rejected) return gated.rejected
+      return { status: 'clean', diff, rounds: round, trail, reason: null, residuals: [], paths: gated.paths }
+    }
+
+    // ---- MATERIALITY GATE ----
+    // Re-iterate ONLY while a MATERIAL residual remains. If the sole remaining
+    // residuals are provably low-impact (no realistic input) AND goal-irrelevant,
+    // accept the fix and DOCUMENT them — never burn another round on them.
+    const { material, minor, regressions, hasMaterial } = assessMateriality(verdict, materiality)
+    trail.push({ round, phase: 'materiality', material: material.length, minor: minor.length, regressions: regressions.length, threshold: materiality })
+
+    if (!hasMaterial) {
+      const gated = gateDiffForAccept()
+      if (gated.rejected) return gated.rejected
       return {
-        status: 'clean',
+        status: 'accepted_with_residuals',
         diff,
         rounds: round,
         trail,
-        reason: null,
-        paths: validation.paths,
+        reason: `accepted with ${minor.length} documented low-impact residual(s): no realistic input triggers them and they touch no core goal`,
+        residuals: minor,
+        paths: gated.paths,
       }
     }
 
-    // needs_work → feed the residual back to the author for the next round.
-    residualFeedback = buildResidualFeedback(verdict)
+    // A MATERIAL issue remains. On the FINAL round this is a real 'rejected'
+    // (a material problem is still open); otherwise iterate, feeding ONLY the
+    // material issues (+ regressions) back to the author.
+    if (round === rounds) {
+      return {
+        status: 'rejected',
+        diff: null,
+        rounds,
+        trail,
+        residuals: minor,
+        reason: `verifier still found MATERIAL problem(s) after ${rounds} round(s): ${buildResidualFeedback({ residual: material, regressions }) || 'unresolved material issues'}`,
+      }
+    }
+    residualFeedback = buildResidualFeedback({ residual: material, regressions })
   }
 
-  // Exhausted maxRounds without a clean verdict.
+  // Fail-closed net (the final round already returns above for both branches).
   return {
     status: 'rejected',
     diff: null,
@@ -462,6 +557,11 @@ export const __testHelpers = {
   buildVerifierUserPrompt,
   capForVerifier,
   normalizeRepoPath,
+  isResidualMaterial,
+  assessMateriality,
+  isLandableStatus,
+  MATERIALITY_THRESHOLDS,
+  DEFAULT_MATERIALITY,
   defaultAuthorFn,
   defaultVerifierFn,
   MAX_VERIFY_DIFF_CHARS,
