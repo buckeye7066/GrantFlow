@@ -239,6 +239,16 @@ Compat: behavior-preserving; the forward migration now covers the FULL two-owner
 
 Compat: behavior-preserving; the forward migration never merges on an unproven match and never aborts on a renamed-away table. New/updated tests in `otpPhoneDedupMigration.test.js` (cross-account negative, no-yana-reference + referenced-tables-exist, pre-map conflict-only), verified red per finding.
 
+## Round 29 (FINAL) — safe JSON everywhere + harness shares the real runner predicate (see PORTFOLIO_AUDIT.md §5ac)
+
+- **[HIGH] A malformed `profile_sections.data` row can no longer abort the migration.** The r28 detect-only pre-map read cast the unconstrained `TEXT` column to JSON (`ps.data::jsonb->>'phone'` / `json_extract(...)`); one legacy/corrupt row aborted the entire migration before move/revoke/phone-repair, leaving 138/0142 unstamped on every boot (deploy outage from pre-existing data). Now safe in both dialects at the only place either migration parses that column: SQLite guards with `CASE WHEN json_valid(ps.data) THEN json_extract(...) END`; Postgres uses a `pg_temp.pdedupe_json_phone(text)` extractor with `EXCEPTION WHEN others THEN RETURN NULL`. A malformed row yields NULL and is skipped.
+- **[MEDIUM] The test harness now shares the real runner's idempotent-error predicate (single source of truth).** `isIdempotentAlreadyAppliedError` is exported from `backend/db/migrate.js` and imported by `applyLikeRunner`; the harness's own `'no such table'` tolerance is removed, so an absent/renamed-table statement fails the harness exactly as it fails boot (previously the live-schema guard introspected a schema a strict run would never produce, masking a yana_*-style abort). Sharing the predicate surfaced no currently-masked migration error — the full-schema build still applies cleanly.
+- All r19–r28 preserved; 138/0142 remain byte-identical in the correctness-critical merge/collapse/phone-fix regions (parity-tested) and derive move/revoke from the same classification.
+
+Compat: behavior-preserving; the forward migration never aborts on malformed profile data, and the harness can no longer mask an absent-table abort. New tests in `otpPhoneDedupMigration.test.js` (malformed-JSON no-abort; harness-throws-on-absent-table + predicate rejects `'no such table'`), both verified red per finding.
+
+**OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–29.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

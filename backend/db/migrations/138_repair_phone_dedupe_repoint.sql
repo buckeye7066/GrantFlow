@@ -1,4 +1,4 @@
--- Round 24/25/26/27/28: FORWARD repair migration for phone-duplicate accounts.
+-- Round 24/25/26/27/28/29: FORWARD repair migration for phone-duplicate accounts.
 --
 -- Runs AFTER 137 (which captures the dup->canonical identity into phone_dedupe_map
 -- BEFORE nulling the duplicates' primary_phone). Re-applies the credential-owned phone
@@ -11,14 +11,15 @@
 -- group -> move NOTHING, record every dup).
 --
 -- Two-owner tables enumerated from the FULL migrated schema, each classified
--- MOVE / REVOKE / EXEMPT; a live-schema-introspection test fails on any unclassified
--- one and on any referenced table that does not exist in the real migrated schema.
+-- MOVE / REVOKE / EXEMPT; existence-guarded on Postgres (renamed-away yana_* skipped).
 --
 -- PROVEN MAP ONLY: entries come from 137's pre-null capture or 138's live-capture of a
 -- dup that STILL holds its phone. A coincidental profile-phone match is NEVER
--- auto-merged (that would hand one account's data to another -- Codex r28 CRITICAL);
--- such candidates are recorded as operator-visible conflicts ('pre-map-unverified,
--- manual review') and moved by NOTHING.
+-- auto-merged; such candidates are recorded as operator conflicts and moved by NOTHING.
+--
+-- SAFE JSON (round 29): profile_sections.data is unconstrained TEXT; a single malformed
+-- row must never abort the migration. The detect read is guarded (json_valid on SQLite,
+-- a NULL-on-invalid extractor on Postgres) so bad rows yield NULL/no-match, not an error.
 CREATE TABLE IF NOT EXISTS phone_dedupe_conflicts (
   dup_user_id TEXT NOT NULL, canonical_user_id TEXT NOT NULL, phone TEXT, reason TEXT,
   recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (dup_user_id, canonical_user_id)
@@ -34,14 +35,14 @@ FROM users d JOIN user_credentials uc ON uc.type = 'phone_otp' AND uc.identifier
 WHERE d.primary_phone IS NOT NULL AND uc.user_id <> d.id
 ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
 
--- Pre-map candidate DETECTION (record-only, never merged): a profile-owning user with
--- no phone whose profile phone matches a DIFFERENT user's phone_otp credential. We
--- cannot prove they were the phone's duplicate, so we FAIL CLOSED -> operator review.
+-- Pre-map candidate DETECTION (record-only, never merged; SAFE JSON): a profile-owning
+-- user with no phone whose profile phone matches a DIFFERENT user's phone_otp credential.
+-- Fail closed -> operator review. A malformed profile_sections.data row yields NULL (no match).
 INSERT INTO phone_dedupe_conflicts (dup_user_id, canonical_user_id, phone, reason)
 SELECT DISTINCT p.user_id, uc.user_id, uc.identifier, 'pre-map-unverified, manual review'
 FROM profiles p
 JOIN profile_sections ps ON ps.profile_id = p.id AND ps.section_key = 'basic_information'
-JOIN user_credentials uc ON uc.type = 'phone_otp' AND json_extract(ps.data, '$.phone') = uc.identifier
+JOIN user_credentials uc ON uc.type = 'phone_otp' AND (CASE WHEN json_valid(ps.data) THEN json_extract(ps.data, '$.phone') END) = uc.identifier
 WHERE p.user_id IS NOT NULL AND uc.user_id <> p.user_id
   AND (SELECT primary_phone FROM users WHERE id = p.user_id) IS NULL
   AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)

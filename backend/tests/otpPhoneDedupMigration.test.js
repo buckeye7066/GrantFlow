@@ -17,6 +17,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const Database = (await import('better-sqlite3')).default
+// Single source of truth (Codex r28/r29): the harness shares the REAL migration
+// runner's idempotent-error predicate, so it tolerates exactly what boot tolerates
+// (and no more — an absent/renamed-table statement FAILS, as it does in prod).
+const { isIdempotentAlreadyAppliedError } = await import('../db/migrate.js')
 const MIGRATION = fs.readFileSync(
   path.resolve('backend/db/migrations/137_users_primary_phone_unique.sql'),
   'utf8',
@@ -109,20 +113,16 @@ const MIG138_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0
 const ALL_MIGRATIONS = fs.readdirSync(path.resolve('backend/db/migrations'))
   .filter((f) => f.endsWith('.sql')).sort()
   .map((f) => ({ name: f, sql: fs.readFileSync(path.resolve('backend/db/migrations', f), 'utf8') }))
-function isIdempotentError(err) {
-  const m = String(err?.message || err || '').toLowerCase()
-  return m.includes('duplicate column name') || m.includes('already exists') || m.includes('duplicate index') ||
-    m.includes('there is already another table or index with this name') ||
-    (m.includes('near "exists"') && m.includes('syntax error')) ||
-    m.includes('no such table') // an ALTER/CREATE-dependent statement whose base was renamed/absent
-}
 function applyLikeRunner(raw, name, sql) {
+  // Mirrors migrate.js EXACTLY: marker migrations split + tolerate only the runner's
+  // idempotent-already-applied errors; everything else execs whole with the same
+  // predicate. 'no such table' is NOT idempotent -> it FAILS here (as in prod boot).
   if (sql.includes('@sqlite-continue-on-idempotent-errors')) {
     const statements = sql.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n').split(';').map((s) => s.trim()).filter(Boolean)
-    for (const s of statements) { try { raw.exec(`${s};`) } catch (e) { if (!isIdempotentError(e)) throw new Error(`${name}: ${e.message}`) } }
+    for (const s of statements) { try { raw.exec(`${s};`) } catch (e) { if (!isIdempotentAlreadyAppliedError(e)) throw new Error(`${name}: ${e.message}`) } }
     return
   }
-  try { raw.exec(sql) } catch (e) { if (!isIdempotentError(e)) throw new Error(`${name}: ${e.message}`) }
+  try { raw.exec(sql) } catch (e) { if (!isIdempotentAlreadyAppliedError(e)) throw new Error(`${name}: ${e.message}`) }
 }
 function fullDb() {
   const raw = new Database(':memory:')
@@ -184,14 +184,22 @@ function userStripeSplits(raw) {
 }
 
 describe('forward repair migration 138 (already-137-stamped DBs) + ownership repoint', () => {
-  it('the SQLite (138) and Postgres (0142) shared preamble/collapse/phone-fix match (dialect diffs only in move/revoke exec + JSON)', () => {
-    // 138 = static move/revoke; 0142 = existence-guarded DO block. Everything BEFORE the
-    // move/revoke section (tables, capture, detect [modulo JSON], merge, collapse) is byte-identical.
-    const preamble = (s) => s.split('-- GROUP-WIDE COLLISION-COLLAPSE')[0]
-      .split('\n').filter((l) => !l.trimStart().startsWith('--'))
-      .map((l) => l.replace(/json_extract\(ps\.data, '\$\.phone'\)/, 'JSONPHONE').replace(/\(ps\.data::jsonb->>'phone'\)/, 'JSONPHONE'))
-      .join('\n').trim()
-    expect(preamble(MIG138_PG)).toBe(preamble(MIG138))
+  it('the SQLite (138) and Postgres (0142) shared complex logic (merge + collapse + phone-fix) is byte-identical', () => {
+    // The two files differ ONLY in the documented dialect spots (the SAFE-JSON detect read
+    // and the move/revoke exec: SQLite static vs PG existence-guarded DO block). The
+    // complex, correctness-critical shared logic — the _members/_group/_merge build, the
+    // group-wide collapse, and the phone-fix — must be byte-identical (no silent drift).
+    const strip = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n')
+    // Region from the _members build through the end of the collapse (before MOVE).
+    const mergeCollapse = (s) => strip(s.split('DROP TABLE IF EXISTS _members;')[1].split('-- MOVE')[0]).trim()
+    const phoneFix = (s) => strip(s.split('Keep the phone on the credential-owned user')[1]).trim()
+    expect(mergeCollapse(MIG138_PG)).toBe(mergeCollapse(MIG138))
+    expect(phoneFix(MIG138_PG)).toBe(phoneFix(MIG138))
+    // And both derive move/revoke from the SAME generated classification (single source of truth).
+    for (const t of [...CLASSIFICATION.moveProfile, ...CLASSIFICATION.moveAccount]) {
+      expect(MIG138).toContain(`UPDATE ${t} SET user_id`)
+      expect(MIG138_PG).toContain(`'${t}'`)
+    }
   })
 
   it('[r28] the migration references NO renamed-away/absent table (no yana_* abort) and every referenced table EXISTS in the live schema', () => {
@@ -244,6 +252,40 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     // Recorded ONLY as an operator-visible conflict (fail closed).
     expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id='stranger'`).get()?.reason).toBe('pre-map-unverified, manual review')
     expect(userProfileSplits(raw)).toBe(0)
+  })
+
+  it('[r29 HIGH] a malformed profile_sections.data row does NOT abort the migration (SAFE JSON); repair still runs, bad row skipped', () => {
+    const raw = fullDb()
+    const p = '+15558880000'
+    // A normal mergeable dup.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('d', ?, '2026-01-01')`).run(p)
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('c', ?, '2026-02-01')`).run(p)
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('cc', 'c', 'phone_otp', ?)`).run(p)
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pd', 'd', 'D')`).run()
+    // An UNRELATED profile with MALFORMED (non-JSON) basic_information — the detect read
+    // would abort the whole migration without a json_valid guard.
+    raw.prepare(`INSERT INTO users (id, created_at) VALUES ('x', '2026-01-01')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('px', 'x', 'X')`).run()
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('px', 'basic_information', 'not json at all {')`).run()
+
+    expect(() => runRepair(raw)).not.toThrow() // COMPLETES, never aborts on the bad row
+
+    // The repair still ran end-to-end.
+    expect(profileOwner(raw, 'pd')).toBe('c')
+    expect(phoneOf(raw, 'c')).toBe(p)
+    // The malformed row is simply skipped (no match, no conflict recorded for it).
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='x'`).get().c).toBe(0)
+  })
+
+  it('[r29 MED] applyLikeRunner shares the REAL runner predicate — an absent/renamed-table statement FAILS the harness (no masked error)', () => {
+    const raw = new Database(':memory:')
+    // 'no such table' is NOT idempotent per the real migrate.js predicate -> must throw,
+    // proving the guard would catch a yana_*-style abort instead of silently skipping it.
+    expect(() => applyLikeRunner(raw, 'x.sql', `UPDATE definitely_absent_table SET user_id = 'z';`)).toThrow(/no such table/i)
+    expect(isIdempotentAlreadyAppliedError({ message: 'no such table: yana_runs' })).toBe(false)
+    // Sanity: a genuinely idempotent error (already exists) is still tolerated.
+    raw.exec(`CREATE TABLE t (id TEXT)`)
+    expect(() => applyLikeRunner(raw, 'x.sql', `CREATE TABLE t (id TEXT);`)).not.toThrow()
   })
 
   it('the runner selects 138 even when 137 is already stamped (forward migration, not an in-place edit)', () => {

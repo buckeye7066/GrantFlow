@@ -174,7 +174,7 @@ async function applyMigration(filename) {
   }
 }
 
-function isIdempotentAlreadyAppliedError(err) {
+export function isIdempotentAlreadyAppliedError(err) {
   const msg = String(err?.message || err || '').toLowerCase();
 
   // SQLite common "already applied" signatures
