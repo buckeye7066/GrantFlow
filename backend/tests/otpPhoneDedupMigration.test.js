@@ -263,7 +263,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     expect(userProfileSplits(raw)).toBe(0)
   })
 
-  it('[r29 HIGH] a malformed profile_sections.data row does NOT abort the migration (SAFE JSON); repair still runs, bad row skipped', () => {
+  it('[r29 HIGH] a malformed profile_sections.data row does NOT abort the migration (SAFE JSON); repair still runs', () => {
     const raw = fullDb()
     const p = '+15558880000'
     // A normal mergeable dup.
@@ -282,38 +282,46 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     // The repair still ran end-to-end.
     expect(profileOwner(raw, 'pd')).toBe('c')
     expect(phoneOf(raw, 'c')).toBe(p)
-    // The malformed row is simply skipped (no match, no conflict recorded for it).
-    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='x'`).get().c).toBe(0)
+    // 'x' is a NULL-phone/no-map user with an unparseable profile → the r31 malformed-audit
+    // SURFACES it for manual review (fail-open AND flagged), rather than silently skipping it.
+    expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id='x'`).get()?.reason).toBe('pre-map-malformed-profile, manual review')
   })
 
-  it('[r30 HIGH] a malformed profile on a NULL-phone potential-duplicate is RECORDED for manual review (fail-open AND flagged), never silently dropped', () => {
+  it('[r31 HIGH] EVERY malformed basic_information on a NULL-phone/no-map user is flagged — no text heuristic (phone under any key / numeric-only / any case)', () => {
     const raw = fullDb()
-    const p = '+15557770000'
-    // A phone owner (canonical) with the credential.
-    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('mcan', ?, '2026-02-01')`).run(p)
-    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('mcc', 'mcan', 'phone_otp', ?)`).run(p)
-    // An already-137-stamped duplicate: primary_phone NULLED, NO proven map entry, and the
-    // ONLY remaining phone evidence is a MALFORMED basic_information (round-29 SAFE JSON → NULL,
-    // so the phone-equality detect skips it). It must still be SURFACED, not lost.
-    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('mdup', NULL, '2026-01-01')`).run()
-    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('mp', 'mdup', 'MD')`).run()
-    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('mp', 'basic_information', ?)`).run('{"phone": +1555 broken json')
+    // Three already-137-stamped duplicates (primary_phone NULLED, NO proven map) whose ONLY
+    // remaining phone evidence is a MALFORMED basic_information — but the phone does NOT sit
+    // under a lowercase 'phone' key, so the r30 `LIKE '%phone%'` gate would SILENTLY DROP them.
+    // The corrupt evidence itself must be surfaced regardless of its (unreadable) text.
+    const malformed = {
+      'm-contact': '{"contact": "+15557770000" broken json',   // phone under a different key
+      'm-numeric': '{ 15557770001 ',                            // numeric-only, no 'phone' text
+      'm-upper': '{"PHONE": "+15557770002" broken',             // UPPERCASE key (PG LIKE is case-sensitive)
+    }
+    for (const [uid, data] of Object.entries(malformed)) {
+      raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES (?, NULL, '2026-01-01')`).run(uid)
+      raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, 'MD')`).run(`p-${uid}`, uid)
+      raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, 'basic_information', ?)`).run(`p-${uid}`, data)
+    }
 
-    raw.exec(MIG138)
+    expect(() => raw.exec(MIG138)).not.toThrow() // the flag INSERT itself must never abort on a malformed row
 
-    // RECORDED for operator review (the whole point — not silently skipped).
-    expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id='mdup'`).get()?.reason).toBe('pre-map-malformed-profile, manual review')
-    // Detect-only: nothing auto-moved, never added to the proven map.
-    expect(profileOwner(raw, 'mp')).toBe('mdup')
-    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map WHERE dup_user_id='mdup'`).get().c).toBe(0)
+    // ALL THREE recorded for operator review — none silently skipped for lacking the word 'phone'.
+    for (const uid of Object.keys(malformed)) {
+      expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid)?.reason).toBe('pre-map-malformed-profile, manual review')
+      // Detect-only: nothing auto-moved, never added to the proven map.
+      expect(profileOwner(raw, `p-${uid}`)).toBe(uid)
+      expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map WHERE dup_user_id=?`).get(uid).c).toBe(0)
+    }
     expect(userProfileSplits(raw)).toBe(0)
-    // A VALID-JSON profile with no credential match is NOT flagged (no false operator noise):
-    // only genuinely UNREADABLE evidence is surfaced this way.
+
+    // GUARD against over-flagging: a VALID (parseable) phoneless profile on a NULL-phone/no-map
+    // user is NOT flagged — only genuinely UNREADABLE evidence is surfaced.
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('vdup', NULL, '2026-01-03')`).run()
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('vp', 'vdup', 'VD')`).run()
-    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('vp', 'basic_information', ?)`).run(JSON.stringify({ phone: '+15550001111' }))
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('vp', 'basic_information', ?)`).run(JSON.stringify({ email: 'v@x.com' }))
     raw.exec(MIG138)
-    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='vdup' AND reason='pre-map-malformed-profile, manual review'`).get().c).toBe(0)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='vdup'`).get().c).toBe(0)
   })
 
   it('[r30 MED] boot post-condition HEALTH catches a failed/unstamped phone-dedup repair — it cannot hide behind schema-check OK', () => {

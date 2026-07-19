@@ -48,19 +48,21 @@ WHERE p.user_id IS NOT NULL AND uc.user_id <> p.user_id
   AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)
 ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
 
--- MALFORMED-PROFILE audit (round 30): FAIL-OPEN AND FLAGGED. Round-29 SAFE JSON turns an
--- unparseable basic_information into NULL, so the phone-equality detect above SILENTLY
--- SKIPS it — a nulled-phone potential-duplicate whose ONLY remaining phone evidence is a
--- corrupt profile row would be lost with no operator signal. Record it as an operator
--- conflict (detect-only; nothing moved, no auto-merge — its phone simply can't be verified)
--- so a human reviews it. Sentinel canonical id: the match is UNKNOWN (JSON is unreadable).
+-- MALFORMED-PROFILE audit (round 30/31): FAIL-OPEN AND FLAGGED. Round-29 SAFE JSON turns an
+-- unparseable basic_information into NULL, so the phone-equality detect above SILENTLY SKIPS
+-- it — a nulled-phone potential-duplicate whose ONLY remaining phone evidence is a corrupt
+-- profile row would be lost with no operator signal. Flag the CORRUPT EVIDENCE ITSELF: you
+-- cannot reliably pattern-match structure inside JSON already declared malformed (the phone
+-- may sit under any key / be numeric-only / use any case), so round 31 records EVERY malformed
+-- basic_information on a NULL-phone, no-proven-map user (no text heuristic, no LIKE — which
+-- also removes the SQLite/Postgres LIKE case-parity mismatch). Detect-only; nothing moved, no
+-- auto-merge. Sentinel canonical id: the match is UNKNOWN (the JSON is unreadable).
 INSERT INTO phone_dedupe_conflicts (dup_user_id, canonical_user_id, phone, reason)
 SELECT DISTINCT p.user_id, '(unknown-malformed-profile)', NULL, 'pre-map-malformed-profile, manual review'
 FROM profiles p
 JOIN profile_sections ps ON ps.profile_id = p.id AND ps.section_key = 'basic_information'
 WHERE p.user_id IS NOT NULL
   AND json_valid(ps.data) = 0
-  AND ps.data LIKE '%phone%'
   AND (SELECT primary_phone FROM users WHERE id = p.user_id) IS NULL
   AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)
 ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;

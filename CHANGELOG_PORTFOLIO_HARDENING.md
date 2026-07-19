@@ -259,6 +259,15 @@ Compat: behavior-preserving; the migration surfaces an unreadable potential-dupl
 
 **OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–30.
 
+## Round 31 (FINAL) — flag the corrupt evidence itself; drop the too-narrow text heuristic (see PORTFOLIO_AUDIT.md §5ae)
+
+- **[HIGH] Every malformed `basic_information` on a NULL-phone/no-map user is now flagged — no `LIKE '%phone%'` gate.** r30's malformed-audit only recorded a conflict when the corrupt text literally contained `phone`, so a malformed row carrying the phone under another key (`{"contact": …`), numeric-only, or uppercase-`PHONE` was silently dropped again — plus a case-parity bug (Postgres `LIKE` is case-sensitive, SQLite default `LIKE` is not, so uppercase `PHONE` flagged on SQLite but not PG). You cannot pattern-match structure inside JSON already declared malformed, so the fix flags the corrupt evidence itself: the predicate is now just *`primary_phone IS NULL` AND not in the proven map AND `basic_information` is unparseable* (`json_valid=0` / `pdedupe_is_json()=false`), with no `LIKE` and no text heuristic — removing both the too-narrow gap and the case-parity mismatch, and making the two dialects identical. Still detect-only (nothing moved); a valid phoneless profile is not over-flagged; the flag INSERT never aborts on a malformed row.
+- All r19–r30 preserved; `138`/`0142` remain byte-identical in the correctness-critical merge/collapse/phone-fix regions (parity-tested).
+
+Compat: behavior-preserving; strictly widens the malformed case to surface every unreadable potential-duplicate. Tests in `otpPhoneDedupMigration.test.js` (phone-under-`contact`-key, numeric-only, and uppercase-`PHONE` malformed rows all flagged; valid phoneless not flagged; r29 no-abort row now surfaced), verified red by re-adding the `LIKE` gate.
+
+**OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–31.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).
