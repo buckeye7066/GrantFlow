@@ -48,6 +48,23 @@ WHERE p.user_id IS NOT NULL AND uc.user_id <> p.user_id
   AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)
 ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
 
+-- MALFORMED-PROFILE audit (round 30): FAIL-OPEN AND FLAGGED. Round-29 SAFE JSON turns an
+-- unparseable basic_information into NULL, so the phone-equality detect above SILENTLY
+-- SKIPS it — a nulled-phone potential-duplicate whose ONLY remaining phone evidence is a
+-- corrupt profile row would be lost with no operator signal. Record it as an operator
+-- conflict (detect-only; nothing moved, no auto-merge — its phone simply can't be verified)
+-- so a human reviews it. Sentinel canonical id: the match is UNKNOWN (JSON is unreadable).
+INSERT INTO phone_dedupe_conflicts (dup_user_id, canonical_user_id, phone, reason)
+SELECT DISTINCT p.user_id, '(unknown-malformed-profile)', NULL, 'pre-map-malformed-profile, manual review'
+FROM profiles p
+JOIN profile_sections ps ON ps.profile_id = p.id AND ps.section_key = 'basic_information'
+WHERE p.user_id IS NOT NULL
+  AND json_valid(ps.data) = 0
+  AND ps.data LIKE '%phone%'
+  AND (SELECT primary_phone FROM users WHERE id = p.user_id) IS NULL
+  AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)
+ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
+
 DROP TABLE IF EXISTS _members;
 CREATE TEMP TABLE _members AS
   SELECT DISTINCT canonical_user_id AS canonical_id, canonical_user_id AS member_id FROM phone_dedupe_map

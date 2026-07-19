@@ -44,6 +44,17 @@ EXCEPTION WHEN others THEN
 END;
 $pdedupe$ LANGUAGE plpgsql IMMUTABLE;
 
+-- SAFE JSON validity helper (round 30): true iff the text parses as JSON. Used to tell a
+-- MALFORMED profile row (surface for review) apart from a valid row with no phone key.
+CREATE OR REPLACE FUNCTION pg_temp.pdedupe_is_json(t text) RETURNS boolean AS $pdedupe$
+BEGIN
+  PERFORM t::jsonb;
+  RETURN true;
+EXCEPTION WHEN others THEN
+  RETURN false;
+END;
+$pdedupe$ LANGUAGE plpgsql IMMUTABLE;
+
 -- Pre-map candidate DETECTION (record-only, never merged; SAFE JSON): a profile-owning
 -- user with no phone whose profile phone matches a DIFFERENT user's phone_otp credential.
 -- Fail closed -> operator review. A malformed profile_sections.data row yields NULL (no match).
@@ -53,6 +64,23 @@ FROM profiles p
 JOIN profile_sections ps ON ps.profile_id = p.id AND ps.section_key = 'basic_information'
 JOIN user_credentials uc ON uc.type = 'phone_otp' AND pg_temp.pdedupe_json_phone(ps.data) = uc.identifier
 WHERE p.user_id IS NOT NULL AND uc.user_id <> p.user_id
+  AND (SELECT primary_phone FROM users WHERE id = p.user_id) IS NULL
+  AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)
+ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
+
+-- MALFORMED-PROFILE audit (round 30): FAIL-OPEN AND FLAGGED. Round-29 SAFE JSON turns an
+-- unparseable basic_information into NULL, so the phone-equality detect above SILENTLY
+-- SKIPS it — a nulled-phone potential-duplicate whose ONLY remaining phone evidence is a
+-- corrupt profile row would be lost with no operator signal. Record it as an operator
+-- conflict (detect-only; nothing moved, no auto-merge — its phone simply can't be verified)
+-- so a human reviews it. Sentinel canonical id: the match is UNKNOWN (JSON is unreadable).
+INSERT INTO phone_dedupe_conflicts (dup_user_id, canonical_user_id, phone, reason)
+SELECT DISTINCT p.user_id, '(unknown-malformed-profile)', NULL, 'pre-map-malformed-profile, manual review'
+FROM profiles p
+JOIN profile_sections ps ON ps.profile_id = p.id AND ps.section_key = 'basic_information'
+WHERE p.user_id IS NOT NULL
+  AND pg_temp.pdedupe_is_json(ps.data) = false
+  AND ps.data LIKE '%phone%'
   AND (SELECT primary_phone FROM users WHERE id = p.user_id) IS NULL
   AND NOT EXISTS (SELECT 1 FROM phone_dedupe_map m WHERE m.dup_user_id = p.user_id)
 ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;

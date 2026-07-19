@@ -249,6 +249,16 @@ Compat: behavior-preserving; the forward migration never aborts on malformed pro
 
 **OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–29.
 
+## Round 30 (FINAL) — fail-open-AND-flagged malformed profiles + boot surfaces a failed high-risk repair (see PORTFOLIO_AUDIT.md §5ad)
+
+- **[HIGH] A malformed profile on a nulled-phone potential-duplicate is now RECORDED for manual review, never silently dropped.** r29's safe JSON turned a corrupt `profile_sections.data` into NULL; because the pre-map conflict insert matches on phone-equality, a NULL never matched — so an already-137-stamped duplicate (nulled `primary_phone`, no durable map, only phone evidence a malformed profile row) was repaired-not and flagged-not. Added a detect-only audit path in both `138` and `0142` that records an operator conflict (`pre-map-malformed-profile, manual review`) for a NULL-phone, no-proven-map user whose `basic_information` is unparseable and mentions a phone (`json_valid=0` on SQLite; a `pg_temp.pdedupe_is_json()` helper on Postgres). Fail-open AND flagged — nothing is moved / no auto-merge; only visibility is added. Valid-but-phoneless profiles are not flagged (no false noise).
+- **[MEDIUM] A failed high-risk boot repair is now surfaced AND caught by a post-condition health check — it can't hide behind schema-OK.** `runPendingMigrationsOnBoot` still catches/continues on a failed migration (no new crash path), but now tracks the failed filenames (logged prominently + persisted to `system_kv` `migrate_boot_failed_migrations`/`migrate_boot_health` + returned), and a new `checkPhoneDedupeHealth(db)` asserts the repair's post-conditions (the `ux_users_primary_phone` and `ux_uvc_one_active_per_credential` indexes exist; the live-schema two-owner guard finds no split). A pure `summarizeBootHealthLine(...)` folds schema drift + failed migrations + phone-dedup health into one line, so `schema check: OK` is reachable only when all three are clean. The CLI `migrate` (`main()`) stays strict for CI.
+- All r19–r29 preserved; `138`/`0142` remain byte-identical in the correctness-critical merge/collapse/phone-fix regions (parity-tested).
+
+Compat: behavior-preserving; the migration surfaces an unreadable potential-duplicate instead of dropping it, and boot can no longer report OK while a high-risk repair is broken. New tests in `otpPhoneDedupMigration.test.js` (malformed-profile flagged + valid-no-match not flagged; `checkPhoneDedupeHealth` fails on a broken-repair DB; `summarizeBootHealthLine` not-OK on a failed migration/broken post-condition even with zero missing cols/tables), all verified red per finding.
+
+**OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–30.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

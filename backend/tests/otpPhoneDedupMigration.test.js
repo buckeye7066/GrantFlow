@@ -20,7 +20,16 @@ const Database = (await import('better-sqlite3')).default
 // Single source of truth (Codex r28/r29): the harness shares the REAL migration
 // runner's idempotent-error predicate, so it tolerates exactly what boot tolerates
 // (and no more — an absent/renamed-table statement FAILS, as it does in prod).
-const { isIdempotentAlreadyAppliedError } = await import('../db/migrate.js')
+const { isIdempotentAlreadyAppliedError, checkPhoneDedupeHealth, summarizeBootHealthLine } = await import('../db/migrate.js')
+// A tiny db-shim over a raw better-sqlite3 connection so the runtime boot-health helpers
+// (which speak the async db-shim API + .dialect) can run against a test fixture DB.
+const asDbShim = (raw) => ({
+  dialect: 'sqlite',
+  prepare: (sql) => {
+    const stmt = raw.prepare(sql)
+    return { get: (...a) => stmt.get(...a), all: (...a) => stmt.all(...a), run: (...a) => stmt.run(...a) }
+  },
+})
 const MIGRATION = fs.readFileSync(
   path.resolve('backend/db/migrations/137_users_primary_phone_unique.sql'),
   'utf8',
@@ -275,6 +284,78 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     expect(phoneOf(raw, 'c')).toBe(p)
     // The malformed row is simply skipped (no match, no conflict recorded for it).
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='x'`).get().c).toBe(0)
+  })
+
+  it('[r30 HIGH] a malformed profile on a NULL-phone potential-duplicate is RECORDED for manual review (fail-open AND flagged), never silently dropped', () => {
+    const raw = fullDb()
+    const p = '+15557770000'
+    // A phone owner (canonical) with the credential.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('mcan', ?, '2026-02-01')`).run(p)
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('mcc', 'mcan', 'phone_otp', ?)`).run(p)
+    // An already-137-stamped duplicate: primary_phone NULLED, NO proven map entry, and the
+    // ONLY remaining phone evidence is a MALFORMED basic_information (round-29 SAFE JSON → NULL,
+    // so the phone-equality detect skips it). It must still be SURFACED, not lost.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('mdup', NULL, '2026-01-01')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('mp', 'mdup', 'MD')`).run()
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('mp', 'basic_information', ?)`).run('{"phone": +1555 broken json')
+
+    raw.exec(MIG138)
+
+    // RECORDED for operator review (the whole point — not silently skipped).
+    expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id='mdup'`).get()?.reason).toBe('pre-map-malformed-profile, manual review')
+    // Detect-only: nothing auto-moved, never added to the proven map.
+    expect(profileOwner(raw, 'mp')).toBe('mdup')
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map WHERE dup_user_id='mdup'`).get().c).toBe(0)
+    expect(userProfileSplits(raw)).toBe(0)
+    // A VALID-JSON profile with no credential match is NOT flagged (no false operator noise):
+    // only genuinely UNREADABLE evidence is surfaced this way.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('vdup', NULL, '2026-01-03')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('vp', 'vdup', 'VD')`).run()
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('vp', 'basic_information', ?)`).run(JSON.stringify({ phone: '+15550001111' }))
+    raw.exec(MIG138)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='vdup' AND reason='pre-map-malformed-profile, manual review'`).get().c).toBe(0)
+  })
+
+  it('[r30 MED] boot post-condition HEALTH catches a failed/unstamped phone-dedup repair — it cannot hide behind schema-check OK', () => {
+    // (a) A HEALTHY migrated DB (indexes present, no split) passes the post-condition check.
+    const healthy = fullDb()
+    healthy.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL')
+    return Promise.resolve().then(async () => {
+      const okHealth = await checkPhoneDedupeHealth(asDbShim(healthy))
+      expect(okHealth.ok).toBe(true)
+      expect(okHealth.problems).toEqual([])
+
+      // (b) A DB where the repair FAILED/was unstamped: the primary_phone index is absent
+      // (fullDb drops it) AND a two-owner split is present. Post-conditions must FAIL.
+      const broken = fullDb() // ux_users_primary_phone already dropped by fullDb()
+      broken.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('a', NULL, '2026-01-01')`).run()
+      broken.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('b', NULL, '2026-01-02')`).run()
+      broken.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pb', 'b', 'B')`).run()
+      broken.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sgx', 'a', 'pb', 'o')`).run() // user a, profile owned by b → split
+      const badHealth = await checkPhoneDedupeHealth(asDbShim(broken))
+      expect(badHealth.ok).toBe(false)
+      expect(badHealth.problems.join(' ')).toMatch(/ux_users_primary_phone/)
+      expect(badHealth.problems.join(' ')).toMatch(/two-owner split/)
+
+      // A missing one-active-code index is also caught.
+      const noCodeIdx = fullDb()
+      noCodeIdx.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL')
+      noCodeIdx.exec('DROP INDEX IF EXISTS ux_uvc_one_active_per_credential')
+      const codeHealth = await checkPhoneDedupeHealth(asDbShim(noCodeIdx))
+      expect(codeHealth.ok).toBe(false)
+      expect(codeHealth.problems.join(' ')).toMatch(/ux_uvc_one_active_per_credential/)
+
+      // (c) The boot signal folds failed-migrations + phone-dedup health into ONE line.
+      // KEY: even with ZERO missing columns/tables (schema check would say OK), a failed
+      // repair OR a broken post-condition flips the line OFF OK — it can't hide.
+      expect(summarizeBootHealthLine({ missingCols: [], missingTables: [], failed: [], dedupe: { ok: true, problems: [] } })).toBe('schema check: OK')
+      const failedLine = summarizeBootHealthLine({ missingCols: [], missingTables: [], failed: ['138_repair_phone_dedupe_repoint.sql'], dedupe: badHealth })
+      expect(failedLine).not.toBe('schema check: OK')
+      expect(failedLine).toMatch(/failed_migrations=138_repair_phone_dedupe_repoint\.sql/)
+      expect(failedLine).toMatch(/phone_dedupe=/)
+      // Broken post-condition alone (no failed file) still flips it — the schema-OK path is closed.
+      expect(summarizeBootHealthLine({ dedupe: badHealth })).not.toBe('schema check: OK')
+    })
   })
 
   it('[r29 MED] applyLikeRunner shares the REAL runner predicate — an absent/renamed-table statement FAILS the harness (no masked error)', () => {

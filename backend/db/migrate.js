@@ -195,6 +195,104 @@ export function isIdempotentAlreadyAppliedError(err) {
   return false;
 }
 
+// Round 30 — boot health for the HIGH-RISK phone-dedup repair (137/138 · 0141/0142).
+// The boot runner CATCHES a failed migration, leaves it unstamped, and CONTINUES (so an
+// unrelated idempotent hiccup can't take prod down). The cost is that a failed DATA repair
+// could otherwise start prod with duplicates still present while the schema check reports
+// OK (it only inspects selected missing columns/tables). These helpers give the boot signal
+// two teeth: (1) the failed filenames are surfaced, and (2) the repair's POST-CONDITIONS are
+// asserted, so a failed/unstamped 138/0142 flips the health line off OK instead of hiding.
+
+// Tables whose (user_id, profile_id/stripe_customer_id) pair legitimately records the ACTOR
+// at event time and must never be rewritten by the merge — mirrors the migration's EXEMPT set
+// (audit/actor rows; yana_* were renamed to hamilton_* so are vestigial phantoms only).
+const PHONE_DEDUPE_EXEMPT_TABLES = new Set(['audit_logs', 'agent_activity_events'])
+const isPhoneDedupeExempt = (t) => PHONE_DEDUPE_EXEMPT_TABLES.has(t) || t.startsWith('yana_')
+
+async function indexExists(dbh, name) {
+  if (dbh.dialect === 'postgres') {
+    const row = await dbh.prepare('SELECT indexname FROM pg_indexes WHERE indexname = ?').get(name)
+    return Boolean(row?.indexname)
+  }
+  const row = await dbh.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`).get(name)
+  return Boolean(row?.name)
+}
+
+// Enumerate two-owner tables (user_id + profile_id, or user_id + stripe_customer_id) from the
+// LIVE migrated schema — the same by-construction discovery the migration test uses, so a
+// table added by a future migration is covered without editing a hardcoded list.
+async function twoOwnerTables(dbh) {
+  let tables
+  let colsOf
+  if (dbh.dialect === 'postgres') {
+    tables = (await dbh.prepare(`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public'`).all()).map((r) => r.name)
+    colsOf = async (t) => (await dbh.prepare(`SELECT column_name AS name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?`).all(t)).map((r) => r.name)
+  } else {
+    tables = (await dbh.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).all()).map((r) => r.name)
+    colsOf = async (t) => (await dbh.prepare(`PRAGMA table_info(${JSON.stringify(t)})`).all()).map((r) => r.name)
+  }
+  const profile = []
+  const stripe = []
+  for (const t of tables) {
+    if (isPhoneDedupeExempt(t)) continue
+    const cols = await colsOf(t)
+    if (cols.includes('user_id') && cols.includes('profile_id')) profile.push(t)
+    if (cols.includes('user_id') && cols.includes('stripe_customer_id')) stripe.push(t)
+  }
+  return { profile, stripe }
+}
+
+async function countTwoOwnerSplits(dbh) {
+  const { profile, stripe } = await twoOwnerTables(dbh)
+  let splits = 0
+  for (const t of profile) {
+    const q = `SELECT COUNT(*) AS c FROM ${t} x JOIN profiles p ON p.id = x.profile_id WHERE x.user_id IS NOT NULL AND p.user_id IS NOT NULL AND x.user_id <> p.user_id`
+    splits += Number((await dbh.prepare(q).get())?.c || 0)
+  }
+  for (const t of stripe) {
+    if (t === 'stripe_customers') continue
+    const q = `SELECT COUNT(*) AS c FROM ${t} x JOIN stripe_customers s ON s.stripe_customer_id = x.stripe_customer_id WHERE x.user_id IS NOT NULL AND s.user_id IS NOT NULL AND x.user_id <> s.user_id`
+    splits += Number((await dbh.prepare(q).get())?.c || 0)
+  }
+  return splits
+}
+
+/**
+ * Assert the phone-dedup repair's post-conditions actually hold. Returns
+ * { ok, problems: string[] }. A failed/unstamped 138/0142 leaves at least one of these
+ * broken, so `ok` is false and the boot health line cannot report OK. Never throws — a
+ * probe error is itself recorded as a problem (visible, not swallowed).
+ */
+export async function checkPhoneDedupeHealth(dbh = db) {
+  const problems = []
+  try {
+    if (!(await indexExists(dbh, 'ux_users_primary_phone'))) problems.push('missing index ux_users_primary_phone (primary_phone not de-duplicated)')
+  } catch (err) { problems.push(`primary_phone index probe failed: ${err?.message || err}`) }
+  try {
+    if (!(await indexExists(dbh, 'ux_uvc_one_active_per_credential'))) problems.push('missing index ux_uvc_one_active_per_credential (one-active-code invariant not enforced)')
+  } catch (err) { problems.push(`one-active-code index probe failed: ${err?.message || err}`) }
+  try {
+    const splits = await countTwoOwnerSplits(dbh)
+    if (splits > 0) problems.push(`two-owner split rows=${splits} (user_id points at a different account than its profile/customer)`)
+  } catch (err) { problems.push(`two-owner split probe failed: ${err?.message || err}`) }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
+ * Pure decision: fold the schema-drift facts, the boot runner's failed migrations, and the
+ * phone-dedup post-condition health into ONE operator line. `schema check: OK` is reachable
+ * ONLY when nothing is missing, nothing failed, and the repair's post-conditions hold — so a
+ * failed high-risk repair can never hide behind a green schema check.
+ */
+export function summarizeBootHealthLine({ missingCols = [], missingTables = [], failed = [], dedupe = { ok: true, problems: [] } } = {}) {
+  const parts = []
+  if (missingCols.length) parts.push(`cols=${missingCols.join(',')}`)
+  if (missingTables.length) parts.push(`tables=${missingTables.join(',')}`)
+  if (failed.length) parts.push(`failed_migrations=${failed.join(',')}`)
+  if (!dedupe.ok) parts.push(`phone_dedupe=${dedupe.problems.join(' | ')}`)
+  return parts.length === 0 ? 'schema check: OK' : `schema check: DRIFT: ${parts.join('; ')}`
+}
+
 async function recordAsApplied(filename, note) {
   try {
     await db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
@@ -290,6 +388,10 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
   const files = listSqlMigrations(migrationsDir)
   const pending = files.filter((f) => !applied.has(f))
   let ran = 0
+  // Round 30: TRACK the files that failed to apply so they can be SURFACED (a queryable
+  // signal + a prominent log), not just logged-and-forgotten. High-risk data repairs
+  // (phone-dedup) especially must not fail silently while the schema check reports OK.
+  const failed = []
   for (const filename of pending) {
     try {
       await applyMigration(filename)
@@ -313,30 +415,48 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
       // and retried next boot, and the `schema check: DRIFT` line below makes
       // any remaining gap visible. The CLI runner (`npm run migrate`, main())
       // stays strict so CI still fails loudly on a bad migration.
-      logger.error?.(`[migrate:boot] Failed on ${filename} (continuing): ${error?.message || error}`)
+      failed.push(filename)
+      logger.error?.(`[migrate:boot] FAILED on ${filename} (left UNSTAMPED, continuing): ${error?.message || error}`)
     }
   }
 
-  let driftLine = 'schema check: UNAVAILABLE'
+  // Post-repair health: schema drift (existing) + failed migrations + phone-dedup
+  // post-conditions. `schema check: OK` is now reachable ONLY when all three are clean.
+  let missingCols = []
+  let missingTables = []
+  let driftLine
   try {
     const { getSystemDiagnostics } = await import('../services/diagnosticsService.js')
     const diag = await getSystemDiagnostics(db)
     const sc = diag?.db?.schema_checks
-    const missingCols = sc?.details?.missing_columns || []
-    const missingTables = sc?.details?.missing_tables || []
-    if (missingCols.length === 0 && missingTables.length === 0) {
-      driftLine = 'schema check: OK'
-    } else {
-      const parts = []
-      if (missingCols.length) parts.push(`cols=${missingCols.join(',')}`)
-      if (missingTables.length) parts.push(`tables=${missingTables.join(',')}`)
-      driftLine = `schema check: DRIFT: ${parts.join('; ')}`
-    }
+    missingCols = sc?.details?.missing_columns || []
+    missingTables = sc?.details?.missing_tables || []
   } catch (err) {
-    driftLine = `schema check: UNAVAILABLE (${err?.message || err})`
+    // Diagnostics unavailable — do NOT report OK; fold the reason in and keep going so
+    // the phone-dedup post-condition check still runs.
+    missingTables = [`diagnostics_unavailable(${err?.message || err})`]
   }
+  const dedupe = await checkPhoneDedupeHealth(db)
+  driftLine = summarizeBootHealthLine({ missingCols, missingTables, failed, dedupe })
+
+  // Queryable signal (durable): persist the failed set + health line so operators/monitors
+  // can read it without grepping logs. Best-effort — never let it break boot.
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const now = new Date().toISOString()
+    const upsert = db.dialect === 'postgres'
+      ? 'INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at'
+      : 'INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    await db.prepare(upsert).run('migrate_boot_failed_migrations', JSON.stringify(failed), now)
+    await db.prepare(upsert).run('migrate_boot_health', driftLine, now)
+  } catch (err) {
+    logger.error?.(`[migrate:boot] could not persist boot health signal: ${err?.message || err}`)
+  }
+
+  if (failed.length) logger.error?.(`[migrate:boot] ${failed.length} migration(s) FAILED and left unstamped: ${failed.join(', ')}`)
+  if (!dedupe.ok) logger.error?.(`[migrate:boot] phone-dedup post-conditions NOT met: ${dedupe.problems.join(' | ')}`)
   logger.log?.(`[migrate:boot] ran=${ran} ${driftLine}`)
-  return { ran, drift: driftLine }
+  return { ran, failed, drift: driftLine, health: dedupe }
 }
 
 // Only run the CLI entry point when invoked directly, so importers
