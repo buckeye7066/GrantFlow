@@ -44,6 +44,7 @@ function normalizeArgs(args) {
 class SqliteShim {
   constructor() {
     this._db = new Database(':memory:')
+    this.dialect = 'sqlite'
   }
   prepare(sql) {
     const stmt = this._db.prepare(sql)
@@ -55,6 +56,19 @@ class SqliteShim {
   }
   exec(sql) { this._db.exec(sql) }
   raw() { return this._db }
+  // Mirror backend/db SqliteDb.withTransaction (manual BEGIN IMMEDIATE) so the
+  // atomic OTP verification path exercises a real transaction under test.
+  async withTransaction(fn) {
+    this._db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = await fn(this)
+      this._db.exec('COMMIT')
+      return result
+    } catch (err) {
+      try { this._db.exec('ROLLBACK') } catch { /* ignore */ }
+      throw err
+    }
+  }
 }
 
 function seedSchema(db) {
@@ -199,10 +213,15 @@ describe('login recording across auth paths', () => {
     ).run()
 
     const code = '654321'
+    // Server-side one-time verification is now authoritative: seed the real DB
+    // code row the way /email/start would (the client token is no longer a
+    // verifier). See emailOtpTokenNoVerifier.test.js for the security rationale.
+    await db.prepare(
+      `INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES ('cred-1', ?, ?)`,
+    ).run(hashValue(`${email}:${code}`), new Date(Date.now() + 600_000).toISOString())
     const verificationToken = signOtpToken({
       kind: 'email',
       identifier: email,
-      codeHash: hashValue(`${email}:${code}`),
       ttlSeconds: 600,
     })
     const res = await request(app)

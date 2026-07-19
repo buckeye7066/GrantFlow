@@ -18,6 +18,7 @@ import Database from 'better-sqlite3'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
 
 const profilePortalsRouter = (await import('../routes/profilePortals.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   setMasterPassphrase,
   getUnlockedKey,
@@ -38,9 +39,13 @@ function createApp(db) {
   app.use(express.json())
   app.use((req, _res, next) => {
     req.db = db
-    req.user = { role: 'admin', id: 'admin-1' }
+    // Validated synthetic ADMIN_TOKEN identity → req.ctx.isAdmin=true (DB-backed
+    // context now fails closed for any other unresolved role:'admin' token).
+    req.user = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }
     next()
   })
+  // Mirror prod: admin authority is DB-backed via attachRequestContext.
+  app.use(attachRequestContext())
   app.use('/api', profilePortalsRouter)
   return app
 }

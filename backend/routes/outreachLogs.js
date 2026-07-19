@@ -36,18 +36,22 @@ async function ensureProfileAccess(req, res, profileId) {
   // user validation passed
 
   const row = await req.db
-    .prepare('SELECT id, user_id, organization_id FROM profiles WHERE id = ?')
+    .prepare('SELECT id, user_id, organization_id, status FROM profiles WHERE id = ?')
     .get(String(profileId))
 
-  if (!row) {
+  if (!row || row.status === 'deleted') {
     res.status(404).json({ error: 'Profile not found' })
     return null
   }
 
+  // Access is decided by the CANONICAL DB-backed accessible set (which fails
+  // closed for a deleted-user / synthetic-collision JWT — empty set). Do NOT fall
+  // back to ctx.userId === row.user_id without a trusted identity: a stale JWT
+  // keeps ctx.userId but identityResolved=false and accessibleProfileIds empty.
+  const accessible = req.ctx?.accessibleProfileIds
   const canAccess =
     req.ctx?.isAdmin === true ||
-    (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === String(profileId)) ||
-    (req.ctx?.userId && row.user_id && String(req.ctx.userId) === String(row.user_id))
+    (accessible instanceof Set && accessible.has(String(profileId)))
 
   if (!canAccess) {
     res.status(403).json({ error: 'Not authorized to access this profile' })

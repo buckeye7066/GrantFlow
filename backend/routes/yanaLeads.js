@@ -14,7 +14,7 @@ const router = express.Router()
 const log = createLogger('route:yana-contacts')
 
 function requireAdmin(req, res) {
-  if (req.ctx?.isAdmin === true || req.user?.role === 'admin' || req.user?.is_admin === true) return true
+  if (req.ctx?.isAdmin === true) return true
   res.status(403).json({ error: 'admin_required' })
   return false
 }

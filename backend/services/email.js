@@ -123,6 +123,26 @@ function getResend() {
 }
 
 /**
+ * Single checked Resend send path. The Resend SDK RESOLVES (does not throw) on
+ * API-level rejections (invalid recipient, unverified domain, 4xx/rate-limit)
+ * with { data:null, error }, so EVERY direct caller must inspect the result or
+ * it will silently report undelivered mail as "sent". Returns { ok, id, error }
+ * and never throws for an API-level error; genuine network throws still
+ * propagate to the caller's try/catch. All resend.emails.send() callers in this
+ * module route through here so the honesty check lives in exactly one place.
+ * @param {import('resend').Resend} resend
+ * @param {object} payload - resend.emails.send payload
+ * @returns {Promise<{ok: boolean, id: string|null, error: string|null}>}
+ */
+export async function sendResendEmail(resend, payload) {
+  const result = await resend.emails.send(payload)
+  if (result?.error) {
+    return { ok: false, id: null, error: result.error?.message || String(result.error) || 'resend_error' }
+  }
+  return { ok: true, id: result?.data?.id || result?.id || null, error: null }
+}
+
+/**
  * Generic send with cc support. Returns { ok, id?, skipped?, error? } and never
  * throws — callers (invoicing, dunning) treat email as best-effort. `from`
  * defaults to FROM_EMAIL; `cc` accepts a string or array.
@@ -153,8 +173,8 @@ export async function sendEmail({ to, cc = null, subject, html, text, from = nul
       payload.replyTo = replyTo
       payload.reply_to = replyTo
     }
-    const result = await resend.emails.send(payload)
-    return { ok: true, id: result?.data?.id || result?.id || null }
+    const { ok, id, error } = await sendResendEmail(resend, payload)
+    return ok ? { ok: true, id } : { ok: false, error }
   } catch (err) {
     return { ok: false, error: err?.message || String(err) }
   }
@@ -326,7 +346,7 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
     const statusEmoji = success ? '✅' : '❌'
     const subject = `${statusEmoji} Auth Event: ${event}`
 
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from,
       to: notifyEmail,
       subject,
@@ -346,6 +366,11 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
       text: `Auth Event: ${event}\nIdentifier: ${identifier}\nSuccess: ${success}${error ? `\nError: ${error}` : ''}\nTime: ${new Date().toISOString()}${grantFlowLinkFooterText()}`,
     })
 
+    // Resend resolves (does not throw) on API rejection — report honestly.
+    if (result?.error) {
+      console.warn('[email/sendAuthAttemptNotification] Resend API error:', result.error?.message || result.error)
+      return false
+    }
     return true
   } catch (e) {
     console.warn('[email/sendAuthAttemptNotification] Failed to send notification:', e?.message || e)
@@ -374,7 +399,10 @@ export async function sendApplicationEmail(toEmail, applicationData) {
   }
 
   try {
-    await resend.emails.send({
+    // Route through the single checked helper: Resend resolves (not throws) on
+    // API rejection, so a bare await would log 'sent' + return true for
+    // undelivered mail. Treat an error result as a failure.
+    const { ok, error: sendError } = await sendResendEmail(resend, {
       from,
       to: toEmail,
       subject: 'GrantFlow Application Submitted',
@@ -388,6 +416,10 @@ export async function sendApplicationEmail(toEmail, applicationData) {
       `,
       text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}${grantFlowLinkFooterText()}`,
     })
+
+    if (!ok) {
+      throw new Error(sendError || 'resend_error')
+    }
 
     log.info('[email/sendApplicationEmail] Application email sent', {
       to: toEmail,

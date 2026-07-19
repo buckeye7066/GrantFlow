@@ -226,7 +226,8 @@ function resolveInternalAdminToken(context) {
   if (configuredToken) return configuredToken
 
   const user = context?.user || {}
-  const isAdmin = context?.ctx?.isAdmin === true || user.is_admin === true || user.isAdmin === true || user.role === 'admin'
+  // DB-backed admin only (context.ctx.isAdmin); never a raw JWT role/is_admin claim.
+  const isAdmin = context?.ctx?.isAdmin === true
   if (!isAdmin) return null
 
   try {

@@ -59,7 +59,8 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') {
+  // DB-backed admin only (req.ctx.isAdmin); never the raw JWT role claim.
+  if (req.ctx?.isAdmin !== true) {
     return res.status(403).json({ error: 'Admin privileges required' })
   }
   return next()
@@ -114,7 +115,7 @@ router.use(requireAuth)
 router.get('/me/:profileId', async (req, res) => {
   try {
     const profileId = String(req.params.profileId)
-    const isAdmin = req.user?.role === 'admin' || req.ctx?.isAdmin === true
+    const isAdmin = req.ctx?.isAdmin === true
     if (!isAdmin) {
       const accessible = await getAccessibleProfileIds(req.db, req.user)
       // null = admin/global; otherwise must contain this profile.
@@ -157,7 +158,7 @@ router.get('/me/:profileId', async (req, res) => {
 })
 
 async function canAccessProfile(req, profileId) {
-  if (req.user?.role === 'admin' || req.ctx?.isAdmin === true) return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, req.user)
   return accessible === null || accessible.has(String(profileId))
 }

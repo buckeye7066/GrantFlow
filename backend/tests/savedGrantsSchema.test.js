@@ -10,6 +10,15 @@ function createSavedGrantsApp(db, user = { userId: 'user-1', role: 'user' }) {
   app.use((req, _res, next) => {
     req.user = user
     req.db = db
+    // In prod attachRequestContext resolves this; user-1 is a real users row →
+    // a trusted identity (identityResolved=true).
+    req.ctx = {
+      userId: user.userId,
+      isAdmin: user.role === 'admin',
+      identityResolved: true,
+      activeProfileId: null,
+      accessibleProfileIds: new Set(),
+    }
     next()
   })
   app.use('/api/saved-grants', savedGrantsRouter)

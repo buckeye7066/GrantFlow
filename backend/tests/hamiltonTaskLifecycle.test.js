@@ -36,6 +36,7 @@ vi.mock('../services/hamilton/hamiltonAutomationOrchestrator.js', async (importO
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const hamiltonRouter = (await import('../routes/hamiltonAutomation.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   ensureApplicationTaskSchema,
   ensureApplicationTask,
@@ -47,7 +48,9 @@ const {
 const { recordBlocker, listOpenAdminBlockers, blockerDedupeKey } = await import('../services/hamilton/hamiltonBlockerStore.js')
 const { HamiltonAgentAdapter } = await import('../services/agentControl/agentAdapters/hamiltonAgentAdapter.js')
 
-function createApp(db, user = { role: 'admin', id: 'admin-1' }) {
+// Default admin = validated synthetic ADMIN_TOKEN identity (DB-backed
+// req.ctx.isAdmin now fails closed for other unresolved role:'admin' tokens).
+function createApp(db, user = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }) {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
@@ -55,6 +58,9 @@ function createApp(db, user = { role: 'admin', id: 'admin-1' }) {
     req.user = user
     next()
   })
+  // Mirror production: routes now authorize against the DB-backed req.ctx that
+  // attachRequestContext resolves (admin gates read req.ctx.isAdmin).
+  app.use(attachRequestContext())
   app.use('/api/hamilton/automation', hamiltonRouter)
   return app
 }

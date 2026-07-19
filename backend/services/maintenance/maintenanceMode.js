@@ -183,8 +183,8 @@ export function maintenanceGuard() {
         cachedAt = now
       }
       if (cached?.phase !== 'down') return next()
-      // Owner/admin keep working during the window.
-      if (req.ctx?.isAdmin === true || req.user?.role === 'admin' || req.user?.is_admin) return next()
+      // Owner/admin keep working during the window (DB-backed admin only).
+      if (req.ctx?.isAdmin === true) return next()
       return res.status(503).json({
         error: 'maintenance',
         message: cached.message || 'GrantFlow is briefly down for maintenance.',

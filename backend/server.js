@@ -87,7 +87,8 @@ import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
-import { attachRequestContext } from './middleware/requestContext.js';
+import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requestContext.js';
+import { enforceResolvedIdentity } from './middleware/enforceResolvedIdentity.js';
 import { ensureAuth, ensureAdmin } from './middleware/auth.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
@@ -101,7 +102,7 @@ import { runWithSchedulerLock } from './services/schedulerLock.js';
 import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
-import { ensureProfileEmailSchema, buildGrantScopeFromContext } from './utils/accessControl.js';
+import { ensureProfileEmailSchema, buildGrantScopeFromContext, getOwnedAndGrantedProfileIds } from './utils/accessControl.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
@@ -1533,6 +1534,11 @@ app.use(async (req, res, next) => {
       // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
       // but requestContext will resolve the final answer from users.is_admin.
       is_admin: true,
+      // serviceToken PROVENANCE: set ONLY inside a safeTokenEqual service-token
+      // branch. isSyntheticServiceAdmin REQUIRES it, so a JWT whose `sub` collides
+      // with a synthetic id (system_admin_token) can never be treated as a service
+      // admin (a JWT payload cannot set this flag).
+      serviceToken: true,
       // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
       userId: 'system_admin_token',
       profileId: null,
@@ -1547,6 +1553,7 @@ app.use(async (req, res, next) => {
     user = {
       role: 'admin',
       is_admin: true,
+      serviceToken: true,
       userId: 'system_anya_token',
       full_name: 'Anya Assistant',
       email: 'anya@grantflow.app',
@@ -1567,6 +1574,7 @@ app.use(async (req, res, next) => {
         user = {
           role: 'admin',
           is_admin: true,
+          serviceToken: true,
           userId: 'system_admin_token',
           profileId: null,
           full_name: ADMIN_NAME,
@@ -1580,6 +1588,7 @@ app.use(async (req, res, next) => {
         user = {
           role: 'admin',
           is_admin: true,
+          serviceToken: true,
           userId: 'system_anya_token',
           full_name: 'Anya Assistant',
           email: 'anya@grantflow.app',
@@ -1684,6 +1693,10 @@ app.use(async (req, res, next) => {
             role: 'user',
             profileId: profile.id,
             profileName: profile.display_name,
+            // Provenance: DB-verified legacy profile bearer TOKEN (non-prod,
+            // opt-in), NOT a JWT claim. Only this flag lets getAccessibleProfileIds
+            // treat the profileId as access proof.
+            profileTokenAuth: true,
           };
           handled = true;
         }
@@ -1700,9 +1713,11 @@ app.use(async (req, res, next) => {
 
 // Ensure synthetic admin-token users exist so foreign keys don't explode.
 // This keeps admin-token flows (Anya, etc.) stable even on fresh DBs.
+// Restricted to the VALIDATED synthetic service tokens — gating on the raw
+// role:'admin' claim would mint an is_admin=true row from any signed JWT.
 app.use(async (req, _res, next) => {
   const user = req.user
-  if (!user || user.role !== 'admin' || !user.userId) return next()
+  if (!isSyntheticServiceAdmin(user) || !user.userId) return next()
 
   try {
     const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
@@ -1769,6 +1784,13 @@ app.use(async (req, _res, next) => {
 // Attach canonical request context (MUST run after auth middleware)
 // This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
 app.use(attachRequestContext())
+
+// STRUCTURAL fail-closed identity gate: for a request whose identity did NOT
+// resolve to a trusted principal (deleted-user JWT / synthetic-id collision) and
+// which is not an admin, NULL the caller id on both ctx and req.user so no
+// user-scoped route can authorize/scope on a stale/reserved id. Runs BEFORE
+// profileContext so the SQL tenant context also sees the nulled identity.
+app.use(enforceResolvedIdentity());
 
 // Wrap route handlers in an AsyncLocalStorage profile context after auth and
 // request context are known, so SQL tenant guards see the real user/profile.
@@ -1847,9 +1869,24 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       return res.status(401).json({ error: 'unauthorized' });
     }
 
-    if (user.userId) {
+    // /api/auth/* is exempt from the enforceResolvedIdentity structural gate
+    // (identity-ESTABLISHING endpoints must run pre-identity), so req.user is NOT
+    // guest-nulled here. But GET /api/auth/me is a user-scoped READ: a deleted-
+    // user JWT or a synthetic-id collision JWT (userId=system_admin_token, no
+    // serviceToken) would otherwise read the self-healed reserved row and get a
+    // 200 user payload. Require a DB-resolved identity (or DB-backed admin), and
+    // source the user id from req.ctx.userId — NEVER the raw JWT claim.
+    if (req.ctx?.identityResolved !== true && req.ctx?.isAdmin !== true) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    const resolvedUserId = req.ctx?.userId ?? null;
+
+    if (resolvedUserId) {
+      // Downstream self-heal + response echo read user.userId; pin it to the
+      // ctx-resolved id so no raw token claim is trusted below this point.
+      user.userId = resolvedUserId;
       let dbUser, profiles;
-      
+
       try {
         dbUser = await req.db
           .prepare(
@@ -1859,7 +1896,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
               WHERE id = ?
             `,
           )
-          .get(user.userId);
+          .get(resolvedUserId);
       } catch (dbError) {
         console.error('[/api/auth/me] Database error fetching user:', dbError);
         return res.status(503).json({
@@ -1872,7 +1909,11 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       if (!dbUser) {
         // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
         // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
-        if (user.role === 'admin' || user.is_admin === true) {
+        // Gate on the DB-backed req.ctx.isAdmin (true for the validated synthetic
+        // ADMIN_TOKEN / configured-admin-email), NOT the raw JWT role claim — a
+        // signed role:'admin' token with a novel userId must not self-heal into a
+        // new admin row.
+        if (req.ctx?.isAdmin === true) {
           try {
             const adminEmail = String(user.email || ADMIN_EMAIL || '').trim().toLowerCase() || null
             const existingByEmail = adminEmail
@@ -1933,8 +1974,12 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       }
 
       try {
-        const isAdminUser =
-          Boolean(dbUser?.is_admin) || user.role === 'admin' || user.is_admin === true
+        // DB-backed admin ONLY (req.ctx.isAdmin is authoritative: fail-closed, and
+        // denies a synthetic id arriving without service-token provenance). We do
+        // NOT OR-in dbUser.is_admin — the persisted synthetic row (keyed by
+        // system_admin_token) would otherwise let a JWT with a colliding `sub`
+        // unlock the cross-org profile list.
+        const isAdminUser = req.ctx?.isAdmin === true
 
         if (isAdminUser) {
           // Admin UX expects cross-org profile selection.
@@ -1957,46 +2002,26 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
             })
           }
         } else {
-          const emails = Array.from(
-            new Set(
-              [dbUser?.primary_email, user?.email]
-                .map((v) => String(v || '').trim().toLowerCase())
-                .filter(Boolean),
-            ),
-          )
-
-          // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
-          try {
-            await ensureProfileEmailSchema(req.db)
-          } catch {
-            // ignore
-          }
-
-          if (emails.length > 0) {
-            const placeholders = emails.map(() => '?').join(', ')
+          // DB-backed: owned + DB-verified-email-granted profiles. The bootstrap
+          // list is NEVER derived from the token email (a JWT could claim
+          // victim@example.com and pick up victim's shared profiles) — same
+          // DB-trusted discipline as GET /api/profiles?scope=mine.
+          const accessibleIds = await getOwnedAndGrantedProfileIds(req.db, user)
+          const idList = Array.from(accessibleIds)
+          if (idList.length > 0) {
+            const placeholders = idList.map(() => '?').join(', ')
             profiles = await req.db
               .prepare(
                 `
-                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status, p.created_at
-                  FROM profiles p
-                  LEFT JOIN profile_emails pe ON pe.profile_id = p.id
-                  WHERE p.user_id = ?
-                     OR lower(pe.email) IN (${placeholders})
-                  ORDER BY p.created_at ASC
-                `,
-              )
-              .all(dbUser.id, ...emails)
-          } else {
-            profiles = await req.db
-              .prepare(
-                `
-                  SELECT id, display_name, organization_id, status
+                  SELECT id, display_name, organization_id, status, created_at
                   FROM profiles
-                  WHERE user_id = ?
+                  WHERE id IN (${placeholders})
                   ORDER BY created_at ASC
                 `,
               )
-              .all(dbUser.id)
+              .all(...idList)
+          } else {
+            profiles = []
           }
         }
       } catch (dbError) {
@@ -2020,7 +2045,10 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           primary_email: dbUser.primary_email,
           primary_phone: dbUser.primary_phone,
           avatar_url: dbUser.avatar_url,
-          is_admin: Boolean(dbUser.is_admin),
+          // Canonical, DB-backed admin (fails closed; rejects a synthetic-id
+          // collision) — NEVER the raw dbUser.is_admin row, which a self-healed
+          // users.id='system_admin_token' row would report true for a colliding JWT.
+          is_admin: req.ctx?.isAdmin === true,
           // Durable onboarding/tour state (has_completed_onboarding,
           // guided_cycle_tour_status, ...) -- THIS is the handler that actually
           // serves every GET /api/auth/me request (registered on `app` before
@@ -2051,7 +2079,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
       });
     }
 
-    if (user.role === 'admin') {
+    if (req.ctx?.isAdmin === true) {
       return res.json({
         role: 'admin',
         full_name: user.full_name ?? ADMIN_NAME,

@@ -77,7 +77,6 @@ function resolveAdminToken() {
 
 function adminAuth(req, res, next) {
   if (req.ctx && req.ctx.isAdmin === true) return next()
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) return next()
   const configuredToken = resolveAdminToken()
   if (!configuredToken) {
     return res.status(401).json({ error: 'Admin token not configured' })

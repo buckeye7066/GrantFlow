@@ -120,9 +120,8 @@ function appendWhere(sql, clauses, params) {
  * rather than every file inlining its own check.
  */
 export function resolveIsAdmin(req) {
-  if (!req || !req.user) return false
-  if (req.user.isAdmin === true) return true
-  if (Array.isArray(req.user.roles) && req.user.roles.includes('admin')) return true
-  if (typeof req.user.role === 'string' && req.user.role.toLowerCase() === 'admin') return true
-  return false
+  // DB-backed admin only (req.ctx.isAdmin, resolved from users.is_admin by
+  // requestContext middleware). Never trust raw JWT claims (req.user.role /
+  // .roles / .isAdmin) — a demoted admin's unexpired token must not broaden scope.
+  return req?.ctx?.isAdmin === true
 }

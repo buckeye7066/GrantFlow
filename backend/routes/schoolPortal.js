@@ -94,7 +94,7 @@ async function findLink(db, partnerId, externalId) {
 }
 
 function isAdminRequest(req) {
-  return req.user?.role === 'admin'
+  return req.ctx?.isAdmin === true
 }
 
 // ---------------------------------------------------------------------------

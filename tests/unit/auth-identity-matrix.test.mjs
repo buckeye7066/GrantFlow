@@ -9,7 +9,8 @@
  *   ✓ Admin token (X-Admin-Token header)              → 200
  *   ✓ Admin token (Authorization: Bearer header)      → 200
  *   ✓ Anya API key (X-Anya-Token header)              → 200
- *   ✓ Signed JWT with admin role                      → 200
+ *   ✓ Signed JWT, admin role, no backing user         → 401 (fail closed, not auto-elevated)
+ *   ✓ Signed JWT, sub collides with synthetic id       → 403 on /api/admin/* (provenance-bound)
  *
  * Source-level assertion: ANYA_ADMIN_TOKEN is honoured as a fallback for
  * ADMIN_TOKEN (verified by inspecting server.js, no extra server spawn needed).
@@ -186,7 +187,12 @@ test('auth/me: Anya API key via X-Anya-Token header → 200', { timeout: 15_000 
   )
 })
 
-test('auth/me: signed JWT with admin role → 200', { timeout: 15_000 }, async () => {
+test('auth/me: signed JWT with admin role but NO backing user is NOT auto-elevated (fail closed)', { timeout: 15_000 }, async () => {
+  // SECURITY: a signed JWT carrying roles:['admin'] for a userId with no users
+  // row (and not the configured admin email) must NOT be auto-created as an admin
+  // — that self-heal was a privilege-escalation path (a stale/forged admin-role
+  // token minting a DB admin). Admin is DB-backed + fail-closed now; only the
+  // validated synthetic ADMIN_TOKEN / Anya key (asserted above) grant token-admin.
   const token = await signJwt(
     { sub: 'jwt-admin-user', email: 'admin@test.example', roles: ['admin'] },
     TEST_JWT_SECRET,
@@ -196,9 +202,47 @@ test('auth/me: signed JWT with admin role → 200', { timeout: 15_000 }, async (
   })
   assert.strictEqual(
     res.status,
-    200,
-    'JWT with admin role should be accepted and user created on demand',
+    401,
+    'a signed admin-role JWT for a non-existent user must be denied, not auto-elevated to admin',
   )
+})
+
+test('admin route: signed JWT whose sub COLLIDES with a synthetic service id is NOT admin (403)', { timeout: 15_000 }, async () => {
+  // SECURITY: synthetic-admin authority is bound to service-token PROVENANCE
+  // (a serviceToken flag set only inside a safeTokenEqual branch), NOT to the id
+  // value. A signed JWT that sets sub:'system_admin_token' has no serviceToken
+  // flag, so requestContext denies it (and refuses to honor the synthetic DB row
+  // the real ADMIN_TOKEN may have persisted). It must be forbidden on /api/admin/*.
+  const token = await signJwt(
+    { sub: 'system_admin_token', email: 'attacker@test.example', roles: ['admin'] },
+    TEST_JWT_SECRET,
+  )
+  const collision = await fetch(`http://127.0.0.1:${sharedPort}/api/admin/agent-control-probe-does-not-exist`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  assert.ok(
+    collision.status === 403 || collision.status === 401,
+    `a JWT with sub colliding with a synthetic service id must be denied on admin routes (got ${collision.status})`,
+  )
+
+  // Control: the REAL safeTokenEqual ADMIN_TOKEN passes the admin gate (not 403;
+  // 404 for the probe path is fine — it cleared ensureAdmin).
+  const real = await fetch(`http://127.0.0.1:${sharedPort}/api/admin/agent-control-probe-does-not-exist`, {
+    headers: { 'X-Admin-Token': TEST_ADMIN_TOKEN },
+  })
+  assert.notStrictEqual(real.status, 403, 'the real ADMIN_TOKEN service token must still clear the admin gate')
+
+  // /api/auth/me must report is_admin:false for the colliding JWT — even though a
+  // users.id='system_admin_token' row was self-healed by the real ADMIN_TOKEN
+  // flow above (is_admin comes from ctx.isAdmin, never dbUser.is_admin).
+  const me = await fetch(`http://127.0.0.1:${sharedPort}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (me.status === 200) {
+    const body = await me.json()
+    assert.notStrictEqual(body?.user?.is_admin, true, 'colliding JWT must NOT be reported is_admin:true by /auth/me')
+    assert.ok(!Array.isArray(body?.profiles) || body.profiles.length === 0, 'colliding JWT must not receive admin-scoped profiles')
+  }
 })
 
 test('auth identity matrix — teardown shared server', async () => {

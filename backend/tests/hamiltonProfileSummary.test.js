@@ -20,6 +20,7 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const hamiltonRouter = (await import('../routes/hamiltonAutomation.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const {
   ensureApplicationTask,
   updateApplicationTask,
@@ -30,7 +31,10 @@ const { _resetMasterVaultSchemaCache } = await import('../services/hamilton/hami
 
 const PROFILE_ID = 'profile-summary-test-1'
 
-function createApp(db, user = { role: 'admin', id: 'admin-1' }) {
+// Default admin = the validated synthetic ADMIN_TOKEN identity, which
+// buildRequestContext resolves to isAdmin=true without a users row (mirrors prod;
+// req.ctx.isAdmin now fails closed for any other unresolved role:'admin' token).
+function createApp(db, user = { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' }) {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
@@ -38,6 +42,8 @@ function createApp(db, user = { role: 'admin', id: 'admin-1' }) {
     req.user = user
     next()
   })
+  // Mirror prod: admin authority is DB-backed via attachRequestContext.
+  app.use(attachRequestContext())
   app.use('/api/hamilton/automation', hamiltonRouter)
   return app
 }

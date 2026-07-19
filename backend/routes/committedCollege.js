@@ -83,7 +83,7 @@ async function deleteDeselectedFromPipeline(db, { profileId, deselected, userId 
 async function userMayAccessProfile(req, profileId) {
   const user = req.user || { role: 'guest' }
   if (!profileId) return false
-  if (user.role === 'admin') return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible === null) return true // admin
   return accessible.has(String(profileId))

@@ -24,15 +24,18 @@ import Database from 'better-sqlite3'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
 
 const profilePortalsRouter = (await import('../routes/profilePortals.js')).default
+const { attachRequestContext } = await import('../middleware/requestContext.js')
 const { setMasterPassphrase, _resetMasterVaultSchemaCache, _resetUnlockCache } = await import(
   '../services/hamilton/hamiltonPortalMasterVault.js'
 )
 
 const PROFILE_ID = 'c4a92724-9cee-416f-ba30-e91b9b5cd885'
 
-// Build an app whose injected user is an admin (role:'admin' takes the fast path
-// in the route's userMayAccessProfile, so we don't need the full users/profiles
-// access-control graph — we are testing the unlock-failure status, not access).
+// Build an app whose injected user is an admin. Admin access is DB-backed
+// (req.ctx.isAdmin), resolved by the real attachRequestContext middleware, so
+// the admin fast-path in userMayAccessProfile is exercised faithfully without
+// needing the full users/profiles access graph — we are testing the
+// unlock-failure status, not access.
 function createApp(db, user) {
   const app = express()
   app.use(express.json())
@@ -41,6 +44,7 @@ function createApp(db, user) {
     req.user = user
     next()
   })
+  app.use(attachRequestContext())
   app.use('/api', profilePortalsRouter)
   return app
 }
@@ -63,7 +67,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
   })
 
   it('returns 400 (not 401) when no passphrase is supplied', async () => {
-    const app = createApp(db, { role: 'admin', id: 'admin-1' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({})
@@ -72,7 +76,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
   })
 
   it('returns 403 (NOT 401) when no passphrase has been set for the profile', async () => {
-    const app = createApp(db, { role: 'admin', id: 'admin-1' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({ passphrase: 'whatever' })
@@ -85,7 +89,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
 
   it('returns 403 (NOT 401) on a WRONG passphrase', async () => {
     await setMasterPassphrase(db, { profileId: PROFILE_ID, passphrase: 'the-right-one' })
-    const app = createApp(db, { role: 'admin', id: 'admin-1' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({ passphrase: 'the-wrong-one' })
@@ -97,7 +101,7 @@ describe('POST /api/profiles/:id/portal-autopilot/unlock — status codes', () =
   it('returns 200 with vault status on the CORRECT passphrase', async () => {
     await setMasterPassphrase(db, { profileId: PROFILE_ID, passphrase: 'the-right-one' })
     _resetUnlockCache() // ensure unlock derives fresh, not a cached key from setMasterPassphrase
-    const app = createApp(db, { role: 'admin', id: 'admin-1' })
+    const app = createApp(db, { role: 'admin', is_admin: true, serviceToken: true, userId: 'system_admin_token' })
     const res = await request(app)
       .post(`/api/profiles/${PROFILE_ID}/portal-autopilot/unlock`)
       .send({ passphrase: 'the-right-one' })

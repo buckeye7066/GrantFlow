@@ -58,7 +58,7 @@ async function resolveAccessibleProfileIds(req, user) {
 
 async function userMayAccessTask(req, user, task) {
   if (!task) return false
-  if (user.role === 'admin') return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await resolveAccessibleProfileIds(req, user)
   if (accessible === null) return true
   return accessible.has(String(task.profile_id))
@@ -71,9 +71,9 @@ router.get('/', async (req, res) => {
   const profileIdParam = req.query.profile_id || req.query.profileId || null
   try {
     let tasks
-    if (user.role === 'admin' && profileIdParam) {
+    if (req.ctx?.isAdmin === true && profileIdParam) {
       tasks = await listApplicationTasks(req.db, { profileId: String(profileIdParam), status, limit: 200 })
-    } else if (user.role === 'admin') {
+    } else if (req.ctx?.isAdmin === true) {
       tasks = await listApplicationTasks(req.db, { status, limit: 200 })
     } else {
       const accessible = await resolveAccessibleProfileIds(req, user)
@@ -120,7 +120,7 @@ router.post('/', async (req, res) => {
   const profileId = String(body.profile_id || body.profileId || '')
   if (!profileId) return res.status(400).json({ error: 'profile_id required' })
 
-  if (user.role !== 'admin') {
+  if (req.ctx?.isAdmin !== true) {
     const accessible = await resolveAccessibleProfileIds(req, user)
     if (accessible !== null && !accessible.has(profileId)) {
       return res.status(403).json({ error: 'Forbidden' })

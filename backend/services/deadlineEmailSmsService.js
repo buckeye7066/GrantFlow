@@ -9,10 +9,11 @@
 
 import { Resend } from 'resend'
 import twilio from 'twilio'
+import { sendTwilioMessage } from './sms.js'
 import { createLogger } from '../utils/logger.js'
 import { t, dayLabel as localizedDayLabel } from './comms/commsMessages.js'
 import { getUserLanguage } from './comms/profileLanguage.js'
-import { grantFlowLinkFooterHtml, grantFlowLinkFooterText } from './email.js'
+import { grantFlowLinkFooterHtml, grantFlowLinkFooterText, sendResendEmail } from './email.js'
 const log = createLogger('deadlineEmailSmsService')
 
 // ── Configuration (lazy, from env) ──────────────────────────────────────────
@@ -81,7 +82,19 @@ export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, dead
   `
 
   try {
-    await resend.emails.send({ from, to: email, subject, html, text: `${t(lang, 'deadline_email_heading')}${grantFlowLinkFooterText()}` })
+    // Resend resolves (not throws) on API rejection — route through the checked
+    // helper so a rejected send is reported as failed, not logged as 'Sent'.
+    const { ok, error } = await sendResendEmail(resend, {
+      from,
+      to: email,
+      subject,
+      html,
+      text: `${t(lang, 'deadline_email_heading')}${grantFlowLinkFooterText()}`,
+    })
+    if (!ok) {
+      console.warn('[deadline-email] Resend API error:', error)
+      return false
+    }
     log.info('[deadline-email] Sent to', email, '—', grantTitle)
     return true
   } catch (err) {
@@ -108,7 +121,13 @@ export async function sendDeadlineSms(phone, { grantTitle, daysRemaining, lang =
   }
 
   try {
-    await client.messages.create(payload)
+    // Checked send: Twilio can RESOLVE with a failed/undelivered message
+    // (errorCode set) rather than throwing — don't report those as sent.
+    const { ok, error } = await sendTwilioMessage(client, payload)
+    if (!ok) {
+      console.warn('[deadline-sms] Twilio reported failure:', error)
+      return false
+    }
     log.info('[deadline-sms] Sent to', phone.slice(0, 4) + '***')
     return true
   } catch (err) {

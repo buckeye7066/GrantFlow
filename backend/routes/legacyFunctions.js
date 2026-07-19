@@ -3,7 +3,6 @@ import crypto from 'crypto'
 import {
   ensureGrantAccess,
   ensureOrganizationAccess,
-  isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 import { crawlGrantsGov } from '../services/crawlerOsCompatibility.js'
@@ -603,7 +602,8 @@ router.post('/analyzeGrant', async (req, res) => {
     // Tier enforcement: Grant analysis is a DOCUMENT_AI feature.
     // Try to derive the billing-scoped id from the grant row. Admin bypass remains intact.
     const ctx = req.ctx ?? {}
-    const admin = Boolean(ctx.isAdmin) || isAdminUser(user)
+    // DB-backed admin only — do NOT OR-in the token-claim isAdminUser (stale-JWT bypass).
+    const admin = ctx.isAdmin === true
     const resolvedProfileId = String(grant.profile_id ?? grant.organization_id ?? '').trim() || null
     if (!admin) {
       if (!resolvedProfileId) {

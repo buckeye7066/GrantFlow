@@ -800,6 +800,34 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at DATETIME
 );
 
+-- At most ONE user per phone number (round 22): backstop for idempotent first-ever
+-- /phone/start (INSERT ... ON CONFLICT (primary_phone) DO NOTHING).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone
+  ON users (primary_phone)
+  WHERE primary_phone IS NOT NULL;
+
+-- Round 25: genuinely-unmergeable phone duplicates (canonical + dup both own a
+-- 1-per-user resource) are left fully self-consistent and recorded here for the
+-- owner to reconcile manually (migration 138/0142 populates this).
+CREATE TABLE IF NOT EXISTS phone_dedupe_conflicts (
+  dup_user_id TEXT NOT NULL,
+  canonical_user_id TEXT NOT NULL,
+  phone TEXT,
+  reason TEXT,
+  recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (dup_user_id, canonical_user_id)
+);
+
+-- Round 26: durable dup->canonical map captured by migration 137/0141 BEFORE the
+-- phone-null, so the forward repair 138/0142 can identify duplicates after their
+-- primary_phone is cleared.
+CREATE TABLE IF NOT EXISTS phone_dedupe_map (
+  dup_user_id TEXT NOT NULL,
+  canonical_user_id TEXT NOT NULL,
+  phone TEXT,
+  PRIMARY KEY (dup_user_id, canonical_user_id)
+);
+
 -- saved_grants: profile-scoped favorites/bookmarks. Each user can save the
 -- same opportunity independently under each of their profiles. Legacy rows
 -- created before migration 075 keep profile_id=NULL and are visible to all
@@ -876,6 +904,13 @@ CREATE TABLE IF NOT EXISTS user_verification_codes (
   attempt_count INTEGER DEFAULT 0,
   metadata TEXT
 );
+
+-- Exactly ONE consumable active OTP code per credential (round 21). Active =
+-- consumed_at IS NULL; the mint (insertFreshVerificationCode) invalidates prior
+-- active rows before inserting, so this never false-conflicts on expired rows.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_uvc_one_active_per_credential
+  ON user_verification_codes (credential_id)
+  WHERE consumed_at IS NULL;
 
 -- One-time password setup tokens (first-login password setup via emailed link).
 CREATE TABLE IF NOT EXISTS password_setup_tokens (

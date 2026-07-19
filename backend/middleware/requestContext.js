@@ -22,7 +22,14 @@ import {
   ensureProfileEmailSchema,
 } from '../utils/accessControl.js'
 import { isAdminEmail } from '../config/constants.js'
+import {
+  SYNTHETIC_SERVICE_ADMIN_USER_IDS,
+  isSyntheticServiceAdmin,
+} from './syntheticServiceTokens.js'
 import crypto from 'crypto'
+
+// Re-export so existing importers (ensureAdminUser, server.js) keep working.
+export { isSyntheticServiceAdmin } from './syntheticServiceTokens.js'
 
 let lastAdminSelfHealAtMs = 0
 const ADMIN_SELF_HEAL_INTERVAL_MS = 10 * 60 * 1000
@@ -144,8 +151,17 @@ async function adminSelfHealOrgProfileEmails(db, { actorUserId, isAdmin = false 
 export async function buildRequestContext(db, user) {
   const ctx = {
     userId: null,
+    // DB-hydrated below from users.primary_email — access/ownership/grant code
+    // reads ctx.email and must NEVER see a token-supplied address.
     email: null,
+    // Raw token-supplied email, for DISPLAY / attribution ONLY (never access).
+    tokenEmail: null,
     isAdmin: false,
+    // TRUSTED identity: true ONLY when a real users row backed this request, OR a
+    // validated service-token / legacy profile-token provenance did. Routes that
+    // fall back to ownership-by-ctx.userId MUST gate on this — a deleted-user JWT
+    // leaves ctx.userId populated but identityResolved=false (fail closed).
+    identityResolved: false,
     activeProfileId: null,
     // IMPORTANT:
     // - `null` means "all" and MUST be reserved for authenticated admins only.
@@ -161,17 +177,30 @@ export async function buildRequestContext(db, user) {
 
   // Extract user ID
   ctx.userId = getAuthUserId(user)
-  ctx.email = user.email || user.primary_email || null
+  // The token email is DISPLAY/attribution only. ctx.email (read by access code)
+  // stays null until DB-hydrated from users.primary_email below — a JWT can carry
+  // any email, so it must never seed the identity that grant/ownership code trusts.
+  ctx.tokenEmail = user.email || user.primary_email || null
+  ctx.email = null
   ctx.activeProfileId = getAuthProfileId(user)
 
-  // CRITICAL: Admin status is DB-backed ONLY (users.is_admin).
-  // Never trust token claims for admin authority.
+  // CRITICAL: Admin status is DB-backed ONLY (users.is_admin), with exactly two
+  // DB-INDEPENDENT admins that are NOT JWT role claims:
+  //   (a) a validated synthetic SERVICE token (ADMIN_TOKEN / Anya / health) that
+  //       has no real users row — the validated token itself is the credential;
+  //   (b) the server-CONFIGURED admin email (ADMIN_EMAIL/ADMIN_EMAILS).
+  // A real user (users row) ALWAYS resolves from users.is_admin. A DB error or a
+  // missing row FAILS CLOSED — we NEVER fall back to the token's role/is_admin
+  // claim, or a demoted admin whose context DB read errors would still be admin.
+  const syntheticServiceAdmin = isSyntheticServiceAdmin(user)
+  // Whether a TRUSTED DB identity backs this request: a real users row was
+  // resolved, or a validated synthetic service token. A stale JWT for a
+  // deleted/missing user must NOT retain token-userId ownership of its old
+  // profiles — access computation below fails closed unless this is true.
+  // Validated provenance tokens (synthetic service token / DB-verified legacy
+  // profile token) are trusted identities even though they have no users row.
+  let identityResolved = syntheticServiceAdmin || user?.profileTokenAuth === true
   try {
-    // IMPORTANT:
-    // `ctx.email` may not be present on the JWT (older tokens / some oauth flows).
-    // We recompute "configured admin email" AFTER we potentially hydrate ctx.email from the DB.
-    let emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
-
     // If we only have a profileId, resolve its owning user first.
     if (!ctx.userId && ctx.activeProfileId) {
       const profileRow = await db
@@ -180,18 +209,34 @@ export async function buildRequestContext(db, user) {
       if (profileRow?.user_id) ctx.userId = profileRow.user_id
     }
 
-    if (ctx.userId) {
+    if (syntheticServiceAdmin) {
+      // Validated service token with no real user row — legitimate token admin.
+      ctx.isAdmin = true
+    } else if (ctx.userId && SYNTHETIC_SERVICE_ADMIN_USER_IDS.has(String(ctx.userId))) {
+      // A synthetic service id arriving WITHOUT service-token provenance (e.g. a
+      // JWT whose `sub` collides with system_admin_token) is an impersonation
+      // attempt. Never admin — and do NOT honor the synthetic DB row that the real
+      // service token's self-heal may have persisted (it's keyed by this id).
+      ctx.isAdmin = false
+    } else if (ctx.userId) {
       const row = await db
         .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
         .get(String(ctx.userId))
       if (row) {
+        identityResolved = true
         ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
-        if (row.primary_email && !ctx.email) ctx.email = row.primary_email
-        emailIsConfiguredAdmin = Boolean(ctx.email && isAdminEmail(ctx.email))
+        // The configured-admin-email elevation is honored ONLY from the TRUSTED
+        // stored email (row.primary_email), NEVER from the token-supplied
+        // user.email — a JWT could otherwise carry the configured admin email and
+        // self-promote (and this path even PERSISTS is_admin=TRUE). Hydrate
+        // ctx.email from the row for downstream display, but decide on the DB email.
+        const trustedEmail = row.primary_email ? String(row.primary_email).trim().toLowerCase() : null
+        // DB-hydrate ctx.email from the TRUSTED stored email (never the token).
+        ctx.email = trustedEmail
+        const dbEmailIsConfiguredAdmin = Boolean(trustedEmail && isAdminEmail(trustedEmail))
 
-        // If this request belongs to a configured admin email but the DB flag wasn't set yet,
-        // upgrade it (best-effort) so future requests are consistent.
-        if (!ctx.isAdmin && emailIsConfiguredAdmin) {
+        // Configured admin email (from the DB row) whose flag isn't set: upgrade + persist.
+        if (!ctx.isAdmin && dbEmailIsConfiguredAdmin) {
           ctx.isAdmin = true
           try {
             await db
@@ -202,15 +247,25 @@ export async function buildRequestContext(db, user) {
           }
         }
       } else {
-        ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
+        // Real user id but NO users row → FAIL CLOSED. A configured admin email
+        // from a TOKEN is not trusted; only a validated service token elevates.
+        ctx.isAdmin = false
       }
     } else {
-      ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
+      // No resolvable identity → not admin.
+      ctx.isAdmin = false
     }
   } catch (error) {
-    console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
-    ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
+    // FAIL CLOSED on DB error. Never trust the JWT role/is_admin/email claims. Only
+    // a validated synthetic service token survives (its authority is the verified
+    // token, not the DB).
+    console.warn('[requestContext] Failed to resolve admin status from DB; failing closed:', error?.message)
+    ctx.isAdmin = syntheticServiceAdmin
   }
+
+  // Expose the trusted-identity flag so routes never treat a deleted-user
+  // ctx.userId as ownership without a real users row / validated provenance.
+  ctx.identityResolved = identityResolved
 
   // Step 5: Compute accessible profiles and orgs
   if (ctx.isAdmin) {
@@ -226,10 +281,28 @@ export async function buildRequestContext(db, user) {
       // ignore (best-effort)
     }
   } else {
-    // Regular user - compute accessible resources
+    // Regular user - compute accessible resources.
     try {
-      ctx.accessibleProfileIds = await getAccessibleProfileIds(db, user)
-      ctx.accessibleOrgIds = await getAccessibleOrganizationIds(db, user)
+      if (!identityResolved) {
+        // No TRUSTED DB identity: a real userId but NO users row (deleted/missing
+        // user), or a synthetic-id impersonation. A stale JWT must NOT retain
+        // token-userId ownership of its old profiles/orgs — FAIL CLOSED (deny all),
+        // and do not call the access helpers with the unresolved token identity.
+        ctx.accessibleProfileIds = new Set()
+        ctx.accessibleOrgIds = new Set()
+      } else {
+        const profileIds = await getAccessibleProfileIds(db, user)
+        const orgIds = await getAccessibleOrganizationIds(db, user)
+        // SECURITY: ctx.isAdmin is FALSE here (a genuine non-admin, OR a fail-closed
+        // admin resolution after a DB error). These helpers run their OWN admin
+        // check and can independently return `null` (the ALL-ACCESS sentinel) — e.g.
+        // if the earlier users lookup timed out but theirs succeeds. A non-admin
+        // context must NEVER carry the null all-access sentinel, or consumers treat
+        // it as admin and leak cross-tenant. Coerce any non-Set (null) result to an
+        // empty Set = deny.
+        ctx.accessibleProfileIds = profileIds instanceof Set ? profileIds : new Set()
+        ctx.accessibleOrgIds = orgIds instanceof Set ? orgIds : new Set()
+      }
     } catch (error) {
       console.warn('[requestContext] Failed to compute accessible resources:', error?.message)
       ctx.accessibleProfileIds = new Set()

@@ -168,16 +168,19 @@ export async function getQuote(db, quoteId) {
   })
 }
 
-export async function listQuotes(db, { status = null, limit = 50, offset = 0 } = {}) {
+export async function listQuotes(db, { status = null, profileId = null, limit = 50, offset = 0 } = {}) {
   if (!(await tableExists(db, QUOTES_TABLE))) return { installed: false, items: [] }
   return withProfileScope({ bypass: true }, async () => {
-    const items = status
-      ? await db.prepare(
-          `SELECT * FROM ${QUOTES_TABLE} WHERE quote_status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-        ).all(status, limit, offset)
-      : await db.prepare(
-          `SELECT * FROM ${QUOTES_TABLE} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-        ).all(limit, offset)
+    // Optional filters. `profileId` lets callers query a single authorized
+    // profile's quotes directly (never "load all, then filter by id").
+    const clauses = []
+    const params = []
+    if (status) { clauses.push('quote_status = ?'); params.push(status) }
+    if (profileId) { clauses.push('profile_id = ?'); params.push(String(profileId)) }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const items = await db
+      .prepare(`SELECT * FROM ${QUOTES_TABLE} ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset)
     return { installed: true, items: items.map((r) => decodeQuote(r, [], [])) }
   })
 }
