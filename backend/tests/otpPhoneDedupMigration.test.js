@@ -113,6 +113,9 @@ const AGE_BASED_137 = `
   CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL;`
 
 const MIG138_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0142_repair_phone_dedupe_repoint.sql'), 'utf8')
+// Round 32: forward migrations that re-apply the broadened malformed-audit to already-stamped DBs.
+const MIG139 = fs.readFileSync(path.resolve('backend/db/migrations/139_repair_malformed_profile_audit.sql'), 'utf8')
+const MIG139_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0143_repair_malformed_profile_audit.sql'), 'utf8')
 
 // Build the FULL migrated schema with the REAL migration-runner semantics (Codex r28):
 // apply schema.sql then every migration, tolerating ONLY the "already applied / idempotent
@@ -322,6 +325,80 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('vp', 'basic_information', ?)`).run(JSON.stringify({ email: 'v@x.com' }))
     raw.exec(MIG138)
     expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='vdup'`).get().c).toBe(0)
+  })
+
+  it('[r32 HIGH] forward 139 re-applies the broadened malformed-audit to an already-138-stamped DB (in-place 138 edit never re-runs by filename)', () => {
+    // An already-138/0142-stamped DB that ran the r30 LIKE-gated behavior MISSED malformed rows
+    // whose corrupt text lacked the literal 'phone'. Because the boot runner selects by filename
+    // (files.filter(f => !applied.has(f))), the in-place r30/r31 edits to 138 never re-run there.
+    // Forward 139 fixes exactly that DB. Simulate it: malformed rows present, 138 already ran and
+    // left them UNFLAGGED (the r30 miss) — represented here by an empty conflicts table.
+    const raw = fullDb() // fullDb runs all migrations incl. 139 then CLEARS the dedupe tables → clean slate
+    const missed = {
+      's-contact': '{"contact": "+15557770000" broken json',
+      's-numeric': '{ 15557770001 ',
+      's-upper': '{"PHONE": "+15557770002" broken',
+    }
+    for (const [uid, data] of Object.entries(missed)) {
+      raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES (?, NULL, '2026-01-01')`).run(uid)
+      raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, 'S')`).run(`p-${uid}`, uid)
+      raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, 'basic_information', ?)`).run(`p-${uid}`, data)
+    }
+    // PRECONDITION (the r30 miss): with 138 already stamped and NOT re-run, these stay unflagged.
+    for (const uid of Object.keys(missed)) {
+      expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid).c).toBe(0)
+    }
+
+    // The forward migration surfaces every previously-missed malformed row.
+    expect(() => raw.exec(MIG139)).not.toThrow()
+    for (const uid of Object.keys(missed)) {
+      expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid)?.reason).toBe('pre-map-malformed-profile, manual review')
+      expect(profileOwner(raw, `p-${uid}`)).toBe(uid) // detect-only, nothing moved
+    }
+    expect(userProfileSplits(raw)).toBe(0)
+
+    // IDEMPOTENT: re-running 139 is a no-op (no double-flag — sentinel canonical id + ON CONFLICT).
+    raw.exec(MIG139)
+    for (const uid of Object.keys(missed)) {
+      expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id=?`).get(uid).c).toBe(1)
+    }
+
+    // A VALID phoneless profile is still NOT flagged by the forward migration (no over-flagging).
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('svalid', NULL, '2026-01-05')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pvalid', 'svalid', 'V')`).run()
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('pvalid', 'basic_information', ?)`).run(JSON.stringify({ email: 'v@x.com' }))
+    raw.exec(MIG139)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='svalid'`).get().c).toBe(0)
+  })
+
+  it('[r32 HIGH] fresh install (138 then 139) does not double-flag; 139 is a safe no-op after 138 already flagged', () => {
+    const raw = fullDb()
+    const p = '+15556660000'
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('fdup', NULL, '2026-01-01')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('fp', 'fdup', 'F')`).run()
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('fp', 'basic_information', ?)`).run('{"contact": "' + p + '" broken')
+
+    // Fresh prod order: 138 (current r31 predicate) flags it, THEN 139 runs as a no-op.
+    raw.exec(MIG138)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='fdup'`).get().c).toBe(1)
+    raw.exec(MIG139)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts WHERE dup_user_id='fdup'`).get().c).toBe(1) // no double-flag
+  })
+
+  it('[r32] forward 139 (SQLite) and 0143 (Postgres) share byte-identical audit logic (only json_valid vs pdedupe_is_json differs)', () => {
+    // Normalize away comments, the PG-only pg_temp helper block, and the dialect validity check,
+    // then the remaining INSERT logic must be byte-identical across the two forward migrations.
+    const strip = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('--') && l.trim() !== '').join('\n')
+    const core = (s) => strip(s.split('INSERT INTO phone_dedupe_conflicts')[1])
+      .replace('AND pg_temp.pdedupe_is_json(ps.data) = false', 'AND <<validity>>')
+      .replace('AND json_valid(ps.data) = 0', 'AND <<validity>>')
+    expect(core(MIG139_PG)).toBe(core(MIG139))
+    // Both use the sentinel canonical id + ON CONFLICT DO NOTHING (idempotent, no double-flag).
+    for (const m of [MIG139, MIG139_PG]) {
+      expect(m).toContain(`'(unknown-malformed-profile)'`)
+      expect(m).toContain('ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING')
+      expect(m).toContain('pre-map-malformed-profile, manual review')
+    }
   })
 
   it('[r30 MED] boot post-condition HEALTH catches a failed/unstamped phone-dedup repair — it cannot hide behind schema-check OK', () => {

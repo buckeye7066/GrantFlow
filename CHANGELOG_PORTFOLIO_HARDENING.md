@@ -268,6 +268,15 @@ Compat: behavior-preserving; strictly widens the malformed case to surface every
 
 **OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–31.
 
+## Round 32 (FINAL) — ship the malformed-audit broadening as a forward migration, not an in-place edit (see PORTFOLIO_AUDIT.md §5af)
+
+- **[HIGH] Already-stamped DBs now get the r31 broadened malformed-audit via NEW forward migrations `139` (SQLite) + `0143` (Postgres).** The boot runner selects migrations by filename, but r30/r31 changed the malformed-audit DATA behavior by editing `138`/`0142` in place — so a DB that already stamped an intermediate `138`/`0142` never re-runs the broadened predicate and a malformed row lacking the literal `phone` stays silently unflagged (a violation of the r24 "never edit an applied migration to change data behavior — add a forward one" discipline; the owner's local/staging may hold an intermediate stamp). `139`/`0143` perform ONLY the broadened conflict insert (`primary_phone IS NULL` AND not-in-proven-map AND `basic_information` unparseable → `pre-map-malformed-profile, manual review`; no `LIKE`; validity-guarded so it never aborts). Idempotent + safe after `138`/`0142`: the sentinel canonical id makes `ON CONFLICT DO NOTHING` a no-double-flag guard, so a fresh install (`138` then `139`) is a safe no-op and a re-run changes nothing. Both dialects share byte-identical audit logic.
+- `138`/`0142`'s r31 predicate is unchanged; all r19–r31 preserved.
+
+Compat: behavior-preserving; strictly delivers the already-earned broadening to DBs stamped before it via the correct forward-migration mechanism. New tests in `otpPhoneDedupMigration.test.js` (already-138-stamped miss → `139` flags all three malformed shapes; idempotent re-run; fresh-install no double-flag; valid not over-flagged; `139`/`0143` byte-identical audit logic), verified red by neutering `139`.
+
+**OTP identity/verification + phone-dedup migration surface: CLOSED** — no known open finding remains across rounds 17–32.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).
