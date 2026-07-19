@@ -101,17 +101,34 @@ const AGE_BASED_137 = `
 
 const MIG138_PG = fs.readFileSync(path.resolve('backend/db/postgres/migrations/0142_repair_phone_dedupe_repoint.sql'), 'utf8')
 
-// The FULL migrated schema (schema.sql + ALL migrations) so every two-owner table the
-// migration touches (grant_applications, anya_match_suggestions, yana_*, hamilton_*, …)
-// actually exists — matching the real runtime the migration runs against.
+// Build the FULL migrated schema with the REAL migration-runner semantics (Codex r28):
+// apply schema.sql then every migration, tolerating ONLY the "already applied / idempotent
+// DDL" errors the runner tolerates (mirrors migrate.js isIdempotentAlreadyAppliedError +
+// @sqlite-continue-on-idempotent-errors) — a genuine error surfaces instead of being
+// swallowed, so the introspected schema is the ACTUAL migrated schema.
 const ALL_MIGRATIONS = fs.readdirSync(path.resolve('backend/db/migrations'))
   .filter((f) => f.endsWith('.sql')).sort()
-  .map((f) => fs.readFileSync(path.resolve('backend/db/migrations', f), 'utf8'))
+  .map((f) => ({ name: f, sql: fs.readFileSync(path.resolve('backend/db/migrations', f), 'utf8') }))
+function isIdempotentError(err) {
+  const m = String(err?.message || err || '').toLowerCase()
+  return m.includes('duplicate column name') || m.includes('already exists') || m.includes('duplicate index') ||
+    m.includes('there is already another table or index with this name') ||
+    (m.includes('near "exists"') && m.includes('syntax error')) ||
+    m.includes('no such table') // an ALTER/CREATE-dependent statement whose base was renamed/absent
+}
+function applyLikeRunner(raw, name, sql) {
+  if (sql.includes('@sqlite-continue-on-idempotent-errors')) {
+    const statements = sql.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n').split(';').map((s) => s.trim()).filter(Boolean)
+    for (const s of statements) { try { raw.exec(`${s};`) } catch (e) { if (!isIdempotentError(e)) throw new Error(`${name}: ${e.message}`) } }
+    return
+  }
+  try { raw.exec(sql) } catch (e) { if (!isIdempotentError(e)) throw new Error(`${name}: ${e.message}`) }
+}
 function fullDb() {
   const raw = new Database(':memory:')
   raw.pragma('foreign_keys = OFF') // fixtures seed rows without full FK graphs
   raw.exec(SCHEMA)
-  for (const m of ALL_MIGRATIONS) { try { raw.exec(m) } catch { /* tolerate idempotent/ordering errors, like the runner */ } }
+  for (const { name, sql } of ALL_MIGRATIONS) applyLikeRunner(raw, name, sql)
   // Reset dedupe state applied by 137/138 above so each fixture starts clean.
   raw.exec('DROP INDEX IF EXISTS ux_users_primary_phone; DELETE FROM phone_dedupe_map; DELETE FROM phone_dedupe_conflicts;')
   return raw
@@ -167,14 +184,29 @@ function userStripeSplits(raw) {
 }
 
 describe('forward repair migration 138 (already-137-stamped DBs) + ownership repoint', () => {
-  it('the SQLite (138) and Postgres (0142) bodies match except the one documented dialect line (JSON extraction)', () => {
-    // Only intentional dialect difference: the pre-map reconstruction's JSON phone read
-    // (SQLite json_extract(...) vs Postgres ...::jsonb->>'phone'). Everything else identical.
-    const body = (s) => s.split('\n')
-      .filter((l) => !l.trimStart().startsWith('--'))
+  it('the SQLite (138) and Postgres (0142) shared preamble/collapse/phone-fix match (dialect diffs only in move/revoke exec + JSON)', () => {
+    // 138 = static move/revoke; 0142 = existence-guarded DO block. Everything BEFORE the
+    // move/revoke section (tables, capture, detect [modulo JSON], merge, collapse) is byte-identical.
+    const preamble = (s) => s.split('-- GROUP-WIDE COLLISION-COLLAPSE')[0]
+      .split('\n').filter((l) => !l.trimStart().startsWith('--'))
       .map((l) => l.replace(/json_extract\(ps\.data, '\$\.phone'\)/, 'JSONPHONE').replace(/\(ps\.data::jsonb->>'phone'\)/, 'JSONPHONE'))
       .join('\n').trim()
-    expect(body(MIG138_PG)).toBe(body(MIG138))
+    expect(preamble(MIG138_PG)).toBe(preamble(MIG138))
+  })
+
+  it('[r28] the migration references NO renamed-away/absent table (no yana_* abort) and every referenced table EXISTS in the live schema', () => {
+    // yana_* were renamed to hamilton_* (sqlite 090 / pg 0086); referencing them aborts PG.
+    const yanaRef = /\byana_(authorizations|runs|autopilot_runs|blockers|resolved_fields|saved_sessions|payment_authorizations|attestation_authorizations)\b/
+    expect(yanaRef.test(MIG138.replace(/--.*/g, ''))).toBe(false)
+    expect(yanaRef.test(MIG138_PG.replace(/--.*/g, ''))).toBe(false)
+    // Every table the SQLite migration MOVES/REVOKES must exist in the real migrated schema.
+    const raw = fullDb()
+    const existing = new Set(raw.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all().map((r) => r.name))
+    const referenced = [...CLASSIFICATION.moveProfile, ...CLASSIFICATION.moveAccount, ...CLASSIFICATION.revoke]
+    const missing = referenced.filter((t) => !existing.has(t))
+    expect(missing).toEqual([])
+    // Postgres 0142 existence-guards each table (to_regclass) so an absent/renamed table is skipped.
+    expect(MIG138_PG).toContain('to_regclass(t) IS NOT NULL')
   })
 
   it('[r27 #3 GUARD] every two-owner table in the live migrated schema is classified (move / revoke / exempt)', () => {
@@ -185,10 +217,33 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     // a new one added by a future migration fails here until a human classifies it.
     const unclassified = profile.filter((t) => !classified.has(t))
     expect(unclassified).toEqual([])
-    // Sanity: the discovery actually found the known later-migration tables (not just schema.sql's).
+    // Sanity: the discovery found the known later-migration tables (not just schema.sql's).
     expect(profile).toContain('grant_applications')
     expect(profile).toContain('anya_match_suggestions')
     expect(profile).toContain('hamilton_portal_credentials')
+  })
+
+  it('[r28 CRITICAL] a coincidental profile-phone match is NEVER auto-merged — data stays with its owner, only an operator conflict is recorded', () => {
+    const raw = fullDb()
+    const p = '+15559990000'
+    // A phone OWNER (canonical) and an UNRELATED email-only user who merely typed the owner's phone into their profile.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('owner', ?, '2026-01-01')`).run(p)
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('oc', 'owner', 'phone_otp', ?)`).run(p)
+    raw.prepare(`INSERT INTO users (id, primary_email, primary_phone, created_at) VALUES ('stranger', 's@x.com', NULL, '2026-01-02')`).run()
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('sc', 'stranger', 'email_otp', 's@x.com')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('sp', 'stranger', 'Stranger')`).run()
+    raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('sp', 'basic_information', ?)`).run(JSON.stringify({ phone: p }))
+
+    raw.exec(MIG138)
+
+    // NO cross-account merge: the stranger's profile + credential stay theirs.
+    expect(profileOwner(raw, 'sp')).toBe('stranger')
+    expect(raw.prepare(`SELECT user_id FROM user_credentials WHERE id='sc'`).get().user_id).toBe('stranger')
+    // Never added to the (proven) map -> never moved.
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map WHERE dup_user_id='stranger'`).get().c).toBe(0)
+    // Recorded ONLY as an operator-visible conflict (fail closed).
+    expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id='stranger'`).get()?.reason).toBe('pre-map-unverified, manual review')
+    expect(userProfileSplits(raw)).toBe(0)
   })
 
   it('the runner selects 138 even when 137 is already stamped (forward migration, not an in-place edit)', () => {
@@ -452,23 +507,23 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     expect(userProfileSplits(raw)).toBe(0)
   })
 
-  it('[r27 #2] pre-map (old-52caf99-137) stamped DB: dup phone already nulled -> reconstructed from the profile trace + repaired (NOT a silent no-op)', () => {
+  it('[r28 #2] pre-map (old-52caf99-137) stamped DB: a nulled candidate is RECORDED for manual review, NEVER auto-merged (fail closed)', () => {
     const raw = fullDb()
     const p = '+15552220000'
-    // Simulate the r23-137-stamped state: dup already nulled, canonical holds the phone+credential.
+    // r23-137-stamped state: a nulled user with a profile whose trace phone matches the canonical.
+    // We CANNOT prove they were the phone's duplicate, so we must NOT auto-merge.
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('pre-dup', NULL, '2026-01-01')`).run()
     raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('pre-can', ?, '2026-02-01')`).run(p)
     raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('pc', 'pre-can', 'phone_otp', ?)`).run(p)
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pre-p', 'pre-dup', 'PD')`).run()
-    // Durable trace: the dup profile still records the phone in basic_information.
     raw.prepare(`INSERT INTO profile_sections (profile_id, section_key, data) VALUES ('pre-p', 'basic_information', ?)`).run(JSON.stringify({ phone: p }))
 
-    // Only 138 runs (137 is "stamped" from the old version and does not re-run).
-    raw.exec(MIG138)
+    raw.exec(MIG138) // only 138 runs (old 137 stamped)
 
-    // Reconstructed from the trace and merged -> NOT a silent empty no-op.
-    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map`).get().c).toBeGreaterThan(0)
-    expect(profileOwner(raw, 'pre-p')).toBe('pre-can')
+    // NOT merged (their profile stays theirs), NOT in the proven map — but RECORDED (not silent).
+    expect(profileOwner(raw, 'pre-p')).toBe('pre-dup')
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map WHERE dup_user_id='pre-dup'`).get().c).toBe(0)
+    expect(raw.prepare(`SELECT reason FROM phone_dedupe_conflicts WHERE dup_user_id='pre-dup'`).get()?.reason).toBe('pre-map-unverified, manual review')
     expect(userProfileSplits(raw)).toBe(0)
   })
 })

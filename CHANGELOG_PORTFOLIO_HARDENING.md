@@ -231,6 +231,14 @@ Compat: behavior-preserving; the forward migration cleanly merges reconcilable p
 
 Compat: behavior-preserving; the forward migration now covers the FULL two-owner surface, handles multi-dup groups without aborting, and repairs/flags pre-map states. New/updated tests in `otpPhoneDedupMigration.test.js` (introspection guard, multi-dup no-abort, group-unmergeable, pre-map reconstruction), all verified red per finding.
 
+## Round 28 — pre-map is conflict-only (no cross-account merge) + no renamed-away-table abort (see PORTFOLIO_AUDIT.md §5ab)
+
+- **[CRITICAL] Removed the r27 profile-phone reconstruction that merged unrelated users.** A coincidental `basic_information.phone` match populated phone_dedupe_map, so an email-only user who typed another user's phone into their profile had their profile + credentials reassigned to the phone owner — a silent cross-account data merge. Now detect-ONLY, fail-closed: such candidates are recorded as operator conflicts (`pre-map-unverified, manual review`) and moved by NOTHING. The proven-map path (137 captures before nulling; 138 live-captures still-phoned dups) is unchanged.
+- **[HIGH] The migration no longer targets renamed-away yana_* tables (PG abort).** yana_* were renamed to hamilton_* (sqlite 090 / pg 0086); r27's 0142 aborted at `UPDATE yana_runs` in live PG. yana_* removed from move/revoke (hamilton_* successors classified), marked EXEMPT (vestigial). Postgres 0142 now MOVE/REVOKEs inside a DO block that existence-guards each table (`to_regclass`) so an absent/renamed table is skipped. The test harness now applies migrations with REAL runner semantics (tolerate only idempotent errors), and a guard asserts no yana_* reference + every referenced table exists.
+- All r19–r27 preserved. 138 (SQLite static) and 0142 (PG DO block) share a byte-identical preamble/collapse/phone-fix (parity-tested); move/revoke derives from the same generated classification.
+
+Compat: behavior-preserving; the forward migration never merges on an unproven match and never aborts on a renamed-away table. New/updated tests in `otpPhoneDedupMigration.test.js` (cross-account negative, no-yana-reference + referenced-tables-exist, pre-map conflict-only), verified red per finding.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

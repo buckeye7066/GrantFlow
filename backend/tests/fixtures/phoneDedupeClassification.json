@@ -19,11 +19,7 @@
     "hamilton_runs",
     "hamilton_autopilot_runs",
     "hamilton_blockers",
-    "hamilton_resolved_fields",
-    "yana_runs",
-    "yana_autopilot_runs",
-    "yana_blockers",
-    "yana_resolved_fields"
+    "hamilton_resolved_fields"
   ],
   "moveAccount": [
     "profiles",
@@ -40,14 +36,18 @@
     "hamilton_attestation_authorizations",
     "hamilton_portal_credentials",
     "hamilton_session_capture_requests",
-    "yana_authorizations",
-    "yana_saved_sessions",
-    "yana_payment_authorizations",
-    "yana_attestation_authorizations",
     "payment_access_events"
   ],
   "exempt": [
     "audit_logs",
-    "agent_activity_events"
+    "agent_activity_events",
+    "yana_authorizations",
+    "yana_runs",
+    "yana_autopilot_runs",
+    "yana_blockers",
+    "yana_resolved_fields",
+    "yana_saved_sessions",
+    "yana_payment_authorizations",
+    "yana_attestation_authorizations"
   ]
 }
