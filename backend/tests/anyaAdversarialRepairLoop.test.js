@@ -398,6 +398,7 @@ describe('owner.adversarial_repair — edit-lock (g)', () => {
       {
         ctx: { isAdmin: true, email: OWNER, userId: 'owner1' },
         user: { role: 'admin', email: OWNER },
+        repairConfig: { enabled: true, landMode, allowCritical: false },
         // clean author + verifier so the loop returns a verified diff. The diff
         // must touch ONLY the trusted target file (the owner-supplied filePath).
         authorFn: async () => goodDiff(TARGET),

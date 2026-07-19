@@ -34,7 +34,7 @@
 
 import crypto from 'node:crypto'
 import {
-  getDirectLandSecret,
+  resolveDirectLandSecret,
   issueDirectLandToken,
   verifyDirectLandToken,
   recordAndConsumeNonce,
@@ -142,23 +142,25 @@ export function validatePatchForDispatch(patch, { allowCriticalPaths = false } =
  * @returns {{landMode:'pr'|'direct', downgraded:boolean, note:string|null,
  *            critical:string[], allowCritical:boolean}}
  */
-export function resolveDirectLanding({ paths = [], landMode = 'pr', env = process.env } = {}) {
+export function resolveDirectLanding({ paths = [], landMode = 'pr', env = process.env, allowCritical = undefined } = {}) {
   const wantDirect = landMode === 'direct' || landMode === true
   if (!wantDirect) {
     return { landMode: 'pr', downgraded: false, note: null, critical: [], allowCritical: false }
   }
-  const allowCritical = directAllowsCriticalPaths(env)
+  // An explicit boolean (from the DB-authoritative settings config) wins over
+  // the env read; when not supplied, fall back to the env flag (unchanged).
+  const effectiveAllowCritical = typeof allowCritical === 'boolean' ? allowCritical : directAllowsCriticalPaths(env)
   const critical = criticalPathsTouched(paths)
-  if (critical.length > 0 && !allowCritical) {
+  if (critical.length > 0 && !effectiveAllowCritical) {
     return {
       landMode: 'pr',
       downgraded: true,
       note: `critical path — routed to PR, not direct (${critical.join(', ')})`,
       critical,
-      allowCritical,
+      allowCritical: effectiveAllowCritical,
     }
   }
-  return { landMode: 'direct', downgraded: false, note: null, critical, allowCritical }
+  return { landMode: 'direct', downgraded: false, note: null, critical, allowCritical: effectiveAllowCritical }
 }
 
 /**
@@ -533,11 +535,14 @@ export async function landPatchDirectToMain({
   const validation = validatePatchForDispatch(patch, { allowCriticalPaths })
   if (!validation.ok) return { ok: false, landed: false, step: 'validate', error: validation.reason }
 
-  // Direct land is INERT without the server secret — no proof can be issued, so
-  // nothing may merge (the PR path is always available instead).
-  const secret = getDirectLandSecret(env)
+  // Direct land is INERT without a signing secret. The secret is SELF-
+  // PROVISIONING: env wins, else a persisted system_kv value, else auto-generated
+  // (crypto.randomBytes) and persisted — so direct land works with ZERO env
+  // config and the owner never sets or sees a secret. Only a total absence of a
+  // DB (and no env secret) leaves it empty → fail closed (caller falls back to PR).
+  const secret = await resolveDirectLandSecret({ db, env })
   if (!secret) {
-    return { ok: false, landed: false, step: 'secret', error: 'DIRECT_LAND_TOKEN_SECRET not configured — direct land disabled (use the PR path).' }
+    return { ok: false, landed: false, step: 'secret', error: 'no signing secret available (no DB to auto-provision one) — direct land disabled (use the PR path).' }
   }
 
   // FRESH, unique branch — reject a reused/pre-existing name (stale green run /
@@ -626,6 +631,7 @@ export async function landVerifiedPatch({
   title = '',
   landMode = 'pr',
   automerge = false,
+  allowCritical = undefined,
   expectedPaths = null,
   fetchImpl = null,
   env = process.env,
@@ -644,16 +650,33 @@ export async function landVerifiedPatch({
   const shape = validatePatchForDispatch(patch, { allowCriticalPaths: true })
   if (!shape.ok) return { ok: false, dispatched: false, landed: false, error: shape.reason }
 
-  const decision = resolveDirectLanding({ paths: shape.paths, landMode, env })
+  const decision = resolveDirectLanding({ paths: shape.paths, landMode, env, allowCritical })
 
-  if (decision.landMode === 'pr') {
+  // NEVER SILENTLY FAIL: a direct land needs the GitHub merge token. If it is
+  // absent, gracefully fall back to opening a PR (fail-closed) with a note the
+  // owner-facing readiness line already explains — never attempt an admin-merge
+  // that cannot complete.
+  let effective = decision
+  if (decision.landMode === 'direct') {
+    const { token } = resolveCodeFixGitHubConfig(env)
+    if (!token) {
+      effective = {
+        ...decision,
+        landMode: 'pr',
+        downgraded: true,
+        note: 'GitHub token not configured — opened a PR instead of direct-merging.',
+      }
+    }
+  }
+
+  if (effective.landMode === 'pr') {
     // PR path (existing gate; strict forbidden-path block re-applied inside).
     const result = await dispatchCodeFixWorkflow({ patch, title, automerge, landMode: 'pr', expectedPaths, fetchImpl, env })
     return {
       ...result,
       land_mode: 'pr',
-      downgraded_to_pr: decision.downgraded,
-      land_note: decision.note,
+      downgraded_to_pr: effective.downgraded,
+      land_note: effective.note,
     }
   }
 

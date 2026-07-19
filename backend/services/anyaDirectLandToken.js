@@ -30,8 +30,50 @@ import crypto from 'node:crypto'
 export const DIRECT_LAND_TOKEN_DEFAULT_TTL_MS = Number(process.env.DIRECT_LAND_TOKEN_TTL_MS) || 10 * 60_000
 export const DIRECT_LAND_NONCE_KV_PREFIX = 'direct_land_nonce:'
 
+export const DIRECT_LAND_SECRET_KV_KEY = 'direct_land_token_secret'
+
 export function getDirectLandSecret(env = process.env) {
   return String(env?.DIRECT_LAND_TOKEN_SECRET || env?.ANYA_DIRECT_LAND_SECRET || '').trim()
+}
+
+/**
+ * Resolve the signing secret WITHOUT requiring a Railway env var:
+ *   1. env (DIRECT_LAND_TOKEN_SECRET / ANYA_DIRECT_LAND_SECRET) wins if set,
+ *   2. else a persisted system_kv `direct_land_token_secret` (reused across runs),
+ *   3. else AUTO-GENERATE crypto.randomBytes(32).hex, persist it, and return it.
+ *
+ * So direct-land works with zero env config (GITHUB_TOKEN — the merge capability
+ * — stays env and is already configured). Never throws: if there is no DB and no
+ * env secret, returns '' (direct land then stays inert / fail-closed).
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.db]
+ * @param {object} [opts.env=process.env]
+ * @returns {Promise<string>}
+ */
+export async function resolveDirectLandSecret({ db = null, env = process.env } = {}) {
+  const fromEnv = getDirectLandSecret(env)
+  if (fromEnv) return fromEnv
+  if (!db || typeof db.prepare !== 'function') return ''
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ? LIMIT 1').get(DIRECT_LAND_SECRET_KV_KEY)
+    const existing = row && row.value !== null && row.value !== undefined ? String(row.value).trim() : ''
+    if (existing) return existing
+    const generated = crypto.randomBytes(32).toString('hex')
+    const at = new Date().toISOString()
+    // Guard against a concurrent generator: INSERT and, on a unique clash,
+    // re-read whatever won the race so both callers use the SAME secret.
+    try {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(DIRECT_LAND_SECRET_KV_KEY, generated, at)
+      return generated
+    } catch {
+      const raced = await db.prepare('SELECT value FROM system_kv WHERE key = ? LIMIT 1').get(DIRECT_LAND_SECRET_KV_KEY)
+      return raced && raced.value !== null && raced.value !== undefined ? String(raced.value).trim() : generated
+    }
+  } catch {
+    return ''
+  }
 }
 
 export function sha256Hex(text) {

@@ -19,6 +19,7 @@ import { isAgentControlAdminEmail, AGENT_CONTROL_ADMIN_EMAIL } from '../../../..
 import { useAuthStore } from '@/stores/authStore'
 import AgentControlAgentCard from './AgentControlAgentCard.jsx'
 import AnyaAutonomyToggle from './AnyaAutonomyToggle.jsx'
+import AdversarialRepairToggle from './AdversarialRepairToggle.jsx'
 import AgentControlRunDetails from './AgentControlRunDetails.jsx'
 import AgentControlEventsTimeline from './AgentControlEventsTimeline.jsx'
 
@@ -307,6 +308,9 @@ export default function AgentControlCenter() {
 
         {/* Anya is interactive (no start/stop card) — expose her autonomy toggle here */}
         <AnyaAutonomyToggle />
+
+        {/* Owner control for autonomous adversarial code repair (+ direct-to-main) */}
+        <AdversarialRepairToggle />
 
         {/* Run details + events */}
         {activeRun ? (
