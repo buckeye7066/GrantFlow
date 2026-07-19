@@ -54,6 +54,7 @@ import {
 import { escalateSamCritical } from './samEscalation.js'
 import { sendSamReportEmail } from './samEmailReport.js'
 import { gitProposeFixes } from './samGit.js'
+import { runAdversarialRepairs } from './samAdversarialRepair.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -155,6 +156,7 @@ export async function runSam(args = {}) {
   const checkResults = []
   const gateResults = []
   const appliedFixes = []
+  let adversarialRepairs = null
   let runError = null
 
   try {
@@ -233,6 +235,23 @@ export async function runSam(args = {}) {
         })
         appliedFixes.push(...fixes)
       }
+
+      // OPT-IN new-risk-tier: findings needing a REAL code edit (a "manual"
+      // strategy, no deterministic safe fix) get one adversarial author↔verifier
+      // repair attempt, landing ONLY a clean-verdict diff through the gated
+      // dispatch (PR by default). Gated OFF by default via SAM_ADVERSARIAL_REPAIR
+      // so it never fires on the scheduler; additive to applySafeFixes above.
+      try {
+        adversarialRepairs = await runAdversarialRepairs({
+          findings,
+          repairPlan,
+          runId,
+          db,
+          maxRounds: 3,
+        })
+      } catch (advErr) {
+        console.warn('[sam] adversarial repair skipped:', advErr?.message || advErr)
+      }
     }
 
     const score = computeHealthScore(findings)
@@ -272,6 +291,7 @@ export async function runSam(args = {}) {
       findings,
       repair_plan: repairPlan,
       applied_fixes: appliedFixes,
+      adversarial_repairs: adversarialRepairs,
       gate_results: gateResults,
       check_results: checkResults,
       summary,
