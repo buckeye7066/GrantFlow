@@ -90,3 +90,40 @@ describe('runAdversarialRepairs — gating', () => {
     expect(out.notes.some((n) => n.reason === 'affected_files_not_all_safe')).toBe(true)
   })
 })
+
+describe('runAdversarialRepairs — DB-authoritative config wiring', () => {
+  it('config.enabled=false makes it INERT even if env says ON (DB wins)', async () => {
+    let generated = false
+    const out = await runAdversarialRepairs({
+      findings: [manualFinding],
+      repairPlan: [manualPlan],
+      env: { SAM_ADVERSARIAL_REPAIR: '1' }, // env ON...
+      config: { enabled: false, landMode: 'pr', allowCritical: false }, // ...but DB config OFF
+      isEditLockPresent: () => false,
+      generateRepair: async () => { generated = true; return { status: 'clean', diff: 'x' } },
+      landPatch: async () => ({ ok: true }),
+      readFile: async () => 'code',
+    })
+    expect(out.enabled).toBe(false)
+    expect(generated).toBe(false)
+  })
+
+  it('config land mode + allowCritical are threaded into landPatch', async () => {
+    let landArgs = null
+    const out = await runAdversarialRepairs({
+      findings: [manualFinding],
+      repairPlan: [manualPlan],
+      env: {},
+      config: { enabled: true, landMode: 'direct', allowCritical: true },
+      isEditLockPresent: () => false,
+      readFile: async () => 'code',
+      policy: { auto_commit_allowed: true, direct_main_commit: false, auto_fix_safe: true, auto_branch_risky: true },
+      generateRepair: async () => ({ status: 'clean', diff: 'diff --git a/src/x b/src/x', rounds: 1 }),
+      landPatch: async (a) => { landArgs = a; return { ok: true, dispatched: true, land_mode: 'direct' } },
+    })
+    expect(out.enabled).toBe(true)
+    expect(out.land_mode).toBe('direct')
+    expect(landArgs.landMode).toBe('direct')
+    expect(landArgs.allowCritical).toBe(true)
+  })
+})

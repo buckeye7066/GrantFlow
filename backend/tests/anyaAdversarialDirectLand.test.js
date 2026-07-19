@@ -294,6 +294,7 @@ describe('owner.adversarial_repair — unverified verdict + direct lands NOTHING
       {
         ctx: { isAdmin: true, email: OWNER, userId: 'o' },
         user: { role: 'admin', email: OWNER },
+        repairConfig: { enabled: true, landMode: 'direct', allowCritical: false },
         authorFn: async () => goodDiff(),
         verifierFn: async () => { throw new Error('verifier down') },
         fetchImpl: async () => { fetchCalled = true; return { status: 204 } },
@@ -333,5 +334,116 @@ describe('anya-code-fix-pr.yml structural safety', () => {
 
   it('sets a run-name embedding the branch so the backend can correlate the run', () => {
     expect(yaml).toMatch(/^run-name:.*inputs\.branch/m)
+  })
+})
+
+// In-memory system_kv fake for the self-provisioning secret path.
+function makeFakeDb() {
+  const kv = new Map()
+  return {
+    _kv: kv,
+    prepare(sql) {
+      const s = String(sql)
+      return {
+        get: async (...a) => {
+          if (/SELECT value FROM system_kv WHERE key/i.test(s)) return kv.has(a[0]) ? { value: kv.get(a[0]) } : undefined
+          if (/SELECT 1 AS x FROM system_kv WHERE key/i.test(s)) return kv.has(a[0]) ? { x: 1 } : undefined
+          return undefined
+        },
+        run: async (...a) => {
+          if (/^\s*CREATE TABLE/i.test(s)) return { changes: 0 }
+          if (/INSERT INTO system_kv/i.test(s)) { kv.set(a[0], a[1]); return { changes: 1 } }
+          if (/UPDATE system_kv SET value/i.test(s)) { const [v, , k] = a; if (kv.has(k)) { kv.set(k, v); return { changes: 1 } } return { changes: 0 } }
+          return { changes: 0 }
+        },
+      }
+    },
+  }
+}
+
+describe('DB-authoritative allowCritical + graceful fallback + self-provisioning secret', () => {
+  it('resolveDirectLanding: explicit allowCritical override WINS over env', () => {
+    // env says NO override, but the DB config allows critical → stays direct
+    const d = resolveDirectLanding({ paths: ['backend/db/migrations/9.sql'], landMode: 'direct', env: {}, allowCritical: true })
+    expect(d.landMode).toBe('direct')
+    // env says override ON, but the DB config forbids critical → downgraded to PR
+    const d2 = resolveDirectLanding({ paths: ['backend/db/migrations/9.sql'], landMode: 'direct', env: { ADVERSARIAL_DIRECT_ALLOW_CRITICAL: 'true' }, allowCritical: false })
+    expect(d2.landMode).toBe('pr')
+    expect(d2.downgraded).toBe(true)
+  })
+
+  it('landVerifiedPatch: enabled direct + allowCritical=true → critical path lands DIRECT', async () => {
+    const s = stubs()
+    const res = await landVerifiedPatch({
+      patch: goodDiff('backend/db/migrations/9_x.sql'),
+      landMode: 'direct',
+      allowCritical: true,
+      env: ENV,
+      db: makeFakeDb(),
+      ...s,
+    })
+    expect(res.land_mode).toBe('direct')
+    expect(res.landed).toBe(true)
+    expect(s.calls.merges.length).toBe(1)
+  })
+
+  it('NEVER SILENTLY FAILS: direct requested but NO GitHub token → falls back to PR (explained)', async () => {
+    const s = stubs()
+    let fetchCalled = false
+    const res = await landVerifiedPatch({
+      patch: goodDiff(),
+      landMode: 'direct',
+      env: { GITHUB_REPO: 'buckeye7066/GrantFlow', DIRECT_LAND_TOKEN_SECRET: 's3cr3t' }, // no GITHUB_TOKEN
+      fetchImpl: async () => { fetchCalled = true; return { status: 204 } },
+      ...s,
+    })
+    // Routed to PR (never an admin-merge that cannot complete), with a clear note.
+    expect(res.land_mode).toBe('pr')
+    expect(res.downgraded_to_pr).toBe(true)
+    expect(res.land_note).toMatch(/GitHub token not configured/i)
+    expect(s.calls.merges.length).toBe(0) // no admin-merge attempted
+    // The PR dispatch itself honestly reports the missing token — never silent.
+    expect(res.error).toMatch(/GITHUB_TOKEN/i)
+    expect(fetchCalled).toBe(false)
+  })
+
+  it('with a GitHub token present, an enabled direct land goes DIRECT (no downgrade)', async () => {
+    const s = stubs()
+    const res = await landVerifiedPatch({ patch: goodDiff(), landMode: 'direct', env: ENV, db: makeFakeDb(), ...s })
+    expect(res.land_mode).toBe('direct')
+    expect(res.landed).toBe(true)
+  })
+
+  it('SELF-PROVISIONING SECRET: direct land succeeds with ZERO env secret (auto-generated + persisted)', async () => {
+    const db = makeFakeDb()
+    const envNoSecret = { GITHUB_TOKEN: 't', GITHUB_REPO: 'buckeye7066/GrantFlow' } // no DIRECT_LAND_TOKEN_SECRET
+    const s = stubs()
+    const res = await landPatchDirectToMain({ patch: goodDiff(), env: envNoSecret, db, ...s })
+    expect(res.landed).toBe(true)
+    // the secret was auto-generated + persisted for reuse
+    expect(db._kv.get('direct_land_token_secret')).toMatch(/^[0-9a-f]{64}$/)
+    // a second land reuses the SAME persisted secret (no env needed, ever)
+    const s2 = stubs()
+    const res2 = await landPatchDirectToMain({ patch: goodDiff(), env: envNoSecret, db, ...s2 })
+    expect(res2.landed).toBe(true)
+  })
+
+  it('owner.adversarial_repair is INERT when the feature is turned OFF (config disabled)', async () => {
+    let fetchCalled = false
+    const result = await invokeTool(
+      'owner.adversarial_repair',
+      { filePath: 'backend/services/anyaAdversarialRepairLoop.js', finding: 'x', dryRun: false },
+      {
+        ctx: { isAdmin: true, email: OWNER, userId: 'o' },
+        user: { role: 'admin', email: OWNER },
+        repairConfig: { enabled: false, landMode: 'pr', allowCritical: false }, // master OFF
+        authorFn: async () => goodDiff(),
+        verifierFn: async () => ({ verdict: 'clean', residual: [], regressions: [] }),
+        fetchImpl: async () => { fetchCalled = true; return { status: 204 } },
+      },
+    )
+    expect(result.output.status).toBe('disabled')
+    expect(result.output.applied).toBe(false)
+    expect(fetchCalled).toBe(false)
   })
 })

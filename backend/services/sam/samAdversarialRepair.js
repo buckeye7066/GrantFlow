@@ -36,14 +36,11 @@ import { getSamPolicy, assertCommitAllowed } from './samPolicy.js'
 import { buildFixBranchName } from './samGit.js'
 import { generateVerifiedRepair, isLandableStatus } from '../anyaAdversarialRepairLoop.js'
 import { landVerifiedPatch } from '../anyaCodeFixDispatch.js'
+import { getConfig } from '../adversarialRepairSettings.js'
 import { isAgentEditLockPresent } from '../../utils/agentEditLock.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
-
-function isFlagOn(env) {
-  return /^(1|true|yes|on)$/i.test(String(env?.SAM_ADVERSARIAL_REPAIR ?? '').trim())
-}
 
 /** A finding needs a real code edit when its plan strategy is a "manual" one. */
 export function isManualCodeEditPlan(plan) {
@@ -66,9 +63,10 @@ export async function runAdversarialRepairs({
   env = process.env,
   maxRounds = 3,
   maxRepairs = Number(process.env.SAM_ADVERSARIAL_MAX_REPAIRS) || 3,
-  // How a clean verified diff lands: 'pr' (default) or 'direct' (auto-merge to
-  // main after release:gates). Default keeps Sam on the PR path.
-  landMode = /^direct$/i.test(String(process.env.SAM_ADVERSARIAL_LAND_MODE ?? '').trim()) ? 'direct' : 'pr',
+  // EFFECTIVE settings (DB-authoritative over env). Injectable for tests;
+  // otherwise resolved from getConfig(db, env) — the master switch, land mode,
+  // and critical-path override all come from here, NEVER env directly.
+  config = null,
   // Injectables (tests never hit a provider / git / remote):
   generateRepair = generateVerifiedRepair,
   landPatch = landVerifiedPatch,
@@ -77,7 +75,9 @@ export async function runAdversarialRepairs({
   policy = null,
   logger = console,
 } = {}) {
-  const out = { enabled: isFlagOn(env), attempted: 0, proposals: [], notes: [] }
+  const cfg = config || (await getConfig(db, env))
+  const landMode = cfg.landMode === 'direct' ? 'direct' : 'pr'
+  const out = { enabled: cfg.enabled === true, land_mode: landMode, attempted: 0, proposals: [], notes: [] }
   if (!out.enabled) return out
 
   // Never dispatch while a human + another assistant are actively editing.
@@ -169,6 +169,7 @@ export async function runAdversarialRepairs({
         patch: repair.diff,
         title: `fix(sam): adversarially-verified repair for ${finding.title || filePath}`,
         landMode, // 'pr' (default) or 'direct'; critical paths auto-downgrade to PR.
+        allowCritical: cfg.allowCritical === true, // DB-authoritative critical-path override
         automerge: false, // Sam proposes; a human/branch-protection merges on the PR path.
         db, // enables single-use nonce enforcement on the direct path
         expectedPaths: trustedPaths, // workflow guard set = trusted, not the model diff
@@ -203,4 +204,4 @@ export async function runAdversarialRepairs({
   return out
 }
 
-export const __testing__ = { REPO_ROOT, isFlagOn, isManualCodeEditPlan }
+export const __testing__ = { REPO_ROOT, isManualCodeEditPlan }

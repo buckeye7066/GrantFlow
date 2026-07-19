@@ -49,6 +49,13 @@ import {
   getAutonomousConfig,
   setAutonomousEnabled,
 } from '../services/anyaAutonomousScheduler.js'
+import {
+  getConfig as getAdversarialRepairConfig,
+  setConfig as setAdversarialRepairConfig,
+  validateConfigPatch as validateAdversarialRepairPatch,
+  computeReadiness as computeAdversarialRepairReadiness,
+} from '../services/adversarialRepairSettings.js'
+import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js'
 
 // Persisted key for the Anya autonomous-scheduler master toggle.
 const ANYA_AUTONOMOUS_SETTING_KEY = 'anya.autonomous_enabled'
@@ -150,6 +157,66 @@ router.put('/anya/autonomous', asyncHandler(async (req, res) => {
   await logAdminAction(req, 'anya_autonomous_toggle', { enabled: raw })
   const state = await readAnyaAutonomousState(req.db)
   res.json({ ok: true, ...state })
+}))
+
+// ---------------------------------------------------------------------------
+// Autonomous Code Repair (Sam/Anya) — owner-flipped master switch + land mode +
+// critical-path override, persisted DB-authoritative over env. Governs
+// auto-merge-to-prod, so it stays under the strict owner gate above.
+// ---------------------------------------------------------------------------
+function serializeRepairConfig(config, readiness) {
+  return {
+    ok: true,
+    config: {
+      enabled: config.enabled === true,
+      landMode: config.landMode === 'direct' ? 'direct' : 'pr',
+      allowCritical: config.allowCritical === true,
+    },
+    source: config.source,
+    readiness,
+  }
+}
+
+router.get('/adversarial-repair', asyncHandler(async (req, res) => {
+  const config = await getAdversarialRepairConfig(req.db)
+  res.json(serializeRepairConfig(config, computeAdversarialRepairReadiness()))
+}))
+
+router.put('/adversarial-repair', asyncHandler(async (req, res) => {
+  const body = req.body || {}
+  const patch = {}
+  if (body.enabled !== undefined) patch.enabled = body.enabled
+  if (body.landMode !== undefined) patch.landMode = body.landMode
+  if (body.allowCritical !== undefined) patch.allowCritical = body.allowCritical
+
+  const validation = validateAdversarialRepairPatch(patch)
+  if (!validation.ok) {
+    return res.status(400).json({ ok: false, error: 'invalid_config', details: validation.errors })
+  }
+
+  const config = await setAdversarialRepairConfig(req.db, patch)
+
+  // Dual trail: the control-event log + the general audit log (this governs
+  // prod auto-merge, so record who/when/what at WARNING severity).
+  await logAdminAction(req, 'adversarial_repair_config', patch)
+  try {
+    await logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.ADMIN,
+      action: 'adversarial_repair_config_change',
+      severity: SEVERITY.WARNING,
+      userId: req.user?.userId ?? req.user?.id ?? null,
+      resourceType: 'adversarial_repair_config',
+      details: {
+        patch,
+        result: { enabled: config.enabled, landMode: config.landMode, allowCritical: config.allowCritical },
+        by: req.user?.email || null,
+      },
+      ipAddress: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+    })
+  } catch { /* best-effort — never block the response on audit */ }
+
+  res.json(serializeRepairConfig(config, computeAdversarialRepairReadiness()))
 }))
 
 router.get('/runs', asyncHandler(async (req, res) => {

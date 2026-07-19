@@ -5437,6 +5437,21 @@ registerTool({
       throw error
     }
 
+    // Master switch (DB-authoritative over env). When the owner has the feature
+    // OFF, the tool is inert — it applies NOTHING and reads nothing further.
+    // context.repairConfig is a trusted server-side test seam (like authorFn).
+    const { getConfig } = await import('./adversarialRepairSettings.js')
+    const repairConfig = context?.repairConfig || (await getConfig(context?.db ?? null))
+    if (!repairConfig.enabled) {
+      return {
+        status: 'disabled',
+        applied: false,
+        dispatched: false,
+        landed: false,
+        message: 'Autonomous code repair is turned OFF. Enable it in the admin panel ("The toggle switch that exists because Claude is a moron").',
+      }
+    }
+
     const resolved = path.resolve(REPO_ROOT, filePath)
     if (!isUnderAllowedRoots(resolved)) {
       const error = new Error('File path is outside of permitted directories')
@@ -5523,6 +5538,7 @@ registerTool({
       title: `fix(anya): adversarially-verified repair for ${filePath}`,
       landMode,
       automerge,
+      allowCritical: repairConfig.allowCritical === true, // DB-authoritative
       db: context?.db ?? null,
       expectedPaths: [trustedPath],
       fetchImpl: typeof context?.fetchImpl === 'function' ? context.fetchImpl : null,

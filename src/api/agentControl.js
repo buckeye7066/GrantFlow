@@ -59,6 +59,16 @@ export const agentControlApi = {
       body: JSON.stringify({ enabled: Boolean(enabled) }),
     }),
 
+  // Autonomous Code Repair (Sam/Anya) config — master switch, land mode,
+  // critical-path override — persisted DB-authoritative, owner-only.
+  getAdversarialRepair: () => apiFetch(`${BASE}/adversarial-repair`),
+  setAdversarialRepair: (patch) =>
+    apiFetch(`${BASE}/adversarial-repair`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch || {}),
+    }),
+
   startAgent: (agentName, options = {}) =>
     postJson(`${BASE}/agents/${encodeURIComponent(agentName)}/start`, { options }),
   stopAgent: (agentName, reason = null) =>
