@@ -212,6 +212,16 @@ Compat: behavior-preserving; the forward migration repairs stranded phone creden
 
 Compat: behavior-preserving; the migration cleanly merges reconcilable duplicates and leaves genuinely-ambiguous ones intact-and-recorded (no silent split, no data loss). New tests in `otpPhoneDedupMigration.test.js` (mergeable full-merge; unmergeable both-profiles / both-stripe / both-prefs cross-FK-consistency; SQLite/Postgres body parity), verified red by reintroducing the split.
 
+## Round 26 — durable map (ordering), abort-proofing, all two-owner tables + by-construction guard (see PORTFOLIO_AUDIT.md §5z)
+
+- **[HIGH #1] The repair survives 137's phone-null.** 138 identified duplicates by primary_phone, which 137 nulls first → the repair was a silent no-op. 137/0141 now capture the dup→canonical identity into a durable `phone_dedupe_map` BEFORE the null; 138/0142 repair from it (+ live-capture fallback + re-apply the phone fix so a stamped DB is repaired end-to-end).
+- **[HIGH #2] The migration never aborts on a legacy unique collision.** `saved_grants` has a partial unique `(user_id, opportunity_id) WHERE profile_id IS NULL`; a blind mergeable-dup UPDATE hit `UNIQUE constraint failed` and aborted mid-run (deploy outage). Now redundant dup rows are COLLAPSED (deleted) first for both saved_grants uniques and the user_organizations PK; all other moved tables audited (global uniques can't collide).
+- **[HIGH #3] Every two-owner-FK table is handled (no split).** user_sessions + hamilton_* carry user_id AND profile_id; moving the profile but not these left them split. For a mergeable dup, ALL 20 user_id+profile_id tables (+ service_purchases' stripe FK) are MOVED with the profile, EXCEPT security-sensitive session/authorization/payment state (user_sessions, hamilton_authorizations, hamilton_saved_sessions, hamilton_payment_authorizations, hamilton_attestation_authorizations) which is REVOKED (deleted), never transferred.
+- **By-construction guard:** a post-migration test sweeps every two-owner table and fails on ANY user_id/profile_id (or user_id/stripe_customer_id) mismatch — red-able, catches any table a future change misses.
+- All r19–r25 preserved. 138/0142 byte-identical (parity-tested); idempotent + fresh no-op. `anya_brain_memory` dropped from the move list (its `user_id` was a comment, not a column).
+
+Compat: behavior-preserving; the forward migration cleanly merges reconcilable phone duplicates (moving all owned data, revoking stale auth/sessions) and leaves ambiguous ones intact-and-recorded — never split, never aborting. New/updated tests in `otpPhoneDedupMigration.test.js` (ordering, collision-no-abort, revoke-vs-move, multi-duplicate invariant sweep), verified red per finding.
+
 ## Not changed (recorded as findings — see PORTFOLIO_AUDIT.md §4)
 - U1 Hamilton weekly-digest auto-send lacks per-recipient opt-in (consent/product decision).
 - U2 Deadline SMS bypasses the TCPA consent gate (legal; needs transactional-vs-promotional classification + consent-lookup wiring).

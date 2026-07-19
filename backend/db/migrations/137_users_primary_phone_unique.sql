@@ -13,6 +13,23 @@
 -- set the phone back on that user and hit this unique index — AFTER consuming the
 -- code — giving the user PERSISTENT 500s on a correct code.
 
+-- Round 26: CAPTURE the dup->canonical identity into a DURABLE table BEFORE Step 1
+-- nulls the duplicates' primary_phone. The forward repair migration (138/0142)
+-- identifies duplicates by phone; if the phone were already nulled its repair would
+-- be a silent no-op (Codex r26 #1). The map survives; 138 consumes it.
+CREATE TABLE IF NOT EXISTS phone_dedupe_map (
+  dup_user_id TEXT NOT NULL,
+  canonical_user_id TEXT NOT NULL,
+  phone TEXT,
+  PRIMARY KEY (dup_user_id, canonical_user_id)
+);
+INSERT INTO phone_dedupe_map (dup_user_id, canonical_user_id, phone)
+SELECT d.id, uc.user_id, d.primary_phone
+FROM users d
+JOIN user_credentials uc ON uc.type = 'phone_otp' AND uc.identifier = d.primary_phone
+WHERE d.primary_phone IS NOT NULL AND uc.user_id <> d.id
+ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
+
 -- Step 1: null primary_phone on every user that is NOT the canonical owner of its
 -- current phone. Canonical = the phone_otp credential's user for that phone if one
 -- exists (credential-owned), else the oldest user with the phone. Non-destructive:

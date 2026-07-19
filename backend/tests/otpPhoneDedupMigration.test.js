@@ -118,6 +118,33 @@ const profileOwner = (raw, profileId) => raw.prepare(`SELECT user_id FROM profil
 const stripeOwner = (raw, custId) => raw.prepare(`SELECT user_id FROM stripe_customers WHERE stripe_customer_id = ?`).get(custId)?.user_id
 const conflicts = (raw) => raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_conflicts`).get().c
 
+const MIG137 = fs.readFileSync(path.resolve('backend/db/migrations/137_users_primary_phone_unique.sql'), 'utf8')
+// The REAL prod order: 137 (capture map -> null non-canonical phones -> index) THEN 138 (repair).
+const runRepair = (raw) => { raw.exec(MIG137); raw.exec(MIG138) }
+
+// BY-CONSTRUCTION GUARD: every table with BOTH user_id and profile_id (audited from
+// schema.sql). After the repair NONE may have user_id and profile_id pointing at
+// different accounts. This catches any two-owner table the migration forgot to handle.
+const TWO_OWNER_PROFILE = [
+  'saved_grants', 'anya_sessions', 'anya_runs', 'anya_tool_usage', 'service_purchases', 'pricing_quotes',
+  'anya_onboarding_events', 'agent_activity_events', 'student_portals', 'application_portal_links',
+  'application_tasks', 'hamilton_runs', 'hamilton_autopilot_runs', 'hamilton_blockers', 'hamilton_resolved_fields',
+  'user_sessions', 'hamilton_authorizations', 'hamilton_saved_sessions', 'hamilton_payment_authorizations',
+  'hamilton_attestation_authorizations',
+]
+function userProfileSplits(raw) {
+  let n = 0
+  for (const t of TWO_OWNER_PROFILE) {
+    n += raw.prepare(`SELECT COUNT(*) c FROM ${t} x JOIN profiles p ON p.id = x.profile_id
+      WHERE x.user_id IS NOT NULL AND p.user_id IS NOT NULL AND x.user_id <> p.user_id`).get().c
+  }
+  return n
+}
+const userStripeSplits = (raw) => raw.prepare(
+  `SELECT COUNT(*) c FROM service_purchases x JOIN stripe_customers s ON s.stripe_customer_id = x.stripe_customer_id
+   WHERE x.user_id IS NOT NULL AND s.user_id IS NOT NULL AND x.user_id <> s.user_id`,
+).get().c
+
 describe('forward repair migration 138 (already-137-stamped DBs) + ownership repoint', () => {
   it('the SQLite (138) and Postgres (0142) SQL bodies are identical (dialect parity)', () => {
     const body = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n').trim()
@@ -167,7 +194,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
     raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg1', 'u-dup', 'p-dup', 'opp1')`).run()
 
-    raw.exec(MIG138)
+    runRepair(raw)
 
     expect(phoneOf(raw, 'u-canonical')).toBe(phone)
     // Profile AND its saved_grant moved to canonical — the grant's user_id matches its profile's owner.
@@ -184,7 +211,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
     raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg1', 'u-dup', 'p-dup', 'opp1')`).run()
 
-    raw.exec(MIG138)
+    runRepair(raw)
 
     // CORE INVARIANT: the grant's user_id must equal the owner of its profile_id — never split.
     const sgUser = raw.prepare(`SELECT user_id FROM saved_grants WHERE id='sg1'`).get().user_id
@@ -205,7 +232,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES ('u-dup', 'cus_dup')`).run()
     raw.prepare(`INSERT INTO service_purchases (id, user_id, service_id, client_category, pricing_model, status, stripe_customer_id) VALUES ('sp', 'u-dup', 'svc1', 'cat', 'flat', 'paid', 'cus_dup')`).run()
 
-    raw.exec(MIG138)
+    runRepair(raw)
 
     // CORE INVARIANT: the purchase's user_id must equal the owner of its stripe_customer_id.
     const sp = raw.prepare(`SELECT user_id, stripe_customer_id FROM service_purchases WHERE id='sp'`).get()
@@ -223,7 +250,7 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO user_preferences (user_id) VALUES ('u-dup')`).run()
     raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
 
-    raw.exec(MIG138)
+    runRepair(raw)
 
     // both-prefs → unmergeable → nothing moves; dup keeps its profile + prefs together.
     expect(profileOwner(raw, 'p-dup')).toBe('u-dup')
@@ -239,12 +266,102 @@ describe('forward repair migration 138 (already-137-stamped DBs) + ownership rep
     raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('c1', 'u1', 'phone_otp', ?)`).run(phone)
     raw.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL')
 
-    raw.exec(MIG138)
+    runRepair(raw)
     expect(phoneOf(raw, 'u1')).toBe(phone)
     expect(phoneCountOn(raw, phone)).toBe(1)
     // Re-run: still a no-op.
-    raw.exec(MIG138)
+    runRepair(raw)
     expect(phoneOf(raw, 'u1')).toBe(phone)
     expect(phoneCountOn(raw, phone)).toBe(1)
+  })
+
+  // ---- Round 26 ----
+  it('[r26 #1] 137 (which nulls the dup phone) THEN 138 still repairs — the durable map survives the null (no silent no-op)', () => {
+    const raw = fullDb()
+    seedPhoneDup(raw)
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'Dup Profile')`).run()
+
+    raw.exec(MIG137) // captures phone_dedupe_map, THEN nulls u-dup's phone
+    expect(phoneOf(raw, 'u-dup')).toBeNull() // phone gone — the old repair would no-op here
+    expect(raw.prepare(`SELECT COUNT(*) c FROM phone_dedupe_map`).get().c).toBe(1) // but the map survives
+
+    raw.exec(MIG138)
+    // Repair still ran: the mergeable dup's profile moved to the canonical.
+    expect(profileOwner(raw, 'p-dup')).toBe('u-canonical')
+    expect(userProfileSplits(raw)).toBe(0)
+  })
+
+  it('[r26 #2] a legacy saved_grants unique collision (NULL-profile AND non-NULL) does NOT abort the migration', () => {
+    const raw = fullDb()
+    seedPhoneDup(raw) // no profiles -> mergeable
+    // Canonical + dup BOTH have a NULL-profile grant for the same opportunity (legacy unique
+    // (user_id, opportunity_id) WHERE profile_id IS NULL), and a non-NULL collision too.
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('c-null', 'u-canonical', NULL, 'oX')`).run()
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('d-null', 'u-dup', NULL, 'oX')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pp', 'u-canonical', 'shared')`).run()
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('c-p', 'u-canonical', 'pp', 'oY')`).run()
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('d-p', 'u-dup', 'pp', 'oY')`).run()
+
+    expect(() => runRepair(raw)).not.toThrow() // must NEVER abort on real data
+    // Redundant dup rows collapsed; canonical keeps exactly one per unique key.
+    expect(raw.prepare(`SELECT COUNT(*) c FROM saved_grants WHERE user_id='u-canonical' AND profile_id IS NULL AND opportunity_id='oX'`).get().c).toBe(1)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM saved_grants WHERE user_id='u-canonical' AND profile_id='pp' AND opportunity_id='oY'`).get().c).toBe(1)
+    expect(userProfileSplits(raw)).toBe(0)
+  })
+
+  it('[r26 #3] mergeable dup: two-owner session/authorization rows are REVOKED (not transferred); activity rows are MOVED — no split', () => {
+    const raw = fullDb()
+    seedPhoneDup(raw) // u-canonical owns nothing -> mergeable
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('p-dup', 'u-dup', 'D')`).run()
+    // Security-sensitive session/auth/payment state (must be revoked, never transferred).
+    raw.prepare(`INSERT INTO user_sessions (id, user_id, profile_id, refresh_token_hash) VALUES ('us', 'u-dup', 'p-dup', 'h')`).run()
+    raw.prepare(`INSERT INTO hamilton_saved_sessions (id, user_id, profile_id, portal_host) VALUES ('hs', 'u-dup', 'p-dup', 'x.com')`).run()
+    raw.prepare(`INSERT INTO hamilton_authorizations (id, user_id, profile_id, scope, authorization_type, authorization_text, authorization_version, options_json, metadata_json) VALUES ('ha', 'u-dup', 'p-dup', 'profile', 'payment', 't', '1', '{}', '{}')`).run()
+    // Non-security activity (moved with the profile).
+    raw.prepare(`INSERT INTO hamilton_runs (id, user_id, profile_id) VALUES ('hr', 'u-dup', 'p-dup')`).run()
+    raw.prepare(`INSERT INTO anya_sessions (id, user_id, profile_id) VALUES ('an', 'u-dup', 'p-dup')`).run()
+
+    runRepair(raw)
+
+    // Revoked, not transferred to the canonical.
+    expect(raw.prepare(`SELECT COUNT(*) c FROM user_sessions`).get().c).toBe(0)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM hamilton_saved_sessions`).get().c).toBe(0)
+    expect(raw.prepare(`SELECT COUNT(*) c FROM hamilton_authorizations`).get().c).toBe(0)
+    // Activity moved to the canonical (with the profile) — no split.
+    expect(raw.prepare(`SELECT user_id FROM hamilton_runs WHERE id='hr'`).get().user_id).toBe('u-canonical')
+    expect(raw.prepare(`SELECT user_id FROM anya_sessions WHERE id='an'`).get().user_id).toBe('u-canonical')
+    expect(userProfileSplits(raw)).toBe(0)
+  })
+
+  it('[r26 GUARD] post-migration invariant holds across ALL two-owner-FK tables on a multi-duplicate DB (red-able)', () => {
+    const raw = fullDb()
+    // Two independent phone groups: one mergeable, one unmergeable.
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('m-dup', '+15550000001', '2026-01-01')`).run()
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('m-can', '+15550000001', '2026-02-01')`).run()
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('mc', 'm-can', 'phone_otp', '+15550000001')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pm', 'm-dup', 'M')`).run() // canonical empty -> mergeable
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('smg', 'm-dup', 'pm', 'o1')`).run()
+    raw.prepare(`INSERT INTO application_tasks (id, user_id, profile_id) VALUES ('at', 'm-dup', 'pm')`).run()
+
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-dup', '+15550000002', '2026-01-01')`).run()
+    raw.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('u-can', '+15550000002', '2026-02-01')`).run()
+    raw.prepare(`INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('uc', 'u-can', 'phone_otp', '+15550000002')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pu-can', 'u-can', 'C')`).run()
+    raw.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pu-dup', 'u-dup', 'D')`).run() // both own -> unmergeable
+    raw.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sud', 'u-dup', 'pu-dup', 'o2')`).run()
+
+    runRepair(raw)
+
+    // The by-construction guard: NO row in ANY two-owner table is split.
+    expect(userProfileSplits(raw)).toBe(0)
+    expect(userStripeSplits(raw)).toBe(0)
+    // Sanity: the mergeable group moved, the unmergeable stayed + was recorded.
+    expect(profileOwner(raw, 'pm')).toBe('m-can')
+    expect(profileOwner(raw, 'pu-dup')).toBe('u-dup')
+    expect(conflicts(raw)).toBe(1)
+
+    // RED-ABLE: introduce a split and the guard catches it.
+    raw.prepare(`UPDATE saved_grants SET user_id='u-can' WHERE id='sud'`).run() // user_id=u-can but profile_id=pu-dup(u-dup)
+    expect(userProfileSplits(raw)).toBeGreaterThan(0)
   })
 })

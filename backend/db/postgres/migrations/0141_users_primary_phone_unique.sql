@@ -7,6 +7,22 @@
 -- so the credential is never stranded on a nulled-phone user (which would make
 -- /phone/verify hit this unique index AFTER consuming the code -> persistent 500s).
 
+-- Round 26: CAPTURE the dup->canonical identity into a DURABLE table BEFORE Step 1
+-- nulls the duplicates' primary_phone, so the forward repair migration 0142 (which
+-- identifies duplicates by phone) is not a silent no-op (Codex r26 #1).
+CREATE TABLE IF NOT EXISTS phone_dedupe_map (
+  dup_user_id TEXT NOT NULL,
+  canonical_user_id TEXT NOT NULL,
+  phone TEXT,
+  PRIMARY KEY (dup_user_id, canonical_user_id)
+);
+INSERT INTO phone_dedupe_map (dup_user_id, canonical_user_id, phone)
+SELECT d.id, uc.user_id, d.primary_phone
+FROM users d
+JOIN user_credentials uc ON uc.type = 'phone_otp' AND uc.identifier = d.primary_phone
+WHERE d.primary_phone IS NOT NULL AND uc.user_id <> d.id
+ON CONFLICT (dup_user_id, canonical_user_id) DO NOTHING;
+
 -- Step 1: null primary_phone on every user that is NOT the canonical owner of its
 -- current phone (canonical = the credential-owned user if present, else oldest).
 UPDATE users

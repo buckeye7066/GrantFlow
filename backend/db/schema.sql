@@ -789,6 +789,16 @@ CREATE TABLE IF NOT EXISTS phone_dedupe_conflicts (
   PRIMARY KEY (dup_user_id, canonical_user_id)
 );
 
+-- Round 26: durable dup->canonical map captured by migration 137/0141 BEFORE the
+-- phone-null, so the forward repair 138/0142 can identify duplicates after their
+-- primary_phone is cleared.
+CREATE TABLE IF NOT EXISTS phone_dedupe_map (
+  dup_user_id TEXT NOT NULL,
+  canonical_user_id TEXT NOT NULL,
+  phone TEXT,
+  PRIMARY KEY (dup_user_id, canonical_user_id)
+);
+
 -- saved_grants: profile-scoped favorites/bookmarks. Each user can save the
 -- same opportunity independently under each of their profiles. Legacy rows
 -- created before migration 075 keep profile_id=NULL and are visible to all

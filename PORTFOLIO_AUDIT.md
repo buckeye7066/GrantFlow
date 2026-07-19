@@ -530,6 +530,33 @@ Either way, no row is ever left with a split parent. Idempotent + re-runnable; f
 
 **Confirmation:** after the repair, no row has `user_id`/`profile_id`/`stripe_customer_id` pointing at different accounts (no split ownership); every duplicate is either cleanly merged into the canonical or left fully self-consistent (phone-login-lost, recorded in `phone_dedupe_conflicts` for manual reconciliation).
 
+## 5z. Round 26 — durable map (ordering), abort-proofing, all two-owner tables + a by-construction guard (Codex review of commit `6492ccb`)
+
+Three HIGH migration findings + a by-construction invariant guard.
+
+### R26-1 [HIGH] The repair no-oped because the map was already erased
+`138` identified duplicates by `users.primary_phone` — but `137` runs FIRST and nulls the non-credential dup's phone, so the map was empty and BOTH the merge and the conflict-recording were silently skipped. **Fix:** `137`/`0141` now **capture the dup→canonical identity into a durable `phone_dedupe_map` table BEFORE the null**; `138`/`0142` repair from that durable map (plus a belt-and-suspenders live-capture for already-stamped DBs whose old `137` never captured, and `138` now re-applies the credential-owned phone fix + index itself so it repairs a stamped DB end-to-end).
+
+### R26-2 [HIGH] Migration aborted mid-run on a legacy unique collision (deploy outage)
+Mergeable dups moved `saved_grants.user_id` blindly, but `saved_grants` has a legacy partial unique `(user_id, opportunity_id) WHERE profile_id IS NULL` — canonical and dup can both hold the same NULL-profile save while still "mergeable", so the `UPDATE` hit `UNIQUE constraint failed` and **aborted the whole migration**. **Fix:** before the bulk move, **collapse (delete) truly-redundant dup rows** that would collide — for BOTH `saved_grants` partial uniques and the `user_organizations` PK. (Every other moved table's `user_id` is either not in a unique or in a GLOBAL unique — `user_credentials(type,identifier)`, `user_providers(provider,provider_account_id)` — where two users cannot collide; audited.) The migration never throws on real data.
+
+### R26-3 [HIGH] Excluded tables carried `profile_id` too → still split
+`user_sessions` and the `hamilton_*` tables carry BOTH `user_id` and `profile_id`; moving the profile but not these left them split (security-sensitive portal/payment/authorization state under a different account). **Fix:** for a mergeable dup, EVERY two-owner table is handled — **MOVED** with the profile, or, for security-sensitive session/authorization/payment state, **REVOKED** (deleted) rather than silently transferred.
+
+**Two-owner-FK inventory (audited from schema.sql — 20 `user_id`+`profile_id`, 1 `user_id`+`stripe_customer_id`) and handling:**
+- **MOVED** (user_id → canonical, with the profile): `profiles` (parent), `saved_grants`, `service_purchases` (+`stripe_customer_id` follows its moved customer), `pricing_quotes`, `student_portals`, `application_portal_links`, `application_tasks`, `anya_sessions`, `anya_runs`, `anya_tool_usage`, `anya_onboarding_events`, `agent_activity_events`, `hamilton_runs`, `hamilton_autopilot_runs`, `hamilton_blockers`, `hamilton_resolved_fields`, plus account-level `user_preferences`, `stripe_customers`, `user_providers`, `user_credentials`, `user_organizations`.
+- **REVOKED** (deleted, never transferred — a stale session/authorization must not silently move to another account): `user_sessions`, `hamilton_authorizations`, `hamilton_saved_sessions`, `hamilton_payment_authorizations`, `hamilton_attestation_authorizations`.
+- **N/A** (`anya_brain_memory` matched only a comment, not a real `user_id` column — excluded after re-audit).
+
+### By-construction invariant guard
+A post-migration test sweeps **every** two-owner table (`userProfileSplits` over the 20 `profile_id` tables + `userStripeSplits` over `service_purchases`) and fails if any row has `user_id` and its `profile_id`/`stripe_customer_id` pointing at different accounts — catching any table a future change forgets to handle. Verified red (introducing a split → the guard flags it).
+
+Everything r19–r25 is preserved. `138`/`0142` remain byte-identical (parity-tested). Idempotent + fresh no-op.
+
+**Tests (`otpPhoneDedupMigration.test.js`):** [#1] `137` (which nulls the phone) then `138` still repairs — durable map survives (red without the capture); [#2] a NULL-profile AND non-NULL `saved_grants` collision does not abort + collapses redundant rows (red without the collapse); [#3] mergeable dup's session/auth rows revoked, activity rows moved, no split; [GUARD] the invariant holds across ALL two-owner tables on a multi-duplicate DB and is red-able; plus the r24/r25 mergeable/unmergeable/parity/idempotent cases, now driven through the real `137→138` order.
+
+**Confirmation:** the repair runs regardless of `137` ordering (the map survives the null), never aborts on a legacy unique collision, moves-or-revokes ALL two-owner-FK tables (incl. Hamilton auth/session/payment + `user_sessions`), and a by-construction invariant test proves no `user_id`/`profile_id`/`stripe_customer_id` mismatch remains.
+
 ## 6. Coverage note (routes verified CORRECTLY scoped)
 
 `grants.js`, `profiles.js` (`router.param('id')` gate), `matching.js`, `opportunities.js` (admin-gated writes; shared catalog reads), `discovery.js`, `profilePortals.js`/`studentPortals.js`, `schoolPortal.js`, `colleges.js`, and leads/entity/document/application siblings (`documents.js`, `applications.js`, `applicationTasks.js`, `vnextApplications.js`, `milestones.js`, `expenses.js`, `budgets.js`, `organizations.js`, `savedGrants.js`, `billingSettings.js`) were checked and fail closed. The three IDOR defects (F1–F3) were the deviant routes relative to their own siblings.
