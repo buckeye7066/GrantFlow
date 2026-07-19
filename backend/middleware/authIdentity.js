@@ -67,6 +67,10 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
       user = {
         role: 'health_check',
         is_admin: true,
+        // serviceToken PROVENANCE (set ONLY in a safeTokenEqual branch): required
+        // by isSyntheticServiceAdmin so a JWT with a colliding synthetic `sub`
+        // cannot be treated as a service admin.
+        serviceToken: true,
         readonly: true,
         scope: 'health_check',
         userId: 'system_health_token',
@@ -89,6 +93,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
         // but requestContext will resolve the final answer from users.is_admin.
         is_admin: true,
+        serviceToken: true,
         // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
         userId: 'system_admin_token',
         profileId: null,
@@ -103,6 +108,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
       user = {
         role: 'admin',
         is_admin: true,
+        serviceToken: true,
         userId: 'system_anya_token',
         profileId: null,
         full_name: 'Anya Assistant',
@@ -124,6 +130,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           user = {
             role: 'admin',
             is_admin: true,
+            serviceToken: true,
             userId: 'system_admin_token',
             profileId: null,
             full_name: adminName,
@@ -137,6 +144,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           user = {
             role: 'admin',
             is_admin: true,
+            serviceToken: true,
             userId: 'system_anya_token',
             profileId: null,
             full_name: 'Anya Assistant',
@@ -265,6 +273,11 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                   userId: profile.id,   // required for audit trails and Anya grounding
                   profileId: profile.id,
                   profileName: profile.display_name,
+                  // Provenance: this profileId came from a DB-verified legacy
+                  // profile bearer TOKEN (non-prod, opt-in), NOT a JWT claim. Only
+                  // this flag lets getAccessibleProfileIds treat the profileId as
+                  // access proof (a JWT payload can never set it).
+                  profileTokenAuth: true,
                 }
                 handled = true
               }

@@ -25,7 +25,7 @@ import { getRequestError } from '../services/requestIdErrorStore.js';
 import { extractTextFromFile } from '../services/documentTextExtraction.js'
 import { crawlItemFunding, runCrawler as runCuratedCrawlerForAudit } from '../services/crawlerOsCompatibility.js';
 import { findDuplicateProfileGroups, mergeProfiles, deduplicateProfileGroups, coerceDryRun } from '../services/profileDedupeService.js'
-import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
+import { ensureAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 import zipcodes from 'zipcodes';
@@ -1482,9 +1482,8 @@ Be conservative - only include information you are confident about from the docu
 router.post('/upload-profile-document', upload.single('document'), async (req, res) => {
   try {
     // Check admin access using centralized admin enforcement
-    const user = req.user;
-    const adminCheck = isAdminUser(user);
-    
+    const adminCheck = req.ctx?.isAdmin === true;
+
     if (!adminCheck) {
       // Clean up uploaded file
       if (req.file) {
@@ -4011,7 +4010,7 @@ router.get('/feature-flags/:key/check', async (req, res) => {
     const { key } = req.params;
     const { userId, profileId } = req.query;
     
-    const adminCheck = isAdminUser(req.user);
+    const adminCheck = req.ctx?.isAdmin === true;
     const enabled = isFeatureEnabled(req.db, key, {
       userId: userId || req.user?.userId,
       profileId: profileId || req.user?.profileId,

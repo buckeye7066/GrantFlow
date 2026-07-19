@@ -791,18 +791,20 @@ export async function invokeTool(name, params, context) {
       throw error
     }
 
+    // DB-backed admin only. ctx.isAdmin is the canonical (requestContext) answer;
+    // isAdminUserWithDb is the self-contained DB fallback. We must NEVER fall back
+    // to a raw token claim (user.role/is_admin) — a demoted admin holding an
+    // unexpired role:'admin' JWT would otherwise pass this admin-tool gate. On a
+    // DB error we fail CLOSED (deny) rather than trust the token.
     let isAdmin = ctx?.isAdmin === true
     if (!isAdmin && db && user) {
       const { isAdminUserWithDb } = await import('../utils/accessControl.js')
       try {
         isAdmin = await isAdminUserWithDb(db, user)
       } catch (error) {
-        console.warn('[anyaToolRegistry] DB admin check failed, falling back to token:', error?.message)
-        isAdmin = user.role === 'admin' || user.is_admin === true
+        console.warn('[anyaToolRegistry] DB admin check failed; failing closed:', error?.message)
+        isAdmin = false
       }
-    }
-    if (!isAdmin && user) {
-      isAdmin = user.role === 'admin' || user.is_admin === true
     }
 
     if (!isAdmin) {
@@ -1956,20 +1958,53 @@ registerTool({
   handler: async (params, context) => {
     const db = context?.db
     if (!db) throw new Error('Database connection unavailable')
+    const ctx = context?.ctx
     const stepId = params?.stepId ? String(params.stepId) : null
     if (!stepId) throw new Error('stepId required')
+
+    // AUTHZ (before any mutation): this is a non-admin-invokable tool, so a
+    // caller could otherwise complete ANY profile's step by guessing stepId —
+    // and a NULL-profile (orphan) step would bypass the applicationWorkflow.js
+    // admin-only guard entirely. Resolve the owning application FIRST, verify a
+    // supplied applicationId matches, then enforce profile access (orphan rows
+    // are admin-only). Only mutate once authorized.
+    const owner = await db
+      .prepare(
+        `SELECT s.application_id, a.profile_id
+           FROM application_steps s
+           JOIN grant_applications a ON a.id = s.application_id
+          WHERE s.id = ?`,
+      )
+      .get(stepId)
+    if (!owner) {
+      const error = new Error('Application step not found')
+      error.status = 404
+      throw error
+    }
+    const suppliedAppId = params?.applicationId ? String(params.applicationId) : null
+    if (suppliedAppId && String(owner.application_id) !== suppliedAppId) {
+      const error = new Error('applicationId does not match this step')
+      error.status = 400
+      throw error
+    }
+    if (owner.profile_id) {
+      if (!ensureProfileAccess(ctx, String(owner.profile_id))) {
+        const error = new Error('Not authorized to modify this application step')
+        error.status = 403
+        throw error
+      }
+    } else if (ctx?.isAdmin !== true) {
+      // Orphan (NULL profile_id) step — admin only, mirroring routes/applicationWorkflow.js.
+      const error = new Error('Not authorized to modify this application step')
+      error.status = 403
+      throw error
+    }
+
     await completeApplicationStep(db, stepId)
 
+    const applicationId = owner.application_id ?? null
     let nextStep = null
-    let applicationId = params?.applicationId ? String(params.applicationId) : null
     try {
-      // Resolve applicationId from the step row if the caller didn't pass it.
-      if (!applicationId) {
-        const row = await db
-          .prepare('SELECT application_id FROM application_steps WHERE id = ?')
-          .get(stepId)
-        applicationId = row?.application_id ?? null
-      }
       if (applicationId) {
         nextStep = await db
           .prepare(

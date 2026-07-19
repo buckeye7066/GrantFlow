@@ -10,6 +10,7 @@
  * - Email-substring allowlists must not participate in authorization decisions.
  */
 import crypto from 'crypto'
+import { isSyntheticIdWithoutProvenance, isReservedSyntheticUserId } from '../middleware/syntheticServiceTokens.js'
 
 function normalizeEmail(email = '') {
   const v = String(email || '').trim().toLowerCase()
@@ -44,6 +45,11 @@ export function isAdminUser(user) {
 }
 
 export async function isAdminUserWithDb(db, user) {
+  // A JWT whose sub collides with a reserved synthetic service id but lacks
+  // service-token provenance must NEVER resolve admin — even if a self-healed
+  // users.id='system_admin_token' row exists. Provenance-validated service tokens
+  // resolve admin earlier (via req.ctx.isAdmin); this guards the direct callers.
+  if (isSyntheticIdWithoutProvenance(user)) return false
   // Some tokens are profile-scoped and don't carry userId.
   // Resolve user_id via profile when needed, then check users.is_admin.
   //
@@ -60,6 +66,13 @@ export async function isAdminUserWithDb(db, user) {
     if (!resolvedUserId && profileId) {
       const profileRow = await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
       resolvedUserId = profileRow?.user_id
+    }
+
+    // A resolved userId that is a reserved synthetic service id (e.g. reached via a
+    // token profile_id -> profiles.user_id='system_admin_token') must NOT resolve
+    // admin without service-token provenance — never honor the self-healed synthetic row.
+    if (resolvedUserId && isReservedSyntheticUserId(resolvedUserId) && user?.serviceToken !== true) {
+      return false
     }
 
     // Fallback: resolve via email if present.
@@ -96,6 +109,9 @@ export async function isAdminUserWithDb(db, user) {
             .get(...emails)
         }
         if (!row) return false
+        // A token email that matches a self-healed synthetic-admin row must not
+        // grant admin without service-token provenance.
+        if (isReservedSyntheticUserId(row.id) && user?.serviceToken !== true) return false
         return Boolean(row.is_admin === true || row.is_admin === 1)
       }
       return false
@@ -170,11 +186,77 @@ export function getAuthProfileId(user) {
   return user?.profileId ?? user?.profile_id ?? null
 }
 
-export async function getAccessibleProfileIds(db, user) {
-  if (await isAdminUserWithDb(db, user)) return null
+/**
+ * DB-TRUSTED email addresses for a user: users.primary_email plus any VERIFIED
+ * email credential (user_credentials type='email_otp' with verified_at set),
+ * looked up by the RESOLVED userId. It NEVER returns the token-supplied
+ * user.email — a signed/stale JWT could otherwise claim victim@example.com and
+ * pick up every profile mapped to that email (profile_emails / basic_information).
+ * Email-based access/grant decisions must use ONLY these DB-verified addresses.
+ */
+export async function getTrustedUserEmails(db, user) {
+  const emails = new Set()
+  const userId = getAuthUserId(user)
+  if (!userId) return []
+  try {
+    const row = await db.prepare('SELECT primary_email FROM users WHERE id = ?').get(String(userId))
+    const primary = normalizeEmail(row?.primary_email)
+    if (primary) emails.add(primary)
+  } catch {
+    // ignore (missing users row / schema)
+  }
+  // DB-verified secondary emails (email-OTP credentials that were actually verified).
+  try {
+    const rows = await db
+      .prepare("SELECT identifier FROM user_credentials WHERE user_id = ? AND type = 'email_otp' AND verified_at IS NOT NULL")
+      .all(String(userId))
+    for (const r of rows || []) {
+      const e = normalizeEmail(r?.identifier)
+      if (e) emails.add(e)
+    }
+  } catch {
+    // ignore (older schema without user_credentials)
+  }
+  return Array.from(emails)
+}
 
+/**
+ * DB-trusted personal profile set: profiles owned/created by the user, profiles
+ * granted to the user's DB-VERIFIED email(s) (never a token email), and — only
+ * via the legacy profile-token provenance flag — the token profileId. Does NOT
+ * short-circuit for admins; callers wanting the admin all-access sentinel use
+ * getAccessibleProfileIds.
+ */
+export async function getOwnedAndGrantedProfileIds(db, user) {
   const ids = new Set()
   const userId = getAuthUserId(user)
+
+  // A userId that collides with a reserved synthetic service id but lacks
+  // service-token provenance (e.g. a signed JWT with sub:'system_admin_token') is
+  // an impersonation attempt — grant NOTHING, and never honor a self-healed
+  // users.id='system_admin_token' row via the users-row gate below.
+  if (isSyntheticIdWithoutProvenance(user)) return ids
+
+  // FAIL CLOSED on a missing principal: a stale/forged JWT for a DELETED user
+  // (userId present but no users row) must gain NOTHING — even if a lingering
+  // profiles.user_id / created_by still references that id. Require a real users
+  // row for the resolved userId, OR a validated provenance token that legitimately
+  // has no users row (synthetic service token / DB-verified legacy profile token).
+  // Centralized here so EVERY caller — scope=mine, /api/auth/me, and
+  // ensureProfileAccess (via getAccessibleProfileIds) — inherits the guard rather
+  // than relying on ctx.accessibleProfileIds.
+  const hasProvenance = user?.serviceToken === true || user?.profileTokenAuth === true
+  if (!hasProvenance) {
+    if (!userId) return ids
+    let userRow = null
+    try {
+      userRow = await db.prepare('SELECT id FROM users WHERE id = ?').get(String(userId))
+    } catch {
+      return ids // DB error → fail closed
+    }
+    if (!userRow) return ids // deleted / nonexistent user → no profiles
+  }
+
   if (userId) {
     const rows = await db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(userId)
     rows.forEach((row) => {
@@ -191,8 +273,9 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
 
-  // Allow additional profile access via email mapping (e.g. board members).
-  const emails = collectUserEmails(user)
+  // Additional profile access via email mapping (e.g. board members) derives from
+  // DB-TRUSTED emails ONLY — never the token-supplied user.email.
+  const emails = await getTrustedUserEmails(db, user)
   if (emails.length > 0) {
     // 1) Explicit allowlist table (profile_emails).
     try {
@@ -286,14 +369,16 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
 
-  // Token-scoped profileId is always treated as accessible for the session.
-  // This prevents lockouts for legacy profiles that lack user_id/profile_emails mappings.
-  // Security note: This is intentional per product requirements to maintain backward compatibility.
-  // Tokens are already validated by auth middleware, so compromised tokens are a separate concern
-  // that should be addressed via token rotation, expiry, and monitoring rather than here.
-  const tokenProfileId = getAuthProfileId(user)
-  if (tokenProfileId) {
-    ids.add(tokenProfileId)
+  // A token-scoped profileId is access proof ONLY for the DB-verified legacy
+  // profile bearer token (provenance flag `profileTokenAuth`, set solely in the
+  // legacy-token auth branch — non-prod, opt-in). A JWT's payload.profile_id is
+  // just a claim and MUST NOT self-authorize an arbitrary tenant: accessible
+  // profiles are derived from DB ownership / email grants above. A stale/forged
+  // JWT profile_id is rejected here and re-validated against this set by
+  // requestContext (activeProfileId is dropped when not in the accessible set).
+  if (user?.profileTokenAuth === true) {
+    const tokenProfileId = getAuthProfileId(user)
+    if (tokenProfileId) ids.add(tokenProfileId)
   }
 
   // Strip soft-deleted profiles so they never appear in the accessible set.
@@ -311,6 +396,11 @@ export async function getAccessibleProfileIds(db, user) {
     }
   }
   return ids
+}
+
+export async function getAccessibleProfileIds(db, user) {
+  if (await isAdminUserWithDb(db, user)) return null
+  return getOwnedAndGrantedProfileIds(db, user)
 }
 
 /**
@@ -445,6 +535,19 @@ export async function getAccessibleOrganizationIds(db, user) {
     if (row?.organization_id) orgIds.add(row.organization_id)
   })
   return orgIds
+}
+
+/**
+ * Route-level defense-in-depth for the structural identity gate: deny a request
+ * whose identity did not resolve to a trusted principal (real users row /
+ * validated service or legacy-token provenance) and which is not an admin. The
+ * global enforceResolvedIdentity middleware already nulls such a caller's id, but
+ * user-scoped routes call this at entry so the denial is explicit (403).
+ */
+export function requireResolvedIdentity(req, res) {
+  if (req.ctx?.isAdmin === true || req.ctx?.identityResolved === true) return true
+  res.status(403).json({ error: 'Not authorized' })
+  return false
 }
 
 export async function ensureProfileAccess(req, res, profileId) {

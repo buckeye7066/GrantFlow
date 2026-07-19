@@ -43,7 +43,6 @@ function timingSafeEq(a, b) {
 
 function adminAuth(req, res, next) {
   if (req.ctx?.isAdmin === true) return next()
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) return next()
   const configured = resolveAdminToken()
   if (!configured) return res.status(401).json({ error: 'Admin token not configured' })
   const headerToken =
@@ -56,7 +55,7 @@ function adminAuth(req, res, next) {
 }
 
 function ingestAuth(req, res, next) {
-  if (req.ctx?.isAdmin === true || req.user?.is_admin === true) return next()
+  if (req.ctx?.isAdmin === true) return next()
   const configured = resolveIngestToken()
   if (!configured) {
     return res.status(401).json({ error: 'Ingest token not configured (set EMAIL_GRANTS_INGEST_TOKEN)' })

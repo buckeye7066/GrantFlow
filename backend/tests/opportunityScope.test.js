@@ -86,18 +86,21 @@ describe('resolveIsAdmin', () => {
     expect(resolveIsAdmin({ user: null })).toBe(false)
   })
 
-  it('accepts explicit isAdmin flag', () => {
-    expect(resolveIsAdmin({ user: { isAdmin: true } })).toBe(true)
-    expect(resolveIsAdmin({ user: { isAdmin: false } })).toBe(false)
+  it('trusts the DB-backed req.ctx.isAdmin', () => {
+    expect(resolveIsAdmin({ ctx: { isAdmin: true } })).toBe(true)
+    expect(resolveIsAdmin({ ctx: { isAdmin: false } })).toBe(false)
   })
 
-  it('accepts role array containing admin', () => {
-    expect(resolveIsAdmin({ user: { roles: ['user', 'admin'] } })).toBe(true)
-    expect(resolveIsAdmin({ user: { roles: ['user'] } })).toBe(false)
+  it('does NOT trust raw JWT admin claims (stale-token hardening)', () => {
+    // A demoted admin's unexpired token still carries these claims; none may
+    // broaden scope now that resolveIsAdmin is DB-backed only.
+    expect(resolveIsAdmin({ user: { isAdmin: true } })).toBe(false)
+    expect(resolveIsAdmin({ user: { roles: ['user', 'admin'] } })).toBe(false)
+    expect(resolveIsAdmin({ user: { role: 'admin' } })).toBe(false)
+    expect(resolveIsAdmin({ user: { is_admin: true } })).toBe(false)
   })
 
-  it('accepts role string "admin"', () => {
-    expect(resolveIsAdmin({ user: { role: 'Admin' } })).toBe(true)
-    expect(resolveIsAdmin({ user: { role: 'member' } })).toBe(false)
+  it('a demoted admin token does not broaden scope even with req.ctx present', () => {
+    expect(resolveIsAdmin({ ctx: { isAdmin: false }, user: { role: 'admin', roles: ['admin'], is_admin: true } })).toBe(false)
   })
 })

@@ -15,7 +15,7 @@
  */
 
 import express from 'express'
-import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import {
   runAudit,
   getLatestAudit,
@@ -31,7 +31,7 @@ const router = express.Router()
 router.use((req, res, next) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) {
+  if (req.ctx?.isAdmin !== true) {
     return res.status(403).json({ ok: false, error: 'admin_only' })
   }
   return next()

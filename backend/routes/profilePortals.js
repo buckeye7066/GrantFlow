@@ -77,7 +77,7 @@ const PACKET_DOC_TYPE = 'application_packet'
 
 async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
-  if (user?.role === 'admin') return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible === null) return true // global access
   return accessible.has(String(profileId))

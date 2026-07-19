@@ -50,7 +50,7 @@ function resolveVehiclesIngestToken() {
  * the blocklist ingest pattern. A logged-in admin (req.ctx.isAdmin) also passes.
  */
 function ingestAuth(req, res, next) {
-  if (req.ctx?.isAdmin === true || req.user?.is_admin === true) return next();
+  if (req.ctx?.isAdmin === true) return next();
   const configured = resolveVehiclesIngestToken();
   if (!configured) {
     return res

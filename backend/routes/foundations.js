@@ -10,6 +10,7 @@ import {
   requireAuthenticatedUser,
   requireAuthenticatedUserMiddleware,
   ensureProfileAccess,
+  requireResolvedIdentity,
 } from '../utils/accessControl.js'
 import * as propublica from '../src/integrations/propublica990.js'
 import * as nsf from '../src/integrations/nsfAwards.js'
@@ -164,10 +165,15 @@ router.get('/federal/search', async (req, res) => {
  */
 router.get('/calendar/deadlines', async (req, res) => {
   if (!requireAuthenticatedUser(req, res)) return
+  // Deleted-user / synthetic-collision JWTs (identityResolved=false) must not
+  // reach the user-scoped pipeline query below.
+  if (!requireResolvedIdentity(req, res)) return
 
   try {
     const userId = req.ctx?.userId
     const profileId = req.query.profileId || null
+    // An explicit profileId must be one the caller can access (fail closed).
+    if (profileId && !(await ensureProfileAccess(req, res, String(profileId)))) return
     const month = req.query.month || null // YYYY-MM format
 
     let dateFilter = ''
@@ -372,6 +378,12 @@ router.post('/reverse-lookup', requireAuthenticatedUserMiddleware, async (req, r
   try {
     const { profile_id } = req.body ?? {}
     if (!profile_id) return res.status(400).json({ error: 'profile_id required' })
+    // Tenant isolation: reverse-lookup loads the target profile's context and
+    // returns its derived attributes (home state, entity type, need categories —
+    // which encode sensitive facts like veteran/disability/housing). Gate on
+    // profile access exactly like the sibling /score and /profile-region routes,
+    // otherwise any authenticated user can read another tenant's profile summary.
+    if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
 
     const { findSimilarOrgsFunders } = await import('../services/reverseLookupService.js')
     const result = await findSimilarOrgsFunders(req.db, profile_id, {

@@ -38,7 +38,7 @@ const router = express.Router()
 async function userMayAccessProfile(req, profileId) {
   const user = req.user || { role: 'guest' }
   if (!profileId) return false
-  if (user.role === 'admin') return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible === null) return true // admin
   return accessible.has(String(profileId))
@@ -53,7 +53,7 @@ router.get('/profiles/:profileId/student-portals', async (req, res) => {
   }
   try {
     const portals = await withProfileScope(
-      { profileId, userId: getAuthUserId(user), bypass: user.role === 'admin' },
+      { profileId, userId: getAuthUserId(user), bypass: req.ctx?.isAdmin === true },
       () => listStudentPortals(req.db, profileId, { includeInactive: false }),
     )
     return res.json({ ok: true, portals })

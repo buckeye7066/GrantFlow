@@ -6,6 +6,8 @@ import twilio from 'twilio'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
+import { sendTwilioMessage } from '../services/sms.js'
+import { requireResolvedIdentity } from '../utils/accessControl.js'
 import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlocklistService.js'
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
@@ -133,6 +135,11 @@ const ACCESS_TOKEN_TTL = parseSeconds(process.env.AUTH_ACCESS_TOKEN_TTL, 10800) 
 const REFRESH_TOKEN_TTL = parseSeconds(process.env.AUTH_REFRESH_TOKEN_TTL, 30 * 24 * 60 * 60) // seconds
 const EMAIL_CODE_TTL = parseSeconds(process.env.AUTH_EMAIL_CODE_TTL, 600) // seconds
 const EMAIL_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_EMAIL_RESEND_SECONDS, 45) // seconds
+// Max wrong /email/verify guesses against a single active code before it is
+// invalidated (lockout). Bounds an ONLINE brute-force of the 6-digit space; the
+// verifier is never exposed to the client, so there is no offline attack.
+const EMAIL_MAX_VERIFY_ATTEMPTS = Math.max(3, parseInt(process.env.AUTH_EMAIL_MAX_VERIFY_ATTEMPTS, 10) || 6)
+const PHONE_MAX_VERIFY_ATTEMPTS = Math.max(3, parseInt(process.env.AUTH_PHONE_MAX_VERIFY_ATTEMPTS, 10) || 6)
 const PHONE_CODE_TTL = parseSeconds(process.env.AUTH_PHONE_CODE_TTL, 600) // seconds
 const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS, 60) // seconds
 const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
@@ -220,6 +227,18 @@ const passwordRateLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+// Defense-in-depth on top of the atomic per-code attempt cap: bound the total
+// /email/verify requests per (normalized email + IP) so an attacker can't cycle
+// through many freshly-started codes for one victim from one host. `normalizeEmail`
+// is a hoisted function declaration, so referencing it here is safe.
+const emailVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: Number.parseInt(process.env.AUTH_EMAIL_VERIFY_RATE_LIMIT ?? '30', 10),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `${normalizeEmail(req.body?.email ?? '')}|${req.ip}`,
+})
+
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
 }
@@ -274,6 +293,23 @@ function hashValue(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
 }
 
+// Constant-time comparison of two hex digests (both are sha256 hex here). Avoids
+// leaking, via response timing, how many leading bytes of the stored code hash a
+// guess matched.
+function timingSafeEqualHex(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  let ba
+  let bb
+  try {
+    ba = Buffer.from(a, 'hex')
+    bb = Buffer.from(b, 'hex')
+  } catch {
+    return false
+  }
+  if (ba.length === 0 || ba.length !== bb.length) return false
+  return crypto.timingSafeEqual(ba, bb)
+}
+
 function base64UrlToken(bytes = 32) {
   return base64UrlEncode(crypto.randomBytes(Math.max(16, Number(bytes) || 32)))
 }
@@ -325,14 +361,21 @@ function otpLoginRetired(res) {
   })
 }
 
-function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
+// SECURITY: a JWT is SIGNED, not ENCRYPTED — anyone holding this token can base64-
+// decode its payload. It therefore MUST NOT carry the OTP verifier (a hash of the
+// 6-digit code): sha256 is instant, so an exposed `sha256(email:code)` lets the
+// holder brute-force all 1,000,000 codes offline and recover the real code. This
+// token is now only an opaque, non-secret challenge REFERENCE (identifier + nonce)
+// returned for client convenience; it is NEVER accepted as proof of possession.
+// The authoritative verifier is the server-side one-time DB code row (hashed,
+// expiring, attempt-limited) checked in /email/verify.
+function signOtpToken({ kind, identifier, ttlSeconds }) {
   const jti = crypto.randomUUID()
   return jwt.sign(
     {
       typ: 'otp',
       kind,
       identifier,
-      code_hash: codeHash,
       jti,
     },
     JWT_SECRET,
@@ -340,37 +383,91 @@ function signOtpToken({ kind, identifier, codeHash, ttlSeconds }) {
   )
 }
 
-function verifyOtpToken(token) {
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] })
-    if (!decoded || typeof decoded !== 'object') return null
-    if (decoded.typ !== 'otp') return null
-    if (decoded.kind !== 'email' && decoded.kind !== 'phone') return null
-    if (typeof decoded.identifier !== 'string' || typeof decoded.code_hash !== 'string') return null
-    return decoded
-  } catch {
-    return null
-  }
-}
+/**
+ * Atomically verify a submitted OTP against the server-side one-time code rows.
+ *
+ * Runs inside a SINGLE transaction so the attempt cap and one-time consumption
+ * are race-free even under pooled/concurrent Postgres (the TOCTOU class):
+ *   - Postgres locks the credential's active rows with `FOR UPDATE`; SQLite's
+ *     `BEGIN IMMEDIATE` serializes writers — so concurrent verifies for the same
+ *     credential execute one at a time.
+ *   - The attempt cap is re-read UNDER the lock, so parallel WRONG guesses cannot
+ *     all observe `attempt_count < max` and slip past the cap. Once the cap is
+ *     reached the active code stays LOCKED (every further attempt — right or
+ *     wrong — is rejected) until a fresh /start mints a new code.
+ *   - A CORRECT guess consumes via a single conditional `UPDATE ... WHERE
+ *     consumed_at IS NULL` that must affect exactly ONE row; two parallel correct
+ *     submissions therefore yield exactly one success (one session) — the loser
+ *     gets `already_consumed`, never a second session.
+ *   - The code compare is constant-time (`timingSafeEqualHex`).
+ *
+ * Returns: 'ok' | 'invalid' | 'already_consumed' | 'locked_out'.
+ */
+async function atomicVerifyOtpCode(db, credentialId, incomingHash, maxAttempts) {
+  return db.withTransaction(async (tx) => {
+    const now = nowISOString()
+    const lockClause = tx.dialect === 'postgres' ? ' FOR UPDATE' : ''
 
-async function findMatchingActiveVerificationCode(db, credentialId, incomingHash) {
-  const now = nowISOString()
-  const rows = await db
-    .prepare(
-      `
-        SELECT *
-        FROM user_verification_codes
-        WHERE credential_id = ?
-          AND consumed_at IS NULL
-          AND (expires_at IS NULL OR expires_at >= ?)
-        ORDER BY created_at DESC
-        LIMIT 10
-      `,
-    )
-    .all(credentialId, now)
+    const active = await tx
+      .prepare(
+        `
+          SELECT id, code_hash, attempt_count
+          FROM user_verification_codes
+          WHERE credential_id = ?
+            AND consumed_at IS NULL
+            AND (expires_at IS NULL OR expires_at >= ?)
+          ORDER BY created_at DESC
+          LIMIT 10${lockClause}
+        `,
+      )
+      .all(credentialId, now)
 
-  if (!Array.isArray(rows) || rows.length === 0) return null
-  return rows.find((row) => row && row.code_hash === incomingHash) ?? null
+    const latest = Array.isArray(active) && active.length > 0 ? active[0] : null
+
+    const match = Array.isArray(active)
+      ? active.find((row) => timingSafeEqualHex(row.code_hash, incomingHash))
+      : null
+
+    if (match) {
+      // Cap enforced on the MATCHED row (not merely the latest): a matched-but-
+      // capped code is LOCKED, never consumed — even if it is an older row that a
+      // fresh /start left behind. Combined with the single-active-code invariant
+      // in insertFreshVerificationCode, this makes the per-code cap strict.
+      if (Number(match.attempt_count || 0) >= maxAttempts) {
+        return 'locked_out'
+      }
+      // One-time consume — a single conditional UPDATE that MUST affect exactly
+      // one row. A parallel winner already flipped consumed_at → 0 rows →
+      // 'already_consumed' (no second session).
+      const consume = await tx
+        .prepare(
+          `UPDATE user_verification_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (expires_at IS NULL OR expires_at >= ?)`,
+        )
+        .run(now, match.id, now)
+      if (Number(consume?.changes ?? 0) !== 1) {
+        return 'already_consumed'
+      }
+      await tx
+        .prepare(`UPDATE user_credentials SET verified_at = COALESCE(verified_at, ?), attempt_count = 0 WHERE id = ?`)
+        .run(now, credentialId)
+      return 'ok'
+    }
+
+    // No match (wrong guess). If the latest active code is already capped, the
+    // credential is locked out. Otherwise charge the miss to the latest active
+    // code (raceless conditional increment) and the credential counter. Serialized
+    // by the lock, so the cap is exact.
+    if (latest && Number(latest.attempt_count || 0) >= maxAttempts) {
+      return 'locked_out'
+    }
+    if (latest?.id) {
+      await tx
+        .prepare(`UPDATE user_verification_codes SET attempt_count = attempt_count + 1 WHERE id = ? AND consumed_at IS NULL`)
+        .run(latest.id)
+    }
+    await tx.prepare(`UPDATE user_credentials SET attempt_count = attempt_count + 1 WHERE id = ?`).run(credentialId)
+    return 'invalid'
+  })
 }
 
 function nowISOString() {
@@ -491,10 +588,14 @@ function normalizePhone(phone = '') {
   return trimmed.startsWith('+') ? trimmed : `+${trimmed}`
 }
 
+// Returns { ok, skipped?, error? }. `skipped` = no provider configured (dev):
+// the code is logged and the flow proceeds. `ok:false` (no skip) = a real
+// delivery failure — the caller must NOT claim "sent" or stamp the resend
+// cooldown. Never throws.
 async function sendPhoneVerificationCode(phone, code) {
   if (!twilioClient) {
     console.warn('[auth] Twilio credentials not configured; skipping SMS send. Code:', code, 'Phone:', phone)
-    return
+    return { ok: false, skipped: true, error: 'sms_not_configured' }
   }
 
   try {
@@ -508,11 +609,16 @@ async function sendPhoneVerificationCode(phone, code) {
       payload.from = TWILIO_FROM_NUMBER
     } else {
       console.warn('[auth] No TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID configured; skipping SMS send.')
-      return
+      return { ok: false, skipped: true, error: 'sms_from_not_configured' }
     }
-    await twilioClient.messages.create(payload)
+    // Checked send: Twilio can RESOLVE with a failed/undelivered message
+    // (errorCode set) without throwing.
+    const result = await sendTwilioMessage(twilioClient, payload)
+    if (!result.ok) console.error('[auth] Twilio rejected verification SMS:', result.error)
+    return result
   } catch (error) {
     console.error('[auth] Failed to send SMS code:', error.message)
+    return { ok: false, error: error.message }
   }
 }
 
@@ -904,7 +1010,6 @@ async function ensureEmailCredential(db, email) {
     .get(email)
 
   if (existing) {
-    const user = await getUserById(db, existing.user_id)
     // Ensure admin status is set if this is the admin email
     await ensureAdminStatus(db, existing.user_id, email)
     // Reload user to get updated admin status
@@ -915,44 +1020,49 @@ async function ensureEmailCredential(db, email) {
     }
   }
 
-  // No email_otp credential yet — but a users row may already exist for this
-  // email (created via password, OAuth, phone, or import). Reuse it instead of
-  // inserting a duplicate: a blind INSERT here violates ux_users_primary_email
-  // and 500s the request, which blocks email-code login for EVERY pre-existing
-  // user (anyone who didn't first sign in via email OTP). Mirror the find-or-
-  // create pattern used by ensureUserForPasswordAuth().
-  const existingUser = await getUserByEmail(db, email)
-  let userId
-  if (existingUser) {
-    userId = existingUser.id
-    // Keep admin flag correct for the admin email.
-    await ensureAdminStatus(db, userId, email)
-  } else {
-    const displayName = email.split('@')[0] || 'New User'
-    userId = crypto.randomUUID()
-    await db.prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)').run(
-      userId,
-      displayName,
-      email,
-      isAdminEmail(email) ? true : false,
-    )
+  // First-ever email_otp login: create the user + credential ATOMICALLY and
+  // IDEMPOTENTLY, SERIALIZED per identifier — so two concurrent first-ever
+  // /email/start converge on ONE user, ONE credential, ONE profile (no duplicate
+  // users, no UNIQUE(type,identifier) 500). A users row may already exist for this
+  // email (password/OAuth/phone/import); reuse it instead of inserting a duplicate
+  // (ux_users_primary_email).
+  return db.withTransaction(async (tx) => {
+    if (tx.dialect === 'postgres') {
+      await tx.prepare(`SELECT pg_advisory_xact_lock(hashtext(?))`).get(`email_otp:${email}`)
+    }
+    // (SQLite BEGIN IMMEDIATE already serializes writers.)
 
-    // Assign profile to user (designated or first available)
-    await assignProfileToUser(db, userId, email)
-  }
+    // Double-checked under the lock.
+    let cred = await tx.prepare(`SELECT * FROM user_credentials WHERE type = 'email_otp' AND identifier = ?`).get(email)
+    let userId
+    if (cred) {
+      userId = cred.user_id
+      await ensureAdminStatus(tx, userId, email)
+    } else {
+      const existingUser = await getUserByEmail(tx, email)
+      if (existingUser) {
+        userId = existingUser.id
+        await ensureAdminStatus(tx, userId, email)
+      } else {
+        // Serialized above, so select-then-insert is safe; ux_users_primary_email
+        // is the DB backstop.
+        userId = crypto.randomUUID()
+        const displayName = email.split('@')[0] || 'New User'
+        await tx
+          .prepare('INSERT INTO users (id, display_name, primary_email, is_admin) VALUES (?, ?, ?, ?)')
+          .run(userId, displayName, email, isAdminEmail(email) ? true : false)
+        await assignProfileToUser(tx, userId, email)
+      }
+      const credentialId = crypto.randomUUID()
+      await tx
+        .prepare(`INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count) VALUES (?, ?, 'email_otp', ?, 0) ON CONFLICT (type, identifier) DO NOTHING`)
+        .run(credentialId, userId, email)
+      cred = await tx.prepare(`SELECT * FROM user_credentials WHERE type = 'email_otp' AND identifier = ?`).get(email)
+    }
 
-  const credentialId = crypto.randomUUID()
-  await db.prepare(
-    `
-      INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
-      VALUES (?, ?, 'email_otp', ?, 0)
-    `,
-  ).run(credentialId, userId, email)
-
-  const user = await getUserById(db, userId)
-  const credential = await db.prepare('SELECT * FROM user_credentials WHERE id = ?').get(credentialId)
-
-  return { user, credential }
+    const user = await getUserById(tx, userId)
+    return { user, credential: cred }
+  })
 }
 
 async function getUserByEmail(db, email) {
@@ -1516,6 +1626,7 @@ function buildRedirectUrl(baseRedirect, params = {}) {
 }
 
 async function ensurePhoneCredential(db, phone) {
+  // Fast path: the credential already exists (no transaction needed).
   const existingCredential = await db
     .prepare(
       `
@@ -1533,45 +1644,112 @@ async function ensurePhoneCredential(db, phone) {
     return { user, credential: existingCredential }
   }
 
-  let user = await db
-    .prepare(
-      `
-        SELECT *
-        FROM users
-        WHERE primary_phone = ?
-      `,
-    )
-    .get(phone)
+  // First-ever: create the user + credential ATOMICALLY and IDEMPOTENTLY,
+  // SERIALIZED per identifier — so two concurrent first-ever /phone/start converge
+  // on ONE user, ONE credential, ONE profile (no duplicates, no UNIQUE 500).
+  return db.withTransaction(async (tx) => {
+    if (tx.dialect === 'postgres') {
+      // Serialize concurrent creators for this exact phone.
+      await tx.prepare(`SELECT pg_advisory_xact_lock(hashtext(?))`).get(`phone_otp:${phone}`)
+    }
+    // (SQLite BEGIN IMMEDIATE already serializes writers.)
 
-  if (!user) {
-    const userId = crypto.randomUUID()
-    const displayName = `User ${phone.slice(-4)}`
-    await db.prepare(
-      `
-        INSERT INTO users (id, display_name, primary_phone)
-        VALUES (?, ?, ?)
-      `,
-    ).run(userId, displayName, phone)
-    
-    // Assign profile to user (phone auth doesn't have email, so only first available)
-    await assignProfileToUser(db, userId, null)
-    
-    user = await getUserById(db, userId)
-  }
-
-  const credentialId = crypto.randomUUID()
-  await db.prepare(
-    `
-      INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
-      VALUES (?, ?, 'phone_otp', ?, 0)
-    `,
-  ).run(credentialId, user.id, phone)
-
-  const credential = await db.prepare('SELECT * FROM user_credentials where id = ?').get(credentialId)
-  return { user, credential }
+    // Double-checked under the lock: another creator may have just won.
+    let cred = await tx.prepare(`SELECT * FROM user_credentials WHERE type = 'phone_otp' AND identifier = ?`).get(phone)
+    if (!cred) {
+      // Create-or-get the user by primary_phone idempotently (ux_users_primary_phone
+      // backstop). Only the true creator assigns a profile.
+      let user = await tx.prepare(`SELECT * FROM users WHERE primary_phone = ?`).get(phone)
+      if (!user) {
+        const userId = crypto.randomUUID()
+        const displayName = `User ${phone.slice(-4)}`
+        await tx
+          .prepare(`INSERT INTO users (id, display_name, primary_phone) VALUES (?, ?, ?) ON CONFLICT (primary_phone) WHERE primary_phone IS NOT NULL DO NOTHING`)
+          .run(userId, displayName, phone)
+        user = await tx.prepare(`SELECT * FROM users WHERE primary_phone = ?`).get(phone)
+        if (user && String(user.id) === String(userId)) {
+          await assignProfileToUser(tx, userId, null)
+        }
+      }
+      const credentialId = crypto.randomUUID()
+      await tx
+        .prepare(`INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count) VALUES (?, ?, 'phone_otp', ?, 0) ON CONFLICT (type, identifier) DO NOTHING`)
+        .run(credentialId, user.id, phone)
+      cred = await tx.prepare(`SELECT * FROM user_credentials WHERE type = 'phone_otp' AND identifier = ?`).get(phone)
+    }
+    const user = await getUserById(tx, cred.user_id)
+    return { user, credential: cred }
+  })
 }
 
-async function attachProfileToUser(db, userId, profileId) {
+/**
+ * Is `profileId` bound to `normalizedEmail`? Used to gate OTP-verify profile
+ * ADOPTION: a verified email/phone code proves control of that CREDENTIAL, not
+ * ownership of an arbitrary unowned profile id. Adoption is permitted only when
+ * the profile is demonstrably the credential-holder's — via the designated map,
+ * an explicit profile_emails access grant, its own basic_information.email, or
+ * its owning user's verified primary email. (Security: tenant-takeover guard.)
+ */
+async function profileIsBoundToEmail(db, profileId, normalizedEmail) {
+  if (!profileId || !normalizedEmail) return false
+
+  // 1) Explicit designated mapping (baseline profiles).
+  try {
+    if (getDesignatedProfileForEmail(normalizedEmail) === profileId) return true
+  } catch {
+    // ignore
+  }
+
+  // 2) profile_emails explicit access mapping FOR THIS profile.
+  try {
+    await ensureProfileEmailSchema(db)
+    const row = await db
+      .prepare(
+        `SELECT 1 AS ok FROM profile_emails WHERE profile_id = ? AND LOWER(TRIM(email)) = ? LIMIT 1`,
+      )
+      .get(profileId, normalizedEmail)
+    if (row?.ok) return true
+  } catch {
+    // ignore
+  }
+
+  // 3) The profile's own basic_information.email.
+  try {
+    const secRow = await db
+      .prepare(
+        `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`,
+      )
+      .get(profileId)
+    if (secRow?.data) {
+      const parsed = JSON.parse(String(secRow.data))
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        normalizeEmail(String(parsed.email || '')) === normalizedEmail
+      ) {
+        return true
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 4) The profile's owning user's primary email (same-account re-claim).
+  try {
+    const owner = await db
+      .prepare(
+        'SELECT u.primary_email AS email FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.id = ? LIMIT 1',
+      )
+      .get(profileId)
+    if (owner?.email && normalizeEmail(String(owner.email)) === normalizedEmail) return true
+  } catch {
+    // ignore
+  }
+
+  return false
+}
+
+async function attachProfileToUser(db, userId, profileId, { verifiedEmail = null } = {}) {
   if (!profileId) {
     return null
   }
@@ -1581,16 +1759,36 @@ async function attachProfileToUser(db, userId, profileId) {
     error.status = 404
     throw error
   }
-  if (profile.user_id && profile.user_id !== userId) {
+  // Re-selecting a profile THIS user already owns is always allowed.
+  if (profile.user_id && String(profile.user_id) === String(userId)) {
+    return profileId
+  }
+  // Owned by someone else — never adoptable via a login credential.
+  if (profile.user_id) {
     const error = new Error('Profile already linked to another user')
     error.status = 403
     throw error
   }
-  if (!profile.user_id) {
-    await db
-      .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(userId, profileId)
+  // Unowned profile: ADOPTION must be bound to the PRESENTED credential. A
+  // verified OTP proves control of an email/phone — NOT ownership of an
+  // arbitrary unowned profile id — so an OTP holder who knows an unrelated,
+  // unowned profile id must not be able to claim it (tenant takeover). Only
+  // adopt when the profile's email matches the just-verified email. The phone
+  // path passes no verifiedEmail (no equivalent verified phone→profile binding
+  // exists), so it can only re-select an already-owned profile (handled above)
+  // and can never adopt an unowned one.
+  const normalizedVerifiedEmail = verifiedEmail ? normalizeEmail(verifiedEmail) : null
+  const bound = normalizedVerifiedEmail
+    ? await profileIsBoundToEmail(db, profileId, normalizedVerifiedEmail)
+    : false
+  if (!bound) {
+    const error = new Error('Profile is not associated with the verified credential')
+    error.status = 403
+    throw error
   }
+  await db
+    .prepare('UPDATE profiles SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(userId, profileId)
   return profileId
 }
 
@@ -1601,6 +1799,114 @@ async function insertVerificationCode(db, credentialId, codeHash, expiresAtIso) 
       VALUES (?, ?, ?)
     `,
   ).run(credentialId, codeHash, expiresAtIso)
+}
+
+function isUniqueViolation(err) {
+  if (!err) return false
+  const code = String(err.code || '')
+  return code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE' || /unique constraint/i.test(String(err.message || ''))
+}
+
+/**
+ * Mint a fresh OTP code AND invalidate every prior active code for this
+ * credential in ONE transaction, so a credential has at most ONE consumable
+ * active code at a time — SERIALIZED per credential so concurrent /start cannot
+ * leave multiple active rows.
+ *
+ * Without the single-active-code invariant, /start APPENDED rows and left older
+ * active rows unconsumed: a locked-out older code stayed verifiable after a fresh
+ * start (lockout bypass; alternating /start + guess → unlimited attempts).
+ *
+ * Concurrency: one caller's invalidate+insert is atomic, but two callers for the
+ * SAME credential could (on Postgres READ COMMITTED) both invalidate before
+ * either insert was visible and leave TWO active rows. So:
+ *   - Postgres locks the parent credential row (SELECT ... FOR UPDATE) FIRST, so
+ *     a second concurrent /start waits, sees the first's inserted row, and
+ *     invalidates it. SQLite's BEGIN IMMEDIATE already serializes writers.
+ *   - The resend cooldown is RE-CHECKED under the lock (two racing /start can't
+ *     both pass), and the credential metadata (secret_hash / last_sent_at /
+ *     attempt reset) is updated in the SAME transaction so it can't interleave.
+ *   - A partial unique index (credential_id WHERE consumed_at IS NULL) is the DB
+ *     backstop: a second active row is rejected (23505) even if a future caller
+ *     skips the lock — treated here as "another start won" (invariant still holds).
+ *
+ * Returns { minted: true } on success, or { minted: false, retryAfterSeconds }
+ * when the cooldown (re-checked under the lock) or the backstop rejects the mint.
+ */
+async function insertFreshVerificationCode(db, credentialId, codeHash, expiresAtIso, { cooldownSeconds = 0 } = {}) {
+  return db.withTransaction(async (tx) => {
+    const now = nowISOString()
+
+    // Serialize concurrent /start for THIS credential.
+    if (tx.dialect === 'postgres') {
+      await tx.prepare(`SELECT id FROM user_credentials WHERE id = ? FOR UPDATE`).get(credentialId)
+    }
+
+    // Re-check the resend cooldown UNDER the lock (raceless).
+    if (cooldownSeconds > 0) {
+      const cred = await tx.prepare(`SELECT last_sent_at FROM user_credentials WHERE id = ?`).get(credentialId)
+      if (cred?.last_sent_at) {
+        const elapsedMs = Date.now() - new Date(cred.last_sent_at).getTime()
+        if (Number.isFinite(elapsedMs) && elapsedMs >= 0 && elapsedMs < cooldownSeconds * 1000) {
+          return { minted: false, retryAfterSeconds: Math.ceil((cooldownSeconds * 1000 - elapsedMs) / 1000) }
+        }
+      }
+    }
+
+    await tx
+      .prepare(`UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE credential_id = ? AND consumed_at IS NULL`)
+      .run(now, credentialId)
+    let inserted
+    try {
+      inserted = await tx
+        .prepare(`INSERT INTO user_verification_codes (credential_id, code_hash, expires_at) VALUES (?, ?, ?) RETURNING id`)
+        .get(credentialId, codeHash, expiresAtIso)
+    } catch (err) {
+      // DB backstop tripped: another active code exists (a caller that skipped the
+      // lock won the race). The one-active-code invariant still holds.
+      if (isUniqueViolation(err)) {
+        return { minted: false, retryAfterSeconds: Math.max(1, cooldownSeconds || 1) }
+      }
+      throw err
+    }
+
+    // Credential metadata in the SAME serialized transaction.
+    await tx
+      .prepare(`UPDATE user_credentials SET secret_hash = ?, last_sent_at = ?, attempt_count = 0 WHERE id = ?`)
+      .run(codeHash, now, credentialId)
+
+    // Return the EXACT minted code id + mint timestamp so a later send-failure can
+    // compensate ONLY this mint (never a newer good code — see compensateFailedOtpSend).
+    return { minted: true, codeId: inserted?.id ?? null, sentAt: now }
+  })
+}
+
+/**
+ * Compensate a mint whose delivery (email/SMS) FAILED after the code was minted.
+ * The winner of the serialized mint sends AFTER minting; if the send then fails,
+ * we must not leave (a) a verifiable code the user never received, or (b) a
+ * cooldown that blocks a retry for a code that never arrived.
+ *
+ * SCOPED to the EXACT failing mint (`codeId` + `sentAt` from insertFreshVerificationCode):
+ * a slow send that fails AFTER a retry already minted+sent a NEWER code must NOT
+ * destroy that newer good code or erase its cooldown. So we only invalidate THIS
+ * code row if it is STILL active, and only rewind last_sent_at if it STILL equals
+ * this mint's timestamp (a newer mint moved it → leave it). Idempotent + safe to
+ * call once even if the mint was already superseded.
+ */
+async function compensateFailedOtpSend(db, credentialId, { codeId = null, sentAt = null } = {}) {
+  return db.withTransaction(async (tx) => {
+    if (codeId) {
+      await tx
+        .prepare(`UPDATE user_verification_codes SET consumed_at = COALESCE(consumed_at, ?) WHERE id = ? AND consumed_at IS NULL`)
+        .run(nowISOString(), codeId)
+    }
+    if (sentAt) {
+      await tx
+        .prepare(`UPDATE user_credentials SET last_sent_at = NULL WHERE id = ? AND last_sent_at = ?`)
+        .run(credentialId, sentAt)
+    }
+  })
 }
 
 function signAccessToken(user, sessionId, profileId) {
@@ -1883,26 +2189,32 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     const code = generateSixDigitCode()
     const codeHash = hashValue(`${email}:${code}`)
     const expiresAt = new Date(now.getTime() + EMAIL_CODE_TTL * 1000).toISOString()
+    // The token carries NO verifier (see signOtpToken) — the code hash lives ONLY
+    // in the server-side DB row below and is delivered to the user via email.
     const verificationToken = signOtpToken({
       kind: 'email',
       identifier: email,
-      codeHash,
       ttlSeconds: EMAIL_CODE_TTL,
     })
     
+    let mintScope = null
     try {
-      await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
-      await req.db
-        .prepare(
-          `
-            UPDATE user_credentials
-            SET secret_hash = ?,
-                last_sent_at = ?,
-                attempt_count = 0
-            WHERE id = ?
-          `,
-        )
-        .run(codeHash, nowISOString(), credential.id)
+      // Serialized single-active-code mint: invalidate prior active codes + insert
+      // the fresh one + reset credential metadata in ONE per-credential-locked
+      // transaction (cooldown re-checked under the lock). No locked-out older row
+      // survives, and concurrent /start can't leave two active codes.
+      const mint = await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt, {
+        cooldownSeconds: EMAIL_RESEND_COOLDOWN,
+      })
+      if (!mint.minted) {
+        return res.status(429).json({
+          error: `Please wait ${mint.retryAfterSeconds} seconds before requesting another code`,
+          error_type: 'rate_limit_cooldown',
+          retry_after_seconds: mint.retryAfterSeconds,
+        })
+      }
+      // Scope any later compensation to EXACTLY this mint (never a newer good code).
+      mintScope = { codeId: mint.codeId, sentAt: mint.sentAt }
       routeLogger.info('[auth/email/start] Verification code stored in database for:', email)
     } catch (dbError) {
       routeLogger.error('[auth/email/start] Database error storing verification code:', dbError)
@@ -1913,27 +2225,71 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    // Attempt to send email with timeout (optional, not required for login)
+    // The serialized mint already ran ABOVE, so only the WINNER reaches this send
+    // (a racing /start 429s at the mint). Distinguish outcomes:
+    //   'sent'    → delivered; keep the code.
+    //   'failed'  → DEFINITIVE failure (only when CONFIGURED); COMPENSATE this mint
+    //               + 502 — no verifiable code the user never received, retry not
+    //               cooldown-blocked. Symmetric with phone.
+    //   'timeout' → tolerant (202 + notice, keep the code) BUT, for a CONFIGURED
+    //               provider, attach a LATE handler so a failure that resolves AFTER
+    //               the route timeout still compensates this exact mint (else an
+    //               active, verifiable, undelivered code + preserved cooldown would
+    //               leak — the very failure mode r22 removed).
     routeLogger.info('[auth/email/start] Attempting to send verification email to:', email)
+    // A DEFINITIVE failure only counts when the email service is actually
+    // configured. Unconfigured/dev returns false — the deliberate "code stored,
+    // delivery may be delayed" path, NOT a failure (compensating there would break
+    // local/dev + queued providers).
+    const emailConfigured = isEmailServiceConfigured()
     let emailSent = false
+    let sendFailed = false
     try {
-      // Add timeout to email sending to prevent hanging
-      const emailPromise = sendVerificationEmail(email, code)
-      const timeoutPromise = new Promise((resolve) => {
-        setTimeout(() => resolve(false), Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000)) // default 15s
-      })
-      
-      emailSent = await Promise.race([emailPromise, timeoutPromise])
-      
-      if (emailSent === true) {
+      const timeoutMs = Number(process.env.AUTH_EMAIL_SEND_TIMEOUT_MS || 15000)
+      // The underlying send promise (already catches its own rejection → 'failed').
+      const sendPromise = Promise.resolve()
+        .then(() => sendVerificationEmail(email, code))
+        .then((ok) => (ok === true ? 'sent' : 'failed'), () => 'failed')
+      const outcome = await Promise.race([
+        sendPromise,
+        new Promise((resolve) => setTimeout(() => resolve('timeout'), timeoutMs)),
+      ])
+      if (outcome === 'sent') {
+        emailSent = true
         routeLogger.info('[auth/email/start] Verification email sent successfully to:', email)
+      } else if (outcome === 'failed' && emailConfigured) {
+        sendFailed = true
+        console.warn('[auth/email/start] Configured email service failed for:', email)
       } else {
-        console.warn('[auth/email/start] Email service unavailable, timed out, or failed for:', email)
+        // Unconfigured, or a timeout that may still be queued — tolerant; keep the code.
+        console.warn('[auth/email/start] Email not sent (unconfigured or queued) for:', email)
+        // Configured + timed out: watch the underlying send; if it LATER fails,
+        // compensate THIS mint (scoped, so a retry's newer code is never touched).
+        if (outcome === 'timeout' && emailConfigured && mintScope) {
+          const scope = mintScope
+          sendPromise.then((late) => {
+            if (late !== 'sent') {
+              compensateFailedOtpSend(req.db, credential.id, scope)
+                .catch(e => console.warn('[auth/email/start] late compensation failed:', e?.message || e))
+            }
+          }, () => {
+            compensateFailedOtpSend(req.db, credential.id, scope)
+              .catch(e => console.warn('[auth/email/start] late compensation failed:', e?.message || e))
+          })
+        }
       }
     } catch (emailError) {
       console.error('[auth/email/start] Unexpected error sending email:', emailError)
-      emailSent = false
-      // Don't fail the request if email fails - code is stored in DB
+      if (emailConfigured) sendFailed = true
+    }
+
+    if (sendFailed) {
+      await compensateFailedOtpSend(req.db, credential.id, mintScope || {}).catch(e => console.warn('[auth/email/start] compensation failed:', e?.message || e))
+      sendAuthAttemptNotification({ event: 'email_start', identifier: email, success: false, error: 'email_send_failed' }).catch(e => console.warn('[background]', e?.message || e))
+      return res.status(502).json({
+        error: 'Could not send the verification email right now. Please try again.',
+        error_type: 'email_send_failed',
+      })
     }
 
     // Return success response
@@ -1991,11 +2347,10 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
   }
 })
 
-router.post('/email/verify', async (req, res) => {
+router.post('/email/verify', emailVerifyLimiter, async (req, res) => {
   if (isOtpLoginRetired()) return otpLoginRetired(res)
   const emailRaw = req.body?.email
   const codeRaw = req.body?.code
-  const verificationTokenRaw = req.body?.verification_token ?? req.body?.verificationToken ?? null
   const requestedProfileId = req.body?.profile_id ?? null
 
   if (typeof emailRaw !== 'string' || (typeof codeRaw !== 'string' && typeof codeRaw !== 'number')) {
@@ -2022,13 +2377,6 @@ router.post('/email/verify', async (req, res) => {
   // Always compute the incoming hash.
   const incomingHash = hashValue(`${email}:${code}`)
 
-  // Prefer stateless verification token (survives multi-instance / non-shared sqlite deployments).
-  const tokenDecoded = typeof verificationTokenRaw === 'string' ? verifyOtpToken(verificationTokenRaw) : null
-  const tokenOk =
-    tokenDecoded &&
-    normalizeEmail(tokenDecoded.identifier) === email &&
-    tokenDecoded.code_hash === incomingHash
-
   // Ensure a credential exists (create if needed). This avoids "code not requested" across instances.
   let user = null
   let credential = null
@@ -2040,113 +2388,36 @@ router.post('/email/verify', async (req, res) => {
     return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  const codeRow = tokenOk ? { id: null } : await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
+  // AUTHORITATIVE server-side verification: the OTP is proven ONLY by the
+  // server-stored, one-time, expiring DB code row — never by any client-supplied
+  // token (the token carries no verifier; see signOtpToken). This is what makes
+  // /email/verify genuinely prove inbox possession (and thus makes the r17
+  // credential-bound profile adoption sound).
+  //
+  // Done ATOMICALLY (row-locked transaction): the attempt cap and one-time
+  // consumption cannot be raced — parallel wrong guesses can't slip past the cap,
+  // and two parallel correct submissions of the one-time code mint exactly one
+  // session (never two). See atomicVerifyOtpCode.
+  let outcome
+  try {
+    outcome = await atomicVerifyOtpCode(req.db, credential.id, incomingHash, EMAIL_MAX_VERIFY_ATTEMPTS)
+  } catch (dbError) {
+    routeLogger.error('[auth/email/verify] Atomic verification failed:', dbError)
+    return res.status(500).json({ error: 'Database error occurred. Please try again.' })
+  }
 
-  if (!codeRow) {
-    // Provide a more accurate error (expired vs already used vs invalid) without exposing the code.
-    const matchedAny = await req.db
-      .prepare(
-        `
-          SELECT id, expires_at, consumed_at
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND code_hash = ?
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(credential.id, incomingHash)
-
-    if (matchedAny?.consumed_at) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
-      return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
-    }
-    if (matchedAny?.expires_at && matchedAny.expires_at < nowISOString()) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(e => console.warn('[background]', e?.message || e))
-      return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
-    }
-
-    const hasAnyActive = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) as c
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND consumed_at IS NULL
-            AND (expires_at IS NULL OR expires_at >= ?)
-        `,
-      )
-      .get(credential.id, nowISOString())
-      ?.c
-
-    if (!hasAnyActive) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(e => console.warn('[background]', e?.message || e))
-      return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
-    }
-
-    // Increment attempt count on the latest active code (if any) to support abuse monitoring.
-    const latest = await req.db
-      .prepare(
-        `
-          SELECT id
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND consumed_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(credential.id)
-
-    if (latest?.id) {
-      await req.db
-        .prepare(
-          `
-            UPDATE user_verification_codes
-            SET attempt_count = attempt_count + 1
-            WHERE id = ?
-          `,
-        )
-        .run(latest.id)
-    }
-
-    await req.db
-      .prepare(
-        `
-          UPDATE user_credentials
-          SET attempt_count = attempt_count + 1
-          WHERE id = ?
-        `,
-      )
-      .run(credential.id)
-
+  if (outcome === 'locked_out') {
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'too_many_attempts' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(429).json({ error: 'Too many attempts. Request a new code.', error_type: 'too_many_attempts' })
+  }
+  if (outcome === 'already_consumed') {
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
+  }
+  if (outcome !== 'ok') {
     sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(400).json({ error: 'Invalid verification code' })
   }
-
-  // Best-effort consume in DB (may be absent in stateless flow on a different instance).
-  if (codeRow.id) {
-    await req.db
-      .prepare(
-        `
-          UPDATE user_verification_codes
-          SET consumed_at = ?
-          WHERE id = ?
-        `,
-      )
-      .run(nowISOString(), codeRow.id)
-  }
-
-  await req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET verified_at = COALESCE(verified_at, ?),
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), credential.id)
 
   // Reload user if needed.
   if (!user) {
@@ -2157,7 +2428,10 @@ router.post('/email/verify', async (req, res) => {
   let activeProfileId = null
   try {
     if (requestedProfileId) {
-      activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId)
+      // Bind adoption to the just-verified EMAIL credential (tenant-takeover guard).
+      activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId, {
+        verifiedEmail: email,
+      })
     }
   } catch (error) {
     return res.status(error.status ?? 400).json({ error: error.message })
@@ -2315,20 +2589,32 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
   const codeHash = hashValue(`${normalized}:${code}`)
   const expiresAt = new Date(now.getTime() + PHONE_CODE_TTL * 1000).toISOString()
 
-  await insertVerificationCode(req.db, credential.id, codeHash, expiresAt)
-  await req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET secret_hash = ?,
-            last_sent_at = ?,
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(codeHash, nowISOString(), credential.id)
+  // MINT FIRST (serialized), THEN send — so only the serialized WINNER sends. Two
+  // concurrent /phone/start no longer both send an SMS (the loser 429s here,
+  // before any send), which previously delivered the loser an UNSTORED code that
+  // could never verify and cost a duplicate Twilio message.
+  const mint = await insertFreshVerificationCode(req.db, credential.id, codeHash, expiresAt, {
+    cooldownSeconds: PHONE_RESEND_COOLDOWN,
+  })
+  if (!mint.minted) {
+    return res.status(429).json({
+      error: 'Verification already sent',
+      retry_after_seconds: mint.retryAfterSeconds,
+    })
+  }
 
-  sendPhoneVerificationCode(normalized, code)
+  // Winner sends. Twilio can RESOLVE with a failed/undelivered message without
+  // throwing. On a definitive failure (not the dev/no-provider "skipped" path),
+  // COMPENSATE: invalidate the minted code + rewind last_sent_at, so there is no
+  // verifiable code the user never received and a retry isn't cooldown-blocked.
+  const smsResult = await sendPhoneVerificationCode(normalized, code)
+  if (smsResult && smsResult.ok === false && smsResult.skipped !== true) {
+    await compensateFailedOtpSend(req.db, credential.id, { codeId: mint.codeId, sentAt: mint.sentAt }).catch(e => console.warn('[auth/phone/start] compensation failed:', e?.message || e))
+    return res.status(502).json({
+      error: 'Could not send the verification code right now. Please try again.',
+      error_type: 'sms_send_failed',
+    })
+  }
 
   // Optional ops alert (never includes the code).
   sendAuthAttemptNotification({
@@ -2381,73 +2667,30 @@ router.post('/phone/verify', async (req, res) => {
   }
 
   const incomingHash = hashValue(`${normalized}:${code}`)
-  const codeRow = await findMatchingActiveVerificationCode(req.db, credential.id, incomingHash)
 
-  if (!codeRow) {
-    const latest = await req.db
-      .prepare(
-        `
-          SELECT id
-          FROM user_verification_codes
-          WHERE credential_id = ?
-            AND consumed_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(credential.id)
-
-    if (latest?.id) {
-      await req.db
-        .prepare(
-          `
-            UPDATE user_verification_codes
-            SET attempt_count = attempt_count + 1
-            WHERE id = ?
-          `,
-        )
-        .run(latest.id)
-    }
-
-    await req.db
-      .prepare(
-        `
-          UPDATE user_credentials
-          SET attempt_count = attempt_count + 1
-          WHERE id = ?
-        `,
-      )
-      .run(credential.id)
-
-    sendAuthAttemptNotification({
-      event: 'phone_verify',
-      identifier: normalized,
-      success: false,
-      error: 'invalid_code',
-    }).catch(e => console.warn('[background]', e?.message || e))
-    return res.status(400).json({ error: 'Invalid verification code' })
+  // Same ATOMIC, race-free verification as the email path (row-locked tx): the
+  // one-time phone code cannot mint two sessions under a concurrent double-submit,
+  // and the attempt cap is exact under parallel wrong guesses.
+  let outcome
+  try {
+    outcome = await atomicVerifyOtpCode(req.db, credential.id, incomingHash, PHONE_MAX_VERIFY_ATTEMPTS)
+  } catch (dbError) {
+    routeLogger.error('[auth/phone/verify] Atomic verification failed:', dbError)
+    return res.status(500).json({ error: 'Database error occurred. Please try again.' })
   }
 
-  await req.db
-    .prepare(
-      `
-        UPDATE user_verification_codes
-        SET consumed_at = ?
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), codeRow.id)
-
-  await req.db
-    .prepare(
-      `
-        UPDATE user_credentials
-        SET verified_at = COALESCE(verified_at, ?),
-            attempt_count = 0
-        WHERE id = ?
-      `,
-    )
-    .run(nowISOString(), credential.id)
+  if (outcome === 'locked_out') {
+    sendAuthAttemptNotification({ event: 'phone_verify', identifier: normalized, success: false, error: 'too_many_attempts' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(429).json({ error: 'Too many attempts. Request a new code.', error_type: 'too_many_attempts' })
+  }
+  if (outcome === 'already_consumed') {
+    sendAuthAttemptNotification({ event: 'phone_verify', identifier: normalized, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
+  }
+  if (outcome !== 'ok') {
+    sendAuthAttemptNotification({ event: 'phone_verify', identifier: normalized, success: false, error: 'invalid_code' }).catch(e => console.warn('[background]', e?.message || e))
+    return res.status(400).json({ error: 'Invalid verification code' })
+  }
 
   const user = await getUserById(req.db, credential.user_id)
   if (!user) {
@@ -2469,6 +2712,9 @@ router.post('/phone/verify', async (req, res) => {
   let activeProfileId = null
   try {
     if (requestedProfileId) {
+      // No verifiedEmail: a verified phone code has no email→profile binding, so
+      // attachProfileToUser can only RE-SELECT a profile this user already owns
+      // and can never adopt an unowned one (tenant-takeover guard).
       activeProfileId = await attachProfileToUser(req.db, user.id, requestedProfileId)
     }
   } catch (error) {
@@ -3299,7 +3545,14 @@ router.get('/:provider/callback', async (req, res) => {
  */
 router.patch('/onboarding-state', async (req, res) => {
   try {
-    const userId = req.ctx?.userId ?? req.user?.userId ?? req.user?.id ?? null
+    // /api/auth* is exempt from the global enforceResolvedIdentity gate (identity-
+    // ESTABLISHING endpoints must run pre-identity). But this is a user-scoped
+    // STATE MUTATION — a deleted-user JWT or synthetic-id collision keeps
+    // ctx.userId through the exemption and would write auth state / mutate the
+    // reserved system_admin_token row. Gate on the DB-backed identity here, and
+    // use req.ctx.userId ONLY (never a raw req.user.userId/id fallback).
+    if (!requireResolvedIdentity(req, res)) return
+    const userId = req.ctx?.userId ?? null
     if (!userId) {
       return res.status(401).json({ error: 'Not authenticated' })
     }
@@ -3352,7 +3605,12 @@ router.patch('/onboarding-state', async (req, res) => {
     // (e.g. 'has_completed_onboarding = ?'). All values go through ? placeholders.
     // No user input enters the SQL template itself.
     values.push(userId)
-    await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+    const result = await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+    // A zero-row update means no such users row (e.g. a stale token for a deleted
+    // user that slipped the gate). Never report a no-op write as success.
+    if ((result?.changes ?? 0) === 0) {
+      return res.status(404).json({ error: 'User not found' })
+    }
 
     // Return updated state (is_admin + last_login_at feed the admin
     // reinterview gate so this echo matches what login//me will serve).
@@ -3505,6 +3763,17 @@ export {
   ensurePasswordAuthSchema,
   ensureUserForPasswordAuth,
   beginPasswordSetup,
+  // Exported for the tenant-takeover regression suite: OTP-verify profile
+  // adoption must be bound to the presented credential (see attachProfileToUser).
+  attachProfileToUser,
+  profileIsBoundToEmail,
+  // Exported for the OTP-atomicity regression suite: one-time consume + raceless
+  // attempt cap (see atomicVerifyOtpCode); single-active-code minting.
+  atomicVerifyOtpCode,
+  insertFreshVerificationCode,
+  compensateFailedOtpSend,
+  ensurePhoneCredential,
+  EMAIL_MAX_VERIFY_ATTEMPTS,
 }
 
 export default router

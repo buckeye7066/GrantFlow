@@ -12,7 +12,6 @@ import {
   ensureOrganizationAccess,
   ensureProfileAccess,
   getAccessibleOrganizationIds,
-  isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
@@ -515,7 +514,7 @@ router.get('/', async (req, res) => {
     `;
     const params = [];
 
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       // If an active profile is selected, list the profile-scoped pipeline.
       if (profile_id) {
         if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
@@ -697,7 +696,7 @@ router.get('/pipeline', async (req, res) => {
       archived: 'closed',
     }
 
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       // If a profile is selected (query or X-Profile-Id), scope the pipeline strictly to it.
       if (profile_id) {
         if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
@@ -787,7 +786,7 @@ router.get('/automation/summary', async (req, res) => {
     return res.status(400).json({ error: 'organization_id query parameter is required' })
   }
 
-  if (!isAdminUser(auth)) {
+  if (req.ctx?.isAdmin !== true) {
     if (!(await ensureOrganizationAccess(req, res, String(organizationId)))) return
   }
 

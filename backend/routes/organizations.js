@@ -11,7 +11,7 @@ import {
   parseOrganizationRow,
   syncOrganizationToProfileSections,
 } from '../services/profileOrganizationSync.js'
-import { getAccessibleOrganizationIds, isAdminUser, ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { getAccessibleOrganizationIds, ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:organizations')
@@ -55,7 +55,7 @@ router.get('/', ensureAuth, async (req, res) => {
     const params = [];
 
     // Access control: non-admins can only see organizations linked to their profiles.
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       if (!orgIds || orgIds.size === 0) {
         routeLogger.info('[organizations] GET / - user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')

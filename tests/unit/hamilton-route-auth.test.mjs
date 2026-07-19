@@ -26,12 +26,15 @@ import Database from 'better-sqlite3'
 
 import hamiltonRouter from '../../backend/routes/hamiltonAutomation.js'
 import { recordSession } from '../../backend/services/hamilton/hamiltonCredentialSessionService.js'
+import { attachRequestContext } from '../../backend/middleware/requestContext.js'
 
 // Two users, each owning one profile.
 const USERS = {
   'u-A': { id: 'u-A', role: 'user', email: 'a@test.com' },
   'u-B': { id: 'u-B', role: 'user', email: 'b@test.com' },
   'u-admin': { id: 'u-admin', role: 'user', email: 'buckeye7066@gmail.com' },
+  // Demoted admin: the JWT still claims role:'admin' but users.is_admin=0.
+  'u-demoted': { id: 'u-demoted', role: 'admin', is_admin: true, roles: ['admin'], email: 'demoted@test.com' },
 }
 
 function makeDb() {
@@ -43,6 +46,10 @@ function makeDb() {
     INSERT INTO profiles (id, user_id, display_name) VALUES ('p-B', 'u-B', 'Profile B');
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-A', 'a@test.com', 0, 'user');
     INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-B', 'b@test.com', 0, 'user');
+    -- The canonical admin is DB-backed (users.is_admin), NOT a token/email claim.
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-admin', 'buckeye7066@gmail.com', 1, 'admin');
+    -- Demoted admin: DB says NOT admin even though the JWT still claims role:'admin'.
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-demoted', 'demoted@test.com', 0, 'user');
   `)
   return db
 }
@@ -56,6 +63,9 @@ function makeApp(db) {
     if (who && USERS[who]) req.user = USERS[who]
     next()
   })
+  // Mirror production: attachRequestContext resolves the DB-backed req.ctx
+  // (isAdmin, accessible sets) that the routes now authorize against.
+  app.use(attachRequestContext())
   app.use('/api/hamilton/automation', hamiltonRouter)
   return app
 }
@@ -129,6 +139,23 @@ describe('Hamilton route auth + profile scoping', () => {
       .get('/api/hamilton/automation/resolved-fields?profileId=p-A')
       .set('x-test-user', 'u-B')
     assert.equal(res.status, 403)
+  })
+
+  it('a demoted admin (role:admin JWT, users.is_admin=0) cannot read another profile\'s sessions (403)', async () => {
+    const res = await request(app)
+      .get('/api/hamilton/automation/sessions?profileId=p-A')
+      .set('x-test-user', 'u-demoted')
+    assert.equal(res.status, 403)
+  })
+
+  it('a demoted admin cannot cross-profile revoke a session (403, row intact)', async () => {
+    const res = await request(app)
+      .post(`/api/hamilton/automation/sessions/${sessionA.id}/revoke`)
+      .set('x-test-user', 'u-demoted')
+      .send({ reason: 'stale token' })
+    assert.equal(res.status, 403)
+    const row = db.prepare('SELECT status FROM hamilton_saved_sessions WHERE id = ?').get(sessionA.id)
+    assert.notEqual(row.status, 'revoked')
   })
 
   it('restricts portal-policy writes to the canonical admin', async () => {
@@ -237,6 +264,8 @@ describe('Hamilton authorize route — JWT-shaped req.user with userId-only', ()
       CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
       CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT, is_admin INTEGER DEFAULT 0, role TEXT);
       INSERT INTO profiles (id, user_id, display_name) VALUES ('p-z', 'u-z', 'Z');
+      -- u-z must exist as a real users row (a deleted user gets no profile access).
+      INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-z', 'z@test.com', 0, 'user');
     `)
     const app = express()
     app.use(express.json())

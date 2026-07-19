@@ -12,7 +12,7 @@
  */
 
 import express from 'express'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireResolvedIdentity } from '../utils/accessControl.js'
 import { isAdminUserWithDb } from '../utils/accessControl.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { isScoutMutedForUser } from '../services/anyaMatchScout.js'
@@ -55,7 +55,8 @@ function mapSuggestionRow(row) {
 async function loadAuthorizedSuggestion(req, res, id) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return null
-  const userId = user.userId ?? user.id ?? null
+  if (!requireResolvedIdentity(req, res)) return null
+  const userId = req.ctx?.userId ?? user.userId ?? user.id ?? null
   if (!userId) {
     res.status(401).json({ error: 'Authentication required' })
     return null
@@ -140,7 +141,8 @@ async function forwardFromOpportunity(req, body) {
 router.get('/pending', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  const userId = user.userId ?? user.id ?? null
+  if (!requireResolvedIdentity(req, res)) return
+  const userId = req.ctx?.userId ?? user.userId ?? user.id ?? null
   if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
   // Honor the mute preference — return empty list rather than 4xx, so the

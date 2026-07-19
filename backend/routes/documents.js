@@ -19,7 +19,7 @@ import { hasTierCapability, requireTierCapability, TIER_CAPABILITIES } from '../
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
-import { ensureProfileEmailSchema } from '../utils/accessControl.js'
+import { getTrustedUserEmails } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:documents')
@@ -470,7 +470,7 @@ function normalizeEmail(value) {
   return v
 }
 
-async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail }) {
+export async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail }) {
   if (!profileId || !actorUserId) return false
   const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(profileId))
   const ownerUserId = row?.user_id ? String(row.user_id) : null
@@ -480,22 +480,15 @@ async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail
     return ownerUserId === String(actorUserId)
   }
 
-  // Legacy profiles may have NULL user_id. Treat a matching saved email as ownership.
+  // Legacy profiles may have NULL user_id. Ownership for a DESTRUCTIVE action is
+  // proven ONLY by the profile's own identity email (basic_information.email) —
+  // NOT by profile_emails, which is the SHARE allowlist: a collaborator merely
+  // shared onto a legacy profile must NOT be able to delete its documents.
   const email = normalizeEmail(actorEmail)
   if (!email) return false
 
-  // 1) profile_emails allowlist (self-healing / explicit share)
-  try {
-    await ensureProfileEmailSchema(req.db)
-    const exists = await req.db
-      .prepare('SELECT 1 FROM profile_emails WHERE profile_id = ? AND lower(email) = ? LIMIT 1')
-      .get(String(profileId), email)
-    if (exists) return true
-  } catch {
-    // ignore (best-effort)
-  }
-
-  // 2) basic_information.email (JSON) fallback
+  // basic_information.email (the profile's owner-identity email) is the ONLY
+  // legacy-owner proof. Never profile_emails (shares).
   try {
     if (req.db?.dialect === 'postgres') {
       const exists = await req.db
@@ -528,20 +521,24 @@ async function isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail
           .get(String(profileId), email)
         if (exists) return true
       } catch {
-        const escaped = email.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-        const exists = await req.db
-          .prepare(
-            `
-              SELECT 1
-              FROM profile_sections
-              WHERE profile_id = ?
-                AND section_key = 'basic_information'
-                AND LOWER(data) LIKE ?
-              LIMIT 1
-            `,
-          )
-          .get(String(profileId), `%"email"%${escaped}%`)
-        if (exists) return true
+        // json1 unavailable: parse the section JSON in JS and compare ONLY the
+        // ROOT basic_information.email. A substring LIKE match would let a NESTED
+        // contact email count as owner proof (a shared collaborator could then
+        // delete). Fail closed on unparseable data.
+        try {
+          const secRow = await req.db
+            .prepare(
+              `SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`,
+            )
+            .get(String(profileId))
+          const parsed = secRow?.data
+            ? JSON.parse(typeof secRow.data === 'string' ? secRow.data : String(secRow.data))
+            : null
+          const rootEmail = normalizeEmail(parsed && typeof parsed === 'object' ? parsed.email : null)
+          if (rootEmail && rootEmail === email) return true
+        } catch {
+          // unparseable JSON → fail closed (no ownership)
+        }
       }
     }
   } catch {
@@ -560,15 +557,26 @@ async function ensureDocumentDeleteAccess(req, res, context, document) {
   }
 
   const actorUserId = context.ctx?.userId ?? null
-  const actorEmail = context.ctx?.email ?? req.user?.email ?? req.user?.primary_email ?? null
-  const actorActiveProfileId = context.ctx?.activeProfileId ? String(context.ctx.activeProfileId) : null
 
-  // Legacy sessions can be profile-scoped without a durable profiles.user_id mapping.
-  // Treat "active profile" as ownership for destructive actions on that same profile.
-  if (actorActiveProfileId && actorActiveProfileId === profileId) return true
+  // NOTE: a matching ctx.activeProfileId is NOT ownership. activeProfileId is only
+  // validated against the ACCESSIBLE set, which includes profiles merely SHARED to
+  // the caller via profile_emails — so treating "active profile === document
+  // profile" as ownership let a shared-profile user delete the OWNER's documents
+  // (IDOR). Delete now requires owner-equivalent proof only: profiles.user_id ===
+  // actorUserId, or a NULL-owner legacy profile whose saved email matches one of
+  // the caller's DB-VERIFIED emails (both checked below).
 
-  const ok = await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail })
-  if (ok) return true
+  // Ownership via profiles.user_id (no email needed).
+  if (await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail: null })) return true
+
+  // Legacy NULL-user_id ownership: a saved profile email counts as ownership only
+  // when it matches one of the caller's DB-VERIFIED emails — NEVER the
+  // token-supplied ctx.email/req.user.email (a JWT could claim victim@example.com
+  // against a shared legacy profile and delete its documents).
+  const trustedEmails = await getTrustedUserEmails(req.db, req.user)
+  for (const actorEmail of trustedEmails) {
+    if (await isProfileOwnerForDelete(req, { profileId, actorUserId, actorEmail })) return true
+  }
 
   console.warn('[documents] delete denied', {
     document_id: document?.id ?? null,

@@ -1,6 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
-import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
 import {
@@ -1094,7 +1094,7 @@ router.get('/meta/export', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res);
     if (!user) return;
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({ error: 'Admin privileges required' });
     }
     const { search, state, source, compliance, deadline_after: deadlineAfter, deadline_before: deadlineBefore, is_national: isNational } = req.query;
@@ -1421,7 +1421,7 @@ router.post('/', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 
@@ -1466,7 +1466,7 @@ router.post('/bulk', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 
@@ -1572,7 +1572,7 @@ router.put('/:id', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 
@@ -1747,7 +1747,7 @@ router.delete('/:id', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
 

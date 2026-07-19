@@ -1,5 +1,5 @@
 import express from 'express';
-import { ensureProfileAccess, isAdminUser, isAdminUserWithDb, requireAuthenticatedUser } from '../utils/accessControl.js'
+import { ensureProfileAccess, isAdminUserWithDb, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isJunkOpportunity } from '../services/contentFilter.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
@@ -320,7 +320,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       } catch (e) {
         return res.status(404).json({ success: false, error: 'Profile not found' })
       }
-    } else if (!isAdminUser(user)) {
+    } else if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({
         success: false,
         error: 'Non-admin requests must provide a profile_id string',
@@ -1020,8 +1020,7 @@ router.post('/searchOpportunities', async (req, res) => {
  */
 router.post('/archOpportunities', async (req, res) => {
   try {
-    const user = req.user ?? { role: 'guest' }
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       return res.status(403).json({ success: false, error: 'Admin privileges required' })
     }
     const { opportunity_ids = [], action = 'archive' } = req.body;

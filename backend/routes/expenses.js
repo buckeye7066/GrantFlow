@@ -4,7 +4,6 @@ import {
   ensureGrantAccess,
   ensureOrganizationAccess,
   getAccessibleOrganizationIds,
-  isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 
@@ -23,7 +22,7 @@ async function ensureExpenseAccess(req, res, expenseId) {
     return null
   }
 
-  if (isAdminUser(user)) return expense
+  if (req.ctx?.isAdmin === true) return expense
 
   if (expense.grant_id) {
     // Will 403/404 as needed.
@@ -64,7 +63,7 @@ router.get('/', async (req, res) => {
       params.push(String(organization_id))
     }
 
-    if (!isAdminUser(user)) {
+    if (req.ctx?.isAdmin !== true) {
       if (!grant_id && !organization_id) {
         const orgIds = await getAccessibleOrganizationIds(req.db, user)
         if (!orgIds || orgIds.size === 0) return res.status(403).json({ error: 'No accessible organizations' })

@@ -44,7 +44,7 @@ const limiter = rateLimit({
 
 async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
-  if (user?.role === 'admin') return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, user)
   if (accessible === null) return true // global access
   return accessible.has(String(profileId))
@@ -98,7 +98,7 @@ router.get('/runs', async (req, res) => {
     if (!(await userMayAccessProfile(req, user, profileId))) {
       return res.status(403).json({ error: 'forbidden' })
     }
-  } else if (user?.role !== 'admin') {
+  } else if (req.ctx?.isAdmin !== true) {
     // No profile filter from a non-admin → restrict to their accessible profiles.
     const accessible = await getAccessibleProfileIds(req.db, user)
     if (accessible !== null) {

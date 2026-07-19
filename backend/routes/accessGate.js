@@ -13,7 +13,7 @@
  */
 
 import express from 'express'
-import { isAdminUser, requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
 import { createLogger } from '../utils/logger.js'
 import {
   getAccessStatus,
@@ -82,7 +82,7 @@ router.post('/agreement/accept', requireAuthenticatedUserMiddleware, async (req,
 router.use((req, res, next) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!isAdminUser(user)) return res.status(403).json({ ok: false, error: 'admin_only' })
+  if (req.ctx?.isAdmin !== true) return res.status(403).json({ ok: false, error: 'admin_only' })
   return next()
 })
 

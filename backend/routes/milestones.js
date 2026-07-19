@@ -4,7 +4,6 @@ import {
   ensureGrantAccess,
   ensureOrganizationAccess,
   getAccessibleOrganizationIds,
-  isAdminUser,
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 
@@ -51,7 +50,7 @@ async function ensureMilestoneAccess(req, res, milestoneId) {
     return null
   }
 
-  if (isAdminUser(user)) return row
+  if (req.ctx?.isAdmin === true) return row
 
   const orgId = row.grant_organization_id ?? row.organization_id ?? null
   if (!orgId) {
@@ -82,7 +81,7 @@ router.get('/', async (req, res) => {
       if (!grant) return // ensureGrantAccess already sent 403/404
       query += ' AND m.grant_id = ?'
       params.push(String(grant_id))
-    } else if (!isAdminUser(user)) {
+    } else if (req.ctx?.isAdmin !== true) {
       // No grant specified: limit to accessible organizations
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       if (!orgIds || orgIds.size === 0) {

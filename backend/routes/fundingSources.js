@@ -24,7 +24,7 @@ const router = express.Router()
 
 async function userMayAccessProfile(req, user, profileId) {
   if (!profileId) return false
-  if (user?.role === 'admin') return true
+  if (req.ctx?.isAdmin === true) return true
   const accessible = await getAccessibleProfileIds(req.db, user)
   return Array.isArray(accessible) && accessible.includes(profileId)
 }

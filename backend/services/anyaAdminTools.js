@@ -232,12 +232,11 @@ export function isAdmin(user) {
     return true;
   }
 
-  // Legacy shapes (raw user row / JWT payload / tool context).
-  return Boolean(
-    user.role === 'admin' ||
-      user.is_admin === true ||
-      user.is_admin === 1,
-  );
+  // Raw DB user row shape (is_admin from users.is_admin) — still DB-backed.
+  // The pure-JWT-claim shape (`role === 'admin'`) is deliberately NOT accepted:
+  // it let a demoted admin's unexpired token pass this admin gate. Tool-runtime
+  // callers always pass req.ctx (canonical `isAdmin`).
+  return Boolean(user.is_admin === true || user.is_admin === 1);
 }
 
 /**

@@ -91,7 +91,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         if (!dbUser) {
           // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
           // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
-          if (user.role === 'admin' || user.is_admin === true) {
+          if (req.ctx?.isAdmin === true) {
             try {
               await db.prepare(
                 `
@@ -135,11 +135,11 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         // configured-admin-email users). Fall back to dbUser/token flags only if
         // requestContext middleware didn't run or couldn't resolve.
         // Hoisted out of the try block so the response can mirror the same answer.
-        const isAdminUser =
-          req.ctx?.isAdmin === true ||
-          Boolean(dbUser?.is_admin) ||
-          user.role === 'admin' ||
-          user.is_admin === true
+        // Canonical, DB-backed admin ONLY (req.ctx.isAdmin fails closed and
+        // rejects a synthetic-id collision). Do NOT OR-in dbUser.is_admin — a
+        // self-healed users.id='system_admin_token' row would otherwise flip a
+        // colliding JWT's admin surface (and profile list) true.
+        const isAdminUser = req.ctx?.isAdmin === true
 
         try {
           if (isAdminUser) {
@@ -238,7 +238,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         })
       }
 
-      if (user.role === 'admin') {
+      if (req.ctx?.isAdmin === true) {
         console.warn('[/api/auth/me] Admin token has no userId â returning profile-less response', {
           email: user.email ?? null,
         })

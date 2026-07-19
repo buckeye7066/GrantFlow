@@ -34,12 +34,25 @@ test('login announcements use a dialect-specific boolean predicate', () => {
   )
 })
 
-test('auth bootstrap does not order a SELECT DISTINCT result by an unselected column', () => {
+test('auth bootstrap lists profiles from the DB-backed accessible-id set (never a token-email SQL join)', () => {
   const src = readRepoFile('backend/server.js')
-  const query = src.match(/SELECT DISTINCT p\.id, p\.display_name, p\.organization_id, p\.status[\s\S]+?ORDER BY p\.[a-z_]+ ASC/)?.[0] || ''
-  const selectList = query.split('FROM profiles p')[0] || ''
-  assert.ok(query, 'auth bootstrap DISTINCT profile query should be present')
-  assert.match(selectList, /p\.created_at/, 'Postgres requires ORDER BY columns in SELECT DISTINCT list')
+  // The /auth/me non-admin profile list is derived from the DB-trusted accessible
+  // set (getOwnedAndGrantedProfileIds) and selected by id — NOT via a raw-email
+  // JOIN on profile_emails using the token email. This closes the round-9
+  // token-email profile-grant vector AND avoids the old Postgres SELECT DISTINCT
+  // over an unselected ORDER BY column.
+  assert.match(
+    src,
+    /getOwnedAndGrantedProfileIds\(req\.db, user\)/,
+    'auth bootstrap must derive the profile list from the DB-backed accessible-id helper',
+  )
+  const query = src.match(/SELECT id, display_name, organization_id, status, created_at\s+FROM profiles\s+WHERE id IN \([^)]*\)\s+ORDER BY created_at ASC/)?.[0] || ''
+  assert.ok(query, 'auth bootstrap should list profiles by id from the accessible set, ordered by created_at')
+  assert.doesNotMatch(
+    src.match(/const accessibleIds = await getOwnedAndGrantedProfileIds[\s\S]{0,600}/)?.[0] || '',
+    /pe\.email|user\?\.email|\.primary_email, user/,
+    'auth bootstrap profile list must not match on the token-supplied email',
+  )
 })
 
 test('from-opportunity manual profile saves stop when the canonical pipeline gate declines', () => {

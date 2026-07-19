@@ -126,7 +126,8 @@ function createApp(db, ctx) {
   return app
 }
 
-const ENDUSER_CTX = { userId: 'user-1', isAdmin: false, email: 'dupe@example.test' }
+// user-1 is a real users row, so requestContext resolves a trusted identity.
+const ENDUSER_CTX = { userId: 'user-1', isAdmin: false, identityResolved: true, email: 'dupe@example.test' }
 
 describe('POST /api/profiles adopts the existing owned profile (ux_profiles_user_id)', () => {
   it('returns 201 with the shell profile id and applies the submitted fields', async () => {

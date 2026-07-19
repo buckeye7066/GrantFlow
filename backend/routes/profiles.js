@@ -27,6 +27,8 @@ import {
   isAdminUserWithDb,
   getAuthUserId,
   getAccessibleProfileIds,
+  getOwnedAndGrantedProfileIds,
+  getTrustedUserEmails,
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
@@ -142,8 +144,14 @@ function canAccessProfileIdFromCtx(ctx, profileId) {
 function canAccessProfileRowFromCtx(ctx, profileRow) {
   if (!profileRow) return false
   if (canAccessProfileIdFromCtx(ctx, profileRow.id)) return true
-  if (ctx?.userId && profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
-  if (ctx?.userId && profileRow.created_by && String(ctx.userId) === String(profileRow.created_by)) return true
+  // Ownership-by-ctx.userId is honored ONLY for a TRUSTED identity (a real users
+  // row / validated provenance backed the request). A deleted-user JWT leaves
+  // ctx.userId populated but identityResolved=false, so a lingering
+  // profiles.user_id/created_by must NOT grant it access.
+  if (ctx?.identityResolved === true && ctx?.userId) {
+    if (profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
+    if (profileRow.created_by && String(ctx.userId) === String(profileRow.created_by)) return true
+  }
   return false
 }
 
@@ -160,15 +168,17 @@ router.param('id', async (req, res, next, id) => {
       return res.status(401).json({ error: 'Authentication required' })
     }
 
-    // As a last resort, verify ownership by userId (covers cases where access sets are empty/unavailable).
-    if (req.ctx?.userId) {
+    // As a last resort, verify ownership by userId — but ONLY for a TRUSTED
+    // identity (real users row / validated provenance). A deleted-user JWT keeps
+    // ctx.userId set yet identityResolved=false; it must not own a lingering profile.
+    if (req.ctx?.identityResolved === true && req.ctx?.userId) {
       const row = await req.db
         .prepare('SELECT user_id, created_by, status FROM profiles WHERE id = ?')
         .get(String(id))
-        // Soft-deleted profiles must appear as non-existent across all sub-routes.
-              if (row?.status === 'deleted') {
-                      return res.status(404).json({ error: 'Profile not found' })
-                            }
+      // Soft-deleted profiles must appear as non-existent across all sub-routes.
+      if (row?.status === 'deleted') {
+        return res.status(404).json({ error: 'Profile not found' })
+      }
       if (row?.user_id && String(row.user_id) === String(req.ctx.userId)) return next()
       if (row?.created_by && String(row.created_by) === String(req.ctx.userId)) return next()
     }
@@ -668,88 +678,13 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // "My Profiles" scope: return only profiles owned-by or shared-to this user,
     // even if the caller is an admin (admins otherwise see ALL profiles).
     if (scopeMine) {
-      const emails = []
-      const primary = normalizeEmail(user?.primary_email)
-      const secondary = normalizeEmail(user?.email)
-      if (primary) emails.push(primary)
-      if (secondary && secondary !== primary) emails.push(secondary)
-
-      if (!userId && emails.length === 0) return res.status(401).json({ error: 'Authentication required' })
-
-      const ids = new Set()
-
-      if (userId) {
-        const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
-        for (const row of owned || []) {
-          if (row?.id) ids.add(String(row.id))
-        }
-        try {
-          const created = await req.db.prepare('SELECT id FROM profiles WHERE created_by = ?').all(String(userId))
-          for (const row of created || []) {
-            if (row?.id) ids.add(String(row.id))
-          }
-        } catch {
-          // ignore schema drift
-        }
-      }
-
-      if (emails.length > 0) {
-        // 1) Explicit allowlist table (profile_emails).
-        try {
-          const placeholders = emails.map(() => '?').join(', ')
-          const rows = await req.db
-            .prepare(
-              `
-                SELECT DISTINCT profile_id
-                FROM profile_emails
-                WHERE lower(email) IN (${placeholders})
-              `,
-            )
-            .all(...emails)
-          for (const row of rows || []) {
-            if (row?.profile_id) ids.add(String(row.profile_id))
-          }
-        } catch {
-          // ignore (schema may not exist yet)
-        }
-
-        // 2) Backfill: match profile basic_information.email against the user (like accessControl fallback).
-        try {
-          const placeholders = emails.map(() => '?').join(', ')
-          if (req.db?.dialect === 'postgres') {
-            const rows = await req.db
-              .prepare(
-                `
-                  SELECT DISTINCT ps.profile_id
-                  FROM profile_sections ps
-                  WHERE ps.section_key = 'basic_information'
-                    AND LOWER((ps.data::jsonb ->> 'email')) IN (${placeholders})
-                `,
-              )
-              .all(...emails)
-            for (const row of rows || []) {
-              if (row?.profile_id) ids.add(String(row.profile_id))
-            }
-          } else {
-            const rows = await req.db
-              .prepare(
-                `
-                  SELECT DISTINCT ps.profile_id
-                  FROM profile_sections ps
-                  WHERE ps.section_key = 'basic_information'
-                    AND LOWER(json_extract(ps.data, '$.email')) IN (${placeholders})
-                `,
-              )
-              .all(...emails)
-            for (const row of rows || []) {
-              if (row?.profile_id) ids.add(String(row.profile_id))
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-
+      // "My Profiles" = the DB-trusted owned/created + DB-verified-email-granted
+      // set, even for admins (who otherwise see ALL profiles). Driven off the
+      // shared DB-backed helper so NO route re-derives access from the
+      // token-supplied req.user.email (a JWT could otherwise claim
+      // victim@example.com and list victim's shared profiles).
+      if (!userId) return res.status(401).json({ error: 'Authentication required' })
+      const ids = await getOwnedAndGrantedProfileIds(req.db, user)
       const idList = Array.from(ids)
       if (idList.length === 0) return res.json([])
 
@@ -1277,7 +1212,15 @@ router.post('/', createProfileLimiter, async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required' })
     }
-    
+
+    // ctx.userId becomes the new/adopted profile's owner (profileUserId) below.
+    // A deleted-user JWT or a synthetic-id collision keeps ctx.userId populated
+    // but identityResolved=false — it must NOT create/adopt an owned profile under
+    // that stale/reserved id (it could adopt+mutate a lingering profiles.user_id row).
+    if (req.ctx?.identityResolved !== true) {
+      return res.status(403).json({ error: 'Not authorized to create a profile' })
+    }
+
     if (user_id && user_id !== userId) {
       return res.status(403).json({ 
         error: 'Endusers can only create profiles for themselves' 
@@ -3311,14 +3254,15 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   try {
     if (sectionKey === 'basic_information') {
       const isAdmin = req.ctx?.isAdmin === true
-      const user = req.user ?? {}
-      const primary = normalizeEmail(user?.primary_email)
-      const secondary = normalizeEmail(user?.email)
-      
+
       // Sync the main email field
       const email = normalizeEmail(guardedData?.email)
       if (email && isValidEmail(email)) {
-        const canAutoLink = isAdmin || email === primary || email === secondary
+        // Only auto-LINK (grant) an email when it is the caller's OWN
+        // DB-VERIFIED email — never the token-supplied req.user.email (a JWT could
+        // otherwise claim any address). Admin actions are trusted + audited.
+        const trustedEmails = isAdmin ? [] : await getTrustedUserEmails(req.db, req.user)
+        const canAutoLink = isAdmin || trustedEmails.includes(email)
 
         if (canAutoLink) {
           await addProfileEmails(req.db, {

@@ -128,11 +128,112 @@ function shouldOverrideString({ key, existingValue, incomingValue }) {
   return false
 }
 
-function mergeSectionData(existing = {}, incoming = {}) {
+// Keys that must never be written from untrusted AI output at any depth
+// (prototype-pollution defense). Dropped regardless of the allowlist.
+const RESERVED_SECTION_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+// Build a RECURSIVE allowed-key shape from the union of existing array elements:
+// { keys: Set<string>, children: { [key]: shape } }. Used to allowlist untrusted
+// AI array-element objects at EVERY depth — nested objects AND nested arrays
+// (the child shape for an array key is derived from that array's object items).
+function buildElementShape(existingElements) {
+  const keys = new Set()
+  const childGroups = {}
+  for (const el of existingElements) {
+    if (!el || typeof el !== 'object' || Array.isArray(el)) continue
+    for (const [k, v] of Object.entries(el)) {
+      if (RESERVED_SECTION_KEYS.has(k)) continue
+      keys.add(k)
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        ;(childGroups[k] ||= []).push(v)
+      } else if (Array.isArray(v)) {
+        // Derive the nested array's element-object shape from its object items.
+        for (const item of v) {
+          if (item && typeof item === 'object' && !Array.isArray(item)) {
+            ;(childGroups[k] ||= []).push(item)
+          }
+        }
+      }
+    }
+  }
+  const children = {}
+  for (const [k, group] of Object.entries(childGroups)) {
+    children[k] = buildElementShape(group)
+  }
+  return { keys, children }
+}
+
+// Recursively collect the OBJECT elements of an untrusted array, flattening any
+// nested arrays (array<object> fields must never store raw nested arrays that
+// bypass shape sanitization). Primitives are dropped in this object-array
+// context. Returns [] when the array contains no objects at any depth (a genuine
+// primitive array), so the caller falls through to the primitive-dedup path.
+function collectObjectElements(arr) {
+  const out = []
+  for (const e of arr) {
+    if (Array.isArray(e)) {
+      out.push(...collectObjectElements(e))
+    } else if (e && typeof e === 'object') {
+      out.push(e)
+    }
+  }
+  return out
+}
+
+// Sanitize an untrusted ARRAY against a shape. Object items are allowlisted
+// against `shape`; nested arrays recurse; primitives pass through. Reserved keys
+// are always dropped (via sanitizeAgainstShape). `shape` null => reserved-only.
+function sanitizeArrayAgainstShape(arr, shape) {
+  return arr.map((item) => {
+    if (Array.isArray(item)) return sanitizeArrayAgainstShape(item, shape)
+    if (item && typeof item === 'object') return sanitizeAgainstShape(item, shape)
+    return item
+  })
+}
+
+// Sanitize an untrusted object against a recursive shape allowlist. Reserved
+// keys are ALWAYS dropped at every depth (objects AND arrays). When `shape` is
+// non-null, keys not in `shape.keys` are dropped and nested objects/arrays
+// recurse into their child shape (unknown nested keys => dropped). When `shape`
+// is null, only reserved-key stripping applies — the first-time-population
+// fallback (structure preserved).
+function sanitizeAgainstShape(obj, shape) {
+  const out = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (RESERVED_SECTION_KEYS.has(k)) continue
+    if (shape && !shape.keys.has(k)) continue
+    const childShape = shape ? shape.children[k] ?? { keys: new Set(), children: {} } : null
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = sanitizeAgainstShape(v, childShape)
+    } else if (Array.isArray(v)) {
+      out[k] = sanitizeArrayAgainstShape(v, childShape)
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+export function mergeSectionData(existing = {}, incoming = {}, allowedKeys = null) {
   const merged = { ...existing }
   const updatedFields = new Set()
 
+  // Untrusted-AI hardening. `incoming` is model output derived from uploaded
+  // document text (a prompt-injection surface). Two guards, applied at EVERY
+  // depth of the recursion:
+  //   1. Drop reserved keys (__proto__/constructor/prototype) — prototype pollution.
+  //   2. When an allowlist is supplied, only accept keys in it. `allowedKeys === null`
+  //      means "no restriction" (trusted/non-AI callers); an ARRAY — even empty —
+  //      restricts (empty => accept nothing). Nested object fields are schema-open
+  //      (e.g. basic_information.academic_status is `type:'object'` with no
+  //      sub-schema), so under an active allowlist a nested object may only REFRESH
+  //      keys ALREADY present — untrusted AI cannot INTRODUCE new nested keys, which
+  //      blocks the academic_status.education_level eligibility-poisoning class.
+  const allow = Array.isArray(allowedKeys) ? new Set(allowedKeys) : null
+
   Object.entries(incoming).forEach(([key, rawValue]) => {
+    if (RESERVED_SECTION_KEYS.has(key)) return
+    if (allow && !allow.has(key)) return
     if (rawValue === undefined || rawValue === null) return
     const value = normalizeValue(rawValue)
     const existingValue = merged[key]
@@ -167,6 +268,42 @@ function mergeSectionData(existing = {}, incoming = {}) {
 
     if (Array.isArray(value)) {
       const existingArr = Array.isArray(existingValue) ? existingValue : []
+
+      // Array-of-objects (schema-open, e.g. university_applications.applications):
+      // element objects previously flowed through normalizeValue() untouched, so
+      // an AI response could persist elements with __proto__/constructor or
+      // arbitrary fields. Sanitize each element recursively: drop reserved keys
+      // at every depth, and — under an active allowlist — restrict element keys
+      // to those already present across the existing elements so untrusted AI
+      // can't inject NEW element fields. If no existing element defines a shape,
+      // fall back to reserved-key stripping only (don't nuke first-time data).
+      // Collect object elements, RECURSIVELY flattening nested arrays. An AI
+      // response of the form applications:[[{...}]] (array whose elements are all
+      // nested arrays) previously produced objectElements=[] and fell through to
+      // the primitive-array path, storing the nested objects (and __proto__)
+      // unfiltered. Flattening here routes every structured element through the
+      // shape sanitizer, so nested array-of-arrays can't smuggle keys/prototype.
+      const objectElements = collectObjectElements(value)
+      if (objectElements.length > 0) {
+        // Under an active allowlist, derive a RECURSIVE key shape from the existing
+        // elements and enforce it at every depth. We do NOT fall back to
+        // reserved-only when the base has no shape: with an EMPTY existing shape
+        // the derived shape has an empty key set, so every unlisted key is dropped
+        // and a fully-unlisted element collapses to {} and is filtered out. This
+        // means untrusted AI cannot introduce new element fields on a first-time
+        // (empty-base) array<object>, and OBJECTS injected into an array<string>
+        // field (whose string elements yield an empty object-shape) are dropped.
+        // Non-AI callers (allow === null) keep reserved-only stripping (shape null).
+        const shape = allow ? buildElementShape(existingArr) : null
+        const sanitized = objectElements
+          .map((e) => sanitizeAgainstShape(e, shape))
+          .filter((e) => allow === null || Object.keys(e).length > 0)
+        merged[key] = [...existingArr, ...sanitized]
+        if (sanitized.length > 0) updatedFields.add(key)
+        return
+      }
+
+      // Primitive array (e.g. receives_assistance: ['SNAP','WIC']): dedup as before.
       const fallback = new Set(existingArr.map((entry) => normalizeValue(entry)))
       let added = false
       value.forEach((entry) => {
@@ -188,7 +325,12 @@ function mergeSectionData(existing = {}, incoming = {}) {
 
     if (typeof value === 'object' && value) {
       const existingObj = typeof existingValue === 'object' && existingValue ? existingValue : {}
-      const nestedResult = mergeSectionData(existingObj, value)
+      // Under an active allowlist, restrict nested keys to those already present
+      // on the profile (schema-open object field) so untrusted AI cannot seed new
+      // eligibility-bearing nested fields. Non-AI callers (allow === null) recurse
+      // unrestricted, preserving prior behavior (reserved keys are still dropped).
+      const nestedAllow = allow ? Object.keys(existingObj) : null
+      const nestedResult = mergeSectionData(existingObj, value, nestedAllow)
       merged[key] = nestedResult.data
       if (nestedResult.updatedFields.size > 0) {
         updatedFields.add(key)
@@ -805,7 +947,7 @@ export async function processDocumentIngestionJob({
         const suggestion = result.json
 
         const existing = sections[sectionKey] ?? {}
-        const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+        const { data: merged, updatedFields } = mergeSectionData(existing, suggestion, promptPayload.config?.keys)
 
         if (updatedFields.size > 0) {
           if (!profile?.id) throw new Error('Profile ID required for section updates'); if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
@@ -867,7 +1009,7 @@ export async function processDocumentIngestionJob({
             }
 
             const existing = sections[sectionKey] ?? {}
-            const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
+            const { data: merged, updatedFields } = mergeSectionData(existing, suggestion, promptPayload.config?.keys)
 
             if (updatedFields.size > 0) {
               if (!profile?.id) throw new Error('Profile ID required for section updates'); if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
