@@ -19,6 +19,17 @@ export default defineConfig({
     // intermittent flake class (see the comment in backend/tests/testServer.js).
     // 30s keeps genuine hangs caught while giving the one-time boot headroom.
     hookTimeout: 30000,
+    // Same "known intermittent flake class" one line up, but for individual
+    // tests rather than beforeAll hooks: a handful of files load their module
+    // graph via top-level `await import(...)` OUTSIDE any hook (e.g.
+    // hamiltonFullProposalGenerator.test.js), so a cold-cache/contended full-
+    // suite run can occasionally blow Vitest's 5s testTimeout default on pure
+    // import time alone, with zero relation to the test's own logic (confirmed
+    // hermetic — in-memory SQLite, stubbed LLM, no network/timers — and passes
+    // reliably standalone). 15s mirrors the hookTimeout bump's own reasoning:
+    // headroom for legitimate slow imports under load, not a looser bar for
+    // actual hangs.
+    testTimeout: 15000,
     // Runner ownership is split by extension to keep the two test runners on
     // disjoint file sets:
     //   - `tests/unit/**/*.test.mjs` are node:test suites (import { test } from
