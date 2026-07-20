@@ -2753,6 +2753,10 @@ app.use('/api/admin/agent-control', lazyRouter('./routes/adminAgentControl.js'))
 // "did the crawler know where to look, did it query, what failed, what was
 // found vs accepted vs rejected" — plus stale sources + weak-data profiles.
 app.use('/api/admin/crawl-coverage', lazyRouter('./routes/adminCrawlCoverage.js'));
+// Admin-only MUTATING companion to the above (kept in a separate file so the
+// read-only dashboard route's documented "never mutates" contract holds):
+// trigger one targeted, bounded re-crawl of a single stale source.
+app.use('/api/admin/crawl-coverage-actions', lazyRouter('./routes/adminCrawlCoverageActions.js'));
 // "Which crawlers fire for this profile, and why?" — explainable plan + a
 // coverage audit that flags zero-coverage / org-directory-only profiles so a
 // VFD can never silently miss FEMA AFG again (architecture: crawler planning).

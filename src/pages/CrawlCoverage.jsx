@@ -1,16 +1,19 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { fetchCrawlCoverage } from '@/api/adminDiagnostics';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchCrawlCoverage, runCrawlCoverageSource } from '@/api/adminDiagnostics';
+import { buildProfileSectionLink } from '@/config/missingInfoTargets';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   CheckCircle2,
   Clock,
   Loader2,
+  PlayCircle,
   RefreshCw,
   Search,
   XCircle,
@@ -30,6 +33,7 @@ import {
 export default function CrawlCoverage() {
   const [profileIdInput, setProfileIdInput] = useState('');
   const [profileId, setProfileId] = useState('');
+  const queryClient = useQueryClient();
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'crawl-coverage', profileId],
@@ -41,6 +45,29 @@ export default function CrawlCoverage() {
     e?.preventDefault?.();
     setProfileId(profileIdInput.trim());
   };
+
+  // Per-source outcome of the "Run now" action, keyed by source_id, so a
+  // result (success/error) sticks around next to the row it belongs to even
+  // after the mutation moves on to another row.
+  const [runResults, setRunResults] = useState({});
+  const runSourceMutation = useMutation({
+    mutationFn: (sourceId) => runCrawlCoverageSource({ sourceId, profileId: profileId || undefined }),
+    onSuccess: (res, sourceId) => {
+      setRunResults((prev) => ({
+        ...prev,
+        [sourceId]: res?.partial
+          ? { status: 'pending', message: res.message || 'Still running in the background.' }
+          : { status: 'success', message: `Ran — found ${res?.found ?? 0}, rejected ${res?.rejected ?? 0}.` },
+      }));
+      queryClient.invalidateQueries({ queryKey: ['admin', 'crawl-coverage'] });
+    },
+    onError: (err, sourceId) => {
+      setRunResults((prev) => ({
+        ...prev,
+        [sourceId]: { status: 'error', message: err?.message || 'Run failed.' },
+      }));
+    },
+  });
 
   const totals = data?.totals ?? {};
   const failureRatePct = Math.round((Number(totals.source_failure_rate) || 0) * 100);
@@ -176,26 +203,67 @@ export default function CrawlCoverage() {
                 {(data?.stale_sources?.length ?? 0) === 0 ? (
                   <EmptyRow text="All sources are within their freshness window." ok />
                 ) : (
-                  data.stale_sources.map((s) => (
-                    <div
-                      key={s.source_id}
-                      className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
-                    >
-                      <div>
-                        <div className="font-medium text-slate-800">{s.label}</div>
-                        <div className="text-xs text-slate-500">{s.source_id}</div>
-                      </div>
-                      <div className="text-right text-xs">
-                        {s.failure_status === 'never_run' ? (
-                          <span className="font-medium text-amber-700">never run</span>
-                        ) : (
-                          <span className="font-medium text-amber-700">
-                            {s.days_since}d old (limit {s.freshness_days}d)
-                          </span>
+                  data.stale_sources.map((s) => {
+                    const running = runSourceMutation.isPending && runSourceMutation.variables === s.source_id;
+                    const result = runResults[s.source_id];
+                    return (
+                      <div
+                        key={s.source_id}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-medium text-slate-800">{s.label}</div>
+                            <div className="text-xs text-slate-500">{s.source_id}</div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <div className="text-right text-xs">
+                              {s.failure_status === 'never_run' ? (
+                                <span className="font-medium text-amber-700">never run</span>
+                              ) : (
+                                <span className="font-medium text-amber-700">
+                                  {s.days_since}d old (limit {s.freshness_days}d)
+                                </span>
+                              )}
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              disabled={running}
+                              onClick={() => runSourceMutation.mutate(s.source_id)}
+                            >
+                              {running ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <PlayCircle className="h-3.5 w-3.5" />
+                              )}
+                              <span className="ml-1">Run now</span>
+                            </Button>
+                          </div>
+                        </div>
+                        {result && (
+                          <div
+                            className={`mt-1.5 flex items-center gap-1.5 text-xs ${
+                              result.status === 'error'
+                                ? 'text-red-600'
+                                : result.status === 'pending'
+                                  ? 'text-amber-700'
+                                  : 'text-emerald-700'
+                            }`}
+                          >
+                            {result.status === 'error' ? (
+                              <XCircle className="h-3.5 w-3.5 shrink-0" />
+                            ) : (
+                              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                            )}
+                            {result.message}
+                          </div>
                         )}
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </CardContent>
             </Card>
@@ -215,27 +283,55 @@ export default function CrawlCoverage() {
                 {(data?.weak_data_profiles?.length ?? 0) === 0 ? (
                   <EmptyRow text="No weak-data profiles detected." ok />
                 ) : (
-                  data.weak_data_profiles.map((p) => (
-                    <div
-                      key={p.profile_id}
-                      className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-slate-800">{p.display_name}</span>
-                        <span className="text-xs text-slate-500">readiness {p.score}</span>
+                  data.weak_data_profiles.map((p) => {
+                    // Deep-link to the first missing field's own section/tab when
+                    // resolvable (same MISSING_INFO_TARGETS convention used by
+                    // MissingInfoChecklist); otherwise fall back to the bare
+                    // profile edit page — always somewhere actionable, never a
+                    // dead end.
+                    const primaryHref =
+                      p.missing.map((m) => buildProfileSectionLink(p.profile_id, m)).find(Boolean) ||
+                      `/ProfileDetail?id=${encodeURIComponent(p.profile_id)}`;
+                    return (
+                      <div
+                        key={p.profile_id}
+                        className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-slate-800">{p.display_name}</span>
+                          <span className="shrink-0 text-xs text-slate-500">readiness {p.score}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {p.missing.map((m) => {
+                            const href = buildProfileSectionLink(p.profile_id, m);
+                            return href ? (
+                              <Link
+                                key={m}
+                                to={href}
+                                className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-200"
+                              >
+                                {m}
+                              </Link>
+                            ) : (
+                              <span
+                                key={m}
+                                className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800"
+                              >
+                                {m}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        <Link
+                          to={primaryHref}
+                          className="group mt-2 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                        >
+                          Complete profile
+                          <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                        </Link>
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {p.missing.map((m) => (
-                          <span
-                            key={m}
-                            className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800"
-                          >
-                            {m}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </CardContent>
             </Card>

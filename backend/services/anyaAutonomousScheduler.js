@@ -587,6 +587,71 @@ export function getBackgroundCodeCrawlState() {
 }
 
 /**
+ * In-memory state for admin-triggered background crawler runs.
+ * Single-instance only; not shared across processes. Mirrors
+ * backgroundCodeCrawlState above.
+ */
+const backgroundCrawlerRunState = {
+  running: false,
+  startedAt: null,
+  completedAt: null,
+  lastResult: null,
+  lastError: null,
+}
+
+/**
+ * Start an autonomous crawler run (Crawler OS, per active/scoped profile) in
+ * the background. Returns immediately; state is updated when the run
+ * completes. Safe to call from an HTTP handler.
+ *
+ * BUG FIX (2026-07-20): POST /api/anya/autonomous/crawlers used to `await`
+ * runAutonomousCrawlers() directly inside the route handler. That function
+ * now drives the Crawler OS synchronously, one real profile at a time
+ * (fetch + reality-gate + match per source, no batching) — at current
+ * profile counts this routinely exceeds Railway/Vercel's proxy timeout and
+ * the owner-facing button 504s even though the run itself eventually
+ * succeeds server-side. Fire-and-forget here, exactly like
+ * startBackgroundCodeCrawlAndRepair above; the caller polls
+ * admin.anya.getStatus for progress/result.
+ */
+export function startBackgroundCrawlerRun(options, context) {
+  if (backgroundCrawlerRunState.running) {
+    return { queued: false, message: 'A background crawler run is already in progress.' }
+  }
+  backgroundCrawlerRunState.running = true
+  backgroundCrawlerRunState.startedAt = new Date().toISOString()
+  backgroundCrawlerRunState.lastResult = null
+  backgroundCrawlerRunState.lastError = null
+
+  runAutonomousCrawlers(options, context)
+    .then((result) => {
+      backgroundCrawlerRunState.lastResult = result
+    })
+    .catch((err) => {
+      backgroundCrawlerRunState.lastError = err?.message || String(err)
+    })
+    .finally(() => {
+      backgroundCrawlerRunState.running = false
+      backgroundCrawlerRunState.completedAt = new Date().toISOString()
+    })
+
+  return { queued: true, message: 'Autonomous crawler run started in the background.' }
+}
+
+/**
+ * Get current background crawler run state (for status API).
+ */
+export function getBackgroundCrawlerRunState() {
+  return {
+    running: backgroundCrawlerRunState.running,
+    startedAt: backgroundCrawlerRunState.startedAt,
+    completedAt: backgroundCrawlerRunState.completedAt,
+    lastResult: backgroundCrawlerRunState.lastResult,
+    lastError: backgroundCrawlerRunState.lastError,
+  }
+}
+
+/**
  * Get current configuration
  */
 export function getAutonomousConfig() {

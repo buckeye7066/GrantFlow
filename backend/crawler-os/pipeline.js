@@ -36,7 +36,13 @@ import {
  * stored opportunity against one or more profile theses.
  *
  * @param {{ store:object, fetcher:{fetch:Function}, env?:object, clock?:Function }} deps
- * @param {{ profile?:object, thesis?:object, matchProfiles?:object[], runId?:string, floor?:number }} [opts]
+ * @param {{ profile?:object, thesis?:object, matchProfiles?:object[], runId?:string, floor?:number, onlySourceIds?:string[] }} [opts]
+ *   `onlySourceIds`, when given a non-empty array, narrows the planner's selection
+ *   down to that intersection — used by the admin "re-crawl this one stale
+ *   source" action (CrawlCoverage dashboard) so a targeted trigger never fans
+ *   out into a full multi-source crawl. Sources dropped by the narrowing are
+ *   re-recorded as excluded (reason `not_requested_in_single_source_run`) so
+ *   the run's telemetry stays honest about what actually ran.
  * @returns {Promise<object>} run summary incl. recommendations + zero_result ladder
  */
 export async function runDiscovery(deps, opts = {}) {
@@ -55,6 +61,15 @@ export async function runDiscovery(deps, opts = {}) {
   const startedAt = new Date(clock()).toISOString();
 
   const thePlan = plan(thesis);
+  if (Array.isArray(opts.onlySourceIds) && opts.onlySourceIds.length > 0) {
+    const only = new Set(opts.onlySourceIds);
+    thePlan.selected_source_ids = thePlan.selected_source_ids.filter((id) => only.has(id));
+    thePlan.source_decisions = thePlan.source_decisions.map((d) => (
+      d.selected && !only.has(d.source_id)
+        ? { ...d, selected: false, reasons: [...d.reasons.filter((r) => r !== 'selected'), 'not_requested_in_single_source_run'] }
+        : d
+    ));
+  }
   recordRun(store, { run_id: runId, profile_id: thesis.profile_id ?? null, started_at: startedAt, planned: thePlan.selected_source_ids.length });
 
   const sourceSummaries = [];

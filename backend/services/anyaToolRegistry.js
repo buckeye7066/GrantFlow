@@ -69,7 +69,7 @@ import {
   testButtonFunctionality,
   getAutonomousFunctionTestsStatus,
 } from './anyaAutonomousFunctionTesting.js'
-import { getBackgroundCodeCrawlState, startBackgroundCodeCrawlAndRepair } from './anyaAutonomousScheduler.js'
+import { getBackgroundCodeCrawlState, startBackgroundCodeCrawlAndRepair, getBackgroundCrawlerRunState } from './anyaAutonomousScheduler.js'
 import { runMissionAudit } from './missionAuditService.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
@@ -2951,37 +2951,22 @@ registerTool({
 
 registerTool({
   name: 'admin.anya.runCrawlers',
-  description: 'Run crawlers for all profiles or specific profiles. Saves results to profile opportunities AND global opportunities page. Admin only.',
+  description:
+    'Run the Crawler OS discovery pipeline (runProfileDiscoveryLive) for all active profiles or ' +
+    'specific ones. Saves opportunities + matches directly to the live tables. Admin only. ' +
+    '(2026-06-23 cutover: the legacy local/scholarship/curated_benefits/comprehensive/' +
+    'profile_enrichment job-type fleet is retired — crawlerTypes/maxRetries/waitForCompletion/' +
+    'timeoutMinutes are no longer read by the handler and have been removed from this schema; ' +
+    'only profileIds still applies.)',
   requiresAdmin: true,
   schema: {
     type: 'object',
     properties: {
-      profileIds: { 
-        type: 'array', 
-        items: { type: 'string' },
-        description: 'Specific profile IDs to run crawlers for (default: all active profiles)' 
-      },
-      crawlerTypes: {
+      profileIds: {
         type: 'array',
-        items: { 
-          type: 'string',
-          enum: [
-            'local',
-            'scholarship',
-            'curated_benefits',
-            'health_resources',
-            'comprehensive',
-            'profile_enrichment',
-            'avatar_lookup',
-            'item_search',
-            'item_gift_search',
-          ]
-        },
-        description: 'Types of crawlers to run (default: [local, scholarship, curated_benefits, comprehensive, profile_enrichment]). curated_benefits runs the new profile-matched benefits/scholarships system.'
+        items: { type: 'string' },
+        description: 'Specific profile IDs to run crawlers for (default: all active profiles)',
       },
-      maxRetries: { type: 'integer', description: 'Maximum retries for failed jobs (default: 3)', minimum: 0, maximum: 10 },
-      waitForCompletion: { type: 'boolean', description: 'Wait for jobs to complete (default: false)' },
-      timeoutMinutes: { type: 'integer', description: 'Timeout in minutes (default: 30)', minimum: 5, maximum: 120 },
     },
   },
   handler: runAutonomousCrawlers,
@@ -3092,7 +3077,8 @@ registerTool({
     }
     
     status.background_code_crawl_repair = getBackgroundCodeCrawlState()
-    
+    status.background_crawler_run = getBackgroundCrawlerRunState()
+
     return status
   },
 })

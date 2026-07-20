@@ -714,8 +714,15 @@ router.post('/autonomous/code/background', adminAuth, async (req, res) => {
 router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
   try {
     attachSamDeprecationHeader(res, 'run')
-    const result = await invokeTool(req.db, req.ctx, 'admin.anya.runCrawlers', req.body, {})
-    res.status(201).json(result)
+    // Fire-and-forget (mirrors /autonomous/code/background just above): this
+    // drives the Crawler OS synchronously, one real profile at a time, which
+    // routinely exceeds the platform's proxy timeout and 504s the button even
+    // though the run succeeds server-side. Poll GET /autonomous/status
+    // (background_crawler_run) for progress/result.
+    const { startBackgroundCrawlerRun } = await import('../services/anyaAutonomousScheduler.js')
+    const context = { db: req.db, user: req.ctx?.user ?? req.user }
+    const result = startBackgroundCrawlerRun(req.body, context)
+    res.status(result.queued ? 202 : 200).json(result)
   } catch (error) {
     handleError(res, error)
   }

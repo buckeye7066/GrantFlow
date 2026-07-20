@@ -31,10 +31,8 @@ import {
   detectProfessionalDevelopmentIntent,
   applyProfessionalDevelopmentQueryPolicy,
 } from '../services/matching/professionalDevelopmentPolicy.js'
-import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource, loadCrawlerSourceRuntimeStatus } from '../services/sourceRegistry.js'
 import { allSources as allCrawlerOsSources } from '../crawler-os/sourceRegistry.js'
 import { implementedAdapterIds } from '../crawler-os/adapters/index.js'
-import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { fileURLToPath } from 'url'
@@ -160,58 +158,6 @@ function scheduleBackgroundIngest(db, opportunities, sourceName) {
       })
       .catch((err) => routeLogger.warn(`[RealCrawlers] background ingest (${sourceName}) failed: ${err?.message ?? err}`))
   })
-}
-
-/**
- * Persist per-source crawler outcomes so missionHealth can answer
- * "did we actually query Grants.gov for this profile, or just plan
- * to?". Best-effort: never throws, never blocks the user response.
- * Schema: see backend/db/migrations/072_crawler_source_runs.sql.
- */
-async function persistCoverageOutcomes(db, { crawlerRunId, profileId, crawlerType, outcomes }) {
-  if (!db || typeof db.prepare !== 'function') return
-  if (!Array.isArray(outcomes) || outcomes.length === 0) return
-  const isPg = db?.dialect === 'postgres'
-  const sql = isPg
-    ? `INSERT INTO crawler_source_runs
-        (crawler_run_id, profile_id, crawler_type, source_id, source_label,
-         planned, queried, failed, found, directory, duration_ms, error)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
-    : `INSERT INTO crawler_source_runs
-        (crawler_run_id, profile_id, crawler_type, source_id, source_label,
-         planned, queried, failed, found, directory, duration_ms, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  // Schema may not exist on older databases (migrations not yet
-  // applied); a single try/catch on the first insert tells us to skip
-  // the rest of the batch silently.
-  let firstFailure = null
-  for (const outcome of outcomes) {
-    if (!outcome?.source_id) continue
-    try {
-      const stmt = db.prepare(sql)
-      await stmt.run(
-        crawlerRunId,
-        profileId ?? null,
-        crawlerType ?? null,
-        outcome.source_id,
-        outcome.source_label ?? null,
-        isPg ? !!outcome.planned : (outcome.planned ? 1 : 0),
-        isPg ? !!outcome.queried : (outcome.queried ? 1 : 0),
-        isPg ? !!outcome.failed : (outcome.failed ? 1 : 0),
-        Number(outcome.found ?? 0) | 0,
-        isPg ? !!outcome.directory : (outcome.directory ? 1 : 0),
-        outcome.duration_ms ?? null,
-        outcome.error ?? null,
-      )
-    } catch (err) {
-      if (!firstFailure) firstFailure = err
-      // If the table is missing the very first insert will fail; abort
-      // the rest so we don't spam logs with the same error.
-      if (String(err?.message || '').toLowerCase().includes('no such table')) return
-      if (String(err?.message || '').toLowerCase().includes('does not exist')) return
-    }
-  }
-  if (firstFailure) throw firstFailure
 }
 
 /**
@@ -436,7 +382,7 @@ router.post('/run', ensureAuth, async (req, res) => {
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
   try {
     const db = req.db
-    const { run } = await runProfileDiscoveryLive({ db, profileId: String(profile_id), floor: min_match_score })
+    const { run } = await runProfileDiscoveryLive({ db, profileId: String(profile_id), floor: min_match_score, crawlerType: crawler_type })
     const rows = await db.prepare(
       `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
               fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max, fo.state,

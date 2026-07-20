@@ -48,6 +48,18 @@ export const MISSING_INFO_TARGETS = {
   // documents are managed on the "documents" tab, not as a profile_section.
   transcript: { tab: "documents", section: "documents", isDocument: true, label: "Transcript" },
   personal_statement: { tab: "documents", section: "documents", isDocument: true, label: "Personal statement / essay" },
+
+  // ── crawl-targeting readiness signals ───────────────────────────────
+  // These three keys match the `missing[]` codes emitted by
+  // backend/services/profileReadinessService.js (checkProfileReadiness) and
+  // surfaced by the admin CrawlCoverage dashboard's "profiles needing data"
+  // list — they are the fields the crawler most needs to search well.
+  // applicant_type has no single dedicated field editor; basic_information
+  // is the closest editable section (display_name/organization context live
+  // there), so this deep-links to that section rather than a bare tab.
+  applicant_type: { tab: "profile", section: "basic_information", field: null, label: "Applicant type" },
+  location: { tab: "profile", section: "basic_information", field: "state", label: "Location (state / ZIP)" },
+  intent_signals: { tab: "profile", section: "programs_services", field: "focus_areas", label: "Focus areas / intent signals" },
 }
 
 /**

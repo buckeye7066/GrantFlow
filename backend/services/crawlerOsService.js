@@ -399,7 +399,7 @@ function skippedDiscoveryResult(profileId, reason) {
   };
 }
 
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   const ctx = await loadProfileContext(db, profileId);
   // Lifecycle guard: never crawl a deleted/archived/merged profile (no-op, no writes).
@@ -427,9 +427,10 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   const crossProfile = effMatchProfiles.length > 1;
   const store = createMemoryStore();
   const liveFetcher = fetcher ?? makeProductionFetcher();
+  const onlySources = Array.isArray(onlySourceIds) && onlySourceIds.length > 0 ? onlySourceIds : null;
   const run = await runDiscovery(
     { store, fetcher: liveFetcher },
-    { thesis, matchProfiles: effMatchProfiles, floor },
+    { thesis, matchProfiles: effMatchProfiles, floor, onlySourceIds: onlySources },
   );
 
   // Open-web discovery lane — the bridge to state/local/foundation/community
@@ -442,8 +443,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // step the lane runs WITHOUT blocking its live return — it hands back a promise
   // (`web.targetVerification`) that we await AFTER persistRun so the live result
   // and persistence never wait on it (it also runs concurrently with persistRun).
+  // A single-source-scoped run (the admin "re-crawl this stale source" action)
+  // must stay targeted and bounded — the open-web search+LLM lane is a
+  // different, unbounded discovery mechanism that is not keyed to any one
+  // registry source, so it is skipped whenever onlySourceIds narrows the run.
   let webTargetVerification = null;
-  if (isWebDiscoveryEnabled()) {
+  if (isWebDiscoveryEnabled() && !onlySources) {
     try {
       const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }, parity] = await Promise.all([
         import('../crawler-os/webLane.js'),
@@ -563,6 +568,28 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     }
   } catch {
     /* web-lane health telemetry must never fail the crawl */
+  }
+
+  // ── Admin Crawl Coverage & Health dashboard telemetry ─────────────────────
+  // Persist this run's per-source outcomes (already computed by pipeline.js's
+  // runDiscovery as run.sources) into the durable crawler_source_runs table so
+  // GET /api/admin/crawl-coverage stays live for the Crawler OS. This table's
+  // only writer used to be realCrawlers.js's legacy pipeline, removed wholesale
+  // by the 2026-06-22 OS cutover without a replacement — leaving the dashboard
+  // frozen on the retired engine's last runs. Best-effort, non-blocking, and
+  // skipped on dry runs (nothing was actually queried against the live DB).
+  if (!dryRun && Array.isArray(run.sources) && run.sources.length > 0) {
+    try {
+      const { persistSourceCoverage } = await import('./crawlerOsCoveragePersistence.js');
+      await persistSourceCoverage(db, {
+        crawlerRunId: run.run_id,
+        profileId,
+        crawlerType: crawlerType ?? 'crawler-os',
+        sources: run.sources,
+      });
+    } catch {
+      /* coverage telemetry must never fail the crawl */
+    }
   }
 
   // ── Global crawler-gap learning ────────────────────────────────────────────

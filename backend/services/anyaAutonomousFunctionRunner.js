@@ -300,18 +300,34 @@ export async function getAutonomousCrawlersStatus(db = null) {
   // Prefer durable DB audit logs when available.
   if (db) {
     try {
+      // BUG FIX (2026-07-20): the 2026-06-23 Crawler OS cutover (commit
+      // 18d397d1) replaced the legacy fleet's completion audit action
+      // ('autonomous_crawlers_complete', written by the retired code path)
+      // with 'complete' (see runAutonomousCrawlersViaOs above), but this
+      // query was never updated to match. Since that day NOTHING has ever
+      // matched the old string again, so admin.anya.getStatus's
+      // crawlers.last_run silently froze on the legacy fleet's final run —
+      // even though the scheduler has been driving the Crawler OS
+      // successfully every day since. Accept BOTH the current and legacy
+      // action strings (ORDER BY + LIMIT 1 keeps this honest: whichever
+      // actually ran most recently wins) so a rollback to the legacy fleet
+      // (ANYA_AUTONOMOUS_LEGACY_FLEET=1) still reports correctly too.
       const row = await db
         .prepare(
           `
             SELECT *
             FROM audit_logs
             WHERE category = ?
-              AND action = ?
+              AND action IN (?, ?)
             ORDER BY created_at DESC
             LIMIT 1
           `,
         )
-        .get(AUDIT_CATEGORIES.ANYA, 'autonomous_crawlers.autonomous_crawlers_complete')
+        .get(
+          AUDIT_CATEGORIES.ANYA,
+          'autonomous_crawlers.complete',
+          'autonomous_crawlers.autonomous_crawlers_complete',
+        )
 
       if (row) {
         let details = null
