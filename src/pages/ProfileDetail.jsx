@@ -1032,7 +1032,11 @@ export default function ProfileDetail() {
 
   // Deep-link a "Hamilton needs you" item to where the owner fixes it. `where`
   // is a coarse tab hint from the profile-summary endpoint; portals + vault land
-  // on the Pipeline tab and scroll to the Portals dashboard anchor.
+  // on the Pipeline tab and scroll to the Portals dashboard anchor. Every case
+  // must scroll (via goToWorkspaceTab / a specific anchor) — a bare
+  // setActiveTab() switches content below the fold with no visible feedback,
+  // which reads as a dead click (the exact bug goToWorkspaceTab was added to fix
+  // for the Profile Flow cards, but this handler predates it and missed it).
   const handleHamiltonNavigate = React.useCallback((where) => {
     switch (where) {
       case "pipeline":
@@ -1040,17 +1044,17 @@ export default function ProfileDetail() {
         setPendingScrollTarget("portal-logins")
         break
       case "documents":
-        setActiveTab("documents")
+        goToWorkspaceTab("documents")
         break
       case "action-plan":
-        setActiveTab("action-plan")
+        goToWorkspaceTab("action-plan")
         break
       case "profile":
       default:
-        setActiveTab("profile")
+        goToWorkspaceTab("profile")
         break
     }
-  }, [])
+  }, [goToWorkspaceTab])
 
   const hasSyncedTargetColleges = useRef(false)
   const lastSyncedProfileId = useRef(null)
