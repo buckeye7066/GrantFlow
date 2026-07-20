@@ -108,6 +108,36 @@ const TEXT_RULES = Object.freeze([
   { rx: /\b(login\s*required|password|sign\s*in|log\s*in\s*to\s*continue|please\s*authenticate|account\s*credentials)\b/i, category: 'login_required' },
 ])
 
+// A STABLE server-side wall: the funder's infrastructure is deliberately
+// refusing our datacenter browser (WAF/anti-bot/IP-reputation), as opposed to
+// the site being transiently down or the URL being wrong. This is the signal
+// the portal-policy registry learns from so Hamilton stops re-launching a
+// browser that will just be refused again.
+//
+// Kept SEPARATE from classifyBlocker's category because the classifier maps
+// every `net::ERR_*` to `portal_unreachable` (correct for its purpose), but for
+// LEARNING a wall we must tell a WAF connection-reset (ERR_HTTP2_PROTOCOL_ERROR
+// — what studentaid.gov threw at our datacenter) apart from a real outage
+// (ERR_NAME_NOT_RESOLVED, ERR_CONNECTION_TIMED_OUT). Over-learning a transient
+// outage as a permanent wall would wrongly retire a working portal.
+const SERVER_WALL_RX =
+  /\b(access\s*denied|forbidden|akamai|imperva|datadome|perimeterx|cloudflare\s*ray|blocked\s*for\s*automated|too\s*many\s*requests|rate[-\s]*limit)\b|\bERR_HTTP2_PROTOCOL_ERROR\b|(^|\D)(403|429)(\D|$)/i
+// Signals that are an OUTAGE / bad URL, never a bot wall — an explicit
+// exclusion so a future edit to SERVER_WALL_RX can't accidentally swallow them.
+const TRANSIENT_OUTAGE_RX =
+  /\b(ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_TIMED_OUT|ERR_CONNECTION_REFUSED|ERR_ADDRESS_UNREACHABLE|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH)\b|getaddrinfo|name\s*not\s*resolved/i
+
+/**
+ * True when `text` (a navigation error detail / captured page text) is a STABLE
+ * server-side wall worth learning — not a transient outage. Pure, never throws.
+ */
+export function isServerWallSignal(text) {
+  const s = safeText(text)
+  if (!s) return false
+  if (TRANSIENT_OUTAGE_RX.test(s)) return false
+  return SERVER_WALL_RX.test(s)
+}
+
 function safeText(v) {
   if (v === null || v === undefined) return ''
   if (typeof v === 'string') return v

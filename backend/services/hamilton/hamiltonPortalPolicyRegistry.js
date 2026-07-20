@@ -201,8 +201,24 @@ async function ensureSchema(db) {
   schemaReady.set(db, true)
 }
 
+// A learned datacenter/IP-reputation wall is re-probed after this long, so a
+// block that later lifts (the funder's WAF relaxes, our egress IP rotates) is
+// not a permanent life sentence for the portal — the next attempt after the TTL
+// tries the real browser once more and either re-confirms or self-heals.
+export const WALL_REPROBE_MS = Number(process.env.PORTAL_WALL_REPROBE_MS) || 7 * 24 * 60 * 60 * 1000
+
+// Parse whatever the driver handed back for metadata_json into a plain object.
+// SQLite returns TEXT (JSON string); the Postgres shim may already return a
+// JSONB object. Never throws — a corrupt value degrades to {}.
+function parseMetadata(raw) {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw
+  try { const v = JSON.parse(raw); return v && typeof v === 'object' ? v : {} } catch { return {} }
+}
+
 function rowToPolicy(row) {
   if (!row) return null
+  const metadata = parseMetadata(row.metadata_json)
   return {
     portal_host: row.portal_host,
     automation_allowed: !!row.automation_allowed,
@@ -218,6 +234,11 @@ function rowToPolicy(row) {
     source_of_policy: row.source_of_policy || null,
     last_checked_at: row.last_checked_at || null,
     notes: row.notes || null,
+    metadata,
+    // A learned server-side (datacenter-IP / anti-bot) wall, if one has been
+    // observed. { state, category, signal, engine, first_seen_at, last_seen_at,
+    // hits, cleared_at } or null.
+    datacenter_block: metadata.datacenter_block || null,
   }
 }
 
@@ -317,6 +338,123 @@ export async function upsertPolicy(db, {
     )
   }
   return await getPolicyFor(db, host)
+}
+
+/**
+ * Record that a portal blocked our SERVER-side browser with a stable anti-bot /
+ * IP-reputation wall — the kind the engine upgrade (#992) can't defeat because
+ * it's scored on our datacenter egress IP, not the browser fingerprint. This is
+ * how Hamilton "learns the wall once": the first observation is persisted, and
+ * getPortalWallStatus() then diverts every later attempt away from the doomed
+ * server browser BEFORE it launches.
+ *
+ * ONLY call this for a genuinely stable signal (classifyBlocker →
+ * `portal_anti_bot_block`). A transient failure (`portal_unreachable`: timeout,
+ * DNS, 5xx) must NOT be recorded — the site may simply be down, and learning a
+ * wall from it would wrongly retire a working portal.
+ *
+ * Merges into metadata_json.datacenter_block without disturbing the row's
+ * automation/policy fields. Idempotent-ish: repeat observations bump `hits` and
+ * `last_seen_at` and re-arm a previously-cleared block.
+ *
+ * @returns {Promise<object>} the updated datacenter_block record.
+ */
+export async function recordPortalWallObservation(db, { portalHost, category = 'portal_anti_bot_block', signal = null, engine = null } = {}) {
+  if (!db) throw new Error('db required')
+  const host = normalizeHost(portalHost)
+  if (!host) throw new Error('portalHost required')
+  await ensureSchema(db)
+  const nowIso = new Date().toISOString()
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+
+  const existing = await db.prepare('SELECT * FROM hamilton_portal_policies WHERE portal_host = ? LIMIT 1').get(host)
+  const metadata = existing ? parseMetadata(existing.metadata_json) : {}
+  const prior = metadata.datacenter_block && !metadata.datacenter_block.cleared_at ? metadata.datacenter_block : null
+  const block = {
+    // A stable anti-bot signal is trustworthy on the FIRST sighting, so we
+    // confirm immediately — the owner's rule is "only hit the wall once", and a
+    // two-strike scheme would hit it twice. The TTL re-probe is the safety valve.
+    state: 'confirmed',
+    category,
+    signal: signal || prior?.signal || null,
+    engine: engine || prior?.engine || null,
+    first_seen_at: prior?.first_seen_at || nowIso,
+    last_seen_at: nowIso,
+    hits: (prior?.hits || 0) + 1,
+    cleared_at: null,
+  }
+  metadata.datacenter_block = block
+
+  if (existing) {
+    await db.prepare(
+      `UPDATE hamilton_portal_policies SET metadata_json = ?, last_checked_at = ${nowFn}, updated_at = ${nowFn} WHERE portal_host = ?`,
+    ).run(JSON.stringify(metadata), host)
+  } else {
+    // No row yet — persist the seed/default policy for this host so its
+    // automation flags survive, with the learned wall attached.
+    const base = await getPolicyFor(db, host)
+    await db.prepare(
+      `INSERT INTO hamilton_portal_policies
+          (id, portal_host, automation_allowed, agent_submission_allowed, scraping_allowed,
+           api_available, manual_only, fallback_path, source_of_policy, notes,
+           last_checked_at, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowFn}, ?, ${nowFn}, ${nowFn})`,
+    ).run(
+      crypto.randomUUID(), host,
+      base.automation_allowed ? 1 : 0, base.agent_submission_allowed ? 1 : 0, base.scraping_allowed ? 1 : 0,
+      base.api_available ? 1 : 0, base.manual_only ? 1 : 0, base.fallback_path, base.source_of_policy, base.notes,
+      JSON.stringify(metadata),
+    )
+  }
+  return block
+}
+
+/**
+ * Should Hamilton SKIP the server-side browser for this portal because a wall
+ * has already been learned? Consulted BEFORE launch so a known-blocked portal
+ * never wastes a launch+navigation just to hit the same wall again.
+ *
+ * A confirmed block older than WALL_REPROBE_MS returns `blocked:false` with
+ * `dueForReprobe:true` — the caller tries the real browser once more, and either
+ * re-records the wall (still blocked) or, if it renders now, the block can be
+ * cleared. This keeps a lifted wall from permanently retiring a portal.
+ *
+ * @returns {Promise<{blocked:boolean, dueForReprobe:boolean, block:object|null}>}
+ */
+export async function getPortalWallStatus(db, portalHost) {
+  const host = normalizeHost(portalHost)
+  if (!host || !db) return { blocked: false, dueForReprobe: false, block: null }
+  const policy = await getPolicyFor(db, host)
+  const block = policy?.datacenter_block
+  if (!block || block.cleared_at || block.state !== 'confirmed') {
+    return { blocked: false, dueForReprobe: false, block: block || null }
+  }
+  const lastSeen = Date.parse(block.last_seen_at || block.first_seen_at || '')
+  const stale = Number.isFinite(lastSeen) && (Date.now() - lastSeen) > WALL_REPROBE_MS
+  if (stale) return { blocked: false, dueForReprobe: true, block }
+  return { blocked: true, dueForReprobe: false, block }
+}
+
+/**
+ * Clear a learned wall (admin action, or after a successful real-browser render
+ * proves the block has lifted). Leaves an audit trail: the block object is kept
+ * with `cleared_at` set rather than deleted, and state flips to 'cleared'.
+ */
+export async function clearPortalWall(db, portalHost) {
+  if (!db) throw new Error('db required')
+  const host = normalizeHost(portalHost)
+  if (!host) throw new Error('portalHost required')
+  await ensureSchema(db)
+  const existing = await db.prepare('SELECT * FROM hamilton_portal_policies WHERE portal_host = ? LIMIT 1').get(host)
+  if (!existing) return { cleared: false, reason: 'no_row' }
+  const metadata = parseMetadata(existing.metadata_json)
+  if (!metadata.datacenter_block) return { cleared: false, reason: 'no_block' }
+  metadata.datacenter_block = { ...metadata.datacenter_block, state: 'cleared', cleared_at: new Date().toISOString() }
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  await db.prepare(
+    `UPDATE hamilton_portal_policies SET metadata_json = ?, updated_at = ${nowFn} WHERE portal_host = ?`,
+  ).run(JSON.stringify(metadata), host)
+  return { cleared: true }
 }
 
 export async function listPolicies(db) {
