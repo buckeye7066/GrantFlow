@@ -30,6 +30,7 @@ import {
   listRuns,
   runSam,
 } from '../services/sam/samAgent.js'
+import { updateFindingStatus } from '../services/sam/samAuditStore.js'
 import {
   DEFAULT_MODE,
   SAM_MODES,
@@ -112,6 +113,24 @@ router.get('/runs/:runId', adminOnly, async (req, res) => {
   } catch (err) {
     qualityLog.error('[sam] /runs/:runId failed:', err)
     return res.status(500).json({ ok: false, error: 'sam run lookup failed' })
+  }
+})
+
+// A finding row is inert until it can be triaged. "resolved"/"ignored" are
+// owner judgment calls (Sam never self-marks a finding — only a human or an
+// explicit re-run that no longer reproduces it changes status here).
+router.patch('/findings/:findingId', adminOnly, async (req, res) => {
+  try {
+    const status = String(req.body?.status || '').toLowerCase()
+    if (!['open', 'resolved', 'ignored'].includes(status)) {
+      return res.status(400).json({ ok: false, error: 'status must be one of: open, resolved, ignored' })
+    }
+    const finding = await updateFindingStatus(req.db, req.params.findingId, status)
+    if (!finding) return res.status(404).json({ ok: false, error: 'finding not found' })
+    return res.json({ ok: true, finding })
+  } catch (err) {
+    qualityLog.error('[sam] /findings/:findingId failed:', err)
+    return res.status(500).json({ ok: false, error: 'sam finding update failed' })
   }
 })
 

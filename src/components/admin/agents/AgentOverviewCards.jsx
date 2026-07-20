@@ -1,7 +1,8 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Bot, ShieldCheck, Search, Users, Mail, Workflow } from 'lucide-react'
+import AgentDetailDialog from './AgentDetailDialog'
 
 const AGENT_ICONS = {
   anya: Bot,
@@ -132,8 +133,9 @@ function MetricRow({ items }) {
   )
 }
 
-export default function AgentOverviewCards({ agents }) {
+export default function AgentOverviewCards({ agents, onAgentStarted }) {
   const ordered = AGENT_ORDER.map((name) => agents?.[name]).filter(Boolean)
+  const [selected, setSelected] = useState(null)
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
@@ -145,7 +147,14 @@ export default function AgentOverviewCards({ agents }) {
             ? null
             : Math.round(agent.success_rate * 100)
         return (
-          <Card key={agent.agent_name} className="overflow-hidden">
+          <Card
+            key={agent.agent_name}
+            className="cursor-pointer overflow-hidden transition-shadow hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
+            role="button"
+            tabIndex={0}
+            onClick={() => setSelected(agent)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelected(agent) } }}
+          >
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
               <div className="flex items-center gap-2">
                 <Icon className="h-4 w-4 text-slate-500" />
@@ -184,6 +193,12 @@ export default function AgentOverviewCards({ agents }) {
           </Card>
         )
       })}
+      <AgentDetailDialog
+        agent={selected}
+        open={Boolean(selected)}
+        onOpenChange={(next) => { if (!next) setSelected(null) }}
+        onStarted={onAgentStarted}
+      />
     </div>
   )
 }

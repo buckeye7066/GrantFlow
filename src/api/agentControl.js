@@ -74,6 +74,15 @@ export const agentControlApi = {
   stopAgent: (agentName, reason = null) =>
     postJson(`${BASE}/agents/${encodeURIComponent(agentName)}/stop`, { reason }),
   agentStatus: (agentName) => apiFetch(`${BASE}/agents/${encodeURIComponent(agentName)}/status`),
+
+  // Free-text, one-shot instruction attached to an agent ahead of its next run.
+  getDirective: (agentName) => apiFetch(`${BASE}/agents/${encodeURIComponent(agentName)}/directive`),
+  setDirective: (agentName, instruction) =>
+    apiFetch(`${BASE}/agents/${encodeURIComponent(agentName)}/directive`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction: instruction || '' }),
+    }),
 }
 
 export default agentControlApi

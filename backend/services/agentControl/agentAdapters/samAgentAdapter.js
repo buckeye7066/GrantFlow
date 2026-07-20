@@ -73,6 +73,14 @@ export class SamAgentAdapter extends BaseAgentAdapter {
     const dryRun = Boolean(options?.dry_run ?? true)
     const runOnPreflight = options?.run_sam_preflight !== false
     const runOnPostflight = options?.run_sam_postflight !== false
+    // Owner-attached free-text instruction (see agentControlOrchestrator's
+    // consumeDirectives). Sam can't safely infer WHICH checks it narrows to
+    // from free text — a wrong guess would silently hide real findings — so
+    // it's recorded on the run for visibility rather than used to scope
+    // checkIds. Scoping a single check is done deterministically instead, via
+    // the finding panel's "Re-check now" (POST /api/sam/run with the exact
+    // check id) or the Console's explicit check picker.
+    const directive = typeof options?.directives?.sam === 'string' ? options.directives.sam : null
 
     if (stage === 'preflight' && !runOnPreflight) {
       return { ok: true, status: 'skipped', summary: { agent: 'sam', stage, skipped: true } }
@@ -113,6 +121,7 @@ export class SamAgentAdapter extends BaseAgentAdapter {
         // Credentialed loopback probe so the Control-Center run actually
         // executes Sam's HTTP-class checks instead of fail-skipping them.
         httpProbe: makeInternalHttpProbe(),
+        operatorNote: directive || undefined,
       })
     } catch (err) {
       return {

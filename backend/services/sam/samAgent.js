@@ -118,6 +118,10 @@ export async function runSam(args = {}) {
     // autofix scheduler runs repair-safe AND wants the heavy code scan, so it
     // passes includeHeavy:true. null === "use the mode default".
     includeHeavy = null,
+    // Free-text instruction the owner attached to this run from the admin UI
+    // (see agentControlOrchestrator's per-agent directive channel). Recorded
+    // for visibility only — Sam does not infer check scoping from it.
+    operatorNote = null,
   } = args
 
   const mode = isValidMode(requestedMode) ? String(requestedMode).toLowerCase() : DEFAULT_MODE
@@ -278,6 +282,7 @@ export async function runSam(args = {}) {
         skipped_reason: g.skipped_reason || null,
         duration_ms: g.duration_ms,
       })),
+      operator_note: operatorNote || null,
       _downgradedFromRepair: args._downgradedFromRepair || null,
     }
 

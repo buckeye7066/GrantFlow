@@ -58,6 +58,7 @@ import {
   ensureSchema,
   fulfillStopRequestsByType,
   getActiveRun,
+  getAgentSetting,
   getRun,
   heartbeat,
   latestUnfulfilledStop,
@@ -65,6 +66,7 @@ import {
   recordEvent,
   recordStopRequest,
   releaseLock,
+  setAgentSetting,
   setRunStatus,
   setStepStatus,
 } from './agentControlStore.js'
@@ -73,6 +75,57 @@ import { makeSignal } from './agentAdapters/baseAgentAdapter.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
 import { createLogger } from '../../utils/logger.js'
 const qualityLog = createLogger('services:agentControl:agentControlOrchestrator')
+
+// ---------------------------------------------------------------------------
+// Per-agent directives — a one-shot free-text instruction the owner attaches
+// to an agent from the admin UI ("give the agent a specific instruction").
+// Persisted via the same agent_settings KV the Anya autonomy toggle uses, so
+// it survives restarts. Consumed (cleared) the moment a run that includes the
+// agent actually starts, and threaded onto that run's options so every
+// adapter can read `options.directives[agentName]` and fold it into the
+// underlying call it makes (Sam scopes checkIds from it; others at minimum
+// record + display it on the run).
+// ---------------------------------------------------------------------------
+function directiveKey(agentName) {
+  return `agent.directive.${agentName}`
+}
+
+export async function getAgentDirective(db, agentName) {
+  const raw = await getAgentSetting(db, directiveKey(agentName))
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+export async function setAgentDirective(db, agentName, text, { userEmail = null } = {}) {
+  const key = directiveKey(agentName)
+  const trimmed = String(text || '').trim()
+  if (!trimmed) {
+    await setAgentSetting(db, key, null, { updatedByEmail: userEmail })
+    return null
+  }
+  const record = { text: trimmed, createdAt: new Date().toISOString(), createdByEmail: userEmail }
+  await setAgentSetting(db, key, JSON.stringify(record), { updatedByEmail: userEmail })
+  return record
+}
+
+/** Reads + clears each agent's pending directive, returning {agentName: text}. One-shot. */
+async function consumeDirectives(db, agentNames) {
+  const directives = {}
+  for (const name of agentNames) {
+    try {
+      const record = await getAgentDirective(db, name)
+      if (record?.text) {
+        directives[name] = record.text
+        await setAgentSetting(db, directiveKey(name), null)
+      }
+    } catch { /* best-effort — a directive read failure must never block a run */ }
+  }
+  return directives
+}
 
 /**
  * Count the real, persisted units of work an agent reported in its step
@@ -203,7 +256,8 @@ export async function startRun(db, {
     throw e
   }
 
-  const mergedOptions = { ...DEFAULT_RUN_OPTIONS, ...(options || {}) }
+  const directives = await consumeDirectives(db, resolvedAgents)
+  const mergedOptions = { ...DEFAULT_RUN_OPTIONS, ...(options || {}), directives }
 
   // Single full_cycle at a time. We check the active run first for a
   // friendlier error, then back it up with the lock so concurrent calls
@@ -228,6 +282,17 @@ export async function startRun(db, {
     options: mergedOptions,
     status: 'queued',
   })
+
+  if (Object.keys(directives).length) {
+    await recordEvent(db, {
+      controlRunId: runId,
+      agentName: resolvedAgents.length === 1 ? resolvedAgents[0] : null,
+      eventType: 'control.agent.directive_applied',
+      severity: 'info',
+      message: `Applying owner instruction to ${Object.keys(directives).join(', ')}`,
+      data: { directives },
+    })
+  }
 
   // Acquire the appropriate lock. For full_cycle we lock everything;
   // for other run types we lock the per-agent name so individual runs

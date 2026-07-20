@@ -385,7 +385,7 @@ export async function aggregateSamFindings(db, range, { severity, status, limit 
 
   return withProfileScope({ bypass: true }, async () => {
     const rows = await db.prepare(`
-      SELECT id, severity, status, title, file_path, created_at, details_json
+      SELECT id, severity, status, title, description, event_type, file_path, created_at, details_json
         FROM sam_findings
        WHERE ${filters.join(' AND ')}
        ORDER BY created_at DESC
@@ -397,14 +397,21 @@ export async function aggregateSamFindings(db, range, { severity, status, limit 
       try {
         details = r.details_json ? (typeof r.details_json === 'string' ? JSON.parse(r.details_json) : r.details_json) : null
       } catch { details = null }
+      const safeDetails = redactSecrets(details) || {}
       return {
         id: r.id,
         severity: r.severity,
         status: r.status,
         title: r.title,
+        description: r.description || null,
+        event_type: r.event_type || null,
         file_path: r.file_path,
         created_at: r.created_at,
-        details: redactSecrets(details),
+        recommended_fix: safeDetails.recommended_fix || null,
+        evidence: safeDetails.evidence || null,
+        category: safeDetails.category || null,
+        safe_auto_fix_available: Boolean(safeDetails.safe_auto_fix_available),
+        details: safeDetails,
       }
     })
     const sev = await db.prepare(`
@@ -481,6 +488,33 @@ export async function aggregateRobert(db, range) {
             const rej = {}
             for (const row of rejBreakdown) rej[row.reason] = Number(row.n || 0)
             out.primary_metrics.rejection_reasons = rej
+          }
+        }
+      }
+
+      // Metrics-parity fallback (the exact "old counters superseded, new
+      // counters never wired in" class CLAUDE.md's MIGRATION PARITY section
+      // warns about): discovery/ingest/match/recommend/full-cycle modes run
+      // through the canonical crawler-os pipeline, which writes candidates
+      // straight to funding_opportunities/profile_opportunity_matches and
+      // NEVER touches the legacy robert_opportunity_candidates table above —
+      // so a real, productive crawler-os run always reported Verified/Ingested
+      // as 0 on this dashboard even while robert_runs.opportunities_ingested
+      // (and .opportunities_matched, the crawler-os proxy for "passed the
+      // reality gate") were genuinely non-zero. Only fill the gap when the
+      // legacy table found nothing, so a real legacy-path count is never
+      // overwritten.
+      if (runs && (!out.primary_metrics.opportunities_verified || !out.primary_metrics.opportunities_ingested)) {
+        const rcols = new Set(await columnsFor(db, 'robert_runs'))
+        const rtcol = pickTimeCol(rcols)
+        if (rtcol) {
+          if (!out.primary_metrics.opportunities_verified && rcols.has('opportunities_matched')) {
+            const r = await db.prepare(`SELECT COALESCE(SUM(opportunities_matched),0) AS n FROM robert_runs WHERE ${rtcol} >= ?`).get(since)
+            out.primary_metrics.opportunities_verified = Number(r?.n || 0)
+          }
+          if (!out.primary_metrics.opportunities_ingested && rcols.has('opportunities_ingested')) {
+            const r = await db.prepare(`SELECT COALESCE(SUM(opportunities_ingested),0) AS n FROM robert_runs WHERE ${rtcol} >= ?`).get(since)
+            out.primary_metrics.opportunities_ingested = Number(r?.n || 0)
           }
         }
       }
@@ -586,6 +620,38 @@ export async function aggregateRobertMap(db, range) {
         byCity.get(key).count += 1
       }
     }
+    // Same metrics-parity gap as aggregateRobert: discovery/ingest/match modes
+    // run through crawler-os, which inserts straight into funding_opportunities
+    // and never touches the legacy robert_opportunity_candidates table this
+    // query reads. Only fall back when the legacy table found nothing, so a
+    // real legacy-path map is never overwritten; label it plainly since this
+    // reads catalog growth rather than a Robert-attributed candidate log.
+    if (byState.size === 0 && await tableExists(db, 'funding_opportunities')) {
+      const focols = (await columnsFor(db, 'funding_opportunities')).reduce((s, c) => (s.add(c), s), new Set())
+      if (focols.has('state') && focols.has('created_at')) {
+        const foRows = await db.prepare(`
+          SELECT state, title, id, created_at
+            FROM funding_opportunities
+           WHERE state IS NOT NULL AND state != '' AND created_at >= ?
+           ORDER BY created_at DESC
+           LIMIT 5000
+        `).all(since)
+        if (foRows.length) {
+          for (const r of foRows) {
+            const state = (r.state || '').trim().toUpperCase()
+            if (!state) continue
+            if (!byState.has(state)) byState.set(state, { state, count: 0, categories: {}, examples: [] })
+            const e = byState.get(state)
+            e.count += 1
+            if (e.examples.length < 5 && r.title) {
+              e.examples.push({ title: r.title, opportunity_id: r.id, created_at: r.created_at })
+            }
+          }
+          out.notes.push('Legacy candidate log was empty; showing catalog opportunities with a known state added in range (crawler-os path, not city-resolved).')
+        }
+      }
+    }
+
     out.by_state = Array.from(byState.values()).sort((a, b) => b.count - a.count)
     out.by_city = Array.from(byCity.values()).sort((a, b) => b.count - a.count).slice(0, 200)
     out.unknown_count = unknown

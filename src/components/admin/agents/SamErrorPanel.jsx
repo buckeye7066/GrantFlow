@@ -2,7 +2,17 @@ import React, { useMemo, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ShieldCheck } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { ShieldCheck, Loader2 } from 'lucide-react'
+import { samApi } from '@/api/sam'
 
 const SEVERITY_STYLES = {
   critical: 'bg-red-100 text-red-900 border-red-200',
@@ -12,7 +22,112 @@ const SEVERITY_STYLES = {
   info: 'bg-blue-50 text-blue-900 border-blue-200',
 }
 
-export default function SamErrorPanel({ data }) {
+function FindingDetailDialog({ finding, open, onOpenChange, onChanged }) {
+  const [busy, setBusy] = useState(null) // 'resolve' | 'ignore' | 'recheck' | null
+  const [error, setError] = useState(null)
+  const [recheckResult, setRecheckResult] = useState(null)
+
+  if (!finding) return null
+
+  async function setStatus(status) {
+    setBusy(status)
+    setError(null)
+    try {
+      const res = await samApi.updateFinding(finding.id, status)
+      onChanged?.(res?.finding || { ...finding, status })
+    } catch (err) {
+      setError(err?.message || 'Failed to update finding')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function recheck() {
+    setBusy('recheck')
+    setError(null)
+    setRecheckResult(null)
+    try {
+      // event_type is the originating check's id (samDiagnostics.js's
+      // runInternalCheck wrapper stamps it) so this re-runs EXACTLY the check
+      // that produced this finding — no guessing which of ~35 checks to run.
+      if (!finding.event_type) {
+        setError('This finding predates check-id tracking and cannot be scoped to a single re-check. Run a full diagnose instead.')
+        return
+      }
+      const res = await samApi.run({ mode: 'observe', checks: [finding.event_type], dryRun: true })
+      const stillFailing = (res?.findings || []).some((f) => f.event_type === finding.event_type || f.title === finding.title)
+      setRecheckResult(stillFailing ? 'still_failing' : 'resolved')
+      if (!stillFailing) await setStatus('resolved')
+    } catch (err) {
+      setError(err?.message || 'Re-check failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Badge variant="outline" className={`text-[10px] uppercase ${SEVERITY_STYLES[finding.severity] || ''}`}>
+              {finding.severity}
+            </Badge>
+            {finding.title}
+          </DialogTitle>
+          {finding.description ? <DialogDescription>{finding.description}</DialogDescription> : null}
+        </DialogHeader>
+
+        <div className="space-y-2 text-sm">
+          {finding.file_path ? (
+            <div className="text-xs text-slate-500">
+              <span className="font-medium">File:</span> <span className="font-mono">{finding.file_path}</span>
+            </div>
+          ) : null}
+          {finding.recommended_fix ? (
+            <div className="rounded border bg-slate-50 p-2 text-xs dark:bg-slate-900/40">
+              <div className="mb-1 font-medium text-slate-700 dark:text-slate-300">Recommended fix</div>
+              <div className="text-slate-600 dark:text-slate-400">{finding.recommended_fix}</div>
+            </div>
+          ) : null}
+          <div className="text-xs text-slate-500">
+            <span className="font-medium">Status:</span> {finding.status}
+            {finding.event_type ? <span className="ml-2 font-mono text-slate-400">check: {finding.event_type}</span> : null}
+          </div>
+
+          {recheckResult === 'resolved' ? (
+            <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-700">
+              Re-check passed — this no longer reproduces. Marked resolved.
+            </div>
+          ) : null}
+          {recheckResult === 'still_failing' ? (
+            <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+              Re-check ran — the problem still reproduces. Left open.
+            </div>
+          ) : null}
+          {error ? <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div> : null}
+        </div>
+
+        <DialogFooter className="flex-wrap gap-2">
+          <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={recheck}>
+            {busy === 'recheck' ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            Re-check now
+          </Button>
+          <Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => setStatus('ignored')}>
+            {busy === 'ignore' ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            Mark ignored
+          </Button>
+          <Button size="sm" disabled={Boolean(busy)} onClick={() => setStatus('resolved')}>
+            {busy === 'resolve' ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            Mark resolved
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export default function SamErrorPanel({ data, onFindingUpdated }) {
   // Default to "issues only" (critical/high/medium/low). INFO entries are
   // environment notes Sam emits when a tool can't run in the production
   // runtime (no source tree, sandboxed network, schema bootstrap pending, …)
@@ -22,19 +137,31 @@ export default function SamErrorPanel({ data }) {
   // silently lost; the badge row still surfaces real severities.
   const [severity, setSeverity] = useState('issues')
   const [status, setStatus] = useState('all')
+  const [selected, setSelected] = useState(null)
+  const [overrides, setOverrides] = useState({}) // id -> patched finding (optimistic, until next fetch)
 
   const findings = data?.findings?.findings || []
   const counts = data?.findings?.counts || {}
   const installed = data?.summary?.installed || data?.findings?.installed
 
+  const merged = useMemo(
+    () => findings.map((f) => (overrides[f.id] ? { ...f, ...overrides[f.id] } : f)),
+    [findings, overrides],
+  )
+
   const filtered = useMemo(() => {
-    return findings.filter((f) => {
+    return merged.filter((f) => {
       if (severity === 'issues' && f.severity === 'info') return false
       if (severity !== 'all' && severity !== 'issues' && f.severity !== severity) return false
       if (status !== 'all' && f.status !== status) return false
       return true
     })
-  }, [findings, severity, status])
+  }, [merged, severity, status])
+
+  function handleChanged(updated) {
+    setOverrides((prev) => ({ ...prev, [updated.id]: updated }))
+    onFindingUpdated?.()
+  }
 
   return (
     <Card>
@@ -92,7 +219,14 @@ export default function SamErrorPanel({ data }) {
             ) : (
               <ul className="divide-y rounded border bg-white text-sm dark:bg-slate-900/40">
                 {filtered.slice(0, 50).map((f) => (
-                  <li key={f.id} className="flex items-start gap-3 px-3 py-2">
+                  <li
+                    key={f.id}
+                    className="flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelected(f)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelected(f) } }}
+                  >
                     <Badge variant="outline" className={`text-[10px] uppercase ${SEVERITY_STYLES[f.severity] || ''}`}>
                       {f.severity}
                     </Badge>
@@ -110,6 +244,12 @@ export default function SamErrorPanel({ data }) {
           </>
         )}
       </CardContent>
+      <FindingDetailDialog
+        finding={selected}
+        open={Boolean(selected)}
+        onOpenChange={(next) => { if (!next) setSelected(null) }}
+        onChanged={(updated) => { handleChanged(updated); setSelected(updated) }}
+      />
     </Card>
   )
 }

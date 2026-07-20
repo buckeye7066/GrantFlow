@@ -192,6 +192,7 @@ export const AGENT_TABLE_DDL = {
       severity TEXT,
       status TEXT,
       title TEXT,
+      description TEXT,
       file_path TEXT,
       event_type TEXT,
       details_json TEXT

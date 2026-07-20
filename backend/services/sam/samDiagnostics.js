@@ -428,14 +428,14 @@ async function runInternalCheck({ check, db, ctx }) {
     // surface it (low) so it can't silently never execute.
     return {
       detail: { ok: false, kind: 'internal', reason: 'no run() defined' },
-      findings: [makeFinding({
+      findings: [{ ...makeFinding({
         severity: SEVERITY.LOW,
         category: check.category,
         title: `Internal Sam check ${check.id} has no run() function`,
         description: 'An INTERNAL-kind check must define an async run({ db, ctx }). This one does not, so it can never report.',
         recommended_fix: `Add a run() to ${check.id} in samRegistry.js or change its kind.`,
         confidence: 1,
-      })],
+      }), event_type: check.id }],
     }
   }
 
@@ -445,7 +445,7 @@ async function runInternalCheck({ check, db, ctx }) {
   } catch (err) {
     return {
       detail: { ok: false, kind: 'internal', error: String(err?.message || err) },
-      findings: [makeFinding({
+      findings: [{ ...makeFinding({
         severity: check.severityOnFailure ?? SEVERITY.MEDIUM,
         category: check.category,
         title: `Internal check threw: ${check.label}`,
@@ -453,7 +453,7 @@ async function runInternalCheck({ check, db, ctx }) {
         evidence: { check_id: check.id, error: String(err?.message || err) },
         recommended_fix: `Inspect the run() function for ${check.id} in samRegistry.js.`,
         confidence: 0.7,
-      })],
+      }), event_type: check.id }],
     }
   }
 
@@ -469,7 +469,7 @@ async function runInternalCheck({ check, db, ctx }) {
   }
   return {
     detail,
-    findings: [makeFinding({
+    findings: [{ ...makeFinding({
       severity: check.severityOnFailure ?? SEVERITY.MEDIUM,
       category: check.category,
       title: `${check.label} reported a problem`,
@@ -479,7 +479,7 @@ async function runInternalCheck({ check, db, ctx }) {
         : { summary: result?.summary ?? null },
       recommended_fix: result?.recommended_fix || `Inspect ${check.id} in samRegistry.js and the engine it observes.`,
       confidence: typeof result?.confidence === 'number' ? result.confidence : 0.8,
-    })],
+    }), event_type: check.id }],
   }
 }
 

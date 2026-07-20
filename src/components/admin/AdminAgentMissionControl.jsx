@@ -156,7 +156,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
         </div>
       ) : null}
 
-      <AgentOverviewCards agents={summary?.agents || {}} />
+      <AgentOverviewCards agents={summary?.agents || {}} onAgentStarted={() => setTimeout(fetchAll, 1500)} />
 
       <AgentHealthGrid health={health} />
 
@@ -167,7 +167,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
         <RobertOpportunityFunnel data={robert} />
         <RobertOpportunityMap data={robertMap} />
         <AnyaInteractionPanel data={anya} />
-        <SamErrorPanel data={sam} />
+        <SamErrorPanel data={sam} onFindingUpdated={fetchAll} />
       </div>
 
       <AgentActivityTimeline data={timeline} />

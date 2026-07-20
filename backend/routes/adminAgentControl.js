@@ -24,12 +24,14 @@ import {
 import {
   cancelRun,
   emergencyStopRun,
+  getAgentDirective,
   getAgentStatus,
   getCanonicalAdminEmail,
   getControlCenterStatus,
   isControlCenterAdmin,
   pauseRun,
   resumeRun,
+  setAgentDirective,
   startAgent,
   startRun,
   stopAgent,
@@ -330,6 +332,30 @@ router.get('/agents/:agentName/status', asyncHandler(async (req, res) => {
   }
   const status = await getAgentStatus(req.db, name)
   res.json({ ok: true, agent: status })
+}))
+
+// A free-text, one-shot instruction the owner attaches to an agent from the
+// admin UI ("give the agent a specific instruction"). Persisted until either
+// consumed by the agent's next run (startRun clears it) or explicitly
+// replaced/cleared here.
+router.get('/agents/:agentName/directive', asyncHandler(async (req, res) => {
+  const name = String(req.params.agentName || '').toLowerCase()
+  if (!ALL_AGENTS.includes(name)) {
+    return res.status(400).json({ ok: false, error: 'invalid_agent', allowed: ALL_AGENTS })
+  }
+  const directive = await getAgentDirective(req.db, name)
+  res.json({ ok: true, directive })
+}))
+
+router.put('/agents/:agentName/directive', asyncHandler(async (req, res) => {
+  const name = String(req.params.agentName || '').toLowerCase()
+  if (!ALL_AGENTS.includes(name)) {
+    return res.status(400).json({ ok: false, error: 'invalid_agent', allowed: ALL_AGENTS })
+  }
+  const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction : ''
+  const directive = await setAgentDirective(req.db, name, instruction, { userEmail: req.user?.email || null })
+  await logAdminAction(req, 'agent.directive', { agent: name, instruction: instruction.slice(0, 500) })
+  res.json({ ok: true, directive })
 }))
 
 export default router

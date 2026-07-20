@@ -162,7 +162,18 @@ export async function completeRun(db, runId, {
           f.title || f.message || f.id || 'finding',
           f.description || f.detail || null,
           f.file_path || f.file || null,
-          safeStringify(maskSecrets(f.details || f.data || {})),
+          // The table has no dedicated recommended_fix/evidence columns, so we
+          // bundle the rest of the finding here — this is what makes a
+          // persisted finding actionable later (the admin panel's "what's
+          // the fix" / "re-check" affordances read it back via details_json).
+          safeStringify(maskSecrets({
+            ...(f.details || f.data || {}),
+            recommended_fix: f.recommended_fix || null,
+            evidence: f.evidence || null,
+            category: f.category || null,
+            confidence: typeof f.confidence === 'number' ? f.confidence : null,
+            safe_auto_fix_available: Boolean(f.safe_auto_fix_available),
+          })),
         )
     }
   } catch { /* sam_findings missing on older DBs — non-fatal */ }
@@ -243,6 +254,25 @@ function shapeRow(row) {
     error: row.error || null,
     created_by_user_id: row.created_by_user_id || null,
   }
+}
+
+const FINDING_STATUSES = Object.freeze(['open', 'resolved', 'ignored'])
+
+/**
+ * Update a single persisted finding's triage status ("What good is a
+ * reported error, if there is no way to fix it" — the owner-facing Sam
+ * findings panel needs a real per-row action, not just a read-only badge).
+ * Returns the updated row, or null if the finding doesn't exist.
+ */
+export async function updateFindingStatus(db, findingId, status) {
+  if (!db?.prepare) throw new Error('updateFindingStatus: db is required')
+  if (!findingId) throw new Error('updateFindingStatus: findingId is required')
+  if (!FINDING_STATUSES.includes(status)) {
+    throw new Error(`updateFindingStatus: status must be one of ${FINDING_STATUSES.join(', ')}`)
+  }
+  await db.prepare('UPDATE sam_findings SET status = ? WHERE id = ?').run(status, String(findingId))
+  const row = await db.prepare('SELECT * FROM sam_findings WHERE id = ?').get(String(findingId))
+  return row || null
 }
 
 // Re-export for tests + diagnostics callers.
