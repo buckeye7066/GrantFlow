@@ -79,6 +79,15 @@ export function initClientErrorReporting() {
   globalHandlersRegistered = true
 
   window.addEventListener('error', (e) => {
+    // Browsers mute cross-origin script errors (WHATWG "muted errors"): when a
+    // script we didn't load in our own origin throws (a browser extension's
+    // injected content script is the common case on login-style pages), the
+    // browser reports message="Script error." with error/filename/lineno all
+    // blanked out. There is no real stack to recover here — synthesizing one
+    // via `new Error()` just fabricates a frame pointing at this handler
+    // itself, misattributing the crash to our bundle. Skip reporting rather
+    // than emailing the owner a false alarm with no diagnostic value.
+    if (e?.message === 'Script error.' && !e?.error && !e?.filename) return
     reportClientError(e?.error || new Error(e?.message || 'Unknown error'), {})
   })
   window.addEventListener('unhandledrejection', (e) => {
