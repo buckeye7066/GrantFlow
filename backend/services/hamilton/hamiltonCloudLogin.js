@@ -176,7 +176,12 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       browser = await chromium.connectOverCDP(cdpEndpoint())
       const context = browser.contexts()[0] || (await browser.newContext())
       const page = context.pages()[0] || (await context.newPage())
-      await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {})
+      const nav = await navigateOrFail(page, target)
+      if (!nav.ok) {
+        await closeQuietly({ browser })
+        log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail })
+        return nav
+      }
       const liveUrl = await acquireProviderLiveUrl(page)
       if (!liveUrl) {
         await closeQuietly({ browser })
@@ -206,7 +211,12 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       locale: 'en-US',
     })
     const page = await context.newPage()
-    await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {})
+    const nav = await navigateOrFail(page, target)
+    if (!nav.ok) {
+      await closeQuietly({ browser })
+      log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail })
+      return nav
+    }
     const liveSessionId = makeLiveSessionId()
     const liveUrl = buildSelfHostedLiveUrl({ liveSessionId, portalHost, origin })
     return finalizeStart({ browser, server: null, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId })
@@ -215,6 +225,29 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     log.error('cloud login start failed', { error: err?.message, provider })
     return { ok: false, reason: 'connect_failed', detail: err?.message }
   }
+}
+
+// Navigate the live page and actually observe whether it worked. The prior
+// code did `page.goto(target, {...}).catch(() => {})` and then unconditionally
+// declared the session started — so a failed navigation (bad URL, timeout, DNS
+// failure, host down) left the browser sitting on about:blank forever while the
+// caller still got `{ ok: true }`. The live-login window then opens, connects
+// its screencast successfully, and paints a real (blank) frame of about:blank —
+// which reads as "Live" with nothing on screen, indistinguishable from the
+// bot-detection/no-repaint bugs already fixed, but never reported and never
+// fixed by them. Returns { ok:true } or { ok:false, reason, detail }.
+async function navigateOrFail(page, target) {
+  let navError = null
+  try {
+    await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 20_000 })
+  } catch (err) {
+    navError = err
+  }
+  const landedUrl = (() => { try { return page.url() } catch { return null } })()
+  if (navError || !landedUrl || landedUrl === 'about:blank') {
+    return { ok: false, reason: 'navigation_failed', detail: navError?.message || `stayed_on_blank_page (target: ${target})` }
+  }
+  return { ok: true }
 }
 
 function makeLiveSessionId() {
@@ -233,7 +266,7 @@ function finalizeStart({ browser, server, context, page, userId, profileId, port
     createdAt: Date.now(),
   })
   log.info('cloud login session started', { liveSessionId: id, profileId: String(profileId), portalHost, provider: cloudLoginProvider() })
-  return { ok: true, liveSessionId: id, liveUrl, expires_in_ms: SESSION_TTL_MS }
+  return { ok: true, liveSessionId: id, liveUrl, portalHost, expires_in_ms: SESSION_TTL_MS }
 }
 
 export function getCloudLoginMeta(liveSessionId) {
