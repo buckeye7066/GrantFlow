@@ -180,7 +180,7 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       if (!nav.ok) {
         await closeQuietly({ browser })
         log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail })
-        return nav
+        return { ...nav, engine: 'cdp' }
       }
       const liveUrl = await acquireProviderLiveUrl(page)
       if (!liveUrl) {
@@ -211,8 +211,8 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     const nav = await navigateOrFail(page, target)
     if (!nav.ok) {
       await closeQuietly({ browser })
-      log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail })
-      return nav
+      log.error('cloud login navigation failed', { provider, target, portalHost, detail: nav.detail, engine: launched.engine })
+      return { ...nav, engine: launched.engine }
     }
     const liveSessionId = makeLiveSessionId()
     const liveUrl = buildSelfHostedLiveUrl({ liveSessionId, portalHost, origin })

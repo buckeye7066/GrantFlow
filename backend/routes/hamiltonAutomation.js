@@ -120,7 +120,10 @@ import {
   getPolicyFor,
   upsertPolicy,
   listPolicies,
+  getPortalWallStatus,
+  recordPortalWallObservation,
 } from '../services/hamilton/hamiltonPortalPolicyRegistry.js'
+import { classifyBlocker, isServerWallSignal } from '../services/hamilton/hamiltonBlockerClassifier.js'
 import {
   saveResolvedField,
   listResolvedFields,
@@ -1041,10 +1044,36 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
   if (!isCloudLoginConfigured()) {
     return res.status(501).json({ error: 'cloud_login_not_configured', ...cloudLoginStatus() })
   }
+  const portalHost = req.body?.portal_host || req.body?.portalHost
+
+  // ADAPT: if this portal has already taught us it blocks our datacenter browser
+  // (a stable anti-bot / IP-reputation wall the engine upgrade can't beat), do
+  // NOT launch the doomed server browser again — that's the "only hit the wall
+  // once" rule. Tell the caller to route the user to a non-datacenter path
+  // (open on their own browser/IP, or capture from the laptop connector).
+  try {
+    const wall = await getPortalWallStatus(req.db, portalHost)
+    if (wall.blocked) {
+      log.info('cloud_login_wall_short_circuit', { portalHost, block: wall.block })
+      return res.status(409).json({
+        error: 'cloud_login_start_failed',
+        reason: 'datacenter_blocked',
+        adapt: 'laptop_capture',
+        portalHost,
+        learned_at: wall.block?.first_seen_at || null,
+        message: 'This portal blocks GrantFlow\'s servers. Hamilton learned this already, so instead of failing again it will open the portal on your own device — sign in there, and (if you want Hamilton to reuse it) capture the session from your laptop.',
+      })
+    }
+  } catch (err) {
+    // Never let the wall check itself break a login start — fall through to the
+    // normal attempt if the policy read fails.
+    log.warn('cloud_login_wall_check_failed', { portalHost, error: err?.message })
+  }
+
   const result = await startCloudLogin({
     userId: getAuthUserId(user),
     profileId,
-    portalHost: req.body?.portal_host || req.body?.portalHost,
+    portalHost,
     loginUrl: req.body?.login_url || req.body?.loginUrl || null,
     label: req.body?.label || null,
     captureRequestId: req.body?.capture_request_id || null,
@@ -1052,7 +1081,34 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
     // points back at GrantFlow's own /HamiltonLiveLogin live-view page.
     origin: `${req.protocol}://${req.get('host')}`,
   })
-  if (!result.ok) return res.status(400).json({ error: 'cloud_login_start_failed', ...result })
+  if (!result.ok) {
+    // LEARN: a navigation failure that classifies as a STABLE anti-bot wall
+    // (Akamai/DataDome/"access denied"/ERR_HTTP2_PROTOCOL_ERROR) is recorded so
+    // the short-circuit above fires next time. A transient failure
+    // (portal_unreachable: timeout/DNS/5xx) is deliberately NOT learned — the
+    // site may just be down, and retiring a working portal would be worse.
+    if (result.reason === 'navigation_failed' && portalHost) {
+      try {
+        const { category } = classifyBlocker({ text: result.detail, detail: result.detail })
+        // Learn when EITHER the classifier calls it anti-bot OR the detail is a
+        // stable server-wall signature the classifier files under
+        // portal_unreachable (WAF connection reset, 403/429 — see
+        // isServerWallSignal). Transient outages are excluded there.
+        if (category === 'portal_anti_bot_block' || isServerWallSignal(result.detail)) {
+          const block = await recordPortalWallObservation(req.db, {
+            portalHost,
+            category: 'portal_anti_bot_block',
+            signal: result.detail || null,
+            engine: result.engine || null,
+          })
+          log.info('cloud_login_wall_learned', { portalHost, block })
+        }
+      } catch (err) {
+        log.warn('cloud_login_wall_record_failed', { portalHost, error: err?.message })
+      }
+    }
+    return res.status(400).json({ error: 'cloud_login_start_failed', ...result })
+  }
   return res.json({ ok: true, ...result, disclaimer: CAPTURE_DISCLAIMER })
 })
 
