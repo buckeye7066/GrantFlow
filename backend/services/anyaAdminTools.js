@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'crypto'
 import { getRecentLogs } from '../utils/logger.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { ANYA_CODE_REPAIR_POLICY } from '../config/missionGoals.js'
+import { findPendingRetryOf } from './crawlerJobCreation.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -1203,7 +1204,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
     throw new Error('jobId is required')
   }
 
-  const originalJob = db
+  const originalJob = await db
     .prepare('SELECT * FROM crawler_jobs WHERE id = ?')
     .get(jobId)
 
@@ -1211,11 +1212,28 @@ export async function adminCrawlerRetry({ jobId }, context) {
     throw new Error('Job not found')
   }
 
+  // Idempotent retry: if a retry of THIS job is already queued/running,
+  // return it instead of creating another one (see
+  // crawlerJobCreation.js#findPendingRetryOf for why this guard exists).
+  const pendingRetry = await findPendingRetryOf(db, jobId)
+  if (pendingRetry) {
+    return {
+      original_job_id: jobId,
+      new_job_id: pendingRetry.id,
+      new_job: {
+        ...pendingRetry,
+        job_id: pendingRetry.id,
+        parameters: safeJson(pendingRetry.parameters, {}),
+      },
+      message: 'A retry of this job is already queued/running; returning it instead of creating a duplicate.',
+    }
+  }
+
   const newJobId = randomUUID()
   const parameters = safeJson(originalJob.parameters ?? originalJob.params ?? originalJob.payload, {})
   parameters.retried_from_job_id = jobId
 
-  db.prepare(
+  await db.prepare(
     `
     INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
     VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
@@ -1228,7 +1246,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
   )
 
   // Update retry count on original job
-  db.prepare(
+  await db.prepare(
     `
     UPDATE crawler_jobs
     SET retry_count = COALESCE(retry_count, 0) + 1,

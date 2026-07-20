@@ -336,6 +336,42 @@ export async function createCrawlerJob(db, options) {
 }
 
 /**
+ * Find an already-queued-or-running manual retry of `originalJobId`, if one
+ * exists. Both manual retry paths (POST /api/crawlers/jobs/:id/retry and the
+ * admin.crawler.retry tool) stamp `parameters.retried_from_job_id` on the new
+ * row, so this is a portable (SQLite + Postgres) substring match on that
+ * marker rather than a JSON-operator query.
+ *
+ * Prevents a retry-storm: nothing capped how many times a human/automated
+ * caller could hit a manual retry endpoint for the SAME original job before
+ * an earlier retry attempt had even resolved — unlike the automatic
+ * orphan-retry path (crawlerConcurrencyGuard.js), which has always enforced
+ * MAX_ORPHAN_AUTO_RETRIES. A burst of clicks (or a buggy caller retrying in a
+ * loop) could pile up a dozen+ duplicate queued/running rows for one failed
+ * job, each competing for the same per-profile concurrency lock.
+ *
+ * @param {object} db
+ * @param {string} originalJobId
+ * @returns {Promise<object|null>} the existing pending retry row, or null
+ */
+export async function findPendingRetryOf(db, originalJobId) {
+  if (!originalJobId) return null
+  const marker = `"retried_from_job_id":"${originalJobId}"`
+  const existing = await db
+    .prepare(
+      `
+        SELECT * FROM crawler_jobs
+        WHERE status IN ('queued', 'running')
+          AND parameters LIKE ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+    )
+    .get(`%${marker}%`)
+  return existing || null
+}
+
+/**
  * Create multiple crawler jobs in a transaction
  * @param {object} db - Database connection
  * @param {Array<object>} jobs - Array of job options (same as createCrawlerJob)

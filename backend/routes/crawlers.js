@@ -4,7 +4,7 @@ import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
-import { createCrawlerJob, validateJobParameters, generateIdempotencyKey } from '../services/crawlerJobCreation.js'
+import { createCrawlerJob, validateJobParameters, generateIdempotencyKey, findPendingRetryOf } from '../services/crawlerJobCreation.js'
 import { buildProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { validatePagination } from '../utils/validation.js'
@@ -1272,6 +1272,15 @@ router.post('/jobs/:id/retry', async (req, res) => {
 
     if (job.status !== 'failed' && job.status !== 'completed' && job.status !== 'cancelled') {
       return res.status(400).json({ error: 'Only completed, failed, or cancelled jobs can be retried' })
+    }
+
+    // Idempotent retry: if a retry of THIS job is already queued/running,
+    // return it instead of creating another one. Without this, nothing
+    // bounded how many duplicate retries a burst of clicks (or a buggy
+    // automated caller) could pile up for the same original job.
+    const pendingRetry = await findPendingRetryOf(req.db, job.id)
+    if (pendingRetry) {
+      return res.status(200).json(mapJob(pendingRetry))
     }
 
     // Tier gating applies to retries too (prevents bypass via retry endpoints).
