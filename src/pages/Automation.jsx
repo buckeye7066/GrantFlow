@@ -91,7 +91,25 @@ const JOB_LABELS = {
   document_ingest: "Document enrichment",
   pipeline_automation: "Pipeline automation",
   profile_enrichment: "Profile enrichment",
+  anya_match_scout: "Anya match scout",
+  national_zip_scan: "National ZIP scan",
 }
+
+// Job types with a registered handler in crawlerDispatcher.js's HANDLERS map —
+// a job created for any other type just sits queued forever (no worker will
+// ever pick it up). national_zip_scan is documented as a "real" automation in
+// shared/supersededCrawlerTypes.js but was never wired to a dispatcher
+// handler, so it is deliberately EXCLUDED here: a manual-trigger button for it
+// would create the exact class of permanently-stuck job this panel exists to
+// surface, not fix.
+const DISPATCHABLE_JOB_TYPES = new Set([
+  "avatar_lookup",
+  "document_ingest",
+  "pipeline_automation",
+  "profile_enrichment",
+  "anya_match_scout",
+  "portal_check",
+])
 
 const STATUS_VARIANTS = {
   queued: "bg-slate-100 text-slate-700",
@@ -155,6 +173,8 @@ const JOB_ICON_MAP = {
   pipeline_automation: Workflow,
   profile_enrichment: Sparkles,
   avatar_lookup: UserCircle2,
+  anya_match_scout: Bot,
+  national_zip_scan: MapPin,
 }
 
 function getJobLabel(job) {
@@ -597,7 +617,7 @@ function RecentActivityChart({ activity }) {
   )
 }
 
-function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
+function MetricCard({ metric, onInspect, inspectionState, isLoading, onRun, isRunning, runDisabledReason }) {
   const Icon = JOB_ICON_MAP[metric.type] ?? Bot
   const label = JOB_LABELS[metric.type] ?? metric.type
 
@@ -767,19 +787,37 @@ function MetricCard({ metric, onInspect, inspectionState, isLoading }) {
         ) : null}
         <div className="flex items-center justify-between gap-3 text-xs text-slate-500">
           <span>{lastRunText}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={(event) => {
-              event.stopPropagation()
-              if (lastJob?.id) onInspect(lastJob.id)
-            }}
-            disabled={!lastJob}
-            className="flex items-center gap-2"
-          >
-            {isInspecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
-            Inspect
-          </Button>
+          <div className="flex items-center gap-2">
+            {typeof onRun === "function" ? (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onRun()
+                }}
+                disabled={Boolean(runDisabledReason) || isRunning}
+                title={runDisabledReason || undefined}
+                className="flex items-center gap-2"
+              >
+                {isRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                {isRunning ? "Running…" : "Run now"}
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation()
+                if (lastJob?.id) onInspect(lastJob.id)
+              }}
+              disabled={!lastJob}
+              className="flex items-center gap-2"
+            >
+              {isInspecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
+              Inspect
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -1878,6 +1916,30 @@ export default function Automation() {
     })
   }
 
+  // Mirrors handleQueueJob's own gates so a "Run now" button can be disabled
+  // proactively (with an explanatory tooltip) instead of only failing via a
+  // toast after the click. Returns null when the type is runnable right now.
+  const getRunDisabledReason = (type) => {
+    if (!DISPATCHABLE_JOB_TYPES.has(type)) {
+      return "Not wired to a crawler-dispatcher handler yet — running it would just queue a job that never executes."
+    }
+    const profileId = isAdmin ? selectedAdminProfileId : activeProfileId
+    const requiresProfile = type !== "pipeline_automation"
+    if (requiresProfile && !profileId) {
+      return "Select a profile first."
+    }
+    const tierGate = {
+      pipeline_automation: canPipelineAutomation,
+      profile_enrichment: canDocumentAI,
+      avatar_lookup: canDocumentAI,
+      document_ingest: canDocumentAI,
+    }[type]
+    if (tierGate === false) {
+      return "Not included in this profile's billing tier."
+    }
+    return null
+  }
+
   const handleRetryJob = (jobId) => {
     if (!jobId) return
     retryJobMutation.mutate(jobId)
@@ -2082,6 +2144,9 @@ export default function Automation() {
             onInspect={handleInspectJob}
             inspectionState={inspectionState}
             isLoading={metricsLoading && !metric.counts}
+            onRun={metricsLoading ? undefined : () => handleQueueJob(metric.type)}
+            isRunning={createJobMutation.isPending && createJobMutation.variables?.type === metric.type}
+            runDisabledReason={metricsLoading ? null : getRunDisabledReason(metric.type)}
           />
         ))}
         <LiveQueueCard
