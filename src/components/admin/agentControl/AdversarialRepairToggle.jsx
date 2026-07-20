@@ -114,9 +114,6 @@ export default function AdversarialRepairToggle() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="font-medium">Autonomous code repair (Sam/Anya)</div>
-            <div className="text-xs text-slate-500 dark:text-slate-400">
-              When on, Sam can autonomously write, adversarially self-verify, and land code fixes.
-            </div>
           </div>
           <ToggleSwitch
             on={enabled}
