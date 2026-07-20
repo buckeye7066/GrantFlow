@@ -85,6 +85,34 @@ describe('admin crawler tools', () => {
     expect(result.new_job.parameters.retried_from_job_id).toBe('failed-1')
   })
 
+  it('does not create a second retry while an earlier retry of the same job is still queued/running — the retry-storm guard', async () => {
+    const db = makeDb()
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, parameters) VALUES (?, ?, ?, ?)').run('failed-1', 'local', 'failed', null)
+
+    const first = await adminCrawlerRetry({ jobId: 'failed-1' }, { db })
+    const rowCountAfterFirst = db.prepare('SELECT COUNT(*) AS n FROM crawler_jobs').get().n
+
+    // Simulate a burst of repeated retry clicks for the same original job
+    // before the first retry has resolved.
+    const second = await adminCrawlerRetry({ jobId: 'failed-1' }, { db })
+    const third = await adminCrawlerRetry({ jobId: 'failed-1' }, { db })
+
+    expect(second.new_job_id).toBe(first.new_job_id)
+    expect(third.new_job_id).toBe(first.new_job_id)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM crawler_jobs').get().n).toBe(rowCountAfterFirst)
+  })
+
+  it('allows a fresh retry once the prior retry has terminated (failed/completed/cancelled)', async () => {
+    const db = makeDb()
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, parameters) VALUES (?, ?, ?, ?)').run('failed-1', 'local', 'failed', null)
+
+    const first = await adminCrawlerRetry({ jobId: 'failed-1' }, { db })
+    db.prepare("UPDATE crawler_jobs SET status = 'failed' WHERE id = ?").run(first.new_job_id)
+
+    const second = await adminCrawlerRetry({ jobId: 'failed-1' }, { db })
+    expect(second.new_job_id).not.toBe(first.new_job_id)
+  })
+
   it('checks crawler jobs with since/status filters without backfilling defaults', async () => {
     const db = makeDb()
     db.prepare('INSERT INTO crawler_jobs (id, type, status, created_at) VALUES (?, ?, ?, ?)').run('old-1', 'local', 'queued', '2020-01-01T00:00:00.000Z')
