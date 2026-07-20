@@ -18,6 +18,7 @@ import Database from 'better-sqlite3'
 import {
   getCheckById,
   detectCoverageRegression,
+  summarizeUnreadableHosts,
   AMOUNT_COVERAGE_KV_KEY,
   AMOUNT_COVERAGE_REGRESSION_POINTS,
 } from '../services/sam/samRegistry.js'
@@ -32,10 +33,10 @@ beforeEach(() => {
     CREATE TABLE profiles (id TEXT PRIMARY KEY, created_by TEXT);
     CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
                          amount_status TEXT, amount_text TEXT, funding_opportunity_id INTEGER, profile_id TEXT,
-                         amount_enrich_attempted_at TEXT);
+                         amount_enrich_attempted_at TEXT, application_url TEXT, portal_url TEXT);
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
-                                        amount_enrich_attempted_at TEXT);
+                                        amount_enrich_attempted_at TEXT, source_url TEXT, application_url TEXT);
   `)
   // One real client profile and one Amy synthetic-training profile, so seeded
   // grants can attach to either.
@@ -91,6 +92,46 @@ describe('detectCoverageRegression', () => {
   it('cannot flag on a first run (no previous reading to compare)', () => {
     expect(detectCoverageRegression(NaN, 15)).toBeNull()
     expect(detectCoverageRegression(undefined, 15)).toBeNull()
+  })
+})
+
+describe('summarizeUnreadableHosts', () => {
+  // The `unreadable` finding's recommended_fix has always said "group the
+  // unreadable rows by source_url host" — this is that grouping. It must be
+  // safe against exactly the URL junk real catalog/grant rows carry.
+  it('groups by hostname, sorted by count desc', () => {
+    const rows = [
+      { url: 'https://www.grants.gov/search-grants?x=1' },
+      { url: 'https://grants.gov/other' },
+      { url: 'https://sam.gov/opp/123' },
+      { url: 'https://grants.gov/third' },
+    ]
+    expect(summarizeUnreadableHosts(rows)).toEqual([
+      { host: 'grants.gov', count: 3 }, // www. stripped so it merges with the bare host
+      { host: 'sam.gov', count: 1 },
+    ])
+  })
+
+  it('collapses missing/unparseable URLs into a single "unknown" bucket instead of dropping them', () => {
+    const rows = [{ url: null }, { url: '' }, { url: 'not a url' }, {}]
+    const out = summarizeUnreadableHosts(rows)
+    expect(out).toEqual([{ host: 'unknown', count: 4 }])
+  })
+
+  it('accepts plain strings, not just {url} rows', () => {
+    expect(summarizeUnreadableHosts(['https://foo.org/a', 'https://foo.org/b'])).toEqual([
+      { host: 'foo.org', count: 2 },
+    ])
+  })
+
+  it('is bounded by limit so a long tail cannot blow up the evidence payload', () => {
+    const rows = Array.from({ length: 15 }, (_, i) => ({ url: `https://host-${i}.example.org/apply` }))
+    expect(summarizeUnreadableHosts(rows, { limit: 5 })).toHaveLength(5)
+  })
+
+  it('is empty for an empty input, not a crash', () => {
+    expect(summarizeUnreadableHosts([])).toEqual([])
+    expect(summarizeUnreadableHosts(undefined)).toEqual([])
   })
 })
 
@@ -192,6 +233,40 @@ describe('pipeline.amountCoverage ratchet', () => {
     expect(res.summary).toMatch(/10 active pipeline grant\(s\) were READ but their source could not be parsed/)
     expect(res.summary).toMatch(/need an API adapter/)
     expect(res.evidence).toMatchObject({ unanswered_unreadable: 10, answered_none_published: 75 })
+  })
+
+  it('groups the unreadable bucket by host in evidence.unreadable_hosts and names the top host in the summary', async () => {
+    // The recommended_fix has always said "group the unreadable rows by
+    // source_url host" so a real concentration can be told apart from a long
+    // tail — this proves the grouping actually happens and is surfaced.
+    seedHistory([{ at: '2026-07-16T14:00:00Z', pct: 15, with_value: 15, total: 100 }])
+    const insFo = db.prepare(
+      'INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempted_at, source_url) VALUES (1, ?, ?, ?)',
+    )
+    const insUnvalued = db.prepare(
+      'INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES (?, NULL, ?, ?)',
+    )
+    const insValued = db.prepare(
+      'INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES (?, ?, NULL, ?)',
+    )
+    for (let i = 0; i < 15; i++) insValued.run('discovered', 5000, 'real-1')
+    // 6 unreadable rows from the SAME JS-shell host — the single-adapter class.
+    for (let i = 0; i < 6; i++) {
+      const foId = insFo.run('not_listed', '2026-07-16T00:00:00Z', `https://www.apply.example-state-portal.gov/opp/${i}`).lastInsertRowid
+      insUnvalued.run('discovered', foId, 'real-1')
+    }
+    // 4 unreadable rows spread across 4 DIFFERENT hosts — the long-tail class.
+    for (const h of ['a.org', 'b.org', 'c.org', 'd.org']) {
+      const foId = insFo.run('not_listed', '2026-07-16T00:00:00Z', `https://${h}/apply`).lastInsertRowid
+      insUnvalued.run('discovered', foId, 'real-1')
+    }
+    const res = await check().run({ db })
+    expect(res.ok).toBe(false)
+    expect(res.evidence.unanswered_unreadable).toBe(10)
+    // www. is stripped so a bare-vs-www duplicate of the same real host merges.
+    expect(res.evidence.unreadable_hosts[0]).toEqual({ host: 'apply.example-state-portal.gov', count: 6 })
+    expect(res.evidence.unreadable_hosts).toHaveLength(5) // 1 concentrated host + 4 long-tail hosts
+    expect(res.summary).toMatch(/Top host\(s\): apply\.example-state-portal\.gov ×6/)
   })
 
   it('an unread ORPHAN grant is BACKLOG (never_read), not a failure — it is now read directly', async () => {

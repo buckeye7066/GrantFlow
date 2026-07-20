@@ -133,6 +133,38 @@ export function detectCoverageRegression(previousPct, currentPct, points = AMOUN
   return { previous_pct: previousPct, current_pct: currentPct, delta }
 }
 
+/**
+ * PURE: turn the `unreadable` bucket's rows into a hostname → count
+ * breakdown, sorted by count desc (ties broken alphabetically for a stable
+ * order). `pipeline.amountCoverage`'s own recommended_fix has always said
+ * "group the unreadable rows by source_url host" — this is that grouping, so
+ * the finding can name a concentration instead of a bare count. A row with no
+ * usable URL (or an unparseable one) collapses into the 'unknown' bucket
+ * rather than being dropped, so the counts always sum to the input length.
+ * Exported for direct unit testing; bounded to `limit` hosts (default 10) so
+ * a long tail of one-off hosts cannot blow up the evidence payload.
+ */
+export function summarizeUnreadableHosts(rows = [], { limit = 10 } = {}) {
+  const counts = new Map()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const raw = typeof row === 'string' ? row : row?.url
+    let host = 'unknown'
+    if (raw) {
+      try {
+        host = new URL(String(raw)).hostname.replace(/^www\./, '').toLowerCase()
+        if (!host) host = 'unknown'
+      } catch {
+        host = 'unknown'
+      }
+    }
+    counts.set(host, (counts.get(host) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([host, count]) => ({ host, count }))
+    .sort((a, b) => b.count - a.count || a.host.localeCompare(b.host))
+    .slice(0, Math.max(1, limit))
+}
+
 function timeCutoff(db, msAgo) {
   const iso = new Date(Date.now() - msAgo).toISOString()
   if (db?.dialect === 'postgres') return iso
@@ -481,6 +513,14 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // here: a census that cannot run degrades to "census unavailable", never to
       // "everything is fine".
       let censusError = null
+      // Host breakdown for the `unreadable` bucket (2026-07-20). The
+      // recommended_fix below has always said "Identify the hosts: group the
+      // unreadable rows by source_url host" — but nothing did it, so every
+      // night's finding named a COUNT with no target and answering "is this one
+      // host worth an adapter, or a long tail?" required ad-hoc prod DB access.
+      // Best-effort ONLY: a failure here must never flip censusError or change
+      // any count above — it only enriches evidence.
+      let unreadableHosts = []
       try {
         // Every active row gets an ANSWER classification. The predicates read an
         // answer off EITHER the grant itself OR its linked catalog row, because
@@ -524,6 +564,30 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
               AND ${NON_SYNTHETIC_PIPELINE('g')}`,
           )
           .get()
+
+        // Nested try: the host breakdown is pure enrichment. A broken query here
+        // (e.g. a column a DB has not migrated) must degrade to "no breakdown",
+        // never take the whole census down with it — `answers` above already
+        // stands on its own as the count Sam/Anya act on.
+        const unreadableCount = Number(answers?.unanswered_unreadable) || 0
+        if (unreadableCount > 0) {
+          try {
+            const urlRows = await db
+              .prepare(
+                `SELECT COALESCE(fo.source_url, fo.application_url, g.application_url, g.portal_url) AS url
+                   FROM grants g
+                   LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+                  WHERE g.status IN (${statusesSql})
+                    AND ${NON_SYNTHETIC_PIPELINE('g')}
+                    AND ${unanswered} AND ${attempted} IS NOT NULL
+                  LIMIT 2000`,
+              )
+              .all()
+            unreadableHosts = summarizeUnreadableHosts(urlRows)
+          } catch {
+            // Best-effort only; unreadableHosts stays [].
+          }
+        }
       } catch (err) {
         censusError = String(err?.message || err)
       }
@@ -617,7 +681,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         }
       }
 
-      const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct }
+      const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct, unreadable_hosts: unreadableHosts }
 
       // `never_read` is BACKLOG, not a defect: the enrichment sweeps are bounded
       // per night and drain it (catalog rows via enforceAmountEnrichment, orphan
@@ -632,11 +696,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // as `no_catalog_row`; now they are read directly, so they either get an
       // answer, sit in `never_read` backlog, or land here as honestly unreadable.
       if (unreadable > 0) {
+        // Name the concentration inline so the finding stops being a bare count:
+        // a dominant host is a single-adapter opportunity, a flat spread is a
+        // long tail (see evidence.unreadable_hosts for the full breakdown).
+        const hostNote = unreadableHosts.length
+          ? ` Top host(s): ${unreadableHosts.slice(0, 3).map((h) => `${h.host} ×${h.count}`).join(', ')}.`
+          : ''
         return {
           ok: false,
-          summary: `${unreadable} active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter. ${summary}`,
+          summary: `${unreadable} active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter.${hostNote} ${summary}`,
           evidence: fullCensus,
-          recommended_fix: 'These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. Identify the hosts: group the unreadable rows by source_url host. sam.gov is deliberately NOT adapted (its award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.',
+          recommended_fix: `These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. evidence.unreadable_hosts already groups these rows by source_url host (top 10) — a host carrying a large share of the count is a single-adapter opportunity; a flat spread across many hosts is a long tail and not worth a bespoke adapter. sam.gov is deliberately NOT adapted (its award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.`,
           confidence: 0.85,
         }
       }
