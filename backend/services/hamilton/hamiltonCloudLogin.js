@@ -42,7 +42,7 @@
  */
 
 import http from 'node:http'
-import { CHROMIUM_CONTAINER_ARGS } from './browserLaunch.js'
+import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
 
@@ -190,24 +190,21 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       return finalizeStart({ browser, server: null, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl })
     }
 
-    // self_hosted: launch our OWN headless Chromium. We mirror the page to the
-    // user's browser ourselves (SSE screencast + POST input), so we don't need a
-    // remote-debugging port, a devtools front-end, or a public devtools base.
-    // CDP Page.startScreencast works fine in headless Chromium.
-    browser = await chromium.launch({
-      headless: true,
-      // --disable-blink-features=AutomationControlled hides the navigator.webdriver
-      // automation flag, which bot-detection (e.g. studentaid.gov / FAFSA behind
-      // Akamai) uses to serve a BLANK page to an obviously-automated browser.
-      args: [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled'],
-    })
+    // self_hosted: launch our OWN headless Chromium via the shared hardened
+    // portal launcher (full Chromium new-headless, falling back to the shell —
+    // see browserLaunch.js for the measured studentaid.gov evidence). We mirror
+    // the page to the user's browser ourselves (SSE screencast + POST input), so
+    // we don't need a remote-debugging port, a devtools front-end, or a public
+    // devtools base. CDP Page.startScreencast works in both engines.
+    const launched = await launchPortalBrowser(chromium)
+    browser = launched.browser
+    log.info('cloud login browser launched', { engine: launched.engine, portalHost })
     // A realistic UA + locale further reduces "this is a bot" blank-page blocks
     // on hardened portals. The user still drives the page; we only soften the
     // automation fingerprint so the login page actually renders.
     const context = await browser.newContext({
       viewport: { width: 1280, height: 900 },
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      userAgent: REALISTIC_PORTAL_UA,
       locale: 'en-US',
     })
     const page = await context.newPage()

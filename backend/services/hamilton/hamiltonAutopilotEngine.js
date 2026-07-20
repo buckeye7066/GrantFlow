@@ -40,7 +40,7 @@
  */
 
 import fs from 'node:fs'
-import { CHROMIUM_CONTAINER_ARGS } from './browserLaunch.js'
+import { launchPortalBrowser, REALISTIC_PORTAL_UA } from './browserLaunch.js'
 import path from 'node:path'
 import os from 'node:os'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -603,15 +603,17 @@ export async function runAutopilot({
     return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  const browser = await chromium.launch({ headless, args: [...CHROMIUM_CONTAINER_ARGS] })
+  const { browser } = await launchPortalBrowser(chromium, { headless })
   // Prefer an in-memory storageState OBJECT (the durable, DB-backed session a
   // user imported after clearing 2FA themselves) — it survives Railway's
   // ephemeral filesystem, unlike an on-disk path. Fall back to a path if given.
-  let contextOptions = {}
+  // UA matches the capture-time fingerprint (REALISTIC_PORTAL_UA) so a WAF that
+  // bound the session cookies to it accepts the replay.
+  const contextOptions = { userAgent: REALISTIC_PORTAL_UA }
   if (storageState && typeof storageState === 'object') {
-    contextOptions = { storageState }
+    contextOptions.storageState = storageState
   } else if (storageStatePath && fs.existsSync(storageStatePath)) {
-    contextOptions = { storageState: storageStatePath }
+    contextOptions.storageState = storageStatePath
   }
   // Guard the setup path: if newContext/newPage throws (e.g. /dev/shm memory
   // pressure), the already-launched Chromium must not leak — the main
