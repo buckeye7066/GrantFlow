@@ -564,7 +564,13 @@ const KNOWN_BOOLEAN_COLUMNS = [
   'automation_allowed', 'agent_submission_allowed', 'scraping_allowed',
   'api_available', 'manual_only', 'live_supported', 'automation_supported',
   'session_reuse_supported', 'credential_reference_supported',
-  'captcha_likely', 'two_factor_likely'
+  'captcha_likely', 'two_factor_likely',
+  // application_missing_info.resolved / dead_letter_queue.resolved — BOOLEAN in
+  // Postgres. enforceInvariants.js and applicationTaskStore.js queried
+  // `resolved = 0`, which threw "operator does not exist: boolean = integer"
+  // on every call (caught and silently swallowed to [] by the caller's
+  // try/catch, so the blocked-task re-check invariant silently no-op'd).
+  'resolved'
 ];
 const BOOL_COL_PATTERN = KNOWN_BOOLEAN_COLUMNS.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 const BOOL_TRUE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*1\\b`, 'gi');
