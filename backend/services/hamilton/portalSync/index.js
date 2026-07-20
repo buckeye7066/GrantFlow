@@ -31,6 +31,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 
 import { normalizeHost, findValidSession, getSessionStorageState } from '../hamiltonCredentialSessionService.js'
+import { launchPortalBrowser, REALISTIC_PORTAL_UA } from '../browserLaunch.js'
 import { getDecryptedCredentialWithFallback, listCredentialedDomains, registrableDomain } from '../hamiltonPortalCredentialService.js'
 import {
   browserAutomationPermittedForUrl,
@@ -371,8 +372,14 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
 
   let browser = null
   try {
-    browser = await chromium.launch({ headless: true })
-    const context = await browser.newContext(storageState && typeof storageState === 'object' ? { storageState } : {})
+    // Hardened shared launcher: container-safe args (this call site had drifted
+    // to a bare launch — the /dev/shm OOM class) + the full-Chromium engine +
+    // the capture-time UA so WAF-bound sessions replay (see browserLaunch.js).
+    ;({ browser } = await launchPortalBrowser(chromium))
+    const context = await browser.newContext({
+      userAgent: REALISTIC_PORTAL_UA,
+      ...(storageState && typeof storageState === 'object' ? { storageState } : {}),
+    })
     const page = await context.newPage()
 
     const ctx = {

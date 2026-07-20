@@ -16,3 +16,41 @@ export const CHROMIUM_CONTAINER_ARGS = Object.freeze([
   '--disable-dev-shm-usage',
   '--disable-gpu',
 ])
+
+/**
+ * One realistic desktop-Chrome UA shared by every portal-facing context. Kept
+ * as a single constant so a captured session and its later automated REUSE
+ * present the SAME fingerprint (Akamai-class WAFs bind cookies to it) — two
+ * services drifting to different UA strings silently invalidates sessions.
+ */
+export const REALISTIC_PORTAL_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+/**
+ * launchPortalBrowser — the one launcher for flows that visit REAL external
+ * portals (cloud login, autopilot, signup, portal sync). PDF/print flows that
+ * only render local HTML should keep using plain `chromium.launch` + args.
+ *
+ * WHY: Playwright's default headless engine is the stripped `headless-shell`
+ * build, and Akamai-class bot walls kill it at the CONNECTION level — measured
+ * 2026-07-20 against studentaid.gov: headless-shell dies with
+ * net::ERR_HTTP2_PROTOCOL_ERROR before any page exists, while FULL Chromium in
+ * new-headless mode (`channel: 'chromium'`, the same build headed runs use)
+ * renders the real FSA login page. The prod image installs the full build
+ * (Dockerfile: `playwright install --with-deps chromium` ships both).
+ *
+ * Falls back to the default headless shell if the full-Chromium launch fails
+ * (e.g. an older image without the full build) so this can never make a
+ * previously-working deployment worse. Returns { browser, engine } so callers
+ * can log which engine actually served the session.
+ */
+export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [] } = {}) {
+  const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]
+  try {
+    const browser = await chromium.launch({ headless, channel: 'chromium', args })
+    return { browser, engine: 'chromium-new-headless' }
+  } catch {
+    const browser = await chromium.launch({ headless, args })
+    return { browser, engine: 'headless-shell' }
+  }
+}
