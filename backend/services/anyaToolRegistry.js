@@ -2674,7 +2674,7 @@ registerTool({
 // Enhanced Admin Crawler Tools
 registerTool({
   name: 'admin.crawler.triggerAll',
-  description: 'Trigger all crawler types for a given profile. Creates multiple crawler jobs at once. Admin only.',
+  description: 'Trigger all (real, still-running) crawler types for a given profile. Legacy discovery types (local/scholarship/curated_benefits/comprehensive/item_search) are retired — grant DISCOVERY runs through the Crawler OS instead; use admin.anya.runCrawlers or the profile\'s normal discovery flow for that. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -2684,7 +2684,7 @@ registerTool({
         type: 'array',
         items: {
           type: 'string',
-          enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup', 'portal_check']
+          enum: ['profile_enrichment', 'avatar_lookup', 'portal_check']
         },
         description: 'Array of crawler types to trigger (default: all)'
       },
@@ -2694,48 +2694,50 @@ registerTool({
   handler: async (params, context) => {
     const { profileId, crawlerTypes } = params
     const { db } = context
-    
-    const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
-    const profiles = [{ id: profileId }]
-    
-    const jobIds = []
-    for (const profile of profiles) {
-      for (const crawlerType of types) {
-        const jobId = randomUUID()
-      
-        const stmt = db.prepare(`
-          INSERT INTO crawler_jobs (id, type, profile_id, status, parameters)
-          VALUES (?, ?, ?, ?, ?)
-        `)
-      
-        const defaultParams = {
-          local: { radius_miles: 25, max_results: 100 },
-          scholarship: { max_results: 50 },
-          curated_benefits: { maxResults: 100 },
-          comprehensive: { max_results: 200 },
-          profile_enrichment: {},
-          avatar_lookup: {},
-          item_search: { max_results: 50 },
-        }
-      
-        stmt.run(
-          jobId,
-          crawlerType,
-          profile.id,
-          'queued',
-          JSON.stringify(defaultParams[crawlerType] || {})
-        )
-      
-        jobIds.push({ type: crawlerType, profileId: profile.id, jobId })
-      }
+    if (!db) throw new Error('Database connection required')
+
+    const { createCrawlerJob } = await import('./crawlerJobCreation.js')
+    const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
+
+    const types = crawlerTypes || ['profile_enrichment', 'avatar_lookup', 'portal_check']
+    const defaultParams = {
+      profile_enrichment: {},
+      avatar_lookup: {},
+      portal_check: {},
     }
-    
+
+    const jobs = []
+    const skipped = []
+    for (const crawlerType of types) {
+      // Routes through the SAME choke point every other job-creation path uses:
+      // idempotency, type validation, and the CUTOVER GUARD that refuses to
+      // persist a row for a retired discovery-crawler type (previously this
+      // handler bypassed all of that with a raw INSERT, which is how
+      // dead-on-arrival `superseded_by_crawler_os` rows got created).
+      const creation = await createCrawlerJob(db, {
+        type: crawlerType,
+        profileId,
+        requestedBy: context?.ctx?.userId ?? context?.user?.id ?? 'anya_owner',
+        parameters: defaultParams[crawlerType] || {},
+      })
+      if (creation.superseded || creation.skipped) {
+        skipped.push({ type: crawlerType, reason: 'superseded_by_crawler_os' })
+        continue
+      }
+      if (creation.created) {
+        setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+      }
+      jobs.push({ type: crawlerType, profileId, jobId: creation.jobId, existing: !creation.created })
+    }
+
     return {
       success: true,
       profileId: profileId ?? null,
-      profilesTriggered: profiles.length,
-      jobsCreated: jobIds.length,
-      jobs: jobIds,
+      profilesTriggered: 1,
+      jobsCreated: jobs.length,
+      jobsSkipped: skipped.length,
+      jobs,
+      skipped,
     }
   },
 })
