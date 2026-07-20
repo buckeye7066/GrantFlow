@@ -86,6 +86,13 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
 
     await signal?.heartbeat?.({ phase: 'starting', allow_send: allowSend })
 
+    // Owner-attached free-text instruction (agentControlOrchestrator's
+    // directive channel). John is the one agent in this fleet whose per-item
+    // output is already AI-composed, so this is a real prompt-level hook, not
+    // just a display note — folded into every draft this run produces via
+    // composeEmailWithAI's prompt, subordinate to johnOutreachSafety's rules.
+    const directive = typeof options?.directives?.john === 'string' ? options.directives.john : null
+
     let result
     try {
       result = await runJohn({
@@ -96,6 +103,7 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
         // throws if the runtime config disagrees, so this is double-locked.
         draftOnly: !allowSend,
         dryRun: Boolean(options?.dry_run),
+        operatorNote: directive,
       })
     } catch (err) {
       return {
@@ -199,6 +207,7 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
         provider_ready: result?.provider_ready ?? null,
         note: result?.note || null,
         allow_send: allowSend,
+        directive_applied: directive || null,
       },
     }
   }

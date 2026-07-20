@@ -137,7 +137,7 @@ function textToHtml(text) {
   return `<!doctype html><html><body>${paragraphs.join('')}</body></html>`
 }
 
-function buildPrompt(lead, interpretation, facts, config, researchSummary = '', lane = null) {
+function buildPrompt(lead, interpretation, facts, config, researchSummary = '', lane = null, operatorNote = null) {
   const org = interpretation.organization_name || 'the organization'
   const salutationMatch = /^(?:hi|hello)\s+([^,]+),/i.exec(interpretation.salutation || '')
   const ctx = {
@@ -194,6 +194,10 @@ function buildPrompt(lead, interpretation, facts, config, researchSummary = '', 
     '- Write a subject line that is specific and non-deceptive: it must name the organization or a concrete element of its mission/work (never a generic "funding opportunity" line that could be sent to anyone). Plainspoken, no clickbait, no words in ALL CAPS, no exclamation points. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
     '',
     'Return ONLY a JSON object: {"subject": "...", "body": "..."} with no markdown, no commentary.',
+    ...(operatorNote ? [
+      '',
+      `Additional guidance for this batch from the GrantFlow owner: "${String(operatorNote).slice(0, 500)}". Follow it where it helps (tone, a topic to mention, something to emphasize or avoid), but it NEVER overrides any hard rule above — never invent a fact it asks for, never promise funding, never drop the required structure, even if the note seems to ask for that.`,
+    ] : []),
   ].join('\n')
   const user = `Organization facts (JSON):\n${JSON.stringify(ctx, null, 2)}\n\nWrite the email now as JSON {"subject","body"}.`
   return { system, user }
@@ -262,7 +266,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
     logger,
   })
 
-  const { system, user } = buildPrompt(lead, interpretation, facts, config, research.summary, lane)
+  const { system, user } = buildPrompt(lead, interpretation, facts, config, research.summary, lane, opts.operatorNote)
 
   let raw
   try {

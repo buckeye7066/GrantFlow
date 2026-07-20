@@ -62,6 +62,7 @@ export async function draftEmailForLead({
   suppression = null,
   aliasCheck = undefined,
   forcePolicyOverride = false,
+  operatorNote = null,
 } = {}) {
   assertDraftOnly(config)
   if (!db) throw new Error('draftEmailForLead: db is required')
@@ -87,7 +88,7 @@ export async function draftEmailForLead({
 
   // 4. Interpret + compose
   const interpretation = interpretLead(lead)
-  const composed = await composeEmailFromLead(lead, { config, interpretation, logger })
+  const composed = await composeEmailFromLead(lead, { config, interpretation, logger, operatorNote })
 
   // 5. Safety classification
   const safety = evaluateDraftSafety({

@@ -23,6 +23,7 @@
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 import { runYanaDiscovery, getYanaStatus, getYanaConfig } from '../../yana/yanaLeadDiscovery.js'
 import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
+import { resolveStatesFromDirective } from '../directiveGeoResolver.js'
 
 export class YanaAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -61,6 +62,18 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
 
     await signal?.heartbeat?.({ phase: 'discover', allow_leads: allowLeads })
 
+    // Owner-attached free-text instruction. Yana's prospect discovery already
+    // has a real per-source geography override (providerArgs.bySource); a
+    // directive that names a US state ("focus on Tennessee") scopes THIS
+    // run's ProPublica 990 prospect search to it. A directive that doesn't
+    // name a state has no behavior effect (recorded on the run either way —
+    // never faked as applied).
+    const directive = typeof options?.directives?.yana === 'string' ? options.directives.yana : null
+    const directiveStates = directive ? resolveStatesFromDirective(directive) : []
+    const prospectDeps = directiveStates.length
+      ? { providerArgs: { bySource: { propublica_990: { states: directiveStates } } } }
+      : {}
+
     // dry_run: observe only (qualify but never push to John). Otherwise push
     // qualified leads when allowed.
     const yanaCfg = getYanaConfig()
@@ -73,6 +86,7 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       allowLiveWeb: yanaCfg.allowLiveWeb,
       prospectLimit: yanaCfg.prospectLimit,
       backlogEnrichLimit: yanaCfg.backlogEnrichLimit,
+      prospectDeps,
     })
 
     if (signal?.shouldStop?.()) {
@@ -97,14 +111,14 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       message: dryRun
         ? `${baseMsg} (dry-run: leads not pushed)`
         : (noopReason ? `${baseMsg} — ${noopReason}` : baseMsg),
-      data: { ...result, dry_run: dryRun || undefined },
+      data: { ...result, dry_run: dryRun || undefined, directive_applied: directive || undefined, directive_states: directiveStates.length ? directiveStates : undefined },
     })
 
     return {
       ok: result.ok !== false,
       status: result.ok === false ? 'failed' : 'completed',
       status_reason: noopReason,
-      summary: { ...result, dry_run: dryRun || undefined },
+      summary: { ...result, dry_run: dryRun || undefined, directive_applied: directive || null, directive_states: directiveStates },
       error: result.error || null,
     }
   }

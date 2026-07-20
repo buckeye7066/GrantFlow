@@ -63,6 +63,11 @@ export async function runJohn({
   leadSource = null,
   logger = console,
   createdByUserId = null,
+  // Owner-attached free-text instruction for this run (agent-control
+  // directive channel). Folded into the AI composer's prompt for every draft
+  // this run produces — never used to bypass johnOutreachSafety, which stays
+  // the final gate regardless of what the note asks for.
+  operatorNote = null,
 } = {}) {
   if (!db) throw new Error('runJohn: db is required')
   // John never sends. The runtime guard fires before any side effects.
@@ -304,6 +309,7 @@ export async function runJohn({
         logger,
         suppression: supp,
         aliasCheck,
+        operatorNote,
       })
       if (result.ok) {
         summary.drafts_created += 1

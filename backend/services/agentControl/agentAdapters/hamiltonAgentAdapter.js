@@ -19,6 +19,7 @@
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
+import { resolveProfileFromDirective } from '../directiveProfileResolver.js'
 
 export class HamiltonAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -136,6 +137,15 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       }
     }
 
+    // Owner-attached free-text instruction. When it names exactly one active
+    // profile unambiguously ("focus on the Smith Family Foundation"), this
+    // run's task queue is scoped to that profile only — a real, deterministic
+    // behavior change, not just a display note. An unresolved directive
+    // (ambiguous, no match, or not about a profile at all) leaves the queue
+    // unscoped rather than guessing.
+    const directive = typeof options?.directives?.hamilton === 'string' ? options.directives.hamilton : null
+    const directiveProfile = directive ? await resolveProfileFromDirective(db, directive) : null
+
     const maxBatch = Math.max(1, Math.min(25, Number(options?.hamilton_batch_size) || 5))
     let tasks = []
     try {
@@ -161,20 +171,25 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       // scheduler owes them a re-attempt. Conservative: a blocked task with
       // next_retry_at IS NULL is a genuine human hand-off and is never re-picked.
       const nowIso = new Date().toISOString()
+      const profileFilter = directiveProfile ? 'AND profile_id = ?' : ''
+      const params = directiveProfile
+        ? [nowIso, nowIso, directiveProfile.id, maxBatch]
+        : [nowIso, nowIso, maxBatch]
       tasks = await db
         .prepare(`
           SELECT id, profile_id, opportunity_id, grant_id, automation_type,
                  status, current_pipeline_stage, selected_from_stage
             FROM application_tasks
-           WHERE status IN ('queued','ready','analyzing','ready_to_start')
+           WHERE (status IN ('queued','ready','analyzing','ready_to_start')
               OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_email_verification','waiting_for_window')
                   AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
               OR (status = 'blocked'
-                  AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+                  AND next_retry_at IS NOT NULL AND next_retry_at <= ?))
+             ${profileFilter}
            ORDER BY updated_at ASC
            LIMIT ?
         `)
-        .all(nowIso, nowIso, maxBatch)
+        .all(...params)
       if (!Array.isArray(tasks)) tasks = []
     } catch { /* table missing on bare DBs — empty list is fine */ }
 
@@ -244,6 +259,8 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       blocked,
       stopped,
       ...(isNoop ? { noop_reason: 'empty_queue' } : {}),
+      directive_applied: directive || null,
+      directive_scoped_profile: directiveProfile ? { id: directiveProfile.id, display_name: directiveProfile.display_name } : null,
       results,
     }
 

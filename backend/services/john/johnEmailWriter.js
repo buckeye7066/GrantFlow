@@ -205,7 +205,7 @@ export async function composeEmailFromLead(lead, opts = {}) {
 
   if (aiComposerEnabled(config)) {
     try {
-      const ai = await composeEmailWithAI(lead, { config, interpretation, logger: opts.logger })
+      const ai = await composeEmailWithAI(lead, { config, interpretation, logger: opts.logger, operatorNote: opts.operatorNote })
       if (ai?.ok) return ai
     } catch (err) {
       opts.logger?.warn?.('[John] AI composer threw; using template', { error: err?.message })
