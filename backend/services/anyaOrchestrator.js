@@ -104,6 +104,8 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['app.explainFeature', 'Explain what a GrantFlow page or feature does, its main actions, and how it relates to other features (routeName e.g. SmartMatcher, Pipeline, MyProfiles).'],
   ['app.explainField', 'Explain what a specific profile field does, why it matters for matching, and whether it affects crawlers (field key e.g. zip, state, health_conditions).'],
   ['profile.thresholdReport', "Show what the profile qualifies for and ALMOST qualifies for — each source's explicit ACT/SAT/GPA/income/age requirement vs the profile's facts, the exact gap, and the application link."],
+  ['profile.find', "Find a profile by (partial) NAME — e.g. 'Robert' — and get its id, type, and state. ALWAYS use this instead of asking the user for a profile ID when they name a person or profile."],
+  ['chat.setAppearance', "Change this chat panel's colors when the user says it is hard to read or asks for a different background / dark mode / higher contrast. preset: 'dark', 'high_contrast', or 'default' (restore normal), or background: '#hex'. Text stays readable automatically."],
 ]
 export const CHAT_TOOL_WHITELIST = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)
 
@@ -143,6 +145,14 @@ const _STATIC_PROMPT_BASE = [
   '- After a tool call, your text reply must reference the tool result truthfully. Do NOT claim success if the tool returned confirmation_required:true, an error, or a "school_not_found" reason — instead, surface what actually happened and what the user needs to do next.',
   '- If you are uncertain whether a tool exists or whether you are allowed to call it, say so honestly: "I am not sure I can do this directly — let me check / let me show you where to do it manually."',
   '',
+  'ANSWER WHAT WAS ACTUALLY ASKED:',
+  '- Re-read the user\'s message before replying and address EVERY part of it — a message often carries both a task and a complaint (e.g. "the chat is hard to read AND tell me about Robert\'s documents"); handle both, the task first.',
+  '- If you are about to ask the user for an identifier or a click (a profile ID, "open the profile card so I can see it"), STOP and check your tools first: profile.find resolves a NAME to a profile id, and the other profile tools take it from there. Asking the user for data a tool can fetch is a failure.',
+  '',
+  'CHAT APPEARANCE (you control it):',
+  '- You CAN change this chat panel\'s colors yourself. When the user says the chat is hard to read, mentions contrast or visibility, or asks for a background color / dark mode: call chat.setAppearance (preset dark / high_contrast / default, or background "#hex" — convert color names to hex yourself). Never send the user hunting for a settings or appearance icon; you are the control.',
+  '- After the tool succeeds, confirm in one short sentence and offer to adjust further or restore the default.',
+  '',
   'DO IT FOR THEM — OR TEACH THEM (owner rule, applies to every profile task):',
   '- For ANY task a user could do themselves in their profile (fill a section, fix a fact, save an opportunity, check off a step, understand a screen), offer BOTH paths and let them choose:',
   '  1. "I can do it for you right now" — use your tools, narrating each step as you go so they can watch what is happening. They can press Escape or the Stop button at any time to halt you mid-task; if you were stopped, acknowledge it and confirm nothing further was changed.',
@@ -179,6 +189,7 @@ const _STATIC_PROMPT_BASE = [
   '- Guide the user conversationally: ask about one section at a time, save their answers, then suggest the next most impactful section',
   '- After saving data, tell the user what you saved and why it helps their matches',
   '- When asked about matches, use the grants.summarizeMatches tool to show real results',
+  '- NEVER ask the user for a profile ID. When they name a person or profile ("Robert", "my daughter"), call profile.find with the name, take the returned id, and continue the task in the SAME turn. Only ask which profile they mean (by NAME, never by id) if profile.find returns more than one match.',
   '',
   ..._CHAT_TOOL_PROMPT_LINES,
   '',
@@ -1035,7 +1046,7 @@ const CANCELLED_REPLY =
   'Any step that had already finished is saved; nothing further was changed. ' +
   'Tell me if you want me to pick it back up or take a different approach.'
 
-export async function generateAssistantResponse(db, user, sessionId, { content, currentPage, pageContext, runId = null } = {}) {
+export async function generateAssistantResponse(db, user, sessionId, { content, currentPage, pageContext, runId = null, uiEffects = null } = {}) {
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
     return "I'm here and ready to help—just let me know what you'd like to work on."
@@ -1267,6 +1278,39 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     console.warn('[anya] Could not pre-load profile context:', profileLoadErr?.message)
   }
 
+  // Roster of EVERY profile the user can access (not just the active one), so
+  // Anya recognises "Robert" without asking for an ID. Non-admins have a small
+  // accessible set (self + family) — list it verbatim. Admins can access
+  // thousands, so they get a pointer to profile.find instead of a dump.
+  let profileRosterSection = ''
+  try {
+    if (db && !isAdmin && user?.accessibleProfileIds instanceof Set && user.accessibleProfileIds.size > 0) {
+      const rosterIds = Array.from(user.accessibleProfileIds).slice(0, 20).map(String)
+      const placeholders = rosterIds.map(() => '?').join(',')
+      const rosterRows = await db
+        .prepare(`SELECT id, display_name, primary_type FROM profiles WHERE id IN (${placeholders})`)
+        .all(...rosterIds)
+      if (rosterRows.length > 0) {
+        profileRosterSection = [
+          '',
+          '## All Profiles This User Can Access',
+          ...rosterRows.map((r) => `- ${r.display_name || 'Unnamed'} (${r.primary_type || 'individual'}) — id: ${r.id}`),
+          'When the user names one of these people, use that id with your profile tools directly — never ask them for an id. For anything not listed, use profile.find.',
+          '',
+        ].join('\n')
+      }
+    } else if (isAdmin) {
+      profileRosterSection = [
+        '',
+        '## Finding Profiles',
+        'This user is an admin with access to every profile. When they name a person or profile, call profile.find with the name to get its id — never ask them for a profile ID or to open a card.',
+        '',
+      ].join('\n')
+    }
+  } catch (rosterErr) {
+    console.warn('[anya] Could not build profile roster:', rosterErr?.message)
+  }
+
   // Build personalized system prompt — only the user-specific header is dynamic;
   // the large role/capability sections are pre-built static strings.
   const firstName = (!userName || userName === 'there')
@@ -1362,7 +1406,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   }
 
   const studentSection = studentFundingApplies ? ('\n' + _STUDENT_HOUSING_PROMPT) : ''
-  const systemPrompt = dynamicHeader + languageDirective + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + studentSection + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  const systemPrompt = dynamicHeader + languageDirective + profileContextSection + profileRosterSection + pageContextSection + _STATIC_PROMPT_BASE + studentSection + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
   // Build the OpenAI tool schema for the chat-time whitelist. Without
   // this, the LLM had no way to actually run profile.updateSection /
@@ -1448,6 +1492,8 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
           'app.explainFeature': 'Looking up how this feature works',
           'app.explainField': 'Looking up what this field does',
           'profile.thresholdReport': 'Checking which thresholds you clear or almost clear',
+          'profile.find': 'Looking up the profile by name',
+          'chat.setAppearance': 'Updating the chat colors',
         }
         return MAP[name] || `Running ${name}`
       }
@@ -1537,6 +1583,17 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
               currentPage: currentPage ?? null,
             })
             toolPayload = invoked?.output ?? invoked ?? null
+            // Surface UI-affecting tool results (chat appearance) to the route
+            // so it can persist them on the assistant message — the frontend
+            // applies whatever the LAST appearance payload in history says.
+            if (
+              registryName === 'chat.setAppearance' &&
+              Array.isArray(uiEffects) &&
+              toolPayload &&
+              toolPayload.applied === true
+            ) {
+              uiEffects.push({ tool: registryName, payload: toolPayload })
+            }
             await markLastStep('done')
           } catch (toolErr) {
             const status = toolErr?.status ?? null

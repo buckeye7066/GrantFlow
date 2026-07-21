@@ -1705,6 +1705,250 @@ registerTool({
 })
 
 // ============================================================================
+// profile.find — resolve a profile by NAME so Anya never has to ask the user
+// for a profile ID. Tenancy-scoped at query time: non-admins can only search
+// the profiles they can access; admins search everything except Amy's
+// synthetic training profiles (created_by='agent:amy').
+// ============================================================================
+
+registerTool({
+  name: 'profile.find',
+  description: "Find a profile by (partial) name — e.g. 'Robert' — and return its id, name, type, and state. Call this whenever the user names a person or profile instead of asking them for a profile ID. Use the returned id with other profile tools (profile.getCompletionStatus, grants.summarizeMatches, etc.).",
+  schema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: "Part of the profile's display name, e.g. 'Robert'." },
+      limit: { type: 'number', description: 'Max matches to return (default 5, max 10).' },
+    },
+    required: ['query'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const db = context.db
+    const ctx = context?.ctx
+    if (!ctx || !ctx.userId) {
+      const error = new Error('Not authorized')
+      error.status = 403
+      throw error
+    }
+
+    const query = String(params?.query ?? '').trim()
+    if (!query) throw new Error('query is required')
+    const limit = Math.max(1, Math.min(Number(params?.limit) || 5, 10))
+    const needle = `%${query.toLowerCase()}%`
+
+    let rows = []
+    if (ctx.isAdmin) {
+      rows = await db
+        .prepare(
+          `SELECT id, display_name, primary_type, state, status
+             FROM profiles
+            WHERE LOWER(display_name) LIKE ?
+              AND COALESCE(created_by, '') != 'agent:amy'
+            ORDER BY updated_at DESC
+            LIMIT ?`,
+        )
+        .all(needle, limit)
+    } else {
+      // Non-admin: the search universe IS the accessible set — the predicate is
+      // part of the query so a name collision can never leak another tenant's
+      // profile. accessibleProfileIds is small for real users (self + family).
+      const ids = ctx.accessibleProfileIds instanceof Set
+        ? Array.from(ctx.accessibleProfileIds).slice(0, 100).map(String)
+        : (ctx.activeProfileId ? [String(ctx.activeProfileId)] : [])
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',')
+        rows = await db
+          .prepare(
+            `SELECT id, display_name, primary_type, state, status
+               FROM profiles
+              WHERE id IN (${placeholders})
+                AND LOWER(display_name) LIKE ?
+              ORDER BY updated_at DESC
+              LIMIT ?`,
+          )
+          .all(...ids, needle, limit)
+      }
+    }
+
+    const matches = rows.map((r) => ({
+      id: r.id,
+      name: r.display_name,
+      type: r.primary_type || 'individual',
+      state: r.state ?? null,
+      status: r.status ?? 'active',
+    }))
+
+    return {
+      query,
+      count: matches.length,
+      matches,
+      guidance:
+        matches.length === 1
+          ? `Exactly one match: "${matches[0].name}" (id ${matches[0].id}). Use this id with other profile tools now — do not ask the user to confirm an ID.`
+          : matches.length > 1
+            ? 'Multiple matches. Ask the user WHICH one they mean by NAME (never by id), then continue with that id.'
+            : 'No profile matched that name. Try a shorter fragment of the name, or ask the user how the profile is named in My Profiles.',
+    }
+  },
+})
+
+// ============================================================================
+// chat.setAppearance — Anya can restyle her own chat panel when the user says
+// it is hard to read. The LLM only requests an INTENT (a preset or one hex
+// background); this handler resolves it into a full palette with WCAG-checked
+// text contrast, so whatever the model asks for, the result stays readable.
+// The chat route persists the payload on the assistant message; the frontend
+// applies it (AnyaChat.jsx) and remembers it in localStorage.
+// ============================================================================
+
+function _hexToRgb(hex) {
+  const raw = String(hex || '').trim().replace(/^#/, '')
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null
+  return {
+    r: parseInt(full.slice(0, 2), 16),
+    g: parseInt(full.slice(2, 4), 16),
+    b: parseInt(full.slice(4, 6), 16),
+  }
+}
+
+function _rgbToHex({ r, g, b }) {
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
+  return `#${c(r)}${c(g)}${c(b)}`
+}
+
+function _mixHex(hexA, hexB, ratio) {
+  const a = _hexToRgb(hexA)
+  const b = _hexToRgb(hexB)
+  if (!a || !b) return hexA
+  const t = Math.max(0, Math.min(1, ratio))
+  return _rgbToHex({
+    r: a.r + (b.r - a.r) * t,
+    g: a.g + (b.g - a.g) * t,
+    b: a.b + (b.b - a.b) * t,
+  })
+}
+
+function _relativeLuminance(hex) {
+  const rgb = _hexToRgb(hex)
+  if (!rgb) return 1
+  const lin = (v) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
+  }
+  return 0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b)
+}
+
+function _contrastRatio(hexA, hexB) {
+  const la = _relativeLuminance(hexA)
+  const lb = _relativeLuminance(hexB)
+  const [hi, lo] = la >= lb ? [la, lb] : [lb, la]
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+const CHAT_INK_DARK = '#0f172a'
+const CHAT_INK_LIGHT = '#f8fafc'
+
+// Nudge a surface toward black/white until `text` reads at >= 4.5:1 on it.
+// Mid-luminance backgrounds (a plain gray) fail against BOTH inks; without
+// this the tool could apply an unreadable theme, which is the exact defect
+// it exists to fix.
+function _ensureReadableSurface(surface, text) {
+  let out = surface
+  const towards = _relativeLuminance(text) > 0.5 ? '#000000' : '#ffffff'
+  for (let i = 0; i < 12 && _contrastRatio(out, text) < 4.5; i += 1) {
+    out = _mixHex(out, towards, 0.15)
+  }
+  return out
+}
+
+export function buildChatAppearance(backgroundHex, { highContrast = false, label = null } = {}) {
+  const bg = _hexToRgb(backgroundHex) ? backgroundHex : '#ffffff'
+  const isDark = _relativeLuminance(bg) < 0.4
+  const ink = isDark ? CHAT_INK_LIGHT : CHAT_INK_DARK
+  const pole = isDark ? '#ffffff' : '#0f172a'
+
+  const panelBg = _ensureReadableSurface(bg, ink)
+  const assistantBubbleBg = _ensureReadableSurface(_mixHex(panelBg, pole, isDark ? 0.1 : 0.05), ink)
+  const userBubbleBg = _ensureReadableSurface(_mixHex(panelBg, pole, isDark ? 0.05 : 0.02), ink)
+  const composerBg = _ensureReadableSurface(_mixHex(panelBg, pole, 0.04), ink)
+
+  return {
+    panelBg,
+    composerBg,
+    assistantBubbleBg,
+    userBubbleBg,
+    bodyText: highContrast ? (isDark ? '#ffffff' : '#000000') : ink,
+    assistantText: highContrast ? (isDark ? '#ffffff' : '#000000') : ink,
+    userText: highContrast ? (isDark ? '#ffffff' : '#000000') : ink,
+    mutedText: highContrast ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#cbd5e1' : '#475569'),
+    border: highContrast ? (isDark ? '#f8fafc' : '#0f172a') : _mixHex(panelBg, pole, isDark ? 0.25 : 0.18),
+    isDark,
+    label: label || (isDark ? 'dark' : 'light'),
+  }
+}
+
+const CHAT_APPEARANCE_PRESETS = {
+  // default = reset: appearance null tells the UI to restore the stock look.
+  default: null,
+  dark: () => buildChatAppearance('#0f172a', { label: 'dark' }),
+  high_contrast: () => buildChatAppearance('#ffffff', { highContrast: true, label: 'high contrast' }),
+}
+
+registerTool({
+  name: 'chat.setAppearance',
+  description: "Change THIS chat panel's colors when the user says the chat is hard to read or asks for a different background, dark mode, or higher contrast. preset: 'dark', 'high_contrast', or 'default' (restores the normal look). For a specific color, pass background as a hex like '#1e293b' (convert color names to hex yourself). Text colors are computed automatically so the result always stays readable.",
+  schema: {
+    type: 'object',
+    properties: {
+      preset: {
+        type: 'string',
+        enum: ['default', 'dark', 'high_contrast'],
+        description: "Named look. 'default' restores the standard chat colors.",
+      },
+      background: {
+        type: 'string',
+        description: "Custom background color as hex (e.g. '#1e293b'). Ignored when preset is given.",
+      },
+    },
+  },
+  handler: async (params) => {
+    const preset = String(params?.preset ?? '').trim().toLowerCase()
+    const background = String(params?.background ?? '').trim()
+
+    if (preset) {
+      if (!(preset in CHAT_APPEARANCE_PRESETS)) {
+        throw new Error(`Unknown preset "${preset}". Use default, dark, or high_contrast — or pass background as a hex color.`)
+      }
+      const build = CHAT_APPEARANCE_PRESETS[preset]
+      const appearance = typeof build === 'function' ? build() : build
+      return {
+        applied: true,
+        appearance,
+        description: appearance
+          ? `Switched the chat to the ${appearance.label} look.`
+          : 'Restored the default chat colors.',
+      }
+    }
+
+    if (background) {
+      if (!_hexToRgb(background)) {
+        throw new Error(`"${background}" is not a hex color. Convert the user's color to hex (e.g. navy → #001f3f) and call again.`)
+      }
+      const appearance = buildChatAppearance(background, { label: background })
+      return {
+        applied: true,
+        appearance,
+        description: `Changed the chat background to ${background} with readable text colors.`,
+      }
+    }
+
+    throw new Error('Pass a preset (default, dark, high_contrast) or a background hex color.')
+  },
+})
+
+// ============================================================================
 // Phase 8: Anya as in-app guide — page-aware "what should I do next?" tool
 // ============================================================================
 

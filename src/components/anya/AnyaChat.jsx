@@ -55,6 +55,37 @@ const ONBOARDING_LS_KEY = "anya_onboarded"
 const NUDGE_SS_KEY = "anya_nudge_shown"
 const TOTAL_PROFILE_SECTIONS = 21
 
+// ---------------------------------------------------------------------------
+// Chat appearance (user-directed via Anya's chat.setAppearance tool)
+// ---------------------------------------------------------------------------
+// The backend resolves the user's ask ("dark mode", "#1e293b") into a full
+// contrast-checked palette and persists it on the assistant message
+// (tool_name 'chat.setAppearance'). The panel applies the LAST such payload in
+// history; localStorage is only a warm-start cache so the colors don't flash
+// back to default while messages load.
+
+const APPEARANCE_LS_KEY = "anya_chat_appearance_v1"
+
+function loadStoredAppearance() {
+  try {
+    const raw = window.localStorage.getItem(APPEARANCE_LS_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" && typeof parsed.panelBg === "string" ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function persistAppearance(appearance) {
+  try {
+    if (appearance) window.localStorage.setItem(APPEARANCE_LS_KEY, JSON.stringify(appearance))
+    else window.localStorage.removeItem(APPEARANCE_LS_KEY)
+  } catch {
+    /* storage unavailable (private mode) — colors still apply for this view */
+  }
+}
+
 // Anya onboarding chips. The display labels here intentionally read
 // like spoken English ("Volunteer Fire / EMS") rather than the
 // canonical snake_case ids from the registry; the lookup below
@@ -394,8 +425,19 @@ function OnboardingFlow({ step, onAdvance, onboarding, t, languages, onPickLangu
   return null
 }
 
-const MessageBubble = React.memo(function MessageBubble({ message }) {
+const MessageBubble = React.memo(function MessageBubble({ message, appearance }) {
   const isAssistant = message.role === "assistant"
+  const isAppearanceUpdate = message.tool_name === "chat.setAppearance"
+  // Inline styles win over the static Tailwind palette only when the user has
+  // asked Anya for different chat colors; otherwise the stock look is untouched.
+  const bubbleStyle = appearance
+    ? {
+        background: isAssistant ? appearance.assistantBubbleBg : appearance.userBubbleBg,
+        borderColor: appearance.border,
+        color: isAssistant ? appearance.assistantText : appearance.userText,
+      }
+    : undefined
+  const metaStyle = appearance ? { color: appearance.mutedText } : undefined
   return (
     <div
       className={cn(
@@ -407,8 +449,9 @@ const MessageBubble = React.memo(function MessageBubble({ message }) {
           ? "border-blue-200 bg-blue-50/80 text-slate-800"
           : "border-slate-200 bg-white text-slate-700",
       )}
+      style={bubbleStyle}
     >
-      <div className="flex items-center justify-between gap-2 text-xs text-slate-600 pb-1">
+      <div className="flex items-center justify-between gap-2 text-xs text-slate-600 pb-1" style={metaStyle}>
         <Badge variant={isAssistant ? "secondary" : "outline"} className="text-[11px] uppercase tracking-wide">
           {isAssistant ? "Anya" : "You"}
         </Badge>
@@ -421,10 +464,14 @@ const MessageBubble = React.memo(function MessageBubble({ message }) {
       {/* break-words wraps long URLs / unbroken tokens so Anya's reply never
           runs past the right edge of the panel. */}
       <p className="whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>
-      {message.tool_name ? (
-        <div className="mt-2 space-y-2 text-xs text-slate-600">
+      {isAppearanceUpdate ? (
+        <div className="mt-2 text-xs text-slate-600" style={metaStyle}>
+          🎨 {message.tool_payload?.description || "Chat colors updated."}
+        </div>
+      ) : message.tool_name ? (
+        <div className="mt-2 space-y-2 text-xs text-slate-600" style={metaStyle}>
           <div>
-            Tool: <span className="font-mono text-xs text-slate-700">{message.tool_name}</span>
+            Tool: <span className="font-mono text-xs text-slate-700" style={metaStyle}>{message.tool_name}</span>
           </div>
           {message.tool_payload ? (
             <div className="max-h-48 overflow-auto rounded-md border border-slate-200 bg-white/80 p-2 text-xs text-slate-800">
@@ -512,6 +559,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
+  // Chat colors the user asked Anya for (null = stock look). Applied from the
+  // newest chat.setAppearance payload in message history; cached in
+  // localStorage so a reload doesn't flash back to default.
+  const [chatAppearance, setChatAppearance] = useState(loadStoredAppearance)
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -969,6 +1020,23 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     // button stays disabled forever (Anya goals 4, 6, 8). Bootstrap only needs
     // to run when the profile identity or admin-ness changes.
   }, [effectiveProfileId, isAdmin, initialSessionOptions?.metadata, initialSessionOptions?.title, initialSessionOptions?.resumeSessionId])
+
+  // Apply the newest chat.setAppearance payload from history. Covers every
+  // path with one channel: sync replies, background replies (refreshMessages),
+  // reloads, and other devices reading the same session. appearance: null in
+  // the payload means "restore the default look".
+  useEffect(() => {
+    const last = [...messages]
+      .reverse()
+      .find((m) => m.tool_name === "chat.setAppearance" && m.tool_payload?.applied === true)
+    if (!last) return
+    const next = last.tool_payload.appearance ?? null
+    setChatAppearance((current) => {
+      if (JSON.stringify(current) === JSON.stringify(next)) return current
+      persistAppearance(next)
+      return next
+    })
+  }, [messages])
 
   // Live-update an OPEN panel when a background reply for THIS session lands.
   // (The toast ping in anyaBackgroundQueue handles the closed-panel case.)
@@ -1723,8 +1791,14 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   const isTaskFormDisabled = !sessionId || isLoading || isSavingTask
 
   return (
-    <div className="flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 bg-white/80 shadow-sm">
-      <div className="border-b border-slate-200 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0">
+    <div
+      className="flex h-full min-w-0 flex-col overflow-x-hidden rounded-xl border border-slate-200 bg-white/80 shadow-sm"
+      style={chatAppearance ? { background: chatAppearance.panelBg, borderColor: chatAppearance.border, color: chatAppearance.bodyText } : undefined}
+    >
+      <div
+        className="border-b border-slate-200 px-4 py-3 max-h-[40%] overflow-y-auto shrink-0"
+        style={chatAppearance ? { borderColor: chatAppearance.border } : undefined}
+      >
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -1736,7 +1810,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <h2 className="text-sm font-semibold text-slate-800">Anya, your GrantFlow copilot</h2>
+                <h2 className="text-sm font-semibold text-slate-800" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Anya, your GrantFlow copilot</h2>
                 {isAdmin && (
                   <Badge variant="default" className="gap-1 text-[11px] bg-purple-600">
                     <Shield className="h-3 w-3" />
@@ -1770,7 +1844,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                   </Button>
                 </div>
               </div>
-              <p className="text-xs text-slate-600">
+              <p className="text-xs text-slate-600" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
                 GrantFlow helps you find, track, and apply for grants. Ask Anya to find grants that match
                 your profile, explain next steps, summarise deadlines, or navigate any part of the app.
               </p>
@@ -2040,8 +2114,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
               <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
             </div>
             <div className="space-y-2">
-              <p className="text-base font-semibold text-slate-800">Hi! I'm Anya, your GrantFlow guide.</p>
-              <p className="text-sm text-slate-500 max-w-xs mx-auto">
+              <p className="text-base font-semibold text-slate-800" style={chatAppearance ? { color: chatAppearance.bodyText } : undefined}>Hi! I'm Anya, your GrantFlow guide.</p>
+              <p className="text-sm text-slate-500 max-w-xs mx-auto" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
                 I can help you find grants that match your profile, explain what you're seeing, walk you through your pipeline, and answer questions about the application process.
               </p>
             </div>
@@ -2121,7 +2195,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
                 scripts — model context + audit trail only, never painted into
                 the visible chat. */}
             {messages.filter((message) => message.tool_name !== "anya_private_seed").map((message) => (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble key={message.id} message={message} appearance={chatAppearance} />
             ))}
             {isSending && !awaitingRunId ? (
               <div className="flex items-center gap-2 text-xs text-slate-600">
@@ -2174,6 +2248,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
 
       <form
         className="border-t border-slate-200 bg-slate-50/80 px-4 py-3"
+        style={chatAppearance ? { background: chatAppearance.composerBg, borderColor: chatAppearance.border } : undefined}
         onSubmit={(event) => {
           event.preventDefault()
           handleSend()
@@ -2194,7 +2269,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           disabled={isDisabled}
         />
         <div className="mt-3 flex items-center justify-between">
-          <span className="text-xs text-slate-600">
+          <span className="text-xs text-slate-600" style={chatAppearance ? { color: chatAppearance.mutedText } : undefined}>
             Anya keeps all actions scoped to this profile.
           </span>
           <Button

@@ -293,11 +293,15 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
 async function generateAndStoreReply(db, ctx, sessionId, runId, { content, currentPage, pageContext }, timeoutMs) {
   let assistantText
   let degraded = false
+  // Collects UI-affecting tool results (chat.setAppearance) from the tool loop.
+  // The last one is persisted on the assistant message so the chat panel — on
+  // any device, sync or background — applies it from message history.
+  const uiEffects = []
   try {
     assistantText = await withReplyTimeout(
       // runId lets the orchestrator publish a live step feed and honor the
       // user's Stop/Escape (cooperative cancel between tool steps).
-      generateAssistantResponse(db, ctx, sessionId, { content, currentPage, pageContext, runId }),
+      generateAssistantResponse(db, ctx, sessionId, { content, currentPage, pageContext, runId, uiEffects }),
       timeoutMs,
     )
   } catch (assistantError) {
@@ -315,9 +319,13 @@ async function generateAndStoreReply(db, ctx, sessionId, runId, { content, curre
       : "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
   }
 
+  const lastAppearanceEffect = uiEffects.filter((e) => e?.tool === 'chat.setAppearance').pop() ?? null
   const assistantMessage = await addMessage(db, ctx, sessionId, {
     role: 'assistant',
     content: assistantText,
+    ...(lastAppearanceEffect
+      ? { toolName: 'chat.setAppearance', toolPayload: lastAppearanceEffect.payload }
+      : {}),
   })
 
   await completeAnyaRun(db, runId, {

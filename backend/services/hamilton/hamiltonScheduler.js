@@ -148,6 +148,27 @@ async function tick({ db, logger = console } = {}) {
       logger?.warn?.('[hamilton:scheduler] verification re-check failed:', err?.message || err)
     }
 
+    // Keep captured portal sessions ALIVE: visit each saved session's portal on
+    // a cadence with the saved cookies so sliding-window sessions never lapse
+    // from pure inactivity (the "Can't auto-merge — open side-by-side login"
+    // regression the owner kept re-doing sign-ins for). A genuinely dead
+    // session is marked expired + notified once; walls/outages touch nothing.
+    let keepAliveSummary = null
+    try {
+      const { runSessionKeepAliveSweep } = await import('./hamiltonSessionKeepAlive.js')
+      keepAliveSummary = await runSessionKeepAliveSweep(db, { limit: resolveBatchSize() })
+      if (keepAliveSummary?.checked > 0) {
+        logger?.info?.('[hamilton:scheduler] session keep-alive', {
+          checked: keepAliveSummary.checked,
+          refreshed: keepAliveSummary.refreshed,
+          expired: keepAliveSummary.expired,
+          inconclusive: keepAliveSummary.inconclusive,
+        })
+      }
+    } catch (err) {
+      logger?.warn?.('[hamilton:scheduler] session keep-alive failed:', err?.message || err)
+    }
+
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
       logger?.info?.('[hamilton:scheduler] tick', {
@@ -157,7 +178,7 @@ async function tick({ db, logger = console } = {}) {
         blocked: summary.blocked,
       })
     }
-    return { ran: true, result, verification: verificationSummary }
+    return { ran: true, result, verification: verificationSummary, keepAlive: keepAliveSummary }
   } catch (err) {
     logger?.warn?.('[hamilton:scheduler] tick failed:', err?.message || err)
     return { ran: false, error: err?.message || String(err) }
