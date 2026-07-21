@@ -4,9 +4,10 @@ import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
 import AuthErrorBoundary from '@/components/auth/AuthErrorBoundary'
 import { useAuthStore } from '@/stores/authStore'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { isNativeApp } from '@/lib/platform'
+import { LOGIN_MAINTENANCE } from '@/config/maintenance'
 
 const AUTH_TABS = new Set(['email'])
 
@@ -87,6 +88,19 @@ export default function Login() {
         }
   }
 
+  if (LOGIN_MAINTENANCE.active) {
+        return (
+              <AuthErrorBoundary onReset={handleErrorReset}>
+                      <AuthShell
+                                title={LOGIN_MAINTENANCE.title}
+                                subtitle="Thanks for your patience while we make GrantFlow better."
+                              >
+                              <MaintenanceBanner />
+                      </AuthShell>
+              </AuthErrorBoundary>
+            )
+  }
+
   return (
         <AuthErrorBoundary onReset={handleErrorReset}>
                 <AuthShell
@@ -114,6 +128,27 @@ export default function Login() {
                 </AuthShell>
         </AuthErrorBoundary>
       )
+}
+
+function MaintenanceBanner() {
+    return (
+          <div
+                  role="status"
+                  className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+                >
+                <div className="flex items-start gap-3">
+                        <Wrench className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
+                        <div>
+                                <p className="font-semibold">{LOGIN_MAINTENANCE.title}</p>
+                                <p className="mt-1">{LOGIN_MAINTENANCE.message}</p>
+                                <p className="mt-2 font-medium">{LOGIN_MAINTENANCE.etaText}</p>
+                                <p className="mt-2 text-amber-800">
+                                        Sign-in is disabled until the upgrade completes. No action is needed on your part.
+                                </p>
+                        </div>
+                </div>
+          </div>
+        )
 }
 
 function AuthMethodExpiryNotice() {
