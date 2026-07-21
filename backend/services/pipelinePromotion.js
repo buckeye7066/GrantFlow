@@ -301,6 +301,7 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
           quiet: true,
           record: async (payload) => {
             recordedPayload = payload
+            if (mode === 'dry_run') return
             await recordOutcome(writeDb, {
               profileId: profile.id,
               opportunityId: candidate.id,

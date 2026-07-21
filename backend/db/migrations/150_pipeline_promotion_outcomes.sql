@@ -3,8 +3,8 @@
 -- backend/db/postgres/migrations/0154_pipeline_promotion_outcomes.sql
 
 CREATE TABLE IF NOT EXISTS pipeline_promotion_outcomes (
-  profile_id TEXT NOT NULL,
-  opportunity_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('live', 'dry_run')),
   outcome TEXT NOT NULL,
   reason TEXT NOT NULL,

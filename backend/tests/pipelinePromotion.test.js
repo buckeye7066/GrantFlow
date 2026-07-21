@@ -332,22 +332,54 @@ describe('qualified pipeline promotion', () => {
     db.close()
   })
 
-  it('isolates dry-run rows and deletes them before live enablement', async () => {
+  it('does not let a disabled replica leave dry rows after live enablement', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
-    seedCandidate(db, 'real', { id: 'projected' })
+    seedCandidate(db, 'real', { id: 'enabled-first' })
+    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    seedCandidate(db, 'real', { id: 'late-dry' })
 
     const dry = await runQualifiedPipelinePromotion(db, { enabled: false, batch: 10, amountFollowup: false })
     expect(dry.mode).toBe('dry_run')
-    expect(grantsFor(db, 'real')).toHaveLength(0)
-    expect(db.prepare('SELECT mode FROM pipeline_promotion_outcomes').get().mode).toBe('dry_run')
+    expect(grantsFor(db, 'real')).toHaveLength(1)
+    expect(db.prepare("SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes WHERE mode='dry_run'").get().n).toBe(0)
+    expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id='enabled-first'").get().outcome)
+      .toBe('promoted')
     expect(JSON.parse(db.prepare("SELECT value FROM system_kv WHERE key='promotion_projection'").get().value))
       .toMatchObject({ projected_rows: 1, projected_null_amounts: 1 })
 
+    db.prepare(`INSERT INTO pipeline_promotion_outcomes
+      (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
+       profile_facts_hash, policy_version, opportunity_updated_at)
+      VALUES ('real', 'late-dry', 'dry_run', 'promoted', 'accepted', 90, ?, 1, 'legacy', 'legacy', '2026-07-01')`)
+      .run(new Date().toISOString())
     const live = await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
     expect(live.deletedDryRun).toBe(1)
-    expect(grantsFor(db, 'real')).toHaveLength(1)
-    expect(db.prepare('SELECT mode FROM pipeline_promotion_outcomes').get().mode).toBe('live')
+    expect(grantsFor(db, 'real')).toHaveLength(2)
+    expect(db.prepare("SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes WHERE mode='dry_run'").get().n).toBe(0)
+    db.close()
+  })
+
+  it('cascades SQLite promotion outcomes when either parent row is deleted', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    db.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY); CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY);')
+    db.exec(fs.readFileSync(path.resolve(process.cwd(), 'backend/db/migrations/150_pipeline_promotion_outcomes.sql'), 'utf8'))
+    const insertOutcome = db.prepare(`INSERT INTO pipeline_promotion_outcomes
+      (profile_id, opportunity_id, mode, outcome, reason, profile_facts_hash, policy_version, opportunity_updated_at)
+      VALUES (?, ?, 'live', 'promoted', 'accepted', 'facts', 'policy', '2026-07-01')`)
+
+    db.prepare("INSERT INTO profiles (id) VALUES ('profile-delete')").run()
+    db.prepare("INSERT INTO funding_opportunities (id) VALUES ('opp-profile-delete')").run()
+    insertOutcome.run('profile-delete', 'opp-profile-delete')
+    db.prepare("DELETE FROM profiles WHERE id='profile-delete'").run()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes').get().n).toBe(0)
+
+    db.prepare("INSERT INTO profiles (id) VALUES ('profile-opp-delete')").run()
+    db.prepare("INSERT INTO funding_opportunities (id) VALUES ('opp-delete')").run()
+    insertOutcome.run('profile-opp-delete', 'opp-delete')
+    db.prepare("DELETE FROM funding_opportunities WHERE id='opp-delete'").run()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes').get().n).toBe(0)
     db.close()
   })
 
