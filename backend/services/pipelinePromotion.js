@@ -199,8 +199,26 @@ function rotateProfiles(profiles, cursor) {
 
 async function remainingFromDb(db, profiles) {
   let remaining = 0
-  for (const { profile, context } of profiles) {
-    remaining += (await listEligibleCandidates(db, context, profile.id)).length
+  const terminal = [...TERMINAL_OUTCOMES]
+  const terminalSlots = terminal.map(() => '?').join(', ')
+  for (const { profile } of profiles) {
+    const row = await db.prepare(
+      `SELECT COUNT(*) AS count
+         FROM profile_opportunity_matches m
+         JOIN funding_opportunities o ON o.id = m.opportunity_id
+         LEFT JOIN pipeline_promotion_outcomes po
+           ON po.profile_id = m.profile_id
+          AND po.opportunity_id = m.opportunity_id
+          AND po.mode = 'live'
+        WHERE m.profile_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM grants g
+             WHERE g.profile_id = m.profile_id
+               AND g.funding_opportunity_id = m.opportunity_id
+          )
+          AND (po.outcome IS NULL OR po.outcome NOT IN (${terminalSlots}))`,
+    ).get(profile.id, ...terminal)
+    remaining += Number(row?.count) || 0
   }
   return remaining
 }

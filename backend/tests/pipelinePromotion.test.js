@@ -11,6 +11,7 @@ vi.mock('../services/matchEngine.js', async () => {
 })
 
 import {
+  __testables,
   getPromotionOutcomeSummary,
   runQualifiedPipelinePromotion,
 } from '../services/pipelinePromotion.js'
@@ -262,6 +263,32 @@ describe('qualified pipeline promotion', () => {
       .toEqual({ outcome: 'duplicate', reason: 'duplicate:fingerprint' })
     expect(result.remaining).toBe(independentlyRemaining)
     expect(result.remaining).toBe(0)
+    db.close()
+  })
+
+  it('counts cooldown errors but not expired terminal duplicates as remaining', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'cooldown-error' })
+    db.prepare(`INSERT INTO pipeline_promotion_outcomes
+      (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
+       profile_facts_hash, policy_version, opportunity_updated_at)
+      VALUES ('real', 'cooldown-error', 'live', 'error', 'error:transient', NULL, ?, 1, 'facts', 'policy', '2026-07-01')`)
+      .run(new Date().toISOString())
+    const profiles = [{ profile: { id: 'real' }, context: { profile: { id: 'real' }, sections: {} } }]
+
+    expect(await __testables.remainingFromDb(db, profiles)).toBe(1)
+
+    db.prepare("DELETE FROM pipeline_promotion_outcomes WHERE opportunity_id='cooldown-error'").run()
+    db.prepare("DELETE FROM profile_opportunity_matches WHERE opportunity_id='cooldown-error'").run()
+    seedCandidate(db, 'real', { id: 'expired-duplicate' })
+    db.prepare(`INSERT INTO pipeline_promotion_outcomes
+      (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
+       profile_facts_hash, policy_version, opportunity_updated_at)
+      VALUES ('real', 'expired-duplicate', 'live', 'duplicate', 'duplicate:fingerprint', 90, ?, 1, 'facts', 'policy', '2026-07-01')`)
+      .run(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString())
+
+    expect(await __testables.remainingFromDb(db, profiles)).toBe(0)
     db.close()
   })
 
