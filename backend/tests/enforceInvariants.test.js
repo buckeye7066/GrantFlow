@@ -989,8 +989,8 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    // 27th: enforceJohnDraftPlausibility (wrong-org drafts in the mailbox).
-    expect(summary.ran).toBe(30)
+    // Pipeline promotion is intentionally off this boot invariant path.
+    expect(summary.ran).toBe(29)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1017,7 +1017,6 @@ describe('enforceInvariants — runner', () => {
       'live_crawl_verified_at_honesty',
       'application_url_rescue',
       'grant_score_backfill',
-      'pipeline_refill',
       'converted_applications_have_profiles',
       'admin_reinterview_suppression',
       'amy_synthetic_expiry',
