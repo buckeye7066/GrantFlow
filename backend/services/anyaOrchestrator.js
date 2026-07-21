@@ -104,7 +104,7 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['app.explainFeature', 'Explain what a GrantFlow page or feature does, its main actions, and how it relates to other features (routeName e.g. SmartMatcher, Pipeline, MyProfiles).'],
   ['app.explainField', 'Explain what a specific profile field does, why it matters for matching, and whether it affects crawlers (field key e.g. zip, state, health_conditions).'],
   ['profile.thresholdReport', "Show what the profile qualifies for and ALMOST qualifies for — each source's explicit ACT/SAT/GPA/income/age requirement vs the profile's facts, the exact gap, and the application link."],
-  ['profile.find', "Find a profile by (partial) NAME — e.g. 'Robert' — and get its id, type, and state. ALWAYS use this instead of asking the user for a profile ID when they name a person or profile."],
+  ['profile.find', "Find a profile by (partial) NAME — e.g. 'Robert' — and get its id and type. ALWAYS use this instead of asking the user for a profile ID when they name a person or profile."],
   ['chat.setAppearance', "Change this chat panel's colors when the user says it is hard to read or asks for a different background / dark mode / higher contrast. preset: 'dark', 'high_contrast', or 'default' (restore normal), or background: '#hex'. Text stays readable automatically."],
 ]
 export const CHAT_TOOL_WHITELIST = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)

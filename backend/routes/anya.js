@@ -317,6 +317,10 @@ async function generateAndStoreReply(db, ctx, sessionId, runId, { content, curre
     assistantText = timedOut
       ? "That took longer than I allow for a single reply, so I stopped before the page timed out. Ask me again — a shorter, more specific question usually comes back fast."
       : "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
+    // A degraded fallback is NOT Anya's real reply — don't let a tool effect
+    // collected mid-generation ride on it (the colors would change while the
+    // message says "I hit a snag"; the user re-asks and gets the honest pair).
+    uiEffects.length = 0
   }
 
   const lastAppearanceEffect = uiEffects.filter((e) => e?.tool === 'chat.setAppearance').pop() ?? null
