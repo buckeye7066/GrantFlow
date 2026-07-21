@@ -22,7 +22,7 @@
  * legacy insert path with a small, stable column set.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
@@ -112,6 +112,56 @@ const farmBusinessProfileContext = {
 function countGrants(db) {
   return Number(db.prepare('SELECT COUNT(*) AS n FROM grants').get().n)
 }
+
+describe('saveToProfilePipeline — legacy caller error contract', () => {
+  it('returns and logs the original six-argument shape for admission-time exceptions', async () => {
+    const db = makeDb()
+    const failure = new Error('injected admission failure')
+    const failingDb = {
+      prepare(sql) {
+        if (/SELECT id, organization_id\s+FROM profiles/i.test(String(sql))) throw failure
+        return db.prepare(sql)
+      },
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const opportunity = {
+      id: 'legacy-error',
+      title: 'Legacy Caller Error',
+      sponsor: 'State Health Dept',
+      source: 'grants_gov',
+      description: 'Community program support',
+      application_url: 'https://example.gov/apply',
+    }
+
+    const result = await saveToProfilePipeline(failingDb, opportunity, 'p1', profileContext, 90, 55)
+
+    expect(result).toEqual({ saved: false, reason: 'injected admission failure' })
+    expect(errorSpy).toHaveBeenCalledWith('[opportunityMatcher] Error saving to pipeline:', failure)
+
+    const record = vi.fn()
+    const sweepResult = await saveToProfilePipeline(
+      failingDb,
+      opportunity,
+      'p1',
+      profileContext,
+      90,
+      55,
+      { mode: 'live', record },
+    )
+    expect(sweepResult).toMatchObject({
+      saved: false,
+      reason: 'injected admission failure',
+      gate: 'ADMISSION_ERROR',
+      matchPercentage: 90,
+    })
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'error:transient',
+      result: expect.objectContaining({ gate: 'ADMISSION_ERROR' }),
+    }))
+    errorSpy.mockRestore()
+    db.close()
+  })
+})
 
 describe('saveToProfilePipeline — DUPLICATE gate', () => {
   let db

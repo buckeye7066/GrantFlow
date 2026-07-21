@@ -658,12 +658,15 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       },
     }
   } catch (error) {
-    return denied('error:transient', {
-      saved: false,
-      reason: error?.message || String(error),
-      gate: 'ADMISSION_ERROR',
-      matchPercentage,
-    })
+    return {
+      ...denied('error:transient', {
+        saved: false,
+        reason: error?.message || String(error),
+        gate: 'ADMISSION_ERROR',
+        matchPercentage,
+      }),
+      _admissionError: error,
+    }
   }
 }
 
@@ -692,6 +695,13 @@ export async function saveToProfilePipeline(
       freshRescoreRequired: outcomeSink?.freshRescoreRequired === true,
     })
     if (!admission.admitted) {
+      if (admission._admissionError && !outcomeSink) {
+        console.error('[opportunityMatcher] Error saving to pipeline:', admission._admissionError)
+        return {
+          saved: false,
+          reason: admission._admissionError.message,
+        }
+      }
       await emitPromotionOutcome(outcomeSink, admission)
       return admission.result
     }
