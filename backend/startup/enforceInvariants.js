@@ -67,6 +67,7 @@ import { DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
+import { classifyLocatorKindFromRow } from '../services/sources/locatorUrlKind.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -3125,6 +3126,152 @@ export async function enforceGrantCatalogLink(db, deps = {}) {
   })
 }
 
+/**
+ * INVARIANT: A LOCATOR/BENEFIT PAGE CARRIES ITS HONEST KIND (prod triage
+ * 2026-07-21).
+ *
+ * The amount-answer census (`pipeline.amountCoverage`) had two standing MISS
+ * blocks nothing could ever answer by reading:
+ *
+ *   - sam.gov `/fal/<uuid>/view` (43 rows) — SAM.gov Assistance Listings: the
+ *     CFDA PROGRAM directory. A listing page describes a program and points at
+ *     where opportunities post; it is a locator, never an award.
+ *   - ssa.gov benefit sections (30 rows, `/survivor`, `/disability`, …) —
+ *     federal benefit programs with no fixed per-applicant award figure.
+ *
+ * Both are the "no-per-award-figure BY DESIGN" class the census's own
+ * recommended_fix names ("classify as a BENEFIT/DIRECTORY kind so it counts as
+ * no-amount-by-design"). This sweep applies that classification by a POSITIVE
+ * structural URL-shape rule (services/sources/locatorUrlKind.js) — the rows
+ * leave the census denominator because of what the page IS, never via a
+ * fabricated `none_published` denial for a page that was never read (silence
+ * is not a denial; a denial requires page_read===true).
+ *
+ * SAFETY: writes ONLY where `opportunity_kind` was never recorded (NULL/''),
+ * so an honest kind another writer assigned is never overwritten; bounded per
+ * boot; idempotent (a classified row leaves the candidate set).
+ *
+ * OVERRIDE: ON by default; `ENFORCE_LOCATOR_KIND_CLASSIFICATION=0` = count-only.
+ */
+export async function enforceLocatorKindClassification(db, deps = {}) {
+  return runInvariant('locator_kind_classification', async () => {
+    const disabled = _parseBoolEnv(process.env.ENFORCE_LOCATOR_KIND_CLASSIFICATION) === false
+    const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.LOCATOR_KIND_BOOT_LIMIT ?? '500', 10) || 500)
+
+    let candidates = []
+    try {
+      // LIKE prefilter narrows the scan to the two hosts the positive rule
+      // knows; the REAL decision is the pure classifier below — a LIKE hit
+      // that fails the structural shape is left untouched.
+      candidates = await db
+        .prepare(
+          `SELECT id, source_url, application_url, evidence_url
+             FROM funding_opportunities
+            WHERE (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '')
+              AND (
+                COALESCE(source_url, '')      LIKE '%sam.gov/fal/%' OR
+                COALESCE(application_url, '') LIKE '%sam.gov/fal/%' OR
+                COALESCE(evidence_url, '')    LIKE '%sam.gov/fal/%' OR
+                COALESCE(source_url, '')      LIKE '%ssa.gov/%' OR
+                COALESCE(application_url, '') LIKE '%ssa.gov/%' OR
+                COALESCE(evidence_url, '')    LIKE '%ssa.gov/%'
+              )
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+    } catch (err) {
+      // Minimal/legacy schema (no evidence_url etc.) → count nothing, never throw.
+      log.warn('locator_kind_classification: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+
+    const rows = Array.isArray(candidates) ? candidates : []
+    let repaired = 0
+    let byKind = { directory: 0, benefit: 0 }
+    for (const row of rows) {
+      const verdict = classifyLocatorKindFromRow(row)
+      if (!verdict) continue
+      if (disabled) { repaired++; byKind[verdict.kind]++; continue } // count-only: what WOULD classify
+      try {
+        // Guard re-asserted in the WHERE so a kind written between scan and
+        // update (another sweep, an admin) is never clobbered.
+        const res = await db
+          .prepare(
+            `UPDATE funding_opportunities
+                SET opportunity_kind = ?,
+                    result_kind = COALESCE(NULLIF(TRIM(COALESCE(result_kind, '')), ''), ?)
+              WHERE id = ?
+                AND (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '')`,
+          )
+          .run(verdict.kind, verdict.kind, row.id)
+        if (changesOf(res) > 0) { repaired++; byKind[verdict.kind]++ }
+      } catch (err) {
+        log.warn('locator_kind_classification: write failed (non-fatal)', { opportunity: row.id, error: String(err?.message || err) })
+      }
+    }
+
+    if (repaired > 0) {
+      log.info(disabled
+        ? 'locator/benefit rows WOULD be classified (ENFORCE_LOCATOR_KIND_CLASSIFICATION=0)'
+        : 'classified locator/benefit catalog rows by positive URL shape', {
+        scanned: rows.length, repaired, ...byKind, enforced: !disabled,
+      })
+    }
+    return { scanned: rows.length, repaired: disabled ? 0 : repaired, wouldRepair: disabled ? repaired : undefined, ...byKind, enforced: !disabled }
+  })
+}
+
+/**
+ * system_kv key: rolling ring of the most recent amount-enrichment FAILURES
+ * (HTTP status + short reason per row, newest last).
+ *
+ * WHY. The grants.gov adapter had effectively NEVER succeeded from Railway —
+ * a WAF 403 on every datacenter-egress call (prod 2026-07-21: 127 attempted,
+ * 0 evidenced answers; the identical keyless call works from a residential
+ * machine) — and NOTHING recorded the failing status anywhere. The sweep
+ * summary counts `fetchFailed` but not WHY, so diagnosing this outage class
+ * required ad-hoc prod spelunking. This ring is the read side: each failed
+ * enrich attempt leaves { status, reason, environment } behind, so "every
+ * recent failure is http_403 environment:true" is one system_kv read away
+ * (Sam/Anya-visible per the agent-observability rule).
+ */
+export const AMOUNT_ENRICH_FAILURE_LOG_KEY = 'amount_enrich_failure_log'
+/** Ring size: enough to show a pattern, small enough to stay a cheap KV row. */
+const AMOUNT_ENRICH_FAILURE_LOG_MAX = 50
+
+async function appendAmountEnrichFailureLog(db, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
+    let prior = []
+    try {
+      const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ENRICH_FAILURE_LOG_KEY)
+      const parsed = row?.value ? JSON.parse(row.value) : null
+      prior = Array.isArray(parsed?.failures) ? parsed.failures : []
+    } catch { prior = [] }
+    const iso = new Date().toISOString()
+    const failures = [...prior, ...entries].slice(-AMOUNT_ENRICH_FAILURE_LOG_MAX)
+    const value = JSON.stringify({ updated_at: iso, failures })
+    const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, iso, AMOUNT_ENRICH_FAILURE_LOG_KEY)
+    if (!Number(res?.changes ?? res?.rowCount ?? 0)) {
+      await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(AMOUNT_ENRICH_FAILURE_LOG_KEY, value, iso)
+    }
+  } catch { /* telemetry is best-effort — never fail the sweep it observes */ }
+}
+
+/** One failure-ring entry from an enrich result. Pure; shared by both sweeps. */
+function amountEnrichFailureEntry({ lane, id, res }) {
+  return {
+    at: new Date().toISOString(),
+    lane,
+    id: String(id),
+    status: Number.isFinite(Number(res?.status)) ? Number(res.status) : null,
+    reason: String(res?.reason ?? 'unknown').slice(0, 120),
+    transient: res?.transient === true,
+    environment: res?.environment === true,
+  }
+}
+
 export async function enforceAmountEnrichment(db, deps = {}) {
   return runInvariant('amount_enrichment', async () => {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
@@ -3217,7 +3364,10 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     //                      that will be thin every night). Another fetch cannot
     //                      teach us more, so stop asking.
     //   - out of retries → transient, but it has had MAX_ATTEMPTS bad nights.
-    //                      Give up rather than re-fetch it forever.
+    //                      Give up rather than re-fetch it forever. EXCEPTION:
+    //                      an ENVIRONMENT failure (`environment: true` — WAF
+    //                      403/401/429 on OUR egress) neither burns nor counts
+    //                      an attempt; see the loop below.
     //
     // Everything else stays NULL and is retried — which is what the invariant
     // table has always CLAIMED ("a provider outage never burns a candidate's
@@ -3247,20 +3397,38 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     let nonePublished = 0
     let fetchFailed = 0
     let retryable = 0
+    let envBlocked = 0
+    const failureLog = []
     for (const cand of fresh) {
       if (attemptedNow >= LIMIT) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
       try {
         const res = await enrichOpportunityAmountFromSource(cand, deps)
-        const attempts = Number(cand.attempts ?? 0) + 1
+        // ENVIRONMENT failure (adapter `environment: true` — WAF 403 / 401 /
+        // 429): OUR egress is blocked, a fact about the DEPLOY, never about the
+        // row. It must not consume the row's retry budget NOR burn it via
+        // out-of-retries: a blocked environment fails every row identically
+        // until an owner action (register GRANTS_GOV_API_KEY / change egress)
+        // fixes it, and burning on it converts a config outage into permanent
+        // answerless rows (prod 2026-07-21: the grants.gov adapter had NEVER
+        // succeeded from Railway — WAF 403 on every call — yet each 4xx read
+        // as "stable" and burned the row's one-shot mark blank).
+        const environmentBlocked = res?.environment === true && res?.page_read !== true
+        const attempts = Number(cand.attempts ?? 0) + (environmentBlocked ? 0 : 1)
         // The service never throws, so this — not a catch block — is the only
         // place the outage-must-not-burn rule can actually be enforced.
         const outOfRetries = attempts >= MAX_ATTEMPTS
-        const burn = res?.page_read === true || res?.transient !== true || outOfRetries
+        const burn = res?.page_read === true
+          || (!environmentBlocked && (res?.transient !== true || outOfRetries))
         if (res?.page_read !== true) {
           fetchFailed++
+          if (environmentBlocked) envBlocked++
           if (!burn) retryable++
+          // Telemetry: WHY it failed (status + reason), so an outage class like
+          // the WAF-403 block is diagnosable from system_kv instead of a prod
+          // DB spelunk. Recorded for every enrich failure, burned or not.
+          failureLog.push(amountEnrichFailureEntry({ lane: 'catalog', id: cand.id, res }))
         }
         // The mark is recorded AFTER the writes below, never before. It used to
         // run here — so when a write threw, the row was already burned and the
@@ -3405,14 +3573,23 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       exhausted = Number(done?.n ?? 0)
     } catch { /* best-effort telemetry */ }
 
+    // Persist the failure ring AFTER the loop (one KV write per sweep run).
+    await appendAmountEnrichFailureLog(db, failureLog)
+
+    if (envBlocked > 0) {
+      log.warn('amount_enrichment: environment-blocked failures (egress/WAF/auth) — rows left retryable, owner action needed', {
+        envBlocked, attempted: attemptedNow,
+        statuses: [...new Set(failureLog.filter((f) => f.environment).map((f) => f.status))],
+      })
+    }
     if (enriched > 0 || textOnly > 0 || nonePublished > 0) {
       log.info('enriched catalog award amounts from funder pages', {
-        attempted: attemptedNow, enriched, textOnly, nonePublished, fetchFailed, retryable, remaining, exhausted,
+        attempted: attemptedNow, enriched, textOnly, nonePublished, fetchFailed, retryable, envBlocked, remaining, exhausted,
       })
     }
     return {
       scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
-      textOnly, nonePublished, fetchFailed, retryable, remaining, exhausted, enforced: true,
+      textOnly, nonePublished, fetchFailed, retryable, envBlocked, remaining, exhausted, enforced: true,
     }
   })
 }
@@ -3441,8 +3618,9 @@ export async function enforceAmountEnrichment(db, deps = {}) {
  * Burn/retry semantics are IDENTICAL to the catalog sweep (the whole reason the
  * grant carries its own `amount_enrich_attempted_at`/`amount_enrich_attempts`,
  * migration 142/0146): burn on `page_read` or a stable non-transient failure or
- * after MAX_ATTEMPTS; a provider outage never burns a row; the mark is written
- * only AFTER the amount write succeeds. Amy synthetic-profile grants are excluded
+ * after MAX_ATTEMPTS; a provider outage never burns a row; an ENVIRONMENT
+ * failure (WAF/auth block on OUR egress) neither burns nor consumes the retry
+ * budget; the mark is written only AFTER the amount write succeeds. Amy synthetic-profile grants are excluded
  * (they are training artifacts, not real pipeline). Runs AFTER
  * `enforceGrantCatalogLink` so a grant that COULD link is linked first and read
  * through the catalog path; only genuine orphans reach here.
@@ -3513,6 +3691,8 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     let textOnly = 0
     let fetchFailed = 0
     let retryable = 0
+    let envBlocked = 0
+    const failureLog = []
     for (const g of fresh) {
       if (attemptedNow >= LIMIT) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
@@ -3527,12 +3707,19 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
           { source_url: g.url ?? g.application_url ?? null },
           deps,
         )
-        const attempts = Number(g.attempts ?? 0) + 1
+        // Environment failure (WAF/auth/quota) never consumes the grant's
+        // retry budget nor burns it via out-of-retries — identical rule and
+        // rationale as the catalog sweep above.
+        const environmentBlocked = res?.environment === true && res?.page_read !== true
+        const attempts = Number(g.attempts ?? 0) + (environmentBlocked ? 0 : 1)
         const outOfRetries = attempts >= MAX_ATTEMPTS
-        const burn = res?.page_read === true || res?.transient !== true || outOfRetries
+        const burn = res?.page_read === true
+          || (!environmentBlocked && (res?.transient !== true || outOfRetries))
         if (res?.page_read !== true) {
           fetchFailed++
+          if (environmentBlocked) envBlocked++
           if (!burn) retryable++
+          failureLog.push(amountEnrichFailureEntry({ lane: 'grant_direct', id: g.id, res }))
         }
         if (res?.found && res.amounts) {
           await db
@@ -3610,14 +3797,16 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
       exhausted = Number(done?.n ?? 0)
     } catch { /* best-effort telemetry */ }
 
+    await appendAmountEnrichFailureLog(db, failureLog)
+
     if (enriched > 0 || nonePublished > 0 || textOnly > 0) {
       log.info('read orphan pipeline grants directly for award amounts', {
-        attempted: attemptedNow, enriched, nonePublished, textOnly, fetchFailed, retryable, remaining, exhausted,
+        attempted: attemptedNow, enriched, nonePublished, textOnly, fetchFailed, retryable, envBlocked, remaining, exhausted,
       })
     }
     return {
       scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
-      nonePublished, textOnly, fetchFailed, retryable, remaining, exhausted, enforced: true,
+      nonePublished, textOnly, fetchFailed, retryable, envBlocked, remaining, exhausted, enforced: true,
     }
   })
 }
@@ -4379,6 +4568,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // to its catalog twin here — URL-identity, exactly-one, profile-safe — puts it
   // in reach of the enrichment + backfill in the SAME boot.
   steps.push(await enforceGrantCatalogLink(db))
+  // Kind honesty BEFORE amount acquisition: a locator/benefit page (sam.gov
+  // assistance listings, ssa.gov benefit sections) gets its POSITIVE
+  // opportunity_kind classification first, so the enrichment sweeps and the
+  // amount-answer census stop treating a pointer page as a missing award.
+  steps.push(await enforceLocatorKindClassification(db))
   // Amount ACQUISITION first: read the funder's own page for active-pipeline
   // sources that carry no dollar figure (bounded per boot), so the backfill
   // right after can mirror freshly-learned amounts onto the grants same-boot.

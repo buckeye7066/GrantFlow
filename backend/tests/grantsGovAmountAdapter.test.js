@@ -229,6 +229,53 @@ describe('enrichAmountViaGrantsGovApi — the sweep contract', () => {
     const f = fakeFetch(() => ({ ok: false, status: 404 }))
     const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
     expect(res).toMatchObject({ attempted: true, page_read: false, transient: false })
+    expect(res.environment).toBe(false) // a dead id is about the ROW, not our egress
+  })
+
+  it('reports a WAF 403 as ENVIRONMENT-transient with its status — never a stable fact about the row', async () => {
+    // REGRESSION (prod 2026-07-21). The adapter has effectively NEVER succeeded
+    // from Railway: a WAF 403 on every datacenter-egress call (the identical
+    // keyless request works from a residential machine). The old rule read ANY
+    // 4xx as "grants.gov told us something stable about this id" → transient:
+    // false → the sweep's burn rule permanently burned every knowable row
+    // answerless. A 403 is a fact about OUR EGRESS, not the opportunity.
+    for (const status of [403, 401, 429]) {
+      const f = fakeFetch(() => ({ ok: false, status }))
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res, `http ${status}`).toMatchObject({
+        attempted: true,
+        page_read: false, // never a fake success
+        transient: true, // stays retryable
+        environment: true, // and the sweep exempts it from the out-of-retries burn
+        found: false,
+        status, // telemetry: WHICH status blocked us
+        reason: `grants_gov_api_failed:http_${status}`,
+      })
+      expect(res.amounts).toBeUndefined() // silence is not an answer
+    }
+  })
+
+  it('a WAF 403 during the ID LOOKUP is equally environment-transient (not "no id")', async () => {
+    const f = fakeFetch(() => ({ ok: false, status: 403 }))
+    const res = await enrichAmountViaGrantsGovApi(
+      { source: 'grants.gov', source_id: 'PA-FPH-27-001', source_url: 'https://www.grants.gov/' },
+      { fetchImpl: f },
+    )
+    expect(res).toMatchObject({
+      attempted: true,
+      page_read: false,
+      transient: true,
+      environment: true,
+      status: 403,
+      found: false,
+      reason: 'grants_gov_id_lookup_failed:http_403',
+    })
+  })
+
+  it('a 503 outage is transient but NOT environment (normal retry budget applies)', async () => {
+    const f = fakeFetch(() => ({ ok: false, status: 503 }))
+    const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+    expect(res).toMatchObject({ transient: true, environment: false, status: 503 })
   })
 
   it('reports a transport throw as transient rather than escaping', async () => {

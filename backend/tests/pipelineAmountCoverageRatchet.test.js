@@ -34,10 +34,12 @@ beforeEach(() => {
     CREATE TABLE profiles (id TEXT PRIMARY KEY, created_by TEXT);
     CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
                          amount_status TEXT, amount_text TEXT, funding_opportunity_id INTEGER, profile_id TEXT,
-                         amount_enrich_attempted_at TEXT, application_url TEXT, portal_url TEXT);
+                         amount_enrich_attempted_at TEXT, amount_enrich_attempts INTEGER DEFAULT 0,
+                         application_url TEXT, portal_url TEXT);
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
-                                        amount_enrich_attempted_at TEXT, source_url TEXT, application_url TEXT);
+                                        amount_enrich_attempted_at TEXT, amount_enrich_attempts INTEGER DEFAULT 0,
+                                        source_url TEXT, application_url TEXT);
     CREATE TABLE pipeline_promotion_outcomes (
       profile_id TEXT, opportunity_id INTEGER, mode TEXT, outcome TEXT, reason TEXT,
       attempted_at TEXT, PRIMARY KEY (profile_id, opportunity_id)
@@ -344,6 +346,54 @@ describe('pipeline.amountCoverage ratchet', () => {
     const res = await check().run({ db })
     expect(res.ok).toBe(true)
     expect(res.evidence).toMatchObject({ no_amount_by_design: 1 })
+  })
+
+  it('does NOT count a BENEFIT program as a miss — no fixed per-applicant award BY DESIGN', async () => {
+    // The ssa.gov class (prod triage 2026-07-21): /survivor, /disability are
+    // federal benefit programs — this check's own recommended_fix has always
+    // said to classify them "as a BENEFIT/DIRECTORY kind so it counts as
+    // no-amount-by-design", but the census predicate only honored 'directory'.
+    // The kind is only ever assigned by POSITIVE classification (registry
+    // default_kinds / locator_kind_classification URL-shape rule), never
+    // inferred from a failed read — so this is honesty, not bucket-widening.
+    // The row here is even BURNED (attempted set): the positive kind still
+    // outranks the stale unreadable classification.
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, opportunity_kind, amount_status, amount_enrich_attempted_at, source_url) VALUES (1, 'benefit', 'not_listed', '2026-07-16T00:00:00Z', 'https://www.ssa.gov/survivor')",
+    ).run().lastInsertRowid
+    db.prepare('INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, NULL, ?)')
+      .run('discovered', foId)
+    const res = await check().run({ db })
+    expect(res.ok).toBe(true)
+    expect(res.evidence).toMatchObject({ no_amount_by_design: 1, unanswered_unreadable: 0 })
+  })
+
+  it('splits MID-RETRY rows (tried, budget intact) from never_read backlog and from burned unreadable', async () => {
+    // Fix 2026-07-21: a row failing TRANSIENTLY (counter > 0, burn mark NULL —
+    // e.g. every grants.gov row during the WAF-403 egress block) is neither
+    // "never read" (something IS trying) nor "unreadable" (nothing is burned).
+    // Conflating it with never_read made an environment outage look like an
+    // untouched backlog.
+    seedGrants(30, 30)
+    // Mid-retry: attempts>0, no burn mark.
+    const midFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempts) VALUES (1, 'not_listed', 3)",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(midFo)
+    // Never read: attempts=0, no mark.
+    const freshFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status) VALUES (1, 'not_listed')",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(freshFo)
+    const res = await check().run({ db })
+    expect(res.evidence).toMatchObject({
+      unanswered_mid_retry: 1,
+      unanswered_never_read: 1,
+      unanswered_unreadable: 0, // neither is burned
+    })
+    expect(res.ok, 'backlog and mid-retry are green — only BURNED rows fail the check').toBe(true)
+    expect(res.summary).toMatch(/1 mid-retry/)
   })
 
   it('A WIPED row still counts as a MISS — the wipe must never hide in an exclusion', async () => {

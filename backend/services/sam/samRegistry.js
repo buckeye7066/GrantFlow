@@ -547,7 +547,16 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         // orphan — so a read-but-silent row is `unreadable` regardless of which
         // path read it, and a never-looked-at row is `never_read` backlog.
         const V = pipelineValueSql('g')
-        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) = 'directory'`
+        // No-amount-BY-DESIGN kinds: a DIRECTORY locator is a pointer to more
+        // sources, and a BENEFIT program (SSA survivor/disability, FAFSA/Pell/
+        // SSI class) has no fixed per-applicant award figure — exactly the two
+        // classifications this check's own recommended_fix prescribes for such
+        // rows. Both kinds are only ever assigned by POSITIVE classification
+        // (source registry default_kinds, reality gate, or the
+        // locator_kind_classification boot sweep's structural URL-shape rule) —
+        // never inferred from a failed read, so counting them as by-design is
+        // honest, not bucket-widening.
+        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) IN ('directory', 'benefit')`
         // NULL-safe (COALESCE): amount_status is NULL on many rows, and a raw
         // `col = 'x'` yields NULL there, which poisons every `NOT (...)` below via
         // three-valued logic (NULL AND anything = NULL → the CASE never fires and
@@ -561,7 +570,15 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           ` OR COALESCE(fo.amount_text, '') <> '')`
         // Read-mark that applies to THIS row: the catalog row's when linked, the
         // grant's own when an orphan (COALESCE picks whichever is present).
+        // `attempted` (the timestamp) is the PERMANENT one-shot burn mark;
+        // `attemptCount` is the running retry counter, which advances on
+        // transient failures WITHOUT burning. The two answer different
+        // questions, and conflating them made the backlog unreadable: a row
+        // mid-retry (counter > 0, mark NULL — e.g. every grants.gov row during
+        // the 2026-07-21 WAF-403 egress block) looked identical to one nothing
+        // had ever touched.
         const attempted = `COALESCE(fo.amount_enrich_attempted_at, g.amount_enrich_attempted_at)`
+        const attemptCount = `COALESCE(fo.amount_enrich_attempts, g.amount_enrich_attempts, 0)`
         // A row with no value, not a directory, no denial and no honest label.
         const unanswered = `${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND NOT ${honestLabel}`
         const promotionJoin = hasPromotionOutcomes
@@ -581,7 +598,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
                SUM(CASE WHEN ${V} = 0 AND ${isDir} THEN 1 ELSE 0 END) AS by_design,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND ${nonePub} THEN 1 ELSE 0 END) AS answered_none_published,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND ${honestLabel} THEN 1 ELSE 0 END) AS answered_text,
-               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND ${attemptCount} = 0 AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND ${attemptCount} > 0 AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_mid_retry,
                SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_unreadable,
                SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_no_catalog_row,
                SUM(CASE WHEN ${promotionConverging} THEN 1 ELSE 0 END) AS promotion_converging
@@ -591,7 +609,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             WHERE g.status IN (${statusesSql})
               AND ${NON_SYNTHETIC_PIPELINE('g')}`,
           )
-          .get(...(hasPromotionOutcomes ? [graceCutoff, graceCutoff, graceCutoff, graceCutoff] : []))
+          // One graceCutoff binding per `${notPromotionConverging}` /
+          // `${promotionConverging}` interpolation above (each carries one `?`):
+          // never_read, mid_retry, unreadable, no_catalog_row + promotion_converging.
+          .get(...(hasPromotionOutcomes ? [graceCutoff, graceCutoff, graceCutoff, graceCutoff, graceCutoff] : []))
 
         // Nested try: the host breakdown is pure enrichment. A broken query here
         // (e.g. a column a DB has not migrated) must degrade to "no breakdown",
@@ -630,6 +651,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const answeredText = Number(answers?.answered_text) || 0
       const noCatalogRow = Number(answers?.unanswered_no_catalog_row) || 0
       const neverRead = Number(answers?.unanswered_never_read) || 0
+      const midRetry = Number(answers?.unanswered_mid_retry) || 0
       const unreadable = Number(answers?.unanswered_unreadable) || 0
       const promotionConverging = Number(answers?.promotion_converging) || 0
       const census = answers
@@ -640,6 +662,13 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             no_amount_by_design: byDesign,
             unanswered_no_catalog_row: noCatalogRow,
             unanswered_never_read: neverRead,
+            // Tried, failed transiently, retry budget intact (burn mark NULL,
+            // attempt counter > 0). Backlog like never_read — NOT burned; the
+            // rows an environment outage (WAF/egress) parks here recover on
+            // their own once the outage clears.
+            unanswered_mid_retry: midRetry,
+            // BURNED: the one-shot mark is set and no answer was recorded —
+            // read → JS shell / dead page. Terminal without adapter work.
             unanswered_unreadable: unreadable,
             promotion_converging: promotionConverging,
             ...(promotionProjection ? { promotion_projection: promotionProjection } : {}),
@@ -759,7 +788,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
       return {
         ok: true,
-        summary: `All ${total} real active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting a read` : ''}). ${summary}`,
+        summary: `All ${total} real active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting a read` : ''}${midRetry > 0 ? `; ${midRetry} mid-retry (transient failures, budget intact)` : ''}). ${summary}`,
         evidence: fullCensus,
       }
     },
