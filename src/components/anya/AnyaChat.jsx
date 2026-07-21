@@ -64,11 +64,15 @@ const TOTAL_PROFILE_SECTIONS = 21
 // history; localStorage is only a warm-start cache so the colors don't flash
 // back to default while messages load.
 
-const APPEARANCE_LS_KEY = "anya_chat_appearance_v1"
+// Scoped per USER id — a shared computer must never carry one account's chat
+// colors into another account's session (adversarial-review finding).
+function appearanceStorageKey(userId) {
+  return `anya_chat_appearance_v1:${userId || "anon"}`
+}
 
-function loadStoredAppearance() {
+function loadStoredAppearance(userId) {
   try {
-    const raw = window.localStorage.getItem(APPEARANCE_LS_KEY)
+    const raw = window.localStorage.getItem(appearanceStorageKey(userId))
     if (!raw) return null
     const parsed = JSON.parse(raw)
     return parsed && typeof parsed === "object" && typeof parsed.panelBg === "string" ? parsed : null
@@ -77,10 +81,10 @@ function loadStoredAppearance() {
   }
 }
 
-function persistAppearance(appearance) {
+function persistAppearance(userId, appearance) {
   try {
-    if (appearance) window.localStorage.setItem(APPEARANCE_LS_KEY, JSON.stringify(appearance))
-    else window.localStorage.removeItem(APPEARANCE_LS_KEY)
+    if (appearance) window.localStorage.setItem(appearanceStorageKey(userId), JSON.stringify(appearance))
+    else window.localStorage.removeItem(appearanceStorageKey(userId))
   } catch {
     /* storage unavailable (private mode) — colors still apply for this view */
   }
@@ -561,8 +565,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
   const [messages, setMessages] = useState([])
   // Chat colors the user asked Anya for (null = stock look). Applied from the
   // newest chat.setAppearance payload in message history; cached in
-  // localStorage so a reload doesn't flash back to default.
-  const [chatAppearance, setChatAppearance] = useState(loadStoredAppearance)
+  // localStorage (per user id) so a reload doesn't flash back to default.
+  const [chatAppearance, setChatAppearance] = useState(() => loadStoredAppearance(user?.id))
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -1033,10 +1037,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
     const next = last.tool_payload.appearance ?? null
     setChatAppearance((current) => {
       if (JSON.stringify(current) === JSON.stringify(next)) return current
-      persistAppearance(next)
+      persistAppearance(user?.id, next)
       return next
     })
-  }, [messages])
+  }, [messages, user?.id])
 
   // Live-update an OPEN panel when a background reply for THIS session lands.
   // (The toast ping in anyaBackgroundQueue handles the closed-panel case.)

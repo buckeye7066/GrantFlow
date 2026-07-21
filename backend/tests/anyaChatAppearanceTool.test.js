@@ -35,6 +35,15 @@ function assertReadable(appearance) {
   expect(contrast(appearance.assistantText, appearance.assistantBubbleBg)).toBeGreaterThanOrEqual(4.5)
   expect(contrast(appearance.userText, appearance.userBubbleBg)).toBeGreaterThanOrEqual(4.5)
   expect(contrast(appearance.bodyText, appearance.panelBg)).toBeGreaterThanOrEqual(4.5)
+  // MUTED text paints on the panel, composer, and inside both bubbles — the
+  // adversarial review measured #4080ff → muted #cbd5e1 on panel ≈ 3.25:1, so
+  // muted must clear the same bar on EVERY surface it touches.
+  for (const surface of ['panelBg', 'composerBg', 'assistantBubbleBg', 'userBubbleBg']) {
+    expect(
+      contrast(appearance.mutedText, appearance[surface]),
+      `mutedText on ${surface}`,
+    ).toBeGreaterThanOrEqual(4.5)
+  }
 }
 
 const ctx = { userId: 'u1', isAdmin: false }
@@ -73,6 +82,11 @@ describe('chat.setAppearance custom colors', () => {
     // #808080 vs white text ≈ 3.9:1 and vs black text ≈ 5.3:1 — but derived
     // bubble surfaces can drift into the dead zone; the tool must nudge them.
     const res = await invokeTool('chat.setAppearance', { background: '#808080' }, { ctx })
+    assertReadable(res.output.appearance)
+  })
+
+  it('saturated mid-tone blue (#4080ff) — the measured muted-text failure — is fully readable', async () => {
+    const res = await invokeTool('chat.setAppearance', { background: '#4080ff' }, { ctx })
     assertReadable(res.output.appearance)
   })
 

@@ -1713,7 +1713,7 @@ registerTool({
 
 registerTool({
   name: 'profile.find',
-  description: "Find a profile by (partial) name — e.g. 'Robert' — and return its id, name, type, and state. Call this whenever the user names a person or profile instead of asking them for a profile ID. Use the returned id with other profile tools (profile.getCompletionStatus, grants.summarizeMatches, etc.).",
+  description: "Find a profile by (partial) name — e.g. 'Robert' — and return its id, name, and type. Call this whenever the user names a person or profile instead of asking them for a profile ID. Use the returned id with other profile tools (profile.getCompletionStatus, grants.summarizeMatches, etc.).",
   schema: {
     type: 'object',
     properties: {
@@ -1737,11 +1737,14 @@ registerTool({
     const limit = Math.max(1, Math.min(Number(params?.limit) || 5, 10))
     const needle = `%${query.toLowerCase()}%`
 
+    // NOTE: profiles has NO `state` column in the canonical schemas (the same
+    // drift trap documented at routes/profiles.js — selecting it throws
+    // `no such column: state` on both SQLite and prod Postgres).
     let rows = []
     if (ctx.isAdmin) {
       rows = await db
         .prepare(
-          `SELECT id, display_name, primary_type, state, status
+          `SELECT id, display_name, primary_type, status
              FROM profiles
             WHERE LOWER(display_name) LIKE ?
               AND COALESCE(created_by, '') != 'agent:amy'
@@ -1760,7 +1763,7 @@ registerTool({
         const placeholders = ids.map(() => '?').join(',')
         rows = await db
           .prepare(
-            `SELECT id, display_name, primary_type, state, status
+            `SELECT id, display_name, primary_type, status
                FROM profiles
               WHERE id IN (${placeholders})
                 AND LOWER(display_name) LIKE ?
@@ -1775,7 +1778,6 @@ registerTool({
       id: r.id,
       name: r.display_name,
       type: r.primary_type || 'individual',
-      state: r.state ?? null,
       status: r.status ?? 'active',
     }))
 
@@ -1863,6 +1865,22 @@ function _ensureReadableSurface(surface, text) {
   return out
 }
 
+// Inverse of _ensureReadableSurface: nudge TEXT toward the readable pole until
+// it clears 4.5:1 on every surface it will be painted on. Muted/secondary text
+// starts from a softer tone, so on saturated mid-tone panels it can land below
+// the bar even when the primary ink passes (the #4080ff → #cbd5e1 ≈ 3.25:1
+// class the adversarial review measured).
+function _ensureReadableInk(text, surfaces) {
+  let out = text
+  for (const surface of surfaces) {
+    const pole = _relativeLuminance(surface) < 0.4 ? '#ffffff' : '#000000'
+    for (let i = 0; i < 12 && _contrastRatio(out, surface) < 4.5; i += 1) {
+      out = _mixHex(out, pole, 0.2)
+    }
+  }
+  return out
+}
+
 export function buildChatAppearance(backgroundHex, { highContrast = false, label = null } = {}) {
   const bg = _hexToRgb(backgroundHex) ? backgroundHex : '#ffffff'
   const isDark = _relativeLuminance(bg) < 0.4
@@ -1874,6 +1892,11 @@ export function buildChatAppearance(backgroundHex, { highContrast = false, label
   const userBubbleBg = _ensureReadableSurface(_mixHex(panelBg, pole, isDark ? 0.05 : 0.02), ink)
   const composerBg = _ensureReadableSurface(_mixHex(panelBg, pole, 0.04), ink)
 
+  // Muted text paints on the panel, composer, AND inside both bubble kinds
+  // (message meta rows) — it must clear 4.5:1 on every one of them.
+  const mutedBase = highContrast ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#cbd5e1' : '#475569')
+  const mutedText = _ensureReadableInk(mutedBase, [panelBg, composerBg, assistantBubbleBg, userBubbleBg])
+
   return {
     panelBg,
     composerBg,
@@ -1882,7 +1905,7 @@ export function buildChatAppearance(backgroundHex, { highContrast = false, label
     bodyText: highContrast ? (isDark ? '#ffffff' : '#000000') : ink,
     assistantText: highContrast ? (isDark ? '#ffffff' : '#000000') : ink,
     userText: highContrast ? (isDark ? '#ffffff' : '#000000') : ink,
-    mutedText: highContrast ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#cbd5e1' : '#475569'),
+    mutedText,
     border: highContrast ? (isDark ? '#f8fafc' : '#0f172a') : _mixHex(panelBg, pole, isDark ? 0.25 : 0.18),
     isDark,
     label: label || (isDark ? 'dark' : 'light'),
