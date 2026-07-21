@@ -21,6 +21,7 @@ import {
   summarizeUnreadableHosts,
   AMOUNT_COVERAGE_KV_KEY,
   AMOUNT_COVERAGE_REGRESSION_POINTS,
+  PROMOTION_AMOUNT_GRACE_DAYS,
 } from '../services/sam/samRegistry.js'
 
 const check = () => getCheckById('pipeline.amountCoverage')
@@ -37,6 +38,10 @@ beforeEach(() => {
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
                                         amount_enrich_attempted_at TEXT, source_url TEXT, application_url TEXT);
+    CREATE TABLE pipeline_promotion_outcomes (
+      profile_id TEXT, opportunity_id INTEGER, mode TEXT, outcome TEXT, reason TEXT,
+      attempted_at TEXT, PRIMARY KEY (profile_id, opportunity_id)
+    );
   `)
   // One real client profile and one Amy synthetic-training profile, so seeded
   // grants can attach to either.
@@ -171,6 +176,28 @@ describe('pipeline.amountCoverage excludes Amy synthetic-training grants', () =>
 })
 
 describe('pipeline.amountCoverage ratchet', () => {
+  it('shows a fresh unanswered promotion as promotion_converging, then turns red after grace expires', async () => {
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempted_at) VALUES (1, 'not_listed', ?)",
+    ).run(new Date().toISOString()).lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')")
+      .run(foId)
+    db.prepare("INSERT INTO pipeline_promotion_outcomes (profile_id, opportunity_id, mode, outcome, reason, attempted_at) VALUES ('real-1', ?, 'live', 'promoted', 'accepted', ?)")
+      .run(foId, new Date().toISOString())
+
+    const fresh = await check().run({ db })
+    expect(fresh.ok).toBe(true)
+    expect(fresh.summary).toMatch(/promotion_converging/)
+    expect(fresh.evidence).toMatchObject({ promotion_converging: 1, unanswered_unreadable: 0 })
+
+    const expired = new Date(Date.now() - (PROMOTION_AMOUNT_GRACE_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString()
+    db.prepare('UPDATE pipeline_promotion_outcomes SET attempted_at = ? WHERE opportunity_id = ?').run(expired, foId)
+    const afterGrace = await check().run({ db })
+    expect(afterGrace.ok).toBe(false)
+    expect(afterGrace.evidence).toMatchObject({ promotion_converging: 0, unanswered_unreadable: 1 })
+  })
+
   it('reports the real 21% → 15% DROP that went unreported', async () => {
     // THE REGRESSION. Both readings are below the 60% bar, so the old check
     // returned the same "LOW" summary for each and the collapse was invisible.

@@ -970,6 +970,15 @@ if (!app.locals.db_startup_error) {
     }
   }
   app.locals.runBootInvariantSweep = runBootInvariantSweep
+  app.locals.runQualifiedPipelinePromotion = async () => {
+    try {
+      const { runQualifiedPipelinePromotionAfterAmy } = await import('./services/pipelinePromotion.js')
+      return await runQualifiedPipelinePromotionAfterAmy(db)
+    } catch (err) {
+      console.warn('[pipeline-promotion] post-listen run failed (non-fatal):', err?.message || err)
+      return null
+    }
+  }
 
   // Register the lead sources John drafts outreach from (johnYanaBridge now
   // aggregates over MULTIPLE sources). Yana = Client Discoverer; Robert hands
@@ -2921,11 +2930,18 @@ if (process.env.NODE_ENV !== 'test') {
   // reads it), so a failure is still observable rather than silent.
   server.on('listening', () => {
     const sweep = app.locals.runBootInvariantSweep
-    if (typeof sweep !== 'function') return;
     setImmediate(() => {
-      sweep().catch((err) => {
-        console.warn('[enforce-invariants] deferred boot sweep failed (non-fatal):', err?.message || err);
-      });
+      if (typeof sweep === 'function') {
+        sweep().catch((err) => {
+          console.warn('[enforce-invariants] deferred boot sweep failed (non-fatal):', err?.message || err);
+        });
+      }
+      const promote = app.locals.runQualifiedPipelinePromotion
+      if (typeof promote === 'function') {
+        promote().catch((err) => {
+          console.warn('[pipeline-promotion] deferred post-listen run failed (non-fatal):', err?.message || err);
+        })
+      }
     });
   });
 
@@ -3909,6 +3925,35 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
   }
 
+  // Qualified-pipeline convergence is deliberately outside the boot invariant
+  // chain. Its own runner reaps expired Amy profiles first, then promotes real
+  // profiles round-robin. The marker makes this a once-per-ET-day nightly job;
+  // the separate post-listen setImmediate above provides fast deploy catch-up.
+  function scheduleQualifiedPipelinePromotion(dbInstance) {
+    const MARKER = 'qualified_pipeline_promotion_last_run'
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.PIPELINE_PROMOTION_HOUR_ET) || 4))
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const dayKey = etEligibleDayKey(TRIGGER_HOUR, etNowParts())
+        if (await kvGet(dbInstance, MARKER) === dayKey) return
+        const { runQualifiedPipelinePromotionAfterAmy } = await import('./services/pipelinePromotion.js')
+        const result = await runQualifiedPipelinePromotionAfterAmy(dbInstance)
+        console.log('[pipeline-promotion] nightly', result)
+        await kvSet(dbInstance, MARKER, dayKey)
+      } catch (err) {
+        console.warn('[pipeline-promotion] nightly failed:', err?.message || err)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'qualified-pipeline-promotion',
+      ttlMs: 2 * 60 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 180_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000)
+  }
+
   // Sam's daily FULL code/function sweep — every day 05:00 America/New_York.
   // Runs Sam's HEAVY checks (source scan, broken-import crawl, ESLint, mission/
   // SQL-safety audit) READ-ONLY (advise mode, no prod gates, no maintenance
@@ -4006,6 +4051,7 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleHamiltonWeeklyDigest(db)
     scheduleMondayPortalReminder(db)
     scheduleNightlyMaintenanceSweep(db)
+    scheduleQualifiedPipelinePromotion(db)
     scheduleSamDailyCodeSweep(db)
     scheduleAnyaDailyOwnerReport(db)
 

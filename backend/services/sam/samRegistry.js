@@ -75,6 +75,12 @@ export const AMOUNT_COVERAGE_KV_KEY = 'pipeline_amount_coverage_history'
 /** Coverage POINTS of drop vs the previous run that count as a regression. */
 export const AMOUNT_COVERAGE_REGRESSION_POINTS = 5
 
+/** Newly promoted unanswered rows converge through enrichment before ratcheting. */
+export const PROMOTION_AMOUNT_GRACE_DAYS = Math.max(
+  0,
+  Number.parseInt(process.env.PROMOTION_AMOUNT_GRACE_DAYS || '7', 10) || 7,
+)
+
 /** History ring size (Sam runs ~daily ⇒ about a month of trend). */
 const AMOUNT_COVERAGE_HISTORY = 30
 
@@ -482,6 +488,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       let grants
       let catalog
       let answers
+      let promotionProjection = null
+      try {
+        const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('promotion_projection')
+        promotionProjection = row?.value ? JSON.parse(row.value) : null
+      } catch { promotionProjection = null }
       try {
         grants = await db
           .prepare(
@@ -522,6 +533,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // any count above — it only enriches evidence.
       let unreadableHosts = []
       try {
+        let hasPromotionOutcomes = false
+        try {
+          await db.prepare('SELECT 1 FROM pipeline_promotion_outcomes LIMIT 1').get()
+          hasPromotionOutcomes = true
+        } catch { /* older/minimal schema: no converging cohort yet */ }
         // Every active row gets an ANSWER classification. The predicates read an
         // answer off EITHER the grant itself OR its linked catalog row, because
         // an amount can now be recorded in two places: on the catalog row (the
@@ -548,6 +564,16 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         const attempted = `COALESCE(fo.amount_enrich_attempted_at, g.amount_enrich_attempted_at)`
         // A row with no value, not a directory, no denial and no honest label.
         const unanswered = `${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND NOT ${honestLabel}`
+        const promotionJoin = hasPromotionOutcomes
+          ? "LEFT JOIN pipeline_promotion_outcomes po ON po.profile_id = g.profile_id AND po.opportunity_id = g.funding_opportunity_id AND po.mode = 'live'"
+          : ''
+        const promotionConverging = hasPromotionOutcomes
+          ? `${unanswered} AND po.outcome = 'promoted' AND po.attempted_at >= ?`
+          : '1 = 0'
+        const notPromotionConverging = hasPromotionOutcomes
+          ? `NOT (COALESCE(po.outcome, '') = 'promoted' AND po.attempted_at >= ?)`
+          : '1 = 1'
+        const graceCutoff = timeCutoff(db, PROMOTION_AMOUNT_GRACE_DAYS * 24 * 60 * 60 * 1000)
         answers = await db
           .prepare(
             `SELECT
@@ -555,15 +581,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
                SUM(CASE WHEN ${V} = 0 AND ${isDir} THEN 1 ELSE 0 END) AS by_design,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND ${nonePub} THEN 1 ELSE 0 END) AS answered_none_published,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND ${honestLabel} THEN 1 ELSE 0 END) AS answered_text,
-               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL THEN 1 ELSE 0 END) AS unanswered_never_read,
-               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL THEN 1 ELSE 0 END) AS unanswered_unreadable,
-               SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL THEN 1 ELSE 0 END) AS unanswered_no_catalog_row
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_unreadable,
+               SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_no_catalog_row,
+               SUM(CASE WHEN ${promotionConverging} THEN 1 ELSE 0 END) AS promotion_converging
              FROM grants g
              LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+             ${promotionJoin}
             WHERE g.status IN (${statusesSql})
               AND ${NON_SYNTHETIC_PIPELINE('g')}`,
           )
-          .get()
+          .get(...(hasPromotionOutcomes ? [graceCutoff, graceCutoff, graceCutoff, graceCutoff] : []))
 
         // Nested try: the host breakdown is pure enrichment. A broken query here
         // (e.g. a column a DB has not migrated) must degrade to "no breakdown",
@@ -580,9 +608,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
                   WHERE g.status IN (${statusesSql})
                     AND ${NON_SYNTHETIC_PIPELINE('g')}
                     AND ${unanswered} AND ${attempted} IS NOT NULL
+                    ${hasPromotionOutcomes ? "AND NOT EXISTS (SELECT 1 FROM pipeline_promotion_outcomes ppo WHERE ppo.profile_id = g.profile_id AND ppo.opportunity_id = g.funding_opportunity_id AND ppo.mode = 'live' AND ppo.outcome = 'promoted' AND ppo.attempted_at >= ?)" : ''}
                   LIMIT 2000`,
               )
-              .all()
+              .all(...(hasPromotionOutcomes ? [graceCutoff] : []))
             unreadableHosts = summarizeUnreadableHosts(urlRows)
           } catch {
             // Best-effort only; unreadableHosts stays [].
@@ -602,6 +631,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const noCatalogRow = Number(answers?.unanswered_no_catalog_row) || 0
       const neverRead = Number(answers?.unanswered_never_read) || 0
       const unreadable = Number(answers?.unanswered_unreadable) || 0
+      const promotionConverging = Number(answers?.promotion_converging) || 0
       const census = answers
         ? {
             carried,
@@ -611,10 +641,14 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             unanswered_no_catalog_row: noCatalogRow,
             unanswered_never_read: neverRead,
             unanswered_unreadable: unreadable,
+            promotion_converging: promotionConverging,
+            ...(promotionProjection ? { promotion_projection: promotionProjection } : {}),
           }
         : {}
       if (total < 20) return { ok: true, summary: `Only ${total} active pipeline grants — coverage check not meaningful yet.` }
       const pct = Math.round((withValue / total) * 100)
+      const comparisonTotal = Math.max(0, total - promotionConverging)
+      const comparisonPct = comparisonTotal > 0 ? Math.round((withValue / comparisonTotal) * 100) : 100
       const catPct = catTotal > 0 ? Math.round((catWith / catTotal) * 100) : 0
 
       // Ratchet: record this reading and compare it to the previous one. A LEVEL
@@ -624,11 +658,24 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // printed its usual line).
       const history = await readAmountCoverageHistory(db)
       const previous = history.length ? history[history.length - 1] : null
-      const regression = detectCoverageRegression(Number(previous?.pct), pct)
-      await appendAmountCoverageHistory(db, { at: new Date().toISOString(), pct, with_value: withValue, total })
+      const regression = detectCoverageRegression(Number(previous?.pct), comparisonPct)
+      await appendAmountCoverageHistory(db, {
+        at: new Date().toISOString(),
+        pct: comparisonPct,
+        raw_pct: pct,
+        with_value: withValue,
+        total: comparisonTotal,
+        promotion_converging: promotionConverging,
+      })
 
       const trend = previous ? ` (was ${previous.pct}% on ${String(previous.at).slice(0, 10)})` : ''
-      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+      const convergingText = promotionConverging > 0
+        ? ` ${promotionConverging} newly promoted unanswered row${promotionConverging === 1 ? '' : 's'} are promotion_converging (visible; temporarily excluded from regression for ${PROMOTION_AMOUNT_GRACE_DAYS} days).`
+        : ''
+      const projectionText = promotionProjection
+        ? ` Preflight projection: ${Number(promotionProjection.projected_rows) || 0} rows, ${Number(promotionProjection.projected_null_amounts) || 0} without listed amounts.`
+        : ''
+      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).${convergingText}${projectionText}`
 
       // A DROP is reported even when the level is above the bar, and takes
       // precedence when below it: "we went backwards" is a different, more urgent
@@ -636,7 +683,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (regression) {
         return {
           ok: false,
-          summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${pct}%): ${summary}`,
+          summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${comparisonPct}%): ${summary}`,
           // The census rides along: on a wipe it shows exactly where the rows
           // went (they stay MISSES — a wiped row keeps its honest status and is
           // never `none_published`, because no read ever denied it).
