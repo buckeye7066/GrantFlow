@@ -250,7 +250,7 @@ export function validateResultPayload(payload) {
       if (!j.name) e(`${jw}.name required`)
       if (!JOURNEY_STATUS.includes(j.status)) e(`${jw}.status invalid`)
       if (j.severity && !SEVERITY.includes(j.severity)) e(`${jw}.severity invalid`)
-      if (j.diagnostic_confidence != null && (typeof j.diagnostic_confidence !== 'number' || j.diagnostic_confidence < 0 || j.diagnostic_confidence > 1)) {
+      if (j.diagnostic_confidence !== null && j.diagnostic_confidence !== undefined && (typeof j.diagnostic_confidence !== 'number' || j.diagnostic_confidence < 0 || j.diagnostic_confidence > 1)) {
         e(`${jw}.diagnostic_confidence out of range`)
       }
       if (Array.isArray(j.evidence) && j.evidence.length > LIMITS.MAX_EVIDENCE_PER_JOURNEY) e(`${jw}.evidence too many`)

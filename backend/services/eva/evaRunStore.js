@@ -23,12 +23,12 @@ function nowIso() {
   return new Date().toISOString()
 }
 function j(value) {
-  return value == null ? null : JSON.stringify(value)
+  return value === null || value === undefined ? null : JSON.stringify(value)
 }
 function isWorse(next, prior) {
   const a = SEVERITY_RANK[next]
   const b = SEVERITY_RANK[prior]
-  if (a == null || b == null) return false
+  if (a === undefined || b === undefined) return false
   return a < b // lower rank = more severe
 }
 

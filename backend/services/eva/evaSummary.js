@@ -50,7 +50,7 @@ export async function defaultLoadEvaPortfolioQa(db, { now = null } = {}) {
 }
 
 function parseJson(value, fallback) {
-  if (value == null) return fallback
+  if (value === null || value === undefined) return fallback
   try {
     return JSON.parse(value)
   } catch {
@@ -114,7 +114,7 @@ export function summarizeEvaPortfolioQa(data, { now = null, staleMs = LIMITS.DEF
   // Finding lifecycle buckets.
   const bucket = { new: 0, recurring: 0, worsened: 0, intermittent: 0, blocked: 0, stale: 0 }
   for (const f of findings) {
-    if (bucket[f.lifecycle_state] != null) bucket[f.lifecycle_state]++
+    if (bucket[f.lifecycle_state] !== undefined) bucket[f.lifecycle_state]++
   }
 
   // Actionable findings, critical/high first, shaped for the renderer.

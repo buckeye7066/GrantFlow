@@ -94,7 +94,7 @@ describe('finding lifecycle', () => {
     const actionable = await getActionableFindings(db)
     expect(actionable.length).toBe(1)
     expect(actionable[0].lifecycle_state).toBe('recurring')
-    expect(actionable[0].resolved_at == null).toBe(true)
+    expect(actionable[0].resolved_at === null).toBe(true)
   })
 
   it('a duplicate idempotency key does not double-count recurrence', async () => {

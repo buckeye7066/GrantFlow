@@ -78,15 +78,15 @@ export function renderEvaSection(summary) {
   )
   t.push(
     `Journeys: ${s.journeys_total} executed | ${s.journeys_passed} passed | ${s.journeys_failed} failed` +
-      (s.pass_rate != null ? ` | pass rate ${s.pass_rate}%` : ''),
+      (s.pass_rate !== null ? ` | pass rate ${s.pass_rate}%` : ''),
   )
   t.push(
     `Findings: ${s.lifecycle.new} new | ${s.lifecycle.recurring} recurring | ${s.lifecycle.worsened} worsened | ` +
       `${s.lifecycle.intermittent} intermittent`,
   )
   t.push(
-    `Coverage: ${s.coverage_pct != null ? s.coverage_pct + '%' : 'n/a'} | ` +
-      `Runner heartbeat: ${s.heartbeat_state}${s.heartbeat_age_hours != null ? ` (${s.heartbeat_age_hours}h ago)` : ''}`,
+    `Coverage: ${s.coverage_pct !== null ? s.coverage_pct + '%' : 'n/a'} | ` +
+      `Runner heartbeat: ${s.heartbeat_state}${s.heartbeat_age_hours !== null ? ` (${s.heartbeat_age_hours}h ago)` : ''}`,
   )
 
   if (s.actionable.length) {
@@ -134,9 +134,9 @@ export function renderEvaSection(summary) {
   h.push(`<p style="margin:0 0 8px;padding:10px 12px;background:${headlineBg};border:1px solid ${headlineBorder};border-radius:6px;color:#0f172a">${safe(s.headline)}${s.freshness === 'stale' ? ' <strong>(STALE RESULTS)</strong>' : ''}</p>`)
   h.push('<table style="border-collapse:collapse;font-size:13px;margin:0 0 12px"><tbody>')
   h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Apps</td><td style="padding:2px 0">${s.apps_expected} expected · <strong>${s.apps_tested} tested</strong> · ${s.apps_blocked} blocked · ${s.apps_startup_failed} startup-failed · ${s.apps_not_run} not run</td></tr>`)
-  h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Journeys</td><td style="padding:2px 0">${s.journeys_total} executed · ${s.journeys_passed} passed · <strong style="color:${s.journeys_failed ? '#b91c1c' : '#166534'}">${s.journeys_failed} failed</strong>${s.pass_rate != null ? ` · ${s.pass_rate}% pass` : ''}</td></tr>`)
+  h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Journeys</td><td style="padding:2px 0">${s.journeys_total} executed · ${s.journeys_passed} passed · <strong style="color:${s.journeys_failed ? '#b91c1c' : '#166534'}">${s.journeys_failed} failed</strong>${s.pass_rate !== null ? ` · ${s.pass_rate}% pass` : ''}</td></tr>`)
   h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Findings</td><td style="padding:2px 0">${s.lifecycle.new} new · ${s.lifecycle.recurring} recurring · ${s.lifecycle.worsened} worsened · ${s.lifecycle.intermittent} intermittent</td></tr>`)
-  h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Coverage</td><td style="padding:2px 0">${s.coverage_pct != null ? s.coverage_pct + '%' : 'n/a'} · runner heartbeat <strong style="color:${s.heartbeat_state === 'ok' ? '#166534' : '#b91c1c'}">${esc(s.heartbeat_state)}</strong>${s.heartbeat_age_hours != null ? ` (${s.heartbeat_age_hours}h ago)` : ''}</td></tr>`)
+  h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Coverage</td><td style="padding:2px 0">${s.coverage_pct !== null ? s.coverage_pct + '%' : 'n/a'} · runner heartbeat <strong style="color:${s.heartbeat_state === 'ok' ? '#166534' : '#b91c1c'}">${esc(s.heartbeat_state)}</strong>${s.heartbeat_age_hours !== null ? ` (${s.heartbeat_age_hours}h ago)` : ''}</td></tr>`)
   h.push('</tbody></table>')
 
   if (s.actionable.length) {

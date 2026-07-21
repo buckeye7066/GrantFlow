@@ -60,21 +60,22 @@ const REQUIRED_MANIFEST_FIELDS = [
 export function validateManifest(manifest) {
   const errors = []
   const e = (m) => errors.push(m)
+  const isSet = (v) => v !== null && v !== undefined
   if (!manifest || typeof manifest !== 'object') return { ok: false, errors: ['manifest not an object'] }
 
   for (const f of REQUIRED_MANIFEST_FIELDS) {
-    if (manifest[f] == null) e(`missing required field: ${f}`)
+    if (!isSet(manifest[f])) e(`missing required field: ${f}`)
   }
-  if (manifest.prohibited_actions != null && (!Array.isArray(manifest.prohibited_actions) || manifest.prohibited_actions.length === 0)) {
+  if (isSet(manifest.prohibited_actions) && (!Array.isArray(manifest.prohibited_actions) || manifest.prohibited_actions.length === 0)) {
     e('prohibited_actions must be a non-empty array (safety policy is mandatory)')
   }
-  if (manifest.cleanup != null && typeof manifest.cleanup !== 'string' && typeof manifest.cleanup !== 'object') {
+  if (isSet(manifest.cleanup) && typeof manifest.cleanup !== 'string' && typeof manifest.cleanup !== 'object') {
     e('cleanup must be a command string or an object')
   }
   if (manifest.runtime_type && !['web', 'electron', 'cli', 'python-cli', 'powershell', 'windows-ui', 'api', 'mobile-web'].includes(manifest.runtime_type)) {
     e(`unknown runtime_type: ${manifest.runtime_type}`)
   }
-  if (manifest.max_runtime_ms != null && (!Number.isInteger(manifest.max_runtime_ms) || manifest.max_runtime_ms <= 0)) {
+  if (isSet(manifest.max_runtime_ms) && (!Number.isInteger(manifest.max_runtime_ms) || manifest.max_runtime_ms <= 0)) {
     e('max_runtime_ms must be a positive integer')
   }
   // Coverage must map each feature to at least one journey OR an explicit reason.
@@ -85,11 +86,11 @@ export function validateManifest(manifest) {
       const hasReason = typeof c.unautomated_reason === 'string' && c.unautomated_reason.length > 0
       if (!hasJourney && !hasReason) e(`coverage[${i}] (${c?.feature}) must map to a journey or give an unautomated_reason`)
     })
-  } else if (manifest.coverage != null) {
+  } else if (isSet(manifest.coverage)) {
     e('coverage must be an array')
   }
   // Nightly critical journeys must be declared (may be empty for blocked apps).
-  if (manifest.nightly_critical_journeys != null && !Array.isArray(manifest.nightly_critical_journeys)) {
+  if (isSet(manifest.nightly_critical_journeys) && !Array.isArray(manifest.nightly_critical_journeys)) {
     e('nightly_critical_journeys must be an array')
   }
   return { ok: errors.length === 0, errors }
