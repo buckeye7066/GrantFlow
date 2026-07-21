@@ -11,9 +11,12 @@ const LOGIN_MAINTENANCE_ACTIVE = true
 
 export function isLoginMaintenanceActive() {
   if (process.env.LOGIN_MAINTENANCE === '0') return false
-  // Tests exercise the normal auth flows; the maintenance posture is a
-  // production stance, never an implicit test fixture.
-  if (process.env.NODE_ENV === 'test' || process.env.VITEST) return false
+  if (process.env.LOGIN_MAINTENANCE === '1') return true
+  // The block matters on the deployed instance only. CI test runners (vitest
+  // AND the node:test .mjs gates, which don't set NODE_ENV=test) and local
+  // dev exercise the normal auth flows; arming the guard there just reddens
+  // every auth-flow test without protecting anything.
+  if (process.env.NODE_ENV !== 'production') return false
   return LOGIN_MAINTENANCE_ACTIVE
 }
 
