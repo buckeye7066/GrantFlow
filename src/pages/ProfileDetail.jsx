@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from "react"
-import { useSearchParams, useNavigate } from "react-router-dom"
+import { useSearchParams, useNavigate, useLocation } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
 import {
@@ -77,6 +77,7 @@ import { getWorkspaceStepStatus } from "@/utils/workspaceSteps"
 import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
 import { formatFieldLabel } from "@/utils/fieldDisplay"
 import { EDITABLE_SECTIONS } from "@/config/missingInfoTargets"
+import { buildDeepLinkToken, isActionableDeepLink } from "@/utils/deepLinkToken"
 
 // Helper: safely turn a rejected item's reason into a human-friendly string.
 function formatRejectReason(reason) {
@@ -523,6 +524,7 @@ export function WorkAreaLinkCard({
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const rawProfileId = searchParams.get("id")
   const profileId = rawProfileId && String(rawProfileId).trim().length > 0 ? rawProfileId : null
   const { toast } = useToast()
@@ -967,8 +969,22 @@ export default function ProfileDetail() {
   const focusParam = searchParams.get("focus")
   React.useEffect(() => {
     if (!profile) return
-    const token = `${tabParam || ""}|${sectionParam || ""}|${fieldParam || ""}|${focusParam || ""}`
-    if (token === "|||" || deepLinkHandled.current === token) return
+    if (!isActionableDeepLink({ tab: tabParam, section: sectionParam, field: fieldParam, focus: focusParam })) return
+    // DEAD-CLICK GUARD (the "Profile Action Plan buttons do nothing" class):
+    // location.key is part of the click identity. Every router navigation —
+    // including a <Link> to the IDENTICAL URL — gets a fresh key, so a
+    // re-click on a plan/checklist/reminder button re-fires this handler even
+    // when the params haven't changed. Keying on param values alone made every
+    // deep-link button dead after its first use. The token still dedupes
+    // re-renders (profile refetches) within the same navigation.
+    const token = buildDeepLinkToken({
+      locationKey: location.key,
+      tab: tabParam,
+      section: sectionParam,
+      field: fieldParam,
+      focus: focusParam,
+    })
+    if (deepLinkHandled.current === token) return
     deepLinkHandled.current = token
     if (tabParam) setActiveTab(tabParam)
     if (focusParam) setPendingScrollTarget(focusParam)
@@ -979,7 +995,7 @@ export default function ProfileDetail() {
         profile?.sections?.find((section) => section.section_key === sectionParam)?.data ?? {}
       handleOpenSection(sectionParam, existing, fieldParam)
     }
-  }, [profile, tabParam, sectionParam, fieldParam, focusParam, handleOpenSection])
+  }, [profile, location.key, tabParam, sectionParam, fieldParam, focusParam, handleOpenSection])
 
   React.useEffect(() => {
     if (!profileId) return
