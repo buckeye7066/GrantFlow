@@ -1,0 +1,69 @@
+Good morning — here's Anya's daily code/function report.
+Tuesday, July 21, 2026
+
+Sam's overnight sweep: health 88/100, 1 finding(s) total.
+  • 0 fixed automatically overnight by Sam's CI (safe eslint/fixes → shipped to production when the test gate passed; left as an open PR if it didn't)
+  • 1 still need you: 0 critical, 1 high, 0 medium, 0 low
+
+NEEDS YOUR ATTENTION
+====================
+1. [HIGH] Unparameterized query in reportBuilder
+   area: security
+   String-concatenated SQL in the report path
+   where: backend/services/reportBuilder.js
+   suggested fix: Use a parameterized query
+
+PORTFOLIO USER-JOURNEY TESTS
+----------------------------
+2 user journeys failed across 3 tested programs.
+
+Apps: 19 expected | 3 tested | 1 blocked | 0 startup-failed | 15 not run
+Journeys: 3 executed | 1 passed | 2 failed | pass rate 33%
+Findings: 1 new | 0 recurring | 0 worsened | 1 intermittent
+Coverage: 37% | Runner heartbeat: missing
+
+ACTIONABLE FINDINGS (critical/high first):
+
+  [Critical] GrantFlow — Login page loads and identifies GrantFlow (NEW)
+    Expected: Login page renders the GrantFlow sign-in form
+    Observed: White screen; console: TypeError reading map
+    Repro: Open /login -> Observe blank page
+    Impact: No user can sign in — total outage of the entry point.
+    Likely cause: authStore selector returns undefined before hydration
+    Suggested repair: Guard the profiles.map with an empty-array default in Login.jsx
+    Candidate files: src/pages/Login.jsx, src/stores/authStore.js
+    Confidence: 0.86
+    First seen 2026-07-21T19:07:49.355Z | last seen 2026-07-21T19:07:49.355Z | seen 1x | last pass never
+    Evidence: screenshot:r-today/grantflow/app-identifies-itself.png, trace:r-today/grantflow/trace.zip
+
+  [Medium] GeneMap Discovery — Reach register form (Intermittent)
+    Expected: Register form appears
+    Observed: Sometimes times out at 8s
+    Repro: Open /Login -> Click Register
+    Impact: Intermittent: some new users cannot register on first try.
+    Confidence: 0.60 (low — needs more evidence)
+    Missing evidence: Need to confirm whether the slow first-paint is cold Vite or a real hydration stall — capture 5 consecutive runs with timing.
+    First seen 2026-07-21T19:07:49.355Z | last seen 2026-07-21T19:07:49.355Z | seen 1x | last pass never
+
+RESOLVED SINCE YESTERDAY:
+  [High] SermonSmith — Login (closed by run evarun_af18beaba45a9060338fc51b)
+
+NOT TESTED OR BLOCKED:
+  Factory Deck — blocked: Anthropic account credits empty; assembly-line requires a real model call which is mocked-unavailable. Launch smoke + Demo stub only.
+  flexfactor — not in the latest run
+  scout-a-program — not in the latest run
+  repo-rewards — not in the latest run
+  promopilot — not in the latest run
+  incognito — not in the latest run
+  mind-over-math — not in the latest run
+  livehealth — not in the latest run
+  free-and-clean — not in the latest run
+  forgepress — not in the latest run
+  family-stewardship-navigator — not in the latest run
+  family-castle-clash — not in the latest run
+  app-store-publisher — not in the latest run
+  are-we-mice-or-are-we-men — not in the latest run
+  crispr-compass — not in the latest run
+  kidney-antigen-discovery — not in the latest run
+
+— Anya · from Sam's run sam-42

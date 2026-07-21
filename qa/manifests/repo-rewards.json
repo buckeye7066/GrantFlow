@@ -1,0 +1,76 @@
+{
+  "app_id": "repo-rewards",
+  "display_name": "Repo Rewards",
+  "repo": "buckeye7066/repo-rewards",
+  "local_path": "C:/Users/firer/repo-rewards",
+  "runtime_type": "web",
+  "start_command": "npm run dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/", "port": 3000, "timeout_ms": 90000 },
+  "base_url": "http://localhost:3000",
+  "test_target": "disposable-local-instance",
+  "required_env": ["DATABASE_URL", "ADMIN_TOKEN", "AI_PROVIDER", "GITHUB_TOKEN"],
+  "seed_command": "npm run db:migrate",
+  "reset_command": "npm run db:migrate",
+  "cleanup": "rm -rf .eva-tmp/repo-rewards && drop disposable local Postgres database (launch dependency: hard-requires PostgreSQL, NO sqlite fallback — never point DATABASE_URL at the prod Railway DB)",
+  "disposable_data_root": ".eva-tmp/repo-rewards",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "NEVER install or execute repositories returned by search results",
+    "never call DELETE /api/admin/queue against a real database",
+    "no hammering of upstream host APIs (GitHub/GitLab/Codeberg/SourceForge/Bitbucket/Gitea/Forgejo)",
+    "never point DATABASE_URL at the prod Railway database — disposable local Postgres only"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [3000],
+    "routes": ["/", "/api/health"],
+    "file_roots": [".eva-tmp/repo-rewards"],
+    "processes": ["node", "npm", "next"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "search-suggest"],
+  "weekly_full_journeys": ["app-identifies-itself", "search-suggest"],
+  "feature_coverage": {
+    "features_total": 5,
+    "features_covered": 2,
+    "unautomated_features": ["Full AI-summary search", "Admin queue", "Repo detail page"]
+  },
+  "coverage": [
+    { "feature": "Home NL search box + suggestions render", "journeys": ["app-identifies-itself"] },
+    { "feature": "Search input accepts a natural-language query", "journeys": ["search-suggest"] },
+    { "feature": "Result cards with score badges", "unautomated_reason": "full result rendering requires a seeded Postgres index and AI provider keys; only the pre-search UI is exercised" },
+    { "feature": "Full AI-summary search", "unautomated_reason": "requires live AI provider keys and a populated Postgres database; real AI spend is out of scope for QA runs" },
+    { "feature": "Admin queue", "unautomated_reason": "DELETE /api/admin/queue against a real DB is prohibited; admin surface only exercised against disposable fixtures manually" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Home page loads and shows the search box",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" },
+        { "action": "waitForSelector", "selector": "input" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "search" }],
+      "user_impact": "If the home search box does not load, no visitor can search for repositories at all.",
+      "candidate_files": ["src/app/page.tsx", "src/components/SearchBox.tsx"]
+    },
+    {
+      "id": "search-suggest",
+      "name": "Typing a query surfaces the results/suggestions area",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "input" },
+        { "action": "fill", "selector": "input", "value": "python cli" },
+        { "action": "wait", "ms": 1500 }
+      ],
+      "assert": [{ "type": "input_value", "selector": "input", "value": "python cli" }],
+      "user_impact": "If the search input rejects typed queries, the core search flow is dead for every user.",
+      "candidate_files": ["src/app/page.tsx", "src/components/SearchBox.tsx", "src/components/ResultCard.tsx"]
+    }
+  ]
+}

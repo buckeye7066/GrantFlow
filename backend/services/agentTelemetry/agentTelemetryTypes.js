@@ -21,7 +21,7 @@
  * tables are read only when a `tableExists` check returns true.
  */
 
-export const AGENT_NAMES = Object.freeze(['anya', 'sam', 'robert', 'yana', 'hamilton', 'john', 'amy'])
+export const AGENT_NAMES = Object.freeze(['anya', 'sam', 'robert', 'yana', 'hamilton', 'john', 'amy', 'eva'])
 
 export const AGENT_LABELS = Object.freeze({
   anya: 'Anya',
@@ -31,6 +31,7 @@ export const AGENT_LABELS = Object.freeze({
   hamilton: 'Hamilton',
   john: 'John',
   amy: 'Amy',
+  eva: 'EVA',
 })
 
 export const AGENT_TAGLINES = Object.freeze({
@@ -41,6 +42,7 @@ export const AGENT_TAGLINES = Object.freeze({
   hamilton: 'Application Autopilot / Funding Completion',
   john: 'Outreach Drafts',
   amy: 'Crawler Training / Fleet Gap Learning',
+  eva: 'End-user Validation / Portfolio User-Journey QA',
 })
 
 export const RANGE_KEYS = Object.freeze(['24h', '7d', '30d', 'custom'])

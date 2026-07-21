@@ -1,0 +1,80 @@
+{
+  "app_id": "family-stewardship-navigator",
+  "display_name": "Family Stewardship Navigator",
+  "repo": "buckeye7066/family-stewardship-navigator",
+  "local_path": "G:/family-stewardship-navigator",
+  "runtime_type": "web",
+  "start_command": "docker compose up --build",
+  "stop_command": "docker compose down",
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 3001, "timeout_ms": 120000 },
+  "base_url": "http://localhost:5180",
+  "test_target": "disposable-local-instance",
+  "required_env": ["VITE_API_URL", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "AI_PROVIDER", "OPENAI_API_KEY", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "DB_HOST_PORT"],
+  "seed_command": "npm --prefix server run db:create-admin",
+  "reset_command": "docker compose down -v",
+  "cleanup": "docker compose down -v && rm -rf .eva-tmp/family-stewardship-navigator",
+  "disposable_data_root": ".eva-tmp/family-stewardship-navigator",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "runtime_status": "Docker/Postgres is the launch blocker — set app_status expectations accordingly; the dev fallback (npm run dev + npm --prefix server run dev) still needs a reachable Postgres",
+  "prohibited_actions": [
+    "no real financial/estate/insurance/tax/family records — synthetic fixtures only",
+    "must not claim to replace a CPA, attorney, RIA, insurer, or fiduciary",
+    "do not connect a real OpenAI key",
+    "do not point at a durable/prod database — disposable compose Postgres only"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5180, 3001, 5432],
+    "routes": ["/", "/login", "/api/health", "/api/auth/*"],
+    "file_roots": [".eva-tmp/family-stewardship-navigator"],
+    "processes": ["node", "npm", "docker", "com.docker.backend", "postgres"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "login-page-renders"],
+  "weekly_full_journeys": ["app-identifies-itself", "login-page-renders"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 1,
+    "unautomated_features": ["CommandCenter", "Accounts", "NetWorth", "EstatePlanning", "Solomon assistant"]
+  },
+  "coverage": [
+    { "feature": "App loads and identifies itself", "journeys": ["app-identifies-itself"] },
+    { "feature": "Login page renders", "journeys": ["login-page-renders"] },
+    { "feature": "CommandCenter", "unautomated_reason": "authed finance feature — needs Docker/Postgres up plus a created admin (db:create-admin); Docker/Postgres availability is the launch blocker" },
+    { "feature": "Accounts", "unautomated_reason": "authed finance feature — needs Docker/Postgres up plus a created admin; synthetic account fixtures only" },
+    { "feature": "NetWorth", "unautomated_reason": "authed finance feature — needs Docker/Postgres up plus a created admin and seeded synthetic accounts" },
+    { "feature": "EstatePlanning", "unautomated_reason": "authed finance feature — needs Docker/Postgres up plus a created admin; synthetic estate fixtures only" },
+    { "feature": "Solomon assistant", "unautomated_reason": "needs an OpenAI mock; connecting a real OpenAI key is prohibited" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "App shell loads and identifies Family Stewardship Navigator",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Family Stewardship" }],
+      "user_impact": "If the shell does not load, the family cannot reach login or any stewardship data.",
+      "candidate_files": ["src/App.tsx", "src/pages/Login.tsx"]
+    },
+    {
+      "id": "login-page-renders",
+      "name": "Login page renders with a usable email field",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "input[type=email], input[name=email], input[type=password]" },
+        { "action": "fill", "selector": "input[type=email], input[name=email]", "value": "eva-fixture@example.com" }
+      ],
+      "assert": [
+        { "type": "input_value", "selector": "input[type=email], input[name=email]", "value": "eva-fixture@example.com" },
+        { "type": "text_visible", "selector": "body", "value": "ogin" }
+      ],
+      "user_impact": "A family member who cannot reach a working login form is locked out of every finance feature.",
+      "candidate_files": ["src/pages/Login.tsx", "server/src/routes/auth.ts"]
+    }
+  ]
+}

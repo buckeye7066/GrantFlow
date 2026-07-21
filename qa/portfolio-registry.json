@@ -1,0 +1,209 @@
+{
+  "$comment": "EVA portfolio registry — canonical resolution of every product surface to a real repo/runtime. Consumed by the EVA coordinator's evaRegistry.js as seed data. runtime_status is the truthful availability state; only apps with a manifest + feasible runtime get nightly journeys. Resolved 2026-07-21 against on-disk repos, not shortcut labels.",
+  "schema_version": 1,
+  "timezone": "America/New_York",
+  "apps": [
+    {
+      "app_id": "grantflow",
+      "display_name": "GrantFlow",
+      "repo": "buckeye7066/GrantFlow",
+      "local_path": "C:/Users/firer/GrantFlow",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "prod_url": "https://grantflow-production.up.railway.app",
+      "concurrency_class": "db-heavy",
+      "notes": "React+Vite web + Express/PG backend. EVA runs against a disposable local instance in test mode; never touches real client records or crawls."
+    },
+    {
+      "app_id": "flexfactor",
+      "display_name": "FlexFactor",
+      "repo": "local-only",
+      "local_path": "C:/Users/firer/flexfactor",
+      "runtime_type": "python-cli",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "CORRECTED 2026-07-21 (repo read): a single-file Python CLI (python flexfactor.py), NOT a web app. Three launchers select a subcommand/mode (default, scout, audit). Safety: EDIT-BLOCK default; never adopt/execute untrusted third-party code."
+    },
+    {
+      "app_id": "scout-a-program",
+      "display_name": "Scout a Program",
+      "repo": "local-only",
+      "local_path": "C:/Users/firer/flexfactor",
+      "runtime_type": "python-cli",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "surface_of": "flexfactor",
+      "launch_mode": "scout",
+      "notes": "CORRECTED 2026-07-21 (repo read): SAME codebase as FlexFactor, launched via the argparse SUBCOMMAND `python flexfactor.py scout` (NOT a FLEXFACTOR_MODE env var). Distinct product surface, shared repo. Safety: never adopt/execute untrusted third-party code."
+    },
+    {
+      "app_id": "sermonsmith",
+      "display_name": "SermonSmith",
+      "repo": "buckeye7066/sermonsmith",
+      "local_path": "C:/Users/firer/sermonsmith",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "prod_url": "https://sermonsmith.vercel.app",
+      "concurrency_class": "default",
+      "notes": "npm-workspaces monorepo. Web (Vercel) + API (Railway). Safety: no public community posting, no payment, no real outbound email."
+    },
+    {
+      "app_id": "repo-rewards",
+      "display_name": "Repo Rewards",
+      "repo": "buckeye7066/repo-rewards",
+      "local_path": "C:/Users/firer/repo-rewards",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "prod_url": "https://web-production-d7db7.up.railway.app",
+      "concurrency_class": "db-heavy",
+      "notes": "Next.js 15 + PG(pgvector). Safety: NEVER install or execute repositories returned by search."
+    },
+    {
+      "app_id": "promopilot",
+      "display_name": "PromoPilot",
+      "repo": "buckeye7066/promopilot",
+      "local_path": "C:/Users/firer/promopilot",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "prod_url": "https://promopilot-production-6370.up.railway.app",
+      "concurrency_class": "default",
+      "notes": "Express + vanilla-JS UI. Safety: NO real social-media post; all connectors mocked."
+    },
+    {
+      "app_id": "incognito",
+      "display_name": "Incognito",
+      "repo": "buckeye7066/incognito",
+      "local_path": "C:/Users/firer/incognito",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "React+Capacitor, local-first WebCrypto vault + optional Railway sync. Safety: NO real passwords/SSNs/cards/accounts/API keys/vault imports — synthetic fixtures only."
+    },
+    {
+      "app_id": "mind-over-math",
+      "display_name": "Mind Over Math",
+      "repo": "local-only",
+      "local_path": "C:/Users/firer/mind-over-math",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "React (Vercel) + Railway backend. Anastasia Pre-Calc tutoring app."
+    },
+    {
+      "app_id": "livehealth",
+      "display_name": "LiveHealth",
+      "repo": "base44-health",
+      "local_path": "C:/Users/firer/base44-health",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "prod_url": "https://livehealth.vercel.app",
+      "readiness_path": "/healthz",
+      "concurrency_class": "default",
+      "notes": "React+Vite+Base44 clinical/EHR app. Safety: NO real PHI; never weaken demo/clinical safety gates. Educational/demo fixtures only."
+    },
+    {
+      "app_id": "free-and-clean",
+      "display_name": "Free and Clean",
+      "repo": "local-only",
+      "local_path": "G:/One Drive/Desktop/Free and Clean",
+      "runtime_type": "python-cli",
+      "runtime_status": "available",
+      "concurrency_class": "fs-heavy",
+      "notes": "CORRECTED 2026-07-21 (repo read): the canonical Python app lives at G:/One Drive/Desktop/Free and Clean (system_cleaner/cleaner.py, optimizers.py, self-healing venv via run_free_and_clean.ps1). The C:/FreeAndClean-v3.0 path is a stale PowerShell-GUI copy. Safety: NO scan/deletion outside generated fixture dirs; dry-run by default (never --apply); EVA passes only a temp fixture root."
+    },
+    {
+      "app_id": "genemap-discovery",
+      "display_name": "GeneMap Discovery",
+      "repo": "buckeye7066/genemap-discovery",
+      "local_path": "C:/Users/firer/genemap-discovery",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "prod_url": "https://genemap-discovery.vercel.app",
+      "readiness_path": "/readyz",
+      "concurrency_class": "db-heavy",
+      "notes": "pnpm monorepo, React+Fastify+PG. Safety: NO identifiable patient data, NO diagnostic claims; genomics providers mocked."
+    },
+    {
+      "app_id": "forgepress",
+      "display_name": "ForgePress",
+      "repo": "local-git",
+      "local_path": "C:/Users/firer/ForgePress",
+      "runtime_type": "electron",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "Electron+React19. Canonical = packaged app tree. Safety: NO Bowker registration, ISBN assignment, cover upload, or publishing. Override user-data dir with disposable profile."
+    },
+    {
+      "app_id": "family-stewardship-navigator",
+      "display_name": "Family Stewardship Navigator",
+      "repo": "buckeye7066/family-stewardship-navigator",
+      "local_path": "G:/family-stewardship-navigator",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "db-heavy",
+      "notes": "React+Express(TS)+PG, Docker. Private one-family. Safety: NO real financial/estate/insurance/tax/family records; must not claim to replace CPA/attorney/RIA/insurer/fiduciary."
+    },
+    {
+      "app_id": "family-castle-clash",
+      "display_name": "Family Castle Clash",
+      "repo": "buckeye7066/family-castle-clash",
+      "local_path": "C:/Users/firer/family-castle-clash",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "React+Vite client + Express/Socket.io server, :8080. Safety: NO private family photos/recordings/real private assets — synthetic cards only."
+    },
+    {
+      "app_id": "factory-deck",
+      "display_name": "Factory Deck",
+      "repo": "local-only",
+      "local_path": "C:/Users/firer/local-ai-factory",
+      "runtime_type": "web",
+      "runtime_status": "blocked_by_external_service",
+      "blocker": "Anthropic account credits empty; AI provider must be mocked. UI/API launch smoke is feasible; any journey requiring a real model call is blocked.",
+      "concurrency_class": "default",
+      "notes": "local-ai-factory. Express 127.0.0.1:5179 + Vite 5180. DRY_RUN_COMMANDS=true default. Safety: NO deployment or publication."
+    },
+    {
+      "app_id": "app-store-publisher",
+      "display_name": "App Store Publisher",
+      "repo": "local-only",
+      "local_path": "C:/Users/firer/app-store-publisher",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "readiness_path": "/api/stores",
+      "concurrency_class": "default",
+      "notes": "Express :4000 (launch.vbs). Safety: NO real app-store upload or submission; store providers mocked."
+    },
+    {
+      "app_id": "are-we-mice-or-are-we-men",
+      "display_name": "Are We Mice Or Are We Men",
+      "repo": "buckeye7066/are-we-mice-or-are-we-men",
+      "local_path": "C:/Users/firer/are-we-mice-or-are-we-men",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "db-heavy",
+      "notes": "React+Express+PG EMS study app. Safety: educational fixtures only; NO patient-specific medical direction."
+    },
+    {
+      "app_id": "crispr-compass",
+      "display_name": "CRISPR Compass",
+      "repo": "local-git",
+      "local_path": "C:/Users/firer/crispr-compass",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "Research-only. Safety: NO high-risk biological design, pathogenic enhancement, clinical plan, or wet-lab execution instruction. Journeys assert disclaimers/guardrails hold."
+    },
+    {
+      "app_id": "kidney-antigen-discovery",
+      "display_name": "Kidney Antigen Discovery",
+      "repo": "local-git-no-remote",
+      "local_path": "C:/Users/firer/kidney-antigen-discovery",
+      "runtime_type": "web",
+      "runtime_status": "available",
+      "concurrency_class": "default",
+      "notes": "FastAPI+SQLite backend + Next.js14 frontend. Safety: NO identifiable patient data, NO diagnostic claims. TRAP: `npm run lint` hangs (no ESLint config) — never invoke it."
+    }
+  ]
+}

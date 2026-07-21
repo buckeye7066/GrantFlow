@@ -1,0 +1,72 @@
+{
+  "app_id": "crispr-compass",
+  "display_name": "CRISPR Compass",
+  "repo": "local-git",
+  "local_path": "C:/Users/firer/crispr-compass",
+  "runtime_type": "web",
+  "start_command": "streamlit run app.py --server.port 8501 --server.headless true",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/", "port": 8501, "timeout_ms": 60000 },
+  "base_url": "http://localhost:8501",
+  "test_target": "disposable-local-instance",
+  "required_env": [],
+  "seed_command": "n/a",
+  "reset_command": "n/a",
+  "cleanup": "rm -rf .eva-tmp/crispr-compass",
+  "disposable_data_root": ".eva-tmp/crispr-compass",
+  "max_runtime_ms": 600000,
+  "concurrency_class": "default",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no high-risk biological design or pathogenic enhancement output (CRITICAL)",
+    "no clinical, therapeutic, germline, or wet-lab protocol generation",
+    "no real off-target backend execution (Cas-OFFinder run/dry-run is never invoked)",
+    "no editing of the research-only disclaimer or guardrails"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1"],
+    "ports": [8501],
+    "routes": ["/"],
+    "file_roots": [".eva-tmp/crispr-compass"],
+    "processes": ["python", "python.exe", "streamlit", "node"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "disclaimer-present"],
+  "weekly_full_journeys": ["app-identifies-itself", "disclaimer-present"],
+  "feature_coverage": {
+    "features_total": 4,
+    "features_covered": 2,
+    "unautomated_features": ["guide search / sequence scanner", "CRISPR design / off-target workflow"]
+  },
+  "coverage": [
+    { "feature": "Streamlit UI loads and identifies the app", "journeys": ["app-identifies-itself"] },
+    { "feature": "Research-only disclaimer / guardrail is visible", "journeys": ["disclaimer-present"] },
+    { "feature": "Guide search / sequence scanner (educational)", "unautomated_reason": "needs a seeded FASTA fixture plus Streamlit widget interaction (button click over the websocket render); scheduled once a Streamlit-interaction harness exists" },
+    { "feature": "Any CRISPR design / off-target execution workflow", "unautomated_reason": "must stay guardrailed — no high-risk biological design and no wet-lab/clinical output; never auto-exercised (safety)" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "App loads and identifies CRISPR Compass",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "CRISPR" }],
+      "user_impact": "If the app does not load, no researcher can plan or screen anything.",
+      "candidate_files": ["app.py", "crispr_compass/__init__.py"]
+    },
+    {
+      "id": "disclaimer-present",
+      "name": "Research-only disclaimer is visible (safety guardrail holds)",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "educational" }],
+      "user_impact": "If the research-only guardrail disappears, the tool could be mistaken for clinical software — a safety failure.",
+      "candidate_files": ["app.py", "crispr_compass/__init__.py"]
+    }
+  ]
+}

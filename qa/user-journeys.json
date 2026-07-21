@@ -1,0 +1,99 @@
+{
+  "app_id": "grantflow",
+  "display_name": "GrantFlow",
+  "repo": "buckeye7066/GrantFlow",
+  "local_path": "C:/Users/firer/GrantFlow",
+  "runtime_type": "web",
+  "start_command": "npm run dev:full",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/api/health", "port_env": "PORT", "timeout_ms": 60000 },
+  "base_url": "http://localhost:5173",
+  "test_target": "disposable-local-instance",
+  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "SMOKE_MODE", "DISABLE_AI", "SQLITE_DB_PATH"],
+  "seed_command": "npm run db:setup",
+  "reset_command": "npm run migrate",
+  "cleanup": "rm -rf .eva-tmp/grantflow && remove disposable sqlite db",
+  "disposable_data_root": ".eva-tmp/grantflow",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no alteration of real client records",
+    "no application submission (Hamilton autopilot off; autosubmit off)",
+    "no uncontrolled crawl",
+    "no real test email (John/Yana/Anya outbound disabled)",
+    "no real Anthropic/OpenAI spend (DISABLE_AI=1)"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5173, 3001],
+    "routes": ["/login", "/start", "/Dashboard", "/api/health", "/api/auth/*"],
+    "file_roots": [".eva-tmp/grantflow"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "login-guest-quiz-entry"],
+  "weekly_full_journeys": ["app-identifies-itself", "login-guest-quiz-entry", "login-validation-error", "responsive-login"],
+  "feature_coverage": { "features_total": 12, "features_covered": 4, "unautomated_features": ["Stripe billing checkout", "Hamilton live automation", "crawler discovery run", "John/Yana outreach drafts"] },
+  "coverage": [
+    { "feature": "Login page identifies the app", "journeys": ["app-identifies-itself"] },
+    { "feature": "Guest onboarding entry (Anya quiz)", "journeys": ["login-guest-quiz-entry"] },
+    { "feature": "Login validation + error messaging", "journeys": ["login-validation-error"] },
+    { "feature": "Responsive login (phone-sized)", "journeys": ["responsive-login"] },
+    { "feature": "Grant discovery / pipeline", "unautomated_reason": "requires seeded profile + crawler run; scheduled as a weekly authenticated journey once a disposable seeded DB fixture is wired" },
+    { "feature": "Stripe billing checkout", "unautomated_reason": "live payment flow; mocked provider only, never exercised end-to-end" },
+    { "feature": "Hamilton application autopilot", "unautomated_reason": "would submit real applications; prohibited" },
+    { "feature": "John/Yana outreach", "unautomated_reason": "would draft/send real outreach; prohibited" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Login page loads and identifies GrantFlow",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/login" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "GrantFlow" }],
+      "user_impact": "If the login page does not load, no user can sign in at all.",
+      "candidate_files": ["src/pages/Login.jsx", "src/components/auth/AuthShell.jsx"]
+    },
+    {
+      "id": "login-guest-quiz-entry",
+      "name": "New user can reach the Anya onboarding quiz from login",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/login" },
+        { "action": "click", "selector": "a[href='/start']" },
+        { "action": "wait", "ms": 800 }
+      ],
+      "assert": [{ "type": "url_contains", "value": "/start" }],
+      "user_impact": "A prospective user who cannot start the guided quiz cannot self-onboard.",
+      "candidate_files": ["src/pages/Login.jsx"]
+    },
+    {
+      "id": "login-validation-error",
+      "name": "Login shows a useful error for an unknown email",
+      "severity": "medium",
+      "steps": [
+        { "action": "goto", "url": "/login" },
+        { "action": "fill", "selector": "input[type=email]", "value": "nobody-eva-fixture@example.com" },
+        { "action": "click", "selector": "button[type=submit]" },
+        { "action": "wait", "ms": 1200 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "email" }],
+      "user_impact": "Without a clear error, a user with a typo'd email is stuck with no feedback.",
+      "candidate_files": ["src/components/auth/EmailSignInForm.jsx"]
+    },
+    {
+      "id": "responsive-login",
+      "name": "Login is usable at phone width without overflow",
+      "severity": "low",
+      "steps": [
+        { "action": "goto", "url": "/login" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "GrantFlow" }],
+      "user_impact": "A mobile user must be able to see and use the sign-in form.",
+      "candidate_files": ["src/pages/Login.jsx"]
+    }
+  ]
+}

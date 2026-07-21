@@ -1,0 +1,78 @@
+{
+  "app_id": "livehealth",
+  "display_name": "LiveHealth",
+  "repo": "base44-health (buckeye7066/livehealth)",
+  "local_path": "C:/Users/firer/base44-health",
+  "runtime_type": "web",
+  "start_command": "cd server && npm run dev & npm run dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/api/v1/capabilities", "port": 3000, "timeout_ms": 60000 },
+  "base_url": "http://localhost:5173",
+  "test_target": "disposable-local-instance",
+  "required_env": ["AUTH_JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD", "CORS_ORIGIN", "VITE_API_URL"],
+  "seed_command": null,
+  "reset_command": null,
+  "cleanup": "rm -rf .eva-tmp/livehealth (server uses in-memory store when DATABASE_URL is unset — state dies with the process)",
+  "disposable_data_root": ".eva-tmp/livehealth",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "default",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no real PHI — synthetic patients only",
+    "never set the 7 ATTEST_* gate flags or AI_VENDOR_BAA (leave UNSET so the demo gate stays down)",
+    "never weaken clinical policy, the LLM PHI gate, or CSRF/session controls",
+    "no real LLM spend"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5173, 3000],
+    "routes": ["/", "/api/v1/capabilities", "/api/v1/auth/*"],
+    "file_roots": [".eva-tmp/livehealth"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "sign-in-screen-renders"],
+  "weekly_full_journeys": ["app-identifies-itself", "sign-in-screen-renders"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 1,
+    "unautomated_features": ["Dashboard", "NewEncounter", "Charting", "Claims", "Patients (synthetic)"]
+  },
+  "coverage": [
+    { "feature": "App loads and identifies itself", "journeys": ["app-identifies-itself"] },
+    { "feature": "Sign-in screen renders", "journeys": ["sign-in-screen-renders"] },
+    { "feature": "Dashboard", "unautomated_reason": "needs seeded admin login (ADMIN_EMAIL/ADMIN_PASSWORD fixture) against the in-memory server; wire once authed fixture exists" },
+    { "feature": "NewEncounter / Charting", "unautomated_reason": "encounters and charting need seeded admin login plus synthetic patient fixtures against the in-memory server" },
+    { "feature": "Claims", "unautomated_reason": "needs seeded admin session and synthetic encounter data; wire once authed fixture exists" },
+    { "feature": "LLM CDS assistant", "unautomated_reason": "requires an LLM mock; real spend and lifting the ATTEST_* demo gate are prohibited" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "App shell loads and identifies LiveHealth",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "LiveHealth" }],
+      "user_impact": "If the shell does not load, no clinician can sign in or reach any chart.",
+      "candidate_files": ["src/App.jsx", "src/pages/SignIn.jsx"]
+    },
+    {
+      "id": "sign-in-screen-renders",
+      "name": "Sign-in screen renders with email and password fields",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "input[type=email], input[name=email]" },
+        { "action": "fill", "selector": "input[type=email], input[name=email]", "value": "eva-fixture@example.com" }
+      ],
+      "assert": [
+        { "type": "input_value", "selector": "input[type=email], input[name=email]", "value": "eva-fixture@example.com" },
+        { "type": "text_visible", "selector": "body", "value": "Sign" }
+      ],
+      "user_impact": "A clinician who cannot reach a working sign-in form is locked out of the entire EHR.",
+      "candidate_files": ["src/pages/SignIn.jsx", "server/src/routes/auth.js"]
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "app_id": "sermonsmith",
+  "display_name": "SermonSmith",
+  "repo": "buckeye7066/sermonsmith",
+  "local_path": "C:/Users/firer/sermonsmith",
+  "runtime_type": "web",
+  "start_command": "npm run dev:api & npm run dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/healthz", "port": 3001, "timeout_ms": 60000 },
+  "base_url": "http://localhost:5173",
+  "test_target": "disposable-local-instance",
+  "required_env": ["DATABASE_URL", "JWT_SECRET", "COOKIE_SECRET", "CORS_ORIGIN", "OPENAI_API_KEY", "DISABLE_AI", "DISABLE_BILLING", "DISABLE_PASSWORD_RESET"],
+  "seed_command": "npm run db:seed -w @sermonsmith/api",
+  "reset_command": "npm run db:seed -w @sermonsmith/api",
+  "cleanup": "rm -rf .eva-tmp/sermonsmith && drop disposable test database",
+  "disposable_data_root": ".eva-tmp/sermonsmith",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no public community/forum posting",
+    "no payment/Stripe checkout (DISABLE_BILLING=1)",
+    "no real outbound email via Resend (DISABLE_PASSWORD_RESET=1)",
+    "no real OpenAI spend (DISABLE_AI=1)"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5173, 3001],
+    "routes": ["/Login", "/healthz", "/api/auth/*"],
+    "file_roots": [".eva-tmp/sermonsmith"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "reach-register"],
+  "weekly_full_journeys": ["app-identifies-itself", "reach-register", "login-validation"],
+  "feature_coverage": {
+    "features_total": 7,
+    "features_covered": 2,
+    "unautomated_features": ["SermonBuilder (Larry AI)", "Reader (Bible)", "BibleStudy", "Community/Forum", "Pricing/billing", "Settings"]
+  },
+  "coverage": [
+    { "feature": "Login page identifies the app", "journeys": ["app-identifies-itself"] },
+    { "feature": "Login/register entry", "journeys": ["reach-register", "login-validation"] },
+    { "feature": "SermonBuilder (Larry AI sermon generation)", "unautomated_reason": "AI sermon generation needs an OpenAI mock; DISABLE_AI=1 in test runs prohibits real spend" },
+    { "feature": "Reader (Bible)", "unautomated_reason": "requires authenticated session with seeded user; wire once seeded auth fixture exists" },
+    { "feature": "BibleStudy", "unautomated_reason": "requires authenticated session with seeded user; wire once seeded auth fixture exists" },
+    { "feature": "Community/Forum", "unautomated_reason": "posting to the public community is prohibited; read-only authed view needs seeded session" },
+    { "feature": "Pricing/billing", "unautomated_reason": "Stripe checkout is prohibited (DISABLE_BILLING=1); mocked provider only" },
+    { "feature": "Settings", "unautomated_reason": "requires authenticated session with seeded user; wire once seeded auth fixture exists" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Login page loads and identifies SermonSmith",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/Login" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "SermonSmith" }],
+      "user_impact": "If the login page does not load, no user can sign in at all.",
+      "candidate_files": ["apps/web/src/pages/Login.tsx"]
+    },
+    {
+      "id": "reach-register",
+      "name": "New user can reach the registration form from login",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/Login" },
+        { "action": "waitForSelector", "selector": "body" },
+        { "action": "click", "selector": "button:has-text('Register'), a:has-text('Register')" },
+        { "action": "wait", "ms": 800 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Create Account" }],
+      "user_impact": "A prospective user who cannot reach the registration form cannot self-onboard.",
+      "candidate_files": ["apps/web/src/pages/Login.tsx", "apps/web/src/components/auth/RegisterForm.tsx"]
+    },
+    {
+      "id": "login-validation",
+      "name": "Login shows a useful error for an unknown email",
+      "severity": "medium",
+      "steps": [
+        { "action": "goto", "url": "/Login" },
+        { "action": "fill", "selector": "input[type=email]", "value": "eva-fixture@example.com" },
+        { "action": "fill", "selector": "input[type=password]", "value": "eva-fixture-wrong-pass" },
+        { "action": "click", "selector": "button[type=submit]" },
+        { "action": "wait", "ms": 1200 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Invalid" }],
+      "user_impact": "Without a clear error, a user with a typo'd email or password is stuck with no feedback.",
+      "candidate_files": ["apps/web/src/pages/Login.tsx", "apps/api/src/routes/auth.ts"]
+    }
+  ]
+}

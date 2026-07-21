@@ -1,0 +1,57 @@
+
+    <div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:720px;margin:0 auto;color:#0f172a;">
+      <h2 style="margin:0 0 2px;">☀️ Anya's daily report</h2>
+      <p style="margin:0 0 16px;color:#64748b;font-size:13px;">Tuesday, July 21, 2026 · 1 code issue for your review</p>
+      
+
+      <table style="border-collapse:collapse;margin:0 0 18px;font-size:13px;">
+        <tr>
+          <td style="padding:6px 14px 6px 0;color:#64748b;">Sam health score</td>
+          <td style="padding:6px 0;font-weight:700;color:#16a34a;">88/100</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 14px 6px 0;color:#64748b;">Fixed automatically overnight</td>
+          <td style="padding:6px 0;font-weight:600;color:#16a34a;">0</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 14px 6px 0;color:#64748b;">Needs your attention</td>
+          <td style="padding:6px 0;font-weight:700;">
+            1 —
+            <span style="color:#b91c1c;">0 critical</span>,
+            <span style="color:#c2410c;">1 high</span>,
+            <span style="color:#a16207;">0 medium</span>,
+            0 low
+          </td>
+        </tr>
+      </table>
+
+      <h3 style="margin:18px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Needs your attention</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <tr>
+              <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;vertical-align:top;white-space:nowrap;">
+                <span style="display:inline-block;font-size:11px;font-weight:700;color:#fff;background:#c2410c;border-radius:4px;padding:2px 8px;text-transform:uppercase;">High</span>
+              </td>
+              <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;vertical-align:top;">
+                <div style="font-weight:600;color:#0f172a;">Unparameterized query in reportBuilder</div>
+                <div style="font-size:12px;color:#64748b;margin-top:2px;">security</div>
+                <div style="font-size:13px;color:#334155;margin-top:6px;">String-concatenated SQL in the report path</div>
+                <div style="font-size:12px;color:#64748b;margin-top:6px;"><strong>Where:</strong> backend/services/reportBuilder.js</div>
+                <div style="font-size:13px;color:#065f46;margin-top:6px;"><strong>Suggested fix:</strong> Use a parameterized query</div>
+              </td>
+            </tr></table>
+      
+      
+      
+      
+      
+
+      <h2 style="margin:24px 0 8px;font-size:16px;color:#0f172a">Portfolio User-Journey Tests</h2><p style="margin:0 0 8px;padding:10px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;color:#0f172a">2 user journeys failed across 3 tested programs.</p><table style="border-collapse:collapse;font-size:13px;margin:0 0 12px"><tbody><tr><td style="padding:2px 10px 2px 0;color:#475569">Apps</td><td style="padding:2px 0">19 expected · <strong>3 tested</strong> · 1 blocked · 0 startup-failed · 15 not run</td></tr><tr><td style="padding:2px 10px 2px 0;color:#475569">Journeys</td><td style="padding:2px 0">3 executed · 1 passed · <strong style="color:#b91c1c">2 failed</strong> · 33% pass</td></tr><tr><td style="padding:2px 10px 2px 0;color:#475569">Findings</td><td style="padding:2px 0">1 new · 0 recurring · 0 worsened · 1 intermittent</td></tr><tr><td style="padding:2px 10px 2px 0;color:#475569">Coverage</td><td style="padding:2px 0">37% · runner heartbeat <strong style="color:#b91c1c">missing</strong></td></tr></tbody></table><h3 style="margin:16px 0 6px;font-size:14px;color:#0f172a">Actionable findings</h3><div style="margin:0 0 12px;padding:10px 12px;border-left:4px solid #b91c1c;background:#f8fafc;border-radius:0 6px 6px 0"><div style="font-weight:600;color:#0f172a"><span style="color:#b91c1c">[Critical]</span> GrantFlow — Login page loads and identifies GrantFlow <span style="font-weight:400;color:#64748b">(NEW)</span></div><div style="font-size:13px;color:#334155;margin-top:4px"><div><span style="color:#64748b">Expected:</span> Login page renders the GrantFlow sign-in form</div><div><span style="color:#64748b">Observed:</span> White screen; console: TypeError reading map</div><div><span style="color:#64748b">Repro:</span> Open /login &rarr; Observe blank page</div><div><span style="color:#64748b">Impact:</span> No user can sign in — total outage of the entry point.</div><div><span style="color:#64748b">Likely cause:</span> authStore selector returns undefined before hydration</div><div><span style="color:#64748b">Suggested repair:</span> Guard the profiles.map with an empty-array default in Login.jsx</div><div><span style="color:#64748b">Candidate files:</span> <code>src/pages/Login.jsx</code>, <code>src/stores/authStore.js</code></div><div><span style="color:#64748b">Confidence:</span> 0.86</div><div style="color:#94a3b8;font-size:12px;margin-top:2px">First seen 2026-07-21T19:07:49.355Z · last seen 2026-07-21T19:07:49.355Z · seen 1× · last pass never</div><div style="color:#94a3b8;font-size:12px">Evidence: screenshot:r-today/grantflow/app-identifies-itself.png, trace:r-today/grantflow/trace.zip</div></div></div><div style="margin:0 0 12px;padding:10px 12px;border-left:4px solid #a16207;background:#f8fafc;border-radius:0 6px 6px 0"><div style="font-weight:600;color:#0f172a"><span style="color:#a16207">[Medium]</span> GeneMap Discovery — Reach register form <span style="font-weight:400;color:#64748b">(Intermittent)</span></div><div style="font-size:13px;color:#334155;margin-top:4px"><div><span style="color:#64748b">Expected:</span> Register form appears</div><div><span style="color:#64748b">Observed:</span> Sometimes times out at 8s</div><div><span style="color:#64748b">Repro:</span> Open /Login &rarr; Click Register</div><div><span style="color:#64748b">Impact:</span> Intermittent: some new users cannot register on first try.</div><div><span style="color:#64748b">Confidence:</span> 0.60 (low — needs more evidence)</div><div><span style="color:#64748b">Missing evidence:</span> Need to confirm whether the slow first-paint is cold Vite or a real hydration stall — capture 5 consecutive runs with timing.</div><div style="color:#94a3b8;font-size:12px;margin-top:2px">First seen 2026-07-21T19:07:49.355Z · last seen 2026-07-21T19:07:49.355Z · seen 1× · last pass never</div></div></div><h3 style="margin:16px 0 6px;font-size:14px;color:#166534">Resolved since yesterday</h3><ul style="margin:0 0 12px;padding-left:18px;font-size:13px;color:#334155"><li><span style="color:#c2410c">[High]</span> SermonSmith — Login <span style="color:#94a3b8">(closed by run evarun_af18beaba45a9060338fc51b)</span></li></ul><h3 style="margin:16px 0 6px;font-size:14px;color:#334155">Not tested or blocked</h3><ul style="margin:0 0 12px;padding-left:18px;font-size:13px;color:#334155"><li>Factory Deck — <strong>blocked</strong>: Anthropic account credits empty; assembly-line requires a real model call which is mocked-unavailable. Launch smoke + Demo stub only.</li><li>flexfactor — not in the latest run</li><li>scout-a-program — not in the latest run</li><li>repo-rewards — not in the latest run</li><li>promopilot — not in the latest run</li><li>incognito — not in the latest run</li><li>mind-over-math — not in the latest run</li><li>livehealth — not in the latest run</li><li>free-and-clean — not in the latest run</li><li>forgepress — not in the latest run</li><li>family-stewardship-navigator — not in the latest run</li><li>family-castle-clash — not in the latest run</li><li>app-store-publisher — not in the latest run</li><li>are-we-mice-or-are-we-men — not in the latest run</li><li>crispr-compass — not in the latest run</li><li>kidney-antigen-discovery — not in the latest run</li></ul>
+
+      <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
+        From Sam's overnight code/function sweep (run sam-42). Auto-fixable issues are
+        corrected by Sam's CI and shipped to production overnight (before this email); the items above need a human eye.
+        To stop this email set <code>ANYA_DAILY_REPORT_ENABLED</code> to <code>false</code>.
+        <!-- No "KEY=value" literals in email bodies: "=fa" is a quoted-printable
+             hex pair and MIME decoding eats it ("ENABLED�lse" corruption). -->
+      </p>
+    </div>
