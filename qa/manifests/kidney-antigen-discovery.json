@@ -1,0 +1,86 @@
+{
+  "app_id": "kidney-antigen-discovery",
+  "display_name": "Kidney Antigen Discovery",
+  "repo": "local-git-no-remote",
+  "local_path": "C:/Users/firer/kidney-antigen-discovery",
+  "runtime_type": "web",
+  "start_command": "backend: uvicorn app.main:app --port 8000 (cwd backend) + frontend: npm run dev (cwd frontend, port 3000)",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/", "port": 3000, "timeout_ms": 60000 },
+  "base_url": "http://localhost:3000",
+  "test_target": "disposable-local-instance",
+  "required_env": ["KAD_DB_PATH", "KAD_UPLOAD_DIR", "KAD_OUTPUT_DIR", "KAD_UPLOAD_TTL_HOURS", "KAD_LOG_LEVEL"],
+  "seed_command": "python -m app.tests.synthetic_data ../example_data/synthetic (regenerate the artificial demo dataset; cwd backend)",
+  "reset_command": "rm -rf .eva-tmp/kidney-antigen-discovery/runs.db",
+  "cleanup": "rm -rf .eva-tmp/kidney-antigen-discovery",
+  "disposable_data_root": ".eva-tmp/kidney-antigen-discovery",
+  "max_runtime_ms": 600000,
+  "concurrency_class": "default",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no identifiable patient data — only artificial synthetic fixtures are ever loaded (CRITICAL)",
+    "no diagnostic, clinical, or therapeutic claims",
+    "no loading of the gitignored real omics data (the ~79MB real_data/ is never touched)",
+    "no npm run lint (hangs on interactive ESLint setup) — never invoked anywhere"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1"],
+    "ports": [3000, 8000],
+    "routes": ["/", "/upload", "/runs", "/api/health", "/api/presets"],
+    "file_roots": [".eva-tmp/kidney-antigen-discovery"],
+    "processes": ["node", "npm", "python", "python.exe", "uvicorn"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "backend-health"],
+  "weekly_full_journeys": ["app-identifies-itself", "backend-health", "research-triage-badge"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 3,
+    "unautomated_features": ["antigen candidate results table", "upload -> analyze scoring pipeline", "real omics analysis / diagnostic output"]
+  },
+  "coverage": [
+    { "feature": "Frontend landing loads and identifies the app", "journeys": ["app-identifies-itself"] },
+    { "feature": "Research-triage-only framing is visible", "journeys": ["research-triage-badge"] },
+    { "feature": "Backend FastAPI is reachable and identifies itself", "journeys": ["backend-health"] },
+    { "feature": "Antigen candidate / results table", "unautomated_reason": "requires a completed analysis run seeded from synthetic fixtures; pending an authenticated seeded-run journey" },
+    { "feature": "Upload -> analyze scoring pipeline", "unautomated_reason": "needs synthetic GTEx/HPA/UniProt fixtures uploaded and an async job polled (/analyze/async -> /jobs/{id}); pending a fixture-upload harness" },
+    { "feature": "Real omics analysis / diagnostic output", "unautomated_reason": "PROHIBITED — no identifiable patient data and no diagnostic claims; the gitignored real_data is never loaded" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Frontend landing loads and identifies the pipeline",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "CAR-Treg" }],
+      "user_impact": "If the landing page does not load, no researcher can start an analysis.",
+      "candidate_files": ["frontend/app/page.tsx", "frontend/app/layout.tsx"]
+    },
+    {
+      "id": "research-triage-badge",
+      "name": "Research-triage-only framing is visible",
+      "severity": "medium",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Research triage" }],
+      "user_impact": "If the research-only framing disappears, output could be misread as clinical guidance.",
+      "candidate_files": ["frontend/app/page.tsx", "frontend/components/CaveatPanel.tsx"]
+    },
+    {
+      "id": "backend-health",
+      "name": "FastAPI backend is reachable and self-identifies",
+      "severity": "high",
+      "command": "node",
+      "args": ["-e", "fetch('http://localhost:8000/').then(r=>{if(!r.ok)process.exit(1);return r.text()}).then(t=>{process.stdout.write(t)}).catch(()=>process.exit(1))"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "Kidney Antigen Discovery",
+      "timeout_ms": 20000,
+      "user_impact": "If the FastAPI backend is down, the frontend proxy has nothing to call and no analysis can run.",
+      "candidate_files": ["backend/app/main.py", "backend/app/api/routes.py"]
+    }
+  ]
+}

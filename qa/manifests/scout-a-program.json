@@ -1,0 +1,62 @@
+{
+  "app_id": "scout-a-program",
+  "display_name": "Scout a Program",
+  "repo": "local-only",
+  "local_path": "C:/Users/firer/flexfactor",
+  "surface_of": "flexfactor",
+  "launch_mode": "scout",
+  "runtime_type": "python-cli",
+  "start_command": "python flexfactor.py scout --help (scout is an argparse SUBCOMMAND of flexfactor.py, not an env var; the Scout a Program.lnk desktop launcher runs flexfactor_scout_launch.ps1 -> python flexfactor.py scout --program <target>)",
+  "stop_command": "n/a",
+  "readiness_probe": { "type": "none" },
+  "base_url": null,
+  "test_target": "disposable-local-instance",
+  "required_env": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+  "seed_command": "n/a",
+  "reset_command": "n/a",
+  "cleanup": "rm -rf .eva-tmp/scout-a-program",
+  "disposable_data_root": ".eva-tmp/scout-a-program",
+  "max_runtime_ms": 300000,
+  "concurrency_class": "default",
+  "adapters": ["cli"],
+  "prohibited_actions": [
+    "no adoption or execution of untrusted third-party code into any real project (EDIT-BLOCK default; CRITICAL)",
+    "no scout apply / --apply / repo-rewards ADOPT-tier integration onto a branch",
+    "no LLM API spend and no repo-rewards service run — only scout --help argparse smoke is invoked",
+    "no real program profiling of a real folder/repo (report-only is the safe default and even that needs keys)"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1"],
+    "ports": [],
+    "routes": [],
+    "file_roots": [".eva-tmp/scout-a-program"],
+    "processes": ["python", "python.exe"]
+  },
+  "nightly_critical_journeys": ["scout-identifies-itself"],
+  "weekly_full_journeys": ["scout-identifies-itself"],
+  "feature_coverage": {
+    "features_total": 4,
+    "features_covered": 1,
+    "unautomated_features": ["program profiling", "repo-rewards search + LLM judging", "ADOPT-tier integration apply"]
+  },
+  "coverage": [
+    { "feature": "Scout-mode CLI loads and identifies as Scout", "journeys": ["scout-identifies-itself"] },
+    { "feature": "Program profiling (folder/.lnk/URL/description)", "unautomated_reason": "shares flexfactor codebase; scout-mode journeys pending mode-launch harness" },
+    { "feature": "Repo-rewards search + LLM benefit judging", "unautomated_reason": "shares flexfactor codebase; needs the repo-rewards service at localhost:3000 plus LLM keys; scout-mode journeys pending mode-launch harness" },
+    { "feature": "ADOPT-tier integration apply on a branch", "unautomated_reason": "PROHIBITED to auto-run — no adoption/execution of untrusted third-party code into a real project; report-only is the safe default and even that needs keys" }
+  ],
+  "journeys": [
+    {
+      "id": "scout-identifies-itself",
+      "name": "Scout mode CLI renders usage/help and identifies as Scout",
+      "severity": "critical",
+      "command": "python",
+      "args": ["flexfactor.py", "scout", "--help"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "usage|--program|scout",
+      "timeout_ms": 30000,
+      "user_impact": "If scout mode will not launch, the Scout a Program surface is dead.",
+      "candidate_files": ["flexfactor.py", "flexfactor_scout_launch.ps1"]
+    }
+  ]
+}

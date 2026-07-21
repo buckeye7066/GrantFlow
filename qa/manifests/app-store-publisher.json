@@ -1,0 +1,75 @@
+{
+  "app_id": "app-store-publisher",
+  "display_name": "App Store Publisher",
+  "repo": "buckeye7066/app-store-publisher",
+  "local_path": "C:/Users/firer/app-store-publisher",
+  "runtime_type": "web",
+  "start_command": "npm start",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 4000, "timeout_ms": 60000 },
+  "base_url": "http://localhost:4000",
+  "test_target": "disposable-local-instance",
+  "required_env": ["PORT"],
+  "seed_command": "none (file-based storage; no DB; loopback bind; all store credentials deliberately UNSET)",
+  "reset_command": "remove file-based data under the disposable data root and restart",
+  "cleanup": "rm -rf .eva-tmp/app-store-publisher && remove any file-based submission/upload artifacts created during the run",
+  "disposable_data_root": ".eva-tmp/app-store-publisher",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "default",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "CRITICAL: NO real app-store upload or submission — never POST /api/submit against live credentials",
+    "never POST /api/submissions/:id/retry against live credentials",
+    "never POST /api/verify/:storeId against live credentials",
+    "keep ALL store credentials unconfigured so store integrations skip"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [4000],
+    "routes": ["/", "/api/health"],
+    "file_roots": [".eva-tmp/app-store-publisher"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "wizard-step1-renders"],
+  "weekly_full_journeys": ["app-identifies-itself", "wizard-step1-renders"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 2,
+    "unautomated_features": ["Upload build", "Submit", "Submission history", "Credential storage"]
+  },
+  "coverage": [
+    { "feature": "App shell identifies itself (4-step wizard)", "journeys": ["app-identifies-itself"] },
+    { "feature": "Choose stores (wizard step 1)", "journeys": ["wizard-step1-renders"] },
+    { "feature": "Upload build", "unautomated_reason": "requires a real build artifact fixture and advances the wizard toward submit; deferred until a synthetic dummy-artifact fixture is wired" },
+    { "feature": "Release details + Submit", "unautomated_reason": "submitting is prohibited — POST /api/submit must never run, even with unset credentials, to keep the safety posture unambiguous" },
+    { "feature": "Submission history", "unautomated_reason": "empty on a disposable instance because submissions are prohibited; nothing meaningful to assert" },
+    { "feature": "Credential storage / test-connection", "unautomated_reason": "test-connection hits real store APIs; all store credentials are deliberately unconfigured" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Root page loads and identifies App Store Publisher",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "App Store Publisher" }],
+      "user_impact": "If the wizard shell does not load, the owner cannot start any publishing workflow.",
+      "candidate_files": ["public/index.html", "server.js"]
+    },
+    {
+      "id": "wizard-step1-renders",
+      "name": "Wizard step 1 shows the store choices",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" },
+        { "action": "wait", "ms": 500 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "store" }],
+      "user_impact": "Without store checkboxes on step 1, no target store can be selected and the wizard is a dead end.",
+      "candidate_files": ["public/index.html", "public/app.js"]
+    }
+  ]
+}

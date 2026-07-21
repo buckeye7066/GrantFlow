@@ -1,0 +1,92 @@
+{
+  "app_id": "genemap-discovery",
+  "display_name": "GeneMap Discovery",
+  "repo": "buckeye7066/genemap-discovery",
+  "local_path": "C:/Users/firer/genemap-discovery",
+  "runtime_type": "web",
+  "start_command": "pnpm dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/readyz", "port": 3000, "timeout_ms": 60000 },
+  "base_url": "http://localhost:5173",
+  "test_target": "disposable-local-instance",
+  "required_env": ["DATABASE_URL", "JWT_SECRET", "JWT_REFRESH_SECRET", "COOKIE_SECRET", "CORS_ORIGINS", "MEDICAL_DATA_ENCRYPTION_KEY", "SKIP_LLM_KEY_CHECK", "ADMIN_EMAILS"],
+  "seed_command": null,
+  "reset_command": null,
+  "cleanup": "rm -rf .eva-tmp/genemap-discovery && drop disposable test database",
+  "disposable_data_root": ".eva-tmp/genemap-discovery",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no identifiable patient data (synthetic fixtures only)",
+    "no diagnostic claims",
+    "no real medical data (medical data at rest is encrypted; never load real records)",
+    "no real Stripe checkout",
+    "no real LLM spend (SKIP_LLM_KEY_CHECK=1)",
+    "never upload real genomic files to LLM paths"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5173, 3000],
+    "routes": ["/Login", "/PrivacyPolicy", "/readyz", "/api/auth/*"],
+    "file_roots": [".eva-tmp/genemap-discovery"],
+    "processes": ["node", "pnpm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "reach-register"],
+  "weekly_full_journeys": ["app-identifies-itself", "reach-register", "public-privacy-policy"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 2,
+    "unautomated_features": ["Search", "VCFAnalysis", "ResearchMode/LLM assistants", "MedicalData", "Premium/pricing (Stripe)"]
+  },
+  "coverage": [
+    { "feature": "Login page identifies the app", "journeys": ["app-identifies-itself"] },
+    { "feature": "Login/register entry", "journeys": ["reach-register"] },
+    { "feature": "Public legal pages render", "journeys": ["public-privacy-policy"] },
+    { "feature": "Search", "unautomated_reason": "requires authenticated session with seeded user; wire once seeded auth fixture exists" },
+    { "feature": "VCF analysis", "unautomated_reason": "needs a synthetic fixture genome file plus authenticated session; real genomic files must never reach LLM paths" },
+    { "feature": "ResearchMode / LLM assistants", "unautomated_reason": "needs an LLM mock; SKIP_LLM_KEY_CHECK=1 in test runs prohibits real spend" },
+    { "feature": "MedicalData", "unautomated_reason": "encrypted medical-data flows require seeded synthetic patient plus MEDICAL_DATA_ENCRYPTION_KEY fixture; never real records" },
+    { "feature": "Premium/pricing", "unautomated_reason": "Stripe checkout is prohibited; mocked provider only. Note: an existing Playwright public-surface spec already covers part of the public pages" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Login page loads and identifies GeneMap",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/Login" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "GeneMap" }],
+      "user_impact": "If the login page does not load, no user can sign in at all.",
+      "candidate_files": ["apps/web/src/pages/Login.tsx"]
+    },
+    {
+      "id": "reach-register",
+      "name": "New user can reach the registration form from login",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/Login" },
+        { "action": "waitForSelector", "selector": "body" },
+        { "action": "click", "selector": "button:has-text('Register'), a:has-text('Register'), a:has-text('Sign up')" },
+        { "action": "wait", "ms": 800 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "account" }],
+      "user_impact": "A prospective user who cannot reach the registration form cannot self-onboard.",
+      "candidate_files": ["apps/web/src/pages/Login.tsx", "apps/web/src/pages/Register.tsx"]
+    },
+    {
+      "id": "public-privacy-policy",
+      "name": "Public privacy policy page renders",
+      "severity": "medium",
+      "steps": [
+        { "action": "goto", "url": "/PrivacyPolicy" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Privacy" }],
+      "user_impact": "A medical-data app whose privacy policy is unreachable fails a basic trust and compliance expectation.",
+      "candidate_files": ["apps/web/src/pages/PrivacyPolicy.tsx"]
+    }
+  ]
+}

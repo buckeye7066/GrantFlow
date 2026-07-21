@@ -23,6 +23,8 @@ import { sendEmail as defaultSendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { maskSecrets, latestRun as defaultLatestRun, getRun as defaultGetRun } from '../sam/samAuditStore.js'
 import { summarizeCrawlerResearch } from '../amy/crawlerCompetitiveResearch.js'
+import { defaultLoadEvaPortfolioQa, summarizeEvaPortfolioQa } from '../eva/evaSummary.js'
+import { renderEvaSection } from '../eva/evaReportSection.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('anyaDailyOwnerReport')
@@ -335,7 +337,7 @@ export function summarizeWebParity(parity) {
  * scan of how other crawler codebases work + implementation suggestions
  * (see summarizeCrawlerResearch).
  */
-export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null, research = null } = {}) {
+export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null, parity = null, research = null, eva = undefined, samUnavailable = false } = {}) {
   const findings = Array.isArray(run?.findings) ? run.findings : []
   const repairPlan = Array.isArray(run?.repair_plan) ? run.repair_plan : []
   const planByFindingId = new Map(repairPlan.map((p) => [p?.finding_id, p]))
@@ -366,13 +368,43 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       ? `${counts.critical} critical code issue${counts.critical === 1 ? '' : 's'} need your attention`
       : `${needsHuman.length} code issue${needsHuman.length === 1 ? '' : 's'} for your review`
 
-  const subject = `[GrantFlow] Anya's daily code report — ${clean ? 'all clear' : `${needsHuman.length} to review (${counts.critical}C/${counts.high}H/${counts.medium}M)`}`
+  // EVA portfolio user-journey section — rendered once, folded into the subject
+  // and both bodies. The section renders whenever EVA loading was ATTEMPTED
+  // (eva !== undefined), even if the data is null: renderEvaSection then emits
+  // an explicit "not run / not a pass" block so missing functional testing can
+  // never read as all-clear. Callers that don't pass `eva` (e.g. legacy tests)
+  // get no section.
+  const evaLoaded = eva !== undefined
+  const evaSummary = evaLoaded ? summarizeEvaPortfolioQa(eva, { now }) : null
+  const evaSection = evaLoaded ? renderEvaSection(evaSummary) : null
+  const evaFailed = evaSummary ? evaSummary.journeys_failed : 0
+  const evaFresh = evaSummary ? evaSummary.freshness === 'fresh' : false
+
+  // Subject reflects BOTH code and functional findings, kept short enough to scan.
+  // The functional part is only appended when EVA loading was attempted so legacy
+  // callers (no eva) keep the original code-only subject.
+  const codePart = clean ? 'all clear' : `${needsHuman.length} to review (${counts.critical}C/${counts.high}H/${counts.medium}M)`
+  const evaPart = !evaLoaded
+    ? null
+    : !evaSummary
+      ? 'user-tests: n/a'
+      : evaFailed > 0
+        ? `${evaFailed} user-journey fail${evaFailed === 1 ? '' : 's'}`
+        : evaFresh
+          ? 'user-journeys clear'
+          : 'user-tests stale'
+  const subject = evaPart
+    ? `[GrantFlow] Anya daily — ${clean ? 'code clear' : `${needsHuman.length} code (${counts.critical}C/${counts.high}H)`} · ${evaPart}`
+    : `[GrantFlow] Anya's daily code report — ${codePart}`
 
   // ----- plain text ---------------------------------------------------------
   const t = []
   t.push(`Good morning — here's Anya's daily code/function report.`)
   if (dateStr) t.push(dateStr)
   t.push('')
+  if (samUnavailable) {
+    t.push("Sam's overnight code sweep was UNAVAILABLE — no fresh run to report. The portfolio user-journey results below are unaffected.")
+  }
   t.push(`Sam's overnight sweep: health ${run?.health_score ?? 'n/a'}/100, ${findings.length} finding(s) total.`)
   t.push(`  • ${autoFixing.length} fixed automatically overnight by Sam's CI (safe eslint/fixes → shipped to production when the test gate passed; left as an open PR if it didn't)`)
   t.push(`  • ${needsHuman.length} still need you: ${counts.critical} critical, ${counts.high} high, ${counts.medium} medium, ${counts.low} low`)
@@ -471,6 +503,11 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       t.push('Nothing beat our current crawler approach this run.')
     }
   }
+  // EVA portfolio user-journey section (independent of Sam — always rendered
+  // when EVA loading was attempted, even if it reports "not run / stale").
+  if (evaSection) {
+    t.push(evaSection.text)
+  }
   t.push('')
   t.push(`— Anya · from Sam's run ${run?.id || 'n/a'}`)
   const text = t.join('\n')
@@ -510,8 +547,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
 
   const html = `
     <div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:720px;margin:0 auto;color:#0f172a;">
-      <h2 style="margin:0 0 2px;">☀️ Anya's daily code report</h2>
+      <h2 style="margin:0 0 2px;">☀️ Anya's daily report</h2>
       <p style="margin:0 0 16px;color:#64748b;font-size:13px;">${esc(dateStr)} · ${esc(headline)}</p>
+      ${samUnavailable ? '<p style="margin:0 0 12px;padding:10px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;color:#92400e;font-size:13px;">Sam’s overnight <strong>code sweep was unavailable</strong> — no fresh run to report. The portfolio user-journey results below are unaffected.</p>' : ''}
 
       <table style="border-collapse:collapse;margin:0 0 18px;font-size:13px;">
         <tr>
@@ -614,6 +652,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       </div>`
       })()}
 
+      ${evaSection ? evaSection.html : ''}
+
       <p style="margin:22px 0 0;color:#94a3b8;font-size:12px;">
         From Sam's overnight code/function sweep (run ${esc(run?.id || 'n/a')}). Auto-fixable issues are
         corrected by Sam's CI and shipped to production overnight (before this email); the items above need a human eye.
@@ -654,6 +694,7 @@ export async function runAnyaDailyOwnerReport(db, {
   loadGaps = defaultLoadCoverageGaps,
   loadParity = defaultLoadWebParity,
   loadResearch = defaultLoadCrawlerResearch,
+  loadEva = defaultLoadEvaPortfolioQa,
   now = null,
 } = {}) {
   try {
@@ -663,21 +704,32 @@ export async function runAnyaDailyOwnerReport(db, {
     let run = null
     if (runId) run = await loadRun(db, runId).catch(() => null)
     if (!run) run = await loadLatest(db).catch(() => null)
-    if (!run) return { ran: true, sent: false, reason: 'no_sam_run' }
 
-    const amy = await loadAmy(db).catch(() => null)
-    const gaps = await loadGaps(db, { now }).catch(() => null)
-    const parity = await loadParity(db).catch(() => null)
-    const research = await loadResearch(db).catch(() => null)
-    const { subject, html, text, stats } = buildOwnerReport(run, { now, amy, gaps, parity, research })
+    // EVA loads INDEPENDENTLY of Sam. A missing Sam run must not suppress the
+    // portfolio user-journey stream, and a missing EVA run must not suppress
+    // Sam's — the two report streams never gate each other.
+    const eva = await loadEva(db, { now }).catch(() => null)
+    const evaHasData = !!(eva && (eva.run || (eva.findings && eva.findings.length) || eva.heartbeat))
+
+    // Send only if AT LEAST ONE stream has something to say. If neither Sam nor
+    // EVA has any data, there is genuinely nothing to send. (Reason kept as
+    // 'no_sam_run' for backward compatibility; it now also implies no EVA data.)
+    if (!run && !evaHasData) return { ran: true, sent: false, reason: 'no_sam_run' }
+
+    const samUnavailable = !run
+    const amy = run ? await loadAmy(db).catch(() => null) : null
+    const gaps = run ? await loadGaps(db, { now }).catch(() => null) : null
+    const parity = run ? await loadParity(db).catch(() => null) : null
+    const research = run ? await loadResearch(db).catch(() => null) : null
+    const { subject, html, text, stats } = buildOwnerReport(run || {}, { now, amy, gaps, parity, research, eva, samUnavailable })
     const to = recipient()
     const res = await send({ to, subject, html, text })
     if (res?.ok) {
-      log.info('daily owner report sent', { to, run_id: run.id, ...stats })
-      return { ran: true, sent: true, run_id: run.id, to, stats }
+      log.info('daily owner report sent', { to, run_id: run?.id || null, sam_unavailable: samUnavailable, ...stats })
+      return { ran: true, sent: true, run_id: run?.id || null, sam_unavailable: samUnavailable, to, stats }
     }
-    if (res?.skipped) return { ran: true, sent: false, reason: res.error || 'email_not_configured', run_id: run.id }
-    return { ran: true, sent: false, reason: 'send_failed', error: res?.error || 'unknown', run_id: run.id }
+    if (res?.skipped) return { ran: true, sent: false, reason: res.error || 'email_not_configured', run_id: run?.id || null }
+    return { ran: true, sent: false, reason: 'send_failed', error: res?.error || 'unknown', run_id: run?.id || null }
   } catch (err) {
     log.warn('daily owner report failed', { error: err?.message })
     return { ran: false, sent: false, reason: 'exception', error: String(err?.message || err) }

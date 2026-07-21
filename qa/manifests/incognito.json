@@ -1,0 +1,76 @@
+{
+  "app_id": "incognito",
+  "display_name": "Incognito",
+  "repo": "buckeye7066/incognito",
+  "local_path": "C:/Users/firer/incognito",
+  "runtime_type": "web",
+  "start_command": "npm run dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/", "port": 5173, "timeout_ms": 60000 },
+  "base_url": "http://localhost:5173",
+  "test_target": "disposable-local-instance",
+  "required_env": [],
+  "seed_command": "none (local-first, fully offline; no backend, no DB, no keys needed)",
+  "reset_command": "clear browser storage (vault state lives client-side) and restart the dev server",
+  "cleanup": "rm -rf .eva-tmp/incognito && clear browser profile/localStorage so the synthetic fixture vault is destroyed",
+  "disposable_data_root": ".eva-tmp/incognito",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "default",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "CRITICAL: NO real passwords, SSNs, cards, accounts, API keys, or vault imports — synthetic fixtures only",
+    "never connect real provider API keys",
+    "never trigger real breach-check, broker-removal, or legal submissions"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5173],
+    "routes": ["/"],
+    "file_roots": [".eva-tmp/incognito"],
+    "processes": ["node", "npm", "vite"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "create-vault"],
+  "weekly_full_journeys": ["app-identifies-itself", "create-vault"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 2,
+    "unautomated_features": ["PasswordManager checker", "EmailAliases", "IdentityScan", "Settings"]
+  },
+  "coverage": [
+    { "feature": "VaultGate / unlock screen identifies the app", "journeys": ["app-identifies-itself"] },
+    { "feature": "Create vault with a master password (offline)", "journeys": ["create-vault"] },
+    { "feature": "Dashboard", "journeys": ["create-vault"] },
+    { "feature": "Password checker", "unautomated_reason": "requires user consent flow plus provider keys; real keys are prohibited" },
+    { "feature": "Email aliases", "unautomated_reason": "alias creation reaches an external alias provider; no synthetic offline path exists yet" },
+    { "feature": "Identity scan", "unautomated_reason": "needs provider API keys — connecting real keys is prohibited, and no stub provider is wired" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Vault gate loads and identifies Incognito (note: use http://localhost:5173 explicitly — Windows ::1 ordering quirk)",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "http://localhost:5173/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Incognito" }],
+      "user_impact": "If the vault gate does not load, the user cannot unlock or create a vault — the entire app is unreachable.",
+      "candidate_files": ["src/App.tsx", "src/components/VaultGate.tsx"]
+    },
+    {
+      "id": "create-vault",
+      "name": "A new vault can be created offline with a synthetic master password",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "http://localhost:5173/" },
+        { "action": "waitForSelector", "selector": "input[type=password]" },
+        { "action": "fill", "selector": "input[type=password]", "value": "EvaFixturePass123!" },
+        { "action": "click", "selector": "button[type=submit]" },
+        { "action": "wait", "ms": 2000 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "vault" }],
+      "user_impact": "If vault creation fails, a new user can never start using the app — local-first onboarding is the only entry path.",
+      "candidate_files": ["src/components/VaultGate.tsx", "src/components/Dashboard.tsx", "src/lib/crypto.ts"]
+    }
+  ]
+}

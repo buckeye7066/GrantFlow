@@ -1,0 +1,73 @@
+{
+  "app_id": "flexfactor",
+  "display_name": "FlexFactor",
+  "repo": "local-only",
+  "local_path": "C:/Users/firer/flexfactor",
+  "runtime_type": "python-cli",
+  "start_command": "python flexfactor.py --help",
+  "stop_command": "n/a",
+  "readiness_probe": { "type": "none" },
+  "base_url": null,
+  "test_target": "disposable-local-instance",
+  "required_env": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+  "seed_command": "n/a",
+  "reset_command": "n/a",
+  "cleanup": "rm -rf .eva-tmp/flexfactor",
+  "disposable_data_root": ".eva-tmp/flexfactor",
+  "max_runtime_ms": 300000,
+  "concurrency_class": "default",
+  "adapters": ["cli"],
+  "prohibited_actions": [
+    "no adoption or execution of untrusted third-party code into any real project (EDIT-BLOCK default; CRITICAL)",
+    "no real refactor/scout/audit run against a real repo (it would modify source, spend LLM budget, and can git commit/push)",
+    "no LLM API spend — only --help/argparse smoke is invoked, which needs no keys",
+    "no scout apply / --apply / --merge / repo-rewards adoption"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1"],
+    "ports": [],
+    "routes": [],
+    "file_roots": [".eva-tmp/flexfactor"],
+    "processes": ["python", "python.exe"]
+  },
+  "nightly_critical_journeys": ["ff-help"],
+  "weekly_full_journeys": ["ff-help", "ff-audit-help"],
+  "feature_coverage": {
+    "features_total": 5,
+    "features_covered": 2,
+    "unautomated_features": ["refactor rewrite loop", "scout program analysis", "audit defect-hunt + auto-fix"]
+  },
+  "coverage": [
+    { "feature": "CLI help / refactor mode entry", "journeys": ["ff-help"] },
+    { "feature": "Audit mode help / entry", "journeys": ["ff-audit-help"] },
+    { "feature": "Refactor self-grading rewrite loop", "unautomated_reason": "needs a throwaway source file plus LLM API keys and MODIFIES code; not auto-run (budget + EDIT-BLOCK safety)" },
+    { "feature": "Scout program analysis (repo-rewards adoption)", "unautomated_reason": "see scout-a-program manifest; a real scout run needs the repo-rewards service + keys and can adopt third-party code — PROHIBITED to auto-run" },
+    { "feature": "Audit defect-hunt + auto-fix", "unautomated_reason": "needs a real target project + keys, modifies and commits code; never auto-run" }
+  ],
+  "journeys": [
+    {
+      "id": "ff-help",
+      "name": "FlexFactor CLI renders usage/help",
+      "severity": "critical",
+      "command": "python",
+      "args": ["flexfactor.py", "--help"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "usage|--goal|--file",
+      "timeout_ms": 30000,
+      "user_impact": "If the CLI cannot render help, the whole tool is unusable.",
+      "candidate_files": ["flexfactor.py"]
+    },
+    {
+      "id": "ff-audit-help",
+      "name": "Audit mode entry is invokable",
+      "severity": "medium",
+      "command": "python",
+      "args": ["flexfactor.py", "audit", "--help"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "usage|--program",
+      "timeout_ms": 30000,
+      "user_impact": "If audit mode cannot even parse its flags, the flagship audit workflow cannot start.",
+      "candidate_files": ["flexfactor.py"]
+    }
+  ]
+}

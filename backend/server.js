@@ -521,6 +521,13 @@ app.use((req, res, next) => {
 
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter)
 
+// EVA portfolio-QA signed ingest + heartbeat. Mounted BEFORE express.json with a
+// raw-body parser: the Windows edge runner signs an HMAC over the exact bytes, so
+// verification needs req.body as a Buffer (see backend/services/eva/evaIngest.js).
+// req.db is already attached above; these routes self-authenticate via HMAC and
+// do NOT use the admin bearer gate.
+app.use('/api/eva', express.raw({ type: '*/*', limit: '2mb' }), lazyRouter('./routes/adminPortfolioQa.js', (mod) => mod.createEvaSignedRouter()))
+
 // Twilio inbound-SMS webhook. Mounted BEFORE express.json() because Twilio POSTs
 // application/x-www-form-urlencoded (the router parses its own body) and signs
 // the raw request — see backend/routes/smsInbound.js. req.db is already attached.
@@ -2238,6 +2245,10 @@ app.use('/api/anya', anyaRouter);
 // reviewable candidate inbox (lead/funding/profile_field). Lazy so the
 // Anthropic SDK only loads when the connector is actually used.
 app.use('/api/laptop-connector', lazyRouter('./routes/laptopConnector.js'));
+// EVA portfolio-QA admin reads (status + email preview). Mounted here (after
+// express.json + auth middleware) so req.ctx/req.user are populated; the signed
+// ingest/heartbeat endpoints are mounted separately BEFORE express.json above.
+app.use('/api/eva', lazyRouter('./routes/adminPortfolioQa.js', (mod) => mod.createEvaAdminRouter()));
 // Controlled-vocabulary catalog for profile TAG pickers (needs / focus). Sourced
 // from the matcher's OWN vocabulary (backend/config/profileVocabulary.js) so every
 // pickable tag is guaranteed to score. Mounted BEFORE the profiles router so the
@@ -4037,6 +4048,28 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(lockedRunOnce, 10 * 60 * 1000) // 10-min check; keeps the owner email within minutes of 09:00 ET and catches up a missed window
   }
 
+  // EVA portfolio-QA maintenance — marks open user-journey findings 'stale' when
+  // no fresh edge-runner upload has re-observed them within the stale window, and
+  // logs runner-heartbeat health. Best-effort, lock-protected, hourly. Does NOT
+  // send email — EVA data reaches the owner via the existing 09:00 Anya report.
+  function scheduleEvaMaintenance(dbInstance) {
+    const runOnce = async () => {
+      try {
+        const { runEvaMaintenance } = await import('./services/eva/evaScheduler.js')
+        await runEvaMaintenance(dbInstance, {})
+      } catch (err) {
+        console.warn('[eva-maintenance] failed:', err.message)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'eva-maintenance',
+      ttlMs: 30 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 180_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly
+  }
+
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
@@ -4049,6 +4082,7 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleQualifiedPipelinePromotion(db)
     scheduleSamDailyCodeSweep(db)
     scheduleAnyaDailyOwnerReport(db)
+    scheduleEvaMaintenance(db)
 
     // Immediate boot-time net: if a previous nightly sweep crashed and left the
     // app stuck in a DOWN maintenance window, reopen it now rather than waiting

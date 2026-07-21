@@ -1,0 +1,73 @@
+{
+  "app_id": "promopilot",
+  "display_name": "PromoPilot",
+  "repo": "buckeye7066/promopilot",
+  "local_path": "C:/Users/firer/promopilot",
+  "runtime_type": "web",
+  "start_command": "npm start",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/healthz", "port": 8090, "timeout_ms": 60000 },
+  "base_url": "http://localhost:8090",
+  "test_target": "disposable-local-instance",
+  "required_env": ["ADMIN_TOKEN", "PROMO_ENABLED", "SQLITE_PATH"],
+  "seed_command": "none (SQLite auto-initializes at SQLITE_PATH; no external DB needed)",
+  "reset_command": "delete disposable SQLite file at SQLITE_PATH and restart",
+  "cleanup": "rm -rf .eva-tmp/promopilot && remove disposable SQLite db at SQLITE_PATH",
+  "disposable_data_root": ".eva-tmp/promopilot",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "default",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "CRITICAL: NO real social-media post — run with PROMO_ENABLED=false AND zero platform credentials configured (the scheduler defaults ON)",
+    "never call POST /api/post-now",
+    "never call POST /api/invites/send-now",
+    "never call POST /api/contact-follows/run-now"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [8090],
+    "routes": ["/", "/healthz"],
+    "file_roots": [".eva-tmp/promopilot"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "login-view-renders"],
+  "weekly_full_journeys": ["app-identifies-itself", "login-view-renders"],
+  "feature_coverage": {
+    "features_total": 4,
+    "features_covered": 1,
+    "unautomated_features": ["Channels panel", "Apps & books campaign manager", "Recent posts log"]
+  },
+  "coverage": [
+    { "feature": "Token login / unlock view", "journeys": ["app-identifies-itself", "login-view-renders"] },
+    { "feature": "Channels panel", "unautomated_reason": "behind the single-owner token login; add-app/upload-asset flows require an authenticated token session not yet wired into fixtures" },
+    { "feature": "Apps & books campaign manager", "unautomated_reason": "requires token login; any campaign action risks touching the posting scheduler, and real posting is prohibited" },
+    { "feature": "Recent posts log", "unautomated_reason": "requires token login and posting history; posting itself is prohibited so the log stays empty in a disposable instance" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Root page loads and identifies PromoPilot (or its login gate)",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "PromoPilot" }],
+      "user_impact": "If the root page does not load, the owner cannot reach the console at all.",
+      "candidate_files": ["public/index.html", "server.js"]
+    },
+    {
+      "id": "login-view-renders",
+      "name": "Token unlock view renders an input for the admin token",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "input" },
+        { "action": "wait", "ms": 500 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "token" }],
+      "user_impact": "Without the token unlock input, the single-owner login is impossible and the whole console is locked out.",
+      "candidate_files": ["public/index.html", "public/app.js"]
+    }
+  ]
+}
