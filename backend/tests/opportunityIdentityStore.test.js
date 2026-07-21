@@ -6,19 +6,32 @@
  *   (b) upsertOpenConflict is idempotent per (scheme, identity_key): a second
  *       observation lands on the SAME row id with updated evidence — never a
  *       second open row (the partial unique index is the DDL backstop) — while
- *       a RESOLVED conflict frees the slot for a genuinely NEW open one;
- *   (c) resolveConflict refuses 'open' (and any unknown status);
+ *       a RESOLVED conflict frees the slot for a genuinely NEW open one; the
+ *       a/b columns keep the FIRST-observed pair and `participants` aggregates
+ *       EVERY distinct opportunity id observed (A/B then A/C retains C
+ *       structurally, and resolution never erases it);
+ *   (c) resolveConflict refuses 'open' (and any unknown status) and is
+ *       COMPARE-AND-SET: of two concurrent resolutions exactly one wins;
  *   (d) withIdentityTxn dispatches by dialect (pg advisory lock inside the txn
- *       vs SQLite BEGIN IMMEDIATE) and, on a unique-constraint violation from
- *       a lost two-writer race, retries the callback exactly ONCE so the
- *       re-read sees the winner;
+ *       vs SQLite BEGIN IMMEDIATE — proven against the REAL shim) and, on a
+ *       unique violation of the ALIAS constraint from a lost two-writer race,
+ *       retries the callback exactly ONCE so the re-read sees the winner —
+ *       while an UNRELATED unique violation is never retried;
  *   (e) the migration twins exist, apply on a fresh DB, and are idempotent;
  *       schema.sql (fresh-install bootstrap) creates the same tables; and
  *   (f) NOTHING in the live code path imports the accessor yet (wired in a
  *       later sub-PR).
+ *
+ * POSTGRES COVERAGE DISPOSITION: the Postgres path (advisory lock, ON CONFLICT
+ * partial-index upsert, error.constraint) is exercised here only against a
+ * shaped fake — this repo has NO ephemeral-Postgres test infra by standing
+ * practice (SQLite tests + prod verification), and this PR deliberately does
+ * not build it. The PG dialect is verified in prod at deploy time, like every
+ * other migration twin in backend/db/postgres/migrations/.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import Database from 'better-sqlite3'
 import {
@@ -29,9 +42,12 @@ import {
   resolveConflict,
   withIdentityTxn,
   isUniqueViolation,
+  isAliasUniqueViolation,
+  ALIAS_UNIQUE_CONSTRAINT,
   CONFLICT_STATUSES,
   RESOLVED_CONFLICT_STATUSES,
 } from '../services/opportunityIdentityStore.js'
+import { SqliteDb } from '../db/index.js'
 
 // Located by SUFFIX, not number: another session may renumber the migration
 // files; the number lives only in the filename, never inside the SQL.
@@ -117,6 +133,7 @@ describe('alias accessors', () => {
     }
     expect(caught).toBeTruthy()
     expect(isUniqueViolation(caught)).toBe(true)
+    expect(isAliasUniqueViolation(caught)).toBe(true) // THE alias constraint specifically
     // The winner's row is untouched.
     expect((await getAlias(db, ALIAS.scheme, ALIAS.identityKey)).opportunity_id).toBe('opp-1')
   })
@@ -145,6 +162,42 @@ describe('open-conflict upsert idempotency', () => {
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM opportunity_identity_conflicts`).get().n,
     ).toBe(1)
+  })
+
+  it('A/B then A/C: the SAME open row AGGREGATES C into participants (a/b stay the FIRST-observed pair)', async () => {
+    const db = makeMigratedDb()
+    const first = await upsertOpenConflict(db, { ...CONFLICT, evidence: 'A vs B' })
+    expect(JSON.parse(first.participants)).toEqual(['opp-1', 'opp-2'])
+
+    // A NEW conflicting opportunity C arrives while A/B is still open. C must
+    // be retained STRUCTURALLY — not merely inside unstructured evidence.
+    const second = await upsertOpenConflict(db, { ...CONFLICT, bId: 'opp-3', evidence: 'A vs C' })
+    expect(second.id).toBe(first.id) // still the ONE open row
+    expect(second.opportunity_id_a).toBe('opp-1') // first-observed pair kept
+    expect(second.opportunity_id_b).toBe('opp-2')
+    expect(JSON.parse(second.participants)).toEqual(['opp-1', 'opp-2', 'opp-3'])
+
+    // Resolving the row FINALIZES the decision but never erases what was
+    // observed: participants stay intact on the resolved row, so resolving
+    // A/B cannot silently discard the knowledge of C.
+    expect(await resolveConflict(db, second.id, 'resolved_merged')).toBe(true)
+    const resolved = db
+      .prepare(`SELECT status, participants FROM opportunity_identity_conflicts WHERE id = ?`)
+      .get(second.id)
+    expect(resolved.status).toBe('resolved_merged')
+    expect(JSON.parse(resolved.participants)).toEqual(['opp-1', 'opp-2', 'opp-3'])
+  })
+
+  it('a legacy open row with NULL participants is seeded from its own a/b pair on re-observation', async () => {
+    const db = makeMigratedDb()
+    db.prepare(
+      `INSERT INTO opportunity_identity_conflicts
+         (id, scheme, identity_key, opportunity_id_a, opportunity_id_b, status)
+       VALUES ('legacy', ?, ?, 'opp-1', 'opp-2', 'open')`,
+    ).run(CONFLICT.scheme, CONFLICT.identityKey)
+    const row = await upsertOpenConflict(db, { ...CONFLICT, aId: 'opp-1', bId: 'opp-4' })
+    expect(row.id).toBe('legacy')
+    expect(JSON.parse(row.participants)).toEqual(['opp-1', 'opp-2', 'opp-4'])
   })
 
   it('re-observation bumps last_seen_at', async () => {
@@ -222,6 +275,17 @@ describe('resolveConflict', () => {
     expect(await resolveConflict(db, 'no-such-id', 'dismissed')).toBe(false)
   })
 
+  it('COMPARE-AND-SET: of two concurrent resolutions the second returns false and the FIRST outcome stands', async () => {
+    const db = makeMigratedDb()
+    const row = await upsertOpenConflict(db, { scheme: 's', identityKey: 'k-cas', aId: 'a', bId: 'b' })
+    expect(await resolveConflict(db, row.id, 'resolved_merged')).toBe(true)
+    // The losing resolver must NOT silently rewrite an already-final decision.
+    expect(await resolveConflict(db, row.id, 'resolved_distinct')).toBe(false)
+    expect(
+      db.prepare(`SELECT status FROM opportunity_identity_conflicts WHERE id = ?`).get(row.id).status,
+    ).toBe('resolved_merged')
+  })
+
   it('every CHECK-constraint status is reachable: the constant lists exactly the DDL statuses', () => {
     // The DDL CHECK and the module constant must not drift.
     const ddl = fs.readFileSync(sqlitePath, 'utf8')
@@ -295,11 +359,60 @@ describe('withIdentityTxn — dialect dispatch + retry-once', () => {
         // must surface, not spin.
         return insertAlias(tx, { ...ALIAS, opportunityId: 'opp-loser' })
       }),
-    ).rejects.toSatisfy(isUniqueViolation)
+    ).rejects.toSatisfy(isAliasUniqueViolation)
     expect(calls).toBe(2)
   })
 
-  it('POSTGRES dispatch: takes pg_advisory_xact_lock(hashtext(scheme || \':\' || identity_key)) INSIDE the txn, BEFORE the callback', async () => {
+  it('an UNRELATED unique violation is NOT retried (propagates on the FIRST attempt)', async () => {
+    const db = makeMigratedDb()
+    // A conflicts-table PRIMARY KEY violation is a unique violation — but it is
+    // NOT the alias race the retry exists to absorb. Re-running the whole
+    // callback for it would double-apply any side effect that escaped the
+    // rolled-back transaction.
+    db.prepare(
+      `INSERT INTO opportunity_identity_conflicts
+         (id, scheme, identity_key, opportunity_id_a, opportunity_id_b)
+       VALUES ('dup-id', 's', 'k1', 'a', 'b')`,
+    ).run()
+    let calls = 0
+    let caught = null
+    try {
+      await withIdentityTxn(db, ALIAS.scheme, ALIAS.identityKey, async (tx) => {
+        calls += 1
+        await tx
+          .prepare(
+            `INSERT INTO opportunity_identity_conflicts
+               (id, scheme, identity_key, opportunity_id_a, opportunity_id_b)
+             VALUES ('dup-id', 's', 'k2', 'a', 'b')`,
+          )
+          .run()
+      })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeTruthy()
+    expect(isUniqueViolation(caught)).toBe(true) // it IS a unique violation...
+    expect(isAliasUniqueViolation(caught)).toBe(false) // ...but not the alias one
+    expect(calls).toBe(1) // and so it was NEVER retried
+  })
+
+  it('isAliasUniqueViolation recognizes the Postgres error shape by constraint name', () => {
+    const pgAliasError = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: ALIAS_UNIQUE_CONSTRAINT,
+      table: 'opportunity_identity_aliases',
+    })
+    const pgOtherError = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'user_verification_codes_pkey',
+      table: 'user_verification_codes',
+    })
+    expect(isAliasUniqueViolation(pgAliasError)).toBe(true)
+    expect(isAliasUniqueViolation(pgOtherError)).toBe(false)
+    expect(isUniqueViolation(pgOtherError)).toBe(true)
+  })
+
+  it('POSTGRES dispatch: takes the TWO-INT pg_advisory_xact_lock(hashtext(scheme), hashtext(identity_key)) INSIDE the txn, BEFORE the callback', async () => {
     const events = []
     const fakePg = {
       dialect: 'postgres',
@@ -332,7 +445,9 @@ describe('withIdentityTxn — dialect dispatch + retry-once', () => {
 
     expect(result).toBe('done')
     expect(events[0]).toBe('BEGIN')
-    expect(events[1].sql).toContain("pg_advisory_xact_lock(hashtext(? || ':' || ?))")
+    // TWO-INT form: each component hashed separately — no concatenation
+    // ambiguity (("a:b","c") vs ("a","b:c")) and a 64-bit combined key space.
+    expect(events[1].sql).toContain('pg_advisory_xact_lock(hashtext(?), hashtext(?))')
     expect(events[1].args).toEqual(['normalized_url', 'key-1'])
     expect(events[2]).toBe('CALLBACK') // lock BEFORE any callback dual-read
     expect(events[3]).toBe('COMMIT')
@@ -362,6 +477,90 @@ describe('withIdentityTxn — dialect dispatch + retry-once', () => {
   })
 })
 
+describe('withIdentityTxn — REAL sqlite shim (BEGIN IMMEDIATE serialization + wedge recovery)', () => {
+  // File-backed (not :memory:) so a SECOND real connection can contend for the
+  // write lock — the only way to prove a transaction is actually held.
+  function makeShimDb() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-idstore-'))
+    const file = path.join(dir, 'shim.db')
+    // Keep the busy wait short so an induced BEGIN failure fails FAST.
+    const prev = process.env.SQLITE_BUSY_TIMEOUT_MS
+    process.env.SQLITE_BUSY_TIMEOUT_MS = '150'
+    let shim
+    try {
+      shim = new SqliteDb(file)
+    } finally {
+      if (prev === undefined) delete process.env.SQLITE_BUSY_TIMEOUT_MS
+      else process.env.SQLITE_BUSY_TIMEOUT_MS = prev
+    }
+    shim.exec(fs.readFileSync(sqlitePath, 'utf8'))
+    return { shim, file, dir }
+  }
+
+  function cleanup(shim, others, dir) {
+    for (const conn of others) {
+      try { conn.close() } catch { /* already closed */ }
+    }
+    try { shim.close() } catch { /* already closed */ }
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* Windows file handles */ }
+  }
+
+  it('runs the callback inside a REAL held transaction: an outside writer is locked out mid-callback, admitted after COMMIT', async () => {
+    const { shim, file, dir } = makeShimDb()
+    const outside = new Database(file)
+    try {
+      outside.pragma('busy_timeout = 0') // fail immediately, do not queue
+      const insertOutside = () =>
+        outside.exec(
+          `INSERT INTO opportunity_identity_aliases (scheme, identity_key, opportunity_id)
+           VALUES ('other-scheme', 'other-key', 'opp-x')`,
+        )
+      const result = await withIdentityTxn(shim, ALIAS.scheme, ALIAS.identityKey, async (tx) => {
+        await insertAlias(tx, ALIAS)
+        // The BEGIN IMMEDIATE write lock is held RIGHT NOW.
+        expect(insertOutside).toThrow(/busy|locked/i)
+        return getAlias(tx, ALIAS.scheme, ALIAS.identityKey)
+      })
+      expect(result.opportunity_id).toBe('opp-1')
+      // After COMMIT the outside writer succeeds — the lock was transactional,
+      // not a leak.
+      expect(insertOutside).not.toThrow()
+    } finally {
+      cleanup(shim, [outside], dir)
+    }
+  })
+
+  it('a FAILED BEGIN IMMEDIATE (writer held past busy_timeout) does NOT wedge the shim: the next transaction still runs', async () => {
+    const { shim, file, dir } = makeShimDb()
+    const holder = new Database(file)
+    try {
+      holder.exec('BEGIN IMMEDIATE') // an outside process holds the write lock
+      await expect(shim.withTransaction(async () => 'never')).rejects.toThrow(/busy|locked/i)
+      holder.exec('ROLLBACK') // the outside writer goes away
+
+      // Pre-fix, the failed BEGIN left _asyncTxLock held forever and this
+      // await never resolved; the race turns that hang into a clear failure.
+      let timer
+      try {
+        const result = await Promise.race([
+          withIdentityTxn(shim, ALIAS.scheme, ALIAS.identityKey, (tx) => insertAlias(tx, ALIAS)),
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('shim wedged: withTransaction never ran after a failed BEGIN')),
+              3000,
+            )
+          }),
+        ])
+        expect(result.opportunity_id).toBe('opp-1')
+      } finally {
+        clearTimeout(timer)
+      }
+    } finally {
+      cleanup(shim, [holder], dir)
+    }
+  })
+})
+
 describe('migration twins — opportunity identity tables', () => {
   it('exist as a numbered twin pair (found by suffix — numbers only in filenames)', () => {
     expect(fs.existsSync(sqlitePath)).toBe(true)
@@ -381,7 +580,16 @@ describe('migration twins — opportunity identity tables', () => {
       expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS opportunity_identity_conflicts/)
       expect(sql).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS ux_opportunity_identity_conflicts_one_open/)
       expect(sql).toMatch(/WHERE status = 'open'/)
+      // The alias constraint NAME is API surface (withIdentityTxn's retry keys
+      // on it via Postgres error.constraint) and must not drift from the code.
+      expect(sql).toContain(`CONSTRAINT ${ALIAS_UNIQUE_CONSTRAINT} UNIQUE (scheme, identity_key)`)
+      // Participant aggregation column (A/B → A/C retention).
+      expect(sql).toMatch(/participants TEXT/)
     }
+    // schema.sql (fresh-install bootstrap) carries the same named constraint.
+    expect(fs.readFileSync(schemaSqlPath, 'utf8')).toContain(
+      `CONSTRAINT ${ALIAS_UNIQUE_CONSTRAINT} UNIQUE (scheme, identity_key)`,
+    )
   })
 
   it('applies on a fresh DB AND is idempotent (re-run is a clean no-op)', () => {

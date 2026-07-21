@@ -13,6 +13,13 @@
 --     The PARTIAL unique index (WHERE status = 'open') means re-observing a
 --     known conflict updates the ONE open row instead of inserting a second,
 --     while a RESOLVED conflict leaves room for a genuinely new open one.
+--     opportunity_id_a/b stay the FIRST-observed pair; `participants` is the
+--     JSON array of ALL distinct opportunity ids ever observed on the row, so
+--     a later A/C observation folding into an open A/B row never loses C.
+--
+-- The aliases UNIQUE constraint carries an EXPLICIT name: the accessor's
+-- withIdentityTxn retry keys on it (Postgres reports error.constraint), so the
+-- name is API surface, not decoration.
 -- NOTHING in the live path writes or reads these tables yet (wired in a later
 -- sub-PR); this PR only adds the tables + a pure accessor
 -- (backend/services/opportunityIdentityStore.js).
@@ -27,7 +34,7 @@ CREATE TABLE IF NOT EXISTS opportunity_identity_aliases (
   opportunity_id TEXT NOT NULL,
   first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (scheme, identity_key)
+  CONSTRAINT ux_opportunity_identity_aliases_key UNIQUE (scheme, identity_key)
 );
 CREATE INDEX IF NOT EXISTS idx_opportunity_identity_aliases_opportunity
   ON opportunity_identity_aliases(opportunity_id);
@@ -38,6 +45,7 @@ CREATE TABLE IF NOT EXISTS opportunity_identity_conflicts (
   identity_key TEXT NOT NULL,
   opportunity_id_a TEXT NOT NULL,
   opportunity_id_b TEXT NOT NULL,
+  participants TEXT,
   evidence TEXT,
   status TEXT NOT NULL DEFAULT 'open'
     CHECK (status IN ('open', 'resolved_merged', 'resolved_distinct', 'dismissed')),

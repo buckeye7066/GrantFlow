@@ -3999,10 +3999,12 @@ CREATE TABLE IF NOT EXISTS page_fact_cache (
 -- identity resolution. ADDITIVE, default-off: NOTHING in the live path
 -- reads/writes these yet (wired in a later sub-PR). An alias maps a
 -- (scheme, identity_key) — a normalized URL or external id under a named
--- scheme — to the ONE opportunity it denotes (UNIQUE is the invariant); a
+-- scheme — to the ONE opportunity it denotes (the NAMED unique constraint is
+-- the invariant AND API surface: withIdentityTxn's retry keys on it); a
 -- conflict records the same key observed on TWO opportunities, and the PARTIAL
 -- unique index keeps at most ONE open conflict per (scheme, identity_key)
--- while resolved rows accumulate. Accessor:
+-- while resolved rows accumulate (opportunity_id_a/b = FIRST-observed pair;
+-- participants = JSON array of ALL distinct opportunity ids observed). Accessor:
 -- backend/services/opportunityIdentityStore.js. Migration twins:
 -- *_opportunity_identity_tables.sql (sqlite + postgres).
 CREATE TABLE IF NOT EXISTS opportunity_identity_aliases (
@@ -4011,7 +4013,7 @@ CREATE TABLE IF NOT EXISTS opportunity_identity_aliases (
   opportunity_id TEXT NOT NULL,
   first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (scheme, identity_key)
+  CONSTRAINT ux_opportunity_identity_aliases_key UNIQUE (scheme, identity_key)
 );
 CREATE INDEX IF NOT EXISTS idx_opportunity_identity_aliases_opportunity
   ON opportunity_identity_aliases(opportunity_id);
@@ -4022,6 +4024,7 @@ CREATE TABLE IF NOT EXISTS opportunity_identity_conflicts (
   identity_key TEXT NOT NULL,
   opportunity_id_a TEXT NOT NULL,
   opportunity_id_b TEXT NOT NULL,
+  participants TEXT,
   evidence TEXT,
   status TEXT NOT NULL DEFAULT 'open'
     CHECK (status IN ('open', 'resolved_merged', 'resolved_distinct', 'dismissed')),
