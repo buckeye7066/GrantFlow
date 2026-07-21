@@ -63,7 +63,7 @@ import { resolveProfileType, getParentChain } from '../services/profileTypeRegis
 import { grantFamilyKey, grantUrlKey, likelySameGrantOpportunity } from '../utils/grantFingerprint.js'
 import { isSearchEngineUrl } from '../config/urlRules.js'
 import { resolveOpportunityAmounts, isOfficialAmountSource, AMOUNT_MAX_PLAUSIBLE, AMOUNT_STATUS_NONE_PUBLISHED } from '../services/awardAmountExtractor.js'
-import { AUTO_ADD_SCORE, DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
+import { DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
@@ -3001,14 +3001,20 @@ export async function enforceImportedStatusHonesty(db) {
  *
  * OVERRIDE: ON by default; `ENFORCE_GRANT_CATALOG_LINK=0` for count-only.
  */
-export async function enforceGrantCatalogLink(db) {
+export async function enforceGrantCatalogLink(db, deps = {}) {
   return runInvariant('grant_catalog_link', async () => {
     const grantCols = await listGrantColumns(db)
     if (!grantCols.has('funding_opportunity_id') || !grantCols.has('url')) {
       return { scanned: 0, repaired: 0, skipped: 'schema' }
     }
     const disabled = _parseBoolEnv(process.env.ENFORCE_GRANT_CATALOG_LINK) === false
-    const LIMIT = Math.max(1, Number(process.env.GRANT_CATALOG_LINK_LIMIT) || 500)
+    const LIMIT = Math.max(1, Number(deps.limit ?? process.env.GRANT_CATALOG_LINK_LIMIT) || 500)
+    const scopedGrantIds = Array.isArray(deps.grantIds)
+      ? [...new Set(deps.grantIds.map(String).filter(Boolean))]
+      : null
+    if (scopedGrantIds && scopedGrantIds.length === 0) {
+      return { scanned: 0, repaired: 0, enforced: !disabled }
+    }
 
     // RTRIM(x, '/') strips trailing slashes on BOTH sqlite and postgres (both
     // read the 2nd arg as a character set). LOWER folds case. Kept as one
@@ -3020,6 +3026,10 @@ export async function enforceGrantCatalogLink(db) {
     let candidates = []
     try {
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const scopeSql = scopedGrantIds
+        ? ` AND g.id IN (${scopedGrantIds.map(() => '?').join(', ')})`
+        : ''
+      // audit:allow dynamic-sql — scopeSql contains placeholders only; ids stay bound.
       candidates = await db
         .prepare(
           `SELECT g.id, g.profile_id,
@@ -3028,10 +3038,11 @@ export async function enforceGrantCatalogLink(db) {
             WHERE g.status IN (${statuses})
               AND g.funding_opportunity_id IS NULL
               AND COALESCE(g.url, g.application_url, '') <> ''
-            ORDER BY g.id ASC
-            LIMIT ?`,
+              ${scopeSql}
+             ORDER BY g.id ASC
+             LIMIT ?`,
         )
-        .all(LIMIT)
+        .all(...(scopedGrantIds || []), LIMIT)
     } catch (err) {
       log.warn('grant_catalog_link: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, skipped: 'query' }
@@ -3120,6 +3131,12 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.AMOUNT_ENRICH_BOOT_LIMIT ?? '10', 10) || 10)
     const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.AMOUNT_ENRICH_TIME_BUDGET_MS ?? '20000', 10) || 20000)
     const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
+    const scopedOpportunityIds = Array.isArray(deps.opportunityIds)
+      ? [...new Set(deps.opportunityIds.map(String).filter(Boolean))]
+      : null
+    if (scopedOpportunityIds && scopedOpportunityIds.length === 0) {
+      return { scanned: 0, repaired: 0, enforced: !disabled }
+    }
 
     // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
     // numeric amount, no text yet (or explicitly not_listed), has a page, and
@@ -3137,6 +3154,10 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     try {
       const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
+      const scopeSql = scopedOpportunityIds
+        ? ` AND fo.id IN (${scopedOpportunityIds.map(() => '?').join(', ')})`
+        : ''
+      // audit:allow dynamic-sql — scopeSql contains placeholders only; ids stay bound.
       candidates = await db
         .prepare(
           // fo.source / fo.source_id / fo.record_origin are what the amount
@@ -3157,10 +3178,11 @@ export async function enforceAmountEnrichment(db, deps = {}) {
               AND fo.amount_text IS NULL
               AND fo.amount_enrich_attempted_at IS NULL
               AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
+              ${scopeSql}
             ORDER BY COALESCE(fo.amount_enrich_attempts, 0) ASC, fo.id ASC
             LIMIT ?`,
         )
-        .all(Math.max(LIMIT, 1))
+        .all(...(scopedOpportunityIds || []), Math.max(LIMIT, 1))
     } catch (err) {
       // A DB that predates ensureAmountVisibilityColumns() has no attempted
       // column. Count-only rather than silently falling back to the wedged
@@ -3969,124 +3991,6 @@ export async function enforceGrantScoreBackfill(db) {
 }
 
 /**
- * INVARIANT: AN ACTIVE PROFILE WITH ABOVE-BAR STORED MATCHES NEVER SHOWS A
- * NEAR-EMPTY PIPELINE (the purge-then-refill gap: the 2026-07-06 below-bar
- * purge emptied pipelines hours before the daily agents refilled them, so
- * profiles with a 99-score stored match displayed "$0 — qualifies for
- * nothing").
- *
- * THE RULE: when an active profile's active-status pipeline rows number fewer
- * than PIPELINE_REFILL_MIN_ROWS (default 5), promote its BEST stored matches
- * (profile_opportunity_matches ≥ AUTO_ADD_SCORE, re-scored through the
- * canonical engine at promote time) into the pipeline via the fully-gated
- * saveToProfilePipeline — which enforces the source allowlist, relevance
- * floor, duplicate guard, and the user's dismissal tombstones. A row the user
- * deleted stays deleted; only genuinely new, above-bar sources flow in.
- *
- * Re-scoring at promote time also makes this invariant the scale-migration
- * bridge: stored scores from an older scoring model can neither inflate nor
- * suppress promotion — the live engine always decides.
- *
- * OVERRIDE: ON by default; ENFORCE_PIPELINE_REFILL=0 for count-only.
- */
-export async function enforcePipelineRefill(db) {
-  return runInvariant('pipeline_refill', async () => {
-    const MIN_ROWS = Math.max(1, Number.parseInt(process.env.PIPELINE_REFILL_MIN_ROWS || '5', 10) || 5)
-
-    let sparse
-    try {
-      const activePh = PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')
-      sparse = await db
-        .prepare(
-          `SELECT p.id AS profile_id,
-                  (SELECT COUNT(*) FROM grants g
-                    WHERE g.profile_id = p.id AND g.status IN (${activePh})) AS active_rows,
-                  (SELECT COUNT(*) FROM profile_opportunity_matches m
-                    WHERE m.profile_id = p.id AND m.match_score >= ?) AS candidate_rows
-           FROM profiles p
-           WHERE p.deleted_at IS NULL
-             AND (p.status IS NULL OR LOWER(p.status) NOT IN ('deleted','archived','merged','inactive'))`,
-        )
-        .all(...PIPELINE_ACTIVE_STATUSES, AUTO_ADD_SCORE)
-    } catch {
-      return { scanned: 0, repaired: 0, skipped: 'schema' }
-    }
-
-    const needy = (sparse || []).filter(
-      (r) => Number(r.active_rows) < MIN_ROWS && Number(r.candidate_rows) > 0,
-    )
-    if (needy.length === 0) return { scanned: 0, repaired: 0, enforced: true }
-
-    const disabled = _parseBoolEnv(process.env.ENFORCE_PIPELINE_REFILL) === false
-    if (disabled) {
-      log.warn('sparse pipelines with above-bar stored matches present (refill DISABLED via ENFORCE_PIPELINE_REFILL=0)', {
-        profiles: needy.length,
-      })
-      return { scanned: needy.length, repaired: 0, enforced: false }
-    }
-
-    const [{ computeMatchDecision }, { saveToProfilePipeline }] = await Promise.all([
-      import('../services/matchEngine.js'),
-      import('../services/opportunityMatcher.js'),
-    ])
-
-    let promoted = 0
-    let profilesRefilled = 0
-    for (const row of needy) {
-      const ctx = await _loadProfileContextForInvariant(db, row.profile_id)
-      if (!ctx) continue
-      const wanted = MIN_ROWS - Number(row.active_rows)
-
-      let matches
-      try {
-        matches = await db
-          .prepare(
-            `SELECT m.opportunity_id, m.match_score, o.*
-             FROM profile_opportunity_matches m
-             JOIN funding_opportunities o ON o.id = m.opportunity_id
-             WHERE m.profile_id = ?
-               AND m.match_score >= ?
-               AND LOWER(COALESCE(m.match_decision, '')) != 'reject'
-               AND NOT EXISTS (
-                 SELECT 1 FROM grants g
-                  WHERE g.profile_id = m.profile_id
-                    AND g.funding_opportunity_id = m.opportunity_id
-               )
-             ORDER BY m.match_score DESC,
-                      CASE WHEN COALESCE(o.amount_max, 0) > 0 OR COALESCE(o.amount_min, 0) > 0
-                           THEN 1 ELSE 0 END DESC
-             LIMIT ?`,
-          )
-          .all(row.profile_id, AUTO_ADD_SCORE, wanted * 4)
-      } catch { continue }
-
-      let added = 0
-      for (const cand of matches || []) {
-        if (added >= wanted) break
-        try {
-          // Fresh canonical score at promote time — stored scores are advisory.
-          const decision = computeMatchDecision(ctx.profile, cand, { profileSections: ctx.sections })
-          if (decision?.decision === 'REJECT' || !(Number(decision?.score) >= AUTO_ADD_SCORE)) continue
-          const result = await saveToProfilePipeline(
-            db, cand, row.profile_id, ctx, decision.score, AUTO_ADD_SCORE,
-          )
-          if (result?.saved) { added++; promoted++ }
-        } catch (err) {
-          log.warn('pipeline_refill: promote failed (non-fatal)', {
-            profile: row.profile_id, opportunity: cand?.opportunity_id, error: String(err?.message || err),
-          })
-        }
-      }
-      if (added > 0) profilesRefilled++
-    }
-    if (promoted > 0) {
-      log.info('refilled sparse pipelines from above-bar stored matches', { promoted, profilesRefilled })
-    }
-    return { scanned: needy.length, repaired: promoted, profilesRefilled, enforced: true }
-  })
-}
-
-/**
  * Run every machine-checkable product invariant, in order. Mirrors
  * ensureSchemaInvariants.js: each step is independently guarded, the whole
  * run never throws, and a structured summary is returned + logged.
@@ -4550,11 +4454,6 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // engine-endorsed match. Runs AFTER the purge sweeps (their status/name
   // protections still govern any subsequent floor action on the new scores).
   steps.push(await enforceGrantScoreBackfill(db))
-  // Anti-empty-pipeline net: promote above-bar stored matches into any active
-  // profile's near-empty pipeline through the fully-gated saver (tombstones,
-  // source allowlist, duplicate guard all enforced). Runs LAST so it refills
-  // on the post-purge, post-backfill truth.
-  steps.push(await enforcePipelineRefill(db))
   // Intake integrity net: every 'converted' service application must point at a
   // live profile (create-or-link); otherwise a real applicant is invisible to
   // the admin and locked out of login.

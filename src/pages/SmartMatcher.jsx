@@ -655,6 +655,12 @@ export default function SmartMatcher() {
         return Array.isArray(prompts) ? prompts : []
   }, [scoredResponse])
 
+  const promotionSummary = useMemo(() => {
+        const payload = scoredResponse?.data ?? scoredResponse ?? {}
+        const summary = payload?.promotion_summary
+        return summary && typeof summary === 'object' ? summary : null
+  }, [scoredResponse])
+
   const { data: profileFundingSourcesResponse, isLoading: isProfileFundingSourcesLoading } = useQuery({
         queryKey: ['smart-profile-funding-sources', selectedProfileId],
         queryFn: () => listProfileFundingSources(selectedProfileId, { minScore: 0 }),
@@ -688,6 +694,15 @@ export default function SmartMatcher() {
   const topMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= STRONG_MATCH_SCORE)
     const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= GOOD_MATCH_SCORE && (o.match_score ?? 0) < STRONG_MATCH_SCORE)
     const allQualified = filteredOpportunities
+    const recordedQualifiedCount = Number.isFinite(Number(promotionSummary?.qualified))
+      ? Number(promotionSummary.qualified)
+      : allQualified.length
+    const morePlacesToLook = Number.isFinite(Number(promotionSummary?.more_places_to_look))
+      ? Number(promotionSummary.more_places_to_look)
+      : profileFundingSources.filter((source) => source?.is_directory).length
+    const recordedRejectionReasons = Object.entries(promotionSummary?.reasons || {})
+      .filter(([, count]) => Number(count) > 0)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
 
   const handleOpenOpp = (opp) => { setSelectedOpp(opp) }
 
@@ -1171,7 +1186,7 @@ export default function SmartMatcher() {
                           onDismiss={() => setImprovePromptsDismissed(true)}
                         />
                       )}
-                      <div id="match-results" className={`grid gap-4 ${profileFundingSources.length ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+                      <div id="match-results" className={`grid gap-4 ${morePlacesToLook > 0 ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
                         <Card>
                           <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
@@ -1201,19 +1216,25 @@ export default function SmartMatcher() {
                             </CardTitle>
                           </CardHeader>
                           <CardContent>
-                            <div className="text-2xl font-bold">{allQualified.length}</div>
-                            <p className="text-xs text-slate-600 mt-1">Score {minScore}+</p>
+                            <div className="text-2xl font-bold">{recordedQualifiedCount}</div>
+                            <p className="text-xs text-slate-600 mt-1">Recorded live admissions</p>
+                            {recordedRejectionReasons.length > 0 && (
+                              <p className="text-xs text-slate-500 mt-1">
+                                Why others were held: {recordedRejectionReasons.slice(0, 2).map(([reason, count]) => `${count} ${reason.replace(/_/g, ' ')}`).join(', ')}
+                              </p>
+                            )}
                           </CardContent>
                         </Card>
-                        {profileFundingSources.length > 0 && (
+                        {morePlacesToLook > 0 && (
                           <Card className="border-emerald-200 bg-emerald-50/40">
                             <CardHeader className="pb-2">
                               <CardTitle className="text-sm font-medium text-emerald-800 flex items-center gap-2">
-                                <FolderOpen className="w-4 h-4" /> Profile Sources
+                                <FolderOpen className="w-4 h-4" /> More places to look
                               </CardTitle>
                             </CardHeader>
                             <CardContent>
-                              <div className="text-2xl font-bold text-emerald-900">{profileFundingSources.length}</div>
+                              <div className="text-2xl font-bold text-emerald-900">{morePlacesToLook}</div>
+                              <p className="text-xs text-emerald-800 mt-1">REVIEW-tier locators, not failed qualifications</p>
                               <Button asChild variant="link" className="h-auto p-0 text-xs text-emerald-800">
                                 <Link to={createPageUrl("ProfileDetail", { id: selectedProfileId, tab: "pipeline", focus: "profile-funding-sources" })}>
                                   Open Crawler OS list

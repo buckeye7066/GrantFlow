@@ -316,6 +316,17 @@ export async function clearDismissal(db, profileId, opportunity) {
   const sql = `DELETE FROM pipeline_dismissals WHERE profile_id = ? AND (${conditions.join(' OR ')})`
   const result = await db.prepare(sql).run(profileId, ...params)
   const changes = Number(result?.changes ?? result?.rowCount ?? 0)
+  // Promotion tombstones are durable too. A deliberate manual restore must
+  // invalidate that terminal outcome in the same path that clears the sticky
+  // delete, otherwise the nightly candidate query could continue suppressing
+  // the restored source until an unrelated fingerprint drift occurred.
+  if (key.opportunity_id) {
+    try {
+      await db
+        .prepare('DELETE FROM pipeline_promotion_outcomes WHERE profile_id = ? AND opportunity_id = ?')
+        .run(profileId, key.opportunity_id)
+    } catch { /* migration may not be present in an older/minimal database */ }
+  }
   return Number.isFinite(changes) ? changes : 0
 }
 
