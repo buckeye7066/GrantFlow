@@ -20,4 +20,3 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_promotion_outcomes_mode_outcome
   ON pipeline_promotion_outcomes(mode, outcome);
 CREATE INDEX IF NOT EXISTS idx_pipeline_promotion_outcomes_attempted
   ON pipeline_promotion_outcomes(attempted_at);
-
