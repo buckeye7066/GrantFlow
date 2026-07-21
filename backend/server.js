@@ -972,8 +972,8 @@ if (!app.locals.db_startup_error) {
   app.locals.runBootInvariantSweep = runBootInvariantSweep
   app.locals.runQualifiedPipelinePromotion = async () => {
     try {
-      const { runQualifiedPipelinePromotionAfterAmy } = await import('./services/pipelinePromotion.js')
-      return await runQualifiedPipelinePromotionAfterAmy(db)
+      const { runScheduledQualifiedPipelinePromotion } = await import('./services/pipelinePromotion.js')
+      return await runScheduledQualifiedPipelinePromotion(db, { source: 'post-listen', logger: console })
     } catch (err) {
       console.warn('[pipeline-promotion] post-listen run failed (non-fatal):', err?.message || err)
       return null
@@ -3927,31 +3927,26 @@ if (process.env.NODE_ENV !== 'test') {
 
   // Qualified-pipeline convergence is deliberately outside the boot invariant
   // chain. Its own runner reaps expired Amy profiles first, then promotes real
-  // profiles round-robin. The marker makes this a once-per-ET-day nightly job;
-  // the separate post-listen setImmediate above provides fast deploy catch-up.
+  // profiles round-robin. Both the nightly tick and post-listen catch-up call the
+  // same distributed-lock + ET-day-marker wrapper, so replicas cannot overlap.
   function scheduleQualifiedPipelinePromotion(dbInstance) {
-    const MARKER = 'qualified_pipeline_promotion_last_run'
     const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.PIPELINE_PROMOTION_HOUR_ET) || 4))
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
-        const dayKey = etEligibleDayKey(TRIGGER_HOUR, etNowParts())
-        if (await kvGet(dbInstance, MARKER) === dayKey) return
-        const { runQualifiedPipelinePromotionAfterAmy } = await import('./services/pipelinePromotion.js')
-        const result = await runQualifiedPipelinePromotionAfterAmy(dbInstance)
+        const { runScheduledQualifiedPipelinePromotion } = await import('./services/pipelinePromotion.js')
+        const result = await runScheduledQualifiedPipelinePromotion(dbInstance, {
+          source: 'nightly',
+          triggerHour: TRIGGER_HOUR,
+          logger: console,
+        })
         console.log('[pipeline-promotion] nightly', result)
-        await kvSet(dbInstance, MARKER, dayKey)
       } catch (err) {
         console.warn('[pipeline-promotion] nightly failed:', err?.message || err)
       }
     }
-    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
-      lockName: 'qualified-pipeline-promotion',
-      ttlMs: 2 * 60 * 60 * 1000,
-      logger: console,
-    }, runOnce)
-    setTimeout(lockedRunOnce, 180_000)
-    setInterval(lockedRunOnce, 60 * 60 * 1000)
+    setTimeout(runOnce, 180_000)
+    setInterval(runOnce, 60 * 60 * 1000)
   }
 
   // Sam's daily FULL code/function sweep — every day 05:00 America/New_York.

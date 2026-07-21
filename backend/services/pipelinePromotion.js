@@ -23,12 +23,16 @@ import {
   enforceGrantCatalogLink,
   enforceAmountEnrichment,
 } from '../startup/enforceInvariants.js'
+import { runWithSchedulerLock } from './schedulerLock.js'
+import { eligibleDayKey, etNowParts } from '../utils/etTime.js'
 
 const log = createLogger('pipelinePromotion')
 const TERMINAL_OUTCOMES = new Set([
   'promoted', 'tombstoned', 'duplicate', 'source_excluded', 'live_reject', 'below_bar',
 ])
 const CURSOR_KEY = 'pipeline_promotion_round_robin_cursor'
+const SCHEDULE_MARKER_KEY = 'qualified_pipeline_promotion_last_run'
+const SCHEDULE_LOCK_NAME = 'qualified-pipeline-promotion'
 export const PROJECTION_KEY = 'promotion_projection'
 
 function envBool(value, fallback = false) {
@@ -95,9 +99,9 @@ async function recordOutcome(db, { profileId, opportunityId, mode, payload }) {
     payload.policy_version,
     String(payload.opportunity_updated_at ?? ''),
   ]
-  const dryGuard = mode === 'dry_run'
+  const conflictGuard = mode === 'dry_run'
     ? " WHERE pipeline_promotion_outcomes.mode = 'dry_run'"
-    : ''
+    : " WHERE NOT (pipeline_promotion_outcomes.mode = 'live' AND pipeline_promotion_outcomes.outcome = 'promoted')"
   await db.prepare(
     `INSERT INTO pipeline_promotion_outcomes
        (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
@@ -112,7 +116,7 @@ async function recordOutcome(db, { profileId, opportunityId, mode, payload }) {
        attempts = pipeline_promotion_outcomes.attempts + 1,
        profile_facts_hash = excluded.profile_facts_hash,
        policy_version = excluded.policy_version,
-       opportunity_updated_at = excluded.opportunity_updated_at${dryGuard}`,
+       opportunity_updated_at = excluded.opportunity_updated_at${conflictGuard}`,
   ).run(...args)
 }
 
@@ -353,6 +357,25 @@ export async function runQualifiedPipelinePromotionAfterAmy(db, options = {}) {
   const amy = await enforceAmySyntheticExpiry(db)
   const promotion = await runQualifiedPipelinePromotion(db, options)
   return { amy, promotion }
+}
+
+export async function runScheduledQualifiedPipelinePromotion(db, options = {}) {
+  const triggerHour = Math.max(0, Math.min(23, Number(options.triggerHour ?? process.env.PIPELINE_PROMOTION_HOUR_ET) || 4))
+  const dayKey = options.dayKey ?? eligibleDayKey(triggerHour, options.nowParts ?? etNowParts())
+  const source = options.source || 'scheduler'
+  return runWithSchedulerLock(db, {
+    lockName: SCHEDULE_LOCK_NAME,
+    ttlMs: 2 * 60 * 60 * 1000,
+    logger: options.logger || console,
+    acquiredBy: `pipeline-promotion:${source}`,
+  }, async () => {
+    if (await kvGet(db, SCHEDULE_MARKER_KEY) === dayKey) {
+      return { skipped: true, reason: 'already_ran', dayKey }
+    }
+    const result = await runQualifiedPipelinePromotionAfterAmy(db, options.promotionOptions)
+    await kvSet(db, SCHEDULE_MARKER_KEY, dayKey)
+    return result
+  })
 }
 
 export const __testables = {

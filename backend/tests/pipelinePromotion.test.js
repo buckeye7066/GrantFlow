@@ -265,6 +265,28 @@ describe('qualified pipeline promotion', () => {
     db.close()
   })
 
+  it('keeps a live promoted outcome sticky when a stale loser later reports duplicate', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    const candidate = seedCandidate(db, 'real', { id: 'sticky-promoted' })
+    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 1, amountFollowup: false })
+    const promotedGrant = grantsFor(db, 'real')[0]
+    expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id='sticky-promoted'").get().outcome)
+      .toBe('promoted')
+
+    db.prepare('DELETE FROM grants WHERE id = ?').run(promotedGrant.id)
+    db.prepare(`INSERT INTO grants
+      (id, profile_id, funding_opportunity_id, title, funder, status, application_url, url, fingerprint)
+      VALUES ('concurrent-winner', 'real', NULL, ?, ?, 'discovered', ?, ?, ?)`)
+      .run(candidate.title, candidate.sponsor, candidate.application_url, candidate.application_url, grantFingerprintFromOpportunity(candidate))
+
+    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 1, amountFollowup: false })
+
+    expect(db.prepare("SELECT outcome, reason FROM pipeline_promotion_outcomes WHERE opportunity_id='sticky-promoted'").get())
+      .toEqual({ outcome: 'promoted', reason: 'accepted' })
+    db.close()
+  })
+
   it('derives UI counts/reasons from live outcomes, including an above-bar source rejection', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
@@ -340,5 +362,18 @@ describe('qualified pipeline promotion', () => {
     expect(listen).toBeGreaterThan(-1)
     expect(immediate).toBeGreaterThan(listen)
     expect(promotion).toBeGreaterThan(immediate)
+  })
+
+  it('routes post-listen and nightly promotion through one lock-and-marker wrapper', () => {
+    const server = fs.readFileSync(path.resolve(process.cwd(), 'backend', 'server.js'), 'utf8')
+    const postListenStart = server.indexOf('app.locals.runQualifiedPipelinePromotion =')
+    const postListenEnd = server.indexOf('\n  // Register the lead sources', postListenStart)
+    const nightlyStart = server.indexOf('function scheduleQualifiedPipelinePromotion')
+    const nightlyEnd = server.indexOf('\n  // Sam\'s daily FULL code/function sweep', nightlyStart)
+
+    expect(postListenStart).toBeGreaterThan(-1)
+    expect(nightlyStart).toBeGreaterThan(-1)
+    expect(server.slice(postListenStart, postListenEnd)).toContain('runScheduledQualifiedPipelinePromotion')
+    expect(server.slice(nightlyStart, nightlyEnd)).toContain('runScheduledQualifiedPipelinePromotion')
   })
 })
