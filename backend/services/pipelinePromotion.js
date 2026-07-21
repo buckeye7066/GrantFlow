@@ -270,22 +270,31 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
       summary.attempted++
 
       let recordedPayload = null
-      const sink = {
-        mode,
-        failClosedTombstone: true,
-        freshRescoreRequired: true,
-        quiet: true,
-        record: async (payload) => {
-          recordedPayload = payload
-          await recordOutcome(db, {
-            profileId: profile.id,
-            opportunityId: candidate.id,
-            mode,
-            payload,
-          })
-        },
+      const attemptPromotion = async (writeDb) => {
+        const sink = {
+          mode,
+          required: mode === 'live',
+          failClosedTombstone: true,
+          freshRescoreRequired: true,
+          quiet: true,
+          record: async (payload) => {
+            recordedPayload = payload
+            await recordOutcome(writeDb, {
+              profileId: profile.id,
+              opportunityId: candidate.id,
+              mode,
+              payload,
+            })
+          },
+        }
+        return saveToProfilePipeline(writeDb, candidate, profile.id, context, null, null, sink)
       }
-      const result = await saveToProfilePipeline(db, candidate, profile.id, context, null, null, sink)
+      if (mode === 'live' && typeof db.withTransaction !== 'function') {
+        throw new Error('Live qualified promotion requires transactional database support')
+      }
+      const result = mode === 'live'
+        ? await db.withTransaction(attemptPromotion)
+        : await attemptPromotion(db)
       const outcome = classifyOutcome(recordedPayload)
       summary.reasons[outcome] = (summary.reasons[outcome] || 0) + 1
       if (result?.saved || result?.projected) {

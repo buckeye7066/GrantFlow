@@ -100,6 +100,11 @@ async function emitPromotionOutcome(outcomeSink, payload) {
   const emit = typeof outcomeSink === 'function' ? outcomeSink : outcomeSink.record
   if (typeof emit !== 'function') return
   try { await emit(payload) } catch (err) {
+    if (outcomeSink?.required === true) {
+      const requiredError = err instanceof Error ? err : new Error(String(err))
+      requiredError.promotionOutcomeSinkFailed = true
+      throw requiredError
+    }
     log.warn('promotion outcome sink failed (non-fatal)', { error: String(err?.message || err) })
   }
 }
@@ -892,6 +897,7 @@ export async function saveToProfilePipeline(
       decision: decision?.decision ?? null,
     }
   } catch (error) {
+    if (error?.promotionOutcomeSinkFailed) throw error
     const msg = String(error?.message || '').toLowerCase()
     // Race-condition duplicate — treat as idempotent, not an error
     if (msg.includes('unique') || msg.includes('duplicate')) {

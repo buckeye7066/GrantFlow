@@ -20,6 +20,17 @@ import { grantFingerprintFromOpportunity } from '../utils/grantFingerprint.js'
 function makeDb() {
   const db = new Database(':memory:')
   db.dialect = 'sqlite'
+  db.withTransaction = async (fn) => {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = await fn(db)
+      db.exec('COMMIT')
+      return result
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
   db.exec(`
     CREATE TABLE profiles (
       id TEXT PRIMARY KEY, organization_id TEXT, status TEXT, deleted_at TEXT,
@@ -133,6 +144,26 @@ beforeEach(() => {
 })
 
 describe('qualified pipeline promotion', () => {
+  it('rolls back a promoted grant when its required live outcome cannot be recorded', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'atomic-outcome' })
+    db.exec(`CREATE TRIGGER reject_promotion_outcome
+      BEFORE INSERT ON pipeline_promotion_outcomes
+      BEGIN
+        SELECT RAISE(ABORT, 'injected outcome sink failure');
+      END`)
+
+    await expect(runQualifiedPipelinePromotion(db, {
+      enabled: true,
+      batch: 1,
+      amountFollowup: false,
+    })).rejects.toThrow('injected outcome sink failure')
+    expect(grantsFor(db, 'real')).toHaveLength(0)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes').get().n).toBe(0)
+    db.close()
+  })
+
   it('promotes stale-LOW and stale-REJECT rows after a fresh live rescore', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
@@ -180,6 +211,9 @@ describe('qualified pipeline promotion', () => {
           return { get() { throw new Error('injected tombstone failure') } }
         }
         return db.prepare(sql)
+      },
+      withTransaction(fn) {
+        return db.withTransaction(() => fn(failingDb))
       },
     }
     await runQualifiedPipelinePromotion(failingDb, { enabled: true, batch: 10, amountFollowup: false })
