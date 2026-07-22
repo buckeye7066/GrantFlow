@@ -6,20 +6,17 @@
 // mid-session. The frontend twin (src/config/maintenance.js) holds fallback
 // banner copy; the Login page asks GET /api/auth/maintenance at runtime, so
 // this module is the single source of truth for whether the banner shows.
-//
-// TOGGLE (no code change, no rebuild): set the LOGIN_MAINTENANCE env var on
-// the backend (Railway) — '0' forces it OFF, '1' forces it ON; the service
-// restarts on a variable change and the frontend follows within one page
-// load. Unset, it falls back to the code default below.
-const LOGIN_MAINTENANCE_ACTIVE = true
+// The guard arms ONLY via the LOGIN_MAINTENANCE=1 environment variable (set
+// on Railway for the upgrade window; remove it or set 0 to reopen sign-in —
+// no code change or deploy needed). The default is OFF so every CI lane —
+// including the release-gate tests that deliberately run with
+// NODE_ENV=production to assert real prod auth semantics — exercises the
+// normal auth flows.
+const LOGIN_MAINTENANCE_ACTIVE = false
 
 export function isLoginMaintenanceActive() {
-  // Explicit env override wins in both directions.
-  if (process.env.LOGIN_MAINTENANCE === '0') return false
   if (process.env.LOGIN_MAINTENANCE === '1') return true
-  // Tests exercise the normal auth flows; the maintenance posture is a
-  // production stance, never an implicit test fixture.
-  if (process.env.NODE_ENV === 'test' || process.env.VITEST) return false
+  if (process.env.LOGIN_MAINTENANCE === '0') return false
   return LOGIN_MAINTENANCE_ACTIVE
 }
 
