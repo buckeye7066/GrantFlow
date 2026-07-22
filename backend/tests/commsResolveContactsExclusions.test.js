@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
-import { resolveProfileContacts, _ensuredReset } from '../services/comms/commsService.js'
+import { resolveProfileContacts, isPlaceholderEmail, _ensuredReset } from '../services/comms/commsService.js'
 import { ADMIN_EMAIL } from '../config/constants.js'
 
 function makeDb() {
@@ -64,5 +64,51 @@ describe('resolveProfileContacts exclusions', () => {
     expect(contacts.emails).toHaveLength(0)
     expect(contacts.has_usable_email).toBe(false)
     expect(contacts.primary_email).toBeNull()
+  })
+
+  it('drops reserved PLACEHOLDER-domain addresses (example.com class) so digests skip instead of erroring', async () => {
+    // REGRESSION (prod 2026-07-21): profiles seeded with someone@example.com
+    // flowed into the Hamilton weekly digest, Resend rejected the recipient,
+    // and each surfaced as a SEND ERROR every week. A placeholder is
+    // structurally "no email on file" — the digest must count it
+    // skipped_no_email, which falls out of it never becoming a contact here.
+    const db = makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name, status) VALUES (?, ?, ?)')
+      .run('p2', 'Placeholder Family', 'active')
+    for (const [i, email] of [
+      'jane@example.com', 'j@example.org', 'x@example.net', 'a@sub.example.com',
+      'b@myapp.test', 'c@localhost', 'd@dev.localhost', 'e@anything.example',
+    ].entries()) {
+      db.prepare('INSERT INTO profile_emails (id, profile_id, email) VALUES (?, ?, ?)').run(`ph${i}`, 'p2', email)
+    }
+    const contacts = await resolveProfileContacts(db, 'p2')
+    expect(contacts.emails).toHaveLength(0)
+    expect(contacts.has_usable_email).toBe(false)
+    expect(contacts.primary_email).toBeNull()
+  })
+
+  it('placeholder guard NEVER swallows a real address that merely resembles one', async () => {
+    const db = makeDb()
+    db.prepare('INSERT INTO profiles (id, display_name, status) VALUES (?, ?, ?)').run('p3', 'Real Org', 'active')
+    for (const [i, email] of [
+      'grants@example-foundation.org', // hyphenated real domain, not example.org
+      'info@testing.org',              // "test" only as a substring
+      'jane@localhostel.com',          // "localhost" only as a substring
+    ].entries()) {
+      db.prepare('INSERT INTO profile_emails (id, profile_id, email) VALUES (?, ?, ?)').run(`r${i}`, 'p3', email)
+    }
+    const contacts = await resolveProfileContacts(db, 'p3')
+    expect(contacts.emails.map((e) => e.email)).toEqual([
+      'grants@example-foundation.org', 'info@testing.org', 'jane@localhostel.com',
+    ])
+  })
+
+  it('isPlaceholderEmail unit contract (terminal-label match only)', () => {
+    for (const e of ['a@example.com', 'a@EXAMPLE.ORG', 'a@x.example.net', 'a@b.test', 'a@localhost', 'a@foo.invalid']) {
+      expect(isPlaceholderEmail(e), `${e} is a placeholder`).toBe(true)
+    }
+    for (const e of ['a@example-foundation.org', 'a@contest.org', 'a@protested.com', 'not-an-email', '']) {
+      expect(isPlaceholderEmail(e), `${e} is NOT a placeholder`).toBe(false)
+    }
   })
 })

@@ -64,6 +64,10 @@ function makeDb() {
   return db
 }
 
+// Fixture addresses use @clientmail.org, NOT @example.com: resolveProfileContacts
+// now drops reserved placeholder domains (RFC 2606 — they Resend-reject and were
+// surfacing as weekly-digest send errors), so an example.com fixture would
+// resolve to zero recipients and vacuously fail every send assertion here.
 async function seedProfile(db, id, { name = id, lang = null, email = null } = {}) {
   db.prepare('INSERT INTO profiles (id, display_name, status) VALUES (?, ?, ?)').run(id, name, 'active')
   if (lang) {
@@ -163,7 +167,7 @@ describe('localized SMS copy', () => {
 describe('localized notification email (notifyProfile)', () => {
   it('renders a catalog-backed email subject + body in es', async () => {
     const db = makeDb()
-    await seedProfile(db, 'p_es', { lang: 'es', email: 'es@example.com' })
+    await seedProfile(db, 'p_es', { lang: 'es', email: 'es@clientmail.org' })
     const res = await notifyProfile(db, {
       profileId: 'p_es',
       channel: 'email',
@@ -179,7 +183,7 @@ describe('localized notification email (notifyProfile)', () => {
 
   it('renders a catalog-backed email in zh', async () => {
     const db = makeDb()
-    await seedProfile(db, 'p_zh', { lang: 'zh', email: 'zh@example.com' })
+    await seedProfile(db, 'p_zh', { lang: 'zh', email: 'zh@clientmail.org' })
     const res = await notifyProfile(db, {
       profileId: 'p_zh',
       channel: 'email',
@@ -192,7 +196,7 @@ describe('localized notification email (notifyProfile)', () => {
 
   it('falls back to en for a profile with no stored language', async () => {
     const db = makeDb()
-    await seedProfile(db, 'p_en', { email: 'en@example.com' })
+    await seedProfile(db, 'p_en', { email: 'en@clientmail.org' })
     const res = await notifyProfile(db, {
       profileId: 'p_en',
       channel: 'email',
@@ -210,9 +214,9 @@ describe('localized notification email (notifyProfile)', () => {
 describe('per-recipient broadcast localization', () => {
   it('catalog-backed broadcast renders each recipient in their own language', async () => {
     const db = makeDb()
-    await seedProfile(db, 'p_es', { lang: 'es', email: 'es@example.com' })
-    await seedProfile(db, 'p_zh', { lang: 'zh', email: 'zh@example.com' })
-    await seedProfile(db, 'p_en', { email: 'en@example.com' }) // unknown -> en
+    await seedProfile(db, 'p_es', { lang: 'es', email: 'es@clientmail.org' })
+    await seedProfile(db, 'p_zh', { lang: 'zh', email: 'zh@clientmail.org' })
+    await seedProfile(db, 'p_en', { email: 'en@clientmail.org' }) // unknown -> en
 
     const result = await sendBroadcast(db, {
       profileIds: ['p_es', 'p_zh', 'p_en'],
@@ -225,17 +229,17 @@ describe('per-recipient broadcast localization', () => {
     expect(sentEmail).toHaveLength(3)
 
     const byTo = Object.fromEntries(sentEmail.map((m) => [m.to, m]))
-    expect(byTo['es@example.com'].text).toBe(t('es', 'deadline_email_body_review'))
-    expect(byTo['zh@example.com'].text).toBe(t('zh', 'deadline_email_body_review'))
-    expect(byTo['en@example.com'].text).toBe(t('en', 'deadline_email_body_review'))
+    expect(byTo['es@clientmail.org'].text).toBe(t('es', 'deadline_email_body_review'))
+    expect(byTo['zh@clientmail.org'].text).toBe(t('zh', 'deadline_email_body_review'))
+    expect(byTo['en@clientmail.org'].text).toBe(t('en', 'deadline_email_body_review'))
     // Each language is distinct (per-recipient, not one global language).
-    expect(byTo['es@example.com'].text).not.toBe(byTo['zh@example.com'].text)
-    expect(byTo['es@example.com'].text).not.toBe(byTo['en@example.com'].text)
+    expect(byTo['es@clientmail.org'].text).not.toBe(byTo['zh@clientmail.org'].text)
+    expect(byTo['es@clientmail.org'].text).not.toBe(byTo['en@clientmail.org'].text)
   })
 
   it('free-form broadcast still sends the owner copy as typed (no machine translation)', async () => {
     const db = makeDb()
-    await seedProfile(db, 'p_es', { lang: 'es', email: 'es@example.com' })
+    await seedProfile(db, 'p_es', { lang: 'es', email: 'es@clientmail.org' })
     const result = await sendBroadcast(db, {
       profileIds: ['p_es'],
       channel: 'email',

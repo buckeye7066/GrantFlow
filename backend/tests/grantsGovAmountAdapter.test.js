@@ -229,6 +229,53 @@ describe('enrichAmountViaGrantsGovApi — the sweep contract', () => {
     const f = fakeFetch(() => ({ ok: false, status: 404 }))
     const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
     expect(res).toMatchObject({ attempted: true, page_read: false, transient: false })
+    expect(res.environment).toBe(false) // a dead id is about the ROW, not our egress
+  })
+
+  it('reports a WAF 403 as ENVIRONMENT-transient with its status — never a stable fact about the row', async () => {
+    // REGRESSION (prod 2026-07-21). The adapter has effectively NEVER succeeded
+    // from Railway: a WAF 403 on every datacenter-egress call (the identical
+    // keyless request works from a residential machine). The old rule read ANY
+    // 4xx as "grants.gov told us something stable about this id" → transient:
+    // false → the sweep's burn rule permanently burned every knowable row
+    // answerless. A 403 is a fact about OUR EGRESS, not the opportunity.
+    for (const status of [403, 401, 429]) {
+      const f = fakeFetch(() => ({ ok: false, status }))
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res, `http ${status}`).toMatchObject({
+        attempted: true,
+        page_read: false, // never a fake success
+        transient: true, // stays retryable
+        environment: true, // and the sweep exempts it from the out-of-retries burn
+        found: false,
+        status, // telemetry: WHICH status blocked us
+        reason: `grants_gov_api_failed:http_${status}`,
+      })
+      expect(res.amounts).toBeUndefined() // silence is not an answer
+    }
+  })
+
+  it('a WAF 403 during the ID LOOKUP is equally environment-transient (not "no id")', async () => {
+    const f = fakeFetch(() => ({ ok: false, status: 403 }))
+    const res = await enrichAmountViaGrantsGovApi(
+      { source: 'grants.gov', source_id: 'PA-FPH-27-001', source_url: 'https://www.grants.gov/' },
+      { fetchImpl: f },
+    )
+    expect(res).toMatchObject({
+      attempted: true,
+      page_read: false,
+      transient: true,
+      environment: true,
+      status: 403,
+      found: false,
+      reason: 'grants_gov_id_lookup_failed:http_403',
+    })
+  })
+
+  it('a 503 outage is transient but NOT environment (normal retry budget applies)', async () => {
+    const f = fakeFetch(() => ({ ok: false, status: 503 }))
+    const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+    expect(res).toMatchObject({ transient: true, environment: false, status: 503 })
   })
 
   it('reports a transport throw as transient rather than escaping', async () => {
@@ -276,5 +323,105 @@ describe('the adapter registry (totality)', () => {
 
   it('a throwing matcher cannot break routing for other sources', () => {
     expect(() => findAmountAdapter({ get source() { throw new Error('boom') } })).not.toThrow()
+  })
+})
+
+describe('Simpler Grants fallback — the second door around the WAF', () => {
+  // Prod 2026-07-21: api.grants.gov 403'd EVERY call from the Railway egress
+  // (127 attempts, 0 answers) while the same data sat one GET away on
+  // api.simpler.grants.gov (separate HHS infra, SIMPLER_GRANTS_API_KEY set in
+  // prod). These tests pin the fallback ladder: primary env-blocked → simpler
+  // answers → the row gets its figures instead of parking as blocked forever.
+
+  /** GET/POST-aware fake fetch: routes by URL substring. */
+  const routedFetch = (routes) =>
+    vi.fn(async (url, init = {}) => {
+      for (const [needle, out] of routes) {
+        if (String(url).includes(needle)) {
+          if (out?.__networkError) throw new Error('socket hang up')
+          return {
+            ok: out.ok ?? true,
+            status: out.status ?? 200,
+            json: async () => out.json ?? {},
+          }
+        }
+      }
+      throw new Error(`unrouted url in test: ${url}`)
+    })
+
+  const row = { source: 'grants.gov', source_url: 'https://www.grants.gov/search-results-detail/112354' }
+
+  it('answers via Simpler when the primary API is WAF-403 environment-blocked', async () => {
+    vi.stubEnv('SIMPLER_GRANTS_API_KEY', 'test-key')
+    try {
+      const f = routedFetch([
+        ['api.grants.gov', { ok: false, status: 403 }],
+        ['api.simpler.grants.gov/v1/opportunities/112354', {
+          json: { data: { summary: { award_floor: 10_000, award_ceiling: 50_000 } } },
+        }],
+      ])
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res.found).toBe(true)
+      expect(res.page_read).toBe(true)
+      expect(res.reason).toBe('simpler_grants_api')
+      expect(res.amounts.amount_min).toBe(10_000)
+      expect(res.amounts.amount_max).toBe(50_000)
+      expect(res.amounts.amount_confidence).toBe(AMOUNT_CONFIDENCE_STRUCTURED)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('stays an ENVIRONMENT failure when both doors are blocked (row must not burn)', async () => {
+    vi.stubEnv('SIMPLER_GRANTS_API_KEY', 'test-key')
+    try {
+      const f = routedFetch([
+        ['api.grants.gov', { ok: false, status: 403 }],
+        ['api.simpler.grants.gov', { ok: false, status: 401 }],
+      ])
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res.found).toBe(false)
+      expect(res.page_read).toBe(false)
+      expect(res.environment).toBe(true)
+      expect(res.transient).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('without a Simpler key the primary environment failure reports unchanged', async () => {
+    vi.stubEnv('SIMPLER_GRANTS_API_KEY', '')
+    try {
+      const f = routedFetch([['api.grants.gov', { ok: false, status: 403 }]])
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res.environment).toBe(true)
+      expect(res.transient).toBe(true)
+      // Simpler must never have been called: the only routed host is grants.gov.
+      for (const call of f.mock.calls) expect(String(call[0])).toContain('api.grants.gov')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('Simpler "no figure" is the honest denial, with the program envelope as TEXT only', async () => {
+    vi.stubEnv('SIMPLER_GRANTS_API_KEY', 'test-key')
+    try {
+      const f = routedFetch([
+        ['api.grants.gov', { ok: false, status: 403 }],
+        ['api.simpler.grants.gov', {
+          json: { data: { summary: { award_floor: null, award_ceiling: null, estimated_total_program_funding: 3_270_000, expected_number_of_awards: 20 } } },
+        }],
+      ])
+      const res = await enrichAmountViaGrantsGovApi(row, { fetchImpl: f })
+      expect(res.page_read).toBe(true)
+      expect(res.found).toBe(false)
+      expect(res.reason).toBe('no_award_amount_published')
+      // The envelope is preserved as an honest label — never as a number (#958).
+      expect(res.amount_text).toContain('$3,270,000')
+      expect(res.amount_text).toContain('~20')
+      expect(res.amounts).toBeUndefined()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

@@ -21,6 +21,7 @@ vi.mock('../services/comms/commsService.js', () => ({
 }))
 
 import { runHamiltonWeeklyDigest, weeklyDigestDeliveryMode, buildDigest } from '../services/hamilton/hamiltonWeeklyDigest.js'
+import { resolveProfileContacts as mockedResolveProfileContacts } from '../services/comms/commsService.js'
 
 const fakeDb = () => ({
   prepare: () => ({
@@ -88,6 +89,31 @@ describe('runHamiltonWeeklyDigest — send mode', () => {
     })
     expect(summary.ran).toBe(true)
     expect(summary.sent).toBe(1)
+  })
+
+  it('a profile whose only email is a placeholder is skipped_no_email — never a send ERROR', async () => {
+    // REGRESSION (prod 2026-07-21): 2 profiles seeded with @example.com
+    // placeholder addresses produced 2 Resend rejections in EVERY weekly
+    // digest run. resolveProfileContacts now filters placeholder domains
+    // (example.com/.org/.net, test, invalid, localhost) so such a profile
+    // resolves to zero emails; the digest loop must classify that as the
+    // honest skipped_no_email — actionable ("collect a real address"), not a
+    // recurring delivery error. No prod data is modified.
+    process.env.HAMILTON_WEEKLY_DIGEST_DELIVERY = 'send'
+    // What the REAL resolver now returns for a placeholder-only profile.
+    mockedResolveProfileContacts.mockResolvedValueOnce({
+      display_name: 'Placeholder Profile', emails: [], phones: [], sms_phone: null,
+    })
+    const broadcast = vi.fn(async () => ({ ok: true, sent_email: 1, sent_sms: 0, failed: 0, recipients: [] }))
+    const summary = await runHamiltonWeeklyDigest(fakeDb(), {
+      force: true,
+      profileIds: ['placeholder-profile'],
+      _sendBroadcast: broadcast,
+    })
+    expect(summary.skipped_no_email).toBe(1)
+    expect(summary.errors).toBe(0)
+    expect(summary.sent).toBe(0)
+    expect(broadcast).not.toHaveBeenCalled()
   })
 
   it('counts a zero-recipient broadcast as an error, not a send', async () => {
