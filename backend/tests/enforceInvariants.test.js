@@ -3162,12 +3162,33 @@ describe('enforceLocatorKindClassification', () => {
     expect(kindOf(db, propublica).opportunity_kind).toBe('directory')
   })
 
-  it('never overwrites a kind another writer already recorded', async () => {
+  it('never overwrites a CURATED or unknown kind — only the generic machine-stamped allowlist', async () => {
     const db = makeRealDb()
-    const foId = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view', kind: 'direct' })
+    // A canonical curated kind and an unknown future value are both protected,
+    // even on a URL the structural rule fully owns.
+    const curated = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view', kind: 'benefit' })
+    const unknown = insFo(db, { url: 'https://www.ssa.gov/ssi', kind: 'custom_kind' })
     const res = await enforceLocatorKindClassification(db)
     expect(res.repaired).toBe(0)
-    expect(kindOf(db, foId).opportunity_kind).toBe('direct')
+    expect(kindOf(db, curated).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, unknown).opportunity_kind).toBe('custom_kind')
+  })
+
+  it('DOES override a generic machine-stamped kind on a structurally-proven shape', async () => {
+    // Prod 2026-07-22: 12 studentaid.gov FAFSA rows sat forever in the
+    // census's unreadable bucket because ingest had stamped them
+    // 'PROGRAM'/'direct' — a generated default the blanket never-overwrite
+    // rule froze in place. The verified structural claim outranks a generated
+    // default (and ONLY a generated default — see the test above).
+    const db = makeRealDb()
+    const fafsa = insFo(db, { url: 'https://studentaid.gov/h/apply-for-aid/fafsa', kind: 'PROGRAM' })
+    const fal = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view', kind: 'direct' })
+    const propublica = insFo(db, { url: 'https://projects.propublica.org/nonprofits/organizations/340714585', kind: 'DIRECT_GRANT' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(3)
+    expect(kindOf(db, fafsa).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, fal).opportunity_kind).toBe('directory')
+    expect(kindOf(db, propublica).opportunity_kind).toBe('directory')
   })
 
   it('is idempotent (a classified row leaves the candidate set) and count-only when disabled', async () => {

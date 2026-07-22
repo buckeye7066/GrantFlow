@@ -3148,12 +3148,30 @@ export async function enforceGrantCatalogLink(db, deps = {}) {
  * fabricated `none_published` denial for a page that was never read (silence
  * is not a denial; a denial requires page_read===true).
  *
- * SAFETY: writes ONLY where `opportunity_kind` was never recorded (NULL/''),
- * so an honest kind another writer assigned is never overwritten; bounded per
- * boot; idempotent (a classified row leaves the candidate set).
+ * SAFETY: writes where `opportunity_kind` was never recorded (NULL/'') — OR
+ * where it holds one of the GENERIC MACHINE-STAMPED ingest kinds
+ * (GENERIC_OVERRIDABLE_KINDS below). Prod 2026-07-22: 12 studentaid.gov FAFSA
+ * portal rows and 6 ProPublica 990 profile pages sat permanently in the
+ * census's `unreadable` bucket because an ingest writer had stamped them
+ * 'PROGRAM'/'DIRECT_GRANT'/'direct' — a generated default, not a judgment —
+ * and the blanket never-overwrite rule froze the misclassification in place.
+ * The structural URL rule is a verified positive claim about what the page IS;
+ * it outranks a generated default, and ONLY a generated default: a row
+ * carrying 'directory'/'benefit'/any value outside the explicit allowlist is
+ * never touched. Bounded per boot; idempotent (a classified row leaves the
+ * candidate set).
  *
  * OVERRIDE: ON by default; `ENFORCE_LOCATOR_KIND_CLASSIFICATION=0` = count-only.
  */
+
+/**
+ * Ingest kinds the structural rule may override — generated defaults observed
+ * in prod (an LLM/ingest stamping every row's shape), NOT curated judgments.
+ * Exact strings; anything else (including the canonical 'directory'/'benefit'
+ * and unknown future values) stays protected by the never-overwrite rule.
+ */
+export const GENERIC_OVERRIDABLE_KINDS = Object.freeze(['PROGRAM', 'DIRECT_GRANT', 'SCHOLARSHIP', 'direct'])
+
 export async function enforceLocatorKindClassification(db, deps = {}) {
   return runInvariant('locator_kind_classification', async () => {
     const disabled = _parseBoolEnv(process.env.ENFORCE_LOCATOR_KIND_CLASSIFICATION) === false
@@ -3171,16 +3189,17 @@ export async function enforceLocatorKindClassification(db, deps = {}) {
         .map(() => `COALESCE(source_url, '') LIKE ? OR COALESCE(application_url, '') LIKE ? OR COALESCE(evidence_url, '') LIKE ?`)
         .join(' OR ')
       const likeParams = LOCATOR_URL_LIKE_PREFILTERS.flatMap((p) => [p, p, p])
-      // audit:allow dynamic-sql — likeClauses is built from the frozen pattern list; values stay bound.
+      const overridable = GENERIC_OVERRIDABLE_KINDS.map(() => '?').join(', ')
+      // audit:allow dynamic-sql — likeClauses/overridable are built from frozen lists; values stay bound.
       candidates = await db
         .prepare(
           `SELECT id, source_url, application_url, evidence_url
              FROM funding_opportunities
-            WHERE (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '')
+            WHERE (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '' OR opportunity_kind IN (${overridable}))
               AND (${likeClauses})
             LIMIT ?`,
         )
-        .all(...likeParams, LIMIT)
+        .all(...GENERIC_OVERRIDABLE_KINDS, ...likeParams, LIMIT)
     } catch (err) {
       // Minimal/legacy schema (no evidence_url etc.) → count nothing, never throw.
       log.warn('locator_kind_classification: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
@@ -3196,16 +3215,19 @@ export async function enforceLocatorKindClassification(db, deps = {}) {
       if (disabled) { repaired++; byKind[verdict.kind]++; continue } // count-only: what WOULD classify
       try {
         // Guard re-asserted in the WHERE so a kind written between scan and
-        // update (another sweep, an admin) is never clobbered.
+        // update (another sweep, an admin) is never clobbered — the same
+        // NULL/''/generic-overridable set as the scan, nothing wider.
+        const overridable = GENERIC_OVERRIDABLE_KINDS.map(() => '?').join(', ')
+        // audit:allow dynamic-sql — overridable placeholders from the frozen list; values stay bound.
         const res = await db
           .prepare(
             `UPDATE funding_opportunities
                 SET opportunity_kind = ?,
                     result_kind = COALESCE(NULLIF(TRIM(COALESCE(result_kind, '')), ''), ?)
               WHERE id = ?
-                AND (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '')`,
+                AND (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '' OR opportunity_kind IN (${overridable}))`,
           )
-          .run(verdict.kind, verdict.kind, row.id)
+          .run(verdict.kind, verdict.kind, row.id, ...GENERIC_OVERRIDABLE_KINDS)
         if (changesOf(res) > 0) { repaired++; byKind[verdict.kind]++ }
       } catch (err) {
         log.warn('locator_kind_classification: write failed (non-fatal)', { opportunity: row.id, error: String(err?.message || err) })
