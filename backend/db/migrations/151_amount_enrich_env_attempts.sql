@@ -1,0 +1,21 @@
+-- ENVIRONMENT-failure attempt tracking for amount enrichment.
+-- Twin: postgres migration 0155_amount_enrich_env_attempts.sql.
+--
+-- Fix-cycle 2026-07-21 (WAF-403 follow-up). An ENVIRONMENT failure (401/403/429
+-- — our egress is blocked, not the row) deliberately consumes NEITHER the
+-- one-shot burn mark NOR the normal retry counter (`amount_enrich_attempts`),
+-- because a blocked deploy fails every row identically until an owner action
+-- fixes it. But with NO counter at all, the blockage was invisible: a
+-- permanently-403ing row retried forever, reported as green `never_read`
+-- (attempts=0), and re-occupied the bounded enrich batch every run — starving
+-- valid never-attempted rows.
+--
+-- This SEPARATE counter makes "N consecutive environment failures" a knowable
+-- fact without touching the burn/retry budget. At
+-- AMOUNT_ENRICH_ENV_MAX_ATTEMPTS (default 3) consecutive environment failures
+-- the row becomes `unanswered_blocked` in the amount-answer census — a VISIBLE
+-- attention state (never green, never a fabricated denial, never burned) — and
+-- leaves the main batch for a slower bounded re-probe lane. Any non-environment
+-- outcome (success, honest denial, ordinary transient) resets it to 0.
+ALTER TABLE funding_opportunities ADD COLUMN amount_enrich_env_attempts INTEGER DEFAULT 0;
+ALTER TABLE grants ADD COLUMN amount_enrich_env_attempts INTEGER DEFAULT 0;

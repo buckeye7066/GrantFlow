@@ -65,6 +65,8 @@ import { AMOUNT_CONFIDENCE_STRUCTURED } from '../awardAmountExtractor.js'
 import {
   GRANTS_GOV_SEARCH2_URL,
   GRANTS_GOV_API_KEY_ENV,
+  SIMPLER_GRANTS_OPPORTUNITY_URL,
+  SIMPLER_GRANTS_API_KEY_ENV,
 } from '../../config/grantsGovEndpoints.js'
 
 const log = createLogger('service:grantsGovAmountAdapter')
@@ -282,6 +284,96 @@ export async function fetchGrantsGovAward(opportunityId, { fetchImpl = fetch } =
     transient: false,
     amount_min: parseApiAmount(node.awardFloor),
     amount_max: parseApiAmount(node.awardCeiling),
+    program_total_text: programTotalText(node.estimatedFunding, node.expectedNumberOfAwards),
+  }
+}
+
+/**
+ * Honest text label for "no per-award figure, but the source DOES publish the
+ * program envelope". Program totals must NEVER become amount_min/amount_max
+ * (the #958 aggregate-precision class: $237,500 recorded for a $20,000 award)
+ * — but throwing the envelope away entirely repeats the #954 discarded-fact
+ * sin. Text-only is the doctrine's own middle: `resolveOpportunityAmounts`
+ * keeps program totals as amount_text, so this label rides the sweep's
+ * page_read branch into the same column. Exported for tests.
+ */
+export function programTotalText(total, count) {
+  const t = parseApiAmount(total)
+  if (t === null) return null
+  const n = Number.parseInt(String(count ?? ''), 10)
+  const countNote = Number.isFinite(n) && n > 0 ? ` across ~${n} expected award${n === 1 ? '' : 's'}` : ''
+  return `No per-award figure published; estimated program total $${t.toLocaleString('en-US')}${countNote}`
+}
+
+/**
+ * GET a JSON document with the same reported-failure semantics as postJson:
+ * { ok, data, status, transient, environment }. Never throws.
+ */
+async function getJson(url, { fetchImpl = fetch, headers = {} } = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+  try {
+    const res = await fetchImpl(url, { method: 'GET', headers, signal: controller.signal })
+    const status = res?.status ?? null
+    if (!res?.ok) {
+      const code = Number(status)
+      const environment = code === 401 || code === 403 || code === 429
+      const transient = !Number.isFinite(code) || environment || code === 408 || code >= 500
+      return { ok: false, data: null, status, transient, environment }
+    }
+    return { ok: true, data: await res.json(), status, transient: false }
+  } catch (err) {
+    return { ok: false, data: null, status: null, transient: true, error: String(err?.message ?? err) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Fetch award figures from the SIMPLER GRANTS API (api.simpler.grants.gov) by
+ * the LEGACY grants.gov opportunity id — the same numeric id our rows' URLs
+ * carry (`GET /v1/opportunities/{legacy_opportunity_id}`, verified live
+ * 2026-07-22 against id 112354).
+ *
+ * WHY A SECOND DOOR TO THE SAME FACTS. api.grants.gov is fronted by a WAF that
+ * 403s every call from the production egress (prod 2026-07-21: 127 attempts, 0
+ * answers, while the identical keyless call succeeds from a residential
+ * machine). Simpler Grants is HHS's own replacement API for the same dataset,
+ * on separate infrastructure, key-authenticated (SIMPLER_GRANTS_API_KEY — set
+ * in prod) — so when the primary door is environment-blocked, the same
+ * authoritative figures are still one GET away. Same-shape result as
+ * fetchGrantsGovAward, plus `program_total_text` (the honest envelope label
+ * when no per-award figure exists). Exported for tests.
+ */
+export async function fetchSimplerGrantsAward(legacyOpportunityId, { fetchImpl = fetch } = {}) {
+  const id = Number.parseInt(String(legacyOpportunityId), 10)
+  if (!Number.isFinite(id)) return { ok: false, transient: false, amount_min: null, amount_max: null, reason: 'bad_id' }
+  const key = process.env[SIMPLER_GRANTS_API_KEY_ENV] || ''
+  if (!key) return { ok: false, transient: false, amount_min: null, amount_max: null, reason: 'no_simpler_key' }
+
+  const res = await getJson(`${SIMPLER_GRANTS_OPPORTUNITY_URL}/${id}`, {
+    fetchImpl,
+    headers: { Accept: 'application/json', 'X-API-Key': key },
+  })
+  if (!res.ok) {
+    return {
+      ok: false,
+      transient: res.transient,
+      environment: res.environment === true,
+      status: res.status ?? null,
+      reason: res.status ? `http_${res.status}` : 'transport',
+      amount_min: null,
+      amount_max: null,
+    }
+  }
+  const summary = res.data?.data?.summary ?? null
+  if (!summary) return { ok: false, transient: false, amount_min: null, amount_max: null, reason: 'no_summary' }
+  return {
+    ok: true,
+    transient: false,
+    amount_min: parseApiAmount(summary.award_floor),
+    amount_max: parseApiAmount(summary.award_ceiling),
+    program_total_text: programTotalText(summary.estimated_total_program_funding, summary.expected_number_of_awards),
   }
 }
 
@@ -322,7 +414,21 @@ export async function enrichAmountViaGrantsGovApi(row, deps = {}) {
         : miss('grants_gov_id_unresolvable')
     }
 
-    const award = await fetchGrantsGovAward(id, { fetchImpl })
+    let award = await fetchGrantsGovAward(id, { fetchImpl })
+    let lane = 'grants_gov_api'
+    if (!award.ok) {
+      // SECOND DOOR: the same figures over Simpler Grants (separate HHS infra,
+      // key-gated). Tried on ANY primary failure — most valuably the WAF-403
+      // environment block that has refused every prod call since 2026-07-21,
+      // but a transient primary outage loses nothing by asking too. A fallback
+      // that is unavailable (no key) or fails changes NOTHING about how the
+      // primary failure is reported below.
+      const fallback = await fetchSimplerGrantsAward(id, { fetchImpl })
+      if (fallback.ok) {
+        award = fallback
+        lane = 'simpler_grants_api'
+      }
+    }
     if (!award.ok) {
       return {
         attempted: true,
@@ -343,13 +449,16 @@ export async function enrichAmountViaGrantsGovApi(row, deps = {}) {
     if (amount_min === null && amount_max === null) {
       // A REAL answer: grants.gov itself publishes no award figure for this
       // opportunity ("none"/"0"). page_read:true so the sweep stops asking —
-      // re-reading an authoritative API nightly cannot change this.
+      // re-reading an authoritative API nightly cannot change this. When the
+      // API DID publish the program envelope, it rides along as an honest
+      // TEXT label (never a number — the #958 aggregate doctrine).
       return {
         attempted: true,
         page_read: true,
         transient: false,
         found: false,
         reason: 'no_award_amount_published',
+        amount_text: award.program_total_text ?? null,
       }
     }
 
@@ -359,7 +468,7 @@ export async function enrichAmountViaGrantsGovApi(row, deps = {}) {
       page_read: true,
       transient: false,
       found: true,
-      reason: 'grants_gov_api',
+      reason: lane,
       amounts: {
         amount_min,
         amount_max,
@@ -387,8 +496,10 @@ export default {
   enrichAmountViaGrantsGovApi,
   isGrantsGovRow,
   parseApiAmount,
+  programTotalText,
   extractOpportunityIdFromUrl,
   resolveOpportunityId,
   fetchGrantsGovAward,
+  fetchSimplerGrantsAward,
   GRANTS_GOV_FETCH_OPPORTUNITY_URL,
 }

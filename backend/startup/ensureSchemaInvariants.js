@@ -611,11 +611,16 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
           ['amount_confidence', 'REAL'],
           ['amount_enrich_attempted_at', 'TEXT'],
           ['amount_enrich_attempts', 'INTEGER'],
+          // Consecutive ENVIRONMENT failures (WAF/egress/auth — migration
+          // 151/0155): separate from the retry counter so an egress block is
+          // VISIBLE (`unanswered_blocked`) without consuming the row's budget.
+          ['amount_enrich_env_attempts', 'INTEGER'],
         ],
         grants: [
           ['amount_text', 'TEXT'],
           ['amount_status', 'TEXT'],
           ['amount_confidence', 'REAL'],
+          ['amount_enrich_env_attempts', 'INTEGER'],
         ],
       }
       for (const [table, columns] of Object.entries(columnsByTable)) {

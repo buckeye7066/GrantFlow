@@ -64,6 +64,59 @@ const RE_SSA_BENEFIT = new RegExp(
 )
 
 /**
+ * WHOLE-HOST rules (fix-cycle-3, prod census 2026-07-22). Each entry is a host
+ * whose EVERY page is structurally a benefit program or a program directory —
+ * there is no per-award figure anywhere on the domain, so a host-wide claim
+ * over-claims nothing. Anything narrower (a host that mixes real awards with
+ * program pages, like tn.gov, which carries BOTH the fixed-award HOPE
+ * scholarship AND benefit program pages) must NOT be listed here — those rows
+ * keep their ordinary read.
+ *
+ *   BENEFIT hosts — application/eligibility portals for need-based federal or
+ *   state benefit programs (the FAFSA/Pell/SSI class): the honest per-award
+ *   answer is "varies by applicant", which is what `benefit` kind states.
+ *
+ *   DIRECTORY hosts — pure service/program directories and funder-profile
+ *   registries: pages ABOUT programs/funders, never an award of their own.
+ */
+const BENEFIT_HOSTS = Object.freeze([
+  'studentaid.gov', // Federal Student Aid: FAFSA/Pell portal — need-based, no fixed award
+  'tenncareconnect.tn.gov', // TennCare (Medicaid) application portal
+  'fabenefits.dhs.tn.gov', // TN Family Assistance (SNAP/TANF) portal
+])
+
+const DIRECTORY_HOSTS = Object.freeze([
+  'tn211.org', // 2-1-1 service directory
+  'benefitscheckup.org', // NCOA benefit-finder directory
+])
+
+const RE_BENEFIT_HOST = new RegExp(
+  `^https?:\\/\\/(?:www\\.)?(?:${BENEFIT_HOSTS.map((h) => h.replace(/\./g, '\\.')).join('|')})(?:[/?#]|$)`,
+  'i',
+)
+const RE_DIRECTORY_HOST = new RegExp(
+  `^https?:\\/\\/(?:www\\.)?(?:${DIRECTORY_HOSTS.map((h) => h.replace(/\./g, '\\.')).join('|')})(?:[/?#]|$)`,
+  'i',
+)
+
+/**
+ * ProPublica Nonprofit Explorer organization profile — a 990/funder registry
+ * page about an ORGANIZATION (path is a bare EIN), never an award.
+ */
+const RE_PROPUBLICA_ORG = /^https?:\/\/projects\.propublica\.org\/nonprofits\/organizations\/\d+(?:[/?#]|$)/i
+
+/**
+ * Scholarships.com BROWSE-TREE pages — `/financial-aid/college-scholarships/
+ * scholarships-by-<facet>/…` is the site's category directory (lists of
+ * scholarships by major/state/type), a pointer to awards rather than an award.
+ * Deliberately anchored on the `scholarships-by-` facet segment: an individual
+ * scholarship page elsewhere on the host makes no claim here and keeps its
+ * ordinary read.
+ */
+const RE_SCHOLARSHIPS_COM_CATEGORY =
+  /^https?:\/\/(?:www\.)?scholarships\.com\/financial-aid\/college-scholarships\/(?:[a-z0-9-]+\/)*scholarships-by-[a-z0-9-]+(?:\/|[?#]|$)/i
+
+/**
  * classifyLocatorKindFromUrl — pure, deterministic, never throws.
  *
  * @param {unknown} url a row's source/application/evidence URL
@@ -81,15 +134,37 @@ export function classifyLocatorKindFromUrl(url) {
   if (RE_SSA_BENEFIT.test(u)) {
     return { kind: 'benefit', reason: 'ssa_benefit_program' }
   }
+  if (RE_BENEFIT_HOST.test(u)) {
+    return { kind: 'benefit', reason: 'benefit_program_host' }
+  }
+  if (RE_DIRECTORY_HOST.test(u)) {
+    return { kind: 'directory', reason: 'service_directory_host' }
+  }
+  if (RE_PROPUBLICA_ORG.test(u)) {
+    return { kind: 'directory', reason: 'propublica_nonprofit_profile' }
+  }
+  if (RE_SCHOLARSHIPS_COM_CATEGORY.test(u)) {
+    return { kind: 'directory', reason: 'scholarships_com_category' }
+  }
   return null
 }
 
 /**
- * classifyLocatorKindFromRow — first positive claim across the row's URLs
- * (same precedence the enrichment sweep reads them in). Pure.
+ * classifyLocatorKindFromRow — classify from the AUTHORITATIVE source_url ONLY.
+ *
+ * Sol fix-cycle-2 finding 2: a row whose PRIMARY crawl target (`source_url`) is a
+ * real award/grant page must NEVER be demoted to directory/benefit by a SECONDARY
+ * `application_url`/`evidence_url` that merely points at a locator (e.g. a
+ * grants.gov award whose evidence_url is a sam.gov/fal assistance listing) — that
+ * would HIDE a knowable amount and a real opportunity from the census/proposals.
+ * When `source_url` is present, its shape is authoritative (a non-locator shape →
+ * null = NOT demoted). Only when there is NO source_url do we fall back to a
+ * secondary URL that is unambiguously a locator/benefit. Pure.
  */
 export function classifyLocatorKindFromRow(row) {
-  for (const url of [row?.source_url, row?.application_url, row?.evidence_url]) {
+  const source = typeof row?.source_url === 'string' ? row.source_url.trim() : ''
+  if (source) return classifyLocatorKindFromUrl(source)
+  for (const url of [row?.application_url, row?.evidence_url]) {
     const hit = classifyLocatorKindFromUrl(url)
     if (hit) return hit
   }

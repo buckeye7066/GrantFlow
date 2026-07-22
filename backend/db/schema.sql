@@ -167,6 +167,13 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- permanently-down host cannot be re-fetched nightly forever, and orders
   -- candidates fewest-attempts-first so retries never starve fresh rows.
   amount_enrich_attempts INTEGER DEFAULT 0,
+  -- CONSECUTIVE ENVIRONMENT failures (WAF 403/401/429 on OUR egress —
+  -- migration 151/0155). Deliberately separate from the counter above: an
+  -- egress block consumes neither the burn mark nor the retry budget, but at
+  -- AMOUNT_ENRICH_ENV_MAX_ATTEMPTS the row becomes a VISIBLE
+  -- `unanswered_blocked` census state and moves to a slower re-probe lane so
+  -- it cannot starve the bounded batch. Reset on any non-environment outcome.
+  amount_enrich_env_attempts INTEGER DEFAULT 0,
 
   deadline DATE,
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),
@@ -520,6 +527,9 @@ CREATE TABLE IF NOT EXISTS grants (
   -- burn/retry logic is identical.
   amount_enrich_attempted_at TEXT,
   amount_enrich_attempts INTEGER DEFAULT 0,
+  -- Consecutive ENVIRONMENT failures (migration 151/0155) — see the catalog
+  -- column of the same name for the full rationale.
+  amount_enrich_env_attempts INTEGER DEFAULT 0,
 
   status TEXT DEFAULT 'discovered' CHECK(status IN (
         -- Canonical pipeline (RC-13, shared/pipelineStages.js):

@@ -35,10 +35,12 @@ beforeEach(() => {
     CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
                          amount_status TEXT, amount_text TEXT, funding_opportunity_id INTEGER, profile_id TEXT,
                          amount_enrich_attempted_at TEXT, amount_enrich_attempts INTEGER DEFAULT 0,
+                         amount_enrich_env_attempts INTEGER DEFAULT 0,
                          application_url TEXT, portal_url TEXT);
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
                                         amount_enrich_attempted_at TEXT, amount_enrich_attempts INTEGER DEFAULT 0,
+                                        amount_enrich_env_attempts INTEGER DEFAULT 0,
                                         source_url TEXT, application_url TEXT);
     CREATE TABLE pipeline_promotion_outcomes (
       profile_id TEXT, opportunity_id INTEGER, mode TEXT, outcome TEXT, reason TEXT,
@@ -394,6 +396,44 @@ describe('pipeline.amountCoverage ratchet', () => {
     })
     expect(res.ok, 'backlog and mid-retry are green — only BURNED rows fail the check').toBe(true)
     expect(res.summary).toMatch(/1 mid-retry/)
+  })
+
+  it('an ENVIRONMENT-BLOCKED row is a VISIBLE red naming its host — never green never_read', async () => {
+    // Fix-cycle 2 (2026-07-21): an env failure (WAF 403 on OUR egress) bumps
+    // NEITHER the burn mark nor the retry counter, so before the separate
+    // env-attempts counter a permanently-blocked row was INDISTINGUISHABLE
+    // from untouched backlog — the census read green `never_read` while every
+    // grants.gov call had failed for days. At AMOUNT_ENRICH_ENV_MAX_ATTEMPTS
+    // consecutive env failures the row must become `unanswered_blocked`: red,
+    // host named, owner action named, and NOT burned.
+    seedGrants(30, 30)
+    const blockedFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_env_attempts, source_url) VALUES (1, 'not_listed', 3, 'https://www.grants.gov/search-results-detail/112354')",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(blockedFo)
+    const res = await check().run({ db })
+    expect(res.evidence).toMatchObject({
+      unanswered_blocked: 1,
+      unanswered_never_read: 0,
+      unanswered_mid_retry: 0,
+      unanswered_unreadable: 0, // NOT burned — the row keeps its chance
+    })
+    expect(res.ok, 'a blocked egress is an attention state, not backlog').toBe(false)
+    expect(res.summary).toMatch(/egress is blocked/)
+    expect(res.summary).toMatch(/grants\.gov/)
+    expect(res.evidence.blocked_hosts?.[0]?.host).toBe('grants.gov')
+    expect(res.recommended_fix).toMatch(/GRANTS_GOV_API_KEY/)
+  })
+
+  it('the block LIFTS when a probe succeeds (env counter reset) — back to ordinary backlog', async () => {
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_env_attempts, source_url) VALUES (1, 'not_listed', 0, 'https://www.grants.gov/search-results-detail/112354')",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(foId)
+    const res = await check().run({ db })
+    expect(res.evidence).toMatchObject({ unanswered_blocked: 0, unanswered_never_read: 1 })
+    expect(res.ok).toBe(true)
   })
 
   it('A WIPED row still counts as a MISS — the wipe must never hide in an exclusion', async () => {

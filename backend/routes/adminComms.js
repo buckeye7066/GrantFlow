@@ -133,6 +133,22 @@ router.post('/hamilton-digest/run', async (req, res) => {
     const { runHamiltonWeeklyDigest } = await import('../services/hamilton/hamiltonWeeklyDigest.js')
     const profileIds = Array.isArray(req.body?.profileIds) ? req.body.profileIds.map(String) : null
     const summary = await runHamiltonWeeklyDigest(req.db, { force: true, profileIds })
+    // Persist like the scheduler does (server.js), so Sam's
+    // `agent.hamilton.weeklyDigest` check and the status endpoint read the
+    // LAST REAL RUN of the digest machinery rather than only Monday's. A
+    // scoped run says so (`scoped: n`) — an owner reading the evidence must
+    // be able to tell a 2-profile verification run from the weekly fleet run.
+    if (summary?.ran) {
+      try {
+        await req.db.prepare(
+          `INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+        ).run(
+          'hamilton_weekly_digest_last_run_summary',
+          JSON.stringify({ ...summary, ...(profileIds ? { scoped: profileIds.length } : {}) }),
+        )
+      } catch { /* best-effort observability; the run itself already succeeded */ }
+    }
     res.json(summary)
   } catch (error) {
     res.status(500).json(formatError(error))

@@ -2716,6 +2716,9 @@ describe('enforceAmountEnrichment', () => {
     const row = foRow(db, foId)
     expect(row.amount_enrich_attempted_at, 'an egress block must never burn the row').toBeNull()
     expect(row.amount_enrich_attempts, 'an egress block must not consume the retry budget').toBe(0)
+    // The SEPARATE env counter (migration 151/0155) is what accumulated instead
+    // — 5 consecutive environment failures, each one visible to the census.
+    expect(row.amount_enrich_env_attempts, 'consecutive env failures must be COUNTED, or the block is invisible').toBe(5)
     // And once the environment clears, the row still converts normally.
     const res = await enforceAmountEnrichment(db, {
       enrichImpl: async () => ({
@@ -2725,6 +2728,46 @@ describe('enforceAmountEnrichment', () => {
     })
     expect(res.repaired).toBe(1)
     expect(foRow(db, foId).amount_max).toBe(5000)
+    // …and the successful probe LIFTS the block: the env counter resets to 0.
+    expect(foRow(db, foId).amount_enrich_env_attempts, 'any non-environment outcome must reset the env counter').toBe(0)
+  })
+
+  it('a BLOCKED row (env failures >= ENV_MAX) leaves the main batch but stays re-probed on the slow lane', async () => {
+    // Fix-cycle 2 (2026-07-21): before the lane split, low-id blocked rows
+    // re-entered the bounded batch every run (attempts=0 sorts first) and
+    // STARVED valid never-attempted rows out of the budget entirely. The
+    // blocked row must (a) stop occupying the main batch, (b) still be
+    // re-probed — bounded — so the block lifts on its own when egress heals.
+    const db = makeRealDb()
+    const blockedId = seedLinkedPair(db, { sourceUrl: 'https://www.grants.gov/search-results-detail/1' })
+    // Pre-blocked: 3 consecutive env failures already recorded.
+    db.prepare('UPDATE funding_opportunities SET amount_enrich_env_attempts = 3 WHERE id = ?').run(blockedId)
+    const freshId = seedLinkedPair(db, { sourceUrl: 'https://funder.org/fresh-grant' })
+    const seen = []
+    const deps = {
+      limit: 1, // batch budget of ONE: the starvation scenario
+      envMaxAttempts: 3,
+      envReprobeLimit: 1,
+      enrichImpl: async (row) => {
+        seen.push(row.id)
+        return row.id === blockedId
+          ? { attempted: true, page_read: false, transient: true, environment: true, status: 403, found: false, reason: 'grants_gov_api_failed:http_403' }
+          : { attempted: true, page_read: true, transient: false, found: true, amounts: { amount_min: null, amount_max: 2500, amount_text: null, amount_status: 'range', amount_confidence: 0.9 } }
+      },
+    }
+    const res = await enforceAmountEnrichment(db, deps)
+    // The single main-batch slot went to the FRESH row (the blocked row could
+    // not occupy it), AND the blocked row still got its bounded re-probe.
+    expect(seen).toContain(freshId)
+    expect(seen).toContain(blockedId)
+    expect(res.repaired, 'the fresh row converts — not starved by the blocked one').toBe(1)
+    expect(foRow(db, blockedId).amount_enrich_env_attempts, 'the failed re-probe keeps counting').toBe(4)
+    // A later successful probe lifts the block entirely.
+    await enforceAmountEnrichment(db, {
+      ...deps,
+      enrichImpl: async () => ({ attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page' }),
+    })
+    expect(foRow(db, blockedId).amount_enrich_env_attempts).toBe(0)
   })
 
   it('RECORDS failure telemetry (status + reason) to the system_kv ring so the outage class is diagnosable', async () => {

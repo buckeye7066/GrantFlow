@@ -68,6 +68,7 @@ import { reconcileConvertedApplications } from '../services/serviceApplicationCo
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { classifyLocatorKindFromRow } from '../services/sources/locatorUrlKind.js'
+import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -3296,7 +3297,11 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     // them all away, reported "0 candidates", and never reached row 201. The
     // sweep read as green while doing nothing — which is why raising the
     // nightly budget to 120 on 2026-07-08 left coverage pinned at ~12%.
+    const ENV_MAX = Math.max(1, Number.parseInt(deps.envMaxAttempts ?? AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, 10) || AMOUNT_ENRICH_ENV_MAX_ATTEMPTS)
+    const ENV_REPROBE = Math.max(0, Number.parseInt(deps.envReprobeLimit ?? AMOUNT_ENRICH_ENV_REPROBE_LIMIT, 10) || 0)
+
     let candidates = []
+    let blockedProbe = []
     let attemptedColumnMissing = false
     try {
       const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
@@ -3304,37 +3309,61 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       const scopeSql = scopedOpportunityIds
         ? ` AND fo.id IN (${scopedOpportunityIds.map(() => '?').join(', ')})`
         : ''
-      // audit:allow dynamic-sql — scopeSql contains placeholders only; ids stay bound.
+      // Shared candidate predicate. ${'${envPredicate}'} splits it into two
+      // DISJOINT lanes so an environment-BLOCKED row (env failures >= ENV_MAX —
+      // our egress is WAF/auth-blocked for its host) can never occupy the main
+      // bounded batch: before this split, low-id blocked rows re-entered the
+      // batch every run (attempts=0 sorts first) and starved valid
+      // never-attempted rows out of the budget entirely.
+      const candidateSql = (envPredicate, orderSql) =>
+        // fo.source / fo.source_id / fo.record_origin are what the amount
+        // ADAPTER registry routes on (services/sources/amountAdapters.js): the
+        // source identifies whose API can answer this row, and source_id (the
+        // opportunity NUMBER) is how a row whose URL carries no numeric id is
+        // resolved. Selecting only URLs would silently degrade every adapter
+        // to URL-pattern matching and drop the rows that need it most.
+        `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url,
+                fo.source, fo.source_id, fo.record_origin,
+                COALESCE(fo.amount_enrich_attempts, 0) AS attempts,
+                COALESCE(fo.amount_enrich_env_attempts, 0) AS env_attempts
+           FROM funding_opportunities fo
+           JOIN grants g ON g.funding_opportunity_id = fo.id
+          WHERE g.status IN (${statuses})
+            AND COALESCE(fo.amount_min, 0) <= 0
+            AND COALESCE(fo.amount_max, 0) <= 0
+            AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
+            AND fo.amount_text IS NULL
+            AND fo.amount_enrich_attempted_at IS NULL
+            AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
+            AND ${envPredicate}
+            ${scopeSql}
+          ORDER BY ${orderSql}
+          LIMIT ?`
+      // audit:allow dynamic-sql — envPredicate/orderSql are the frozen literals below; ids stay bound.
       candidates = await db
-        .prepare(
-          // fo.source / fo.source_id / fo.record_origin are what the amount
-          // ADAPTER registry routes on (services/sources/amountAdapters.js): the
-          // source identifies whose API can answer this row, and source_id (the
-          // opportunity NUMBER) is how a row whose URL carries no numeric id is
-          // resolved. Selecting only URLs would silently degrade every adapter
-          // to URL-pattern matching and drop the rows that need it most.
-          `SELECT DISTINCT fo.id, fo.title, fo.source_url, fo.application_url, fo.evidence_url,
-                  fo.source, fo.source_id, fo.record_origin,
-                  COALESCE(fo.amount_enrich_attempts, 0) AS attempts
-             FROM funding_opportunities fo
-             JOIN grants g ON g.funding_opportunity_id = fo.id
-            WHERE g.status IN (${statuses})
-              AND COALESCE(fo.amount_min, 0) <= 0
-              AND COALESCE(fo.amount_max, 0) <= 0
-              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
-              AND fo.amount_text IS NULL
-              AND fo.amount_enrich_attempted_at IS NULL
-              AND COALESCE(fo.source_url, fo.application_url, fo.evidence_url) IS NOT NULL
-              ${scopeSql}
-            ORDER BY COALESCE(fo.amount_enrich_attempts, 0) ASC, fo.id ASC
-            LIMIT ?`,
-        )
+        .prepare(candidateSql(
+          `COALESCE(fo.amount_enrich_env_attempts, 0) < ${ENV_MAX}`,
+          'COALESCE(fo.amount_enrich_attempts, 0) ASC, fo.id ASC',
+        ))
         .all(...(scopedOpportunityIds || []), Math.max(LIMIT, 1))
+      // The SLOWER re-probe lane: blocked rows stay re-checkable (the block
+      // lifts the moment a probe gets a non-environment outcome) but at most
+      // ENV_REPROBE of them per run, OVER the main budget — never instead of a
+      // fresh row. Least-blocked first so a newly-blocked row is confirmed
+      // before an anciently-blocked one is re-polled.
+      if (ENV_REPROBE > 0) {
+        blockedProbe = await db
+          .prepare(candidateSql(
+            `COALESCE(fo.amount_enrich_env_attempts, 0) >= ${ENV_MAX}`,
+            'COALESCE(fo.amount_enrich_env_attempts, 0) ASC, fo.id ASC',
+          ))
+          .all(...(scopedOpportunityIds || []), ENV_REPROBE)
+      }
     } catch (err) {
       // A DB that predates ensureAmountVisibilityColumns() has no attempted
       // column. Count-only rather than silently falling back to the wedged
       // ring — boot re-asserts the column, so this self-heals next start.
-      attemptedColumnMissing = /amount_enrich_attempted_at/i.test(String(err?.message || err))
+      attemptedColumnMissing = /amount_enrich_attempted_at|amount_enrich_env_attempts/i.test(String(err?.message || err))
       log.warn('amount_enrichment: candidate scan failed (non-fatal)', {
         error: String(err?.message || err),
         attemptedColumnMissing,
@@ -3342,7 +3371,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       return { scanned: 0, repaired: 0, skipped: attemptedColumnMissing ? 'schema' : 'query' }
     }
 
-    const fresh = candidates || []
+    const fresh = [...(candidates || []), ...(blockedProbe || [])]
     if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
     if (disabled) {
       log.warn('amount-less active pipeline sources present (enrichment DISABLED via ENFORCE_AMOUNT_ENRICHMENT=0)', {
@@ -3374,16 +3403,23 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     // one chance") but the code did not do: it marked unconditionally and put
     // the retry rule in a catch block that the service — documented "never
     // throws" — could not reach. Prod 2026-07-15: 30 rows burned, 0 amounts.
-    const recordAttempt = async (id, { burn, attempts }) => {
+    // `envAttempts` is the CONSECUTIVE-environment-failure counter (migration
+    // 151/0155): incremented only on an environment failure, reset to 0 by ANY
+    // other outcome — success, denial, ordinary transient — because "the egress
+    // un-blocked" is exactly what a non-environment outcome proves. It is
+    // written in the same statement as the ordinary counters so the two can
+    // never drift apart on a partial write.
+    const recordAttempt = async (id, { burn, attempts, envAttempts = 0 }) => {
       try {
         await db
           .prepare(
             `UPDATE funding_opportunities
                 SET amount_enrich_attempts = ?,
+                    amount_enrich_env_attempts = ?,
                     amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
               WHERE id = ?`,
           )
-          .run(attempts, burn ? new Date().toISOString() : null, id)
+          .run(attempts, envAttempts, burn ? new Date().toISOString() : null, id)
       } catch { /* best-effort; a missed mark only costs one re-fetch */ }
     }
 
@@ -3399,8 +3435,14 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     let retryable = 0
     let envBlocked = 0
     const failureLog = []
+    // The re-probe rows ride OVER the main budget by contract ("at most
+    // ENV_REPROBE per run, over and above the main batch") — capping the loop
+    // at LIMIT alone would let a full main batch silently swallow the re-probe
+    // slots, and a blocked row would then never be re-checked at all. The time
+    // budget still bounds the whole pass.
+    const ATTEMPT_CAP = LIMIT + (blockedProbe?.length ?? 0)
     for (const cand of fresh) {
-      if (attemptedNow >= LIMIT) break
+      if (attemptedNow >= ATTEMPT_CAP) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
       try {
@@ -3416,6 +3458,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
         // as "stable" and burned the row's one-shot mark blank).
         const environmentBlocked = res?.environment === true && res?.page_read !== true
         const attempts = Number(cand.attempts ?? 0) + (environmentBlocked ? 0 : 1)
+        const envAttempts = environmentBlocked ? Number(cand.env_attempts ?? 0) + 1 : 0
         // The service never throws, so this — not a catch block — is the only
         // place the outage-must-not-burn rule can actually be enforced.
         const outOfRetries = attempts >= MAX_ATTEMPTS
@@ -3494,7 +3537,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
           else textOnly++
         }
         // Reached only when every write above SUCCEEDED.
-        await recordAttempt(cand.id, { burn, attempts })
+        await recordAttempt(cand.id, { burn, attempts, envAttempts })
       } catch (err) {
         // enrichOpportunityAmountFromSource is documented "never throws" and
         // returns its failures, so reaching here means a DB WRITE above failed.
@@ -3640,12 +3683,20 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
     const VAL = pipelineValueSql('g')
 
+    const ENV_MAX = Math.max(1, Number.parseInt(deps.envMaxAttempts ?? AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, 10) || AMOUNT_ENRICH_ENV_MAX_ATTEMPTS)
+    const ENV_REPROBE = Math.max(0, Number.parseInt(deps.envReprobeLimit ?? AMOUNT_ENRICH_ENV_REPROBE_LIMIT, 10) || 0)
+
     let candidates = []
+    let blockedProbe = []
     try {
+      // Same DISJOINT-lanes split as the catalog sweep above: an
+      // environment-BLOCKED orphan grant (env failures >= ENV_MAX) leaves the
+      // main bounded batch and is re-probed on the slower lane, so a WAF-blocked
+      // host can never starve valid never-attempted orphans out of the budget.
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
-      candidates = await db
-        .prepare(
-          `SELECT g.id, g.url, g.application_url, COALESCE(g.amount_enrich_attempts, 0) AS attempts
+      const candidateSql = (envPredicate, orderSql) =>
+        `SELECT g.id, g.url, g.application_url, COALESCE(g.amount_enrich_attempts, 0) AS attempts,
+                COALESCE(g.amount_enrich_env_attempts, 0) AS env_attempts
              FROM grants g
             WHERE g.status IN (${statuses})
               AND g.funding_opportunity_id IS NULL
@@ -3655,32 +3706,50 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
               AND g.amount_enrich_attempted_at IS NULL
               AND COALESCE(g.url, g.application_url, '') <> ''
               AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
-            ORDER BY COALESCE(g.amount_enrich_attempts, 0) ASC, g.id ASC
-            LIMIT ?`,
-        )
+              AND ${envPredicate}
+            ORDER BY ${orderSql}
+            LIMIT ?`
+      // audit:allow dynamic-sql — envPredicate/orderSql are the frozen literals below.
+      candidates = await db
+        .prepare(candidateSql(
+          `COALESCE(g.amount_enrich_env_attempts, 0) < ${ENV_MAX}`,
+          'COALESCE(g.amount_enrich_attempts, 0) ASC, g.id ASC',
+        ))
         .all(LIMIT)
+      if (ENV_REPROBE > 0) {
+        blockedProbe = await db
+          .prepare(candidateSql(
+            `COALESCE(g.amount_enrich_env_attempts, 0) >= ${ENV_MAX}`,
+            'COALESCE(g.amount_enrich_env_attempts, 0) ASC, g.id ASC',
+          ))
+          .all(ENV_REPROBE)
+      }
     } catch (err) {
       log.warn('grant_direct_amount: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, skipped: 'query' }
     }
 
-    const fresh = Array.isArray(candidates) ? candidates : []
+    const fresh = [...(Array.isArray(candidates) ? candidates : []), ...(Array.isArray(blockedProbe) ? blockedProbe : [])]
     if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
     if (disabled) return { scanned: fresh.length, repaired: 0, enforced: false }
 
     const { enrichOpportunityAmountFromSource } =
       deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
 
-    const recordAttempt = async (id, { burn, attempts }) => {
+    // Same env-counter contract as the catalog sweep: increment only on an
+    // environment failure, reset on any other outcome, written atomically with
+    // the ordinary counters.
+    const recordAttempt = async (id, { burn, attempts, envAttempts = 0 }) => {
       try {
         await db
           .prepare(
             `UPDATE grants
                 SET amount_enrich_attempts = ?,
+                    amount_enrich_env_attempts = ?,
                     amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
               WHERE id = ?`,
           )
-          .run(attempts, burn ? new Date().toISOString() : null, id)
+          .run(attempts, envAttempts, burn ? new Date().toISOString() : null, id)
       } catch { /* best-effort; a missed mark only costs one re-fetch */ }
     }
 
@@ -3693,8 +3762,11 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     let retryable = 0
     let envBlocked = 0
     const failureLog = []
+    // Re-probe slots ride OVER the main budget — same contract and rationale
+    // as the catalog sweep above.
+    const ATTEMPT_CAP = LIMIT + (blockedProbe?.length ?? 0)
     for (const g of fresh) {
-      if (attemptedNow >= LIMIT) break
+      if (attemptedNow >= ATTEMPT_CAP) break
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
       try {
@@ -3712,6 +3784,7 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
         // rationale as the catalog sweep above.
         const environmentBlocked = res?.environment === true && res?.page_read !== true
         const attempts = Number(g.attempts ?? 0) + (environmentBlocked ? 0 : 1)
+        const envAttempts = environmentBlocked ? Number(g.env_attempts ?? 0) + 1 : 0
         const outOfRetries = attempts >= MAX_ATTEMPTS
         const burn = res?.page_read === true
           || (!environmentBlocked && (res?.transient !== true || outOfRetries))
@@ -3762,7 +3835,7 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
         }
         // Mark only AFTER the write succeeds (the #946 rule): a failed write
         // leaves the row unmarked so "will retry" is true, not a comforting lie.
-        await recordAttempt(g.id, { burn, attempts })
+        await recordAttempt(g.id, { burn, attempts, envAttempts })
       } catch (err) {
         fetchFailed++
         retryable++

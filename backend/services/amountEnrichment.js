@@ -33,7 +33,7 @@
 
 import { extractAwardAmountsFromText } from './awardAmountExtractor.js'
 import { htmlToText } from './webGrantExtractor.js'
-import { findAmountAdapter as defaultFindAmountAdapter } from './sources/amountAdapters.js'
+import { AMOUNT_ADAPTERS } from './sources/amountAdapters.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('service:amountEnrichment')
@@ -91,12 +91,25 @@ export async function enrichOpportunityAmountFromSource(opportunity, deps = {}) 
     // its HTML, so it is consulted before any page fetch.
     //
     // An adapter that does not recognize the row returns `attempted:false` and we
-    // fall through to the page fetcher unchanged — the adapter lane can never
+    // fall through — first to any LATER adapter that also matches (a row can
+    // carry a grants.gov source_url AND a sam.gov /fal/ evidence_url; if the
+    // primary adapter cannot identify it, the secondary one still deserves its
+    // chance), then to the page fetcher unchanged. The adapter lane can never
     // cost a row its chance at the generic strategy.
-    const adapter = (deps.findAdapter ?? defaultFindAmountAdapter)(opportunity)
-    if (adapter) {
-      const viaApi = await adapter.enrich(opportunity, deps)
-      if (viaApi?.attempted) return viaApi
+    if (deps.findAdapter) {
+      const adapter = deps.findAdapter(opportunity)
+      if (adapter) {
+        const viaApi = await adapter.enrich(opportunity, deps)
+        if (viaApi?.attempted) return viaApi
+      }
+    } else {
+      for (const adapter of AMOUNT_ADAPTERS) {
+        let matches = false
+        try { matches = adapter.matches(opportunity) } catch { matches = false }
+        if (!matches) continue
+        const viaApi = await adapter.enrich(opportunity, deps)
+        if (viaApi?.attempted) return viaApi
+      }
     }
 
     if (!fetcher) {
