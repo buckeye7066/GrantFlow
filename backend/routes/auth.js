@@ -41,7 +41,7 @@ import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import bcrypt from 'bcryptjs'
 
 import { createLogger } from '../utils/logger.js'
-import { isLoginMaintenanceActive, LOGIN_MAINTENANCE_MESSAGE } from '../config/maintenance.js'
+import { isLoginMaintenanceActive, LOGIN_MAINTENANCE_MESSAGE, LOGIN_MAINTENANCE_COPY } from '../config/maintenance.js'
 const routeLogger = createLogger('route:auth')
 
 const __filename = fileURLToPath(import.meta.url)
@@ -54,7 +54,7 @@ const router = express.Router()
 // every session-creating endpoint on this router with a 503. Existing
 // sessions keep working: /refresh and /logout are exempt, and GET /api/auth/me
 // lives in authMe.js which this guard never touches.
-const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout'])
+const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout', '/maintenance'])
 router.use((req, res, next) => {
   if (!isLoginMaintenanceActive()) return next()
   if (MAINTENANCE_EXEMPT_PATHS.has(req.path)) return next()
@@ -62,6 +62,13 @@ router.use((req, res, next) => {
     error: 'maintenance',
     message: LOGIN_MAINTENANCE_MESSAGE,
   })
+})
+
+// Public status probe: the Login page asks this at runtime so the banner
+// follows the server-side switch (LOGIN_MAINTENANCE env var) without a
+// frontend rebuild. Never requires auth; exempt from the guard above.
+router.get('/maintenance', (_req, res) => {
+  res.json({ active: isLoginMaintenanceActive(), ...LOGIN_MAINTENANCE_COPY })
 })
 
 function getOpenAI() {

@@ -1,11 +1,14 @@
-// Login maintenance mode.
+// Login maintenance mode — FALLBACK copy + default.
 //
-// While `active` is true the Login page replaces the sign-in form with an
-// upgrade banner and no new sign-ins are possible from the UI. The backend
-// twin (backend/config/maintenance.js) enforces the same block server-side.
-// Flip BOTH to false (one commit) when the upgrade is finished.
+// The Login page asks GET /api/auth/maintenance at runtime and follows the
+// server's answer (toggled by the LOGIN_MAINTENANCE env var on the backend —
+// '1' on, '0' off, default OFF — no rebuild needed). This static object is
+// only the initial render state before the probe answers and the fallback
+// when the API is unreachable; `active: false` matches the backend's default
+// so a normal page load never flashes the upgrade banner. The backend twin
+// is backend/config/maintenance.js.
 export const LOGIN_MAINTENANCE = {
-  active: true,
+  active: false,
   title: 'GrantFlow is being upgraded',
   message:
     'We are performing a scheduled upgrade. Sign-in is temporarily disabled while we finish.',
