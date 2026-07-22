@@ -70,6 +70,19 @@ describe('fetchFalListing — the exact-match floor', () => {
     expect(res.hit.title).toBe('Middle Mile')
   })
 
+  it('the URL hex id OUTRANKS a stale source_id — a number-only match must not answer', async () => {
+    // Gate finding: with `falId OR programNumber` a row whose source_id had
+    // drifted to a DIFFERENT program's number would accept that program's
+    // financial text. When the URL names the listing, only that listing may
+    // answer.
+    const f = sgsFetch(hits([
+      { _id: 'ffffffffffffffffffffffffffffffff', programNumber: '11.032', financial: { additionalInfo: '$1 to $2' } },
+    ]))
+    const res = await fetchFalListing({ source_url: FAL_URL, source_id: '11.032' }, { fetchImpl: f })
+    expect(res.ok).toBe(false)
+    expect(res.reason).toBe('listing_not_found')
+  })
+
   it('a near-miss first hit is NEVER taken (different program)', async () => {
     const f = sgsFetch(hits([{ _id: 'ffffffffffffffffffffffffffffffff', programNumber: '11.032' }]))
     const res = await fetchFalListing({ source_url: FAL_URL }, { fetchImpl: f })

@@ -107,8 +107,16 @@ export async function enrichOpportunityAmountFromSource(opportunity, deps = {}) 
         let matches = false
         try { matches = adapter.matches(opportunity) } catch { matches = false }
         if (!matches) continue
-        const viaApi = await adapter.enrich(opportunity, deps)
-        if (viaApi?.attempted) return viaApi
+        // Every adapter is documented "never throws", but a throw here must
+        // cost only THIS adapter its turn — never the later adapters or the
+        // page-fetch fallback (gate finding: an uncaught throw fell to the
+        // outer catch and aborted the whole chain as a transient error).
+        try {
+          const viaApi = await adapter.enrich(opportunity, deps)
+          if (viaApi?.attempted) return viaApi
+        } catch (err) {
+          log.warn(`[amountEnrichment] adapter ${adapter.id} threw for "${opportunity?.title ?? '?'}" — continuing to next strategy: ${err?.message ?? err}`)
+        }
       }
     }
 

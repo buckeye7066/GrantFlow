@@ -67,7 +67,7 @@ import { DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
-import { classifyLocatorKindFromRow } from '../services/sources/locatorUrlKind.js'
+import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
 
 const log = createLogger('startup:enforceInvariants')
@@ -3161,25 +3161,26 @@ export async function enforceLocatorKindClassification(db, deps = {}) {
 
     let candidates = []
     try {
-      // LIKE prefilter narrows the scan to the two hosts the positive rule
-      // knows; the REAL decision is the pure classifier below — a LIKE hit
-      // that fails the structural shape is left untouched.
+      // LIKE prefilter narrows the scan to the shapes the positive rules know
+      // — the pattern list is EXPORTED BY the classifier module
+      // (LOCATOR_URL_LIKE_PREFILTERS) so a rule added there is automatically
+      // scanned here (gate finding: a hand-copied two-host list silently
+      // orphaned every newer rule). The REAL decision is the pure classifier
+      // below — a LIKE hit that fails the structural shape is left untouched.
+      const likeClauses = LOCATOR_URL_LIKE_PREFILTERS
+        .map(() => `COALESCE(source_url, '') LIKE ? OR COALESCE(application_url, '') LIKE ? OR COALESCE(evidence_url, '') LIKE ?`)
+        .join(' OR ')
+      const likeParams = LOCATOR_URL_LIKE_PREFILTERS.flatMap((p) => [p, p, p])
+      // audit:allow dynamic-sql — likeClauses is built from the frozen pattern list; values stay bound.
       candidates = await db
         .prepare(
           `SELECT id, source_url, application_url, evidence_url
              FROM funding_opportunities
             WHERE (opportunity_kind IS NULL OR TRIM(opportunity_kind) = '')
-              AND (
-                COALESCE(source_url, '')      LIKE '%sam.gov/fal/%' OR
-                COALESCE(application_url, '') LIKE '%sam.gov/fal/%' OR
-                COALESCE(evidence_url, '')    LIKE '%sam.gov/fal/%' OR
-                COALESCE(source_url, '')      LIKE '%ssa.gov/%' OR
-                COALESCE(application_url, '') LIKE '%ssa.gov/%' OR
-                COALESCE(evidence_url, '')    LIKE '%ssa.gov/%'
-              )
+              AND (${likeClauses})
             LIMIT ?`,
         )
-        .all(LIMIT)
+        .all(...likeParams, LIMIT)
     } catch (err) {
       // Minimal/legacy schema (no evidence_url etc.) → count nothing, never throw.
       log.warn('locator_kind_classification: candidate scan failed (non-fatal)', { error: String(err?.message || err) })

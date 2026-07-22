@@ -616,6 +616,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
                SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND NOT (${envBlockedPred}) AND ${attemptCount} > 0 AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_mid_retry,
                SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND ${envBlockedPred} AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_blocked,
                SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_unreadable,
+               -- OVERLAY, not a fifth state: never_read/mid_retry/blocked/
+               -- unreadable PARTITION the unanswered set (every unanswered row
+               -- is in exactly one — attempted NULL x counter states, or
+               -- attempted NOT NULL). Orphan-ness is an orthogonal dimension:
+               -- a burned orphan is counted once as unreadable AND annotated
+               -- here. Nothing may SUM this with the state buckets.
                SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_no_catalog_row,
                SUM(CASE WHEN ${promotionConverging} THEN 1 ELSE 0 END) AS promotion_converging
              FROM grants g

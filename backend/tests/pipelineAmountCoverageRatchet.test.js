@@ -425,6 +425,26 @@ describe('pipeline.amountCoverage ratchet', () => {
     expect(res.recommended_fix).toMatch(/GRANTS_GOV_API_KEY/)
   })
 
+  it('the four STATE buckets partition the unanswered set; no_catalog_row is an OVERLAY, never a fifth state', async () => {
+    // Gate finding (fix-cycle 3): an orphan row is counted in a state bucket
+    // AND annotated no_catalog_row. That is by design — orphan-ness is an
+    // orthogonal dimension — but it means nothing may SUM no_catalog_row with
+    // the states. This test pins both facts: (a) one unanswered row lands in
+    // exactly ONE state bucket, (b) the orphan overlay counts it again.
+    seedGrants(30, 30)
+    // A burned ORPHAN (no catalog row, own mark set): state = unreadable.
+    db.prepare(
+      "INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id, amount_enrich_attempted_at, application_url) VALUES ('discovered', NULL, NULL, 'real-1', '2026-07-16T00:00:00Z', 'https://example.org/x')",
+    ).run()
+    const res = await check().run({ db })
+    const e = res.evidence
+    const stateSum = (e.unanswered_never_read ?? 0) + (e.unanswered_mid_retry ?? 0)
+      + (e.unanswered_blocked ?? 0) + (e.unanswered_unreadable ?? 0)
+    expect(e.unanswered_unreadable, 'the burned orphan is in exactly one STATE bucket').toBe(1)
+    expect(stateSum, 'states partition the unanswered set').toBe(1)
+    expect(e.unanswered_no_catalog_row, 'orphan-ness is the overlay annotation').toBe(1)
+  })
+
   it('the block LIFTS when a probe succeeds (env counter reset) — back to ordinary backlog', async () => {
     seedGrants(30, 30)
     const foId = db.prepare(

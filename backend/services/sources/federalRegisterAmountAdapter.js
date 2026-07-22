@@ -92,7 +92,12 @@ export async function fetchFrDocumentText(docNumber, { fetchImpl = fetch } = {})
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
     try {
-      return await fetchImpl(url, { method: 'GET', headers: { Accept: accept }, signal: controller.signal })
+      // redirect:'error' — the host allowlist below is checked BEFORE the
+      // fetch, so silently following a redirect would let a poisoned pointer
+      // hop off federalregister.gov after passing the check (gate finding). A
+      // legitimate FR redirect surfaces as a thrown error → transient, and the
+      // row keeps its chance.
+      return await fetchImpl(url, { method: 'GET', headers: { Accept: accept }, signal: controller.signal, redirect: 'error' })
     } finally {
       clearTimeout(timer)
     }

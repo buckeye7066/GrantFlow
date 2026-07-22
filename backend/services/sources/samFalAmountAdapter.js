@@ -122,12 +122,15 @@ export async function fetchFalListing(row, { fetchImpl = fetch } = {}) {
     }
     const data = await res.json()
     const hits = Array.isArray(data?._embedded?.results) ? data._embedded.results : []
-    // EXACT identity only: the hex id when the row's URL carries one, else the
-    // exact program number. A search hit that merely ranks first is a
-    // different program and must never answer for this row.
+    // EXACT identity only — and the URL's hex id OUTRANKS the row's program
+    // number. When the URL carries a /fal/<id>/ the id IS the row's identity:
+    // a hit matching only a (possibly stale/mismatched) source_id number would
+    // accept financial text for a DIFFERENT assistance listing (gate finding).
+    // The number is the identity only for rows with no /fal/ URL at all.
     const hit = hits.find((h) =>
-      (falId && String(h?._id ?? '').toLowerCase() === falId)
-      || (alNumber && String(h?.programNumber ?? '').trim() === alNumber),
+      falId
+        ? String(h?._id ?? '').toLowerCase() === falId
+        : (alNumber && String(h?.programNumber ?? '').trim() === alNumber),
     ) ?? null
     if (!hit) return { ok: false, status, transient: false, reason: 'listing_not_found' }
     return { ok: true, hit, status, transient: false }

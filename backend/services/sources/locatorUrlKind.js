@@ -171,4 +171,21 @@ export function classifyLocatorKindFromRow(row) {
   return null
 }
 
-export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow }
+/**
+ * SQL LIKE prefilters for the `locator_kind_classification` boot sweep — one
+ * per positive rule above, kept HERE so the sweep's candidate scan can never
+ * drift from the classifier (fix-cycle-3 gate finding: the sweep prefiltered
+ * only the two original hosts, so newer rules were never invoked on prod
+ * rows). The prefilter only NARROWS the scan; the pure classifier above makes
+ * every real decision, so an over-broad LIKE hit is harmless.
+ */
+export const LOCATOR_URL_LIKE_PREFILTERS = Object.freeze([
+  '%sam.gov/fal/%',
+  '%ssa.gov/%',
+  ...BENEFIT_HOSTS.map((h) => `%${h}/%`),
+  ...DIRECTORY_HOSTS.map((h) => `%${h}/%`),
+  '%projects.propublica.org/nonprofits/organizations/%',
+  '%scholarships.com/financial-aid/college-scholarships/%',
+])
+
+export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS }

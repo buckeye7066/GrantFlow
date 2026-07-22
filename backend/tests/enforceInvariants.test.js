@@ -3145,6 +3145,23 @@ describe('enforceLocatorKindClassification', () => {
     for (const id of [opp, ssaHome, lookalike]) expect(kindOf(db, id).opportunity_kind).toBeNull()
   })
 
+  it('the sweep PREFILTER covers every classifier rule — a fix-cycle-3 shape actually persists', async () => {
+    // Gate finding: the sweep's hand-copied LIKE list knew only the two
+    // original hosts, so the newer classifier rules were pure dead code on
+    // prod rows — classifyLocatorKindFromRow was never handed a candidate.
+    // The prefilter list now lives in the classifier module; this pins that a
+    // rule added there is scanned AND persisted here.
+    const db = makeRealDb()
+    const fafsa = insFo(db, { url: 'https://studentaid.gov/h/apply-for-aid/fafsa' })
+    const directory = insFo(db, { url: 'https://tn211.org/search?need=rent' })
+    const propublica = insFo(db, { url: 'https://projects.propublica.org/nonprofits/organizations/340714585' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(3)
+    expect(kindOf(db, fafsa).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, directory).opportunity_kind).toBe('directory')
+    expect(kindOf(db, propublica).opportunity_kind).toBe('directory')
+  })
+
   it('never overwrites a kind another writer already recorded', async () => {
     const db = makeRealDb()
     const foId = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view', kind: 'direct' })
