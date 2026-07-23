@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   ChevronDown,
   ChevronRight,
@@ -29,7 +29,6 @@ import {
 } from '@/components/ui/collapsible'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import AutoTimeTracker from '@/components/billing/AutoTimeTracker'
 import OnboardingSequencer from '@/components/onboarding/OnboardingSequencer'
 import AnyaFloatingButton from '@/components/anya/AnyaFloatingButton'
@@ -120,15 +119,12 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
 
 export default function Layout({ children }) {
   const location = useLocation()
-  const navigate = useNavigate()
   const { t } = useLanguage()
   const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen()
   const [showAdvancedTools, setShowAdvancedToolsState] = useState(getShowAdvancedTools)
 
   const user = useAuthStore((state) => state.user)
-  const profiles = useAuthStore((state) => state.profiles)
   const activeProfileId = useAuthStore((state) => state.activeProfileId)
-  const setActiveProfileId = useAuthStore((state) => state.setActiveProfileId)
   const logout = useAuthStore((state) => state.logout)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
 
@@ -159,7 +155,6 @@ export default function Layout({ children }) {
 
   const displayName = user?.display_name || user?.full_name || 'User'
   const displayEmail = user?.primary_email || user?.email || undefined
-  const selectedProfileId = activeProfileId ?? (isAdmin ? '__admin__' : (profiles?.[0]?.id ?? ''))
   const initials =
     displayName
       .split(' ')
@@ -168,15 +163,6 @@ export default function Layout({ children }) {
       .join('')
       .slice(0, 2)
       .toUpperCase() || 'U'
-
-  const handleProfileChange = (value) => {
-    if (value === '__admin__') {
-      setActiveProfileId('__admin__')
-      return
-    }
-    setActiveProfileId(value || null)
-    if (value) navigate(`/OrganizationProfile?id=${value}`)
-  }
 
   React.useEffect(() => {
     if (!isAuthenticated) return
@@ -283,31 +269,6 @@ export default function Layout({ children }) {
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   {t('layout.workspaceShowsData')}{' '}
                   <span className="font-medium text-sidebar-foreground">{t('layout.allProfilesAdmin')}</span>
-                </p>
-              </div>
-            ) : null}
-
-            {isAdmin && profiles?.length > 0 ? (
-              <div>
-                <Select value={selectedProfileId || undefined} onValueChange={handleProfileChange}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder={t('layout.switchProfile')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {profiles.map((profile) => (
-                      <SelectItem key={profile.id} value={profile.id}>
-                        {profile.display_name ?? profile.id}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  {t('layout.workspaceShowsData')}{' '}
-                  <span className="font-medium text-sidebar-foreground">
-                    {profiles.find((profile) => profile.id === activeProfileId)?.display_name ??
-                      profiles[0]?.display_name ??
-                      t('layout.yourOrganization')}
-                  </span>
                 </p>
               </div>
             ) : null}
