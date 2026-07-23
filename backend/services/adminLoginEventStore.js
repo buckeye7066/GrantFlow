@@ -36,6 +36,7 @@ export async function recordClientSignInEvent({
   profileId,
   ip,
   userAgent,
+  sessionId = null,
 } = {}) {
   const event = {
     id: safeUuid(),
@@ -47,6 +48,7 @@ export async function recordClientSignInEvent({
     profile_id: safeString(profileId, 128),
     ip: safeString(ip, 128),
     user_agent: safeString(userAgent, 256),
+    session_id: safeString(sessionId, 128),
   }
 
   events.unshift(event)
@@ -64,11 +66,18 @@ export async function recordClientSignInEvent({
           severity: SEVERITY.INFO,
           userId: event.user_id,
           profileId: event.profile_id,
+          // Stamp the linked session id BOTH in details (parsed back by the
+          // read path, persists across sqlite+pg) and as resource_id (first-
+          // class column, SQL-queryable). createSessionAndTokens writes a
+          // user_sessions row AND this audit row for the same login; the read
+          // path uses this link to drop the duplicate so one login isn't
+          // rendered as two admin-panel rows.
           resourceType: 'client_sign_in',
-          resourceId: null,
+          resourceId: event.session_id,
           details: {
             identifier: event.identifier,
             method: event.method,
+            session_id: event.session_id,
           },
           ipAddress: event.ip,
           userAgent: event.user_agent,
