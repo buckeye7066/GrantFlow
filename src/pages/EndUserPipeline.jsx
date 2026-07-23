@@ -135,7 +135,18 @@ export default function EndUserPipeline() {
     [tasksQuery.data],
   )
 
-  const activeTaskGrantId = activeTask?.grant_id ? String(activeTask.grant_id) : null
+  const workingGrantId = useMemo(() => {
+    if (!activeTask) return null
+    const byGrant = activeTask.grant_id
+      ? grants.find((grant) => String(grant.id) === String(activeTask.grant_id))
+      : null
+    if (byGrant) return String(byGrant.id)
+    const opportunityId = activeTask.opportunity_id || activeTask.funding_source_id
+    const byOpportunity = opportunityId
+      ? grants.find((grant) => String(grant.funding_opportunity_id || grant.opportunity_id || '') === String(opportunityId))
+      : null
+    return byOpportunity ? String(byOpportunity.id) : null
+  }, [activeTask, grants])
 
   useEffect(() => {
     if (grants.length === 0) {
@@ -143,12 +154,12 @@ export default function EndUserPipeline() {
       return
     }
     const candidate =
-      (activeTaskGrantId && grants.some((grant) => String(grant.id) === activeTaskGrantId) && activeTaskGrantId) ||
+      (workingGrantId && grants.some((grant) => String(grant.id) === workingGrantId) && workingGrantId) ||
       (requestedGrantId && grants.some((grant) => String(grant.id) === String(requestedGrantId)) && String(requestedGrantId)) ||
       (selectedGrantId && grants.some((grant) => String(grant.id) === String(selectedGrantId)) && String(selectedGrantId)) ||
       String(grants[0].id)
     if (candidate !== selectedGrantId) setSelectedGrantId(candidate)
-  }, [activeTaskGrantId, grants, requestedGrantId, selectedGrantId])
+  }, [grants, requestedGrantId, selectedGrantId, workingGrantId])
 
   const selectedGrant = grants.find((grant) => String(grant.id) === String(selectedGrantId)) || null
   const selectedUrl = grantUrl(selectedGrant)
@@ -164,7 +175,7 @@ export default function EndUserPipeline() {
     : []
 
   function chooseGrant(grantId) {
-    if (activeTaskGrantId && String(grantId) !== activeTaskGrantId) return
+    if (workingGrantId && String(grantId) !== workingGrantId) return
     setSelectedGrantId(String(grantId))
     const params = new URLSearchParams(location.search)
     params.set('grant_id', String(grantId))
@@ -197,7 +208,7 @@ export default function EndUserPipeline() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
-              <Sparkles className="h-3.5 w-3.5" />
+              <CircleDollarSign className="h-3.5 w-3.5" />
               One source at a time
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">Your funding pipeline</h1>
@@ -225,7 +236,7 @@ export default function EndUserPipeline() {
               {activeTask ? (
                 <Card className="border-emerald-300 bg-emerald-50/60">
                   <CardContent className="flex items-start gap-3 p-4 text-sm text-emerald-900">
-                    <Loader2 className="mt-0.5 h-4 w-4 animate-spin shrink-0" />
+                    <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
                     <div>
                       <p className="font-semibold">Hamilton is already working on one funding source.</p>
                       <p className="mt-1">Open the live task below to watch, provide information, change auto-submit, or cancel before starting another source.</p>
@@ -316,7 +327,7 @@ export default function EndUserPipeline() {
               <CardContent className="space-y-2">
                 {grants.map((grant) => {
                   const selected = String(grant.id) === String(selectedGrantId)
-                  const locked = Boolean(activeTaskGrantId) && String(grant.id) !== activeTaskGrantId
+                  const locked = Boolean(workingGrantId) && String(grant.id) !== workingGrantId
                   return (
                     <button
                       key={grant.id}
