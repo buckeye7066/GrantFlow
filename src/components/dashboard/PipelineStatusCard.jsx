@@ -151,7 +151,9 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
               <Link to={createPageUrl('Pipeline')}>Manage Workflow</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link to={createPageUrl('GrantDeadline')}>Schedule deadlines</Link>
+              <Link to={createPageUrl(isAdmin ? 'GrantDeadline' : 'Calendar')}>
+                {isAdmin ? 'Schedule deadlines' : 'View calendar'}
+              </Link>
             </Button>
           </div>
         </div>
