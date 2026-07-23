@@ -106,13 +106,13 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
         {!isAdmin ? (
           <div className="grid grid-cols-2 gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3">
             <div className="rounded-lg bg-background/85 p-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Funding sources in pipeline</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-foreground">Funding sources in pipeline</p>
               <p className="mt-1 text-2xl font-bold text-foreground">
                 {grantsQuery.isLoading ? '…' : endUserSummary?.count ?? 0}
               </p>
             </div>
             <div className="rounded-lg bg-background/85 p-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Potential dollar amount</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-foreground">Potential dollar amount</p>
               <p className="mt-1 text-2xl font-bold text-foreground">
                 {grantsQuery.isLoading ? '…' : currency.format(endUserSummary?.amount ?? 0)}
               </p>
