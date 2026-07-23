@@ -23,6 +23,8 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
 import { useAuthStore } from "@/stores/authStore"
+import { hasFullAdminWorkspace } from "@/lib/workspaceAccess"
+import { pickDashboardNextAction } from "@/lib/dashboardNextAction"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import { getLastVisitedPath } from "@/lib/lastVisitedPreferences"
 
@@ -81,7 +83,7 @@ function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrant
   );
 }
 
-function EngagementRow({ profileDetail, activeGrants, urgentDeadlines }) {
+function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplified = false }) {
   const { savedIds, sync, synced } = useSavedGrantsStore()
 
   React.useEffect(() => {
@@ -93,17 +95,33 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines }) {
   const totalCount = profileCompletion.totalSections
   const completionPct = profileCompletion.completionPct
 
-  // Determine next action
-  let nextAction = null
-  if (completionPct < 40) {
-    nextAction = { label: 'Complete your profile for better matches', url: createPageUrl('MyProfiles'), icon: User }
-  } else if (savedIds.length === 0 && activeGrants.length === 0) {
-    nextAction = { label: 'Discover grants matched to your profile', url: createPageUrl('DiscoverGrants'), icon: Target }
-  } else if (urgentDeadlines.length > 0) {
-    nextAction = { label: `${urgentDeadlines.length} deadline${urgentDeadlines.length > 1 ? 's' : ''} approaching — review now`, url: createPageUrl('Pipeline'), icon: CalendarIcon }
-  } else if (savedIds.length > 0 && activeGrants.length === 0) {
-    nextAction = { label: 'Move saved grants into your pipeline', url: createPageUrl('SavedGrants'), icon: Star }
+  // Determine next action via the shared, unit-tested policy. Simplified
+  // (end-user) shells never route to hidden surfaces (Discovery, Saved Grants,
+  // the profile editor); those actions become "Ask Anya" or "Open your
+  // pipeline" so the CTA always lands on a page the user can actually see.
+  const NEXT_ACTION_ICONS = {
+    finish_profile: Sparkles,
+    complete_profile: User,
+    find_funding: Sparkles,
+    discover: Target,
+    deadlines: CalendarIcon,
+    open_pipeline: ArrowRight,
+    move_saved: Star,
   }
+  const resolvedAction = pickDashboardNextAction({
+    completionPct,
+    savedCount: savedIds.length,
+    activeCount: activeGrants.length,
+    urgentCount: urgentDeadlines.length,
+    isSimplified,
+  })
+  const nextAction = resolvedAction
+    ? {
+        label: resolvedAction.label,
+        url: createPageUrl(resolvedAction.route),
+        icon: NEXT_ACTION_ICONS[resolvedAction.key] || Target,
+      }
+    : null
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
@@ -203,6 +221,11 @@ export default function Dashboard() {
     queryFn: () => client.auth.me(),
     staleTime: 60_000,
   })
+
+  // Presentation policy only — server-side authorization stays authoritative.
+  // The simplified (end-user) Dashboard must never funnel to hidden surfaces
+  // (Discovery, Automations, the profile editor).
+  const isSimplified = Boolean(currentUser) && !hasFullAdminWorkspace(currentUser)
 
   // Fetch user preferences to check if onboarding video has been seen
   const { data: userPreferences } = useQuery({
@@ -580,25 +603,47 @@ export default function Dashboard() {
                     {today}
                   </span>
                   <h1 className="text-2xl font-bold text-card-foreground md:text-3xl">
-                    Operational pulse across all grants and obligations
+                    {isSimplified
+                      ? 'Your funding at a glance'
+                      : 'Operational pulse across all grants and obligations'}
                   </h1>
                   <p className="text-sm text-foreground md:text-base">
-                    Staying ahead of submissions, compliance, and reporting just became easier.
-                    Leverage AI nudges and smart filters to keep every opportunity on track.
+                    {isSimplified
+                      ? 'GrantFlow and Anya line up funding sources that fit you. Open your pipeline to work the next one, or ask Anya what to do next.'
+                      : 'Staying ahead of submissions, compliance, and reporting just became easier. Leverage AI nudges and smart filters to keep every opportunity on track.'}
                   </p>
                   <div className="flex flex-wrap gap-3">
-                    <Button asChild className="gap-2 shadow-md shadow-blue-200/40" size="lg">
-                      <Link to={createPageUrl("DiscoverGrants")}>
-                        <Plus className="h-4 w-4" />
-                        Find Grants
-                      </Link>
-                    </Button>
-                    <Button variant="ghost" size="sm" className="gap-2" asChild>
-                      <Link to={createPageUrl("Automation")}>
-                        <Sparkles className="h-4 w-4" />
-                        Automations
-                      </Link>
-                    </Button>
+                    {isSimplified ? (
+                      <>
+                        <Button asChild className="gap-2 shadow-md shadow-blue-200/40" size="lg">
+                          <Link to={createPageUrl("Pipeline")}>
+                            <ArrowRight className="h-4 w-4" />
+                            Open my pipeline
+                          </Link>
+                        </Button>
+                        <Button variant="ghost" size="sm" className="gap-2" asChild>
+                          <Link to={createPageUrl("Help")}>
+                            <Sparkles className="h-4 w-4" />
+                            Ask Anya
+                          </Link>
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button asChild className="gap-2 shadow-md shadow-blue-200/40" size="lg">
+                          <Link to={createPageUrl("DiscoverGrants")}>
+                            <Plus className="h-4 w-4" />
+                            Find Grants
+                          </Link>
+                        </Button>
+                        <Button variant="ghost" size="sm" className="gap-2" asChild>
+                          <Link to={createPageUrl("Automation")}>
+                            <Sparkles className="h-4 w-4" />
+                            Automations
+                          </Link>
+                        </Button>
+                      </>
+                    )}
                     <Button variant="ghost" size="sm" className="gap-2" onClick={() => logout()}>
                       <LogOut className="h-4 w-4" />
                       Logout
@@ -639,6 +684,7 @@ export default function Dashboard() {
           profileDetail={profileDetail}
           activeGrants={activeGrants}
           urgentDeadlines={urgentDeadlines}
+          isSimplified={isSimplified}
         />
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
