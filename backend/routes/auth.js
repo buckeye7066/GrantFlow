@@ -2006,6 +2006,7 @@ async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddres
       profileId: profileId ?? null,
       ip: ipAddress ?? null,
       userAgent,
+      sessionId,
     })
   } catch (auditErr) {
     console.warn('[auth] sign-in audit record failed:', auditErr?.message || auditErr)
@@ -2095,6 +2096,7 @@ async function rotateSessionTokens(db, {
         profileId: profileId ?? null,
         ip: ipAddress ?? null,
         userAgent,
+        sessionId,
       })
     } catch (auditErr) {
       console.warn('[auth] session-resume audit record failed:', auditErr?.message || auditErr)
