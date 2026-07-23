@@ -180,7 +180,7 @@
     "date-fns": "^3.6.0",
     "embla-carousel-react": "^8.5.2",
     "esbuild": "^0.28.1",
-    "eslint": "^9.39.1",
+    "eslint": "^10.7.0",
     "eslint-plugin-react": "^7.37.4",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
