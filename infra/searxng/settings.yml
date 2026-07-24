@@ -29,36 +29,51 @@ search:
     SearxEngineAccessDenied: 3600
 
 outgoing:
-  # Stock 3s is too tight for the slower DC-tolerant engines enabled below.
-  request_timeout: 6.0
-  max_request_timeout: 12.0
+  # SearXNG waits for the SLOWEST engine (up to its timeout) before returning the
+  # aggregated response. The GrantFlow backend gives each web query an 8s budget
+  # (searxngProvider), so if SearXNG itself can take ~8-12s, EVERY query times out
+  # on attempt 1 and only succeeds on the retry — doubling latency and starving the
+  # gateway crawl budget (observed 2026-07-23 right after enabling google/brave).
+  # Cap SearXNG below the client's 8s so it returns the fast engines' results
+  # (google/brave/bing answer in 1-4s) instead of blocking on a slow straggler.
+  request_timeout: 5.0
+  max_request_timeout: 7.0
 
-# Engine mix tuned for a DATACENTER egress IP. Google/Startpage CAPTCHA-wall
-# datacenter IPs almost immediately — with only the stock defaults enabled,
-# one suspension wave killed ALL coverage at once. Keep them off and lean on
-# engines that tolerate DC traffic (bing/mojeek/qwant/yahoo), with ddg/brave
-# as best-effort extras that now recover in minutes instead of hours.
+# Engine mix tuned for a DATACENTER egress IP. bing/mojeek/qwant/yahoo tolerate
+# DC traffic and are the reliable core; ddg/brave are best-effort extras.
+#
+# Google/Startpage are ENABLED as best-effort quality boosters (2026-07-23): with
+# only bing reliably answering, funding queries returned brand noise ("Bradley
+# Corp", "Cleveland Guardians") and mis-disambiguated small towns (Cleveland TN →
+# Cleveland OH). Google adds far better local relevance WHEN it answers. The
+# earlier "one suspension wave killed ALL coverage" failure is now contained by
+# the short suspended_times above (a CAPTCHA parks ONLY that engine for ~1h while
+# the DC-tolerant core keeps serving), so enabling them can only add coverage,
+# never remove it. If Google CAPTCHA-walls this IP it self-suspends harmlessly;
+# revert to disabled:true if it proves pure dead weight.
 engines:
   - name: google
-    disabled: true
+    disabled: false
+    timeout: 6.0
   - name: startpage
-    disabled: true
+    disabled: false
+    timeout: 6.0
   - name: bing
     disabled: false
-    timeout: 8.0
+    timeout: 6.0
   - name: mojeek
     disabled: false
-    timeout: 8.0
+    timeout: 6.0
   - name: qwant
     disabled: false
-    timeout: 8.0
+    timeout: 6.0
   - name: yahoo
     disabled: false
-    timeout: 8.0
+    timeout: 6.0
   - name: duckduckgo
-    timeout: 8.0
+    timeout: 6.0
   - name: brave
-    timeout: 8.0
+    timeout: 6.0
 
 general:
   instance_name: "grantflow-search"
