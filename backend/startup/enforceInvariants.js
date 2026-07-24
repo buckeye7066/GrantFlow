@@ -3432,17 +3432,18 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     // un-blocked" is exactly what a non-environment outcome proves. It is
     // written in the same statement as the ordinary counters so the two can
     // never drift apart on a partial write.
-    const recordAttempt = async (id, { burn, attempts, envAttempts = 0 }) => {
+    const recordAttempt = async (id, { burn, attempts, envAttempts = 0, reason = null }) => {
       try {
         await db
           .prepare(
             `UPDATE funding_opportunities
                 SET amount_enrich_attempts = ?,
                     amount_enrich_env_attempts = ?,
-                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
+                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at),
+                    amount_enrich_last_reason = ?
               WHERE id = ?`,
           )
-          .run(attempts, envAttempts, burn ? new Date().toISOString() : null, id)
+          .run(attempts, envAttempts, burn ? new Date().toISOString() : null, reason, id)
       } catch { /* best-effort; a missed mark only costs one re-fetch */ }
     }
 
@@ -3560,7 +3561,7 @@ export async function enforceAmountEnrichment(db, deps = {}) {
           else textOnly++
         }
         // Reached only when every write above SUCCEEDED.
-        await recordAttempt(cand.id, { burn, attempts, envAttempts })
+        await recordAttempt(cand.id, { burn, attempts, envAttempts, reason: res?.reason ?? null })
       } catch (err) {
         // enrichOpportunityAmountFromSource is documented "never throws" and
         // returns its failures, so reaching here means a DB WRITE above failed.
@@ -3762,17 +3763,18 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     // Same env-counter contract as the catalog sweep: increment only on an
     // environment failure, reset on any other outcome, written atomically with
     // the ordinary counters.
-    const recordAttempt = async (id, { burn, attempts, envAttempts = 0 }) => {
+    const recordAttempt = async (id, { burn, attempts, envAttempts = 0, reason = null }) => {
       try {
         await db
           .prepare(
             `UPDATE grants
                 SET amount_enrich_attempts = ?,
                     amount_enrich_env_attempts = ?,
-                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at)
+                    amount_enrich_attempted_at = COALESCE(?, amount_enrich_attempted_at),
+                    amount_enrich_last_reason = ?
               WHERE id = ?`,
           )
-          .run(attempts, envAttempts, burn ? new Date().toISOString() : null, id)
+          .run(attempts, envAttempts, burn ? new Date().toISOString() : null, reason, id)
       } catch { /* best-effort; a missed mark only costs one re-fetch */ }
     }
 
@@ -3858,7 +3860,7 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
         }
         // Mark only AFTER the write succeeds (the #946 rule): a failed write
         // leaves the row unmarked so "will retry" is true, not a comforting lie.
-        await recordAttempt(g.id, { burn, attempts, envAttempts })
+        await recordAttempt(g.id, { burn, attempts, envAttempts, reason: res?.reason ?? null })
       } catch (err) {
         fetchFailed++
         retryable++

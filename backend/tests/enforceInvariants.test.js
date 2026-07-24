@@ -2938,6 +2938,66 @@ describe('enforceAmountEnrichment', () => {
     expect(foRow(db, foId).amount_max).toBe(2500)
     expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
   })
+
+  // Per-row LAST-reason observability (migration 153/0157). The rolling
+  // system_kv failure-log ring ages out, so a source that burned weeks ago is
+  // faceless — its counter says "burned once", nothing says WHY. Pinning the
+  // service's reason to the row turns the backlog into a triage table.
+  it('PINS the enrich reason to the row for a STABLE WAF-403 burn (so the faceless backlog self-documents)', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: false, transient: false, found: false, reason: 'fetch_failed:403',
+      }),
+      limit: 1,
+    })
+    const row = foRow(db, foId)
+    expect(row.amount_enrich_attempted_at, 'a stable 4xx is a learned answer → burned').not.toBeNull()
+    // The headline assertion: the reason is now durable ON THE ROW, not just in
+    // a rolling ring that drops it. `SELECT last_reason, COUNT(*) GROUP BY` IS
+    // the triage of "adapter work vs egress fix vs genuinely dead".
+    expect(row.amount_enrich_last_reason).toBe('fetch_failed:403')
+  })
+
+  it('PINS a thin_page reason so an answerless JS-shell source names itself', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+      limit: 1,
+    })
+    expect(foRow(db, foId).amount_enrich_last_reason).toBe('thin_page')
+  })
+
+  it('records the reason for a transient NON-burn too, then CLEARS it to null once the amount lands (no stale reason on an answered row)', async () => {
+    // The reason is the LAST outcome, not just the burn outcome — so a row still
+    // in flight shows why it is failing (a 503 tonight), and that must not fossilize
+    // once the row is answered: a row that eventually gets an amount has NO failure
+    // reason, and `last_reason` must read null there, not the long-gone 503.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    // Pass 1: transient 503 — retried, NOT burned, but its reason IS the last outcome.
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: true, found: false, reason: 'fetch_failed:503' }),
+      limit: 1,
+    })
+    const after503 = foRow(db, foId)
+    expect(after503.amount_enrich_attempted_at, 'a transient failure is NOT a burn').toBeNull()
+    expect(after503.amount_enrich_last_reason, 'the latest outcome is still recorded even when not burned').toBe('fetch_failed:503')
+    // Pass 2: the page comes up, the amount lands. A found result carries no
+    // `reason`, so the column must reset to null — not keep the stale 503.
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: true,
+        amounts: { amount_min: 1000, amount_max: 5000, amount_text: '$1k–$5k', amount_status: 'range', amount_confidence: 0.9 },
+      }),
+      limit: 1,
+    })
+    const answered = foRow(db, foId)
+    expect(answered.amount_max).toBe(5000)
+    expect(answered.amount_enrich_last_reason, 'an ANSWERED row must not carry a stale failure reason').toBeNull()
+  })
 })
 
 describe('enforceGrantDirectAmountEnrichment', () => {
@@ -3090,6 +3150,21 @@ describe('enforceGrantDirectAmountEnrichment', () => {
     expect(g.amount_enrich_attempts, 'an egress block must not consume the retry budget').toBe(0)
     const ring = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ENRICH_FAILURE_LOG_KEY).value)
     expect(ring.failures.at(-1)).toMatchObject({ lane: 'grant_direct', id: String(gId), status: 403, environment: true })
+  })
+
+  it('PINS the enrich reason onto an orphan grant (same per-row observability as the catalog sweep)', async () => {
+    // The grants-direct sweep mirrors the catalog columns so its burn/retry is
+    // identical — and the per-row reason (migration 153/0157) belongs here too,
+    // so an `unanswered_unreadable` orphan self-documents instead of aging out of
+    // the global failure-log ring.
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://grants.gov/synopsis/12345' })
+    await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+    })
+    const g = grantRow(db, gId)
+    expect(g.amount_enrich_attempted_at, 'a thin JS shell is a stable fact → burned').not.toBeNull()
+    expect(g.amount_enrich_last_reason).toBe('thin_page')
   })
 })
 
