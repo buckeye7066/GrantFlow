@@ -615,12 +615,16 @@ export async function ensureAmountVisibilityColumns(db, { logger = console } = {
           // 151/0155): separate from the retry counter so an egress block is
           // VISIBLE (`unanswered_blocked`) without consuming the row's budget.
           ['amount_enrich_env_attempts', 'INTEGER'],
+          // The LAST enrich reason for this row (migration 153/0157): per-row
+          // durable observability complementing the rolling system_kv ring.
+          ['amount_enrich_last_reason', 'TEXT'],
         ],
         grants: [
           ['amount_text', 'TEXT'],
           ['amount_status', 'TEXT'],
           ['amount_confidence', 'REAL'],
           ['amount_enrich_env_attempts', 'INTEGER'],
+          ['amount_enrich_last_reason', 'TEXT'],
         ],
       }
       for (const [table, columns] of Object.entries(columnsByTable)) {

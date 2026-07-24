@@ -174,6 +174,14 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- `unanswered_blocked` census state and moves to a slower re-probe lane so
   -- it cannot starve the bounded batch. Reset on any non-environment outcome.
   amount_enrich_env_attempts INTEGER DEFAULT 0,
+  -- The LAST enrich outcome's reason for THIS row (migration 153/0157): the text
+  -- the service returned ('thin_page', 'fetch_failed:403', 'no_per_award_amount_on_page', …).
+  -- Pinned to the ROW, not the rolling system_kv failure-log ring, so a stable-burn
+  -- source that has aged out of the ring still self-documents WHY it is unreadable --
+  -- `SELECT last_reason, COUNT(*) … GROUP BY` turns the faceless backlog into a
+  -- triage table (which adapter/egress work moves the most rows). Always the latest
+  -- attempt's reason (burn or not); the BURN MARK remains `amount_enrich_attempted_at`.
+  amount_enrich_last_reason TEXT,
 
   deadline DATE,
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),
@@ -530,6 +538,11 @@ CREATE TABLE IF NOT EXISTS grants (
   -- Consecutive ENVIRONMENT failures (migration 151/0155) — see the catalog
   -- column of the same name for the full rationale.
   amount_enrich_env_attempts INTEGER DEFAULT 0,
+  -- The LAST enrich outcome's reason for THIS grant (migration 153/0157): same
+  -- per-row observability as the catalog column above — the rolling failure-log
+  -- ring ages out, but a grant read DIRECTLY here pins its own unreadable reason
+  -- to itself so `unanswered_unreadable` orphans self-document and triage by reason.
+  amount_enrich_last_reason TEXT,
 
   status TEXT DEFAULT 'discovered' CHECK(status IN (
         -- Canonical pipeline (RC-13, shared/pipelineStages.js):
