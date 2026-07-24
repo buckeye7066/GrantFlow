@@ -382,7 +382,21 @@ router.post('/run', ensureAuth, async (req, res) => {
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
   try {
     const db = req.db
-    const { run } = await runProfileDiscoveryLive({ db, profileId: String(profile_id), floor: min_match_score, crawlerType: crawler_type })
+    // Gateway-safe deadline (mirrors /run-smart): the live crawl legitimately
+    // runs for minutes, but the edge proxy drops a proxied /api/* response at
+    // ~30s (504). Bound it under CRAWL_TOTAL_BUDGET_MS; on overrun the in-flight
+    // crawl is abandoned by the REQUEST but keeps running + persists, and we
+    // return whatever matches are already persisted (partial) instead of a 504.
+    const startTime = Date.now()
+    const outcome = await withCrawlBudget(
+      () => runProfileDiscoveryLive({ db, profileId: String(profile_id), floor: min_match_score, crawlerType: crawler_type }),
+      remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS }),
+    )
+    const timedOut = outcome === CRAWL_TIMEOUT
+    const run = timedOut ? null : outcome?.run
+    if (timedOut) {
+      routeLogger.warn(`[RealCrawlers] run (${crawler_type}) for ${profile_id} exceeded gateway budget; returning partial (work continues in background)`)
+    }
     const rows = await db.prepare(
       `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
               fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max, fo.state,
@@ -403,9 +417,11 @@ router.post('/run', ensureAuth, async (req, res) => {
     }))
     return res.json({
       success: true, crawler_type, profile_id, engine: 'crawler-os',
+      partial: timedOut, timed_out: timedOut,
       count: results.length, total_found: results.length,
       results, opportunities: results,
-      sources: run.sources, zero_result: run.zero_result?.zero_result_reason ?? null,
+      sources: run?.sources ?? [], zero_result: run?.zero_result?.zero_result_reason ?? null,
+      ...(timedOut ? { message: 'Search is still running in the background — showing results found so far. Check back shortly for more.' } : {}),
     })
   } catch (err) {
     routeLogger.error(`[RealCrawlers] run failed for ${profile_id}: ${err?.message || err}`)

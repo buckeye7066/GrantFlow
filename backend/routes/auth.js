@@ -1,6 +1,6 @@
 import express from 'express'
 import crypto from 'crypto'
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
 import { fileURLToPath } from 'url'
@@ -258,7 +258,11 @@ const emailVerifyLimiter = rateLimit({
   limit: Number.parseInt(process.env.AUTH_EMAIL_VERIFY_RATE_LIMIT ?? '30', 10),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  keyGenerator: (req) => `${normalizeEmail(req.body?.email ?? '')}|${req.ip}`,
+  // Normalize the IP through the library helper: a raw IPv6 address is a /128,
+  // so combining req.ip directly buckets every IPv6 client separately and
+  // defeats the limit (and trips express-rate-limit's ERR_ERL_KEY_GEN_IPV6
+  // validation at boot). ipKeyGenerator collapses IPv6 to its routable subnet.
+  keyGenerator: (req) => `${normalizeEmail(req.body?.email ?? '')}|${ipKeyGenerator(req.ip)}`,
 })
 
 function normalizeEmail(email = '') {

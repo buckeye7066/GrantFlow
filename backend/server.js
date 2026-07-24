@@ -3024,7 +3024,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startRobertScheduler } = await import('./services/robert/robertScheduler.js')
-        const result = startRobertScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startRobertScheduler({ db })
         if (result?.started) console.log('[Server] Robert scheduler started')
         else console.log('[Server] Robert scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3069,7 +3071,9 @@ if (process.env.NODE_ENV !== 'test') {
           console.warn('[Server] Yana contact enricher wiring failed (non-fatal):', enrichErr?.message || enrichErr)
         }
         const { startYanaScheduler } = await import('./services/yana/yanaScheduler.js')
-        const result = startYanaScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startYanaScheduler({ db })
         if (result?.started) console.log('[Server] Yana scheduler started')
         else console.log('[Server] Yana scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3081,8 +3085,12 @@ if (process.env.NODE_ENV !== 'test') {
     // once and exits when env gates aren't set.
     (async () => {
       try {
-        const { startSamScheduler } = await import('./services/sam/samScheduler.js')
-        startSamScheduler({ db, logger: console })
+        if (BACKGROUND_SERVICES_DISABLED) {
+          console.log('[sam:scheduler] not started: background_services_disabled')
+        } else {
+          const { startSamScheduler } = await import('./services/sam/samScheduler.js')
+          startSamScheduler({ db, logger: console })
+        }
       } catch (samErr) {
         console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
       }
@@ -3119,7 +3127,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startAmyScheduler } = await import('./services/amy/amyScheduler.js')
-        const result = startAmyScheduler({ db, logger: console })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startAmyScheduler({ db, logger: console })
         if (result?.started) console.log(`[Server] Amy scheduler started (target=${result.daily_target}/day)`)
         else console.log('[Server] Amy scheduler not started:', result?.reason || 'disabled')
       } catch (amyErr) {
@@ -3192,7 +3202,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startJohnScheduler } = await import('./services/john/johnScheduler.js')
-        const result = startJohnScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startJohnScheduler({ db })
         if (result?.started) console.log('[Server] John scheduler started:', JSON.stringify(result))
         else console.log('[Server] John scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3311,7 +3323,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startHamiltonScheduler } = await import('./services/hamilton/hamiltonScheduler.js')
-        const result = startHamiltonScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startHamiltonScheduler({ db })
         if (result?.started) console.log('[Server] Hamilton scheduler started:', JSON.stringify(result))
         else console.log('[Server] Hamilton scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
