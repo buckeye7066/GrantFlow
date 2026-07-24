@@ -16,6 +16,21 @@ do read-only work only and tell the user the repo is locked. This suspends any
 is present. The lock is git-ignored; remove it (`rm .agent-edit-lock`) to
 release. (Cursor honors the same lock via `.cursor/rules/respect-edit-lock.mdc`.)
 
+## Program awareness (wire every change through its full chain)
+
+Any change to the code MUST be wired correctly through everything that depends
+on it. After you edit a function, module, route, schema, or contract, trace the
+dependency chain outward — callers, importers, the API/UI layer across the
+frontend/backend boundary, tests, and docs — and update each consumer so no part
+of the program silently uses the old behavior or falls silent. Do not stop at
+the file you touched; continue down the chain until every affected consumer is
+updated or explicitly confirmed unaffected, and prove there are no stale
+references (grep every import/caller of what you changed). Preserve existing
+public contracts (exports, response shapes) unless the change is intentional and
+propagated everywhere. The canonical, always-applied version of this rule lives
+at `.cursor/rules/program-awareness.mdc`; this summary exists so non-Cursor
+workers honor it too.
+
 ## Commands
 
 ```bash
