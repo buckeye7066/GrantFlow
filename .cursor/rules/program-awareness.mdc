@@ -1,0 +1,56 @@
+---
+description: Wire every code change through its full dependency chain so nothing uses stale code or silently falls quiet
+alwaysApply: true
+---
+
+# Program awareness — a change is not done until the whole chain is re-wired
+
+Every edit ripples. A change is complete only when **every part of the program
+affected by it has been found and updated**, following the chain outward until it
+reaches leaves that need nothing. Never leave a caller on old behavior, a
+consumer reading a field you renamed, or a path that now silently returns
+nothing. "It compiles" and "the file I edited looks right" are not done.
+
+## The procedure (run it every time you change code)
+
+1. **Map before you cut.** Before changing a function, export, field, route,
+   env var, DB column, or return shape, `grep` for **every** reference to it
+   (importers, callers, string keys, API paths, SQL column names, tests, docs).
+   You cannot re-wire what you haven't enumerated.
+2. **Change the shared thing once, then fan out.** Fix the root, then walk to
+   each consumer you found and update it to the new contract. Repeat on anything
+   *those* consumers expose. Continue until no reference points at the old shape.
+3. **Cross the boundaries.** Impact rarely stays in one layer. A change usually
+   touches several of: backend route ↔ `src/api/*` client ↔ React consumer;
+   service ↔ its callers ↔ its tests; `funding_opportunities`/`grants` column ↔
+   every reader/writer ↔ migration (SQLite **and** Postgres) ↔ the invariant
+   sweep. Check each boundary the change actually crosses.
+4. **Preserve or migrate the contract.** Do not delete/rename an export, route,
+   response field, or column without either keeping it or updating **all**
+   consumers in the same change. Never truncate a shared module (e.g.
+   `src/api/*.js`, `shared/*`) — preserve existing exports.
+5. **Prove zero stale references.** End with a `grep` for the old name/shape and
+   confirm it's gone (or intentionally kept). Exercise the real path end-to-end,
+   don't infer — a fresh check beats re-reading your own diff.
+
+## Don't let anything fall silent
+
+A change can make a path go quiet instead of loud. Guard against it:
+
+- If a producer stops emitting a value, find every consumer that expected it and
+  decide explicitly: update, default, or surface the gap. Never let it read as
+  empty by accident.
+- Watch the silence-makers: empty `catch {}`, `?.` / `|| []` / `?? {}` that hide
+  now-missing data, early returns, feature flags defaulting off, a UI count that
+  no longer maps 1:1 to a backend field. If your change flows through one, verify
+  the path still returns real data.
+- Displayed counts/results must map 1:1 to the backend field they came from
+  after the change (mission rule). If "found X" can now show 0 downstream, that's
+  a wiring bug, not a UX choice.
+
+## Report what you re-wired
+
+When summarizing a change, state the chain you followed: the root edit, each
+downstream consumer updated, the boundaries crossed, and how you verified no
+stale/silent path remains. If you deliberately stopped at a boundary, say so and
+why. This rule complements mission-goals, optimization-doctrine, and ponytail.
