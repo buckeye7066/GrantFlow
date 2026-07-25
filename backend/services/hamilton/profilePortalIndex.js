@@ -482,15 +482,22 @@ async function hasReadyIdentity(db, profileId, host, { credentialDomains } = {})
   // Credential: match by registrable domain (a login saved for any host on the
   // same eTLD+1 counts). credentialDomains is precomputed once per profile.
   const wantDomain = registrableDomain(host) || host
-  if (credentialDomains && credentialDomains.has(wantDomain)) {
-    return { hasCredential: true, hasSession: false }
-  }
+  const hasCredential = Boolean(credentialDomains && credentialDomains.has(wantDomain))
+  // Always resolve the session too — even when a credential exists. A captured
+  // session is materially different from a stored credential: it OVERRIDES a
+  // provisioned-but-unregistered (`pending_registration`) credential in the
+  // autopilot resolver. Short-circuiting on the credential reported
+  // `hasSession:false` for a portal the owner had just signed into side-by-side,
+  // so the dashboard kept showing "Can't auto-merge — open side-by-side login"
+  // even though Hamilton already held a valid session (the "no evidence it
+  // changed anything" report). `status` (ready/needs_setup) is unaffected — a
+  // credential alone already makes it ready.
   let hasSession = false
   try {
     const session = await findValidSession(db, { profileId, portalHost: host })
     hasSession = Boolean(session)
   } catch { hasSession = false }
-  return { hasCredential: false, hasSession }
+  return { hasCredential, hasSession }
 }
 
 /** Latest portal_sync_runs row for (profile, host) → compact lastSync shape. */

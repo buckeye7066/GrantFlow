@@ -16,6 +16,7 @@ const Database = (await import('better-sqlite3')).default
 const express = (await import('express')).default
 const request = (await import('supertest')).default
 const { saveCredential } = await import('../services/hamilton/hamiltonPortalCredentialService.js')
+const { importSession } = await import('../services/hamilton/hamiltonCredentialSessionService.js')
 const {
   getProfilePortals,
   preResolveProfilePortals,
@@ -229,6 +230,47 @@ describe('getProfilePortals', () => {
     const gates = portals.find((p) => p.portalHost === 'gates.org')
     expect(gates.status).toBe('ready')
     expect(gates.hasCredential).toBe(true)
+  })
+
+  it('a captured session unmasks a pending_registration credential (hasSession not masked by the credential short-circuit)', async () => {
+    // The regression: Hamilton auto-provisioned a login here but never finished
+    // registration (pending_registration=1), THEN the owner completed a
+    // side-by-side login so a valid session exists. hasReadyIdentity used to
+    // short-circuit on the credential and report hasSession:false, so the
+    // autopilot resolver kept the tile stuck at needs_user / cant-auto-merge —
+    // "no evidence it changed anything" even though Hamilton held the session.
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
+      .run('g1', 'p1', 'Scholarships.com', 'https://scholarships.com/apply', 'portal')
+    await saveCredential(db, {
+      userId: 'u1', profileId: 'p1', portalHost: 'scholarships.com',
+      username: 't@icloud.com', password: 'pw', managedBy: 'hamilton',
+    })
+    db.prepare('UPDATE hamilton_portal_credentials SET pending_registration = 1 WHERE profile_id = ? AND portal_host = ?')
+      .run('p1', 'scholarships.com')
+
+    // Before the side-by-side login: credential yes, session honestly no.
+    const before = (await getProfilePortals(db, 'p1')).portals
+      .find((p) => p.portalHost === 'scholarships.com')
+    expect(before.hasCredential).toBe(true)
+    expect(before.hasSession).toBe(false)
+
+    // The owner completes the side-by-side login → a valid session is captured.
+    await importSession(db, {
+      userId: 'u1', profileId: 'p1', portalHost: 'scholarships.com',
+      storageState: { cookies: [{ name: 's', value: 'x', domain: 'scholarships.com', path: '/' }], origins: [] },
+      authenticationStrategy: 'imported_session',
+      expiresAt: new Date(Date.now() + 14 * 86400_000).toISOString(),
+    })
+
+    // After: BOTH flags are reported. The old short-circuit returned
+    // hasSession:false whenever a credential matched, hiding the captured
+    // session from every consumer that treats a session as stronger evidence
+    // than a pending-registration credential.
+    const after = (await getProfilePortals(db, 'p1')).portals
+      .find((p) => p.portalHost === 'scholarships.com')
+    expect(after.hasCredential).toBe(true)
+    expect(after.hasSession).toBe(true)
+    expect(after.status).toBe('ready')
   })
 
   it('pre-resolve warms the cache and read works with refresh disabled', async () => {
