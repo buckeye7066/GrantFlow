@@ -41,6 +41,7 @@ import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import bcrypt from 'bcryptjs'
 
 import { createLogger } from '../utils/logger.js'
+import { isLoginMaintenanceActive, LOGIN_MAINTENANCE_MESSAGE } from '../config/maintenance.js'
 const routeLogger = createLogger('route:auth')
 
 const __filename = fileURLToPath(import.meta.url)
@@ -48,6 +49,28 @@ const __dirname = dirname(__filename)
 const uploadDir = join(__dirname, '..', 'uploads')
 
 const router = express.Router()
+
+// LOGIN MAINTENANCE GUARD — while the upgrade maintenance flag is on, block
+// every session-creating endpoint on this router with a 503. Existing
+// sessions keep working: /refresh, /logout, and /onboarding-state (a
+// logged-in user's state mutation, not session-creating) are exempt, and
+// GET /api/auth/me lives in authMe.js which this guard never touches.
+const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout', '/onboarding-state'])
+router.use((req, res, next) => {
+  if (!isLoginMaintenanceActive()) return next()
+  const path = req.path.length > 1 ? req.path.replace(/\/+$/, '') : req.path
+  if (MAINTENANCE_EXEMPT_PATHS.has(path)) return next()
+  if (req.method === 'GET' && path.endsWith('/callback')) {
+    // An OAuth provider callback is a top-level BROWSER navigation, not an
+    // XHR — hand the user to the frontend banner instead of raw JSON, the
+    // same convention as every failure path in the callback handler itself.
+    return res.redirect(buildRedirectUrl(defaultFrontendRedirect(req), { error: 'maintenance' }))
+  }
+  return res.status(503).json({
+    error: 'maintenance',
+    message: LOGIN_MAINTENANCE_MESSAGE,
+  })
+})
 
 function getOpenAI() {
   const openai = getOpenAIOptional()

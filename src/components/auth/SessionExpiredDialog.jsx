@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { useAuthStore } from '@/stores/authStore'
 import AuthMethodTabs from './AuthMethodTabs'
+import LoginMaintenanceNotice from './LoginMaintenanceNotice'
+import { isLoginMaintenanceActive } from '@/config/maintenance'
 import { AlertCircle } from 'lucide-react'
 
 const AUTH_TABS = new Set(['email', 'phone', 'social'])
@@ -68,7 +70,11 @@ export default function SessionExpiredDialog() {
         </DialogHeader>
 
         <div className="space-y-6">
-          <AuthMethodTabs value={activeTab} onValueChange={setActiveTab} onComplete={handleReauthComplete} />
+          {isLoginMaintenanceActive() ? (
+            <LoginMaintenanceNotice />
+          ) : (
+            <AuthMethodTabs value={activeTab} onValueChange={setActiveTab} onComplete={handleReauthComplete} />
+          )}
 
           <div className="flex flex-col gap-2 text-xs text-slate-500">
             <p>

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { isLoginMaintenanceActive } from '@/config/maintenance'
 
 const REDIRECT_DELAY_MS = 1200
 
@@ -22,6 +23,8 @@ function parseParams(location) {
 
 function mapError(code) {
   switch (code) {
+    case 'maintenance':
+      return 'GrantFlow is being upgraded and sign-in is temporarily disabled. Please try again once the upgrade completes.'
     case 'oauth_state_invalid':
       return 'We could not validate the login request. Please start over.'
     case 'provider_not_configured':
@@ -61,6 +64,14 @@ export default function AuthCallback() {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
       timeoutRef.current = null
+    }
+
+    if (isLoginMaintenanceActive()) {
+      setStatus('error')
+      setMessage(
+        'GrantFlow is being upgraded and sign-in is temporarily disabled. Please try again once the upgrade completes.',
+      )
+      return
     }
 
     if (errorCode) {

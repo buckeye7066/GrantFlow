@@ -7,6 +7,8 @@ import { useAuthStore } from '@/stores/authStore'
 import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { isNativeApp } from '@/lib/platform'
+import { LOGIN_MAINTENANCE, isLoginMaintenanceActive } from '@/config/maintenance'
+import LoginMaintenanceNotice from '@/components/auth/LoginMaintenanceNotice'
 
 const AUTH_TABS = new Set(['email'])
 
@@ -85,6 +87,19 @@ export default function Login() {
         } finally {
                 setDevLoading(false)
         }
+  }
+
+  if (isLoginMaintenanceActive()) {
+        return (
+              <AuthErrorBoundary onReset={handleErrorReset}>
+                      <AuthShell
+                                title={LOGIN_MAINTENANCE.title}
+                                subtitle="Thanks for your patience while we make GrantFlow better."
+                              >
+                              <LoginMaintenanceNotice />
+                      </AuthShell>
+              </AuthErrorBoundary>
+            )
   }
 
   return (
