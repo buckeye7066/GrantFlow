@@ -49,6 +49,7 @@ import {
   isExpiredOpportunity,
   isDirectoryLike,
 } from '../routes/opportunityHelpers.js'
+import { classifyLocatorKindFromRow } from './sources/locatorUrlKind.js'
 
 export const OPPORTUNITY_KINDS = Object.freeze({
   DIRECT: 'direct',
@@ -173,6 +174,20 @@ export function classifyOpportunityKind(opp) {
   if (Object.values(OPPORTUNITY_KINDS).includes(explicitKind)) {
     return explicitKind
   }
+
+  // STRUCTURAL URL-SHAPE CLAIM (the kind tug-of-war fix, 2026-07-25). The
+  // locator_kind_classification boot sweep repaired ~387 rows EVERY night and
+  // never converged, because this gate — consulted on every ingest/re-crawl —
+  // kept restamping machine-generated kinds over the sweep's verified
+  // classification (sam.gov /fal/ assistance listings, ssa.gov benefit pages,
+  // studentaid.gov, ProPublica 990 profiles). Per the repo's invariant
+  // doctrine the WRITER is the first line of defense and the boot sweep is
+  // only the net, so the same positive structural rule the sweep applies is
+  // consulted here first: a verified URL-shape claim outranks every heuristic
+  // below. An explicit canonical kind above still wins (a curated judgment is
+  // never overridden), and a URL the rule makes no claim about is unaffected.
+  const structural = classifyLocatorKindFromRow(opp)
+  if (structural) return structural.kind
 
   if (isDirectoryLike(opp)) return OPPORTUNITY_KINDS.DIRECTORY
   const oppType = lc(opp.opportunity_type)

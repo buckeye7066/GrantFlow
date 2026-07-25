@@ -191,6 +191,28 @@ describe('amount_recall_miss counts only amounts that were KNOWABLE', () => {
     ])
     expect(fired(ev)).toBe(true)
   })
+
+  it('does NOT fire on BENEFIT-kind results (their stated amount semantic is "varies by applicant")', () => {
+    // The 2026-07-21 cohort's amount_recall_miss ×22 was dominated by profiles
+    // whose recommendations were federal/state BENEFIT programs (SSI, Pell,
+    // LIHEAP — the ssa.gov/studentaid.gov class the locator classifier now
+    // stamps kind='benefit'). A benefit program has no fixed per-award figure
+    // BY DESIGN — the same doctrine that already excludes DIRECTORY locators —
+    // so a benefit rec without a dollar amount measures the program's design,
+    // not our extraction.
+    const ev = run(Array.from({ length: 8 }, (_, i) => rec(i, { kind: 'benefit' })))
+    expect(fired(ev), 'a benefit program without a figure is not a recall miss').toBe(false)
+  })
+
+  it('STILL fires when non-benefit rows missed alongside benefit rows', () => {
+    // Benefit rows leave the denominator; the 5 silent PROGRAM rows remain
+    // measurable and keep the finding's teeth.
+    const ev = run([
+      ...Array.from({ length: 5 }, (_, i) => rec(i, { amount_status: 'not_listed' })),
+      ...Array.from({ length: 3 }, (_, i) => rec(i + 5, { kind: 'BENEFIT' })),
+    ])
+    expect(fired(ev)).toBe(true)
+  })
 })
 
 describe('Amy evaluation + Anya handoff', () => {

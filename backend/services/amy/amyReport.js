@@ -322,11 +322,14 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // adapter/extractor lane feeding this profile shape drops dollars entirely.
   // DIRECTORY locators never carry a per-award amount BY DESIGN (a pointer to
   // program lists, not an award) — counting them made this finding fire on
-  // shape alone. Measure dollar recall against grant-shaped candidates only;
-  // recs with no kind (older run shape) stay in the denominator so real
-  // extraction gaps keep firing.
+  // shape alone. BENEFIT programs are the same class one door over: their
+  // stated per-award semantic is "varies by applicant" (SSI, Pell, LIHEAP —
+  // locatorUrlKind.js), so a benefit rec with no dollar figure measures the
+  // program's design, not our extraction. Measure dollar recall against
+  // grant-shaped candidates only; recs with no kind (older run shape) stay in
+  // the denominator so real extraction gaps keep firing.
   const grantShaped = recommendations.filter(
-    (r) => String(r.kind ?? '').toUpperCase() !== 'DIRECTORY',
+    (r) => !['DIRECTORY', 'BENEFIT'].includes(String(r.kind ?? '').toUpperCase()),
   )
   const withAmount = grantShaped.filter(
     (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0,

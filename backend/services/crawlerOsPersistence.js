@@ -21,6 +21,7 @@ import { likelySameGrantOpportunity } from '../utils/grantFingerprint.js';
 import { resolveOpportunityAmounts } from './awardAmountExtractor.js';
 import { cleanupDisallowedHamiltonTraces } from './hamilton/hamiltonFundingSourcePolicy.js';
 import { buildLivePageFactColumns } from '../crawler-os/pageFacts.js';
+import { classifyLocatorKindFromRow, GENERIC_OVERRIDABLE_KINDS } from './sources/locatorUrlKind.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -335,6 +336,19 @@ function osOppToLiveRow(o) {
     title: o.title,
     description: o.summary,
   });
+  // KIND: a verified structural URL-shape claim (sam.gov /fal/ assistance
+  // listing, ssa.gov benefit page, studentaid.gov, ProPublica 990 profile…)
+  // outranks the OS pipeline's machine-stamped kind. This is the WRITER-side
+  // half of the tug-of-war fix: the locator_kind_classification boot sweep
+  // repaired ~387 rows every night and never converged because this bridge
+  // re-stamped 'PROGRAM'/'DIRECT_GRANT' over the sweep's classification on
+  // every re-crawl. The classifier claims nothing about ordinary award pages,
+  // so every other row keeps the OS kind unchanged.
+  const structuralKind = classifyLocatorKindFromRow({
+    source_url: o.info_url ?? null,
+    application_url: o.apply_url ?? null,
+    evidence_url: o.evidence_url ?? null,
+  });
   const row = {
     id: o.id,
     title: o.title ?? '(untitled opportunity)', // only NOT NULL column
@@ -357,7 +371,7 @@ function osOppToLiveRow(o) {
     is_national: geo.national ? 1 : 0,
     state,
     categories: JSON.stringify(needCats),
-    opportunity_kind: o.kind ?? null,
+    opportunity_kind: structuralKind?.kind ?? o.kind ?? null,
     source_trust_tier: o.trust_tier ?? null,
     reality_status: o.reality_status ?? null,
     record_origin: 'live_crawl', // CHECK: live_crawl|curated_verified|manual|synthetic
@@ -444,7 +458,21 @@ function fundingOpportunityConflictExpr(db) {
           SELECT key, value FROM json_each(COALESCE(excluded.field_provenance, '{}'))
         )
       )`;
-  return { field_provenance: provExpr };
+  // opportunity_kind: the stored value survives when it is a canonical
+  // structural classification ('directory'/'benefit' — a verified judgment)
+  // and the incoming value is one of the generic machine-stamped ingest kinds;
+  // an incoming NULL never wipes a stored kind either. This is the UPDATE-side
+  // net under the writer-side structural override in osOppToLiveRow: together
+  // they end the sweep-vs-writer tug-of-war over locator/benefit rows.
+  // audit:allow dynamic-sql — GENERIC_OVERRIDABLE_KINDS is a frozen code-constant list.
+  const overridableList = GENERIC_OVERRIDABLE_KINDS.map((k) => `'${k}'`).join(', ');
+  const kindExpr = `CASE
+        WHEN LOWER(COALESCE(funding_opportunities.opportunity_kind, '')) IN ('directory', 'benefit')
+         AND COALESCE(excluded.opportunity_kind, '') IN (${overridableList})
+        THEN funding_opportunities.opportunity_kind
+        ELSE COALESCE(excluded.opportunity_kind, funding_opportunities.opportunity_kind)
+      END`;
+  return { field_provenance: provExpr, opportunity_kind: kindExpr };
 }
 
 /**

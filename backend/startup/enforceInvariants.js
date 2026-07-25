@@ -67,7 +67,7 @@ import { DEMOTED_MATCH_SCORE } from '../config/matchThresholds.js'
 import { reconcileConvertedApplications } from '../services/serviceApplicationConversion.js'
 import { findOfficialUrlForOpportunity, significantTitleTokens } from '../services/urlEnrichment.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
-import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS } from '../services/sources/locatorUrlKind.js'
+import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
 
 const log = createLogger('startup:enforceInvariants')
@@ -3165,12 +3165,11 @@ export async function enforceGrantCatalogLink(db, deps = {}) {
  */
 
 /**
- * Ingest kinds the structural rule may override — generated defaults observed
- * in prod (an LLM/ingest stamping every row's shape), NOT curated judgments.
- * Exact strings; anything else (including the canonical 'directory'/'benefit'
- * and unknown future values) stays protected by the never-overwrite rule.
+ * GENERIC_OVERRIDABLE_KINDS now lives beside the structural rules themselves
+ * (services/sources/locatorUrlKind.js) so the sweep and the upsert WRITERS
+ * share one list by construction; re-exported here for existing consumers.
  */
-export const GENERIC_OVERRIDABLE_KINDS = Object.freeze(['PROGRAM', 'DIRECT_GRANT', 'SCHOLARSHIP', 'direct'])
+export { GENERIC_OVERRIDABLE_KINDS }
 
 export async function enforceLocatorKindClassification(db, deps = {}) {
   return runInvariant('locator_kind_classification', async () => {
@@ -3294,6 +3293,61 @@ function amountEnrichFailureEntry({ lane, id, res }) {
     transient: res?.transient === true,
     environment: res?.environment === true,
   }
+}
+
+/**
+ * SYSTEMIC-BURN GUARD (the 2026-07-22 mass burn).
+ *
+ * A "stable" failure is a per-ROW judgment: 404/410, an in-band API refusal of
+ * this id, a JS-shell thin_page — facts another try cannot change, so the row
+ * burns. But eleven minutes after #1006 deployed, ONE sweep run burned 34
+ * grants.gov rows in ~5 seconds, each failing ~150ms apart with the SAME
+ * stable-class reason — and every one of those ids answers perfectly today
+ * (verified live from the prod egress, 2026-07-25). That was the API having a
+ * degraded incident, not 34 facts about 34 rows: when EVERY row of a host
+ * fails identically in one run and NOT ONE row of that host was successfully
+ * read, the failure describes the run, not the rows.
+ *
+ * So a stable failure is no longer burned inline. It is DEFERRED to the end of
+ * the run and burned only if its (host, reason) group stayed below the
+ * systemic streak limit or the same host also produced a real read this run
+ * (proof the source was alive, so the failures are genuinely row-specific).
+ * A group at/over the limit with zero same-host reads is reclassified as an
+ * ENVIRONMENT-style outcome: no burn, no ordinary-retry spend, env-counter
+ * incremented — which parks the rows on the existing blocked lane
+ * (`unanswered_blocked`, slow re-probe) where a real outage is VISIBLE and
+ * recoverable instead of silently permanent.
+ *
+ * Pure; exported for tests.
+ *
+ * @param {Array<{id:string, host:string|null, reason:string|null}>} pending
+ * @param {Set<string>} readHosts hosts that produced page_read:true this run
+ * @param {number} streakLimit group size at which a uniform failure is systemic
+ * @returns {{burnNow: Array, systemic: Array}}
+ */
+export function partitionSystemicStableFailures(pending, readHosts, streakLimit) {
+  const rows = Array.isArray(pending) ? pending : []
+  const groups = new Map()
+  const keyOf = (p) => `${p?.host ?? 'unknown'}|${p?.reason ?? 'unknown'}`
+  for (const p of rows) groups.set(keyOf(p), (groups.get(keyOf(p)) ?? 0) + 1)
+  const burnNow = []
+  const systemic = []
+  for (const p of rows) {
+    const uniform = (groups.get(keyOf(p)) ?? 0) >= streakLimit
+    const hostAlive = Boolean(p?.host) && readHosts instanceof Set && readHosts.has(p.host)
+    if (uniform && !hostAlive) systemic.push(p)
+    else burnNow.push(p)
+  }
+  return { burnNow, systemic }
+}
+
+/** Hostname (no www.) of the first URL a row carries, or null. Pure. */
+function amountEnrichHostOf(...urls) {
+  for (const url of urls) {
+    if (!url) continue
+    try { return new URL(String(url)).hostname.replace(/^www\./i, '').toLowerCase() } catch { /* next */ }
+  }
+  return null
 }
 
 export async function enforceAmountEnrichment(db, deps = {}) {
@@ -3459,6 +3513,10 @@ export async function enforceAmountEnrichment(db, deps = {}) {
     let retryable = 0
     let envBlocked = 0
     const failureLog = []
+    // Deferred stable failures + the hosts that proved alive this run — the
+    // systemic-burn guard's inputs (see partitionSystemicStableFailures).
+    const pendingStable = []
+    const readHosts = new Set()
     // The re-probe rows ride OVER the main budget by contract ("at most
     // ENV_REPROBE per run, over and above the main batch") — capping the loop
     // at LIMIT alone would let a full main batch silently swallow the re-probe
@@ -3486,12 +3544,19 @@ export async function enforceAmountEnrichment(db, deps = {}) {
         // The service never throws, so this — not a catch block — is the only
         // place the outage-must-not-burn rule can actually be enforced.
         const outOfRetries = attempts >= MAX_ATTEMPTS
+        // A STABLE failure (not transient, not environment, nothing read) no
+        // longer burns inline: it is deferred to the end of the run so the
+        // systemic-burn guard can tell "34 facts about 34 rows" from "one bad
+        // afternoon at the API" (the 2026-07-22 mass burn).
+        const stableFailure = res?.page_read !== true && !environmentBlocked && res?.transient !== true
         const burn = res?.page_read === true
-          || (!environmentBlocked && (res?.transient !== true || outOfRetries))
-        if (res?.page_read !== true) {
+          || (!environmentBlocked && !stableFailure && outOfRetries)
+        if (res?.page_read === true) {
+          readHosts.add(amountEnrichHostOf(cand.source_url, cand.application_url, cand.evidence_url))
+        } else {
           fetchFailed++
           if (environmentBlocked) envBlocked++
-          if (!burn) retryable++
+          if (!burn && !stableFailure) retryable++
           // Telemetry: WHY it failed (status + reason), so an outage class like
           // the WAF-403 block is diagnosable from system_kv instead of a prod
           // DB spelunk. Recorded for every enrich failure, burned or not.
@@ -3560,8 +3625,20 @@ export async function enforceAmountEnrichment(db, deps = {}) {
           if (readStatus === AMOUNT_STATUS_NONE_PUBLISHED) nonePublished++
           else textOnly++
         }
-        // Reached only when every write above SUCCEEDED.
-        await recordAttempt(cand.id, { burn, attempts, envAttempts, reason: res?.reason ?? null })
+        // Reached only when every write above SUCCEEDED. A stable failure has
+        // NO data write, so deferring its mark to the post-loop guard cannot
+        // violate the mark-after-write rule.
+        if (stableFailure) {
+          pendingStable.push({
+            id: cand.id,
+            host: amountEnrichHostOf(cand.source_url, cand.application_url, cand.evidence_url),
+            reason: res?.reason ?? null,
+            baseAttempts: Number(cand.attempts ?? 0),
+            baseEnvAttempts: Number(cand.env_attempts ?? 0),
+          })
+        } else {
+          await recordAttempt(cand.id, { burn, attempts, envAttempts, reason: res?.reason ?? null })
+        }
       } catch (err) {
         // enrichOpportunityAmountFromSource is documented "never throws" and
         // returns its failures, so reaching here means a DB WRITE above failed.
@@ -3576,6 +3653,31 @@ export async function enforceAmountEnrichment(db, deps = {}) {
           opportunity: cand.id, error: String(err?.message || err),
         })
       }
+    }
+
+    // The systemic-burn guard: burn each deferred stable failure only if its
+    // (host, reason) group stayed under the streak limit or its host also
+    // produced a real read this run; a uniform group with a silent host is an
+    // OUTAGE and parks on the environment-blocked lane instead of burning.
+    const SYSTEMIC_STREAK = Math.max(
+      2,
+      Number.parseInt(deps.systemicStreakLimit ?? process.env.AMOUNT_ENRICH_SYSTEMIC_STREAK ?? '4', 10) || 4,
+    )
+    const { burnNow, systemic } = partitionSystemicStableFailures(pendingStable, readHosts, SYSTEMIC_STREAK)
+    for (const p of burnNow) {
+      await recordAttempt(p.id, { burn: true, attempts: p.baseAttempts + 1, envAttempts: 0, reason: p.reason })
+    }
+    for (const p of systemic) {
+      envBlocked++
+      retryable++
+      await recordAttempt(p.id, { burn: false, attempts: p.baseAttempts, envAttempts: p.baseEnvAttempts + 1, reason: p.reason })
+    }
+    if (systemic.length > 0) {
+      log.warn('amount_enrichment: SYSTEMIC stable-failure signature — burns withheld, rows parked environment-blocked', {
+        withheld: systemic.length,
+        streakLimit: SYSTEMIC_STREAK,
+        groups: [...new Set(systemic.map((p) => `${p.host ?? 'unknown'}|${p.reason ?? 'unknown'}`))].slice(0, 5),
+      })
     }
 
     // Remaining backlog, so Anya's report can show this converging (or not)
@@ -3787,6 +3889,10 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     let retryable = 0
     let envBlocked = 0
     const failureLog = []
+    // Deferred stable failures + hosts that proved alive — the systemic-burn
+    // guard's inputs (same contract as the catalog sweep above).
+    const pendingStable = []
+    const readHosts = new Set()
     // Re-probe slots ride OVER the main budget — same contract and rationale
     // as the catalog sweep above.
     const ATTEMPT_CAP = LIMIT + (blockedProbe?.length ?? 0)
@@ -3795,6 +3901,50 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
       if (Date.now() - startedAt > TIME_BUDGET_MS) break
       attemptedNow++
       try {
+        // STRUCTURAL SHORT-CIRCUIT. The census can see `opportunity_kind` only
+        // on CATALOG rows, so an orphan grant on a benefit host (studentaid.gov
+        // Pell/work-study — a JS shell to the fetcher) would sit "unreadable"
+        // forever even though the locator classifier makes a positive claim
+        // about what the page IS. That claim carries its own honest amount
+        // vocabulary — 'benefit' means "award varies by applicant" (the kind's
+        // stated semantic in locatorUrlKind.js), a directory is a pointer and
+        // never an award — so record it in the grant-side label vocabulary the
+        // census already reads, and skip the doomed fetch.
+        const structural = classifyLocatorKindFromRow({ source_url: g.url ?? g.application_url ?? null })
+        if (structural) {
+          const isBenefit = structural.kind === 'benefit'
+          const wrote = await db
+            .prepare(
+              `UPDATE grants
+                  SET amount_status = COALESCE(?, amount_status),
+                      amount_text = ?
+                WHERE id = ?
+                  AND (amount_status IS NULL OR amount_status = 'not_listed')
+                  AND (amount_text IS NULL OR amount_text = '')
+                  AND COALESCE(amount_min, 0) <= 0
+                  AND COALESCE(amount_max, 0) <= 0
+                  AND COALESCE(amount_requested, 0) <= 0`,
+            )
+            .run(
+              isBenefit ? 'varies' : null,
+              isBenefit
+                ? 'Benefit program — award varies by applicant'
+                : 'Program directory/locator — points at opportunities; no per-award figure by design',
+              g.id,
+            )
+          if (changesOf(wrote) > 0) {
+            textOnly++
+            // A structural fact about the URL's shape is stable — burn the
+            // one-shot mark; the row now carries its honest answer.
+            await recordAttempt(g.id, {
+              burn: true,
+              attempts: Number(g.attempts ?? 0) + 1,
+              envAttempts: 0,
+              reason: `locator_kind:${structural.reason}`,
+            })
+          }
+          continue
+        }
         // The service reads source_url ?? application_url ?? evidence_url. A grant
         // carries no source/source_id, so the API-adapter lane is a no-op here and
         // the page fetch runs — correct: an orphan grant at a grants.gov/sam.gov
@@ -3811,12 +3961,17 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
         const attempts = Number(g.attempts ?? 0) + (environmentBlocked ? 0 : 1)
         const envAttempts = environmentBlocked ? Number(g.env_attempts ?? 0) + 1 : 0
         const outOfRetries = attempts >= MAX_ATTEMPTS
+        // Stable failures defer to the post-loop systemic-burn guard — same
+        // rule and rationale as the catalog sweep above.
+        const stableFailure = res?.page_read !== true && !environmentBlocked && res?.transient !== true
         const burn = res?.page_read === true
-          || (!environmentBlocked && (res?.transient !== true || outOfRetries))
-        if (res?.page_read !== true) {
+          || (!environmentBlocked && !stableFailure && outOfRetries)
+        if (res?.page_read === true) {
+          readHosts.add(amountEnrichHostOf(g.url, g.application_url))
+        } else {
           fetchFailed++
           if (environmentBlocked) envBlocked++
-          if (!burn) retryable++
+          if (!burn && !stableFailure) retryable++
           failureLog.push(amountEnrichFailureEntry({ lane: 'grant_direct', id: g.id, res }))
         }
         if (res?.found && res.amounts) {
@@ -3860,7 +4015,18 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
         }
         // Mark only AFTER the write succeeds (the #946 rule): a failed write
         // leaves the row unmarked so "will retry" is true, not a comforting lie.
-        await recordAttempt(g.id, { burn, attempts, envAttempts, reason: res?.reason ?? null })
+        // A stable failure has no data write, so its deferred mark is safe.
+        if (stableFailure) {
+          pendingStable.push({
+            id: g.id,
+            host: amountEnrichHostOf(g.url, g.application_url),
+            reason: res?.reason ?? null,
+            baseAttempts: Number(g.attempts ?? 0),
+            baseEnvAttempts: Number(g.env_attempts ?? 0),
+          })
+        } else {
+          await recordAttempt(g.id, { burn, attempts, envAttempts, reason: res?.reason ?? null })
+        }
       } catch (err) {
         fetchFailed++
         retryable++
@@ -3868,6 +4034,29 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
           grant: g.id, error: String(err?.message || err),
         })
       }
+    }
+
+    // Systemic-burn guard — same partition and outcome semantics as the
+    // catalog sweep above.
+    const SYSTEMIC_STREAK = Math.max(
+      2,
+      Number.parseInt(deps.systemicStreakLimit ?? process.env.AMOUNT_ENRICH_SYSTEMIC_STREAK ?? '4', 10) || 4,
+    )
+    const { burnNow, systemic } = partitionSystemicStableFailures(pendingStable, readHosts, SYSTEMIC_STREAK)
+    for (const p of burnNow) {
+      await recordAttempt(p.id, { burn: true, attempts: p.baseAttempts + 1, envAttempts: 0, reason: p.reason })
+    }
+    for (const p of systemic) {
+      envBlocked++
+      retryable++
+      await recordAttempt(p.id, { burn: false, attempts: p.baseAttempts, envAttempts: p.baseEnvAttempts + 1, reason: p.reason })
+    }
+    if (systemic.length > 0) {
+      log.warn('grant_direct_amount: SYSTEMIC stable-failure signature — burns withheld, grants parked environment-blocked', {
+        withheld: systemic.length,
+        streakLimit: SYSTEMIC_STREAK,
+        groups: [...new Set(systemic.map((p) => `${p.host ?? 'unknown'}|${p.reason ?? 'unknown'}`))].slice(0, 5),
+      })
     }
 
     let remaining = null
