@@ -11,7 +11,7 @@
  *   - summarizeCrawlerResearch renders "more optimal" findings for the email
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   isResearchHit,
   buildCandidates,
@@ -87,6 +87,10 @@ describe('buildCandidates', () => {
 })
 
 describe('runCrawlerCompetitiveResearch', () => {
+  // Every run stays fully offline: stub the Repo Rewards lane except in the
+  // tests that exercise it explicitly.
+  const noRepoLane = { searchRepoRewards: async () => [], loadReport: async () => null }
+  afterEach(() => { delete process.env.AMY_REPO_REWARDS })
   const goodSearch = vi.fn(async () => [
     { url: 'https://github.com/acme/grant-crawler', title: 'grant-crawler', snippet: 'async scraping pipeline for grants.gov and foundation 990 data' },
     { url: 'https://tech.candid.org/how-we-index-funding', title: 'How we index funding', snippet: 'embedding-based relevance ranking crawler architecture' },
@@ -103,7 +107,7 @@ describe('runCrawlerCompetitiveResearch', () => {
       ],
       provider: 'test',
     }))
-    const res = await runCrawlerCompetitiveResearch(db, { searchWeb: goodSearch, analyze, emitTelemetry: emit, now: new Date('2026-07-14T06:00:00Z') })
+    const res = await runCrawlerCompetitiveResearch(db, { ...noRepoLane, searchWeb: goodSearch, analyze, emitTelemetry: emit, now: new Date('2026-07-14T06:00:00Z') })
     expect(res.ran).toBe(true)
     expect(res.candidates_scanned).toBeGreaterThanOrEqual(2)
     expect(res.optimal_count).toBe(1)
@@ -124,10 +128,10 @@ describe('runCrawlerCompetitiveResearch', () => {
     const db = makeDb()
     const analyze = vi.fn(async () => ({ overall: '', findings: [] }))
     const t0 = new Date('2026-07-14T06:00:00Z')
-    await runCrawlerCompetitiveResearch(db, { searchWeb: goodSearch, analyze, emitTelemetry: async () => {}, now: t0 })
+    await runCrawlerCompetitiveResearch(db, { ...noRepoLane, searchWeb: goodSearch, analyze, emitTelemetry: async () => {}, now: t0 })
     analyze.mockClear()
     const soon = new Date(t0.getTime() + MIN_INTERVAL_MS - 1000)
-    const res2 = await runCrawlerCompetitiveResearch(db, { searchWeb: goodSearch, analyze, emitTelemetry: async () => {}, now: soon })
+    const res2 = await runCrawlerCompetitiveResearch(db, { ...noRepoLane, searchWeb: goodSearch, analyze, emitTelemetry: async () => {}, now: soon })
     expect(res2.ran).toBe(false)
     expect(res2.reason).toBe('throttled')
     expect(analyze).not.toHaveBeenCalled()
@@ -137,7 +141,7 @@ describe('runCrawlerCompetitiveResearch', () => {
     const db = makeDb()
     const emptySearch = vi.fn(async () => [{ url: 'https://google.com/search?q=x', title: 'noise' }])
     const analyze = vi.fn(async () => ({ overall: 'x', findings: [] }))
-    const res = await runCrawlerCompetitiveResearch(db, { searchWeb: emptySearch, analyze, emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z') })
+    const res = await runCrawlerCompetitiveResearch(db, { ...noRepoLane, searchWeb: emptySearch, analyze, emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z') })
     expect(res.ran).toBe(true)
     expect(res.candidates_scanned).toBe(0)
     expect(res.reason).toBe('no_candidates')
@@ -148,16 +152,94 @@ describe('runCrawlerCompetitiveResearch', () => {
 
   it('does not throw and returns analysis_failed when the LLM returns null', async () => {
     const db = makeDb()
-    const res = await runCrawlerCompetitiveResearch(db, { searchWeb: goodSearch, analyze: async () => null, emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z') })
+    const res = await runCrawlerCompetitiveResearch(db, { ...noRepoLane, searchWeb: goodSearch, analyze: async () => null, emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z') })
     expect(res.ran).toBe(true)
     expect(res.reason).toBe('analysis_failed')
+  })
+
+  it('merges Repo Rewards hits into ONE candidate pool: via/is_repo carried, tech-signal probe bypassed, findings labeled', async () => {
+    process.env.AMY_REPO_REWARDS = 'true' // lane defaults OFF under the test runner
+    const db = makeDb()
+    const repoSearch = vi.fn(async () => [
+      // terse description with NO tech-signal word, self-hosted host the
+      // is_repo domain regex can't know — both must survive via the lane flags
+      { url: 'https://git.civicdata.dev/civic/fundfinder', title: 'civic/fundfinder', snippet: 'Find money for people. — score 82 · safety safe', via: 'repo_rewards', is_repo: true },
+      { url: 'https://github.com/acme/grant-crawler', title: 'acme/grant-crawler', snippet: 'dup of a web hit', via: 'repo_rewards', is_repo: true }, // same URL as goodSearch hit → deduped
+    ])
+    const analyze = vi.fn(async () => ({
+      overall: '',
+      findings: [{ url: 'https://git.civicdata.dev/civic/fundfinder', technique: 'profile-need keyword expansion', more_optimal: true, why: 'w', suggestion: 's', effort: 'low' }],
+    }))
+    const res = await runCrawlerCompetitiveResearch(db, {
+      searchWeb: goodSearch, searchRepoRewards: repoSearch, loadReport: async () => null,
+      analyze, emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z'),
+    })
+    expect(res.ran).toBe(true)
+    expect(res.repo_rewards_hits).toBe(1) // the github dup was deduped by URL
+    const cands = analyze.mock.calls[0][0]
+    const rrCand = cands.find((c) => c.domain === 'git.civicdata.dev')
+    expect(rrCand).toBeTruthy()
+    expect(rrCand.is_repo).toBe(true)
+    expect(rrCand.via).toBe('repo_rewards')
+    // persisted finding carries the lane label the owner email renders
+    expect(res.findings[0].via).toBe('repo_rewards')
+  })
+
+  it('derives Repo Rewards queries from the latest Amy report gaps and worst archetype', async () => {
+    process.env.AMY_REPO_REWARDS = 'true'
+    const db = makeDb()
+    const queries = []
+    const repoSearch = vi.fn(async (q) => { queries.push(q); return [] })
+    const report = { findings: [
+      { type: 'hyperlocal_recall_miss', archetype: 'veteran' },
+      { type: 'hyperlocal_recall_miss', archetype: 'veteran' },
+      { type: 'amount_recall_miss', archetype: 'cancer_patient' },
+    ] }
+    await runCrawlerCompetitiveResearch(db, {
+      searchWeb: async () => [], searchRepoRewards: repoSearch, loadReport: async () => report,
+      analyze: async () => ({ findings: [] }), emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z'),
+    })
+    expect(queries[0]).toMatch(/local community foundation/) // most-tripped gap first
+    expect(queries.some((q) => q.includes('veteran'))).toBe(true) // worst-served archetype
+  })
+
+  it('a Repo Rewards outage is non-fatal and counted honestly', async () => {
+    process.env.AMY_REPO_REWARDS = 'true'
+    const db = makeDb()
+    const analyze = vi.fn(async () => ({ overall: '', findings: [] }))
+    const res = await runCrawlerCompetitiveResearch(db, {
+      searchWeb: goodSearch, searchRepoRewards: async () => { throw new Error('down') }, loadReport: async () => null,
+      analyze, emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z'),
+    })
+    expect(res.ran).toBe(true)
+    expect(res.repo_rewards_hits).toBe(0)
+    expect(res.repo_rewards_errors).toBeGreaterThan(0)
+    expect(analyze).toHaveBeenCalled() // web candidates still analyzed
+  })
+
+  it('AMY_REPO_REWARDS=false skips the repo lane entirely', async () => {
+    const prev = process.env.AMY_REPO_REWARDS
+    process.env.AMY_REPO_REWARDS = 'false'
+    try {
+      const repoSearch = vi.fn(async () => [])
+      const res = await runCrawlerCompetitiveResearch(makeDb(), {
+        searchWeb: goodSearch, searchRepoRewards: repoSearch, loadReport: async () => null,
+        analyze: async () => ({ findings: [] }), emitTelemetry: async () => {}, now: new Date('2026-07-14T06:00:00Z'),
+      })
+      expect(res.ran).toBe(true)
+      expect(repoSearch).not.toHaveBeenCalled()
+      expect(res.repo_rewards_hits).toBe(0)
+    } finally {
+      if (prev === undefined) delete process.env.AMY_REPO_REWARDS
+      else process.env.AMY_REPO_REWARDS = prev
+    }
   })
 
   it('is disabled via AMY_CRAWLER_RESEARCH=false', async () => {
     const prev = process.env.AMY_CRAWLER_RESEARCH
     process.env.AMY_CRAWLER_RESEARCH = 'false'
     try {
-      const res = await runCrawlerCompetitiveResearch(makeDb(), { searchWeb: goodSearch, analyze: async () => ({ findings: [] }) })
+      const res = await runCrawlerCompetitiveResearch(makeDb(), { ...noRepoLane, searchWeb: goodSearch, analyze: async () => ({ findings: [] }) })
       expect(res.ran).toBe(false)
       expect(res.reason).toBe('disabled')
     } finally {

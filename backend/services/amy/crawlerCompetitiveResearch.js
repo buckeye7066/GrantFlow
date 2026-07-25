@@ -35,6 +35,13 @@
  */
 
 import { searchWeb as defaultSearchWeb } from '../shared/webSearchEngine.js'
+import {
+  searchRepoRewards as defaultSearchRepoRewards,
+  buildRepoQueries,
+  isRepoRewardsEnabled,
+  MAX_RESULTS_PER_QUERY as MAX_REPO_RESULTS_PER_QUERY,
+} from './repoRewardsScout.js'
+import { readLatestAmyReport } from './amyReportStore.js'
 import { invokeJsonWithFallback, getOpenAIOptional } from '../../utils/aiProviders.js'
 import {
   isSearchEngineUrl,
@@ -138,6 +145,11 @@ export function isResearchHit(hit) {
   if (isSearchEngineUrl(url) || isPlaceholderUrl(url) || isNonActionableUrl(url)) return false
   const domain = extractHostname(url)
   if (!domain || RESEARCH_NOISE_DOMAINS.has(domain)) return false
+  // A Repo Rewards hit IS a code repository by construction (safety-gated,
+  // scored by a purpose-built repo search) — the free-text tech-signal probe
+  // exists to filter generic WEB hits and would wrongly drop tersely-described
+  // repos, so it does not apply to this lane.
+  if (hit?.via === 'repo_rewards') return true
   const text = `${hit?.title ?? ''} ${hit?.snippet ?? ''} ${url}`
   return TECH_SIGNAL_RE.test(text)
 }
@@ -166,7 +178,11 @@ export function buildCandidates(hits, { max = MAX_CANDIDATES } = {}) {
       title,
       snippet: String(hit.snippet || '').trim().slice(0, 320),
       domain,
-      is_repo: /github\.com|gitlab\.com|sourceforge\.net|codeberg\.org|bitbucket\.org/.test(domain),
+      // Repo Rewards hits are repos on ANY host (incl. self-hosted Gitea/
+      // Forgejo the domain regex can't know about) — trust the lane's flag.
+      is_repo: hit.is_repo === true
+        || /github\.com|gitlab\.com|sourceforge\.net|codeberg\.org|bitbucket\.org/.test(domain),
+      via: hit.via === 'repo_rewards' ? 'repo_rewards' : 'web',
     })
   }
   // GitHub/code repos first (most directly reusable technique transfer).
@@ -197,6 +213,7 @@ function normalizeFinding(f, candidateByUrl) {
     suggestion: String(f.suggestion || '').trim().slice(0, 500),
     archetypes,
     effort,
+    via: cand?.via === 'repo_rewards' ? 'repo_rewards' : 'web',
   }
 }
 
@@ -221,10 +238,11 @@ export function summarizeCrawlerResearch(store) {
 
   const findings = optimal.slice(0, MAX_FINDINGS).map((f) => {
     const who = f.source_title || f.domain || 'source'
+    const via = f.via === 'repo_rewards' ? ' (via Repo Rewards)' : ''
     const arche = f.archetypes?.length ? ` [${f.archetypes.slice(0, 3).join(', ')}]` : ''
     const effort = f.effort ? ` (effort: ${f.effort})` : ''
     const suggestion = f.suggestion ? ` → Suggested: ${f.suggestion}` : ''
-    return `${who}: ${f.technique}${effort}${arche}${suggestion}`
+    return `${who}${via}: ${f.technique}${effort}${arche}${suggestion}`
   })
 
   return { headline, findings, allClear, generatedAt: latest.generated_at || null }
@@ -277,7 +295,7 @@ const ANALYSIS_SYSTEM =
 
 function buildAnalysisPrompt(candidates) {
   const lines = candidates.map(
-    (c, i) => `${i + 1}. ${c.is_repo ? '[REPO] ' : ''}${c.title} — ${c.domain}\n   url: ${c.url}\n   ${c.snippet}`,
+    (c, i) => `${i + 1}. ${c.is_repo ? '[REPO] ' : ''}${c.via === 'repo_rewards' ? '[SAFETY-SCREENED via Repo Rewards] ' : ''}${c.title} — ${c.domain}\n   url: ${c.url}\n   ${c.snippet}`,
   )
   return [
     'CURRENT APPROACH:',
@@ -350,6 +368,10 @@ async function defaultEmitTelemetry(db, event) {
  * @param {object} db
  * @param {object} [opts]
  * @param {Function} [opts.searchWeb]   injectable (query,{count}) → [{url,title,snippet}]
+ * @param {Function} [opts.searchRepoRewards] injectable (query,{count}) → repo hits
+ *                                      (repoRewardsScout.searchRepoRewards)
+ * @param {Function} [opts.loadReport]  injectable (db) → latest Amy report (drives
+ *                                      the gap-derived Repo Rewards queries)
  * @param {Function} [opts.analyze]     injectable (candidates) → {overall,findings}|null
  * @param {Function} [opts.emitTelemetry]
  * @param {boolean}  [opts.force=false] bypass the MIN_INTERVAL_MS throttle
@@ -359,6 +381,8 @@ async function defaultEmitTelemetry(db, event) {
  */
 export async function runCrawlerCompetitiveResearch(db, {
   searchWeb = defaultSearchWeb,
+  searchRepoRewards = defaultSearchRepoRewards,
+  loadReport = readLatestAmyReport,
   analyze = defaultAnalyze,
   emitTelemetry = defaultEmitTelemetry,
   force = false,
@@ -399,13 +423,45 @@ export async function runCrawlerCompetitiveResearch(db, {
     }
   }
 
+  // 1b) Repo Rewards lane (owner directive 2026-07-25): purpose-built,
+  // safety-gated repo search, with queries derived from Amy's OWN latest gap
+  // findings + worst-served archetype — so the hunt targets code that fixes
+  // what her synthetic profiles proved is broken. Non-fatal like the web lane.
+  let repoRewardsHits = 0
+  let repoRewardsErrors = 0
+  if (isRepoRewardsEnabled()) {
+    let report = null
+    try {
+      report = await loadReport(db)
+    } catch (err) {
+      log.warn('research amy-report load failed (repo queries fall back to base)', { error: err?.message })
+    }
+    for (const q of buildRepoQueries({ report })) {
+      let results = []
+      try {
+        results = await searchRepoRewards(q, { count: MAX_REPO_RESULTS_PER_QUERY })
+      } catch (err) {
+        repoRewardsErrors += 1
+        log.warn('repo rewards search failed (non-fatal)', { query: q, error: err?.message })
+        results = []
+      }
+      for (const h of Array.isArray(results) ? results : []) {
+        const key = normalizeUrlKey(h?.url)
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        hits.push(h)
+        repoRewardsHits += 1
+      }
+    }
+  }
+
   const candidates = buildCandidates(hits)
   const generatedAt = new Date(nowMs).toISOString()
 
   if (candidates.length === 0) {
     // Honest: nothing to analyze (search outage or all-noise). Do not persist a
     // hollow snapshot that would read as "we researched and found nothing".
-    const result = { ran: true, generated_at: generatedAt, candidates_scanned: 0, findings: [], overall: '', reason: 'no_candidates', search_errors: searchErrors }
+    const result = { ran: true, generated_at: generatedAt, candidates_scanned: 0, findings: [], overall: '', reason: 'no_candidates', search_errors: searchErrors, repo_rewards_hits: repoRewardsHits, repo_rewards_errors: repoRewardsErrors }
     await emitTelemetry(db, {
       agent_name: 'amy',
       event_type: 'amy.crawler_research',
@@ -427,7 +483,7 @@ export async function runCrawlerCompetitiveResearch(db, {
     log.warn('research analysis failed (non-fatal)', { error: err?.message })
   }
   if (!analysis) {
-    return { ran: true, generated_at: generatedAt, candidates_scanned: candidates.length, findings: [], overall: '', reason: 'analysis_failed', search_errors: searchErrors }
+    return { ran: true, generated_at: generatedAt, candidates_scanned: candidates.length, findings: [], overall: '', reason: 'analysis_failed', search_errors: searchErrors, repo_rewards_hits: repoRewardsHits, repo_rewards_errors: repoRewardsErrors }
   }
 
   const candidateByUrl = new Map(candidates.map((c) => [normalizeUrlKey(c.url), c]))
@@ -445,6 +501,8 @@ export async function runCrawlerCompetitiveResearch(db, {
     findings,
     optimal_count: optimalCount,
     search_errors: searchErrors,
+    repo_rewards_hits: repoRewardsHits,
+    repo_rewards_errors: repoRewardsErrors,
     provider: analysis.provider ?? null,
   }
 
@@ -480,7 +538,7 @@ export async function runCrawlerCompetitiveResearch(db, {
     metric_value: optimalCount,
     entity_type: 'crawler_research',
     entity_id: generatedAt,
-    details_json: { candidates_scanned: candidates.length, optimal_count: optimalCount, findings: findings.map((f) => ({ source: f.source_title, technique: f.technique })) },
+    details_json: { candidates_scanned: candidates.length, optimal_count: optimalCount, repo_rewards_hits: repoRewardsHits, repo_rewards_errors: repoRewardsErrors, findings: findings.map((f) => ({ source: f.source_title, technique: f.technique, via: f.via })) },
   })
 
   return result
