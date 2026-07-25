@@ -332,6 +332,32 @@ export async function runRobert({
       summary.notes.push({ stage: 'contact_lead_scan', ...(contactScan?.ran ? { tagged: contactScan.tagged } : { skipped: contactScan?.reason || 'unknown' }) })
     }
 
+    // ---- Phase 1d: owner-contact HARVEST → Yana's verification lane ----
+    // Owner directive 2026-07-25: Robert reads the owner's four mailboxes
+    // (Gmail/Yahoo×2/axiombiolabs) for (name, email) contacts and files them in
+    // Yana's verification lane (yana_lead_candidates, source
+    // 'robert_contact_harvest', status 'candidate'). Only Yana-VERIFIED
+    // contacts ever reach John, through Yana's existing capped handoff — this
+    // phase never touches John's stores and never sends mail. Gated by
+    // ROBERT_CONTACT_HARVEST (default off); unconfigured accounts are skipped
+    // with per-account honesty inside the summary.
+    if (!dryRun) {
+      const harvest = await safe(
+        async () => {
+          const { runContactHarvestForRobert } = await import('./robertContactHarvest.js')
+          return runContactHarvestForRobert(db, { runId })
+        },
+        { errors: summary.errors, stage: 'contact_harvest' },
+      )
+      summary.contact_harvest = harvest || { ran: false, reason: 'contact_harvest_error' }
+      summary.notes.push({
+        stage: 'contact_harvest',
+        ...(harvest?.ran
+          ? { harvested: harvest.harvested, submitted_to_yana: harvest.submitted?.inserted ?? 0 }
+          : { skipped: harvest?.reason || 'unknown' }),
+      })
+    }
+
     // ---- Phase 2: search plans (always derived; cheap) ----
     const allPlans = []
     for (const profileId of profilesToConsider) {

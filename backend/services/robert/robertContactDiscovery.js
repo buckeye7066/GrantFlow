@@ -68,7 +68,7 @@ function messageScanMax() {
 // System/robot senders that must never become "leads".
 const NON_HUMAN_LOCALPARTS = /^(no-?reply|do-?not-?reply|noreply|postmaster|mailer-daemon|bounce|bounces|notifications?|alerts?|newsletter|news|updates?|info-noreply|support|billing|invoice|receipts?|automated?|robot|daemon|admin|webmaster|unsubscribe|marketing|hello@mail|team@mail)/i
 
-function isNonHumanEmail(email) {
+export function isNonHumanEmail(email) {
   const [local = '', domain = ''] = String(email).split('@')
   if (NON_HUMAN_LOCALPARTS.test(local)) return true
   // Sending-infrastructure subdomains — mass mailers, not people

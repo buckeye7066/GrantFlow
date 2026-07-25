@@ -1108,6 +1108,24 @@ export async function runYanaDiscovery(db, {
     summary.backlog_enrichment = backlog
     summary.candidates_qualified += Number(backlog.promoted_to_qualified || 0)
 
+    // Robert's owner-contact harvest lane: verify candidates Robert filed
+    // (source='robert_contact_harvest', status 'candidate'). Deterministic and
+    // DB-only, so it is safe to run every cycle; bounded by env. Verified
+    // contacts become 'qualified' and reach John ONLY through the same
+    // pushQualifiedToJohn cap/handoff below — Robert never writes to John.
+    // Dynamic import: yanaHarvestVerification imports helpers from this module.
+    try {
+      const { verifyRobertHarvestLeads } = await import('./yanaHarvestVerification.js')
+      const harvestVerification = await verifyRobertHarvestLeads(db, {
+        limit: Number(process.env.YANA_HARVEST_VERIFY_LIMIT || 200),
+        runId,
+      })
+      summary.harvest_verification = harvestVerification
+      summary.candidates_qualified += Number(harvestVerification.verified || 0)
+    } catch (err) {
+      summary.harvest_verification = { error: String(err?.message || err) }
+    }
+
     // Honest NOOP: when nothing qualified across BOTH funnels, say why in one
     // line so the run isn't a silent zero. Data/config condition, not a bug.
     if (summary.candidates_qualified === 0) {
