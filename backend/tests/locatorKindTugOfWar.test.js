@@ -138,6 +138,58 @@ describe('crawler-os bridge — the writer honors the structural rule', () => {
   })
 })
 
+describe('crawler-os bridge — a re-crawl NEVER wipes a learned amount answer', () => {
+  // THE #950 WIPE CLASS, CAUGHT LIVE (prod 2026-07-25). The deploy-boot sweep
+  // wrote 7 real grants.gov award figures via the API adapter at 17:08Z; the
+  // ordinary crawl cycle re-upserted those rows at 17:09–17:22Z with the
+  // bridge's default `amount_min = excluded.amount_min` — every figure wiped
+  // to NULL within minutes while each row stayed BURNED as answered. The
+  // inserter path has carried COALESCE guards for these columns all along;
+  // the bridge (the highest-volume writer) is what this suite pins.
+  const seedAnswered = async (db, opp) => {
+    await persistRun(db, makeMemStore({ catalog: [opp] }), {})
+    db.prepare(
+      `UPDATE funding_opportunities
+          SET amount_min = 795000, amount_max = 800000, amount_status = 'range',
+              amount_confidence = 0.9, amount_text = '$795k–$800k'
+        WHERE id = ?`,
+    ).run(opp.id)
+  }
+  const amountsOf = (db, id) =>
+    db.prepare('SELECT amount_min, amount_max, amount_text, amount_status FROM funding_opportunities WHERE id = ?').get(id)
+
+  it('a re-crawl carrying NO amounts leaves the stored answer intact', async () => {
+    const db = makeDb()
+    const opp = osOpp({ id: 'os-w1', canonical_opportunity_key: 'ck-w1', info_url: 'https://example.org/grant-w1' })
+    await seedAnswered(db, opp)
+    await persistRun(db, makeMemStore({ catalog: [{ ...opp, amount_min: null, amount_max: null }] }), {})
+    const row = amountsOf(db, 'os-w1')
+    expect(row.amount_max, 'silence must never clear a learned figure').toBe(800000)
+    expect(row.amount_min).toBe(795000)
+    expect(row.amount_status).toBe('range')
+    expect(row.amount_text).toBe('$795k–$800k')
+  })
+
+  it('a re-crawl that DID extract a real amount still updates', async () => {
+    const db = makeDb()
+    const opp = osOpp({ id: 'os-w2', canonical_opportunity_key: 'ck-w2', info_url: 'https://example.org/grant-w2' })
+    await seedAnswered(db, opp)
+    await persistRun(db, makeMemStore({ catalog: [{ ...opp, amount_min: 10000, amount_max: 50000 }] }), {})
+    const row = amountsOf(db, 'os-w2')
+    expect(row.amount_max).toBe(50000)
+    expect(row.amount_min).toBe(10000)
+  })
+
+  it('an evidenced denial (none_published) survives a silent re-crawl', async () => {
+    const db = makeDb()
+    const opp = osOpp({ id: 'os-w3', canonical_opportunity_key: 'ck-w3', info_url: 'https://example.org/grant-w3' })
+    await persistRun(db, makeMemStore({ catalog: [opp] }), {})
+    db.prepare(`UPDATE funding_opportunities SET amount_status = 'none_published' WHERE id = 'os-w3'`).run()
+    await persistRun(db, makeMemStore({ catalog: [{ ...opp, amount_min: null, amount_max: null }] }), {})
+    expect(amountsOf(db, 'os-w3').amount_status, 'a read denial is a learned fact, not clearable by silence').toBe('none_published')
+  })
+})
+
 describe('reality gate — classifyOpportunityKind consults the structural rule', () => {
   it('a machine-stamped PROGRAM on a sam.gov /fal/ URL classifies as directory', () => {
     expect(
