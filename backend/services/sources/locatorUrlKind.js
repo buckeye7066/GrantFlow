@@ -117,6 +117,19 @@ const RE_SCHOLARSHIPS_COM_CATEGORY =
   /^https?:\/\/(?:www\.)?scholarships\.com\/financial-aid\/college-scholarships\/(?:[a-z0-9-]+\/)*scholarships-by-[a-z0-9-]+(?:\/|[?#]|$)/i
 
 /**
+ * Ingest kinds a verified structural claim may override — generated defaults
+ * observed in prod (an LLM/ingest stamping every row's shape), NOT curated
+ * judgments. Exact strings; anything else (including the canonical
+ * 'directory'/'benefit' and unknown future values) stays protected by the
+ * never-overwrite rule. Lives HERE — next to the structural rules whose claims
+ * outrank it — so the boot sweep (startup/enforceInvariants.js) and the
+ * upsert writers (crawlerOsPersistence.js) can never drift on which stamps are
+ * overridable: the tug-of-war this module's rules exist to end was exactly the
+ * sweep and a writer disagreeing about who owns `opportunity_kind`.
+ */
+export const GENERIC_OVERRIDABLE_KINDS = Object.freeze(['PROGRAM', 'DIRECT_GRANT', 'SCHOLARSHIP', 'direct'])
+
+/**
  * classifyLocatorKindFromUrl — pure, deterministic, never throws.
  *
  * @param {unknown} url a row's source/application/evidence URL
@@ -188,4 +201,4 @@ export const LOCATOR_URL_LIKE_PREFILTERS = Object.freeze([
   '%scholarships.com/financial-aid/college-scholarships/%',
 ])
 
-export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS }
+export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS }

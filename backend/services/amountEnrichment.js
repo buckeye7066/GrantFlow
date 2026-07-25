@@ -54,7 +54,10 @@ const PAGE_TEXT_MAX_CHARS = 12_000
  * 5xx/429/408 and transport-level errors (no status at all: DNS, TLS, timeout,
  * socket reset) are the provider having a bad night. A 4xx is the provider
  * telling us something stable and true about the URL — retrying it nightly
- * would burn budget forever and never learn anything new.
+ * would burn budget forever and never learn anything new. EXCEPTION: a
+ * 401/403/429 is the provider refusing OUR CALLER (WAF/bot-block/rate limit),
+ * not describing the URL — the fetch branch below reports those as
+ * `environment: true` so the sweep parks them visibly instead of burning them.
  */
 export function isTransientFetchFailure({ status = null } = {}) {
   if (status === null || status === undefined) return true
@@ -130,10 +133,21 @@ export async function enrichOpportunityAmountFromSource(opportunity, deps = {}) 
 
     const res = await fetcher.fetch(url)
     if (!res?.ok || !res.body) {
+      const status = res?.status ?? null
+      // 401/403/429 on a page fetch is a WAF/bot-block refusing OUR egress — a
+      // fact about the deploy environment, never about the row (the same rule
+      // the API adapters already state, and the same class that mass-burned
+      // rows behind Incapsula/Akamai fronts). `environment` rows are also
+      // transient: the sweep neither burns them nor spends their ordinary
+      // retry budget (it counts amount_enrich_env_attempts instead).
+      const code = Number(status)
+      const environment = code === 401 || code === 403 || code === 429
       return {
         attempted: true,
         page_read: false,
-        transient: isTransientFetchFailure({ status: res?.status ?? null }),
+        transient: environment || isTransientFetchFailure({ status }),
+        environment,
+        status,
         found: false,
         reason: `fetch_failed:${res?.status ?? res?.error ?? 'unknown'}`,
       }

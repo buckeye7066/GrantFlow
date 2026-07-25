@@ -50,6 +50,7 @@ import {
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
   enforceLocatorKindClassification,
+  partitionSystemicStableFailures,
   AMOUNT_ENRICH_FAILURE_LOG_KEY,
   enforceGrantCatalogLink,
   enforceGrantAmountBackfill,
@@ -2895,7 +2896,11 @@ describe('enforceAmountEnrichment', () => {
   it('reaches rows beyond the first batch instead of wedging on one window', async () => {
     const db = makeRealDb()
     const TOTAL = 210
-    for (let i = 0; i < TOTAL; i++) seedLinkedPair(db, { sourceUrl: `https://funder.org/g/${i}` })
+    // Distinct hosts: 210 identical failures against ONE host is the systemic
+    // outage signature (burns withheld by design — see the systemic-burn guard
+    // suite); the realistic drained-backlog shape this test pins is many
+    // different funders each honestly thin.
+    for (let i = 0; i < TOTAL; i++) seedLinkedPair(db, { sourceUrl: `https://funder-${i}.org/g/${i}` })
 
     const seen = new Set()
     const deps = {
@@ -3000,6 +3005,116 @@ describe('enforceAmountEnrichment', () => {
   })
 })
 
+describe('enforceAmountEnrichment — systemic-burn guard (the 2026-07-22 mass burn)', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+  function seedLinkedPair(db, { foId = crypto.randomUUID(), sourceUrl } = {}) {
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, description, source_url) VALUES (?, ?, ?, ?)`,
+    ).run(foId, 'Grant ' + foId.slice(0, 6), 'A grant.', sourceUrl)
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id) VALUES (?, ?, 'interested', NULL, ?)`,
+    ).run(crypto.randomUUID(), 'Grant', foId)
+    return foId
+  }
+  const foRow = (db, id) => db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id)
+  const STABLE_FAIL = {
+    attempted: true, page_read: false, transient: false, found: false,
+    reason: 'grants_gov_api_failed:no_synopsis_or_forecast',
+  }
+
+  it('withholds ALL burns when every row of a host fails identically and none was read', async () => {
+    // REGRESSION (prod 2026-07-22 16:45Z). Eleven minutes after #1006 deployed,
+    // one run burned 34 grants.gov rows in ~5 seconds — each API call failing
+    // ~150ms apart with the SAME stable-class reason — while every one of those
+    // ids answers perfectly today (verified live from the prod egress,
+    // 2026-07-25). A "stable" failure is a per-ROW judgment; 34 identical ones
+    // against one host, with not a single successful read of that host, is a
+    // fact about the RUN. Burning on it converted one degraded afternoon at the
+    // API into permanently answerless rows the (later-deployed) triage
+    // instrumentation could never even reach — the sweep saw 0 candidates.
+    const db = makeRealDb()
+    const ids = Array.from({ length: 4 }, (_, i) =>
+      seedLinkedPair(db, { sourceUrl: `https://www.grants.gov/search-results-detail/36000${i}` }))
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => STABLE_FAIL,
+      limit: 4,
+      systemicStreakLimit: 4,
+    })
+    for (const id of ids) {
+      const row = foRow(db, id)
+      expect(row.amount_enrich_attempted_at, 'a systemic failure must NOT burn the row').toBeNull()
+      expect(row.amount_enrich_env_attempts, 'systemic failures park on the environment lane').toBe(1)
+      expect(row.amount_enrich_attempts, 'systemic failures spend no ordinary retry budget').toBe(0)
+      expect(row.amount_enrich_last_reason, 'the reason breadcrumb is still recorded').toBe(STABLE_FAIL.reason)
+    }
+    expect(res.envBlocked).toBe(4)
+  })
+
+  it('still burns when the same host ALSO produced a real read this run', async () => {
+    // A live host is proof the failures are genuinely row-specific: if one
+    // grants.gov row answered, the other rows' stable failures are facts about
+    // those rows, and withholding their burns would let dead ids be re-fetched
+    // nightly forever.
+    const db = makeRealDb()
+    const failIds = Array.from({ length: 4 }, (_, i) =>
+      seedLinkedPair(db, { foId: `aa-fail-${i}`, sourceUrl: `https://www.grants.gov/search-results-detail/36100${i}` }))
+    seedLinkedPair(db, { foId: 'zz-ok', sourceUrl: 'https://www.grants.gov/search-results-detail/361999' })
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async (cand) =>
+        cand.id === 'zz-ok'
+          ? {
+              attempted: true, page_read: true, transient: false, found: true,
+              amounts: { amount_min: 1000, amount_max: 5000, amount_text: null, amount_status: 'range', amount_confidence: 0.9 },
+            }
+          : STABLE_FAIL,
+      limit: 5,
+      systemicStreakLimit: 4,
+    })
+    for (const id of failIds) {
+      expect(foRow(db, id).amount_enrich_attempted_at, 'row-specific stable failures on a LIVE host still burn').not.toBeNull()
+    }
+  })
+
+  it('burns normally below the streak limit', async () => {
+    const db = makeRealDb()
+    const ids = Array.from({ length: 2 }, (_, i) =>
+      seedLinkedPair(db, { sourceUrl: `https://www.grants.gov/search-results-detail/36200${i}` }))
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => STABLE_FAIL,
+      limit: 2,
+      systemicStreakLimit: 4,
+    })
+    for (const id of ids) {
+      expect(foRow(db, id).amount_enrich_attempted_at, 'an isolated stable failure is still a real burn').not.toBeNull()
+    }
+  })
+
+  it('partitionSystemicStableFailures groups by host AND reason', () => {
+    // Two hosts failing 2× each with the same reason must not pool into one
+    // 4-row "systemic" group — the signature is per-host uniformity.
+    const pending = [
+      { id: '1', host: 'a.gov', reason: 'x' },
+      { id: '2', host: 'a.gov', reason: 'x' },
+      { id: '3', host: 'b.gov', reason: 'x' },
+      { id: '4', host: 'b.gov', reason: 'x' },
+    ]
+    const { burnNow, systemic } = partitionSystemicStableFailures(pending, new Set(), 4)
+    expect(systemic).toHaveLength(0)
+    expect(burnNow).toHaveLength(4)
+    const uniform = pending.map((p) => ({ ...p, host: 'a.gov' }))
+    const split = partitionSystemicStableFailures(uniform, new Set(), 4)
+    expect(split.systemic).toHaveLength(4)
+    // ...unless that host proved alive this run.
+    const alive = partitionSystemicStableFailures(uniform, new Set(['a.gov']), 4)
+    expect(alive.systemic).toHaveLength(0)
+  })
+})
+
 describe('enforceGrantDirectAmountEnrichment', () => {
   const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
   function makeRealDb() {
@@ -3061,6 +3176,70 @@ describe('enforceGrantDirectAmountEnrichment', () => {
     })
     expect(grantRow(db, gId).amount_status, 'an unread page must never fabricate a denial').not.toBe('none_published')
     expect(res.nonePublished ?? 0).toBe(0)
+  })
+
+  it('answers an orphan grant on a BENEFIT host structurally, without fetching', async () => {
+    // studentaid.gov (Pell / work-study / FSEOG) is a JS shell to the fetcher,
+    // and the census can only see opportunity_kind on CATALOG rows — so an
+    // orphan grant there sat "unreadable" forever while the locator classifier
+    // had a verified positive claim about the page all along. 'benefit' kind's
+    // stated semantic IS the honest amount answer: award varies by applicant.
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://studentaid.gov/understand-aid/types/grants/pell' })
+    let fetches = 0
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => { fetches++; return { attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' } },
+    })
+    const g = grantRow(db, gId)
+    expect(fetches, 'a structural claim answers the row without a doomed fetch').toBe(0)
+    expect(g.amount_status).toBe('varies')
+    expect(g.amount_text).toMatch(/varies by applicant/i)
+    expect(g.amount_enrich_attempted_at, 'a structural fact is a stable answer — the row is done').not.toBeNull()
+    expect(g.amount_enrich_last_reason).toBe('locator_kind:benefit_program_host')
+    expect(res.textOnly).toBe(1)
+  })
+
+  it('labels an orphan grant on a DIRECTORY shape honestly, without a fabricated status', async () => {
+    // A directory is a pointer, never an award — so it gets the honest text
+    // label (which the census counts as an answer) but NO 'varies' status: a
+    // pointer does not "vary", it simply has no per-award figure by design.
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://projects.propublica.org/nonprofits/organizations/911140642' })
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => { throw new Error('must not fetch') },
+    })
+    const g = grantRow(db, gId)
+    expect(g.amount_status).toBeNull()
+    expect(g.amount_text).toMatch(/directory\/locator/i)
+    expect(g.amount_enrich_attempted_at).not.toBeNull()
+    expect(res.textOnly).toBe(1)
+  })
+
+  it('the structural short-circuit loses the race to a real amount (guarded write)', async () => {
+    // The WHERE guard must hold even when an amount lands BETWEEN the candidate
+    // scan and the structural write — simulated by injecting the amount right
+    // before the structural UPDATE executes. The least-informed writer never wins.
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://studentaid.gov/understand-aid/types/grants/pell' })
+    const realPrepare = db.prepare.bind(db)
+    db.prepare = (sql) => {
+      if (/SET amount_status = COALESCE\(\?, amount_status\)/i.test(sql)) {
+        const stmt = realPrepare(sql)
+        return {
+          run: (...args) => {
+            realPrepare(`UPDATE grants SET amount_max = 7395, amount_status = 'known' WHERE id = ?`).run(args[2])
+            return stmt.run(...args)
+          },
+        }
+      }
+      return realPrepare(sql)
+    }
+    await enforceGrantDirectAmountEnrichment(db, { enrichImpl: async () => ({ attempted: false }) })
+    db.prepare = realPrepare
+    const g = grantRow(db, gId)
+    expect(g.amount_max).toBe(7395)
+    expect(g.amount_status, 'a landed amount is never downgraded to a structural label').toBe('known')
+    expect(g.amount_enrich_attempted_at, 'a write the guard rejected must not burn the row').toBeNull()
   })
 
   it('never touches a LINKED grant (that is the catalog sweep\'s job)', async () => {

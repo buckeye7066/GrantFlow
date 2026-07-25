@@ -67,7 +67,7 @@ describe('enrichOpportunityAmountFromSource', () => {
       expect(res.transient).toBe(false)
     })
 
-    it('treats 5xx/429/timeouts as transient and a 4xx as a stable fact about the URL', async () => {
+    it('treats 5xx/429/timeouts as transient and a 404/410 as a stable fact about the URL', async () => {
       for (const status of [500, 502, 503, 429, 408]) {
         const res = await enrichOpportunityAmountFromSource(
           { title: 'x', source_url: 'https://funder.org' },
@@ -76,12 +76,30 @@ describe('enrichOpportunityAmountFromSource', () => {
         expect(res.page_read, `status ${status}`).toBe(false)
         expect(res.transient, `status ${status}`).toBe(true)
       }
-      for (const status of [404, 403, 410]) {
+      for (const status of [404, 410]) {
         const res = await enrichOpportunityAmountFromSource(
           { title: 'x', source_url: 'https://funder.org' },
           { fetcher: fakeFetcher(null, false, status) },
         )
         expect(res.transient, `status ${status}`).toBe(false)
+        expect(res.environment ?? false, `status ${status}`).toBe(false)
+      }
+    })
+
+    it('reports a 401/403/429 page fetch as an ENVIRONMENT failure, never a row fact', async () => {
+      // A WAF/bot-block (tn.gov Incapsula, Akamai fronts) refuses OUR CALLER,
+      // not the URL — the same rule the API adapters already state. Burning on
+      // it converted egress trouble into permanently answerless rows; the sweep
+      // now parks these on the env-blocked lane (no burn, no retry-budget spend).
+      for (const status of [401, 403, 429]) {
+        const res = await enrichOpportunityAmountFromSource(
+          { title: 'x', source_url: 'https://funder.org' },
+          { fetcher: fakeFetcher(null, false, status) },
+        )
+        expect(res.page_read, `status ${status}`).toBe(false)
+        expect(res.environment, `status ${status}`).toBe(true)
+        expect(res.transient, `status ${status}`).toBe(true)
+        expect(res.status, `status ${status}`).toBe(status)
       }
     })
 
