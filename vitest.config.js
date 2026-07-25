@@ -30,6 +30,16 @@ export default defineConfig({
     // headroom for legitimate slow imports under load, not a looser bar for
     // actual hangs.
     testTimeout: 15000,
+    // The OTP full-app family (backend/tests/otp*.test.js +
+    // emailOtpTokenNoVerifier.test.js) is the worst member of that same class:
+    // its tests race their OWN parallel requests in-process (the security
+    // property under test), so cross-FILE parallelism adds only CPU-starvation
+    // noise — under full-suite load a rotating member flakes (correct code
+    // 400s, a just-minted row reads as absent) while every serial run is
+    // green. `npm run unit` therefore runs the bulk suite with that family
+    // excluded, then the family serially (--no-file-parallelism); in-file
+    // concurrency coverage is unchanged. Keep the two lists in package.json's
+    // `unit` script in sync with this comment.
     // Runner ownership is split by extension to keep the two test runners on
     // disjoint file sets:
     //   - `tests/unit/**/*.test.mjs` are node:test suites (import { test } from

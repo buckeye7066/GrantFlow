@@ -26,7 +26,7 @@
     "runtime-imports:check": "node scripts/check-runtime-imports.mjs",
     "check:env-examples": "node scripts/check-env-examples.mjs",
     "check:prepush": "npm run auth-middleware:check && npm run profile-guards:check && npm run check:profile-metadata && npm run runtime-imports:check && npm run check:env-examples && npm run lint && npm run typecheck && npm run build",
-    "unit": "node scripts/run-unit-tests.mjs && npm exec -- vitest run",
+    "unit": "node scripts/run-unit-tests.mjs && npm exec -- vitest run --exclude \"backend/tests/otp*.test.js\" --exclude \"backend/tests/emailOtpTokenNoVerifier.test.js\" && npm exec -- vitest run --no-file-parallelism backend/tests/otp backend/tests/emailOtpTokenNoVerifier",
     "test:endpoints": "npm exec -- vitest run --config vitest.endpoints.config.js",
     "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "smoke:install": "node ./node_modules/playwright/cli.js install chromium",
