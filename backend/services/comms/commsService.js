@@ -154,6 +154,33 @@ function maskEmail(e) {
   if (!d) return s
   return `${u.slice(0, 2)}***@${d}`
 }
+
+/**
+ * Reserved/placeholder domains (RFC 2606 / RFC 6761) that can never receive
+ * mail: example.com/.org/.net, and the example/test/invalid/localhost TLDs.
+ * Matched on the domain's TERMINAL labels only, so a real address like
+ * jane@example-foundation.org is untouched.
+ *
+ * WHY (prod 2026-07-21): profiles seeded with `someone@example.com`
+ * placeholder emails flowed into the Hamilton weekly digest, Resend rejected
+ * the recipient, and each one surfaced as a SEND ERROR every week. A
+ * placeholder is structurally "no email on file" — the honest outcome is
+ * `skipped_no_email` (visible, actionable: collect a real address), not a
+ * recurring delivery error. Enforced here at the single contact-resolution
+ * choke point so every comms consumer (digest, portal reminders, broadcast)
+ * inherits the rule; prod DATA is untouched.
+ */
+const RE_PLACEHOLDER_EMAIL_DOMAIN = /(?:^|\.)(?:example\.(?:com|org|net)|example|test|invalid|localhost)$/i
+
+/** True when the address's domain is a reserved placeholder (undeliverable by design). Exported for tests. */
+export function isPlaceholderEmail(email) {
+  const s = String(email || '').trim()
+  const at = s.lastIndexOf('@')
+  if (at < 0) return false // malformed, but not this guard's claim to make
+  const domain = s.slice(at + 1).trim().toLowerCase()
+  if (!domain) return false
+  return RE_PLACEHOLDER_EMAIL_DOMAIN.test(domain)
+}
 function maskPhone(p) {
   const s = String(p || '')
   return s.length > 4 ? `***${s.slice(-4)}` : s
@@ -183,6 +210,11 @@ export async function resolveProfileContacts(db, profileId) {
     // Non-routable RFC-6761 .invalid addresses (e.g. Amy synthetic profiles'
     // amy+<scenario>@synthetic.grantflow.invalid) must never be emailed.
     if (/\.invalid$/i.test(e)) return
+    // Reserved placeholder domains (example.com/.org/.net, test, invalid,
+    // localhost) are undeliverable by design: Resend rejects them, and each
+    // one turned into a recurring weekly-digest SEND ERROR. Treat them as "no
+    // email on file" so consumers report an honest skipped_no_email instead.
+    if (isPlaceholderEmail(e)) return
     seenEmail.add(e.toLowerCase())
     out.emails.push({ email: e, is_proxy: Boolean(is_proxy), source })
   }

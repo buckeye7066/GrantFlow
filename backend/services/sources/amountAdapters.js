@@ -26,25 +26,37 @@
  */
 
 import { enrichAmountViaGrantsGovApi, isGrantsGovRow } from './grantsGovAmountAdapter.js'
+import { enrichAmountViaSamFal, isSamFalRow } from './samFalAmountAdapter.js'
+import { enrichAmountViaFederalRegister, isFederalRegisterRow } from './federalRegisterAmountAdapter.js'
 
 /**
  * The registry.
  *
  * NOT YET COVERED — recorded here so the gap is visible rather than folklore:
  *
- *   sam.gov — also a JS shell to the fetcher. Its Opportunities v2 API is
- *     key-gated (`getSamGovApiKey()`) and, unlike grants.gov, it does not
- *     publish a per-award ceiling/floor for open solicitations: the `award`
- *     node appears on AWARDED notices and reports what was actually granted to
- *     a specific vendor, which is not the same fact as "what an applicant could
- *     receive". Adding it would need that distinction handled honestly, so it
- *     is deliberately absent rather than half-built.
+ *   sam.gov CONTRACT opportunities (`sam.gov/opp/...`) — the Opportunities v2
+ *     API's `award` node appears on AWARDED notices and reports what was
+ *     actually granted to a specific vendor, which is not the same fact as
+ *     "what an applicant could receive". Deliberately absent rather than
+ *     half-built. (SAM.gov ASSISTANCE LISTINGS — `/fal/<id>/view` — ARE
+ *     covered: `sam_fal` below reads the listing's own published
+ *     range-and-average text.)
  */
 export const AMOUNT_ADAPTERS = Object.freeze([
   Object.freeze({
     id: 'grants_gov',
     matches: isGrantsGovRow,
     enrich: enrichAmountViaGrantsGovApi,
+  }),
+  Object.freeze({
+    id: 'sam_fal',
+    matches: isSamFalRow,
+    enrich: enrichAmountViaSamFal,
+  }),
+  Object.freeze({
+    id: 'federal_register',
+    matches: isFederalRegisterRow,
+    enrich: enrichAmountViaFederalRegister,
   }),
 ])
 

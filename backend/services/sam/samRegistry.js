@@ -29,6 +29,10 @@
 import { SAM_CATEGORIES, SEVERITY } from './samTypes.js'
 import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql } from '../../config/pipelineValue.js'
 import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY } from '../amy/amyConstants.js'
+// Shared with the enrichment sweeps (config/amountEnrichEnv.js) so the WRITER
+// of the env-failure counter and this READER of the `unanswered_blocked` state
+// can never disagree on where "blocked" begins.
+import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS } from '../../config/amountEnrichEnv.js'
 
 /**
  * Exclude Amy's SYNTHETIC-profile grants from a pipeline-health metric.
@@ -74,6 +78,12 @@ export const AMOUNT_COVERAGE_KV_KEY = 'pipeline_amount_coverage_history'
 
 /** Coverage POINTS of drop vs the previous run that count as a regression. */
 export const AMOUNT_COVERAGE_REGRESSION_POINTS = 5
+
+/** Newly promoted unanswered rows converge through enrichment before ratcheting. */
+export const PROMOTION_AMOUNT_GRACE_DAYS = Math.max(
+  0,
+  Number.parseInt(process.env.PROMOTION_AMOUNT_GRACE_DAYS || '7', 10) || 7,
+)
 
 /** History ring size (Sam runs ~daily ⇒ about a month of trend). */
 const AMOUNT_COVERAGE_HISTORY = 30
@@ -482,6 +492,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       let grants
       let catalog
       let answers
+      let promotionProjection = null
+      try {
+        const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get('promotion_projection')
+        promotionProjection = row?.value ? JSON.parse(row.value) : null
+      } catch { promotionProjection = null }
       try {
         grants = await db
           .prepare(
@@ -521,7 +536,13 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // Best-effort ONLY: a failure here must never flip censusError or change
       // any count above — it only enriches evidence.
       let unreadableHosts = []
+      let blockedHosts = []
       try {
+        let hasPromotionOutcomes = false
+        try {
+          await db.prepare('SELECT 1 FROM pipeline_promotion_outcomes LIMIT 1').get()
+          hasPromotionOutcomes = true
+        } catch { /* older/minimal schema: no converging cohort yet */ }
         // Every active row gets an ANSWER classification. The predicates read an
         // answer off EITHER the grant itself OR its linked catalog row, because
         // an amount can now be recorded in two places: on the catalog row (the
@@ -531,7 +552,16 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         // orphan — so a read-but-silent row is `unreadable` regardless of which
         // path read it, and a never-looked-at row is `never_read` backlog.
         const V = pipelineValueSql('g')
-        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) = 'directory'`
+        // No-amount-BY-DESIGN kinds: a DIRECTORY locator is a pointer to more
+        // sources, and a BENEFIT program (SSA survivor/disability, FAFSA/Pell/
+        // SSI class) has no fixed per-applicant award figure — exactly the two
+        // classifications this check's own recommended_fix prescribes for such
+        // rows. Both kinds are only ever assigned by POSITIVE classification
+        // (source registry default_kinds, reality gate, or the
+        // locator_kind_classification boot sweep's structural URL-shape rule) —
+        // never inferred from a failed read, so counting them as by-design is
+        // honest, not bucket-widening.
+        const isDir = `LOWER(COALESCE(fo.opportunity_kind, '')) IN ('directory', 'benefit')`
         // NULL-safe (COALESCE): amount_status is NULL on many rows, and a raw
         // `col = 'x'` yields NULL there, which poisons every `NOT (...)` below via
         // three-valued logic (NULL AND anything = NULL → the CASE never fires and
@@ -545,9 +575,36 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           ` OR COALESCE(fo.amount_text, '') <> '')`
         // Read-mark that applies to THIS row: the catalog row's when linked, the
         // grant's own when an orphan (COALESCE picks whichever is present).
+        // `attempted` (the timestamp) is the PERMANENT one-shot burn mark;
+        // `attemptCount` is the running retry counter, which advances on
+        // transient failures WITHOUT burning. The two answer different
+        // questions, and conflating them made the backlog unreadable: a row
+        // mid-retry (counter > 0, mark NULL — e.g. every grants.gov row during
+        // the 2026-07-21 WAF-403 egress block) looked identical to one nothing
+        // had ever touched.
         const attempted = `COALESCE(fo.amount_enrich_attempted_at, g.amount_enrich_attempted_at)`
+        const attemptCount = `COALESCE(fo.amount_enrich_attempts, g.amount_enrich_attempts, 0)`
+        // CONSECUTIVE environment failures (WAF 403/401/429 on OUR egress —
+        // migration 151/0155). An env failure deliberately bumps NEITHER the
+        // burn mark nor `attemptCount`, so without this counter a
+        // permanently-blocked row is INDISTINGUISHABLE from untouched backlog:
+        // it reads as green `never_read` forever while the deploy's egress is
+        // the thing that is broken. At AMOUNT_ENRICH_ENV_MAX_ATTEMPTS the row
+        // becomes the VISIBLE `unanswered_blocked` state below.
+        const envAttemptCount = `COALESCE(fo.amount_enrich_env_attempts, g.amount_enrich_env_attempts, 0)`
+        const envBlockedPred = `${envAttemptCount} >= ${AMOUNT_ENRICH_ENV_MAX_ATTEMPTS}`
         // A row with no value, not a directory, no denial and no honest label.
         const unanswered = `${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND NOT ${honestLabel}`
+        const promotionJoin = hasPromotionOutcomes
+          ? "LEFT JOIN pipeline_promotion_outcomes po ON po.profile_id = g.profile_id AND po.opportunity_id = g.funding_opportunity_id AND po.mode = 'live'"
+          : ''
+        const promotionConverging = hasPromotionOutcomes
+          ? `${unanswered} AND po.outcome = 'promoted' AND po.attempted_at >= ?`
+          : '1 = 0'
+        const notPromotionConverging = hasPromotionOutcomes
+          ? `NOT (COALESCE(po.outcome, '') = 'promoted' AND po.attempted_at >= ?)`
+          : '1 = 1'
+        const graceCutoff = timeCutoff(db, PROMOTION_AMOUNT_GRACE_DAYS * 24 * 60 * 60 * 1000)
         answers = await db
           .prepare(
             `SELECT
@@ -555,37 +612,67 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
                SUM(CASE WHEN ${V} = 0 AND ${isDir} THEN 1 ELSE 0 END) AS by_design,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND ${nonePub} THEN 1 ELSE 0 END) AS answered_none_published,
                SUM(CASE WHEN ${V} = 0 AND NOT ${isDir} AND NOT ${nonePub} AND ${honestLabel} THEN 1 ELSE 0 END) AS answered_text,
-               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL THEN 1 ELSE 0 END) AS unanswered_never_read,
-               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL THEN 1 ELSE 0 END) AS unanswered_unreadable,
-               SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL THEN 1 ELSE 0 END) AS unanswered_no_catalog_row
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND NOT (${envBlockedPred}) AND ${attemptCount} = 0 AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_never_read,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND NOT (${envBlockedPred}) AND ${attemptCount} > 0 AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_mid_retry,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NULL AND ${envBlockedPred} AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_blocked,
+               SUM(CASE WHEN ${unanswered} AND ${attempted} IS NOT NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_unreadable,
+               -- OVERLAY, not a fifth state: never_read/mid_retry/blocked/
+               -- unreadable PARTITION the unanswered set (every unanswered row
+               -- is in exactly one — attempted NULL x counter states, or
+               -- attempted NOT NULL). Orphan-ness is an orthogonal dimension:
+               -- a burned orphan is counted once as unreadable AND annotated
+               -- here. Nothing may SUM this with the state buckets.
+               SUM(CASE WHEN ${unanswered} AND g.funding_opportunity_id IS NULL AND ${notPromotionConverging} THEN 1 ELSE 0 END) AS unanswered_no_catalog_row,
+               SUM(CASE WHEN ${promotionConverging} THEN 1 ELSE 0 END) AS promotion_converging
              FROM grants g
              LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+             ${promotionJoin}
             WHERE g.status IN (${statusesSql})
               AND ${NON_SYNTHETIC_PIPELINE('g')}`,
           )
-          .get()
+          // One graceCutoff binding per `${notPromotionConverging}` /
+          // `${promotionConverging}` interpolation above (each carries one `?`):
+          // never_read, mid_retry, blocked, unreadable, no_catalog_row
+          // + promotion_converging.
+          .get(...(hasPromotionOutcomes ? [graceCutoff, graceCutoff, graceCutoff, graceCutoff, graceCutoff, graceCutoff] : []))
 
         // Nested try: the host breakdown is pure enrichment. A broken query here
         // (e.g. a column a DB has not migrated) must degrade to "no breakdown",
         // never take the whole census down with it — `answers` above already
         // stands on its own as the count Sam/Anya act on.
-        const unreadableCount = Number(answers?.unanswered_unreadable) || 0
-        if (unreadableCount > 0) {
-          try {
-            const urlRows = await db
-              .prepare(
-                `SELECT COALESCE(fo.source_url, fo.application_url, g.application_url, g.portal_url) AS url
+        const hostBreakdownSql = (rowPredicate) =>
+          `SELECT COALESCE(fo.source_url, fo.application_url, g.application_url, g.portal_url) AS url
                    FROM grants g
                    LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
                   WHERE g.status IN (${statusesSql})
                     AND ${NON_SYNTHETIC_PIPELINE('g')}
-                    AND ${unanswered} AND ${attempted} IS NOT NULL
-                  LIMIT 2000`,
-              )
-              .all()
+                    AND ${rowPredicate}
+                    ${hasPromotionOutcomes ? "AND NOT EXISTS (SELECT 1 FROM pipeline_promotion_outcomes ppo WHERE ppo.profile_id = g.profile_id AND ppo.opportunity_id = g.funding_opportunity_id AND ppo.mode = 'live' AND ppo.outcome = 'promoted' AND ppo.attempted_at >= ?)" : ''}
+                  LIMIT 2000`
+        const unreadableCount = Number(answers?.unanswered_unreadable) || 0
+        if (unreadableCount > 0) {
+          try {
+            const urlRows = await db
+              .prepare(hostBreakdownSql(`${unanswered} AND ${attempted} IS NOT NULL`))
+              .all(...(hasPromotionOutcomes ? [graceCutoff] : []))
             unreadableHosts = summarizeUnreadableHosts(urlRows)
           } catch {
             // Best-effort only; unreadableHosts stays [].
+          }
+        }
+        // Same enrichment for the BLOCKED bucket: the whole point of the state
+        // is that the finding names WHICH host our egress cannot reach, so the
+        // owner action ("register GRANTS_GOV_API_KEY" / fix egress) is
+        // actionable instead of a bare count.
+        const blockedCount = Number(answers?.unanswered_blocked) || 0
+        if (blockedCount > 0) {
+          try {
+            const blockedRows = await db
+              .prepare(hostBreakdownSql(`${unanswered} AND ${attempted} IS NULL AND ${envBlockedPred}`))
+              .all(...(hasPromotionOutcomes ? [graceCutoff] : []))
+            blockedHosts = summarizeUnreadableHosts(blockedRows)
+          } catch {
+            // Best-effort only; blockedHosts stays [].
           }
         }
       } catch (err) {
@@ -601,7 +688,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const answeredText = Number(answers?.answered_text) || 0
       const noCatalogRow = Number(answers?.unanswered_no_catalog_row) || 0
       const neverRead = Number(answers?.unanswered_never_read) || 0
+      const midRetry = Number(answers?.unanswered_mid_retry) || 0
+      const blocked = Number(answers?.unanswered_blocked) || 0
       const unreadable = Number(answers?.unanswered_unreadable) || 0
+      const promotionConverging = Number(answers?.promotion_converging) || 0
       const census = answers
         ? {
             carried,
@@ -610,11 +700,27 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             no_amount_by_design: byDesign,
             unanswered_no_catalog_row: noCatalogRow,
             unanswered_never_read: neverRead,
+            // Tried, failed transiently, retry budget intact (burn mark NULL,
+            // attempt counter > 0). Backlog like never_read — NOT burned; the
+            // rows an environment outage (WAF/egress) parks here recover on
+            // their own once the outage clears.
+            unanswered_mid_retry: midRetry,
+            // BLOCKED: N consecutive ENVIRONMENT failures (WAF/egress/auth on
+            // OUR side). Not burned, not backlog, not the row's fault — an
+            // ATTENTION state that stays visible until an owner action (API
+            // key / egress change) un-blocks the host and a probe succeeds.
+            unanswered_blocked: blocked,
+            // BURNED: the one-shot mark is set and no answer was recorded —
+            // read → JS shell / dead page. Terminal without adapter work.
             unanswered_unreadable: unreadable,
+            promotion_converging: promotionConverging,
+            ...(promotionProjection ? { promotion_projection: promotionProjection } : {}),
           }
         : {}
       if (total < 20) return { ok: true, summary: `Only ${total} active pipeline grants — coverage check not meaningful yet.` }
       const pct = Math.round((withValue / total) * 100)
+      const comparisonTotal = Math.max(0, total - promotionConverging)
+      const comparisonPct = comparisonTotal > 0 ? Math.round((withValue / comparisonTotal) * 100) : 100
       const catPct = catTotal > 0 ? Math.round((catWith / catTotal) * 100) : 0
 
       // Ratchet: record this reading and compare it to the previous one. A LEVEL
@@ -624,11 +730,24 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // printed its usual line).
       const history = await readAmountCoverageHistory(db)
       const previous = history.length ? history[history.length - 1] : null
-      const regression = detectCoverageRegression(Number(previous?.pct), pct)
-      await appendAmountCoverageHistory(db, { at: new Date().toISOString(), pct, with_value: withValue, total })
+      const regression = detectCoverageRegression(Number(previous?.pct), comparisonPct)
+      await appendAmountCoverageHistory(db, {
+        at: new Date().toISOString(),
+        pct: comparisonPct,
+        raw_pct: pct,
+        with_value: withValue,
+        total: comparisonTotal,
+        promotion_converging: promotionConverging,
+      })
 
       const trend = previous ? ` (was ${previous.pct}% on ${String(previous.at).slice(0, 10)})` : ''
-      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).`
+      const convergingText = promotionConverging > 0
+        ? ` ${promotionConverging} newly promoted unanswered row${promotionConverging === 1 ? '' : 's'} are promotion_converging (visible; temporarily excluded from regression for ${PROMOTION_AMOUNT_GRACE_DAYS} days).`
+        : ''
+      const projectionText = promotionProjection
+        ? ` Preflight projection: ${Number(promotionProjection.projected_rows) || 0} rows, ${Number(promotionProjection.projected_null_amounts) || 0} without listed amounts.`
+        : ''
+      const summary = `${withValue}/${total} (${pct}%) real active pipeline grants carry a dollar value${trend} (Amy synthetic-training grants excluded); catalog amount coverage ${catWith}/${catTotal} (${catPct}%).${convergingText}${projectionText}`
 
       // A DROP is reported even when the level is above the bar, and takes
       // precedence when below it: "we went backwards" is a different, more urgent
@@ -636,7 +755,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (regression) {
         return {
           ok: false,
-          summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${pct}%): ${summary}`,
+          summary: `Pipeline-$ coverage DROPPED ${Math.abs(regression.delta)} points (${regression.previous_pct}% → ${comparisonPct}%): ${summary}`,
           // The census rides along: on a wipe it shows exactly where the rows
           // went (they stay MISSES — a wiped row keeps its honest status and is
           // never `none_published`, because no read ever denied it).
@@ -681,7 +800,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         }
       }
 
-      const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct, unreadable_hosts: unreadableHosts }
+      const fullCensus = { ...census, active_grants: total, coverage_pct: pct, catalog_pct: catPct, unreadable_hosts: unreadableHosts, blocked_hosts: blockedHosts }
 
       // `never_read` is BACKLOG, not a defect: the enrichment sweeps are bounded
       // per night and drain it (catalog rows via enforceAmountEnrichment, orphan
@@ -706,13 +825,31 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           ok: false,
           summary: `${unreadable} active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter.${hostNote} ${summary}`,
           evidence: fullCensus,
-          recommended_fix: `These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js), the way grants.gov got one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. evidence.unreadable_hosts already groups these rows by source_url host (top 10) — a host carrying a large share of the count is a single-adapter opportunity; a flat spread across many hosts is a long tail and not worth a bespoke adapter. sam.gov is deliberately NOT adapted (its award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.`,
+          recommended_fix: `These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js) — grants.gov (API + Simpler Grants fallback), sam.gov /fal/ assistance listings, and federalregister.gov documents already have one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. evidence.unreadable_hosts already groups these rows by source_url host (top 10) — a host carrying a large share of the count is a single-adapter opportunity; a flat spread across many hosts is a long tail and not worth a bespoke adapter. sam.gov CONTRACT opportunities remain deliberately unadapted (their award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.`,
+          confidence: 0.85,
+        }
+      }
+      // BLOCKED is a different red than UNREADABLE: nothing is wrong with the
+      // rows, and no adapter is missing — OUR egress is refused (WAF 403 / 401 /
+      // 429) by the host, N consecutive times. Only an owner/deploy action can
+      // clear it, so the finding must name the host and the action rather than
+      // hide the rows in green backlog (which is exactly what they looked like
+      // before the env-attempts counter existed).
+      if (blocked > 0) {
+        const hostNote = blockedHosts.length
+          ? ` Blocked host(s): ${blockedHosts.slice(0, 3).map((h) => `${h.host} ×${h.count}`).join(', ')}.`
+          : ''
+        return {
+          ok: false,
+          summary: `${blocked} active pipeline grant(s) cannot be read because OUR egress is blocked (repeated WAF/auth 403s from the deploy environment, not a row defect).${hostNote} ${summary}`,
+          evidence: fullCensus,
+          recommended_fix: `The adapter/fetcher for these rows works, but every call from THIS deploy environment is refused (401/403/429) ${AMOUNT_ENRICH_ENV_MAX_ATTEMPTS}+ consecutive times — see evidence.blocked_hosts and the system_kv amount_enrich_failure_log ring for the exact status/reason per attempt. This is an OWNER/DEPLOY action, not a code change: for grants.gov, register GRANTS_GOV_API_KEY (bypasses the WAF) or rely on the Simpler Grants fallback (SIMPLER_GRANTS_API_KEY); for other hosts, the egress IP is being filtered. Rows are NOT burned — they re-probe on a slow bounded lane and un-block themselves the moment a call succeeds.`,
           confidence: 0.85,
         }
       }
       return {
         ok: true,
-        summary: `All ${total} real active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting a read` : ''}). ${summary}`,
+        summary: `All ${total} real active pipeline grants have an amount answer (${carried} valued, ${nonePublished} read → funder publishes none, ${answeredText} labelled, ${byDesign} no-per-award-figure by design${neverRead > 0 ? `; ${neverRead} awaiting a read` : ''}${midRetry > 0 ? `; ${midRetry} mid-retry (transient failures, budget intact)` : ''}). ${summary}`,
         evidence: fullCensus,
       }
     },

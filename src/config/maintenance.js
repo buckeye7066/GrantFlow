@@ -1,20 +1,27 @@
-// Login maintenance mode (frontend).
+// Login maintenance mode — frontend.
 //
-// While active, the auth UI (Login page, session-expired re-auth dialog,
-// set-password page, and OAuth callback) hides its sign-in controls and shows
-// an upgrade banner, so no new sign-ins are attempted from the UI. This mirrors
-// the backend twin (backend/config/maintenance.js), which returns 503 from every
-// session-creating auth endpoint and is the real enforcement.
-//
-// Like the backend (LOGIN_MAINTENANCE=1), the guard arms ONLY via an
-// environment variable: set VITE_LOGIN_MAINTENANCE=1 at build time for the
-// upgrade window (pair it with LOGIN_MAINTENANCE=1 on the backend). The default
-// is OFF so normal sign-in works with no code change and every CI/dev build
-// exercises the real auth flows.
-const RAW = import.meta.env.VITE_LOGIN_MAINTENANCE
-
+// The backend (backend/config/maintenance.js) is the single source of truth:
+// LOGIN_MAINTENANCE=1 makes every session-creating auth endpoint return 503.
+// The frontend reflects that in two ways, both defaults OFF so normal CI/dev
+// builds exercise the real auth flows:
+//   • isLoginMaintenanceActive() is the BUILD-TIME opt-in
+//     (VITE_LOGIN_MAINTENANCE === '1' | 'true'). It seeds the Login page's
+//     INITIAL paint via LOGIN_MAINTENANCE.active so a maintenance build never
+//     flashes the normal login form, and gates the secondary auth surfaces
+//     that render synchronously without a probe — AuthCallback, SetPassword,
+//     and SessionExpiredDialog.
+//   • The Login page then probes GET /api/auth/maintenance at runtime and
+//     follows the server's answer, so flipping the backend env var needs no
+//     frontend rebuild — the build-time flag only avoids the initial flash
+//     and stays consistent with the runtime truth in normal builds.
+// LOGIN_MAINTENANCE (below) is the runtime fallback (and the probe's shape);
+// when the API is unreachable the fallback stands — sign-in couldn't succeed
+// anyway, so showing the banner is the safe default.
 export function isLoginMaintenanceActive() {
-  return RAW === '1' || RAW === 'true'
+  return (
+    import.meta.env.VITE_LOGIN_MAINTENANCE === '1' ||
+    import.meta.env.VITE_LOGIN_MAINTENANCE === 'true'
+  )
 }
 
 export const LOGIN_MAINTENANCE = {
@@ -22,5 +29,5 @@ export const LOGIN_MAINTENANCE = {
   title: 'GrantFlow is being upgraded',
   message:
     'We are performing a scheduled upgrade. Sign-in is temporarily disabled while we finish.',
-  etaText: 'Sign-in will be restored as soon as the upgrade completes. Thanks for your patience.',
+  etaText: 'Expected back online by 8:00 PM Eastern tonight (Monday, July 21).',
 }

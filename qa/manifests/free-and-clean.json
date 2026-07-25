@@ -1,0 +1,73 @@
+{
+  "app_id": "free-and-clean",
+  "display_name": "Free and Clean",
+  "repo": "local-only",
+  "local_path": "G:/One Drive/Desktop/Free and Clean",
+  "runtime_type": "python-cli",
+  "start_command": "python system_cleaner/cleaner.py --help (use the self-healing venv python at %LocalAppData%/FreeAndClean/.venv/Scripts/python.exe for full deps: psutil/rich/tqdm/send2trash/pywin32/Pillow)",
+  "stop_command": "n/a",
+  "readiness_probe": { "type": "none" },
+  "base_url": null,
+  "test_target": "disposable-local-instance",
+  "required_env": [],
+  "seed_command": "mkdir -p .eva-tmp/free-and-clean/fixture && write a few throwaway junk files into it",
+  "reset_command": "rm -rf .eva-tmp/free-and-clean/fixture",
+  "cleanup": "rm -rf .eva-tmp/free-and-clean",
+  "disposable_data_root": ".eva-tmp/free-and-clean",
+  "max_runtime_ms": 300000,
+  "concurrency_class": "fs-heavy",
+  "adapters": ["cli"],
+  "prohibited_actions": [
+    "no scan of any real drive or user directory — EVA passes ONLY a generated throwaway fixture root under the disposable_data_root (CRITICAL)",
+    "no deletion / no --apply / no recycle or quarantine of real files (dry-run is the default and --apply is never passed)",
+    "no --move of real data (move is exercised dry-run only against fixtures)",
+    "no registry/startup/defender/uninstall changes (optimizers is invoked in read-only 'health' mode only; --apply never passed)"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1"],
+    "ports": [],
+    "routes": [],
+    "file_roots": [".eva-tmp/free-and-clean"],
+    "processes": ["python", "python.exe"]
+  },
+  "nightly_critical_journeys": ["cli-help"],
+  "weekly_full_journeys": ["cli-help", "optimizers-health"],
+  "feature_coverage": {
+    "features_total": 5,
+    "features_covered": 2,
+    "unautomated_features": ["dry-run scan of a fixture dir", "move (dry-run) between fixtures", "real deep scan / --apply delete / real --move"]
+  },
+  "coverage": [
+    { "feature": "CLI help / usage renders", "journeys": ["cli-help"] },
+    { "feature": "System-health scoring (optimizers health, read-only)", "journeys": ["optimizers-health"] },
+    { "feature": "Dry-run scan of a fixture directory", "unautomated_reason": "even a dry-run scan needs a generated fixture tree seeded as the throwaway scan root, and the app's self-healing venv python (deps: psutil/rich/tqdm/send2trash/pywin32/Pillow); pending a fixture-seed + venv-python step in the runner" },
+    { "feature": "Move (dry-run) between fixture directories", "unautomated_reason": "needs two fixture dirs seeded under the disposable root; --move dry-run journey pending the fixture harness" },
+    { "feature": "Real deep scan / --apply delete / real --move", "unautomated_reason": "PROHIBITED outside generated fixtures — EVA never scans, deletes, or moves real files; dry-run by default and only a temp fixture root is ever passed" }
+  ],
+  "journeys": [
+    {
+      "id": "cli-help",
+      "name": "Cleaner CLI renders usage/help",
+      "severity": "critical",
+      "command": "python",
+      "args": ["system_cleaner/cleaner.py", "--help"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "usage|--move|--apply",
+      "timeout_ms": 15000,
+      "user_impact": "If the cleaner CLI cannot even render help, the tool is unusable.",
+      "candidate_files": ["system_cleaner/cleaner.py"]
+    },
+    {
+      "id": "optimizers-health",
+      "name": "Optimizers health score runs (read-only)",
+      "severity": "high",
+      "command": "python",
+      "args": ["system_cleaner/optimizers.py", "health"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "score|health",
+      "timeout_ms": 20000,
+      "user_impact": "Health scoring must run; it is the read-only dashboard users open before any cleanup.",
+      "candidate_files": ["system_cleaner/optimizers.py"]
+    }
+  ]
+}

@@ -396,7 +396,7 @@ function decoratePgErrorWithSqlSnippet(error, sql) {
   return new Error(nextMessage)
 }
 
-class SqliteDb {
+export class SqliteDb {
   constructor(sqlitePath) {
     this.dialect = 'sqlite';
     this.path = sqlitePath;
@@ -458,14 +458,22 @@ class SqliteDb {
     let unlock;
     this._asyncTxLock = new Promise((r) => { unlock = r; });
 
-    this._db.exec('BEGIN IMMEDIATE');
+    // BEGIN runs INSIDE the outer try/finally: if it throws (e.g. another
+    // process holds the file write lock past busy_timeout), the async lock
+    // MUST still be released or every later withTransaction awaits a promise
+    // that never resolves — a permanently wedged shim. ROLLBACK is attempted
+    // only when BEGIN actually succeeded (there is no transaction to roll
+    // back otherwise).
     try {
-      const result = await fn(this);
-      this._db.exec('COMMIT');
-      return result;
-    } catch (err) {
-      try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback errors */ }
-      throw err;
+      this._db.exec('BEGIN IMMEDIATE');
+      try {
+        const result = await fn(this);
+        this._db.exec('COMMIT');
+        return result;
+      } catch (err) {
+        try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback errors */ }
+        throw err;
+      }
     } finally {
       this._asyncTxLock = null;
       unlock();

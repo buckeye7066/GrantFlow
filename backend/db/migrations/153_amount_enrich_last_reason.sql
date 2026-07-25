@@ -1,0 +1,24 @@
+-- Per-row LAST enrich-outcome reason (twin: postgres 0157_amount_enrich_last_reason.sql).
+--
+-- Fix-cycle 2026-07-24. The amount-enrichment sweeps already record WHY a fetch
+-- failed on a ROLLING ring (`system_kv amount_enrich_failure_log`, added
+-- 2026-07-21, 50 newest failures globally) and the per-row COUNTERS
+-- (`amount_enrich_attempts`, `amount_enrich_env_attempts`) record HOW MANY times.
+-- What was missing was anything pinned to a SPECIFIC row: a source that burned
+-- weeks ago has aged out of the ring, and its counter only says "burned once" --
+-- not "burned because grants.gov returned a JS shell" vs "burned because the host
+-- 404'd" vs "burned because the egress is WAF-403'd". The faceless backlog could
+-- not be triaged: an owner seeing N unreadable rows could not tell which needed
+-- a grants.gov/sam.gov API adapter vs an egress fix vs were genuinely dead,
+-- short of per-row prod spelunking.
+--
+-- This column is that per-row pin: the reason the enrich service returned for the
+-- row's LAST attempt ('thin_page', 'fetch_failed:403', 'no_per_award_amount_on_page',
+-- 'error:…'). Always the latest attempt's reason (burn or not); the BURN MARK
+-- remains `amount_enrich_attempted_at`. With it,
+-- `SELECT amount_enrich_last_reason, COUNT(*) ... GROUP BY` IS the triage table.
+--
+-- Also added idempotently at boot by ensureAmountVisibilityColumns() so the
+-- recordAttempt UPDATE never throws on a DB that predates this migration.
+ALTER TABLE funding_opportunities ADD COLUMN amount_enrich_last_reason TEXT;
+ALTER TABLE grants ADD COLUMN amount_enrich_last_reason TEXT;

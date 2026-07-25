@@ -1,0 +1,58 @@
+{
+  "app_id": "forgepress",
+  "display_name": "ForgePress",
+  "repo": "local-git",
+  "local_path": "C:/Users/firer/ForgePress",
+  "runtime_type": "electron",
+  "start_command": "electron . --user-data-dir=.eva-tmp/forgepress/profile (launch the packaged app tree with a disposable userData dir)",
+  "stop_command": "close window",
+  "readiness_probe": { "type": "window", "timeout_ms": 30000 },
+  "base_url": null,
+  "test_target": "disposable-local-instance",
+  "required_env": [],
+  "seed_command": "n/a",
+  "reset_command": "n/a",
+  "cleanup": "rm -rf .eva-tmp/forgepress",
+  "disposable_data_root": ".eva-tmp/forgepress",
+  "max_runtime_ms": 300000,
+  "concurrency_class": "default",
+  "adapters": ["electron"],
+  "prohibited_actions": [
+    "no Bowker registration (CRITICAL)",
+    "no ISBN assignment",
+    "no cover upload",
+    "no publishing or submit action",
+    "override the normal user-data directory with a disposable test profile — never touch the real ForgePress profile"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1"],
+    "ports": [],
+    "routes": [],
+    "file_roots": [".eva-tmp/forgepress"],
+    "processes": ["electron", "node"]
+  },
+  "nightly_critical_journeys": ["app-launches"],
+  "weekly_full_journeys": ["app-launches"],
+  "feature_coverage": {
+    "features_total": 4,
+    "features_covered": 1,
+    "unautomated_features": ["manuscript import (fixture)", "stream parser / export", "Bowker/ISBN submit & publishing"]
+  },
+  "coverage": [
+    { "feature": "App launches + main window with a disposable profile", "journeys": ["app-launches"] },
+    { "feature": "Manuscript import (fixture)", "unautomated_reason": "electron adapter harness pending; launch smoke via Playwright electron support" },
+    { "feature": "Stream parser / manuscript export", "unautomated_reason": "electron adapter harness pending; export needs the electron interaction harness" },
+    { "feature": "Bowker/ISBN submit & publishing", "unautomated_reason": "PROHIBITED — no Bowker registration, ISBN assignment, cover upload, or publishing is ever exercised" }
+  ],
+  "journeys": [
+    {
+      "id": "app-launches",
+      "name": "App launches with a disposable profile",
+      "severity": "critical",
+      "steps": [],
+      "assert": [],
+      "user_impact": "If it won't launch nothing works.",
+      "candidate_files": ["resources/app/dist/assets/forge-enhance.js"]
+    }
+  ]
+}

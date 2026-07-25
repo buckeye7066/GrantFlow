@@ -17,9 +17,18 @@
 import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
-import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
+import {
+  evaluatePipelineSource,
+  PIPELINE_ALLOWED_SOURCES,
+  PIPELINE_DENIED_SOURCES,
+} from '../config/pipelineAllowedSources.js'
 import { extractHostname } from '../config/urlRules.js'
-import { RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR, isTrustedRecordOrigin } from '../config/relevanceFloor.js'
+import {
+  RELEVANCE_FLOOR,
+  TRUSTED_RELEVANCE_FLOOR,
+  TRUSTED_RECORD_ORIGINS,
+  isTrustedRecordOrigin,
+} from '../config/relevanceFloor.js'
 import { evaluateExclusion } from './exclusionEngine.js'
 import { evaluateProfileSpecificGate } from './matching/profileSpecificGate.js'
 import {
@@ -47,6 +56,58 @@ export function isDirectoryLikeOpportunity(opp) {
   return Boolean(opp.is_directory_resource || opp.is_directory || opp.excluded_from_grant_scoring)
 }
 const log = createLogger('opportunityMatcher')
+
+function stableJson(value) {
+  if (value instanceof Set) return [...value].map((v) => stableJson(v)).sort()
+  if (Array.isArray(value)) return value.map((v) => stableJson(v))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, stableJson(value[key])]),
+    )
+  }
+  if (typeof value === 'bigint') return String(value)
+  if (typeof value === 'function' || value === undefined) return null
+  return value
+}
+
+function sha256Stable(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(stableJson(value))).digest('hex')
+}
+
+export const PIPELINE_ADMISSION_POLICY_VERSION = sha256Stable({
+  version: 1,
+  allowedSources: PIPELINE_ALLOWED_SOURCES,
+  deniedSources: PIPELINE_DENIED_SOURCES,
+  relevanceFloor: RELEVANCE_FLOOR,
+  trustedRelevanceFloor: TRUSTED_RELEVANCE_FLOOR,
+  trustedOrigins: TRUSTED_RECORD_ORIGINS,
+})
+
+export function pipelineAdmissionFingerprints(profileContext, opportunity) {
+  const rawProfile = profileContext?.profile ?? profileContext ?? {}
+  const sections = profileContext?.sections ?? null
+  let normalizedProfile = rawProfile
+  try { normalizedProfile = normalizeProfile(rawProfile, sections) } catch { /* raw input is still stable */ }
+  return {
+    profile_facts_hash: sha256Stable(normalizedProfile),
+    policy_version: PIPELINE_ADMISSION_POLICY_VERSION,
+    opportunity_updated_at: String(opportunity?.updated_at ?? opportunity?.created_at ?? ''),
+  }
+}
+
+async function emitPromotionOutcome(outcomeSink, payload) {
+  if (!outcomeSink) return
+  const emit = typeof outcomeSink === 'function' ? outcomeSink : outcomeSink.record
+  if (typeof emit !== 'function') return
+  try { await emit(payload) } catch (err) {
+    if (outcomeSink?.required === true) {
+      const requiredError = err instanceof Error ? err : new Error(String(err))
+      requiredError.promotionOutcomeSinkFailed = true
+      throw requiredError
+    }
+    log.warn('promotion outcome sink failed (non-fatal)', { error: String(err?.message || err) })
+  }
+}
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
@@ -127,19 +188,25 @@ function calculateMatchPercentage(opportunity, profileContext) {
 }
 
 /**
- * Save opportunity to profile pipeline if match >= threshold.
- * Calls the shared decision engine and stores full match metadata.
- *
- * `minMatchThreshold` defaults to 55 to capture solid matches without being too strict.
+ * The one canonical pipeline admission predicate. It evaluates only; the sole
+ * public entry point below owns persistence. Sweep callers opt into fail-closed
+ * tombstones while ordinary interactive callers retain the historical
+ * fail-open behavior.
  */
-export async function saveToProfilePipeline(
-  db,
-  opportunity,
-  profileId,
-  profileContext,
-  matchPercentage = null,
-  minMatchThreshold = null,
-) {
+async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
+  const profileId = ctx.profileId ?? profileContext?.profile?.id ?? profileContext?.id ?? null
+  let matchPercentage = ctx.matchPercentage ?? null
+  const minMatchThreshold = ctx.minMatchThreshold ?? null
+  const failClosedTombstone = ctx.failClosedTombstone === true
+  const quiet = ctx.quiet === true
+  const fingerprints = pipelineAdmissionFingerprints(profileContext, opportunity)
+  const denied = (reason, result, score = result?.matchPercentage ?? null) => ({
+    admitted: false,
+    reason,
+    score: Number.isFinite(Number(score)) ? Number(score) : null,
+    ...fingerprints,
+    result,
+  })
   try {
     // The numeric floor is a TRUE FLOOR. A caller's minMatchThreshold can only
     // RAISE the bar, never lower it below RELEVANCE_FLOOR (config/relevanceFloor.js).
@@ -161,20 +228,37 @@ export async function saveToProfilePipeline(
       : 0 // no explicit bar — the canonical floor below is the bar
     const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
 
+    const rawProfile = profileContext?.profile ?? profileContext
+    const profileSections = profileContext?.sections ?? null
+    let decision = null
+    if (ctx.freshRescoreRequired === true) {
+      try {
+        decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
+      } catch (decisionErr) {
+        return denied('error:transient', {
+          saved: false,
+          reason: `Decision engine error: ${decisionErr?.message ?? 'unknown'}`,
+          gate: 'DECISION_ENGINE',
+          matchPercentage: 0,
+          threshold,
+        }, 0)
+      }
+    }
+
     // Gate 1: Source allowlist — blocks non-approved sources entirely
     const sourceGate = evaluatePipelineSource({
       source: opportunity?.source ? String(opportunity.source).trim() : null,
       record_origin: opportunity?.record_origin ? String(opportunity.record_origin).trim() : null,
     })
     if (!sourceGate.allowed) {
-      log.info(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — ${sourceGate.reason}`)
-      return {
+      if (!quiet) log.info(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — ${sourceGate.reason}`)
+      return denied('source_excluded', {
         saved: false,
         reason: sourceGate.reason || 'Source is not approved for profile pipelines',
         gate: 'SOURCE_ALLOWLIST',
         matchPercentage: null,
         threshold,
-      }
+      }, decision?.score ?? null)
     }
 
     // Gate 1.5: Pipeline dismissals (sticky deletes). The user's explicit
@@ -189,21 +273,30 @@ export async function saveToProfilePipeline(
       try {
         const dismissed = await isPipelineDismissed(db, profileId, opportunity)
         if (dismissed) {
-          log.info(
+          if (!quiet) log.info(
             `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
           )
-          return {
+          return denied('tombstoned', {
             saved: false,
             reason: 'Previously dismissed by user — re-add manually to bring it back',
             gate: 'DISMISSED',
             matchPercentage: null,
             threshold,
-          }
+          }, decision?.score ?? null)
         }
       } catch (dismissErr) {
+        if (failClosedTombstone) {
+          return denied('error:transient', {
+            saved: false,
+            reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
+            gate: 'DISMISSED_ERROR',
+            matchPercentage: null,
+            threshold,
+          })
+        }
         // Tombstone lookup failure must never block a save — recall over
         // suppression. Log it and proceed.
-        console.warn(
+        if (!quiet) console.warn(
           `[opportunityMatcher] Gate:DISMISSED check failed for profile ${profileId}, opp "${opportunity?.title}":`,
           dismissErr?.message || dismissErr,
         )
@@ -211,33 +304,32 @@ export async function saveToProfilePipeline(
     }
 
     // Run the full decision engine
-    const rawProfile = profileContext?.profile ?? profileContext
-    const profileSections = profileContext?.sections ?? null
-    let decision
-    try {
-      decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
-    } catch (decisionErr) {
-      console.warn(`[opportunityMatcher] computeMatchDecision threw for "${opportunity?.title}" â treating as REJECT to avoid inserting unscored opportunity:`, decisionErr?.message)
-      return {
-        saved: false,
-        reason: `Decision engine error: ${decisionErr?.message ?? 'unknown'}`,
-        gate: 'DECISION_ENGINE',
-        matchPercentage: 0,
-        threshold,
+    if (!decision) {
+      try {
+        decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
+      } catch (decisionErr) {
+        if (!quiet) console.warn(`[opportunityMatcher] computeMatchDecision threw for "${opportunity?.title}" â treating as REJECT to avoid inserting unscored opportunity:`, decisionErr?.message)
+        return denied('error:transient', {
+          saved: false,
+          reason: `Decision engine error: ${decisionErr?.message ?? 'unknown'}`,
+          gate: 'DECISION_ENGINE',
+          matchPercentage: 0,
+          threshold,
+        }, 0)
       }
     }
 
     // Gate 2: Canonical decision engine — REJECT means hard ineligible
     if (decision?.decision === 'REJECT') {
-      log.info(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
-      return {
+      if (!quiet) log.info(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
+      return denied('live_reject', {
         saved: false,
         reason: `Rejected: ${(decision.ineligibilityReasons ?? []).join('; ')}`,
         gate: 'DECISION_ENGINE',
         matchPercentage: decision.score ?? 0,
         threshold,
         decision: 'REJECT',
-      }
+      }, decision.score ?? 0)
     }
 
     // Gate 2.5: Applicant-type eligibility (the fix for institution-only rows
@@ -266,15 +358,15 @@ export async function saveToProfilePipeline(
         null
       const applicantEval = evaluateApplicantTypeEligibility(opportunity, profileApplicantType)
       if (applicantEval.decision === 'mismatch') {
-        log.info(`[opportunityMatcher] Gate:APPLICANT_TYPE suppressed "${opportunity.title}" — ${applicantEval.reason} (profile applicant type: ${profileApplicantType ?? 'unknown'})`)
-        return {
+        if (!quiet) log.info(`[opportunityMatcher] Gate:APPLICANT_TYPE suppressed "${opportunity.title}" — ${applicantEval.reason} (profile applicant type: ${profileApplicantType ?? 'unknown'})`)
+        return denied('live_reject', {
           saved: false,
           reason: `Not eligible for this applicant type (${applicantEval.reason})`,
           gate: 'APPLICANT_TYPE',
           matchPercentage: decision?.score ?? null,
           threshold,
           decision: 'REJECT',
-        }
+        }, decision?.score ?? null)
       }
     }
 
@@ -286,14 +378,14 @@ export async function saveToProfilePipeline(
     } catch { /* table may not exist yet; treat as ALLOW */ }
 
     if (exclusion.decision === 'SUPPRESS') {
-      log.info(`[opportunityMatcher] Gate:EXCLUSION_ENGINE suppressed "${opportunity.title}" — rule ${exclusion.rule_id}`)
-      return {
+      if (!quiet) log.info(`[opportunityMatcher] Gate:EXCLUSION_ENGINE suppressed "${opportunity.title}" — rule ${exclusion.rule_id}`)
+      return denied('live_reject', {
         saved: false,
         reason: `Excluded by rule ${exclusion.rule_id}`,
         gate: 'EXCLUSION_ENGINE',
         matchPercentage,
         threshold,
-      }
+      })
     }
 
     // Use decision engine score when available, fall back to legacy scorer.
@@ -328,27 +420,27 @@ export async function saveToProfilePipeline(
       const profileData = extractProfileData(profileContext)
       const profileGate = evaluateProfileSpecificGate(profileContext, opportunity, { mode: 'pipeline' })
       if (!profileGate.pass) {
-        log.info(`[opportunityMatcher] Gate:PROFILE_SPECIFIC suppressed "${opportunity.title}" - ${profileGate.reason}`)
-        return {
+        if (!quiet) log.info(`[opportunityMatcher] Gate:PROFILE_SPECIFIC suppressed "${opportunity.title}" - ${profileGate.reason}`)
+        return denied('live_reject', {
           saved: false,
           reason: profileGate.reason,
           gate: 'PROFILE_SPECIFIC',
           ruleId: profileGate.ruleId,
           matchPercentage: adjustedScore,
           threshold,
-        }
+        }, adjustedScore)
       }
 
       const relevance = applyRelevanceFilter(opportunity, profileData, { mode: 'soft' })
       if (!relevance.pass) {
-        log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
-        return {
+        if (!quiet) log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
+        return denied('relevance_floor', {
           saved: false,
           reason: relevance.reason,
           gate: 'RELEVANCE_FILTER',
           matchPercentage: adjustedScore,
           threshold,
-        }
+        }, adjustedScore)
       }
 
       if (relevance.softFail) {
@@ -396,10 +488,10 @@ export async function saveToProfilePipeline(
     // so this remains a canonical hard floor no caller can drop below.
     if (adjustedScore < effectiveThreshold) {
       const flooredByCanonical = effectiveThreshold === effectiveFloor && callerThreshold < effectiveFloor
-      log.info(
+      if (!quiet) log.info(
         `[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${effectiveThreshold}% (floor ${effectiveFloor}${trusted ? ' [trusted origin ' + recordOrigin + ']' : ''}, caller asked ${callerThreshold}), decision was ${decision?.decision ?? 'null'}`,
       )
-      return {
+      return denied('below_bar', {
         saved: false,
         reason: flooredByCanonical
           ? `Match score ${adjustedScore}% below relevance floor ${effectiveFloor}%`
@@ -409,7 +501,7 @@ export async function saveToProfilePipeline(
         threshold: effectiveThreshold,
         relevanceFloor: effectiveFloor,
         decision: decision?.decision ?? null,
-      }
+      }, adjustedScore)
     }
 
     matchPercentage = adjustedScore
@@ -427,7 +519,7 @@ export async function saveToProfilePipeline(
       .get(profileId)
 
     if (!profile?.id) {
-      return { saved: false, reason: 'Profile not found' }
+      return denied('error:transient', { saved: false, reason: 'Profile not found' })
     }
 
     // Gate 6: IDEMPOTENCY (profile-scoped dedup).
@@ -473,49 +565,55 @@ export async function saveToProfilePipeline(
       .all(profileId)
 
     let existing = null
+    let duplicateKind = null
     for (const row of dupCandidateRows || []) {
       // (a) catalog FK
       if (fkOpportunityId && row.funding_opportunity_id && String(row.funding_opportunity_id) === String(fkOpportunityId)) {
         existing = row
+        duplicateKind = 'catalog_id'
         break
       }
       // also match against the raw opportunity.id (covers callers that pass a
       // catalog id that didn't survive FK validation but still equals a stored row)
       if (opportunity.id && row.funding_opportunity_id && String(row.funding_opportunity_id) === String(opportunity.id)) {
         existing = row
+        duplicateKind = 'catalog_id'
         break
       }
       // (b) canonical fingerprint — stored, or recomputed from the row's tuple
       const rowFp = (row.fingerprint && String(row.fingerprint)) || grantFingerprintFromOpportunity(row)
       if (candidateFp && rowFp && candidateFp === rowFp) {
         existing = row
+        duplicateKind = 'fingerprint'
         break
       }
       // (c) normalized title+funder
       const rowTitleFunder = titleFunderKey(row.title, row.funder)
       if (candidateTitleFunder && rowTitleFunder && candidateTitleFunder === rowTitleFunder) {
         existing = row
+        duplicateKind = 'title_funder'
         break
       }
       // (d) stable URL or conservative acronym-family match
       if (likelySameGrantOpportunity(opportunity, row)) {
         existing = row
+        duplicateKind = 'identity'
         break
       }
     }
 
     if (existing) {
-      log.info(
+      if (!quiet) log.info(
         `[opportunityMatcher] Gate:DUPLICATE suppressed "${opportunity.title}" — already in pipeline for profile ${profileId} (existing grant ${existing.id})`,
       )
-      return {
+      return denied(`duplicate:${duplicateKind || 'unknown'}`, {
         saved: false,
         reason: 'Already in pipeline',
         gate: 'DUPLICATE',
         matchPercentage,
         threshold,
         pipelineId: existing.id,
-      }
+      }, matchPercentage)
     }
 
     // Compute fingerprints for versioning
@@ -531,6 +629,107 @@ export async function saveToProfilePipeline(
     const canonicalReasons = decision?.reasons?.length
       ? decision.reasons
       : (profileContext?.match_reasons ?? opportunity.match_reasons ?? [])
+
+    return {
+      admitted: true,
+      reason: 'accepted',
+      score: matchPercentage,
+      ...fingerprints,
+      result: {
+        saved: false,
+        reason: 'Admitted; persistence pending',
+        matchPercentage,
+        threshold: effectiveThreshold,
+        decision: decision?.decision ?? null,
+      },
+      _write: {
+        rawProfile,
+        profileSections,
+        decision,
+        matchPercentage,
+        effectiveThreshold,
+        profile,
+        profileId,
+        fkOpportunityId,
+        candidateFp,
+        profileFingerprint,
+        opportunityFingerprint,
+        canonicalReasons,
+      },
+    }
+  } catch (error) {
+    return {
+      ...denied('error:transient', {
+        saved: false,
+        reason: error?.message || String(error),
+        gate: 'ADMISSION_ERROR',
+        matchPercentage,
+      }),
+      _admissionError: error,
+    }
+  }
+}
+
+/**
+ * Sole public pipeline entry point. Existing callers keep their six-argument
+ * contract. Promotion callers may pass a trailing outcome sink/options object;
+ * user-initiated calls pass nothing and retain historical behavior.
+ */
+export async function saveToProfilePipeline(
+  db,
+  opportunity,
+  profileId,
+  profileContext,
+  matchPercentage = null,
+  minMatchThreshold = null,
+  outcomeSink = null,
+) {
+  let admission = null
+  try {
+    admission = await admitToPipeline(db, profileContext, opportunity, {
+      profileId,
+      matchPercentage,
+      minMatchThreshold,
+      failClosedTombstone: outcomeSink?.failClosedTombstone === true,
+      quiet: outcomeSink?.quiet === true,
+      freshRescoreRequired: outcomeSink?.freshRescoreRequired === true,
+    })
+    if (!admission.admitted) {
+      if (admission._admissionError && !outcomeSink) {
+        console.error('[opportunityMatcher] Error saving to pipeline:', admission._admissionError)
+        return {
+          saved: false,
+          reason: admission._admissionError.message,
+        }
+      }
+      await emitPromotionOutcome(outcomeSink, admission)
+      return admission.result
+    }
+
+    const dryRun = outcomeSink?.mode === 'dry_run'
+    if (dryRun) {
+      await emitPromotionOutcome(outcomeSink, { ...admission, outcome: 'promoted', dryRun: true })
+      return {
+        saved: false,
+        dryRun: true,
+        projected: true,
+        matchPercentage: admission.score,
+        threshold: admission.result.threshold,
+        decision: admission.result.decision,
+      }
+    }
+
+    const {
+      decision,
+      effectiveThreshold,
+      profile,
+      fkOpportunityId,
+      candidateFp,
+      profileFingerprint,
+      opportunityFingerprint,
+      canonicalReasons,
+    } = admission._write
+    matchPercentage = admission.score
 
     // Add to pipeline — preserve application URL, contact info, amounts, and submission method
     // (fkOpportunityId was already resolved + FK-validated by the dedup gate above.)
@@ -692,7 +891,13 @@ export async function saveToProfilePipeline(
         .run(...vals)
     }
     
-    log.info(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
+    if (!outcomeSink?.quiet) log.info(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
+
+    await emitPromotionOutcome(outcomeSink, {
+      ...admission,
+      outcome: 'promoted',
+      pipelineId: grantId,
+    })
     
     return {
       saved: true,
@@ -702,24 +907,49 @@ export async function saveToProfilePipeline(
       decision: decision?.decision ?? null,
     }
   } catch (error) {
+    if (error?.promotionOutcomeSinkFailed) throw error
     const msg = String(error?.message || '').toLowerCase()
     // Race-condition duplicate — treat as idempotent, not an error
     if (msg.includes('unique') || msg.includes('duplicate')) {
       const thresholdNum = Number(minMatchThreshold)
       const callerThreshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
       const threshold = Math.max(callerThreshold, RELEVANCE_FLOOR)
-      return { saved: false, reason: 'Already in pipeline', gate: 'DUPLICATE', matchPercentage, threshold }
+      const result = { saved: false, reason: 'Already in pipeline', gate: 'DUPLICATE', matchPercentage, threshold }
+      await emitPromotionOutcome(outcomeSink, {
+        ...(admission || pipelineAdmissionFingerprints(profileContext, opportunity)),
+        admitted: false,
+        reason: 'duplicate:race',
+        score: Number.isFinite(Number(matchPercentage)) ? Number(matchPercentage) : null,
+        result,
+      })
+      return result
     }
     // FK violation — the funding_opportunity was deleted or never upserted
     if (msg.includes('foreign key') || msg.includes('fkey')) {
-      console.warn(`[opportunityMatcher] FK miss for "${opportunity.title}" — funding_opportunity_id not found, skipping`)
-      return { saved: false, reason: 'Funding opportunity not yet in database', matchPercentage }
+      if (!outcomeSink?.quiet) console.warn(`[opportunityMatcher] FK miss for "${opportunity.title}" — funding_opportunity_id not found, skipping`)
+      const result = { saved: false, reason: 'Funding opportunity not yet in database', matchPercentage }
+      await emitPromotionOutcome(outcomeSink, {
+        ...(admission || pipelineAdmissionFingerprints(profileContext, opportunity)),
+        admitted: false,
+        reason: 'error:transient',
+        score: Number.isFinite(Number(matchPercentage)) ? Number(matchPercentage) : null,
+        result,
+      })
+      return result
     }
     console.error('[opportunityMatcher] Error saving to pipeline:', error)
-    return {
+    const result = {
       saved: false,
       reason: error.message
     }
+    await emitPromotionOutcome(outcomeSink, {
+      ...(admission || pipelineAdmissionFingerprints(profileContext, opportunity)),
+      admitted: false,
+      reason: 'error:transient',
+      score: Number.isFinite(Number(matchPercentage)) ? Number(matchPercentage) : null,
+      result,
+    })
+    return result
   }
 }
 

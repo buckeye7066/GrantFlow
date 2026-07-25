@@ -1,6 +1,6 @@
 import express from 'express'
 import crypto from 'crypto'
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import twilio from 'twilio'
 import { fileURLToPath } from 'url'
@@ -41,7 +41,7 @@ import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
 import bcrypt from 'bcryptjs'
 
 import { createLogger } from '../utils/logger.js'
-import { isLoginMaintenanceActive, LOGIN_MAINTENANCE_MESSAGE } from '../config/maintenance.js'
+import { isLoginMaintenanceActive, LOGIN_MAINTENANCE_MESSAGE, LOGIN_MAINTENANCE_COPY } from '../config/maintenance.js'
 const routeLogger = createLogger('route:auth')
 
 const __filename = fileURLToPath(import.meta.url)
@@ -52,10 +52,12 @@ const router = express.Router()
 
 // LOGIN MAINTENANCE GUARD — while the upgrade maintenance flag is on, block
 // every session-creating endpoint on this router with a 503. Existing
-// sessions keep working: /refresh, /logout, and /onboarding-state (a
-// logged-in user's state mutation, not session-creating) are exempt, and
-// GET /api/auth/me lives in authMe.js which this guard never touches.
-const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout', '/onboarding-state'])
+// sessions keep working: /refresh, /logout, and /onboarding-state (a logged-in
+// user's state mutation, not session-creating) are exempt, and GET /api/auth/me
+// lives in authMe.js which this guard never touches. /maintenance is also exempt
+// so the runtime status probe (below) can answer while the fence is up — the
+// Login page needs it to show the banner.
+const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout', '/onboarding-state', '/maintenance'])
 router.use((req, res, next) => {
   if (!isLoginMaintenanceActive()) return next()
   const path = req.path.length > 1 ? req.path.replace(/\/+$/, '') : req.path
@@ -70,6 +72,13 @@ router.use((req, res, next) => {
     error: 'maintenance',
     message: LOGIN_MAINTENANCE_MESSAGE,
   })
+})
+
+// Public status probe: the Login page asks this at runtime so the banner
+// follows the server-side switch (LOGIN_MAINTENANCE env var) without a
+// frontend rebuild. Never requires auth; exempt from the guard above.
+router.get('/maintenance', (_req, res) => {
+  res.json({ active: isLoginMaintenanceActive(), ...LOGIN_MAINTENANCE_COPY })
 })
 
 function getOpenAI() {
@@ -259,7 +268,11 @@ const emailVerifyLimiter = rateLimit({
   limit: Number.parseInt(process.env.AUTH_EMAIL_VERIFY_RATE_LIMIT ?? '30', 10),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  keyGenerator: (req) => `${normalizeEmail(req.body?.email ?? '')}|${req.ip}`,
+  // Normalize the IP through the library helper: a raw IPv6 address is a /128,
+  // so combining req.ip directly buckets every IPv6 client separately and
+  // defeats the limit (and trips express-rate-limit's ERR_ERL_KEY_GEN_IPV6
+  // validation at boot). ipKeyGenerator collapses IPv6 to its routable subnet.
+  keyGenerator: (req) => `${normalizeEmail(req.body?.email ?? '')}|${ipKeyGenerator(req.ip)}`,
 })
 
 function normalizeEmail(email = '') {
@@ -2007,6 +2020,7 @@ async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddres
       profileId: profileId ?? null,
       ip: ipAddress ?? null,
       userAgent,
+      sessionId,
     })
   } catch (auditErr) {
     console.warn('[auth] sign-in audit record failed:', auditErr?.message || auditErr)
@@ -2096,6 +2110,7 @@ async function rotateSessionTokens(db, {
         profileId: profileId ?? null,
         ip: ipAddress ?? null,
         userAgent,
+        sessionId,
       })
     } catch (auditErr) {
       console.warn('[auth] session-resume audit record failed:', auditErr?.message || auditErr)

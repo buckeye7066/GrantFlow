@@ -1,0 +1,198 @@
+// Web adapter (Playwright). Drives a browser through a journey's steps against a
+// disposable browser profile, capturing trace/screenshot/console/network on
+// failure. Playwright is an OPTIONAL dependency: if it isn't installed the
+// adapter returns a 'blocked' result naming the missing dep rather than throwing,
+// so the rest of the run proceeds.
+//
+// A journey is a list of steps: { action, selector?, url?, value?, expect? }.
+// The adapter asserts SEMANTIC correctness (visible text / value), not merely
+// element presence, and records console errors + failed requests as findings.
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import os from 'node:os'
+
+async function loadPlaywright() {
+  try {
+    const mod = await import('playwright')
+    return mod.chromium ? mod : null
+  } catch {
+    return null
+  }
+}
+
+export async function runWebJourney({ baseUrl, journey, captureDir = null, dryRun = false }) {
+  const started = Date.now()
+  if (dryRun) {
+    return { journey_id: journey.id, name: journey.name, status: 'skipped', duration_ms: Date.now() - started }
+  }
+  const pw = await loadPlaywright()
+  if (!pw) {
+    return blocked(journey, started, 'Playwright is not installed on this runner (npm i playwright && npx playwright install chromium)')
+  }
+
+  const userDataDir = mkdtempSync(join(os.tmpdir(), 'eva-web-'))
+  const consoleErrors = []
+  const failedRequests = []
+  let context
+  try {
+    context = await pw.chromium.launchPersistentContext(userDataDir, { headless: true })
+    const page = await context.newPage()
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    page.on('requestfailed', (req) => failedRequests.push(`${req.method()} ${req.url()}`))
+    page.on('response', (resp) => {
+      if (resp.status() >= 500) failedRequests.push(`${resp.status()} ${resp.url()}`)
+    })
+
+    for (const step of journey.steps || []) {
+      await applyStep(page, step, baseUrl)
+    }
+
+    // Semantic assertion(s).
+    for (const assertion of journey.assert || []) {
+      const okAssert = await checkAssertion(page, assertion)
+      if (!okAssert.ok) {
+        return await fail(journey, started, page, captureDir, {
+          severity: journey.severity || 'high',
+          failureClass: 'assertion',
+          route: page.url(),
+          observed: okAssert.observed,
+          expected: okAssert.expected,
+          impact: journey.user_impact || 'the user could not complete this workflow',
+          errorSignature: `assertion failed: ${assertion.type}`,
+          consoleErrors,
+          failedRequests,
+        })
+      }
+    }
+
+    // Uncaught console errors / 5xx are findings even if assertions passed.
+    if (consoleErrors.length || failedRequests.length) {
+      return await fail(journey, started, page, captureDir, {
+        severity: 'medium',
+        failureClass: consoleErrors.length ? 'console-error' : 'network-5xx',
+        route: page.url(),
+        observed: [...consoleErrors.slice(0, 3), ...failedRequests.slice(0, 3)].join(' | '),
+        expected: 'no console errors or 5xx responses during the journey',
+        impact: 'the page reached the right state but logged errors a user’s session could hit',
+        errorSignature: (consoleErrors[0] || failedRequests[0] || '').slice(0, 200),
+        consoleErrors,
+        failedRequests,
+      })
+    }
+
+    return { journey_id: journey.id, name: journey.name, status: 'passed', duration_ms: Date.now() - started }
+  } catch (err) {
+    return await fail(journey, started, null, captureDir, {
+      severity: journey.severity || 'high',
+      failureClass: 'uncaught-page-error',
+      route: baseUrl,
+      observed: String(err?.message || err).slice(0, 300),
+      expected: 'the journey runs without throwing',
+      impact: journey.user_impact || 'the workflow crashed mid-way',
+      errorSignature: String(err?.message || err).slice(0, 200),
+      consoleErrors,
+      failedRequests,
+    })
+  } finally {
+    try {
+      await context?.close()
+    } catch {
+      /* ignore */
+    }
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function applyStep(page, step, baseUrl) {
+  switch (step.action) {
+    case 'goto':
+      return page.goto(new URL(step.url || '/', baseUrl).toString(), { waitUntil: 'domcontentloaded', timeout: step.timeout || 15000 })
+    case 'fill':
+      return page.fill(step.selector, step.value ?? '', { timeout: step.timeout || 10000 })
+    case 'click':
+      return page.click(step.selector, { timeout: step.timeout || 10000 })
+    case 'wait':
+      return page.waitForTimeout(Math.min(step.ms || 500, 5000))
+    case 'waitForSelector':
+      return page.waitForSelector(step.selector, { timeout: step.timeout || 10000 })
+    default:
+      return null
+  }
+}
+
+async function checkAssertion(page, assertion) {
+  try {
+    if (assertion.type === 'text_visible') {
+      const loc = page.locator(assertion.selector || 'body')
+      const text = (await loc.first().textContent({ timeout: assertion.timeout || 8000 })) || ''
+      const ok = text.includes(assertion.value)
+      return { ok, observed: ok ? '' : `visible text did not contain "${assertion.value}"`, expected: `text containing "${assertion.value}"` }
+    }
+    if (assertion.type === 'url_contains') {
+      const ok = page.url().includes(assertion.value)
+      return { ok, observed: ok ? '' : `url is ${page.url()}`, expected: `url containing "${assertion.value}"` }
+    }
+    if (assertion.type === 'input_value') {
+      const val = await page.inputValue(assertion.selector, { timeout: assertion.timeout || 8000 })
+      const ok = val === assertion.value
+      return { ok, observed: ok ? '' : `input value was "${val}"`, expected: `input value "${assertion.value}"` }
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, observed: String(err?.message || err).slice(0, 200), expected: `assertion ${assertion.type} to hold` }
+  }
+}
+
+async function fail(journey, started, page, captureDir, ctx) {
+  const evidence = []
+  if (page && captureDir) {
+    try {
+      const shot = join(captureDir, `${journey.id}.png`)
+      await page.screenshot({ path: shot, fullPage: false })
+      // Reference only — a relative name, never the absolute private path.
+      evidence.push({ kind: 'screenshot', ref: `${journey.id}.png` })
+    } catch {
+      /* screenshot best-effort */
+    }
+  }
+  if (ctx.consoleErrors?.length) evidence.push({ kind: 'console', ref: `${journey.id}-console.txt` })
+  if (ctx.failedRequests?.length) evidence.push({ kind: 'network', ref: `${journey.id}-network.txt` })
+  return {
+    journey_id: journey.id,
+    name: journey.name,
+    status: 'failed',
+    severity: ctx.severity,
+    retry_classification: 'reproducible',
+    failure_class: ctx.failureClass,
+    route_or_control: ctx.route,
+    error_signature: ctx.errorSignature,
+    expected_behavior: ctx.expected,
+    observed_behavior: ctx.observed,
+    repro_steps: (journey.steps || []).map((s) => `${s.action}${s.selector ? ' ' + s.selector : ''}${s.url ? ' ' + s.url : ''}`).slice(0, 20),
+    user_impact: ctx.impact,
+    likely_root_cause: journey.likely_root_cause || null,
+    recommended_fix: journey.recommended_fix || null,
+    candidate_files: journey.candidate_files || null,
+    diagnostic_confidence: journey.candidate_files ? 0.7 : 0.55,
+    missing_evidence: journey.candidate_files ? null : 'No source mapping yet — inspect the failing route handler and recent changes',
+    evidence,
+    duration_ms: Date.now() - started,
+  }
+}
+
+function blocked(journey, started, reason) {
+  return {
+    journey_id: journey.id,
+    name: journey.name,
+    status: 'blocked',
+    route_or_control: journey.id,
+    observed_behavior: reason,
+    duration_ms: Date.now() - started,
+  }
+}

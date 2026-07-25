@@ -1,0 +1,21 @@
+{
+  "name": "eva-edge-runner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "EVA Windows edge runner — launches portfolio apps, runs end-user journeys, uploads signed results to GrantFlow. No general remote-command capability.",
+  "bin": {
+    "eva-runner": "bin/eva-runner.mjs"
+  },
+  "scripts": {
+    "selftest": "node bin/eva-runner.mjs --selftest",
+    "dry-run": "node bin/eva-runner.mjs --dry-run",
+    "test": "node --test test/sign.test.mjs test/runner.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
+  }
+}

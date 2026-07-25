@@ -1893,6 +1893,14 @@ router.get('/login-events', async (req, res, next) => {
 
     // 1) Durable source: audit_logs (client_sign_in)
     const events = []
+    // Session ids already represented by a client_sign_in audit row. A fresh
+    // login writes BOTH a user_sessions row and an audit row in the same
+    // createSessionAndTokens call (tagged with the session id), so without
+    // this set the merge below would render one login as two events. The
+    // audit row carries the real method (password/email/oauth/…); the session
+    // row only ever carried a synthetic 'session' label, so dropping the
+    // duplicate loses nothing.
+    const auditedSessionIds = new Set()
     const sourceStatus = {
       audit_logs: { ok: true },
       user_sessions: { ok: true },
@@ -1911,12 +1919,15 @@ router.get('/login-events', async (req, res, next) => {
 
       for (const row of auditRes?.logs || []) {
         const details = row?.details && typeof row.details === 'object' ? row.details : {}
+        const auditSessionId = details?.session_id ?? row?.resource_id ?? null
+        if (auditSessionId) auditedSessionIds.add(String(auditSessionId))
         events.push({
           id: row.id,
           type: 'client_sign_in',
           at: row.created_at,
           identifier: details?.identifier ?? null,
           method: details?.method ?? null,
+          session_id: auditSessionId,
           user_id: row.user_id ?? null,
           profile_id: row.profile_id ?? null,
           ip: row.ip_address ?? null,
@@ -1976,6 +1987,12 @@ router.get('/login-events', async (req, res, next) => {
             .all(sessionLimit)
 
       for (const r of rows || []) {
+        // Skip sessions already represented by a client_sign_in audit row (see
+        // above): they are the SAME login, and the audit row carries the real
+        // method while this session row only carries the synthetic 'session'
+        // label. Pre-audit rows (historical, before the link existed) are never
+        // in the set, so historical backfill still surfaces them.
+        if (r?.id && auditedSessionIds.has(String(r.id))) continue
         events.push({
           id: `session:${r.id}`,
           type: 'client_sign_in',

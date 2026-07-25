@@ -80,6 +80,40 @@ test('Federal Register: a result with no html_url is dropped (no fake info_url)'
   assert.equal(cand, null);
 });
 
+test('Federal Register: a non-funding notice (matched on body only) is dropped', () => {
+  // A meeting notice whose title/abstract carry no funding language — it only
+  // matched the "funding opportunity" term deep in its body. Must be rejected so
+  // it never surfaces as a fundable PROGRAM (finding #4: federal_register junk).
+  const adapter = createFederalRegisterAdapter();
+  const cand = adapter.mapCandidate(
+    {
+      external_id: '2026-99999',
+      title: 'Advisory Committee Meeting; Notice of Public Hearing',
+      info_url: 'https://www.federalregister.gov/documents/2026/06/24/2026-99999/notice',
+      summary: 'The committee will meet to discuss agency priorities and take public comment.',
+      agencies: [{ name: 'Department of Commerce' }],
+    },
+    { source: getSource('federal_register') },
+  );
+  assert.equal(cand, null, 'a non-funding notice must be dropped, not stored as a PROGRAM');
+});
+
+test('Federal Register: a real NOFO whose funding language is in the abstract survives', () => {
+  const adapter = createFederalRegisterAdapter();
+  const cand = adapter.mapCandidate(
+    {
+      external_id: '2026-88888',
+      title: 'Rural Broadband Deployment Program',
+      info_url: 'https://www.federalregister.gov/documents/2026/06/24/2026-88888/notice',
+      summary: 'The agency announces the availability of funds and invites applications for a cooperative agreement.',
+      agencies: [{ name: 'Department of Agriculture' }],
+    },
+    { source: getSource('federal_register') },
+  );
+  assert.ok(cand, 'a genuine NOFO must survive the precision gate');
+  assert.equal(cand.kind, OPPORTUNITY_KIND.PROGRAM);
+});
+
 test('NIH RSS: parses <item> blocks (CDATA + entities cleaned) and survives as PROGRAM', () => {
   const xml = `<?xml version="1.0"?><rss><channel>
     <item>

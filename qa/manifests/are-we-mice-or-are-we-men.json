@@ -1,0 +1,76 @@
+{
+  "app_id": "are-we-mice-or-are-we-men",
+  "display_name": "Are We Mice Or Are We Men",
+  "repo": "buckeye7066/are-we-mice-or-are-we-men",
+  "local_path": "C:/Users/firer/are-we-mice-or-are-we-men",
+  "runtime_type": "web",
+  "start_command": "cd backend && npm run dev & npm run dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/health", "port": 3001, "timeout_ms": 60000 },
+  "base_url": "http://localhost:5273",
+  "test_target": "disposable-local-instance",
+  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "ANTHROPIC_API_KEY", "CORS_ORIGIN", "APP_URL", "INVITE_ONLY", "ADMIN_EMAIL"],
+  "seed_command": null,
+  "reset_command": null,
+  "cleanup": "rm -rf .eva-tmp/are-we-mice-or-are-we-men && drop disposable test database",
+  "disposable_data_root": ".eva-tmp/are-we-mice-or-are-we-men",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "educational fixtures only — no patient-specific medical direction",
+    "no real Anthropic spend (leave ANTHROPIC_API_KEY unset in test runs)",
+    "do not register the admin email buckeye7066@gmail.com locally (it grants admin); use synthetic fixture emails like eva-fixture@example.com"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5273, 3001],
+    "routes": ["/", "/login", "/register", "/health", "/api/auth/*"],
+    "file_roots": [".eva-tmp/are-we-mice-or-are-we-men"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "reach-register"],
+  "weekly_full_journeys": ["app-identifies-itself", "reach-register"],
+  "feature_coverage": {
+    "features_total": 6,
+    "features_covered": 1,
+    "unautomated_features": ["Quizzes", "ExamSimulator", "AITutor", "DrugReference", "Flashcards"]
+  },
+  "coverage": [
+    { "feature": "App loads and identifies itself", "journeys": ["app-identifies-itself"] },
+    { "feature": "Login/register entry (INVITE_ONLY=false for test)", "journeys": ["reach-register"] },
+    { "feature": "Quizzes", "unautomated_reason": "requires authenticated session with seeded study content; wire once seeded auth fixture exists" },
+    { "feature": "ExamSimulator", "unautomated_reason": "needs authenticated session plus seeded exam bank; wire once seeded DB fixture exists" },
+    { "feature": "AITutor", "unautomated_reason": "AI tutoring needs an Anthropic mock; real spend is prohibited" },
+    { "feature": "DrugReference", "unautomated_reason": "requires authenticated session with seeded drug data; educational fixtures only" },
+    { "feature": "Flashcards", "unautomated_reason": "requires authenticated session with seeded decks; wire once seeded auth fixture exists" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Landing page loads and identifies the EMS study app (note: port 5273, not 5173)",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Mice" }],
+      "user_impact": "If the app shell does not load, no student can reach quizzes, flashcards, or the exam simulator.",
+      "candidate_files": ["src/App.jsx", "src/pages/Login.jsx"]
+    },
+    {
+      "id": "reach-register",
+      "name": "New student can reach the registration form (INVITE_ONLY off)",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" },
+        { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up')" },
+        { "action": "wait", "ms": 800 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "egister" }],
+      "user_impact": "A prospective student who cannot reach registration cannot self-onboard (with INVITE_ONLY=false in the test env).",
+      "candidate_files": ["src/pages/Login.jsx", "src/pages/Register.jsx"]
+    }
+  ]
+}

@@ -21,6 +21,7 @@ import {
   summarizeUnreadableHosts,
   AMOUNT_COVERAGE_KV_KEY,
   AMOUNT_COVERAGE_REGRESSION_POINTS,
+  PROMOTION_AMOUNT_GRACE_DAYS,
 } from '../services/sam/samRegistry.js'
 
 const check = () => getCheckById('pipeline.amountCoverage')
@@ -33,10 +34,18 @@ beforeEach(() => {
     CREATE TABLE profiles (id TEXT PRIMARY KEY, created_by TEXT);
     CREATE TABLE grants (id INTEGER PRIMARY KEY, status TEXT, amount_requested REAL, amount_min REAL, amount_max REAL,
                          amount_status TEXT, amount_text TEXT, funding_opportunity_id INTEGER, profile_id TEXT,
-                         amount_enrich_attempted_at TEXT, application_url TEXT, portal_url TEXT);
+                         amount_enrich_attempted_at TEXT, amount_enrich_attempts INTEGER DEFAULT 0,
+                         amount_enrich_env_attempts INTEGER DEFAULT 0,
+                         application_url TEXT, portal_url TEXT);
     CREATE TABLE funding_opportunities (id INTEGER PRIMARY KEY, is_active INTEGER DEFAULT 1, amount_min REAL, amount_max REAL,
                                         amount_status TEXT, amount_text TEXT, opportunity_kind TEXT,
-                                        amount_enrich_attempted_at TEXT, source_url TEXT, application_url TEXT);
+                                        amount_enrich_attempted_at TEXT, amount_enrich_attempts INTEGER DEFAULT 0,
+                                        amount_enrich_env_attempts INTEGER DEFAULT 0,
+                                        source_url TEXT, application_url TEXT);
+    CREATE TABLE pipeline_promotion_outcomes (
+      profile_id TEXT, opportunity_id INTEGER, mode TEXT, outcome TEXT, reason TEXT,
+      attempted_at TEXT, PRIMARY KEY (profile_id, opportunity_id)
+    );
   `)
   // One real client profile and one Amy synthetic-training profile, so seeded
   // grants can attach to either.
@@ -171,6 +180,28 @@ describe('pipeline.amountCoverage excludes Amy synthetic-training grants', () =>
 })
 
 describe('pipeline.amountCoverage ratchet', () => {
+  it('shows a fresh unanswered promotion as promotion_converging, then turns red after grace expires', async () => {
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempted_at) VALUES (1, 'not_listed', ?)",
+    ).run(new Date().toISOString()).lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')")
+      .run(foId)
+    db.prepare("INSERT INTO pipeline_promotion_outcomes (profile_id, opportunity_id, mode, outcome, reason, attempted_at) VALUES ('real-1', ?, 'live', 'promoted', 'accepted', ?)")
+      .run(foId, new Date().toISOString())
+
+    const fresh = await check().run({ db })
+    expect(fresh.ok).toBe(true)
+    expect(fresh.summary).toMatch(/promotion_converging/)
+    expect(fresh.evidence).toMatchObject({ promotion_converging: 1, unanswered_unreadable: 0 })
+
+    const expired = new Date(Date.now() - (PROMOTION_AMOUNT_GRACE_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString()
+    db.prepare('UPDATE pipeline_promotion_outcomes SET attempted_at = ? WHERE opportunity_id = ?').run(expired, foId)
+    const afterGrace = await check().run({ db })
+    expect(afterGrace.ok).toBe(false)
+    expect(afterGrace.evidence).toMatchObject({ promotion_converging: 0, unanswered_unreadable: 1 })
+  })
+
   it('reports the real 21% → 15% DROP that went unreported', async () => {
     // THE REGRESSION. Both readings are below the 60% bar, so the old check
     // returned the same "LOW" summary for each and the collapse was invisible.
@@ -317,6 +348,112 @@ describe('pipeline.amountCoverage ratchet', () => {
     const res = await check().run({ db })
     expect(res.ok).toBe(true)
     expect(res.evidence).toMatchObject({ no_amount_by_design: 1 })
+  })
+
+  it('does NOT count a BENEFIT program as a miss — no fixed per-applicant award BY DESIGN', async () => {
+    // The ssa.gov class (prod triage 2026-07-21): /survivor, /disability are
+    // federal benefit programs — this check's own recommended_fix has always
+    // said to classify them "as a BENEFIT/DIRECTORY kind so it counts as
+    // no-amount-by-design", but the census predicate only honored 'directory'.
+    // The kind is only ever assigned by POSITIVE classification (registry
+    // default_kinds / locator_kind_classification URL-shape rule), never
+    // inferred from a failed read — so this is honesty, not bucket-widening.
+    // The row here is even BURNED (attempted set): the positive kind still
+    // outranks the stale unreadable classification.
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, opportunity_kind, amount_status, amount_enrich_attempted_at, source_url) VALUES (1, 'benefit', 'not_listed', '2026-07-16T00:00:00Z', 'https://www.ssa.gov/survivor')",
+    ).run().lastInsertRowid
+    db.prepare('INSERT INTO grants (status, amount_requested, funding_opportunity_id) VALUES (?, NULL, ?)')
+      .run('discovered', foId)
+    const res = await check().run({ db })
+    expect(res.ok).toBe(true)
+    expect(res.evidence).toMatchObject({ no_amount_by_design: 1, unanswered_unreadable: 0 })
+  })
+
+  it('splits MID-RETRY rows (tried, budget intact) from never_read backlog and from burned unreadable', async () => {
+    // Fix 2026-07-21: a row failing TRANSIENTLY (counter > 0, burn mark NULL —
+    // e.g. every grants.gov row during the WAF-403 egress block) is neither
+    // "never read" (something IS trying) nor "unreadable" (nothing is burned).
+    // Conflating it with never_read made an environment outage look like an
+    // untouched backlog.
+    seedGrants(30, 30)
+    // Mid-retry: attempts>0, no burn mark.
+    const midFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_attempts) VALUES (1, 'not_listed', 3)",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(midFo)
+    // Never read: attempts=0, no mark.
+    const freshFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status) VALUES (1, 'not_listed')",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(freshFo)
+    const res = await check().run({ db })
+    expect(res.evidence).toMatchObject({
+      unanswered_mid_retry: 1,
+      unanswered_never_read: 1,
+      unanswered_unreadable: 0, // neither is burned
+    })
+    expect(res.ok, 'backlog and mid-retry are green — only BURNED rows fail the check').toBe(true)
+    expect(res.summary).toMatch(/1 mid-retry/)
+  })
+
+  it('an ENVIRONMENT-BLOCKED row is a VISIBLE red naming its host — never green never_read', async () => {
+    // Fix-cycle 2 (2026-07-21): an env failure (WAF 403 on OUR egress) bumps
+    // NEITHER the burn mark nor the retry counter, so before the separate
+    // env-attempts counter a permanently-blocked row was INDISTINGUISHABLE
+    // from untouched backlog — the census read green `never_read` while every
+    // grants.gov call had failed for days. At AMOUNT_ENRICH_ENV_MAX_ATTEMPTS
+    // consecutive env failures the row must become `unanswered_blocked`: red,
+    // host named, owner action named, and NOT burned.
+    seedGrants(30, 30)
+    const blockedFo = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_env_attempts, source_url) VALUES (1, 'not_listed', 3, 'https://www.grants.gov/search-results-detail/112354')",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(blockedFo)
+    const res = await check().run({ db })
+    expect(res.evidence).toMatchObject({
+      unanswered_blocked: 1,
+      unanswered_never_read: 0,
+      unanswered_mid_retry: 0,
+      unanswered_unreadable: 0, // NOT burned — the row keeps its chance
+    })
+    expect(res.ok, 'a blocked egress is an attention state, not backlog').toBe(false)
+    expect(res.summary).toMatch(/egress is blocked/)
+    expect(res.summary).toMatch(/grants\.gov/)
+    expect(res.evidence.blocked_hosts?.[0]?.host).toBe('grants.gov')
+    expect(res.recommended_fix).toMatch(/GRANTS_GOV_API_KEY/)
+  })
+
+  it('the four STATE buckets partition the unanswered set; no_catalog_row is an OVERLAY, never a fifth state', async () => {
+    // Gate finding (fix-cycle 3): an orphan row is counted in a state bucket
+    // AND annotated no_catalog_row. That is by design — orphan-ness is an
+    // orthogonal dimension — but it means nothing may SUM no_catalog_row with
+    // the states. This test pins both facts: (a) one unanswered row lands in
+    // exactly ONE state bucket, (b) the orphan overlay counts it again.
+    seedGrants(30, 30)
+    // A burned ORPHAN (no catalog row, own mark set): state = unreadable.
+    db.prepare(
+      "INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id, amount_enrich_attempted_at, application_url) VALUES ('discovered', NULL, NULL, 'real-1', '2026-07-16T00:00:00Z', 'https://example.org/x')",
+    ).run()
+    const res = await check().run({ db })
+    const e = res.evidence
+    const stateSum = (e.unanswered_never_read ?? 0) + (e.unanswered_mid_retry ?? 0)
+      + (e.unanswered_blocked ?? 0) + (e.unanswered_unreadable ?? 0)
+    expect(e.unanswered_unreadable, 'the burned orphan is in exactly one STATE bucket').toBe(1)
+    expect(stateSum, 'states partition the unanswered set').toBe(1)
+    expect(e.unanswered_no_catalog_row, 'orphan-ness is the overlay annotation').toBe(1)
+  })
+
+  it('the block LIFTS when a probe succeeds (env counter reset) — back to ordinary backlog', async () => {
+    seedGrants(30, 30)
+    const foId = db.prepare(
+      "INSERT INTO funding_opportunities (is_active, amount_status, amount_enrich_env_attempts, source_url) VALUES (1, 'not_listed', 0, 'https://www.grants.gov/search-results-detail/112354')",
+    ).run().lastInsertRowid
+    db.prepare("INSERT INTO grants (status, amount_requested, funding_opportunity_id, profile_id) VALUES ('discovered', NULL, ?, 'real-1')").run(foId)
+    const res = await check().run({ db })
+    expect(res.evidence).toMatchObject({ unanswered_blocked: 0, unanswered_never_read: 1 })
+    expect(res.ok).toBe(true)
   })
 
   it('A WIPED row still counts as a MISS — the wipe must never hide in an exclusion', async () => {

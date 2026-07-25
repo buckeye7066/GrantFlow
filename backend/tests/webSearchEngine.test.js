@@ -85,6 +85,38 @@ describe('searchWeb (DuckDuckGo fallback, no key)', () => {
     expect(results).toEqual([])
     expect(getWithRetryMock).not.toHaveBeenCalled()
   })
+
+  it('trips a process-level breaker on a 202 block so later queries never re-probe', async () => {
+    // First query hits the datacenter-IP block (non-200) → one network attempt.
+    getWithRetryMock.mockResolvedValueOnce({ status: 202, data: '' })
+    expect(await searchWeb('first query')).toEqual([])
+    expect(getWithRetryMock).toHaveBeenCalledTimes(1)
+
+    // Every subsequent query short-circuits: the breaker means NO more network
+    // calls (this is the fix — the old code re-probed DDG, burning the timeout
+    // on every query in a discovery run).
+    expect(await searchWeb('second query')).toEqual([])
+    expect(await searchWeb('third query')).toEqual([])
+    expect(getWithRetryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('trips the breaker when the response has no result markup (anti-bot challenge)', async () => {
+    getWithRetryMock.mockResolvedValueOnce({ status: 200, data: '<html>challenge, no results</html>' })
+    expect(await searchWeb('first')).toEqual([])
+    expect(await searchWeb('second')).toEqual([])
+    expect(getWithRetryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('trips the breaker on a thrown timeout so later queries never re-probe', async () => {
+    // The real datacenter-IP failure mode is a HANG (timeout throw), not a 202.
+    // The old code caught the throw, returned [], but re-probed on every query —
+    // so a discovery run paid N×8s. The breaker must trip on the throw too.
+    getWithRetryMock.mockRejectedValueOnce(new Error('timeout of 8000ms exceeded'))
+    expect(await searchWeb('first query')).toEqual([])
+    expect(await searchWeb('second query')).toEqual([])
+    expect(await searchWeb('third query')).toEqual([])
+    expect(getWithRetryMock).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('searchWeb (Brave, when keyed)', () => {

@@ -110,8 +110,15 @@ describe('runSelfHealOnDemand — structured truthful summary + observability', 
     const first = await runSelfHealOnDemand(db)
     const second = await runSelfHealOnDemand(db)
     expect(second.ran).toBe(true)
-    // A clean DB yields zero repairs on the dedup/enforce steps both times.
-    expect(second.totalRepaired).toBe(first.totalRepaired)
+    expect(first.ran).toBe(true)
+    // Idempotency means the SECOND run has nothing left to repair. The FIRST
+    // run on an empty DB is allowed a nonzero count: it SEEDS baseline rows
+    // and its enforce-invariants pass may legitimately correct one in the same
+    // breath (e.g. the locator-kind sweep reclassifying a generically-stamped
+    // seeded benefit row) — that is the heal converging, not flapping. The old
+    // equality-with-first assertion encoded "the seeds never need healing",
+    // which broke the day a sweep learned to fix a seed row.
+    expect(second.totalRepaired).toBe(0)
   })
 })
 

@@ -29,36 +29,54 @@ search:
     SearxEngineAccessDenied: 3600
 
 outgoing:
-  # Stock 3s is too tight for the slower DC-tolerant engines enabled below.
-  request_timeout: 6.0
-  max_request_timeout: 12.0
+  # SearXNG waits for the SLOWEST engine (up to its timeout) before returning the
+  # aggregated response. The GrantFlow backend gives each web query an 8s budget
+  # (searxngProvider), so if SearXNG itself can take ~8-12s, EVERY query times out
+  # on attempt 1 and only succeeds on the retry — doubling latency and starving the
+  # gateway crawl budget (observed 2026-07-23 right after enabling google/brave).
+  # Cap SearXNG below the client's 8s so it returns the fast engines' results
+  # (google/brave/bing answer in 1-4s) instead of blocking on a slow straggler.
+  request_timeout: 5.0
+  max_request_timeout: 7.0
 
-# Engine mix tuned for a DATACENTER egress IP. Google/Startpage CAPTCHA-wall
-# datacenter IPs almost immediately — with only the stock defaults enabled,
-# one suspension wave killed ALL coverage at once. Keep them off and lean on
-# engines that tolerate DC traffic (bing/mojeek/qwant/yahoo), with ddg/brave
-# as best-effort extras that now recover in minutes instead of hours.
+# Engine mix for a DATACENTER egress IP, tuned against MEASURED per-engine health
+# on this Railway instance (5-query probe, 2026-07-23), not assumptions.
+#
+# RELIABLE CORE (fire on every query — these carry funding recall):
+#   google, startpage, qwant, bing — together the major distinct web indices, so
+#   coverage is effectively complete for local/foundation/scholarship queries.
+# BEST-EFFORT (independent index; rate-limits under load but self-recovers via the
+#   short suspended_times above, so it adds unique results when available):
+#   brave.
+# DISABLED — cannot fire from a datacenter IP, so leaving them on only spends the
+#   occasional re-attempt after a suspension expires (each measured 5/5 failing
+#   with a HARD reason, not a transient rate-limit):
+#   - duckduckgo: CAPTCHA-walls DC IPs (and is Bing-backed → redundant with bing).
+#   - mojeek:     actively blocks DC scraping ("access denied").
+#   - yahoo:      "HTTP protocol error" — the engine itself is broken in this image
+#                 (a bug, not an IP block), so it never returns results.
 engines:
   - name: google
-    disabled: true
+    disabled: false
+    timeout: 6.0
   - name: startpage
-    disabled: true
+    disabled: false
+    timeout: 6.0
   - name: bing
     disabled: false
-    timeout: 8.0
-  - name: mojeek
-    disabled: false
-    timeout: 8.0
+    timeout: 6.0
   - name: qwant
     disabled: false
-    timeout: 8.0
-  - name: yahoo
-    disabled: false
-    timeout: 8.0
-  - name: duckduckgo
-    timeout: 8.0
+    timeout: 6.0
   - name: brave
-    timeout: 8.0
+    disabled: false
+    timeout: 6.0
+  - name: mojeek
+    disabled: true
+  - name: yahoo
+    disabled: true
+  - name: duckduckgo
+    disabled: true
 
 general:
   instance_name: "grantflow-search"

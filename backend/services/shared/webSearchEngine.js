@@ -65,6 +65,16 @@ function getSearxngProvider() {
   return _searxng
 }
 
+// DuckDuckGo is DEAD from datacenter/cloud IPs (202 anti-bot challenge). Once we
+// observe the block in this process, stop paying the per-query network timeout:
+// every subsequent DDG query short-circuits to [] until the process restarts (or
+// a test reset). Without this, a discovery run with no SearXNG/Brave provider
+// pays the full DDG timeout on EVERY web query in sequence (~8s×N), which starves
+// the gateway-safe crawl budget and makes /run-smart return an empty partial.
+// ponytail: process-lifetime breaker (no TTL) — a restart re-probes; that's the
+// upgrade path if a datacenter IP ever becomes un-blocked.
+let _ddgBlocked = false
+
 let _brave = null
 let _braveResolved = false
 function getBraveProvider() {
@@ -88,6 +98,7 @@ export function _resetWebSearchEngineForTests() {
   _searxngResolved = false
   _brave = null
   _braveResolved = false
+  _ddgBlocked = false
 }
 
 function shouldSkip(url) {
@@ -101,7 +112,10 @@ async function duckDuckGoSearch(query, count, timeoutMs) {
   const response = await getWithRetry(
     searchUrl,
     { headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.5' } },
-    { timeoutMs, retries: 1 },
+    // retries:0 — a blocked datacenter IP is a stable fact, not a transient
+    // error, so a retry just doubles the wasted per-query timeout. The
+    // process-level breaker (below) short-circuits every query after the first.
+    { timeoutMs, retries: 0 },
   )
   // DuckDuckGo serves a 202 anti-bot challenge (no result markup) to datacenter
   // / cloud IPs — exactly where this runs in prod. Detect it and warn ONCE-style
@@ -110,17 +124,19 @@ async function duckDuckGoSearch(query, count, timeoutMs) {
   const status = Number(response?.status)
   const body = String(response?.data || '')
   if (status && status !== 200) {
+    _ddgBlocked = true
     log.warn(
       `[webSearchEngine] DuckDuckGo returned HTTP ${status} (likely a datacenter-IP block) — ` +
-        'web search is degraded. Set BRAVE_SEARCH_API_KEY for reliable server-side web search.',
+        'disabling DuckDuckGo for this process. Set BRAVE_SEARCH_API_KEY or SEARXNG_URL for reliable server-side web search.',
     )
     return []
   }
   if (!body) return []
   if (!body.includes('result__') && !body.includes('result-link')) {
+    _ddgBlocked = true
     log.warn(
-      '[webSearchEngine] DuckDuckGo response had no result markup (anti-bot challenge). ' +
-        'Set BRAVE_SEARCH_API_KEY for reliable server-side web search.',
+      '[webSearchEngine] DuckDuckGo response had no result markup (anti-bot challenge) — ' +
+        'disabling DuckDuckGo for this process. Set BRAVE_SEARCH_API_KEY or SEARXNG_URL for reliable server-side web search.',
     )
     return []
   }
@@ -204,10 +220,20 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   }
 
   // 3. DuckDuckGo HTML (last resort, no key): dead from cloud IPs, kept for dev.
+  // Once the block is observed once, every later query no-ops instantly so a
+  // full discovery run never burns its budget re-probing a dead backend.
+  if (_ddgBlocked) return []
   try {
     return await duckDuckGoSearch(q, count, timeoutMs)
   } catch (err) {
-    log.warn(`[webSearchEngine] DuckDuckGo search failed for "${q}": ${err?.message ?? err}`)
+    // A THROW here (almost always a timeout from a datacenter IP that DDG never
+    // answers) is the block manifesting as a hang instead of a 202. Trip the
+    // breaker so the rest of the run's queries don't each pay the full timeout —
+    // this is what collapses ~N×8s of dead time down to a single probe. DDG is
+    // the last-resort backend; losing it for the process on one failure is the
+    // right trade vs. starving the gateway-safe crawl budget. A restart re-probes.
+    _ddgBlocked = true
+    log.warn(`[webSearchEngine] DuckDuckGo search failed for "${q}" (${err?.message ?? err}) — disabling DuckDuckGo for this process. Set BRAVE_SEARCH_API_KEY or SEARXNG_URL for reliable server-side web search.`)
     return []
   }
 }

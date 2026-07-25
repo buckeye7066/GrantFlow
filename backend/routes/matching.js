@@ -671,6 +671,15 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       const totalScored = relaxation ? Math.max(mapped.length, qualified.length) : mapped.length
       const histogramSource = relaxation ? qualified : mapped
 
+      // Promotion/UI counts come from the durable canonical outcomes, never a
+      // second client-side interpretation of scores. Missing migration/first
+      // preflight degrades to null so older databases keep serving results.
+      let promotionSummary = null
+      try {
+        const { getPromotionOutcomeSummary } = await import('../services/pipelinePromotion.js')
+        promotionSummary = await getPromotionOutcomeSummary(req.db, profileId)
+      } catch { promotionSummary = null }
+
       return res.json({
         profile_id: profileId,
         profile_applicant_type: profileContext?.profile?.primary_type ?? profileRow.primary_type ?? null,
@@ -680,6 +689,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         total_scored: totalScored,
         returned: qualified.length,
         qualified_count: qualifiedCount,
+        promotion_summary: promotionSummary || undefined,
         zero_result: zeroResult || undefined,
         relaxation: relaxation || undefined,
         threshold_relaxed: relaxation ? relaxation.threshold_relaxed : undefined,

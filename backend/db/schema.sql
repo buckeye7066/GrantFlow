@@ -167,6 +167,21 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- permanently-down host cannot be re-fetched nightly forever, and orders
   -- candidates fewest-attempts-first so retries never starve fresh rows.
   amount_enrich_attempts INTEGER DEFAULT 0,
+  -- CONSECUTIVE ENVIRONMENT failures (WAF 403/401/429 on OUR egress —
+  -- migration 151/0155). Deliberately separate from the counter above: an
+  -- egress block consumes neither the burn mark nor the retry budget, but at
+  -- AMOUNT_ENRICH_ENV_MAX_ATTEMPTS the row becomes a VISIBLE
+  -- `unanswered_blocked` census state and moves to a slower re-probe lane so
+  -- it cannot starve the bounded batch. Reset on any non-environment outcome.
+  amount_enrich_env_attempts INTEGER DEFAULT 0,
+  -- The LAST enrich outcome's reason for THIS row (migration 153/0157): the text
+  -- the service returned ('thin_page', 'fetch_failed:403', 'no_per_award_amount_on_page', …).
+  -- Pinned to the ROW, not the rolling system_kv failure-log ring, so a stable-burn
+  -- source that has aged out of the ring still self-documents WHY it is unreadable --
+  -- `SELECT last_reason, COUNT(*) … GROUP BY` turns the faceless backlog into a
+  -- triage table (which adapter/egress work moves the most rows). Always the latest
+  -- attempt's reason (burn or not); the BURN MARK remains `amount_enrich_attempted_at`.
+  amount_enrich_last_reason TEXT,
 
   deadline DATE,
   deadline_type TEXT CHECK(deadline_type IN ('fixed', 'rolling', 'ongoing', 'unknown')),
@@ -520,6 +535,14 @@ CREATE TABLE IF NOT EXISTS grants (
   -- burn/retry logic is identical.
   amount_enrich_attempted_at TEXT,
   amount_enrich_attempts INTEGER DEFAULT 0,
+  -- Consecutive ENVIRONMENT failures (migration 151/0155) — see the catalog
+  -- column of the same name for the full rationale.
+  amount_enrich_env_attempts INTEGER DEFAULT 0,
+  -- The LAST enrich outcome's reason for THIS grant (migration 153/0157): same
+  -- per-row observability as the catalog column above — the rolling failure-log
+  -- ring ages out, but a grant read DIRECTLY here pins its own unreadable reason
+  -- to itself so `unanswered_unreadable` orphans self-document and triage by reason.
+  amount_enrich_last_reason TEXT,
 
   status TEXT DEFAULT 'discovered' CHECK(status IN (
         -- Canonical pipeline (RC-13, shared/pipelineStages.js):
@@ -3993,3 +4016,173 @@ CREATE TABLE IF NOT EXISTS page_fact_cache (
   page_facts_json TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ── Opportunity identity aliases + conflicts (Phase 2.1, de-contamination) ──
+-- Durable identity bookkeeping for a LATER phase's cross-run opportunity
+-- identity resolution. ADDITIVE, default-off: NOTHING in the live path
+-- reads/writes these yet (wired in a later sub-PR). An alias maps a
+-- (scheme, identity_key) — a normalized URL or external id under a named
+-- scheme — to the ONE opportunity it denotes (the NAMED unique constraint is
+-- the invariant AND API surface: withIdentityTxn's retry keys on it); a
+-- conflict records the same key observed on TWO opportunities, and the PARTIAL
+-- unique index keeps at most ONE open conflict per (scheme, identity_key)
+-- while resolved rows accumulate (opportunity_id_a/b = FIRST-observed pair;
+-- participants = JSON array of ALL distinct opportunity ids observed). Accessor:
+-- backend/services/opportunityIdentityStore.js. Migration twins:
+-- *_opportunity_identity_tables.sql (sqlite + postgres).
+CREATE TABLE IF NOT EXISTS opportunity_identity_aliases (
+  scheme TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  opportunity_id TEXT NOT NULL,
+  first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT ux_opportunity_identity_aliases_key UNIQUE (scheme, identity_key)
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_identity_aliases_opportunity
+  ON opportunity_identity_aliases(opportunity_id);
+
+CREATE TABLE IF NOT EXISTS opportunity_identity_conflicts (
+  id TEXT PRIMARY KEY,
+  scheme TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  opportunity_id_a TEXT NOT NULL,
+  opportunity_id_b TEXT NOT NULL,
+  participants TEXT,
+  evidence TEXT,
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'resolved_merged', 'resolved_distinct', 'dismissed')),
+  first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_opportunity_identity_conflicts_one_open
+  ON opportunity_identity_conflicts(scheme, identity_key)
+  WHERE status = 'open';
+
+-- ===========================================================================
+-- EVA (End-user Validation Agent) portfolio user-journey QA.
+-- Mirror of backend/db/migrations/151_eva_portfolio_qa.sql so a fresh SQLite
+-- DB (tests / local) has these tables without running migrations. No BOOLEAN
+-- columns by design; lifecycle/status are TEXT and never SQL-filtered on 0/1.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS eva_runs (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  runner_id TEXT NOT NULL,
+  runner_version TEXT,
+  environment TEXT NOT NULL,
+  is_catchup INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  received_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+  idempotency_key TEXT,
+  nonce TEXT,
+  apps_expected INTEGER DEFAULT 0,
+  apps_tested INTEGER DEFAULT 0,
+  journeys_total INTEGER DEFAULT 0,
+  journeys_passed INTEGER DEFAULT 0,
+  journeys_failed INTEGER DEFAULT 0,
+  payload_bytes INTEGER DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_eva_runs_idempotency
+  ON eva_runs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_eva_runs_received ON eva_runs(received_at);
+
+CREATE TABLE IF NOT EXISTS eva_app_runs (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  display_name TEXT,
+  repo TEXT,
+  commit_sha TEXT,
+  app_status TEXT NOT NULL,
+  blocker_reason TEXT,
+  duration_ms INTEGER DEFAULT 0,
+  features_total INTEGER DEFAULT 0,
+  features_covered INTEGER DEFAULT 0,
+  unautomated_features_json TEXT,
+  journeys_total INTEGER DEFAULT 0,
+  journeys_passed INTEGER DEFAULT 0,
+  journeys_failed INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+CREATE INDEX IF NOT EXISTS idx_eva_app_runs_run ON eva_app_runs(run_id);
+CREATE INDEX IF NOT EXISTS idx_eva_app_runs_app ON eva_app_runs(app_id);
+
+CREATE TABLE IF NOT EXISTS eva_journey_results (
+  id TEXT PRIMARY KEY,
+  app_run_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  journey_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  severity TEXT,
+  retry_classification TEXT,
+  duration_ms INTEGER DEFAULT 0,
+  route_or_control TEXT,
+  failure_class TEXT,
+  error_signature TEXT,
+  expected_behavior TEXT,
+  observed_behavior TEXT,
+  repro_steps_json TEXT,
+  user_impact TEXT,
+  likely_root_cause TEXT,
+  recommended_fix TEXT,
+  candidate_files_json TEXT,
+  diagnostic_confidence REAL,
+  missing_evidence TEXT,
+  evidence_json TEXT,
+  fingerprint TEXT,
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+CREATE INDEX IF NOT EXISTS idx_eva_journey_app_run ON eva_journey_results(app_run_id);
+CREATE INDEX IF NOT EXISTS idx_eva_journey_fingerprint ON eva_journey_results(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_eva_journey_run ON eva_journey_results(run_id);
+
+CREATE TABLE IF NOT EXISTS eva_findings (
+  fingerprint TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL,
+  journey_id TEXT NOT NULL,
+  display_name TEXT,
+  journey_name TEXT,
+  failure_class TEXT,
+  route_or_control TEXT,
+  severity TEXT,
+  lifecycle_state TEXT NOT NULL DEFAULT 'new',
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  first_seen_run_id TEXT,
+  last_seen_run_id TEXT,
+  recurrence_count INTEGER NOT NULL DEFAULT 1,
+  intermittent_count INTEGER NOT NULL DEFAULT 0,
+  prior_severity TEXT,
+  last_passing_run_id TEXT,
+  last_passing_at TEXT,
+  resolved_at TEXT,
+  resolved_run_id TEXT,
+  latest_journey_result_id TEXT,
+  updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+CREATE INDEX IF NOT EXISTS idx_eva_findings_state ON eva_findings(lifecycle_state);
+CREATE INDEX IF NOT EXISTS idx_eva_findings_app ON eva_findings(app_id);
+
+CREATE TABLE IF NOT EXISTS eva_runner_heartbeats (
+  runner_id TEXT PRIMARY KEY,
+  last_seen_at TEXT NOT NULL,
+  runner_version TEXT,
+  status TEXT,
+  note TEXT,
+  hostname_hash TEXT,
+  updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+
+CREATE TABLE IF NOT EXISTS eva_evidence (
+  id TEXT PRIMARY KEY,
+  journey_result_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  sha256 TEXT,
+  bytes INTEGER,
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+);
+CREATE INDEX IF NOT EXISTS idx_eva_evidence_journey ON eva_evidence(journey_result_id);

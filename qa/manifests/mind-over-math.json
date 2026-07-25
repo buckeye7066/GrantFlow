@@ -1,0 +1,74 @@
+{
+  "app_id": "mind-over-math",
+  "display_name": "Mind Over Math",
+  "repo": "buckeye7066/mind-over-math",
+  "local_path": "C:/Users/firer/mind-over-math",
+  "runtime_type": "web",
+  "start_command": "cd backend && npm run dev & npm run dev",
+  "stop_command": "taskkill-by-port",
+  "readiness_probe": { "type": "http", "path": "/health", "port": 3001, "timeout_ms": 60000 },
+  "base_url": "http://localhost:5273",
+  "test_target": "disposable-local-instance",
+  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "ANTHROPIC_API_KEY", "INVITE_ONLY"],
+  "seed_command": null,
+  "reset_command": null,
+  "cleanup": "rm -rf .eva-tmp/mind-over-math && drop disposable test database",
+  "disposable_data_root": ".eva-tmp/mind-over-math",
+  "max_runtime_ms": 900000,
+  "concurrency_class": "db-heavy",
+  "adapters": ["web"],
+  "prohibited_actions": [
+    "no real Anthropic spend (leave ANTHROPIC_API_KEY unset in test runs)",
+    "never weaken the deterministic answer-verifier honesty rule (a false 'verified' is the worst bug)"
+  ],
+  "allowlist": {
+    "hosts": ["localhost", "127.0.0.1", "::1"],
+    "ports": [5273, 3001],
+    "routes": ["/", "/login", "/register", "/health", "/api/auth/*"],
+    "file_roots": [".eva-tmp/mind-over-math"],
+    "processes": ["node", "npm"]
+  },
+  "nightly_critical_journeys": ["app-identifies-itself", "reach-register"],
+  "weekly_full_journeys": ["app-identifies-itself", "reach-register"],
+  "feature_coverage": {
+    "features_total": 5,
+    "features_covered": 1,
+    "unautomated_features": ["ProblemSolver deterministic verify", "AITutor", "Quizzes (AI generation)", "WorkedExamples"]
+  },
+  "coverage": [
+    { "feature": "App loads and identifies itself", "journeys": ["app-identifies-itself"] },
+    { "feature": "Login/register entry (INVITE_ONLY=false for test)", "journeys": ["reach-register"] },
+    { "feature": "ProblemSolver deterministic answer verification", "unautomated_reason": "needs booted backend + scratch Postgres; offline-capable (needs NO AI key), wire once seeded DB fixture exists" },
+    { "feature": "AITutor", "unautomated_reason": "AI tutoring needs an Anthropic mock; real spend is prohibited" },
+    { "feature": "Quizzes (AI generation)", "unautomated_reason": "AI quiz generation needs an Anthropic mock; real spend is prohibited" },
+    { "feature": "WorkedExamples", "unautomated_reason": "requires authenticated session with seeded student; wire once seeded auth fixture exists" }
+  ],
+  "journeys": [
+    {
+      "id": "app-identifies-itself",
+      "name": "Landing page loads and identifies Mind Over Math (note: port 5273, not 5173)",
+      "severity": "critical",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Mind Over Math" }],
+      "user_impact": "If the app shell does not load, no student can reach any lesson or solver.",
+      "candidate_files": ["src/App.tsx", "src/pages/Login.tsx"]
+    },
+    {
+      "id": "reach-register",
+      "name": "New student can reach the registration form (INVITE_ONLY off)",
+      "severity": "high",
+      "steps": [
+        { "action": "goto", "url": "/" },
+        { "action": "waitForSelector", "selector": "body" },
+        { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up')" },
+        { "action": "wait", "ms": 800 }
+      ],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "egister" }],
+      "user_impact": "A prospective student who cannot reach registration cannot self-onboard (with INVITE_ONLY=false in the test env).",
+      "candidate_files": ["src/pages/Login.tsx", "src/pages/Register.tsx"]
+    }
+  ]
+}

@@ -521,6 +521,13 @@ app.use((req, res, next) => {
 
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter)
 
+// EVA portfolio-QA signed ingest + heartbeat. Mounted BEFORE express.json with a
+// raw-body parser: the Windows edge runner signs an HMAC over the exact bytes, so
+// verification needs req.body as a Buffer (see backend/services/eva/evaIngest.js).
+// req.db is already attached above; these routes self-authenticate via HMAC and
+// do NOT use the admin bearer gate.
+app.use('/api/eva', express.raw({ type: '*/*', limit: '2mb' }), lazyRouter('./routes/adminPortfolioQa.js', (mod) => mod.createEvaSignedRouter()))
+
 // Twilio inbound-SMS webhook. Mounted BEFORE express.json() because Twilio POSTs
 // application/x-www-form-urlencoded (the router parses its own body) and signs
 // the raw request — see backend/routes/smsInbound.js. req.db is already attached.
@@ -970,6 +977,15 @@ if (!app.locals.db_startup_error) {
     }
   }
   app.locals.runBootInvariantSweep = runBootInvariantSweep
+  app.locals.runQualifiedPipelinePromotion = async () => {
+    try {
+      const { runScheduledQualifiedPipelinePromotion } = await import('./services/pipelinePromotion.js')
+      return await runScheduledQualifiedPipelinePromotion(db, { source: 'post-listen', logger: console })
+    } catch (err) {
+      console.warn('[pipeline-promotion] post-listen run failed (non-fatal):', err?.message || err)
+      return null
+    }
+  }
 
   // Register the lead sources John drafts outreach from (johnYanaBridge now
   // aggregates over MULTIPLE sources). Yana = Client Discoverer; Robert hands
@@ -2229,6 +2245,10 @@ app.use('/api/anya', anyaRouter);
 // reviewable candidate inbox (lead/funding/profile_field). Lazy so the
 // Anthropic SDK only loads when the connector is actually used.
 app.use('/api/laptop-connector', lazyRouter('./routes/laptopConnector.js'));
+// EVA portfolio-QA admin reads (status + email preview). Mounted here (after
+// express.json + auth middleware) so req.ctx/req.user are populated; the signed
+// ingest/heartbeat endpoints are mounted separately BEFORE express.json above.
+app.use('/api/eva', lazyRouter('./routes/adminPortfolioQa.js', (mod) => mod.createEvaAdminRouter()));
 // Controlled-vocabulary catalog for profile TAG pickers (needs / focus). Sourced
 // from the matcher's OWN vocabulary (backend/config/profileVocabulary.js) so every
 // pickable tag is guaranteed to score. Mounted BEFORE the profiles router so the
@@ -2921,11 +2941,18 @@ if (process.env.NODE_ENV !== 'test') {
   // reads it), so a failure is still observable rather than silent.
   server.on('listening', () => {
     const sweep = app.locals.runBootInvariantSweep
-    if (typeof sweep !== 'function') return;
     setImmediate(() => {
-      sweep().catch((err) => {
-        console.warn('[enforce-invariants] deferred boot sweep failed (non-fatal):', err?.message || err);
-      });
+      if (typeof sweep === 'function') {
+        sweep().catch((err) => {
+          console.warn('[enforce-invariants] deferred boot sweep failed (non-fatal):', err?.message || err);
+        });
+      }
+      const promote = app.locals.runQualifiedPipelinePromotion
+      if (typeof promote === 'function') {
+        promote().catch((err) => {
+          console.warn('[pipeline-promotion] deferred post-listen run failed (non-fatal):', err?.message || err);
+        })
+      }
     });
   });
 
@@ -2997,7 +3024,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startRobertScheduler } = await import('./services/robert/robertScheduler.js')
-        const result = startRobertScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startRobertScheduler({ db })
         if (result?.started) console.log('[Server] Robert scheduler started')
         else console.log('[Server] Robert scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3042,7 +3071,9 @@ if (process.env.NODE_ENV !== 'test') {
           console.warn('[Server] Yana contact enricher wiring failed (non-fatal):', enrichErr?.message || enrichErr)
         }
         const { startYanaScheduler } = await import('./services/yana/yanaScheduler.js')
-        const result = startYanaScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startYanaScheduler({ db })
         if (result?.started) console.log('[Server] Yana scheduler started')
         else console.log('[Server] Yana scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3054,8 +3085,12 @@ if (process.env.NODE_ENV !== 'test') {
     // once and exits when env gates aren't set.
     (async () => {
       try {
-        const { startSamScheduler } = await import('./services/sam/samScheduler.js')
-        startSamScheduler({ db, logger: console })
+        if (BACKGROUND_SERVICES_DISABLED) {
+          console.log('[sam:scheduler] not started: background_services_disabled')
+        } else {
+          const { startSamScheduler } = await import('./services/sam/samScheduler.js')
+          startSamScheduler({ db, logger: console })
+        }
       } catch (samErr) {
         console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
       }
@@ -3092,7 +3127,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startAmyScheduler } = await import('./services/amy/amyScheduler.js')
-        const result = startAmyScheduler({ db, logger: console })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startAmyScheduler({ db, logger: console })
         if (result?.started) console.log(`[Server] Amy scheduler started (target=${result.daily_target}/day)`)
         else console.log('[Server] Amy scheduler not started:', result?.reason || 'disabled')
       } catch (amyErr) {
@@ -3165,7 +3202,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startJohnScheduler } = await import('./services/john/johnScheduler.js')
-        const result = startJohnScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startJohnScheduler({ db })
         if (result?.started) console.log('[Server] John scheduler started:', JSON.stringify(result))
         else console.log('[Server] John scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3284,7 +3323,9 @@ if (process.env.NODE_ENV !== 'test') {
     ;(async () => {
       try {
         const { startHamiltonScheduler } = await import('./services/hamilton/hamiltonScheduler.js')
-        const result = startHamiltonScheduler({ db })
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startHamiltonScheduler({ db })
         if (result?.started) console.log('[Server] Hamilton scheduler started:', JSON.stringify(result))
         else console.log('[Server] Hamilton scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
@@ -3909,6 +3950,30 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly check; catches up a missed 04:00 ET window
   }
 
+  // Qualified-pipeline convergence is deliberately outside the boot invariant
+  // chain. Its own runner reaps expired Amy profiles first, then promotes real
+  // profiles round-robin. Both the nightly tick and post-listen catch-up call the
+  // same distributed-lock + ET-day-marker wrapper, so replicas cannot overlap.
+  function scheduleQualifiedPipelinePromotion(dbInstance) {
+    const TRIGGER_HOUR = Math.max(0, Math.min(23, Number(process.env.PIPELINE_PROMOTION_HOUR_ET) || 4))
+    const runOnce = async () => {
+      try {
+        await ensureSystemKv(dbInstance)
+        const { runScheduledQualifiedPipelinePromotion } = await import('./services/pipelinePromotion.js')
+        const result = await runScheduledQualifiedPipelinePromotion(dbInstance, {
+          source: 'nightly',
+          triggerHour: TRIGGER_HOUR,
+          logger: console,
+        })
+        console.log('[pipeline-promotion] nightly', result)
+      } catch (err) {
+        console.warn('[pipeline-promotion] nightly failed:', err?.message || err)
+      }
+    }
+    setTimeout(runOnce, 180_000)
+    setInterval(runOnce, 60 * 60 * 1000)
+  }
+
   // Sam's daily FULL code/function sweep — every day 05:00 America/New_York.
   // Runs Sam's HEAVY checks (source scan, broken-import crawl, ESLint, mission/
   // SQL-safety audit) READ-ONLY (advise mode, no prod gates, no maintenance
@@ -3997,6 +4062,28 @@ if (process.env.NODE_ENV !== 'test') {
     setInterval(lockedRunOnce, 10 * 60 * 1000) // 10-min check; keeps the owner email within minutes of 09:00 ET and catches up a missed window
   }
 
+  // EVA portfolio-QA maintenance — marks open user-journey findings 'stale' when
+  // no fresh edge-runner upload has re-observed them within the stale window, and
+  // logs runner-heartbeat health. Best-effort, lock-protected, hourly. Does NOT
+  // send email — EVA data reaches the owner via the existing 09:00 Anya report.
+  function scheduleEvaMaintenance(dbInstance) {
+    const runOnce = async () => {
+      try {
+        const { runEvaMaintenance } = await import('./services/eva/evaScheduler.js')
+        await runEvaMaintenance(dbInstance, {})
+      } catch (err) {
+        console.warn('[eva-maintenance] failed:', err.message)
+      }
+    }
+    const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
+      lockName: 'eva-maintenance',
+      ttlMs: 30 * 60 * 1000,
+      logger: console,
+    }, runOnce)
+    setTimeout(lockedRunOnce, 180_000)
+    setInterval(lockedRunOnce, 60 * 60 * 1000) // hourly
+  }
+
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
@@ -4006,8 +4093,10 @@ if (process.env.NODE_ENV !== 'test') {
     scheduleHamiltonWeeklyDigest(db)
     scheduleMondayPortalReminder(db)
     scheduleNightlyMaintenanceSweep(db)
+    scheduleQualifiedPipelinePromotion(db)
     scheduleSamDailyCodeSweep(db)
     scheduleAnyaDailyOwnerReport(db)
+    scheduleEvaMaintenance(db)
 
     // Immediate boot-time net: if a previous nightly sweep crashed and left the
     // app stuck in a DOWN maintenance window, reopen it now rather than waiting

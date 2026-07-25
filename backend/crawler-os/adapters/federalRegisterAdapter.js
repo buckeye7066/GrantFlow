@@ -41,6 +41,28 @@ function buildUrl(term) {
   return `${DOCUMENTS_ENDPOINT}?${params.toString()}`;
 }
 
+// Funding-signal vocabulary. The Federal Register `term` search matches the
+// phrase anywhere in the FULL document, but we only keep a notice's title +
+// abstract — so a meeting / information-collection / correction notice that
+// merely mentions "funding opportunity" deep in its body arrives with a
+// title/abstract about something else. Requiring one of these signals in the
+// kept text is the high-precision, recall-safe filter: a real NOFO's title or
+// abstract virtually always carries funding language, so genuine opportunities
+// survive while body-only matches (the junk) are dropped.
+const FEDERAL_REGISTER_FUNDING_SIGNALS = [
+  'funding opportunity', 'notice of funding', 'nofo', 'nofa',
+  'funding availability', 'availability of funds', 'available funds',
+  'cooperative agreement', 'financial assistance', 'assistance listing',
+  'grant', 'grants', 'solicitation', 'request for application',
+  'request for proposal', 'invites application', 'applications are invited',
+  'apply for', 'award',
+];
+
+function hasFederalRegisterFundingSignal(...parts) {
+  const hay = parts.filter(Boolean).join(' ').toLowerCase();
+  return FEDERAL_REGISTER_FUNDING_SIGNALS.some((s) => hay.includes(s));
+}
+
 export function federalRegisterParseCfg() {
   return {
     listPath: 'results',
@@ -76,6 +98,10 @@ export function createFederalRegisterAdapter() {
         : null;
       const infoUrl = typeof raw.info_url === 'string' ? raw.info_url.trim() : null;
       if (!infoUrl) return null; // no official notice URL -> nothing to surface honestly
+      // PRECISION GATE (recall-safe): drop notices whose kept text (title +
+      // abstract) shows no funding signal — these matched the term only in their
+      // body and are meeting/rule/information-collection notices, not NOFOs.
+      if (!hasFederalRegisterFundingSignal(raw.title, raw.summary)) return null;
       return {
         external_id: raw.external_id != null ? String(raw.external_id) : null,
         kind: OPPORTUNITY_KIND.PROGRAM,

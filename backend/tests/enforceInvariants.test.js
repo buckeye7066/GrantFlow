@@ -49,6 +49,8 @@ import {
   enforceImportedStatusHonesty,
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
+  enforceLocatorKindClassification,
+  AMOUNT_ENRICH_FAILURE_LOG_KEY,
   enforceGrantCatalogLink,
   enforceGrantAmountBackfill,
   enforceAmySyntheticExpiry,
@@ -989,7 +991,7 @@ describe('enforceInvariants — runner', () => {
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
-    // 27th: enforceJohnDraftPlausibility (wrong-org drafts in the mailbox).
+    // Pipeline promotion is intentionally off this boot invariant path.
     expect(summary.ran).toBe(30)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
@@ -1001,6 +1003,9 @@ describe('enforceInvariants — runner', () => {
       'imported_status_honesty',
       'relevance_floor',
       'grant_catalog_link',
+      // Positive locator/benefit kind classification (sam.gov /fal/ listings,
+      // ssa.gov benefit sections) BEFORE amount acquisition.
+      'locator_kind_classification',
       'amount_enrichment',
       'grant_amount_backfill',
       'grant_direct_amount',
@@ -1017,7 +1022,6 @@ describe('enforceInvariants — runner', () => {
       'live_crawl_verified_at_honesty',
       'application_url_rescue',
       'grant_score_backfill',
-      'pipeline_refill',
       'converted_applications_have_profiles',
       'admin_reinterview_suppression',
       'amy_synthetic_expiry',
@@ -2684,6 +2688,143 @@ describe('enforceAmountEnrichment', () => {
     expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
   })
 
+  it('an ENVIRONMENT-blocked failure (WAF 403) NEVER burns the row — not even via out-of-retries', async () => {
+    // REGRESSION (prod 2026-07-21). The grants.gov adapter has effectively
+    // never succeeded from Railway: a WAF 403 blocks every datacenter-egress
+    // call while the identical keyless request works from a residential
+    // machine. The old adapter read the 403 as "stable" → transient:false →
+    // this sweep's burn rule permanently burned each knowable row answerless.
+    // Even with the adapter fixed to transient:true, MAX_ATTEMPTS bad nights
+    // would burn the row via out-of-retries — but a blocked ENVIRONMENT fails
+    // every row identically until an owner action (API key / egress) fixes it,
+    // so it must not consume the row's retry budget at all.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    let calls = 0
+    const deps = {
+      maxAttempts: 2, // tight budget: the old rule burns on the 2nd strike
+      enrichImpl: async () => {
+        calls++
+        return {
+          attempted: true, page_read: false, transient: true, environment: true,
+          status: 403, found: false, reason: 'grants_gov_api_failed:http_403',
+        }
+      },
+    }
+    for (let i = 0; i < 5; i++) await enforceAmountEnrichment(db, deps)
+    expect(calls, 'the row stays a candidate every pass').toBe(5)
+    const row = foRow(db, foId)
+    expect(row.amount_enrich_attempted_at, 'an egress block must never burn the row').toBeNull()
+    expect(row.amount_enrich_attempts, 'an egress block must not consume the retry budget').toBe(0)
+    // The SEPARATE env counter (migration 151/0155) is what accumulated instead
+    // — 5 consecutive environment failures, each one visible to the census.
+    expect(row.amount_enrich_env_attempts, 'consecutive env failures must be COUNTED, or the block is invisible').toBe(5)
+    // And once the environment clears, the row still converts normally.
+    const res = await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: true,
+        amounts: { amount_min: 1000, amount_max: 5000, amount_text: null, amount_status: 'range', amount_confidence: 0.9 },
+      }),
+    })
+    expect(res.repaired).toBe(1)
+    expect(foRow(db, foId).amount_max).toBe(5000)
+    // …and the successful probe LIFTS the block: the env counter resets to 0.
+    expect(foRow(db, foId).amount_enrich_env_attempts, 'any non-environment outcome must reset the env counter').toBe(0)
+  })
+
+  it('a BLOCKED row (env failures >= ENV_MAX) leaves the main batch but stays re-probed on the slow lane', async () => {
+    // Fix-cycle 2 (2026-07-21): before the lane split, low-id blocked rows
+    // re-entered the bounded batch every run (attempts=0 sorts first) and
+    // STARVED valid never-attempted rows out of the budget entirely. The
+    // blocked row must (a) stop occupying the main batch, (b) still be
+    // re-probed — bounded — so the block lifts on its own when egress heals.
+    const db = makeRealDb()
+    const blockedId = seedLinkedPair(db, { sourceUrl: 'https://www.grants.gov/search-results-detail/1' })
+    // Pre-blocked: 3 consecutive env failures already recorded.
+    db.prepare('UPDATE funding_opportunities SET amount_enrich_env_attempts = 3 WHERE id = ?').run(blockedId)
+    const freshId = seedLinkedPair(db, { sourceUrl: 'https://funder.org/fresh-grant' })
+    const seen = []
+    const deps = {
+      limit: 1, // batch budget of ONE: the starvation scenario
+      envMaxAttempts: 3,
+      envReprobeLimit: 1,
+      enrichImpl: async (row) => {
+        seen.push(row.id)
+        return row.id === blockedId
+          ? { attempted: true, page_read: false, transient: true, environment: true, status: 403, found: false, reason: 'grants_gov_api_failed:http_403' }
+          : { attempted: true, page_read: true, transient: false, found: true, amounts: { amount_min: null, amount_max: 2500, amount_text: null, amount_status: 'range', amount_confidence: 0.9 } }
+      },
+    }
+    const res = await enforceAmountEnrichment(db, deps)
+    // The single main-batch slot went to the FRESH row (the blocked row could
+    // not occupy it), AND the blocked row still got its bounded re-probe.
+    expect(seen).toContain(freshId)
+    expect(seen).toContain(blockedId)
+    expect(res.repaired, 'the fresh row converts — not starved by the blocked one').toBe(1)
+    expect(foRow(db, blockedId).amount_enrich_env_attempts, 'the failed re-probe keeps counting').toBe(4)
+    // A later successful probe lifts the block entirely.
+    await enforceAmountEnrichment(db, {
+      ...deps,
+      enrichImpl: async () => ({ attempted: true, page_read: true, transient: false, found: false, reason: 'no_per_award_amount_on_page' }),
+    })
+    expect(foRow(db, blockedId).amount_enrich_env_attempts).toBe(0)
+  })
+
+  it('RECORDS failure telemetry (status + reason) to the system_kv ring so the outage class is diagnosable', async () => {
+    // The other half of the 2026-07-21 fix: the WAF block was invisible —
+    // `fetchFailed` counted THAT rows failed but nothing recorded WHY, so
+    // diagnosing "every call is http_403 from this egress" needed a prod DB
+    // spelunk. Every failed enrich attempt must leave its status/reason in
+    // system_kv `amount_enrich_failure_log` (Sam/Anya-visible).
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: false, transient: true, environment: true,
+        status: 403, found: false, reason: 'grants_gov_api_failed:http_403',
+      }),
+    })
+    const kv = db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ENRICH_FAILURE_LOG_KEY)
+    const ring = JSON.parse(kv.value)
+    expect(ring.failures).toHaveLength(1)
+    expect(ring.failures[0]).toMatchObject({
+      lane: 'catalog',
+      id: String(foId),
+      status: 403,
+      reason: 'grants_gov_api_failed:http_403',
+      transient: true,
+      environment: true,
+    })
+    // Stable failures are recorded too (a thin_page names adapter work).
+    // Scoped to the new row: the env-blocked row above is DELIBERATELY still a
+    // candidate (that is the fix), so an unscoped pass would re-read it too.
+    const fo2 = seedLinkedPair(db, { sourceUrl: 'https://shell.example/opp' })
+    await enforceAmountEnrichment(db, {
+      opportunityIds: [fo2],
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+    })
+    const ring2 = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ENRICH_FAILURE_LOG_KEY).value)
+    expect(ring2.failures).toHaveLength(2)
+    expect(ring2.failures[1]).toMatchObject({ lane: 'catalog', id: String(fo2), status: null, reason: 'thin_page', environment: false })
+  })
+
+  it('the failure ring is BOUNDED (oldest entries fall off, sweep never fails on it)', async () => {
+    const db = makeRealDb()
+    // Pre-seed a full ring; the next failure must displace the oldest.
+    db.exec('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+    const old = Array.from({ length: 50 }, (_, i) => ({ at: 'x', lane: 'catalog', id: `old-${i}`, status: 503, reason: 'fetch_failed:503', transient: true, environment: false }))
+    db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+      .run(AMOUNT_ENRICH_FAILURE_LOG_KEY, JSON.stringify({ updated_at: 'x', failures: old }), 'x')
+    seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: true, environment: true, status: 403, found: false, reason: 'grants_gov_api_failed:http_403' }),
+    })
+    const ring = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ENRICH_FAILURE_LOG_KEY).value)
+    expect(ring.failures).toHaveLength(50)
+    expect(ring.failures[0].id).toBe('old-1') // oldest displaced
+    expect(ring.failures.at(-1)).toMatchObject({ status: 403, environment: true }) // newest appended
+  })
+
   it('retries never starve never-tried rows out of the budget', async () => {
     const db = makeRealDb()
     // Ids are PINNED, and pinned adversarially: the stale row sorts FIRST by id.
@@ -2796,6 +2937,66 @@ describe('enforceAmountEnrichment', () => {
     expect(res.repaired).toBe(1)
     expect(foRow(db, foId).amount_max).toBe(2500)
     expect(foRow(db, foId).amount_enrich_attempted_at).not.toBeNull()
+  })
+
+  // Per-row LAST-reason observability (migration 153/0157). The rolling
+  // system_kv failure-log ring ages out, so a source that burned weeks ago is
+  // faceless — its counter says "burned once", nothing says WHY. Pinning the
+  // service's reason to the row turns the backlog into a triage table.
+  it('PINS the enrich reason to the row for a STABLE WAF-403 burn (so the faceless backlog self-documents)', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: false, transient: false, found: false, reason: 'fetch_failed:403',
+      }),
+      limit: 1,
+    })
+    const row = foRow(db, foId)
+    expect(row.amount_enrich_attempted_at, 'a stable 4xx is a learned answer → burned').not.toBeNull()
+    // The headline assertion: the reason is now durable ON THE ROW, not just in
+    // a rolling ring that drops it. `SELECT last_reason, COUNT(*) GROUP BY` IS
+    // the triage of "adapter work vs egress fix vs genuinely dead".
+    expect(row.amount_enrich_last_reason).toBe('fetch_failed:403')
+  })
+
+  it('PINS a thin_page reason so an answerless JS-shell source names itself', async () => {
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+      limit: 1,
+    })
+    expect(foRow(db, foId).amount_enrich_last_reason).toBe('thin_page')
+  })
+
+  it('records the reason for a transient NON-burn too, then CLEARS it to null once the amount lands (no stale reason on an answered row)', async () => {
+    // The reason is the LAST outcome, not just the burn outcome — so a row still
+    // in flight shows why it is failing (a 503 tonight), and that must not fossilize
+    // once the row is answered: a row that eventually gets an amount has NO failure
+    // reason, and `last_reason` must read null there, not the long-gone 503.
+    const db = makeRealDb()
+    const foId = seedLinkedPair(db)
+    // Pass 1: transient 503 — retried, NOT burned, but its reason IS the last outcome.
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: true, found: false, reason: 'fetch_failed:503' }),
+      limit: 1,
+    })
+    const after503 = foRow(db, foId)
+    expect(after503.amount_enrich_attempted_at, 'a transient failure is NOT a burn').toBeNull()
+    expect(after503.amount_enrich_last_reason, 'the latest outcome is still recorded even when not burned').toBe('fetch_failed:503')
+    // Pass 2: the page comes up, the amount lands. A found result carries no
+    // `reason`, so the column must reset to null — not keep the stale 503.
+    await enforceAmountEnrichment(db, {
+      enrichImpl: async () => ({
+        attempted: true, page_read: true, transient: false, found: true,
+        amounts: { amount_min: 1000, amount_max: 5000, amount_text: '$1k–$5k', amount_status: 'range', amount_confidence: 0.9 },
+      }),
+      limit: 1,
+    })
+    const answered = foRow(db, foId)
+    expect(answered.amount_max).toBe(5000)
+    expect(answered.amount_enrich_last_reason, 'an ANSWERED row must not carry a stale failure reason').toBeNull()
   })
 })
 
@@ -2928,6 +3129,162 @@ describe('enforceGrantDirectAmountEnrichment', () => {
       if (prev === undefined) delete process.env.ENFORCE_GRANT_DIRECT_AMOUNT
       else process.env.ENFORCE_GRANT_DIRECT_AMOUNT = prev
     }
+  })
+
+  it('an ENVIRONMENT-blocked failure never burns the grant, and its telemetry lands on the grant_direct lane', async () => {
+    // Same 2026-07-21 egress-block rule as the catalog sweep, on the orphan-
+    // grant path (identical burn semantics is the whole reason grants carry
+    // their own attempt columns — migration 142/0146).
+    const db = makeRealDb()
+    const gId = insOrphan(db)
+    const deps = {
+      maxAttempts: 2,
+      enrichImpl: async () => ({
+        attempted: true, page_read: false, transient: true, environment: true,
+        status: 403, found: false, reason: 'fetch_failed:403',
+      }),
+    }
+    for (let i = 0; i < 4; i++) await enforceGrantDirectAmountEnrichment(db, deps)
+    const g = grantRow(db, gId)
+    expect(g.amount_enrich_attempted_at, 'an egress block must never burn the grant').toBeNull()
+    expect(g.amount_enrich_attempts, 'an egress block must not consume the retry budget').toBe(0)
+    const ring = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ENRICH_FAILURE_LOG_KEY).value)
+    expect(ring.failures.at(-1)).toMatchObject({ lane: 'grant_direct', id: String(gId), status: 403, environment: true })
+  })
+
+  it('PINS the enrich reason onto an orphan grant (same per-row observability as the catalog sweep)', async () => {
+    // The grants-direct sweep mirrors the catalog columns so its burn/retry is
+    // identical — and the per-row reason (migration 153/0157) belongs here too,
+    // so an `unanswered_unreadable` orphan self-documents instead of aging out of
+    // the global failure-log ring.
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://grants.gov/synopsis/12345' })
+    await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+    })
+    const g = grantRow(db, gId)
+    expect(g.amount_enrich_attempted_at, 'a thin JS shell is a stable fact → burned').not.toBeNull()
+    expect(g.amount_enrich_last_reason).toBe('thin_page')
+  })
+})
+
+describe('enforceLocatorKindClassification', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    return db
+  }
+  const insFo = (db, { url, kind = null } = {}) => {
+    const id = crypto.randomUUID()
+    db.prepare('INSERT INTO funding_opportunities (id, title, source_url, opportunity_kind) VALUES (?, ?, ?, ?)')
+      .run(id, 'Row', url, kind)
+    return id
+  }
+  const kindOf = (db, id) => db.prepare('SELECT opportunity_kind, result_kind FROM funding_opportunities WHERE id = ?').get(id)
+
+  it('classifies a sam.gov /fal/<uuid>/view assistance listing as DIRECTORY by positive URL shape', async () => {
+    // Prod triage 2026-07-21: 43 such rows sat in the census's `unreadable`
+    // bucket forever. An assistance listing is the CFDA PROGRAM directory —
+    // a locator/pointer, never an award. It leaves the census denominator via
+    // THIS positive structural classification, never via a fabricated denial.
+    const db = makeRealDb()
+    const foId = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(1)
+    expect(kindOf(db, foId)).toMatchObject({ opportunity_kind: 'directory', result_kind: 'directory' })
+  })
+
+  it('classifies ssa.gov benefit sections (/survivor, /disability) as BENEFIT', async () => {
+    // The 30-row ssa.gov block: federal benefit programs with no fixed
+    // per-applicant award — the FAFSA/Pell/SSI "no amount by design" class the
+    // census's own recommended_fix names.
+    const db = makeRealDb()
+    const survivor = insFo(db, { url: 'https://www.ssa.gov/survivor' })
+    const disability = insFo(db, { url: 'https://www.ssa.gov/disability/apply' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(2)
+    expect(kindOf(db, survivor).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, disability).opportunity_kind).toBe('benefit')
+  })
+
+  it('NEVER claims a row outside the positive shape (no fuzzy matching, no guessing)', async () => {
+    const db = makeRealDb()
+    // sam.gov but NOT an assistance listing; ssa.gov but not a benefit section;
+    // a lookalike host that merely contains the substring.
+    const opp = insFo(db, { url: 'https://sam.gov/opp/abc123/view' })
+    const ssaHome = insFo(db, { url: 'https://www.ssa.gov/thirdparty/materials.html' })
+    const lookalike = insFo(db, { url: 'https://notsam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(0)
+    for (const id of [opp, ssaHome, lookalike]) expect(kindOf(db, id).opportunity_kind).toBeNull()
+  })
+
+  it('the sweep PREFILTER covers every classifier rule — a fix-cycle-3 shape actually persists', async () => {
+    // Gate finding: the sweep's hand-copied LIKE list knew only the two
+    // original hosts, so the newer classifier rules were pure dead code on
+    // prod rows — classifyLocatorKindFromRow was never handed a candidate.
+    // The prefilter list now lives in the classifier module; this pins that a
+    // rule added there is scanned AND persisted here.
+    const db = makeRealDb()
+    const fafsa = insFo(db, { url: 'https://studentaid.gov/h/apply-for-aid/fafsa' })
+    const directory = insFo(db, { url: 'https://tn211.org/search?need=rent' })
+    const propublica = insFo(db, { url: 'https://projects.propublica.org/nonprofits/organizations/340714585' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(3)
+    expect(kindOf(db, fafsa).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, directory).opportunity_kind).toBe('directory')
+    expect(kindOf(db, propublica).opportunity_kind).toBe('directory')
+  })
+
+  it('never overwrites a CURATED or unknown kind — only the generic machine-stamped allowlist', async () => {
+    const db = makeRealDb()
+    // A canonical curated kind and an unknown future value are both protected,
+    // even on a URL the structural rule fully owns.
+    const curated = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view', kind: 'benefit' })
+    const unknown = insFo(db, { url: 'https://www.ssa.gov/ssi', kind: 'custom_kind' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(0)
+    expect(kindOf(db, curated).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, unknown).opportunity_kind).toBe('custom_kind')
+  })
+
+  it('DOES override a generic machine-stamped kind on a structurally-proven shape', async () => {
+    // Prod 2026-07-22: 12 studentaid.gov FAFSA rows sat forever in the
+    // census's unreadable bucket because ingest had stamped them
+    // 'PROGRAM'/'direct' — a generated default the blanket never-overwrite
+    // rule froze in place. The verified structural claim outranks a generated
+    // default (and ONLY a generated default — see the test above).
+    const db = makeRealDb()
+    const fafsa = insFo(db, { url: 'https://studentaid.gov/h/apply-for-aid/fafsa', kind: 'PROGRAM' })
+    const fal = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view', kind: 'direct' })
+    const propublica = insFo(db, { url: 'https://projects.propublica.org/nonprofits/organizations/340714585', kind: 'DIRECT_GRANT' })
+    const res = await enforceLocatorKindClassification(db)
+    expect(res.repaired).toBe(3)
+    expect(kindOf(db, fafsa).opportunity_kind).toBe('benefit')
+    expect(kindOf(db, fal).opportunity_kind).toBe('directory')
+    expect(kindOf(db, propublica).opportunity_kind).toBe('directory')
+  })
+
+  it('is idempotent (a classified row leaves the candidate set) and count-only when disabled', async () => {
+    const db = makeRealDb()
+    const foId = insFo(db, { url: 'https://sam.gov/fal/6a147f795dbb41ee85172f42934ca55f/view' })
+    const first = await enforceLocatorKindClassification(db)
+    expect(first.repaired).toBe(1)
+    const second = await enforceLocatorKindClassification(db)
+    expect(second.scanned).toBe(0)
+    // Count-only mode: reports what WOULD classify, writes nothing.
+    const other = insFo(db, { url: 'https://www.ssa.gov/ssi' })
+    process.env.ENFORCE_LOCATOR_KIND_CLASSIFICATION = '0'
+    try {
+      const res = await enforceLocatorKindClassification(db)
+      expect(res.repaired).toBe(0)
+      expect(res.wouldRepair).toBe(1)
+      expect(kindOf(db, other).opportunity_kind).toBeNull()
+    } finally {
+      delete process.env.ENFORCE_LOCATOR_KIND_CLASSIFICATION
+    }
+    expect(kindOf(db, foId).opportunity_kind).toBe('directory')
   })
 })
 
