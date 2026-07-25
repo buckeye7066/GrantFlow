@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Loader2 } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
+import LoginMaintenanceNotice from '@/components/auth/LoginMaintenanceNotice'
+import { isLoginMaintenanceActive } from '@/config/maintenance'
 
 const schema = z
   .object({
@@ -28,8 +30,11 @@ export default function SetPassword() {
 
   const tokenMissing = useMemo(() => !token, [token])
 
+  const maintenanceActive = isLoginMaintenanceActive()
+
   const onSubmit = async (e) => {
     e?.preventDefault?.()
+    if (maintenanceActive) return
     if (tokenMissing) return
 
     const parsed = schema.safeParse({ password, confirm })
@@ -52,6 +57,10 @@ export default function SetPassword() {
 
   return (
     <AuthShell title="Set your password" subtitle="Choose a strong password to finish signing in.">
+      {maintenanceActive ? (
+        <LoginMaintenanceNotice />
+      ) : (
+      <>
       {tokenMissing ? (
         <Alert variant="destructive">
           <AlertTitle>Missing link token</AlertTitle>
@@ -103,6 +112,8 @@ export default function SetPassword() {
           </Link>
         </div>
       </form>
+      </>
+      )}
     </AuthShell>
   )
 }

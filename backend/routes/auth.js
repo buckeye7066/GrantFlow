@@ -52,12 +52,22 @@ const router = express.Router()
 
 // LOGIN MAINTENANCE GUARD — while the upgrade maintenance flag is on, block
 // every session-creating endpoint on this router with a 503. Existing
-// sessions keep working: /refresh and /logout are exempt, and GET /api/auth/me
-// lives in authMe.js which this guard never touches.
-const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout', '/maintenance'])
+// sessions keep working: /refresh, /logout, and /onboarding-state (a logged-in
+// user's state mutation, not session-creating) are exempt, and GET /api/auth/me
+// lives in authMe.js which this guard never touches. /maintenance is also exempt
+// so the runtime status probe (below) can answer while the fence is up — the
+// Login page needs it to show the banner.
+const MAINTENANCE_EXEMPT_PATHS = new Set(['/refresh', '/logout', '/onboarding-state', '/maintenance'])
 router.use((req, res, next) => {
   if (!isLoginMaintenanceActive()) return next()
-  if (MAINTENANCE_EXEMPT_PATHS.has(req.path)) return next()
+  const path = req.path.length > 1 ? req.path.replace(/\/+$/, '') : req.path
+  if (MAINTENANCE_EXEMPT_PATHS.has(path)) return next()
+  if (req.method === 'GET' && path.endsWith('/callback')) {
+    // An OAuth provider callback is a top-level BROWSER navigation, not an
+    // XHR — hand the user to the frontend banner instead of raw JSON, the
+    // same convention as every failure path in the callback handler itself.
+    return res.redirect(buildRedirectUrl(defaultFrontendRedirect(req), { error: 'maintenance' }))
+  }
   return res.status(503).json({
     error: 'maintenance',
     message: LOGIN_MAINTENANCE_MESSAGE,
