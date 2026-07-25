@@ -472,7 +472,26 @@ function fundingOpportunityConflictExpr(db) {
         THEN funding_opportunities.opportunity_kind
         ELSE COALESCE(excluded.opportunity_kind, funding_opportunities.opportunity_kind)
       END`;
-  return { field_provenance: provExpr, opportunity_kind: kindExpr };
+  // AMOUNT COLUMNS: silence never clears a learned answer (invariant-133 /
+  // the #950 wipe class — CAUGHT LIVE 2026-07-25: the deploy-boot sweep wrote
+  // 7 real grants.gov award figures via the API adapter at 17:08Z and the
+  // ordinary crawl cycle re-upserted those same rows at 17:09–17:22Z with the
+  // default `amount_min = excluded.amount_min` — every figure wiped to NULL
+  // within minutes, while the row stayed BURNED as enriched. This is why
+  // amount coverage sat pinned for weeks no matter how much the sweeps
+  // learned. The inserter path (opportunityInserter ON CONFLICT) has had these
+  // exact COALESCE guards all along; this bridge — the highest-volume writer —
+  // never got them. A crawl that DID extract a real amount still updates.
+  const keep = (col) => `COALESCE(excluded.${col}, funding_opportunities.${col})`;
+  return {
+    field_provenance: provExpr,
+    opportunity_kind: kindExpr,
+    amount_min: keep('amount_min'),
+    amount_max: keep('amount_max'),
+    amount_text: keep('amount_text'),
+    amount_status: keep('amount_status'),
+    amount_confidence: keep('amount_confidence'),
+  };
 }
 
 /**
