@@ -5291,6 +5291,16 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.missingAmount !== undefined ? { missingAmount: s.missingAmount } : {}),
       ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
       ...(s.wouldReap !== undefined ? { wouldReap: s.wouldReap } : {}),
+      // Repair-net detail (owner rule: Sam repairs, not monitors — and a
+      // repair Sam cannot SEE is one it cannot report or escalate). Without
+      // these, dead_url_repair persisted as a bare "repaired 0/3" with the
+      // why (notFound vs outage vs refused) living only in boot logs.
+      ...(s.structural_reclaimed !== undefined ? { structural_reclaimed: s.structural_reclaimed } : {}),
+      ...(s.recoveredAlive !== undefined ? { recoveredAlive: s.recoveredAlive } : {}),
+      ...(s.notFound !== undefined ? { notFound: s.notFound } : {}),
+      ...(s.outage !== undefined ? { outage: s.outage } : {}),
+      ...(s.refused !== undefined ? { refused: s.refused } : {}),
+      ...(s.skippedCooldown !== undefined ? { skippedCooldown: s.skippedCooldown } : {}),
     })),
   })
 
