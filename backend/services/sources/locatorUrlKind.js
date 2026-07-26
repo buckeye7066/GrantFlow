@@ -83,6 +83,8 @@ const BENEFIT_HOSTS = Object.freeze([
   'studentaid.gov', // Federal Student Aid: FAFSA/Pell portal — need-based, no fixed award
   'tenncareconnect.tn.gov', // TennCare (Medicaid) application portal
   'fabenefits.dhs.tn.gov', // TN Family Assistance (SNAP/TANF) portal
+  'tnreconnect.gov', // TN Reconnect: last-dollar adult tuition grant — award = the applicant's gap, varies by design
+  'benefits.va.gov', // VA benefits portal: every page is a veteran benefit program (award varies by eligibility)
 ])
 
 const DIRECTORY_HOSTS = Object.freeze([
@@ -98,6 +100,59 @@ const RE_DIRECTORY_HOST = new RegExp(
   `^https?:\\/\\/(?:www\\.)?(?:${DIRECTORY_HOSTS.map((h) => h.replace(/\./g, '\\.')).join('|')})(?:[/?#]|$)`,
   'i',
 )
+
+/**
+ * STATE-GOVERNMENT path rules (fix-cycle-4, prod census 2026-07-26). A state's
+ * main .gov host CANNOT be claimed host-wide — tn.gov carries BOTH real
+ * fixed-award pages (the HOPE/STEP UP lottery scholarships under /collegepays/,
+ * deliberately NOT listed here) and benefit-program/department pages. So each
+ * entry claims only POSITIVE path shapes, with two distinct semantics:
+ *
+ *   benefitPrefixes — SUBTREE claims: every page under the prefix is a state
+ *     benefit program (Medicaid waivers, aging/caregiver service programs —
+ *     the "award varies by applicant" class). 'tenncare' claims
+ *     /tenncare.html and /tenncare/…, never /tenncareX.
+ *
+ *   directoryPages — EXACT-PAGE claims: a department homepage or a grants
+ *     portal index is a pointer to programs, never an award. 'didd' claims
+ *     /didd, /didd.html, /didd/ — and makes NO claim about /didd/anything
+ *     (a department SUBPAGE can be a real program and keeps its ordinary read).
+ *
+ * ADDING A STATE is one entry here: the classifier, the boot sweep's LIKE
+ * prefilters (LOCATOR_URL_LIKE_PREFILTERS below) and the burned-orphan
+ * structural re-claim net (enforceGrantDirectAmountEnrichment) all derive from
+ * this registry, so a new state's rows — including ones already burned as
+ * unreadable — converge on the next boot with no migration.
+ */
+export const STATE_GOV_PATH_RULES = Object.freeze([
+  {
+    host: 'tn.gov',
+    // TennCare (Medicaid — Katie Beckett class) + TCAD service programs
+    // (National Family Caregiver Support class), seen in the 2026-07-26 census.
+    benefitPrefixes: Object.freeze(['tenncare', 'aging/our-programs']),
+    // DIDD department homepage + the TN grant-opportunities portal index.
+    directoryPages: Object.freeze(['didd', 'finance/grants']),
+  },
+])
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const STATE_GOV_MATCHERS = STATE_GOV_PATH_RULES.map(({ host, benefitPrefixes = [], directoryPages = [] }) => {
+  const h = escapeRe(host)
+  return {
+    host,
+    // Subtree: prefix then a boundary ([/.?#] or end) — '.html' roots match,
+    // 'tenncareX' cannot.
+    benefit: benefitPrefixes.length
+      ? new RegExp(`^https?:\\/\\/(?:www\\.)?${h}\\/(?:${benefitPrefixes.map(escapeRe).join('|')})(?:[/.?#]|$)`, 'i')
+      : null,
+    // Exact page: optional '.html', optional trailing '/', then END (or query/
+    // fragment) — '/didd/for-consumers/…' makes no claim.
+    directory: directoryPages.length
+      ? new RegExp(`^https?:\\/\\/(?:www\\.)?${h}\\/(?:${directoryPages.map(escapeRe).join('|')})(?:\\.html)?\\/?(?:[?#]|$)`, 'i')
+      : null,
+  }
+})
 
 /**
  * ProPublica Nonprofit Explorer organization profile — a 990/funder registry
@@ -153,6 +208,14 @@ export function classifyLocatorKindFromUrl(url) {
   if (RE_DIRECTORY_HOST.test(u)) {
     return { kind: 'directory', reason: 'service_directory_host' }
   }
+  for (const m of STATE_GOV_MATCHERS) {
+    if (m.benefit && m.benefit.test(u)) {
+      return { kind: 'benefit', reason: `state_benefit_program_path:${m.host}` }
+    }
+    if (m.directory && m.directory.test(u)) {
+      return { kind: 'directory', reason: `state_dept_or_portal_page:${m.host}` }
+    }
+  }
   if (RE_PROPUBLICA_ORG.test(u)) {
     return { kind: 'directory', reason: 'propublica_nonprofit_profile' }
   }
@@ -199,6 +262,13 @@ export const LOCATOR_URL_LIKE_PREFILTERS = Object.freeze([
   ...DIRECTORY_HOSTS.map((h) => `%${h}/%`),
   '%projects.propublica.org/nonprofits/organizations/%',
   '%scholarships.com/financial-aid/college-scholarships/%',
+  // One prefilter per state-gov path rule — derived from the registry so a new
+  // state entry can never be silently orphaned from the sweeps' candidate scans
+  // (the fix-cycle-3 gate finding, kept true by the registry-derivation test).
+  ...STATE_GOV_PATH_RULES.flatMap((r) => [
+    ...r.benefitPrefixes.map((p) => `%${r.host}/${p}%`),
+    ...r.directoryPages.map((p) => `%${r.host}/${p}%`),
+  ]),
 ])
 
-export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS }
+export default { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS, STATE_GOV_PATH_RULES }

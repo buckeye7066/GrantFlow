@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { classifyLocatorKindFromUrl, classifyLocatorKindFromRow } from '../services/sources/locatorUrlKind.js'
+import { classifyLocatorKindFromUrl, classifyLocatorKindFromRow, STATE_GOV_PATH_RULES, LOCATOR_URL_LIKE_PREFILTERS } from '../services/sources/locatorUrlKind.js'
 
 describe('classifyLocatorKindFromUrl — fix-cycle-1 shapes', () => {
   it('classifies sam.gov /fal/ assistance listings as DIRECTORY', () => {
@@ -55,14 +55,65 @@ describe('classifyLocatorKindFromUrl — fix-cycle-3 shapes (prod census 2026-07
   })
 
   it('NEVER host-classifies mixed-content hosts (tn.gov carries the fixed-award HOPE scholarship)', () => {
+    // The load-bearing negative: real fixed-award pages on a state host must
+    // stay unclaimed no matter how many PATH rules that host gains (fix-cycle-4
+    // added tn.gov path rules; /collegepays/ is deliberately not one of them).
     expect(classifyLocatorKindFromUrl('https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-hope-scholarship.html')).toBeNull()
-    expect(classifyLocatorKindFromUrl('https://www.tn.gov/aging/our-programs/caregiver-support-program.html')).toBeNull()
-    expect(classifyLocatorKindFromUrl('https://www.tnreconnect.gov/')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-step-up-scholarship.html')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/')).toBeNull()
   })
 
   it('lookalike hostnames make no claim', () => {
     expect(classifyLocatorKindFromUrl('https://studentaid.gov.evil.com/fafsa')).toBeNull()
     expect(classifyLocatorKindFromUrl('https://nottn211.org/')).toBeNull()
+  })
+})
+
+describe('classifyLocatorKindFromUrl — fix-cycle-4 STATE-GOV path rules (prod census 2026-07-26)', () => {
+  it('claims state benefit SUBTREES: TennCare (Medicaid) and TCAD service programs', () => {
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/tenncare/long-term-services-supports/katie-beckett-program.html'))
+      .toMatchObject({ kind: 'benefit' })
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/tenncare.html')).toMatchObject({ kind: 'benefit' })
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/aging/our-programs/caregiver-support-program.html'))
+      .toMatchObject({ kind: 'benefit' })
+  })
+
+  it('a benefit PREFIX is a token, not a substring, and unlisted sections make no claim', () => {
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/tenncareers/apply')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/aging/grants-and-contracts/rfp.html')).toBeNull()
+  })
+
+  it('claims department homepages / grant-portal INDEX pages as DIRECTORY — exact page only', () => {
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/didd.html')).toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/didd/')).toMatchObject({ kind: 'directory' })
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/finance/grants.html')).toMatchObject({ kind: 'directory' })
+    // A department SUBPAGE can be a real program (DIDD Family Support pays real
+    // dollars) — an exact-page rule must never claim the subtree.
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/didd/for-consumers/family-support-program.html')).toBeNull()
+    expect(classifyLocatorKindFromUrl('https://www.tn.gov/finance/grants/opportunity-42.html')).toBeNull()
+  })
+
+  it('claims the TN Reconnect and VA benefits hosts as BENEFIT (whole-host, award varies by design)', () => {
+    expect(classifyLocatorKindFromUrl('https://tnreconnect.gov/')).toMatchObject({ kind: 'benefit' })
+    expect(classifyLocatorKindFromUrl('https://www.benefits.va.gov/homeloans/adaptedhousing.asp')).toMatchObject({ kind: 'benefit' })
+  })
+
+  it('every STATE_GOV_PATH_RULES entry derives a LIKE prefilter (a new state cannot be orphaned from the sweeps)', () => {
+    for (const rule of STATE_GOV_PATH_RULES) {
+      for (const p of [...rule.benefitPrefixes, ...rule.directoryPages]) {
+        expect(LOCATOR_URL_LIKE_PREFILTERS, `missing prefilter for ${rule.host}/${p}`).toContain(`%${rule.host}/${p}%`)
+      }
+    }
+    // And the classifier actually claims what each prefilter scans for — the
+    // registry cannot drift from the matchers it compiles into.
+    for (const rule of STATE_GOV_PATH_RULES) {
+      for (const p of rule.benefitPrefixes) {
+        expect(classifyLocatorKindFromUrl(`https://www.${rule.host}/${p}/some-program.html`)).toMatchObject({ kind: 'benefit' })
+      }
+      for (const p of rule.directoryPages) {
+        expect(classifyLocatorKindFromUrl(`https://www.${rule.host}/${p}.html`)).toMatchObject({ kind: 'directory' })
+      }
+    }
   })
 })
 

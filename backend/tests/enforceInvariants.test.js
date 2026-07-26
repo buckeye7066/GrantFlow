@@ -3215,6 +3215,74 @@ describe('enforceGrantDirectAmountEnrichment', () => {
     expect(res.textOnly).toBe(1)
   })
 
+  it('re-claims an already-BURNED orphan the moment a rule exists — no migration, no fetch', async () => {
+    // THE ANTI-MIGRATION NET (2026-07-26). A burn mark says FETCHING was tried;
+    // a structural claim needs no fetch — yet the candidate scan's
+    // `amount_enrich_attempted_at IS NULL` hid burned rows from the short-circuit,
+    // so every new locatorUrlKind rule (a new STATE's paths, a new benefit host)
+    // needed a hand-written un-burn migration to reach rows burned before it
+    // shipped (138/152/156 — three instances). The Katie Beckett / caregiver
+    // class: burned 2026-07-17, claimable by the tn.gov path rules of 07-26.
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://www.tn.gov/tenncare/long-term-services-supports/katie-beckett-program.html' })
+    db.prepare(
+      `UPDATE grants SET amount_enrich_attempted_at = '2026-07-17T12:00:00.000Z', amount_enrich_attempts = 2 WHERE id = ?`,
+    ).run(gId)
+    let fetches = 0
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => { fetches++; return { attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' } },
+    })
+    const g = grantRow(db, gId)
+    expect(fetches, 'a burned row is never re-fetched by the re-claim net').toBe(0)
+    expect(g.amount_status, 'the structural claim answers the burned row').toBe('varies')
+    expect(g.amount_text).toMatch(/varies by applicant/i)
+    expect(g.amount_enrich_attempted_at, 'the burn mark is preserved, not reset').toBe('2026-07-17T12:00:00.000Z')
+    expect(g.amount_enrich_attempts, 'attempt counters are untouched').toBe(2)
+    expect(g.amount_enrich_last_reason).toBe('locator_kind:state_benefit_program_path:tn.gov')
+    expect(res.structural_reclaimed).toBe(1)
+  })
+
+  it('a burned orphan the classifier does NOT claim stays exactly as it was', async () => {
+    // The load-bearing negative: /collegepays/ is a real fixed-award page —
+    // the re-claim net must neither answer it nor un-burn it (its honest state
+    // is unreadable-until-the-egress-block clears, and fabricating 'varies'
+    // there would hide a knowable dollar figure).
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-hope-aspire-award.html' })
+    db.prepare(
+      `UPDATE grants SET amount_enrich_attempted_at = '2026-07-18T12:00:00.000Z', amount_enrich_attempts = 2 WHERE id = ?`,
+    ).run(gId)
+    const res = await enforceGrantDirectAmountEnrichment(db, {
+      enrichImpl: async () => ({ attempted: true, page_read: false, transient: true, found: false, reason: 'fetch_failed:reset' }),
+    })
+    const g = grantRow(db, gId)
+    expect(g.amount_status).toBeNull()
+    expect(g.amount_text).toBeNull()
+    expect(g.amount_enrich_attempted_at).toBe('2026-07-18T12:00:00.000Z')
+    expect(res.structural_reclaimed ?? 0).toBe(0)
+  })
+
+  it('count-only mode counts would-be re-claims without writing', async () => {
+    const db = makeRealDb()
+    const gId = insOrphan(db, { url: 'https://studentaid.gov/understand-aid/types/grants/pell' })
+    db.prepare(
+      `UPDATE grants SET amount_enrich_attempted_at = '2026-07-17T12:00:00.000Z', amount_enrich_attempts = 1 WHERE id = ?`,
+    ).run(gId)
+    const prev = process.env.ENFORCE_GRANT_DIRECT_AMOUNT
+    process.env.ENFORCE_GRANT_DIRECT_AMOUNT = '0'
+    try {
+      const res = await enforceGrantDirectAmountEnrichment(db, {
+        enrichImpl: async () => ({ attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }),
+      })
+      expect(res.structural_reclaimed).toBe(1)
+      expect(res.enforced).toBe(false)
+      expect(grantRow(db, gId).amount_status, 'count-only must not write').toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.ENFORCE_GRANT_DIRECT_AMOUNT
+      else process.env.ENFORCE_GRANT_DIRECT_AMOUNT = prev
+    }
+  })
+
   it('the structural short-circuit loses the race to a real amount (guarded write)', async () => {
     // The WHERE guard must hold even when an amount lands BETWEEN the candidate
     // scan and the structural write — simulated by injecting the amount right

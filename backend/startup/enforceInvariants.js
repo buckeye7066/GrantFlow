@@ -3855,16 +3855,11 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
       return { scanned: 0, repaired: 0, skipped: 'query' }
     }
 
-    const fresh = [...(Array.isArray(candidates) ? candidates : []), ...(Array.isArray(blockedProbe) ? blockedProbe : [])]
-    if (fresh.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
-    if (disabled) return { scanned: fresh.length, repaired: 0, enforced: false }
-
-    const { enrichOpportunityAmountFromSource } =
-      deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
-
     // Same env-counter contract as the catalog sweep: increment only on an
     // environment failure, reset on any other outcome, written atomically with
-    // the ordinary counters.
+    // the ordinary counters. (Defined before the early returns below: the
+    // structural re-claim net must run even on a boot with zero unburned
+    // candidates.)
     const recordAttempt = async (id, { burn, attempts, envAttempts = 0, reason = null }) => {
       try {
         await db
@@ -3879,6 +3874,98 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
           .run(attempts, envAttempts, burn ? new Date().toISOString() : null, reason, id)
       } catch { /* best-effort; a missed mark only costs one re-fetch */ }
     }
+
+    // ── STRUCTURAL RE-CLAIM over BURNED rows (the anti-migration net) ────────
+    // A burn mark records that FETCHING was tried and is final; a structural
+    // locator claim needs NO fetch, so a burned row is a legitimate claim
+    // target the moment a rule exists for its URL. Without this net, every new
+    // locatorUrlKind rule needed a hand-written un-burn migration to reach the
+    // rows burned before it shipped (migrations 138/152/156 — three instances
+    // of one class; the studentaid.gov orphans sat four days on the last one).
+    // With it, adding a rule — e.g. a new STATE'S benefit/portal paths in
+    // STATE_GOV_PATH_RULES — converges burned rows on the next boot, no
+    // migration. Bounded and LIKE-prefiltered (cheap: DB-only, no fetch, no
+    // budget spend); idempotent (a claimed row gains its answer and leaves the
+    // predicate); the burn mark and both attempt counters are preserved —
+    // nothing here re-opens fetching for a row the classifier does not claim.
+    let structuralReclaimed = 0
+    try {
+      const RECLAIM_LIMIT = Math.max(1, Number.parseInt(deps.reclaimLimit ?? process.env.GRANT_STRUCTURAL_RECLAIM_LIMIT ?? '200', 10) || 200)
+      const likeClauses = LOCATOR_URL_LIKE_PREFILTERS
+        .map(() => `COALESCE(g.url, '') LIKE ? OR COALESCE(g.application_url, '') LIKE ?`)
+        .join(' OR ')
+      const likeParams = LOCATOR_URL_LIKE_PREFILTERS.flatMap((p) => [p, p])
+      // audit:allow dynamic-sql — statuses/likeClauses derive from frozen constants; all values stay bound.
+      const burnedRows = await db
+        .prepare(
+          `SELECT g.id, g.url, g.application_url,
+                  COALESCE(g.amount_enrich_attempts, 0) AS attempts,
+                  COALESCE(g.amount_enrich_env_attempts, 0) AS env_attempts
+             FROM grants g
+            WHERE g.status IN (${statuses})
+              AND g.funding_opportunity_id IS NULL
+              AND ${VAL} = 0
+              AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
+              AND (g.amount_text IS NULL OR g.amount_text = '')
+              AND g.amount_enrich_attempted_at IS NOT NULL
+              AND COALESCE(g.url, g.application_url, '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')
+              AND (${likeClauses})
+            LIMIT ?`,
+        )
+        .all(...likeParams, RECLAIM_LIMIT)
+      for (const g of Array.isArray(burnedRows) ? burnedRows : []) {
+        // Same effective-URL slot the fetch lane classifies (url ?? application_url).
+        const structural = classifyLocatorKindFromRow({ source_url: g.url ?? g.application_url ?? null })
+        if (!structural) continue
+        if (disabled) { structuralReclaimed++; continue } // count-only: what WOULD re-claim
+        const isBenefit = structural.kind === 'benefit'
+        const wrote = await db
+          .prepare(
+            `UPDATE grants
+                SET amount_status = COALESCE(?, amount_status),
+                    amount_text = ?
+              WHERE id = ?
+                AND (amount_status IS NULL OR amount_status = 'not_listed')
+                AND (amount_text IS NULL OR amount_text = '')
+                AND COALESCE(amount_min, 0) <= 0
+                AND COALESCE(amount_max, 0) <= 0
+                AND COALESCE(amount_requested, 0) <= 0`,
+          )
+          .run(
+            isBenefit ? 'varies' : null,
+            isBenefit
+              ? 'Benefit program — award varies by applicant'
+              : 'Program directory/locator — points at opportunities; no per-award figure by design',
+            g.id,
+          )
+        if (changesOf(wrote) > 0) {
+          structuralReclaimed++
+          // burn:false → COALESCE keeps the original mark; counters unchanged;
+          // only the reason breadcrumb records who answered the row.
+          await recordAttempt(g.id, {
+            burn: false,
+            attempts: Number(g.attempts ?? 0),
+            envAttempts: Number(g.env_attempts ?? 0),
+            reason: `locator_kind:${structural.reason}`,
+          })
+        }
+      }
+      if (structuralReclaimed > 0) {
+        log.info(disabled
+          ? 'burned orphan grants WOULD be structurally re-claimed (ENFORCE_GRANT_DIRECT_AMOUNT=0)'
+          : 'structurally re-claimed burned orphan grants (no fetch spent)', { reclaimed: structuralReclaimed })
+      }
+    } catch (err) {
+      log.warn('grant_direct_amount: structural re-claim scan failed (non-fatal)', { error: String(err?.message || err) })
+    }
+
+    const fresh = [...(Array.isArray(candidates) ? candidates : []), ...(Array.isArray(blockedProbe) ? blockedProbe : [])]
+    if (fresh.length === 0) return { scanned: 0, repaired: 0, structural_reclaimed: structuralReclaimed, enforced: !disabled }
+    if (disabled) return { scanned: fresh.length, repaired: 0, structural_reclaimed: structuralReclaimed, enforced: false }
+
+    const { enrichOpportunityAmountFromSource } =
+      deps.enrichImpl ? { enrichOpportunityAmountFromSource: deps.enrichImpl } : await import('../services/amountEnrichment.js')
 
     const startedAt = Date.now()
     let attemptedNow = 0
@@ -4093,6 +4180,7 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     }
     return {
       scanned: fresh.length, attempted: attemptedNow, repaired: enriched,
+      structural_reclaimed: structuralReclaimed,
       nonePublished, textOnly, fetchFailed, retryable, envBlocked, remaining, exhausted, enforced: true,
     }
   })
