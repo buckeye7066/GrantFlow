@@ -49,6 +49,7 @@ import {
   enforceImportedStatusHonesty,
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
+  enforceDeadUrlRepair,
   enforceLocatorKindClassification,
   partitionSystemicStableFailures,
   AMOUNT_ENRICH_FAILURE_LOG_KEY,
@@ -993,7 +994,7 @@ describe('enforceInvariants — runner', () => {
 
     const summary = await runEnforceInvariants(db, { logger: { info() {}, warn() {} } })
     // Pipeline promotion is intentionally off this boot invariant path.
-    expect(summary.ran).toBe(30)
+    expect(summary.ran).toBe(31)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1007,6 +1008,9 @@ describe('enforceInvariants — runner', () => {
       // Positive locator/benefit kind classification (sam.gov /fal/ listings,
       // ssa.gov benefit sections) BEFORE amount acquisition.
       'locator_kind_classification',
+      // Dead-URL repair BEFORE amount acquisition so a repaired row is read
+      // by the sweeps in this same boot.
+      'dead_url_repair',
       'amount_enrichment',
       'grant_amount_backfill',
       'grant_direct_amount',
@@ -3112,6 +3116,159 @@ describe('enforceAmountEnrichment — systemic-burn guard (the 2026-07-22 mass b
     // ...unless that host proved alive this run.
     const alive = partitionSystemicStableFailures(uniform, new Set(['a.gov']), 4)
     expect(alive.systemic).toHaveLength(0)
+  })
+})
+
+describe('enforceDeadUrlRepair', () => {
+  const SCHEMA_PATH = path.resolve(process.cwd(), 'backend', 'db', 'schema.sql')
+  function makeRealDb() {
+    const db = new Database(':memory:')
+    db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'))
+    // The repair-attempt state rides in system_kv (created by boot elsewhere).
+    db.exec(`CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)`)
+    return db
+  }
+  const DEAD = { status: 'broken', code: null, method: null, error: 'ENOTFOUND' }
+  const ALIVE = { status: 'ok', code: 200, method: 'head', error: null, finalUrl: null }
+  const insDeadOrphan = (db, { url = 'https://pacfcf.org/scholarships', reason = 'fetch_failed:ssrf_guard', title = 'Polish American Congress Charitable Foundation Scholarships' } = {}) => {
+    const id = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id, url,
+                           amount_enrich_attempted_at, amount_enrich_attempts, amount_enrich_last_reason)
+       VALUES (?, ?, 'interested', NULL, NULL, ?, '2026-07-25T12:00:00.000Z', 3, ?)`,
+    ).run(id, title, url, reason)
+    return id
+  }
+  const grantRow = (db, id) => db.prepare('SELECT * FROM grants WHERE id = ?').get(id)
+
+  it('repairs a dead orphan URL with a live, plausibility-gated page and resets the enrich state', async () => {
+    // The pacfcf.org / 1stresponderchildren.org class: NXDOMAIN forever, but
+    // the ORGANIZATION is real and its page is findable by the row's own
+    // title+sponsor. Repair the URL, reset the burn — the amount lane reads
+    // the real page next.
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db)
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => DEAD,
+      findOfficialUrl: async () => ({ url: 'https://pac1944.org/charitable-foundation/scholarships', searched: true, hits: 4 }),
+    })
+    const g = grantRow(db, gId)
+    expect(g.url).toBe('https://pac1944.org/charitable-foundation/scholarships')
+    expect(g.amount_enrich_attempted_at, 'a new URL is a new claim — the burn resets').toBeNull()
+    expect(g.amount_enrich_attempts).toBe(0)
+    expect(g.amount_enrich_last_reason).toBe('dead_url_repaired')
+    expect(res.repaired).toBe(1)
+  })
+
+  it('repairs a LINKED row on its catalog side (source_url), scoped to active real pipelines', async () => {
+    const db = makeRealDb()
+    const foId = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, sponsor, source_url, is_active,
+                                          amount_enrich_attempted_at, amount_enrich_attempts, amount_enrich_last_reason)
+       VALUES (?, 'Tennessee STEP UP Scholarship', 'TSAC', 'https://www.tn.gov/old-dead-path.html', 1,
+               '2026-07-25T12:00:00.000Z', 3, 'fetch_failed:404')`,
+    ).run(foId)
+    db.prepare(`INSERT INTO grants (id, title, status, profile_id, funding_opportunity_id) VALUES (?, 'STEP UP', 'interested', NULL, ?)`)
+      .run(crypto.randomUUID(), foId)
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => DEAD,
+      findOfficialUrl: async () => ({ url: 'https://www.tn.gov/collegepays/new-path.html', searched: true, hits: 2 }),
+    })
+    const fo = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(foId)
+    expect(fo.source_url).toBe('https://www.tn.gov/collegepays/new-path.html')
+    expect(fo.amount_enrich_attempted_at).toBeNull()
+    expect(res.repaired).toBe(1)
+  })
+
+  it('a "dead" URL that answers today is un-burned, not rewritten (transient-404 recovery)', async () => {
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db, { reason: 'fetch_failed:404' })
+    let searches = 0
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => ALIVE,
+      findOfficialUrl: async () => { searches++; return { url: null, searched: true, hits: 0 } },
+    })
+    const g = grantRow(db, gId)
+    expect(searches, 'an alive URL never spends a search').toBe(0)
+    expect(g.url, 'the URL was never the problem').toBe('https://pacfcf.org/scholarships')
+    expect(g.amount_enrich_attempted_at, 'un-burned for an ordinary re-read').toBeNull()
+    expect(g.amount_enrich_attempts, 'counters preserved — MAX_ATTEMPTS still bounds a flapping host').toBe(3)
+    expect(res.recoveredAlive).toBe(1)
+  })
+
+  it('a provider OUTAGE spends no attempt; a genuine not-found spends one and exhausts at the cap', async () => {
+    const db = makeRealDb()
+    insDeadOrphan(db)
+    // Outage: searched:false → state untouched.
+    await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => DEAD,
+      findOfficialUrl: async () => ({ url: null, searched: false, error: 'provider down' }),
+      maxAttempts: 1,
+    })
+    const afterOutage = db.prepare(`SELECT value FROM system_kv WHERE key = 'dead_url_repair_state'`).get()
+    expect(JSON.stringify(Object.keys(JSON.parse(afterOutage?.value ?? '{"entries":{}}').entries))).toBe('[]')
+    // Genuine not-found at maxAttempts=1 → exhausted; a later run skips it.
+    const r2 = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => DEAD,
+      findOfficialUrl: async () => ({ url: null, searched: true, hits: 3 }),
+      maxAttempts: 1,
+    })
+    expect(r2.notFound).toBe(1)
+    let searches = 0
+    const r3 = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => DEAD,
+      findOfficialUrl: async () => { searches++; return { url: 'https://real.org/x', searched: true, hits: 1 } },
+      maxAttempts: 1,
+    })
+    expect(searches, 'an exhausted row never searches again').toBe(0)
+    expect(r3.skippedCooldown).toBe(1)
+  })
+
+  it('refuses a search-engine URL and never writes it (canonical URL hygiene)', async () => {
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db)
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => DEAD,
+      findOfficialUrl: async () => ({ url: 'https://www.google.com/search?q=pacfcf+scholarships', searched: true, hits: 5 }),
+    })
+    expect(grantRow(db, gId).url).toBe('https://pacfcf.org/scholarships')
+    expect(res.refused).toBe(1)
+    expect(res.repaired).toBe(0)
+  })
+
+  it('a burned row with a NON-dead reason (thin_page) is never a candidate', async () => {
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db, { reason: 'thin_page' })
+    let probes = 0
+    const res = await enforceDeadUrlRepair(db, {
+      checkUrlImpl: async () => { probes++; return DEAD },
+      findOfficialUrl: async () => ({ url: 'https://real.org/x', searched: true, hits: 1 }),
+    })
+    expect(probes, 'a JS-shell burn is adapter work, not URL rot').toBe(0)
+    expect(res.scanned).toBe(0)
+    expect(grantRow(db, gId).url).toBe('https://pacfcf.org/scholarships')
+  })
+
+  it('count-only mode scans without probing, searching, or writing', async () => {
+    const db = makeRealDb()
+    const gId = insDeadOrphan(db)
+    const prev = process.env.ENFORCE_DEAD_URL_REPAIR
+    process.env.ENFORCE_DEAD_URL_REPAIR = '0'
+    try {
+      let network = 0
+      const res = await enforceDeadUrlRepair(db, {
+        checkUrlImpl: async () => { network++; return DEAD },
+        findOfficialUrl: async () => { network++; return { url: 'https://real.org/x', searched: true, hits: 1 } },
+      })
+      expect(network).toBe(0)
+      expect(res.scanned).toBe(1)
+      expect(res.enforced).toBe(false)
+      expect(grantRow(db, gId).amount_enrich_attempted_at).not.toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.ENFORCE_DEAD_URL_REPAIR
+      else process.env.ENFORCE_DEAD_URL_REPAIR = prev
+    }
   })
 })
 

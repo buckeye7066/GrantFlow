@@ -883,7 +883,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         return { ok: true, summary: 'No persisted invariant-sweep summary yet (pre-observability boot).' }
       }
       const failedSteps = parsed.steps.filter((s) => s && s.ok === false)
-      const interesting = ['application_url_rescue', 'amount_enrichment', 'imported_status_honesty', 'grant_amount_backfill', 'pipeline_refill', 'grant_score_backfill']
+      const interesting = ['application_url_rescue', 'dead_url_repair', 'amount_enrichment', 'imported_status_honesty', 'grant_amount_backfill', 'pipeline_refill', 'grant_score_backfill']
       const highlights = parsed.steps
         .filter((s) => interesting.includes(s.name) && (Number(s.repaired) > 0 || Number(s.scanned) > 0))
         .map((s) => `${s.name}: repaired ${s.repaired}/${s.scanned} scanned`)
@@ -2472,6 +2472,61 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         ok: true,
         summary: `crawler coverage healthy: ${failed}/${queried} queried sources failed (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%)`,
         evidence: { queried, failed, failure_rate: Number(rate.toFixed(3)), threshold },
+      }
+    },
+  },
+  {
+    // Per-SOURCE persistent failure (2026-07-26, owner rule: repair, not just
+    // monitor). The fleet-average check above structurally cannot see ONE
+    // source dead for weeks — 1 source × 100% failure is invisible inside a
+    // 30%-of-50-runs threshold, so Amy's cohort kept reporting
+    // source_fetch_failed while nothing named WHICH source or for how long.
+    // This check names the exact source, its last error, and the concrete
+    // repair (single-source re-crawl / registry URL fix / key) — a finding an
+    // owner can act on in one step instead of a trend to watch.
+    id: 'crawler.sourcePersistentFailure',
+    label: 'Crawler source persistently failing (every recent run)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Flags any registry source whose last N (default 5) QUERIED runs ALL failed — a dead endpoint, rotted registry URL, or expired key that the fleet-average check cannot see. Names the source and its latest error. Fails open when the table is missing or a source has too few recent runs.',
+    async run({ db }) {
+      if (!db?.prepare) return { ok: true, summary: 'source persistence: db unavailable' }
+      const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_FAILURE_STREAK || '5', 10) || 5)
+      let rows
+      try {
+        rows = await db
+          .prepare(
+            `WITH recent AS (
+               SELECT source_id, source_label, failed, error,
+                      ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY created_at DESC) AS rn
+                 FROM crawler_source_runs
+                WHERE queried
+             )
+             SELECT source_id, MAX(source_label) AS source_label,
+                    COUNT(*) AS sampled,
+                    MAX(CASE WHEN rn = 1 THEN error END) AS last_error
+               FROM recent
+              WHERE rn <= ${STREAK}
+              GROUP BY source_id
+             HAVING COUNT(*) >= ${STREAK}
+                AND SUM(CASE WHEN failed THEN 1 ELSE 0 END) = COUNT(*)`,
+          )
+          .all()
+      } catch (err) {
+        return { ok: true, summary: `crawler_source_runs not queryable yet (${err?.message || 'unknown'})` }
+      }
+      const failing = Array.isArray(rows) ? rows : []
+      if (failing.length === 0) {
+        return { ok: true, summary: `No source has failed ${STREAK} consecutive queried runs.` }
+      }
+      const names = failing.slice(0, 5).map((r) => `${r.source_id}${r.last_error ? ` (${String(r.last_error).slice(0, 60)})` : ''}`).join('; ')
+      return {
+        ok: false,
+        summary: `${failing.length} source(s) failed EVERY one of their last ${STREAK} queried runs: ${names}.`,
+        evidence: { streak: STREAK, sources: failing.map((r) => ({ source_id: r.source_id, label: r.source_label, last_error: r.last_error })) },
+        recommended_fix: 'This is a per-source outage/rot signal, not fleet noise. For each named source: probe its registry URL (sourceRegistry.js) — a moved/dead endpoint needs the registry entry updated; an auth error needs its API key re-issued; then verify with a single-source re-crawl (runProfileDiscoveryLive onlySourceIds / the admin stale-source re-crawl action) or `npm run crawler:doctor`. Row-level URL rot inside the catalog is already self-repaired by the dead_url_repair boot net — this finding is specifically the SOURCE (registry) level that net cannot touch because the registry is code.',
+        confidence: 0.85,
       }
     },
   },

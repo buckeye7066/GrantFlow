@@ -4186,6 +4186,229 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
   })
 }
 
+/**
+ * DEAD-URL REPAIR (2026-07-26, owner rule: Sam repairs, not monitors).
+ *
+ * A row whose source URL is provably DEAD — the domain no longer resolves
+ * (the pacfcf.org / 1stresponderchildren.org class: a crawler stored a wrong
+ * or rotted domain for a REAL organization) or the page permanently 404s (the
+ * tn.gov STEP UP class: a state CMS reorganized) — can never be answered by
+ * any amount of fetching, adapters, or classification. Its burn is honest,
+ * but the row's real defect is the URL, and the repair for that already
+ * exists in this codebase: `findOfficialUrlForOpportunity` (search the row's
+ * own title+sponsor → token-overlap plausibility → LIVENESS probe), used by
+ * the application-url rescue for MISSING urls. This net applies the same
+ * finder to DEAD urls.
+ *
+ * HONESTY CONTRACT (inherits the finder's): a URL is never fabricated or
+ * guessed — only a live, plausibility-gated search hit is ever written, a
+ * search-engine URL is refused (canonical isSearchEngineUrl, invariant
+ * #urlHygiene), and a provider outage spends NOTHING. Deadness is RE-PROVED
+ * with a live probe before any search: a row whose "dead" URL answers today
+ * (a transient 404 window, a recovered host) is simply un-burned so the
+ * ordinary amount lane re-reads it — its URL was never the problem.
+ *
+ * On repair the row's enrich state is RESET (mark NULL, counters 0): a new
+ * URL is a new claim about the row, the same doctrine that re-opens a burn
+ * when a new strategy ships (migration-135 rule). The next boot's amount
+ * sweep then reads the REAL page. Attempt state for the repair itself lives
+ * in system_kv `dead_url_repair_state` (MAX 3 searches per row, 7d cooldown,
+ * exhausted = terminal) so a row whose real page genuinely cannot be found
+ * stops consuming search budget.
+ */
+const DEAD_URL_REPAIR_STATE_KEY = 'dead_url_repair_state'
+const DEAD_URL_REASON_PREDICATE = (alias) =>
+  `(COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:404%'
+    OR COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:410%'
+    OR COALESCE(${alias}.amount_enrich_last_reason, '') LIKE 'fetch_failed:ssrf_guard%')`
+
+export async function enforceDeadUrlRepair(db, deps = {}) {
+  return runInvariant('dead_url_repair', async () => {
+    const grantCols = await listGrantColumns(db)
+    if (!grantCols.has('amount_enrich_last_reason') || !grantCols.has('url')) {
+      return { scanned: 0, repaired: 0, skipped: 'schema' }
+    }
+    const disabled = _parseBoolEnv(process.env.ENFORCE_DEAD_URL_REPAIR) === false
+    const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.DEAD_URL_REPAIR_BOOT_LIMIT ?? '4', 10) || 4)
+    const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.DEAD_URL_REPAIR_TIME_BUDGET_MS ?? '20000', 10) || 20000)
+    const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.DEAD_URL_REPAIR_MAX_ATTEMPTS ?? '3', 10) || 3)
+    const COOLDOWN_MS = Math.max(0, Number.parseInt(deps.cooldownMs ?? process.env.DEAD_URL_REPAIR_COOLDOWN_MS ?? String(7 * 24 * 60 * 60 * 1000), 10) || 0)
+    const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
+    const VAL = pipelineValueSql('g')
+    const NON_SYNTH = `NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')`
+
+    // Two candidate lanes — the same two places an answer can live (census rule).
+    let candidates = []
+    try {
+      // audit:allow dynamic-sql — statuses/predicates are frozen module constants.
+      const orphans = await db
+        .prepare(
+          `SELECT 'grant' AS lane, g.id, g.title, g.funder AS sponsor,
+                  COALESCE(g.url, g.application_url) AS dead_url
+             FROM grants g
+            WHERE g.status IN (${statuses})
+              AND g.funding_opportunity_id IS NULL
+              AND ${VAL} = 0
+              AND (g.amount_status IS NULL OR g.amount_status = 'not_listed')
+              AND (g.amount_text IS NULL OR g.amount_text = '')
+              AND g.amount_enrich_attempted_at IS NOT NULL
+              AND ${DEAD_URL_REASON_PREDICATE('g')}
+              AND COALESCE(g.url, g.application_url, '') <> ''
+              AND ${NON_SYNTH}
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+      // audit:allow dynamic-sql — statuses/predicates are frozen module constants.
+      const catalogRows = await db
+        .prepare(
+          `SELECT 'fo' AS lane, fo.id, fo.title, fo.sponsor,
+                  COALESCE(fo.source_url, fo.application_url) AS dead_url
+             FROM funding_opportunities fo
+            WHERE fo.is_active
+              AND COALESCE(fo.amount_min, 0) <= 0
+              AND COALESCE(fo.amount_max, 0) <= 0
+              AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
+              AND (fo.amount_text IS NULL OR fo.amount_text = '')
+              AND LOWER(COALESCE(fo.opportunity_kind, '')) NOT IN ('directory', 'benefit')
+              AND fo.amount_enrich_attempted_at IS NOT NULL
+              AND ${DEAD_URL_REASON_PREDICATE('fo')}
+              AND COALESCE(fo.source_url, fo.application_url, '') <> ''
+              AND EXISTS (SELECT 1 FROM grants g
+                           WHERE g.funding_opportunity_id = fo.id
+                             AND g.status IN (${statuses}) AND ${NON_SYNTH})
+            LIMIT ?`,
+        )
+        .all(LIMIT)
+      candidates = [...(Array.isArray(orphans) ? orphans : []), ...(Array.isArray(catalogRows) ? catalogRows : [])].slice(0, LIMIT)
+    } catch (err) {
+      log.warn('dead_url_repair: candidate scan failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, skipped: 'query' }
+    }
+    if (candidates.length === 0) return { scanned: 0, repaired: 0, enforced: !disabled }
+    if (disabled) return { scanned: candidates.length, repaired: 0, enforced: false }
+
+    const findOfficialUrl = deps.findOfficialUrl ?? findOfficialUrlForOpportunity
+    const checkUrlImpl = deps.checkUrlImpl ?? (await import('../services/linkVerificationService.js')).checkUrl
+
+    // Per-row repair-attempt state (searches are the scarce resource here, not
+    // fetches): { entries: { '<lane>:<id>': { attempts, last_at, exhausted } } }.
+    let state = { entries: {} }
+    try {
+      const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(DEAD_URL_REPAIR_STATE_KEY)
+      const parsed = row?.value ? JSON.parse(row.value) : null
+      if (parsed && typeof parsed.entries === 'object' && parsed.entries) state = parsed
+    } catch { /* fresh state */ }
+
+    const nowMs = Date.now()
+    const startedAt = nowMs
+    let repaired = 0
+    let recoveredAlive = 0
+    let notFound = 0
+    let outage = 0
+    let refused = 0
+    let skippedCooldown = 0
+
+    const resetSqlFor = (lane) =>
+      lane === 'grant'
+        ? `UPDATE grants
+              SET url = ?,
+                  amount_enrich_attempted_at = NULL,
+                  amount_enrich_attempts = 0,
+                  amount_enrich_env_attempts = 0,
+                  amount_enrich_last_reason = ?
+            WHERE id = ?
+              AND (amount_status IS NULL OR amount_status = 'not_listed')
+              AND (amount_text IS NULL OR amount_text = '')
+              AND COALESCE(amount_min, 0) <= 0
+              AND COALESCE(amount_max, 0) <= 0
+              AND COALESCE(amount_requested, 0) <= 0`
+        : `UPDATE funding_opportunities
+              SET source_url = ?,
+                  amount_enrich_attempted_at = NULL,
+                  amount_enrich_attempts = 0,
+                  amount_enrich_env_attempts = 0,
+                  amount_enrich_last_reason = ?
+            WHERE id = ?
+              AND (amount_status IS NULL OR amount_status = 'not_listed')
+              AND (amount_text IS NULL OR amount_text = '')
+              AND COALESCE(amount_min, 0) <= 0
+              AND COALESCE(amount_max, 0) <= 0`
+
+    // Un-burn WITHOUT touching the URL (the alive-again path): counters are
+    // preserved so MAX_ATTEMPTS still bounds a flapping host.
+    const unburnSqlFor = (lane) =>
+      lane === 'grant'
+        ? `UPDATE grants SET amount_enrich_attempted_at = NULL, amount_enrich_last_reason = ? WHERE id = ?`
+        : `UPDATE funding_opportunities SET amount_enrich_attempted_at = NULL, amount_enrich_last_reason = ? WHERE id = ?`
+
+    for (const cand of candidates) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break
+      const stateKey = `${cand.lane}:${cand.id}`
+      const entry = state.entries[stateKey] ?? { attempts: 0, last_at: null, exhausted: false }
+      if (entry.exhausted) { skippedCooldown++; continue }
+      if (entry.last_at && COOLDOWN_MS > 0 && nowMs - Date.parse(entry.last_at) < COOLDOWN_MS) { skippedCooldown++; continue }
+      try {
+        // 1. RE-PROVE deadness. 'skipped' covers an unresolvable domain (the
+        //    probe's own SSRF/DNS guard) — dead for our purposes; ok/redirect
+        //    means the URL answers today and needs no repair, only a re-read.
+        const probe = await checkUrlImpl(cand.dead_url, { timeoutMs: 8000 })
+        if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
+          await db.prepare(unburnSqlFor(cand.lane)).run('dead_url_recovered_alive', cand.id)
+          recoveredAlive++
+          delete state.entries[stateKey]
+          continue
+        }
+        // 2. Search for the row's REAL page by its own identity.
+        const found = await findOfficialUrl({ title: cand.title, sponsor: cand.sponsor ?? '' })
+        if (found?.searched === false) { outage++; continue } // provider outage: spend nothing
+        entry.attempts += 1
+        entry.last_at = new Date(nowMs).toISOString()
+        if (entry.attempts >= MAX_ATTEMPTS) entry.exhausted = true
+        state.entries[stateKey] = entry
+        if (!found?.url) { notFound++; continue }
+        // 3. Guards: canonical URL hygiene; a "new" URL identical to the dead
+        //    one proved live by the finder's own probe → alive-recovery, not a
+        //    repair.
+        if (isSearchEngineUrl(found.url)) { refused++; continue }
+        const norm = (u) => String(u ?? '').trim().toLowerCase().replace(/\/+$/, '')
+        if (norm(found.url) === norm(cand.dead_url)) {
+          await db.prepare(unburnSqlFor(cand.lane)).run('dead_url_recovered_alive', cand.id)
+          recoveredAlive++
+          delete state.entries[stateKey]
+          continue
+        }
+        const wrote = await db.prepare(resetSqlFor(cand.lane)).run(found.url, 'dead_url_repaired', cand.id)
+        if (changesOf(wrote) > 0) {
+          repaired++
+          delete state.entries[stateKey]
+          log.info('dead_url_repair: replaced a dead source URL with a live, plausibility-gated page', {
+            lane: cand.lane, id: cand.id, from: String(cand.dead_url).slice(0, 120), to: String(found.url).slice(0, 120),
+          })
+        }
+      } catch (err) {
+        log.warn('dead_url_repair: candidate failed (non-fatal, no attempt spent on errors)', {
+          id: cand.id, error: String(err?.message || err),
+        })
+      }
+    }
+
+    try {
+      const value = JSON.stringify({ updated_at: new Date(nowMs).toISOString(), entries: state.entries })
+      const res = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?').run(value, new Date(nowMs).toISOString(), DEAD_URL_REPAIR_STATE_KEY)
+      if (!changesOf(res)) {
+        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(DEAD_URL_REPAIR_STATE_KEY, value, new Date(nowMs).toISOString())
+      }
+    } catch (err) {
+      log.warn('dead_url_repair: state persist failed (non-fatal)', { error: String(err?.message || err) })
+    }
+
+    return {
+      scanned: candidates.length, repaired, recoveredAlive, notFound, outage, refused,
+      skippedCooldown, enforced: true,
+    }
+  })
+}
+
 export async function enforceFunderBackfill(db) {
   return runInvariant('funder_backfill', async () => {
     const grantCols = await listGrantColumns(db)
@@ -4948,6 +5171,11 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // opportunity_kind classification first, so the enrichment sweeps and the
   // amount-answer census stop treating a pointer page as a missing award.
   steps.push(await enforceLocatorKindClassification(db))
+  // Dead-URL repair BEFORE amount acquisition: a row whose domain no longer
+  // resolves / permanently 404s gets its REAL page found (search → plausibility
+  // → liveness) and its enrich state reset, so the sweeps just below read the
+  // repaired URL in this same boot instead of skipping a burned row.
+  steps.push(await enforceDeadUrlRepair(db))
   // Amount ACQUISITION first: read the funder's own page for active-pipeline
   // sources that carry no dollar figure (bounded per boot), so the backfill
   // right after can mirror freshly-learned amounts onto the grants same-boot.
@@ -5118,6 +5346,7 @@ export const __testables = {
   enforceGrantCatalogLink,
   enforceAmountEnrichment,
   enforceGrantDirectAmountEnrichment,
+  enforceDeadUrlRepair,
   enforceLiveCrawlVerifiedAtHonesty,
   VERIFIED_AT_HONESTY_BOOT_LIMIT_DEFAULT,
   resolveIndividualAmountCeiling,
